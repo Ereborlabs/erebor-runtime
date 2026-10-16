@@ -524,6 +524,19 @@ the package exports again. Retained-byte accounting includes vector capacity,
 reason indices, and all admitted queries. Public transient admission remains
 checked. The signed bundle still retains its original blueprint.
 
+AdmittedExport also retains one ordered input program. Each instruction reads
+an admitted query or an exact committed output. Instructions for declared
+Table inputs precede instructions for declared Query inputs. The program
+stores normalized SQL names, alias bindings,
+and inherited source indices. A run uses fresh slots in declared input order.
+It does not construct a source-name catalog or resolve those bindings again.
+The declared input position selects a slot. Binding and inherited indices
+select program instructions. Inherited indices keep original port-name order,
+including a completed Query input that shares a lowercase Table alias. Full
+AST dependencies remain in this inventory, including unused CTEs. OutputRef,
+grant, freshness, source reads, and leases remain per-run checks and state.
+The existing MemTable map remains the SQL execution catalog.
+
 Each run supplies its own tenant, grant, source batches, clock, checkpoint,
 bindings, and mutable execution state. A historical snapshot does not permit
 a current-state commit.
@@ -841,3 +854,32 @@ complete redesign adds 2,247 from `537f9de3`. The current tree adds 18 from
 count record is `/tmp/araphor-arrow-engine-count12.json`. The count excludes
 tests, documents, and blank lines. Complete redesign: **Not done**. No speed
 measurement is made. The native SQL behavior proposals remain unapproved.
+
+Admitted input bindings: **Done**. One ordered input program replaces the
+retained SQL-name map and the per-run source-name map. Admission fixes Table
+bindings and inherited provenance indices. Each run supplies fresh declaration
+slots, current authorization, source reads, and leases. The existing MemTable
+map remains the SQL catalog. The new case checks declaration permutations,
+mixed-case aliases, unused CTE dependencies, exact encoded bytes, revisions,
+evidence, retained capacity, and cleanup.
+
+The affected Data build passes in 177.98 seconds. All 53 selected cases pass.
+The first run passes 32 cases. Its other 21 cases stop at the host filesystem
+reserve check. After removal of two obsolete generated test binaries, only
+those 21 cases run again. All pass in 51.27 seconds. Production, limits, and
+the test binary remain unchanged. Strict Clippy for Data, Control, and E2E
+test targets passes in 70.52 seconds. Native and caller runtime cases are not
+repeated. The records are `/tmp/araphor-input-program-build2.json`,
+`/tmp/araphor-input-program-tests1.json`,
+`/tmp/araphor-input-program-failed2.json`,
+`/tmp/araphor-input-program-cache-cleanup2.json`,
+`/tmp/araphor-input-program-clippy1.json`, and
+`/tmp/araphor-input-program-qualification1.json`.
+
+This change adds 54 nonblank production Rust lines from `6b69aab8`. The
+complete redesign adds 2,301 from `537f9de3`. The current tree adds 72 from
+`7b7b407a`; another 6,072 must be removed to meet the production target. The
+count record is `/tmp/araphor-arrow-engine-count13.json`. The count excludes
+tests, documents, and blank lines. Complete redesign: **Not done**. This
+change removes runtime interpretation but does not prove a smaller complete
+architecture. No speed measurement is made.

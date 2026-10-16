@@ -85,6 +85,19 @@ vector widths and reason indices. InstalledBundle retains the exact package,
 descriptor, and admitted-program pairing. Public transient calls still perform
 admission. Retained memory includes vector capacity and every admitted query.
 
+[AdmittedExport](../../crates/araphor-data/src/query/model.rs) also retains an
+ordered input program. Its typed instructions read admitted queries or exact
+committed outputs. Instructions for declared Table inputs precede instructions
+for declared Query inputs. Each run uses fresh declared-input slots. A declared
+port position selects a slot;
+binding and inherited indices select program instructions. No input SQL map
+or source-name catalog is constructed during the run. The existing MemTable
+map remains the SQL execution catalog. Admission retains the
+alias imports and inherited revision order. That order follows original port
+names, including a completed Query input whose lowercase name matches a bound
+Table alias. Full AST dependencies include unused CTEs. OutputRef, current
+grant, freshness, source reads, and leases remain per-run checks and state.
+
 Each original Table input retains its evidence and exact dependency once.
 A derived Query input combines inherited coverage and hashes the inherited
 input revisions, including when SQL returns zero rows. Witness normalization
@@ -250,6 +263,17 @@ The cases check descriptor order, independent admitted execution, reason
 bindings, vector capacity, installed pairing, current grants, snapshot reuse,
 invalid indices, and cleanup. Native and caller runtime cases are not repeated.
 The result record is `/tmp/araphor-admitted-runtime-qualification1.json`.
+
+The admitted input-program change passes the affected Data build and all 53
+selected cases. The first run passes 32 cases and reaches the host filesystem
+reserve in 21 cases. After two obsolete generated test binaries are removed,
+only those 21 cases run again. All pass with unchanged production, limits,
+and test binary. Strict Clippy for Data and its callers passes. The new case
+checks declaration order, mixed-case aliases, unused CTE dependencies, exact
+wire bytes, revisions, evidence, retained capacities, and cleanup. Native and
+caller runtime cases are not repeated. The result record is
+`/tmp/araphor-input-program-qualification1.json`. The change adds 54 production
+lines. The complete reduction remains open.
 
 The complete earlier receipts remain at
 `7b7b407adf347d389984553a4d212bfce37b75b5:docs/guides/araphor-sql-operation-review.md`.

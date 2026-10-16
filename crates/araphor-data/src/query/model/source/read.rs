@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
@@ -76,17 +75,9 @@ impl super::super::operation::ModelOperation<'_> {
         port: &sdk::Port,
         sql: &QuerySql,
         control: &AnalysisReadControl,
-        catalog: &BTreeMap<String, ModelSource>,
+        inherited: &[&ModelSource],
     ) -> Result<ModelSource> {
         let owner = self.owner;
-        let inherited: Vec<_> = catalog
-            .iter()
-            .filter_map(|(name, source)| {
-                (self.bound.contains_key(&name.to_ascii_lowercase())
-                    && sql.dependencies().contains(&name.to_ascii_lowercase()))
-                .then_some(source)
-            })
-            .collect();
         let plan = QueryPlan::model(request.grant.selection.clone(), sql.clone())?;
         let binding = sql.bind_complete(request.now)?;
         let selection = plan.dependencies_bound(request.now, &binding)?;
@@ -198,6 +189,6 @@ impl super::super::operation::ModelOperation<'_> {
         for batch in &mut data.batches {
             *batch = retained.retain_batch(batch)?;
         }
-        rows.finish(owner, sql, selection, data, retained, &inherited)
+        rows.finish(owner, sql, selection, data, retained, inherited)
     }
 }

@@ -8,7 +8,8 @@ use araphor_analysis_sdk as sdk;
 #[cfg(test)]
 use super::SqlModelV1;
 use super::{
-    execute::ModelExecution, AdmittedExport, ModelInputRequest, ModelInputs, SqlModelOutputV1,
+    execute::ModelExecution, source::ModelSource, AdmittedExport, AdmittedRead, ModelInputRequest,
+    ModelInputs, SqlModelOutputV1,
 };
 use crate::query::{budget::QueryLease, engine::QueryEngine};
 use crate::{AnalysisReadControl, QueryOwner, Result};
@@ -79,7 +80,6 @@ impl ModelOperation<'_> {
         if request.model.input_mode == sdk::InputMode::Provided {
             return Err(crate::PackageErrorCodeV1::Missing.error("host-prepared inputs"));
         }
-        let queries = &admitted.inputs;
         let model = request.model;
         let limits = sdk::Limits {
             max_bytes: model
@@ -88,60 +88,28 @@ impl ModelOperation<'_> {
                 .min(self.owner.limits.input_bytes as u64),
             ..model.limits
         };
-        let mut sources = BTreeMap::new();
-        for input in &model.inputs {
-            let sdk::InputSource::Table(table) = &input.source else {
-                continue;
-            };
+        let mut sources: Vec<Option<ModelSource>> = (0..model.inputs.len()).map(|_| None).collect();
+        for input in &admitted.inputs {
             control.check()?;
             authorize()?;
-            let source = match table {
-                sdk::TableRef::Output(reference) => {
-                    self.owner.output_table(&request, reference, &input.port)?
-                }
-                sdk::TableRef::Named(_) => self.read_input(
-                    &request,
-                    &input.port,
-                    &queries[&input.port.name],
-                    control,
-                    &sources,
-                )?,
-            };
-            sources.insert(input.port.name.clone(), source);
-            ModelInputs::check(sources.values(), limits)?;
-        }
-        for input in &model.inputs {
-            let sdk::InputSource::Query(_) = &input.source else {
-                continue;
-            };
-            control.check()?;
-            authorize()?;
-            let sql = &queries[&input.port.name];
-            for input in &model.inputs {
-                if !matches!(input.source, sdk::InputSource::Table(_))
-                    || !sql
-                        .dependencies()
-                        .contains(&input.port.name.to_ascii_lowercase())
-                    || crate::query::input::SCHEMAS
-                        .iter()
-                        .any(|schema| schema.name.eq_ignore_ascii_case(&input.port.name))
-                    || self
-                        .bound
-                        .contains_key(&input.port.name.to_ascii_lowercase())
-                {
+            for index in &input.bindings {
+                let binding = &admitted.inputs[*index];
+                if self.bound.contains_key(&binding.name) {
                     continue;
                 }
-                let source = sources
-                    .get(&input.port.name)
+                let port = &model.inputs[binding.port];
+                let source = sources[binding.port]
+                    .as_ref()
                     .ok_or_else(|| crate::PackageErrorCodeV1::Incomplete.error("table binding"))?;
                 ModelExecution::check_input(
-                    sources
+                    admitted
+                        .inputs
                         .iter()
-                        .filter(|(name, _)| {
-                            self.bound.contains_key(&name.to_ascii_lowercase())
-                                || name.as_str() == input.port.name.as_str()
+                        .filter(|input| {
+                            self.bound.contains_key(&input.name) || input.port == binding.port
                         })
-                        .flat_map(|(_, source)| &source.input.data.batches),
+                        .filter_map(|input| sources[input.port].as_ref())
+                        .flat_map(|source| &source.input.data.batches),
                     self.owner.limits.input_bytes,
                 )?;
                 let bytes = source
@@ -150,10 +118,7 @@ impl ModelOperation<'_> {
                     .batches
                     .iter()
                     .map(|batch| {
-                        let payload = if matches!(
-                            &input.source,
-                            sdk::InputSource::Table(sdk::TableRef::Output(_))
-                        ) {
+                        let payload = if matches!(binding.read, AdmittedRead::Output) {
                             QueryEngine::batch_bytes(batch)
                         } else {
                             0
@@ -174,20 +139,21 @@ impl ModelOperation<'_> {
                 let stage = control.within(self.owner.limits.evaluate_timeout)?;
                 let (_, lease) = self.engine()?;
                 let table = QueryEngine::table(
-                    Arc::new(input.port.schema.clone()),
+                    Arc::new(port.port.schema.clone()),
                     &source.input.data.batches,
                     lease,
                 )?;
                 stage.check()?;
-                self.bound
-                    .insert(input.port.name.to_ascii_lowercase(), table);
+                self.bound.insert(binding.name.clone(), table);
                 self.retained_bytes = retained;
                 #[cfg(test)]
                 {
-                    let resident = sources
+                    let resident = admitted
+                        .inputs
                         .iter()
-                        .filter(|(name, _)| self.bound.contains_key(&name.to_ascii_lowercase()))
-                        .flat_map(|(_, source)| &source.input.data.batches)
+                        .filter(|input| self.bound.contains_key(&input.name))
+                        .filter_map(|input| sources[input.port].as_ref())
+                        .flat_map(|source| &source.input.data.batches)
                         .fold(0usize, |bytes, batch| {
                             bytes
                                 .saturating_add(batch.get_array_memory_size())
@@ -196,20 +162,42 @@ impl ModelOperation<'_> {
                     assert!(
                         self.retained_bytes >= resident,
                         "alias={}, retained={}, resident={resident}",
-                        input.port.name,
+                        port.port.name,
                         self.retained_bytes,
                     );
                 }
             }
-            let source = self.read_input(&request, &input.port, sql, control, &sources)?;
-            sources.insert(input.port.name.clone(), source);
-            ModelInputs::check(sources.values(), limits)?;
+            let port = &model.inputs[input.port];
+            let source = match &input.read {
+                AdmittedRead::Query(sql) => {
+                    let inherited = input
+                        .inherited
+                        .iter()
+                        .map(|index| {
+                            sources[admitted.inputs[*index].port]
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    crate::PackageErrorCodeV1::Incomplete.error("table binding")
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    self.read_input(&request, &port.port, sql, control, &inherited)?
+                }
+                AdmittedRead::Output => {
+                    let sdk::InputSource::Table(sdk::TableRef::Output(reference)) = &port.source
+                    else {
+                        return Err(crate::PackageErrorCodeV1::Incomplete.error("table binding"));
+                    };
+                    self.owner.output_table(&request, reference, &port.port)?
+                }
+            };
+            sources[input.port] = Some(source);
+            ModelInputs::check(sources.iter().flatten(), limits)?;
         }
         let mut selected = ModelInputs::default();
-        for input in &model.inputs {
+        for source in sources {
             selected.push(
-                sources
-                    .remove(&input.port.name)
+                source
                     .ok_or_else(|| crate::PackageErrorCodeV1::Incomplete.error("input binding"))?,
             );
         }
@@ -236,7 +224,7 @@ impl ModelOperation<'_> {
                 .build()
             })?;
         let admitted = AdmittedExport {
-            inputs: BTreeMap::new(),
+            inputs: Vec::new(),
             model: Some(program.admit(model)?),
         };
         self.evaluate_admitted(package, &admitted, evaluation, control)

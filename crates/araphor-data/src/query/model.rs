@@ -46,8 +46,30 @@ pub struct SqlModelOutputV1 {
 }
 
 pub(crate) struct AdmittedExport {
-    pub(crate) inputs: BTreeMap<String, QuerySql>,
+    inputs: Vec<AdmittedInput>,
     model: Option<AdmittedModel>,
+}
+
+struct AdmittedInput {
+    port: usize,
+    name: String,
+    read: AdmittedRead,
+    bindings: Vec<usize>,
+    inherited: Vec<usize>,
+}
+
+enum AdmittedRead {
+    Query(QuerySql),
+    Output,
+}
+
+impl AdmittedInput {
+    fn query(&self) -> Option<&QuerySql> {
+        match &self.read {
+            AdmittedRead::Query(sql) => Some(sql),
+            AdmittedRead::Output => None,
+        }
+    }
 }
 
 impl AdmittedExport {
@@ -60,7 +82,8 @@ impl AdmittedExport {
 
     pub(crate) fn input_clock(&self) -> bool {
         self.inputs
-            .values()
+            .iter()
+            .filter_map(AdmittedInput::query)
             .any(|sql| sql.uses_clock() || sql.dependencies().contains("notifications"))
     }
 
@@ -74,12 +97,14 @@ impl AdmittedExport {
     pub(crate) fn allocated_bytes(&self) -> usize {
         use std::mem::size_of;
 
-        let node = size_of::<(String, QuerySql)>()
-            .saturating_mul(11)
-            .saturating_add(16 * size_of::<usize>());
-        let mut bytes = self.inputs.keys().fold(
-            size_of::<Self>().saturating_add(node.saturating_mul(self.inputs.len())),
-            |bytes, name| bytes.saturating_add(name.capacity()),
+        let mut bytes = self.inputs.iter().fold(
+            size_of::<Self>().saturating_add(self.inputs.capacity() * size_of::<AdmittedInput>()),
+            |bytes, input| {
+                bytes
+                    .saturating_add(input.name.capacity())
+                    .saturating_add(input.bindings.capacity() * size_of::<usize>())
+                    .saturating_add(input.inherited.capacity() * size_of::<usize>())
+            },
         );
         if let Some(model) = &self.model {
             bytes = bytes
@@ -88,7 +113,8 @@ impl AdmittedExport {
                 .saturating_add(model.reasons.capacity() * size_of::<(usize, usize, QuerySql)>());
         }
         self.inputs
-            .values()
+            .iter()
+            .filter_map(AdmittedInput::query)
             .chain(self.model.iter().flat_map(AdmittedModel::queries))
             .fold(bytes, |bytes, sql| {
                 bytes.saturating_add(sql.allocated_bytes())
@@ -127,12 +153,14 @@ impl QueryOwner {
         program.admit(model).map(|_| ())
     }
 
-    pub(crate) fn admit_inputs(model: &sdk::Model) -> Result<BTreeMap<String, QuerySql>> {
+    fn admit_inputs(model: &sdk::Model) -> Result<Vec<AdmittedInput>> {
         let relations = schema::ModelSchema::sources(model)?;
-        let mut queries = BTreeMap::new();
-        for input in &model.inputs {
-            let sql = match &input.source {
-                sdk::InputSource::Query(sql) => QuerySql::admit_relations(sql, relations.clone())?,
+        let mut inputs = Vec::new();
+        for (port, input) in model.inputs.iter().enumerate() {
+            let read = match &input.source {
+                sdk::InputSource::Query(sql) => {
+                    AdmittedRead::Query(QuerySql::admit_relations(sql, relations.clone())?)
+                }
                 sdk::InputSource::Table(sdk::TableRef::Named(name))
                     if model.input_mode == sdk::InputMode::Resolved =>
                 {
@@ -144,17 +172,69 @@ impl QueryOwner {
                         .map(|field| schema::ModelSchema::quote(field.name()))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    QuerySql::admit(
+                    AdmittedRead::Query(QuerySql::admit(
                         &format!("SELECT {fields} FROM {}", schema::ModelSchema::quote(name)),
                         Vec::new(),
                         false,
-                    )?
+                    )?)
+                }
+                sdk::InputSource::Table(sdk::TableRef::Output(_))
+                    if model.input_mode == sdk::InputMode::Resolved =>
+                {
+                    AdmittedRead::Output
                 }
                 _ => continue,
             };
-            queries.insert(input.port.name.clone(), sql);
+            inputs.push(AdmittedInput {
+                port,
+                name: input.port.name.to_ascii_lowercase(),
+                read,
+                bindings: Vec::new(),
+                inherited: Vec::new(),
+            });
         }
-        Ok(queries)
+        inputs.sort_by_key(|input| {
+            matches!(model.inputs[input.port].source, sdk::InputSource::Query(_))
+        });
+        for query in 0..inputs.len() {
+            if !matches!(
+                model.inputs[inputs[query].port].source,
+                sdk::InputSource::Query(_)
+            ) {
+                continue;
+            }
+            let AdmittedRead::Query(sql) = &inputs[query].read else {
+                continue;
+            };
+            let bindings: Vec<_> = inputs
+                .iter()
+                .enumerate()
+                .filter(|(_, input)| {
+                    matches!(model.inputs[input.port].source, sdk::InputSource::Table(_))
+                        && sql.dependencies().contains(&input.name)
+                        && !crate::query::input::SCHEMAS
+                            .iter()
+                            .any(|schema| schema.name == input.name)
+                })
+                .map(|(index, _)| index)
+                .collect();
+            let mut inherited: Vec<_> = (0..query)
+                .filter(|source| {
+                    bindings
+                        .iter()
+                        .any(|binding| inputs[*binding].name == inputs[*source].name)
+                })
+                .collect();
+            inherited.sort_by(|a, b| {
+                model.inputs[inputs[*a].port]
+                    .port
+                    .name
+                    .cmp(&model.inputs[inputs[*b].port].port.name)
+            });
+            inputs[query].bindings = bindings;
+            inputs[query].inherited = inherited;
+        }
+        Ok(inputs)
     }
 
     #[cfg(test)]
@@ -181,7 +261,7 @@ impl QueryOwner {
                 .build()
             })?;
         let admitted = AdmittedExport {
-            inputs: BTreeMap::new(),
+            inputs: Vec::new(),
             model: Some(program.admit(model)?),
         };
         self.model_operation(tenant)

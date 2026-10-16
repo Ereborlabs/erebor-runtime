@@ -523,3 +523,197 @@ fn aggregate_output_rows_stop_before_reference_tables() -> TestResult {
     assert_eq!(owner.input_charge(), 0);
     Ok(())
 }
+
+#[test]
+fn admitted_input_provenance() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    fixture.event(1, 100, 7)?;
+    let owner = fixture.owner(limits())?;
+    let (grant, active) = scope(AnalysisSelectionV1::new(
+        fixture.source.tenant_id,
+        vec![fixture.source.clone()],
+    ));
+    let mut model = model(&[]);
+    let rows = sdk::Schema::new(vec![sdk::Field::new(
+        "source_cursor",
+        sdk::DataType::UInt64,
+        false,
+    )]);
+    let ordinals = sdk::Schema::new(vec![sdk::Field::new(
+        "ordinal",
+        sdk::DataType::UInt32,
+        false,
+    )]);
+    model.inputs = vec![
+        sdk::InputPort {
+            port: port("zrows"),
+            source: sdk::InputSource::Query("SELECT source_cursor AS value FROM \"ZRows\"".into()),
+        },
+        sdk::InputPort {
+            port: port("selected"),
+            source: sdk::InputSource::Query("WITH unused AS (SELECT ordinal FROM \"arows\") SELECT source_cursor AS value FROM \"ZRows\"".into()),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new("arows", ordinals),
+            source: sdk::InputSource::Table(sdk::TableRef::Named("catalog".into())),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new("ZRows", rows),
+            source: sdk::InputSource::Table(sdk::TableRef::Named("events".into())),
+        },
+    ];
+    sdk::Package::new("binding-fixture", "1", vec![model.clone()]).validate()?;
+    let mut expected: Option<BTreeMap<String, sdk::wire::Input>> = None;
+    let mut expected_metadata = None;
+    for indices in [&[0, 1, 2, 3][..], &[3, 0, 2, 1][..], &[3, 2, 1][..]] {
+        let mut declared = model.clone();
+        declared.inputs = indices
+            .iter()
+            .map(|index| model.inputs[*index].clone())
+            .collect();
+        let mut admitted = AdmittedExport::admit(&declared, None)?;
+        let selected = admitted
+            .inputs
+            .iter()
+            .find(|input| declared.inputs[input.port].port.name == "selected")
+            .ok_or("selected program")?;
+        assert_eq!(
+            selected
+                .bindings
+                .iter()
+                .map(|index| &declared.inputs[admitted.inputs[*index].port].port.name)
+                .collect::<Vec<_>>(),
+            indices
+                .iter()
+                .filter(|index| **index >= 2)
+                .map(|index| &model.inputs[*index].port.name)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            selected
+                .inherited
+                .iter()
+                .map(|index| declared.inputs[admitted.inputs[*index].port]
+                    .port
+                    .name
+                    .as_str())
+                .collect::<Vec<_>>(),
+            if indices.contains(&0) {
+                vec!["ZRows", "arows", "zrows"]
+            } else {
+                vec!["ZRows", "arows"]
+            }
+        );
+        let before = admitted.allocated_bytes();
+        let capacity = admitted.inputs.capacity();
+        admitted.inputs.reserve_exact(8);
+        let mut growth = (admitted.inputs.capacity() - capacity)
+            * std::mem::size_of::<super::super::AdmittedInput>();
+        for input in &mut admitted.inputs {
+            let capacity = input.name.capacity();
+            input.name.reserve_exact(8);
+            growth += input.name.capacity() - capacity;
+            for indices in [&mut input.bindings, &mut input.inherited] {
+                let capacity = indices.capacity();
+                indices.reserve_exact(8);
+                growth += (indices.capacity() - capacity) * std::mem::size_of::<usize>();
+            }
+        }
+        assert_eq!(admitted.allocated_bytes(), before + growth);
+        let mut calls = 0;
+        let (operation, inputs) = owner
+            .model_operation(fixture.source.tenant_id)
+            .inputs_admitted(
+                request(&declared, &grant, &active),
+                &admitted,
+                &control()?,
+                || {
+                    calls += 1;
+                    Ok(())
+                },
+            )?;
+        assert_eq!(calls, indices.len());
+        assert_eq!(
+            inputs
+                .inputs
+                .iter()
+                .map(|input| &input.data.name)
+                .collect::<Vec<_>>(),
+            declared
+                .inputs
+                .iter()
+                .map(|input| &input.port.name)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            inputs
+                .inputs
+                .iter()
+                .find(|input| input.data.name == "selected")
+                .ok_or("selected input")?
+                .data
+                .batches
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum::<usize>(),
+            1
+        );
+        let data = inputs
+            .inputs
+            .iter()
+            .map(|input| {
+                let port = declared
+                    .inputs
+                    .iter()
+                    .find(|port| port.port.name == input.data.name)
+                    .ok_or("declared input")?;
+                Ok((
+                    input.data.name.clone(),
+                    sdk::wire::Input {
+                        data: sdk::wire::Dataset::encode(
+                            &input.data,
+                            &port.port.schema,
+                            declared.limits,
+                        )?,
+                        revision: input.revision.clone(),
+                        coverage: input.coverage.clone(),
+                    },
+                ))
+            })
+            .collect::<TestResult<BTreeMap<_, _>>>()?;
+        assert_ne!(data["ZRows"].revision, data["arows"].revision);
+        if let Some(expected) = &expected {
+            if indices.contains(&0) {
+                assert_eq!(expected, &data);
+            } else {
+                for (name, actual) in &data {
+                    assert_eq!(expected[name].data, actual.data);
+                    assert_eq!(expected[name].coverage, actual.coverage);
+                    if name == "selected" {
+                        assert_ne!(expected[name].revision, actual.revision);
+                    } else {
+                        assert_eq!(expected[name].revision, actual.revision);
+                    }
+                }
+            }
+        } else {
+            expected = Some(data);
+        }
+        let metadata = (
+            inputs.source_revisions.clone(),
+            inputs.dependencies.clone(),
+            inputs.witnesses.clone(),
+            inputs.contexts.clone(),
+        );
+        if let Some(expected) = &expected_metadata {
+            assert_eq!(expected, &metadata);
+        } else {
+            expected_metadata = Some(metadata);
+        }
+        operation.release_inputs()?;
+        drop(inputs);
+        assert_eq!(owner.input_charge(), 0);
+        drop(owner.budget.evaluate(fixture.source.tenant_id)?);
+    }
+    Ok(())
+}
