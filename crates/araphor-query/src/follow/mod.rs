@@ -570,7 +570,10 @@ impl State {
 
     async fn advance(&mut self, now: u64) -> Result<Update> {
         let crate::stream::Output {
-            snapshot, batches, ..
+            snapshot,
+            batches,
+            _memory,
+            ..
         } = self
             .execution
             .as_mut()
@@ -580,36 +583,6 @@ impl State {
             .ok_or_else(Self::state_error)?;
         if let Some(cursor) = &self.cursor {
             cursor.check_store(&snapshot.page.extraction.meta)?;
-        }
-        let mut reservation = self.engine.memory().reserve_output(0).context(SqlSnafu)?;
-        if let Some(batches) = &batches {
-            let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
-            let bytes = batches
-                .iter()
-                .map(RecordBatch::get_array_memory_size)
-                .sum::<usize>();
-            if rows > self.engine.limits().output_rows || bytes > self.engine.limits().output_bytes
-            {
-                return Err(Self::output_error());
-            }
-            for batch in batches {
-                self.engine
-                    .memory()
-                    .retain_output(batch, &mut reservation)
-                    .context(SqlSnafu)?;
-            }
-            reservation
-                .try_grow(
-                    batches.capacity() * size_of::<RecordBatch>()
-                        + batches
-                            .iter()
-                            .map(|batch| {
-                                batch.num_columns()
-                                    * size_of::<datafusion::arrow::array::ArrayRef>()
-                            })
-                            .sum::<usize>(),
-                )
-                .context(SqlSnafu)?;
         }
         let cursor = Cursor::new(
             &snapshot.page.extraction.meta,
@@ -639,7 +612,7 @@ impl State {
             positions: Vec::new(),
             evaluated_utc_ns: now,
             limited: false,
-            _memory: reservation,
+            _memory,
         })
     }
 

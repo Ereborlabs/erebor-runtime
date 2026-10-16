@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, StorePositionV1};
 use datafusion::arrow::array::RecordBatch;
+use datafusion::execution::memory_pool::MemoryReservation;
 use futures_core::Stream;
 
 use crate::execution::{Engine, Permit};
@@ -38,6 +39,7 @@ pub(super) type Input = Pin<Box<dyn Stream<Item = Result<Message>> + Send>>;
 pub(crate) struct Output {
     pub snapshot: Arc<ArrowSnapshot>,
     pub batches: Option<Vec<RecordBatch>>,
+    pub _memory: MemoryReservation,
     pub _permit: Option<Arc<Permit>>,
     pub _control: Arc<AnalysisReadControl>,
 }

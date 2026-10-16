@@ -302,15 +302,16 @@ impl ExecutionPlan for SubscribeExec {
         let stream = self
             .execute_committed(partition, context)
             .map_err(|source| DataFusionError::External(Box::new(source)))?
-            .map_ok(|output| {
-                stream::iter(
-                    output
-                        .batches
-                        .into_iter()
-                        .flatten()
-                        .map(Ok::<_, crate::Error>),
-                )
-            })
+            .map_ok(
+                |Output {
+                     batches, _memory, ..
+                 }| {
+                    stream::iter(batches.into_iter().flatten().map(move |batch| {
+                        let _metadata = &_memory;
+                        Ok::<_, crate::Error>(batch)
+                    }))
+                },
+            )
             .try_flatten()
             .map_err(|source| DataFusionError::External(Box::new(source)));
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -431,6 +432,7 @@ impl Outputs {
         let Some(Output {
             snapshot,
             batches,
+            _memory: _input,
             _permit,
             _control: control,
         }) = self.stream.try_next().await?
@@ -443,19 +445,6 @@ impl Outputs {
             }
             .build()
         })?;
-        let mut input = self
-            .run
-            .engine
-            .memory()
-            .reserve_input(0)
-            .context(SqlSnafu)?;
-        for batch in &batches {
-            self.run
-                .engine
-                .memory()
-                .retain_input(batch, &mut input)
-                .context(SqlSnafu)?;
-        }
         control.check()?;
         let mut reservation = self
             .run
@@ -524,9 +513,16 @@ impl Outputs {
                     source,
                 })?;
         }
+        reservation
+            .try_resize(if unchanged { 0 } else { metadata })
+            .map_err(|source| crate::Error::Capacity {
+                resource: "shared output",
+                source,
+            })?;
         Ok(Some(Output {
             snapshot,
             batches: (!unchanged).then_some(batches),
+            _memory: reservation,
             _permit,
             _control: control,
         }))

@@ -12,6 +12,7 @@ use araphor_data::{
     TraceIdentityV1, UnconfirmedNotificationConcernV1, ValidatedEvidenceBatchV1,
     NOTIFICATION_STATE_OWNER,
 };
+use datafusion::arrow::array::RecordBatch;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion::logical_expr::LogicalPlan;
@@ -845,11 +846,40 @@ async fn native_subscribe_execution() {
         ScalarValue::try_from_array(first.column(0), 0).unwrap(),
         ScalarValue::Int64(Some(1))
     );
+    let capacity = fixture.engine.limits().output_capacity;
+    let buffers = first.column(0).get_buffer_memory_size();
+    let held = capacity
+        - fixture
+            .engine
+            .memory()
+            .prepare_output(capacity)
+            .unwrap()
+            .size();
+    assert!(held >= buffers + std::mem::size_of::<RecordBatch>());
+    drop(
+        fixture
+            .engine
+            .reserve_evaluation(fixture.source.tenant_id)
+            .unwrap(),
+    );
+    let borrowed = Arc::clone(first.column(0));
     drop(first);
     let second = {
         let waiting = stream.next();
         futures_util::pin_mut!(waiting);
         assert!(futures_util::poll!(&mut waiting).is_pending());
+        let retained = capacity
+            - fixture
+                .engine
+                .memory()
+                .prepare_output(capacity)
+                .unwrap()
+                .size();
+        assert_eq!(retained, buffers);
+        assert_eq!(
+            ScalarValue::try_from_array(&borrowed, 0).unwrap(),
+            ScalarValue::Int64(Some(1))
+        );
         drop(
             fixture
                 .engine
@@ -873,6 +903,21 @@ async fn native_subscribe_execution() {
         source: stream.next().await.unwrap().unwrap_err(),
     };
     assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity)
+        .is_err());
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_output(fixture.engine.limits().output_capacity)
+        .is_err());
+    assert_eq!(
+        ScalarValue::try_from_array(&borrowed, 0).unwrap(),
+        ScalarValue::Int64(Some(1))
+    );
+    drop(borrowed);
     drop(
         fixture
             .engine

@@ -173,11 +173,17 @@ impl State {
                     let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)
                         .map_err(DataFusionError::from)
                         .context(SqlSnafu)?;
+                    let mut memory = self.engine.memory().reserve_input(0).context(SqlSnafu)?;
+                    self.engine
+                        .memory()
+                        .retain_input(&batch, &mut memory)
+                        .context(SqlSnafu)?;
                     control.check()?;
                     self.frontier = Some(position);
                     return Ok(Some(Output {
                         snapshot,
                         batches: Some(vec![batch]),
+                        _memory: memory,
                         _permit,
                         _control: control,
                     }));

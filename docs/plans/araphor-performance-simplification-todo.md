@@ -158,6 +158,14 @@ adds 1,028 from `537f9de3`: `/tmp/araphor-native-rewrite-count11.json`.
 Another 4,799 must be removed for the 6,000-line target. General maintained
 SQL, clock epochs, the append source replacement, and the complete redesign
 remain **Not done**. Full workspace CI is not run, as instructed.
+Physical Output now transfers its reservation to Update. Follow's repeated
+output checks and claims are deleted. The native iterator retains metadata
+without retaining the completed SQL permit. The old-code regression fails;
+all 102 Query cases and strict Query Clippy pass with the change. The record is
+`/tmp/araphor-output-owner-qualification1.json`. This change removes 23 nonblank
+production Rust lines. The complete count removes 1,224 from `7b7b407a`:
+`/tmp/araphor-output-owner-count2.json`. Another 4,776 must be removed for the
+6,000-line target. Complete redesign: **Not done**.
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

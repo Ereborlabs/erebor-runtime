@@ -398,6 +398,26 @@ maintained SQL, clock epochs, shared maintained-query ownership, and the append
 source replacement remain **Not done**. Complete redesign: **Not done**.
 These functional checks establish no performance improvement.
 
+### Physical output ownership
+
+Implementation and selected host verification: **Done**. Physical Output
+transfers its native reservation to Update. Follow no longer repeats output
+size checks, buffer claims, and metadata charges. The native Arrow iterator
+keeps its metadata charge until EOF or drop. Completed SQL releases its permit
+at the original boundary. Borrowed buffers retain their own native claims.
+
+The lifetime regression fails on the old code and passes with this change.
+All 102 Query cases pass. Strict Query Clippy and scoped formatting pass.
+The record is `/tmp/araphor-output-owner-qualification1.json`. Unchanged
+cross-crate runtime suites and full workspace CI are not repeated.
+
+This change removes 23 nonblank production Rust lines. The verified count
+checks 668 prior Rust file hashes. The complete result adds 1,005 lines from
+`537f9de3` and removes 1,224 from `7b7b407a`. Another 4,776 must be removed
+for the 6,000-line target. The records are
+`/tmp/araphor-output-owner-count1.json` and
+`/tmp/araphor-output-owner-count2.json`. Complete redesign: **Not done**.
+
 ### Shared subscription owner
 
 The user requires Query to own subscription behavior used by Control and

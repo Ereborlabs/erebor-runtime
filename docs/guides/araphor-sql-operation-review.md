@@ -412,6 +412,16 @@ JournalExec rejects unsigned execute with native NotImplemented. Signed
 inserts and deletes require the committed route through SubscribeExec.
 The registered planner delegates ordinary planning to DataFusion.
 
+Physical Output now carries its actual native reservation into Update.
+Follow's advance method does not repeat output size checks or buffer claims.
+The native Arrow iterator keeps the output metadata reservation until EOF or
+drop. It releases the completed SQL permit at the original boundary. The
+`native_subscribe_execution` regression checks that separation and borrowed
+buffer lifetime through a second commit and cancellation. All 102 Query cases
+and strict Query Clippy pass. The exact source record is
+`/tmp/araphor-output-owner-qualification1.json`. Wider runtime suites and full
+workspace CI are not repeated for this private ownership change.
+
 Each State currently owns one physical execution stream. A shared maintained
 query owner is **Not done**. Other plans still use State::evaluate and its hash
 of the complete result. Broader maintained operators and clock processing are
