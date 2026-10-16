@@ -104,13 +104,13 @@ impl SourceSnapshot {
 
     pub(crate) fn providers() -> BTreeMap<String, Arc<dyn TableProvider>> {
         Self::schemas()
-            .into_iter()
+            .iter()
             .map(|(name, schema)| {
                 let provider: Arc<dyn TableProvider> = Arc::new(SourceProvider {
                     name: name.clone(),
-                    schema,
+                    schema: Arc::clone(schema),
                 });
-                (name, provider)
+                (name.clone(), provider)
             })
             .collect()
     }

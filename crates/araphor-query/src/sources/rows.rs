@@ -9,7 +9,7 @@ use araphor_data::{
     StorePositionV1, TraceRecipeV1,
 };
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::execution::memory_pool::MemoryReservation;
 
@@ -136,7 +136,6 @@ struct Capture<'a> {
     sources: &'a BTreeSet<String>,
     scope: &'a AnalysisSelectionV1,
     requested: &'a BTreeMap<String, BTreeSet<usize>>,
-    schemas: BTreeMap<String, SchemaRef>,
     tables: BTreeMap<String, ArrowBatch>,
     witnesses: Vec<AnalysisWitnessV1>,
     removals: Vec<Removal>,
@@ -184,7 +183,6 @@ impl SourceSnapshot {
             sources,
             scope: &selection,
             requested: requests,
-            schemas: Self::schemas(),
             tables: BTreeMap::new(),
             witnesses: Vec::new(),
             removals: Vec::new(),
@@ -427,8 +425,7 @@ impl Capture<'_> {
         };
         if !self.tables.contains_key(name) {
             sink.charge(name.len() + 512)?;
-            let schema = self
-                .schemas
+            let schema = SourceSnapshot::schemas()
                 .get(name)
                 .ok_or_else(|| ArrowBatch::invalid("the source has no native Arrow schema"))?;
             let indices = indices.iter().copied().collect::<Vec<_>>();
@@ -529,18 +526,13 @@ impl AnalysisProjection for Capture<'_> {
                 Ok(true)
             }
             input @ AnalysisInputV1::Event { .. } => self.event(input, sink),
-            AnalysisInputV1::Context(context) | AnalysisInputV1::DiscoveryContext(context) => {
-                self.context(context, sink)
-            }
-            input @ (AnalysisInputV1::Behavior { .. } | AnalysisInputV1::Profile { .. }) => {
-                self.discovery(input, sink)
-            }
-            AnalysisInputV1::Target { context, fact } => self.target(context, fact, sink),
+            AnalysisInputV1::Context(context) => self.context(context, sink),
+            input @ AnalysisInputV1::Profile { .. } => self.discovery(input, sink),
             input @ AnalysisInputV1::Graph { .. } => self.graph(input, sink),
             input @ AnalysisInputV1::Notification { .. } => self.notification(input, sink),
-            input @ (AnalysisInputV1::Trace { .. }
-            | AnalysisInputV1::TraceOutput { .. }
-            | AnalysisInputV1::TraceMeasurement { .. }) => self.trace(input, sink),
+            input @ (AnalysisInputV1::Trace { .. } | AnalysisInputV1::TraceOutput { .. }) => {
+                self.trace(input, sink)
+            }
             AnalysisInputV1::Result { .. } => Ok(true),
         }
     }

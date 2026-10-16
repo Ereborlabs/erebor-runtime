@@ -153,7 +153,7 @@ impl Capture<'_> {
                     sink.check()?;
                     self.append("catalog", &mut sink, |name, _kind, sink| {
                         Ok(match name {
-                            "relation" => Self::text(Some(&relation), sink)?,
+                            "relation" => Self::text(Some(relation), sink)?,
                             "ordinal" => ScalarValue::UInt32(Some(
                                 u32::try_from(ordinal).map_err(|_| ArrowBatch::overflow())?,
                             )),

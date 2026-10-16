@@ -122,7 +122,7 @@ impl SubscribeExec {
             };
             node = Arc::clone(child);
         }
-        let schema = SourceSnapshot::providers()["events"].schema();
+        let schema = &SourceSnapshot::schemas()["events"];
         let columns = node
             .schema()
             .fields()

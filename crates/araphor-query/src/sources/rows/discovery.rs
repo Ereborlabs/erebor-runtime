@@ -12,87 +12,68 @@ impl Capture<'_> {
         input: AnalysisInputV1<'_>,
         sink: &mut ProjectionSink<'_>,
     ) -> araphor_data::Result<bool> {
-        match input {
-            AnalysisInputV1::Profile {
-                result_id,
-                body,
-                commit_revision,
-                sources,
-                discovery_enabled,
-            } => {
-                if !self.sources.contains("behaviors") {
-                    return Ok(true);
-                }
-                sink.charge(body.len().checked_mul(4).ok_or_else(ArrowBatch::overflow)?)?;
-                let profile = DiscoveryProfileV1::try_from(body)?;
-                if profile.profile_id != result_id || !sources.contains(&profile.scope.identity) {
-                    return Err(ArrowBatch::invalid(
-                        "the discovery result differs from its retained profile identity",
-                    ));
-                }
-                if !self.scope.nodes.is_empty()
-                    && !self.scope.nodes.contains(&profile.scope.identity.node_id)
-                {
-                    return Ok(true);
-                }
-                if let Selection::Exact(sources) = &self.scope.sources {
-                    if !sources.contains(&profile.scope.identity) {
-                        return Ok(true);
-                    }
-                }
-                self.mutable_discovery |= !profile.sealed;
-                if self.scope.binding_ids.is_empty()
-                    && !self.behavior(&profile, None, commit_revision, discovery_enabled, sink)?
-                {
-                    return Ok(false);
-                }
-                for atom in &profile.snapshot.atoms {
-                    if !self.scope.binding_ids.is_empty()
-                        && !self.scope.binding_ids.contains(&atom.key.binding_id)
-                    {
-                        continue;
-                    }
-                    for evidence in &atom.evidence_sample {
-                        sink.grow(&mut self.witnesses)?;
-                        sink.charge(evidence.stream.node_id.len())?;
-                        self.witnesses.push(AnalysisWitnessV1 {
-                            identity: evidence.stream.clone().into(),
-                            cursor: evidence.durable_cursor,
-                            expires_utc_ns: 0,
-                        });
-                    }
-                    if !self.behavior(
-                        &profile,
-                        Some(atom),
-                        commit_revision,
-                        discovery_enabled,
-                        sink,
-                    )? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-            AnalysisInputV1::Behavior {
-                profile,
-                commit_revision,
-                atom,
-                discovery_enabled,
-            } => {
-                self.mutable_discovery |= !profile.sealed;
-                if atom.is_none() && !self.scope.binding_ids.is_empty() {
-                    return Ok(true);
-                }
-                if atom.is_some_and(|atom| {
-                    !self.scope.binding_ids.is_empty()
-                        && !self.scope.binding_ids.contains(&atom.key.binding_id)
-                }) {
-                    return Ok(true);
-                }
-                self.behavior(profile, atom, commit_revision, discovery_enabled, sink)
-            }
-            _ => Ok(true),
+        let AnalysisInputV1::Profile {
+            result_id,
+            body,
+            commit_revision,
+            sources,
+            discovery_enabled,
+        } = input
+        else {
+            return Ok(true);
+        };
+        if !self.sources.contains("behaviors") {
+            return Ok(true);
         }
+        sink.charge(body.len().checked_mul(4).ok_or_else(ArrowBatch::overflow)?)?;
+        let profile = DiscoveryProfileV1::try_from(body)?;
+        if profile.profile_id != result_id || !sources.contains(&profile.scope.identity) {
+            return Err(ArrowBatch::invalid(
+                "the discovery result differs from its retained profile identity",
+            ));
+        }
+        if !self.scope.nodes.is_empty()
+            && !self.scope.nodes.contains(&profile.scope.identity.node_id)
+        {
+            return Ok(true);
+        }
+        if let Selection::Exact(sources) = &self.scope.sources {
+            if !sources.contains(&profile.scope.identity) {
+                return Ok(true);
+            }
+        }
+        self.mutable_discovery |= !profile.sealed;
+        if self.scope.binding_ids.is_empty()
+            && !self.behavior(&profile, None, commit_revision, discovery_enabled, sink)?
+        {
+            return Ok(false);
+        }
+        for atom in &profile.snapshot.atoms {
+            if !self.scope.binding_ids.is_empty()
+                && !self.scope.binding_ids.contains(&atom.key.binding_id)
+            {
+                continue;
+            }
+            for evidence in &atom.evidence_sample {
+                sink.grow(&mut self.witnesses)?;
+                sink.charge(evidence.stream.node_id.len())?;
+                self.witnesses.push(AnalysisWitnessV1 {
+                    identity: evidence.stream.clone().into(),
+                    cursor: evidence.durable_cursor,
+                    expires_utc_ns: 0,
+                });
+            }
+            if !self.behavior(
+                &profile,
+                Some(atom),
+                commit_revision,
+                discovery_enabled,
+                sink,
+            )? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     fn behavior(

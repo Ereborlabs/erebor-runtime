@@ -15,7 +15,7 @@ use super::{
 };
 use crate::{
     AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, EvidenceIntakeIdentityV1, EvidenceRecord,
-    Result, TraceIdentityV1, TraceIntentV1, TraceMeasurementV1, TraceOutputReceiptV1, TraceStateV1,
+    Result, TraceIdentityV1, TraceIntentV1, TraceOutputReceiptV1, TraceStateV1,
 };
 
 mod changes;
@@ -446,17 +446,6 @@ pub enum AnalysisInputV1<'a> {
         position: StorePositionV1,
     },
     Context(&'a AnalysisContextVersionV1),
-    DiscoveryContext(&'a AnalysisContextVersionV1),
-    Behavior {
-        profile: &'a crate::DiscoveryProfileV1,
-        commit_revision: u64,
-        atom: Option<&'a crate::BehaviorAtomV1>,
-        discovery_enabled: bool,
-    },
-    Target {
-        context: &'a AnalysisContextVersionV1,
-        fact: &'a crate::WorkloadTargetFactV1,
-    },
     Profile {
         result_id: &'a str,
         body: &'a [u8],
@@ -495,10 +484,6 @@ pub enum AnalysisInputV1<'a> {
     Result {
         result_id: &'a str,
         body: &'a [u8],
-    },
-    TraceMeasurement {
-        identity: &'a TraceIdentityV1,
-        measurement: &'a TraceMeasurementV1,
     },
 }
 
@@ -3263,13 +3248,9 @@ mod tests {
                     AnalysisInputV1::Trace { .. }
                     | AnalysisInputV1::RawRemoval { .. }
                     | AnalysisInputV1::TraceOutput { .. }
-                    | AnalysisInputV1::TraceMeasurement { .. }
-                    | AnalysisInputV1::Target { .. }
-                    | AnalysisInputV1::DiscoveryContext(_)
                     | AnalysisInputV1::Profile { .. }
                     | AnalysisInputV1::Graph { .. }
-                    | AnalysisInputV1::Notification { .. }
-                    | AnalysisInputV1::Behavior { .. } => {
+                    | AnalysisInputV1::Notification { .. } => {
                         return store.reject("unselected input entered an evidence-only snapshot");
                     }
                 }))

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex, Weak};
@@ -7,17 +6,15 @@ use std::time::Duration;
 use araphor_data::{
     AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, StorePositionV1,
 };
-use async_trait::async_trait;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::memory::{
     MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
 };
-use datafusion::catalog::{
-    CatalogProvider, CatalogProviderList, SchemaProvider, Session as NativeSession, TableProvider,
-};
-use datafusion::common::{DataFusionError, Result as NativeResult};
-use datafusion::datasource::MemTable;
+use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
+use datafusion::common::tree_node::Transformed;
+use datafusion::common::DataFusionError;
+use datafusion::datasource::{provider_as_source, source_as_provider, MemTable};
 use datafusion::execution::config::SessionConfig;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryReservation};
@@ -25,7 +22,7 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::execution_props::ExecutionProps;
-use datafusion::logical_expr::{Expr, LogicalPlan, TableType};
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan, SendableRecordBatchStream};
 use futures_util::TryStreamExt;
@@ -316,7 +313,8 @@ impl Engine {
     pub fn catalog(&self, schemas: BTreeMap<String, SchemaRef>) -> Result<SessionState> {
         let mut tables = SourceSnapshot::providers();
         for (name, schema) in schemas {
-            tables.insert(name.clone(), Arc::new(LocalTable { name, schema }));
+            let table = MemTable::try_new(schema, vec![vec![]]).context(SqlSnafu)?;
+            tables.insert(name, Arc::new(table));
         }
         let schema = Arc::new(MemorySchemaProvider::new());
         for (name, table) in tables {
@@ -480,8 +478,6 @@ impl Engine {
     }
 }
 
-type LocalTables = BTreeMap<String, (Arc<MemTable>, usize)>;
-
 #[derive(Clone, Copy, Debug)]
 pub enum Read {
     Snapshot,
@@ -494,7 +490,7 @@ pub struct Session {
     selection: AnalysisSelectionV1,
     control: Arc<AnalysisReadControl>,
     now: u64,
-    tables: LocalTables,
+    tables: BTreeMap<String, (Arc<MemTable>, usize)>,
     output_rows: usize,
     output_bytes: usize,
 }
@@ -712,9 +708,6 @@ impl Session {
 
     fn state(&self) -> Result<SessionState> {
         let mut state = self.engine.state.clone();
-        state
-            .config_mut()
-            .set_extension(Arc::new(self.tables.clone()));
         let clock = chrono::DateTime::from_timestamp(
             (self.now / 1_000_000_000) as i64,
             (self.now % 1_000_000_000) as u32,
@@ -736,7 +729,32 @@ impl Session {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planning = self.control.within(self.engine.limits.evaluate_timeout)?;
         planning
-            .query_async(async { state.create_physical_plan(plan).await.context(SqlSnafu) })
+            .query_async(async {
+                let plan = plan
+                    .clone()
+                    .transform_up_with_subqueries(|plan| {
+                        let LogicalPlan::TableScan(mut scan) = plan else {
+                            return Ok(Transformed::no(plan));
+                        };
+                        let declared = source_as_provider(&scan.source)?;
+                        if !declared.as_any().is::<MemTable>() {
+                            return Ok(Transformed::no(LogicalPlan::TableScan(scan)));
+                        }
+                        let (table, _) =
+                            self.tables.get(scan.table_name.table()).ok_or_else(|| {
+                                DataFusionError::Execution("local input table is absent".into())
+                            })?;
+                        if table.schema() != declared.schema() {
+                            return datafusion::common::exec_err!("local input schema changed");
+                        }
+                        let table: Arc<dyn TableProvider> = table.clone();
+                        scan.source = provider_as_source(table);
+                        Ok(Transformed::yes(LogicalPlan::TableScan(scan)))
+                    })
+                    .context(SqlSnafu)?
+                    .data;
+                state.create_physical_plan(&plan).await.context(SqlSnafu)
+            })
             .await
     }
 
@@ -866,45 +884,6 @@ impl Session {
         };
         let stream = execute_stream(physical, state.task_ctx()).context(SqlSnafu)?;
         Ok((captured, stream, permit, control, reservation))
-    }
-}
-
-#[derive(Debug)]
-struct LocalTable {
-    name: String,
-    schema: SchemaRef,
-}
-
-#[async_trait]
-impl TableProvider for LocalTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-    fn table_type(&self) -> TableType {
-        TableType::Base
-    }
-
-    async fn scan(
-        &self,
-        session: &dyn NativeSession,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> NativeResult<Arc<dyn ExecutionPlan>> {
-        let tables = session
-            .config()
-            .get_extension::<LocalTables>()
-            .ok_or_else(|| DataFusionError::Execution("local input tables are absent".into()))?;
-        let (table, _) = tables
-            .get(&self.name)
-            .ok_or_else(|| DataFusionError::Execution("local input table is absent".into()))?;
-        if table.schema() != self.schema {
-            return datafusion::common::exec_err!("local input schema changed");
-        }
-        table.scan(session, projection, filters, limit).await
     }
 }
 

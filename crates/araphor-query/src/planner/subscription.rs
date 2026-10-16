@@ -33,7 +33,7 @@ impl Subscribe {
                 LogicalPlan::TableScan(scan) => {
                     let provider = source_as_provider(&scan.source)?;
                     if !provider.as_any().is::<SourceProvider>()
-                        || provider.schema() != SourceSnapshot::providers()["events"].schema()
+                        || provider.schema() != SourceSnapshot::schemas()["events"]
                         || scan.fetch.is_some()
                     {
                         return Err(DataFusionError::NotImplemented(

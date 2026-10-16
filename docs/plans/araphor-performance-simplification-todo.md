@@ -95,6 +95,12 @@ framework are deleted. The selected host checks pass 195 distinct cases.
 The last count adds 1,008 production lines from `537f9de3` and removes 1,221
 from `7b7b407a`. The record is `/tmp/araphor-native-rewrite-count7.json`.
 The required 6,000-line reduction and the complete redesign are **Not done**.
+Local input binding now uses native MemTables and a native logical transformation
+before optimization. The custom LocalTable provider and its SessionConfig map
+are deleted. Canonical source schemas are shared across reads. Four unused Data
+input variants and synthetic trace dispatch are deleted. The selected Query,
+Data extraction, and Analysis model checks pass 158 cases; one Data history case
+is ignored. Strict Clippy passes for the six affected crates and test targets.
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

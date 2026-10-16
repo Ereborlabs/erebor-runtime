@@ -198,6 +198,13 @@ fn local_skips_store() {
         matches!(ScalarValue::try_from_array(now[0].column(0), 0).unwrap(),
         ScalarValue::TimestampNanosecond(Some(value), _) if value == frozen as i64)
     );
+    session
+        .register(
+            "events",
+            crate::sources::SourceSnapshot::providers()["events"].schema(),
+            &[],
+        )
+        .unwrap();
     assert!(session.execute_local(source).is_err());
     let error = session
         .execute(Arc::clone(&constant), &BTreeSet::new())
@@ -291,6 +298,53 @@ fn native_plan_reuses_inputs() {
     assert_eq!(value(&second_rows), 22);
 }
 
+#[test]
+fn native_counts_rebind() {
+    let fixture = Fixture::new(Limits::default());
+    let state = fixture
+        .engine
+        .catalog(BTreeMap::from([("CaseRows".into(), schema())]))
+        .unwrap();
+    let plan = Arc::new(
+        fixture
+            .engine
+            .plan(
+                &state,
+                Parser::parse(
+                    "WITH selected AS (SELECT value FROM \"CaseRows\") SELECT count(*) AS total, current_timestamp AS clock FROM selected",
+                )
+                .unwrap(),
+                vec![],
+            )
+            .unwrap(),
+    );
+    let mut first = fixture
+        .engine
+        .session(AnalysisSelectionV1::new([1; 16], vec![]), &control(), 1)
+        .unwrap();
+    first
+        .register("CaseRows", schema(), &[batch(11), batch(22)])
+        .unwrap();
+    let mut second = fixture
+        .engine
+        .session(AnalysisSelectionV1::new([2; 16], vec![]), &control(), 2)
+        .unwrap();
+    second.register("caserows", schema(), &[batch(99)]).unwrap();
+    assert!(second.execute_local(Arc::clone(&plan)).is_err());
+    second.register("CaseRows", schema(), &[]).unwrap();
+    for (session, expected, clock) in [(&first, 2, 1), (&second, 0, 2)] {
+        let rows = session.execute_local(Arc::clone(&plan)).unwrap();
+        assert_eq!(value(&rows), expected);
+        assert_eq!(
+            ScalarValue::try_from_array(rows[0].column(1), 0).unwrap(),
+            ScalarValue::TimestampNanosecond(Some(clock), None)
+        );
+    }
+    first.register("CaseRows", schema(), &[batch(33)]).unwrap();
+    assert_eq!(value(&first.execute_local(Arc::clone(&plan)).unwrap()), 1);
+    assert_eq!(value(&second.execute_local(plan).unwrap()), 0);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn native_scans_fix_inputs() {
     let fixture = Fixture::new(Limits::default());
@@ -337,19 +391,25 @@ fn native_bindings_fail_closed() {
         .unwrap();
     let (_, rows) = second.execute(Arc::clone(&plan), &sources).unwrap();
     assert_eq!(value(&rows), 22);
-    let changed = Arc::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::UInt64,
-        false,
-    )]));
-    second
-        .register(
-            "local_rows",
-            Arc::clone(&changed),
-            &[RecordBatch::new_empty(changed)],
-        )
-        .unwrap();
-    assert!(second.execute(Arc::clone(&plan), &sources).is_err());
+    let metadata = std::collections::HashMap::from([("owner".into(), "changed".into())]);
+    for changed in [
+        Schema::new(vec![Field::new("value", DataType::UInt64, false)]),
+        Schema::new(vec![Field::new("value", DataType::Int64, true)]),
+        Schema::new(vec![
+            Field::new("value", DataType::Int64, false).with_metadata(metadata.clone())
+        ]),
+        schema().as_ref().clone().with_metadata(metadata),
+    ] {
+        let changed = Arc::new(changed);
+        second
+            .register(
+                "local_rows",
+                Arc::clone(&changed),
+                &[RecordBatch::new_empty(changed)],
+            )
+            .unwrap();
+        assert!(second.execute(Arc::clone(&plan), &sources).is_err());
+    }
     second
         .register("local_rows", schema(), &[batch(44)])
         .unwrap();

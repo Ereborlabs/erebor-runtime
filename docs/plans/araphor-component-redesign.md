@@ -177,6 +177,31 @@ The last source count adds 1,008 nonblank production Rust lines from
 The record is `/tmp/araphor-native-rewrite-count7.json`. The complete redesign
 still requires 4,779 more net production deletions. It is **Not done**.
 
+### Native input ownership
+
+Implementation and selected host verification: **Done**. Local admission uses
+native MemTables. Before native optimization, Session binds only declared local
+scans to the current run's exact-schema MemTables. The custom LocalTable provider
+and its SessionConfig map are deleted. Native SQL, CTE, and parameter planning
+remain with DataFusion. A local table with a canonical source name does not
+replace an already admitted durable source scan.
+
+One immutable canonical schema map supplies all source providers, captures,
+and catalog rows. Each read no longer builds every field and metadata map.
+Data no longer declares the unused Behavior, DiscoveryContext, Target, or
+TraceMeasurement input variants. Query calls the trace measurement table
+adapter directly from the retained trace frame.
+
+The Query check passes all 98 cases in 13.46 seconds. The new COUNT case proves
+binding before native optimization, exact quoted names, separate tenants,
+separate clocks, empty input, and later rebinding. Existing schema checks now
+also reject changed nullability, field metadata, and schema metadata. Data
+extraction passes 25 cases in 8.65 seconds; one release-history case is ignored.
+Analysis model checks pass all 35 cases in 47.39 seconds. Strict Clippy passes
+for Query, Data, Analysis, CLI, Control, and E2E library and test targets.
+The combined record is `/tmp/araphor-native-owners-qualification1.json`.
+These times describe functional checks. They do not prove a speed improvement.
+
 The obsolete Data extraction row-page framework is also deleted. Query already
 owns Arrow batches through its actual projection callback. Data retains atomic
 snapshots, receipts, read guards, byte bounds, and complete source frontiers.
@@ -289,7 +314,8 @@ A client submits SQL or Analysis selects a detector input query
 
 A run starts for a native logical plan
   -> Session supplies its selection, clock, control, and local Arrow tables
-  -> native SessionConfig extensions bind the run without changing retained scans
+  -> native logical transformation binds declared local scans to this run's MemTables
+  -> native SessionConfig supplies the durable source snapshot
   -> create_physical_plan performs native optimization and physical planning once
   -> native TableProvider scans record requested canonical columns
   -> Data captures all original source receipts and requested rows in one bounded snapshot
@@ -315,7 +341,7 @@ subscription extension does not justify a second ordinary-SQL context now.
 | Implementation | Current requirement and reason | Verification state |
 | --- | --- | --- |
 | `SourceProvider` and `SnapshotPartition` | Native scan projections must be known before Data captures rows. All original source receipts must come from the same snapshot before SQL filtering. A retained provider has a name and schema; SessionConfig supplies each run. A populated MemTable would bind one run's data to the retained plan. Native StreamingTableExec supplies execution. | Five source tests pass. They cover scope, original receipts, empty page progress, zero-column counts, and binary-buffer lifetime. |
-| `LocalTable` | A retained plan must read a different exact-schema local dataset for each run. The provider resolves that dataset through SessionConfig and delegates its scan to native MemTable. | Session tests pass for rebinding, schema rejection, input capacity, and buffer lifetime. |
+| Local table binding | Admission registers empty native MemTables. Before native optimization, Session replaces only declared MemTable scan sources with this run's exact-schema MemTables. The custom LocalTable provider and its SessionConfig map are deleted. Durable SourceProvider scans keep their original authority. | All 98 Query cases pass. They include COUNT over changed and empty input, separate tenants and clocks, quoted names, source-name collisions, exact metadata, and buffer lifetime. |
 | Native Arrow reservation bridge | A borrowed Arrow buffer must retain its capacity charge after its producer closes. Arrow buffer claims hold one reservation; separate input and output consumers must retain their own allocation charges. Native memory pools enforce capacity. The allocation registry holds weak references only. | Six memory tests pass for aliases, nested buffers, separate engine consumers, cancellation, capacity pressure, and cleanup. |
 | Parser and planner boundary | Admit one bounded read statement, native parameters, and the existing resource policy. DataFusion owns syntax, names, types, functions, catalogs, and plans. Policy checks belong at admission; source lookup does not enforce spelling rules. | Native stage tests pass for names, CTE scope, parameters, functions, joins, windows, writes, and redacted errors. |
 

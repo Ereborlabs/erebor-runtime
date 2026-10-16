@@ -1,6 +1,6 @@
 use araphor_data::{
     AnalysisInputV1, AnalysisWitnessV1, ProjectionSink, TraceCleanupV1, TraceFrameKindV1,
-    TraceFrameV1, TraceRecipeV1, TraceTerminalReasonV1,
+    TraceFrameV1, TraceIdentityV1, TraceMeasurementV1, TraceRecipeV1, TraceTerminalReasonV1,
 };
 use datafusion::common::ScalarValue;
 
@@ -159,43 +159,42 @@ impl Capture<'_> {
                 };
                 if let Some(measurements) = recipe.measurements(&frame) {
                     for measurement in &measurements {
-                        if !self.trace(
-                            AnalysisInputV1::TraceMeasurement {
-                                identity,
-                                measurement,
-                            },
-                            sink,
-                        )? {
+                        if !self.measurement(identity, measurement, sink)? {
                             return Ok(false);
                         }
                     }
                 }
                 Ok(true)
             }
-            AnalysisInputV1::TraceMeasurement {
-                identity,
-                measurement,
-            } => self.append("trace_measurements", sink, |name, _kind, sink| {
-                Ok(match name {
-                    "tenant_id" => Self::binary(Some(&identity.tenant_id), sink)?,
-                    "request_id" => Self::binary(Some(&identity.request_id), sink)?,
-                    "execution_id" => Self::binary(Some(&measurement.execution_id), sink)?,
-                    "sequence" => ScalarValue::UInt64(Some(measurement.sequence)),
-                    "ordinal" => ScalarValue::UInt32(Some(u32::from(measurement.ordinal))),
-                    "syscall_id" => ScalarValue::UInt32(measurement.syscall_id),
-                    "errno" => ScalarValue::Int64(Some(measurement.errno)),
-                    "count" => ScalarValue::UInt64(Some(measurement.count)),
-                    "cumulative" => ScalarValue::Boolean(Some(measurement.cumulative)),
-                    "atomic_snapshot" => ScalarValue::Boolean(Some(measurement.atomic_snapshot)),
-                    "unit" => Self::text(Some(&measurement.unit), sink)?,
-                    _ => {
-                        return Err(ArrowBatch::invalid(
-                            "the native source field has no adapter",
-                        ));
-                    }
-                })
-            }),
             _ => Ok(true),
         }
+    }
+
+    fn measurement(
+        &mut self,
+        identity: &TraceIdentityV1,
+        measurement: &TraceMeasurementV1,
+        sink: &mut ProjectionSink<'_>,
+    ) -> araphor_data::Result<bool> {
+        self.append("trace_measurements", sink, |name, _kind, sink| {
+            Ok(match name {
+                "tenant_id" => Self::binary(Some(&identity.tenant_id), sink)?,
+                "request_id" => Self::binary(Some(&identity.request_id), sink)?,
+                "execution_id" => Self::binary(Some(&measurement.execution_id), sink)?,
+                "sequence" => ScalarValue::UInt64(Some(measurement.sequence)),
+                "ordinal" => ScalarValue::UInt32(Some(u32::from(measurement.ordinal))),
+                "syscall_id" => ScalarValue::UInt32(measurement.syscall_id),
+                "errno" => ScalarValue::Int64(Some(measurement.errno)),
+                "count" => ScalarValue::UInt64(Some(measurement.count)),
+                "cumulative" => ScalarValue::Boolean(Some(measurement.cumulative)),
+                "atomic_snapshot" => ScalarValue::Boolean(Some(measurement.atomic_snapshot)),
+                "unit" => Self::text(Some(&measurement.unit), sink)?,
+                _ => {
+                    return Err(ArrowBatch::invalid(
+                        "the native source field has no adapter",
+                    ));
+                }
+            })
+        })
     }
 }

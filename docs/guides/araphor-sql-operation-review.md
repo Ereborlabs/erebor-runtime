@@ -42,7 +42,7 @@ crate. SDK owns declarations and native/Wasm application binary interfaces.
   -> [ModelRun::prepare_inputs](../../crates/araphor-analysis/src/model/operation.rs) checks current authority and resolves declared Table inputs before Query inputs
   -> [ModelRun::output_table](../../crates/araphor-analysis/src/model/source/table.rs) reads exact committed package output through Engine.store and checks the retained grant
   -> [ModelRun::read_input](../../crates/araphor-analysis/src/model/source/read.rs) executes admitted source plans through the native Session
-  -> [ModelInputs::from_snapshot](../../crates/araphor-analysis/src/model/source.rs) checks source references and combines original receipts with inherited input revisions
+  -> [ModelInputs::add_snapshot](../../crates/araphor-analysis/src/model/source.rs) checks source references and combines original receipts with inherited input revisions
   -> [ModelInputs::finish](../../crates/araphor-analysis/src/model/source.rs) normalizes evidence after the run restores declared input order
   -> [AnalysisPackageOwner::execute_model](../../crates/araphor-analysis/src/package/execution.rs) selects SQL, native, or Wasm execution
   -> [AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs) prepares one result contract
@@ -124,7 +124,9 @@ Source declarations and datasets use canonical Arrow 58 schemas and batches.
 The [canonical schemas](../../crates/araphor-query/src/sources/schema.rs)
 supply source fields, catalog rows, and result metadata. Field metadata defines
 owner, units, null meaning, join keys, readiness, and description. Native
-projections preserve the selected Field metadata. The query engine is
+projections preserve the selected Field metadata. One immutable schema map is
+shared across engines and reads. Capture does not build another schema map.
+The query engine is
 DataFusion 53.1.0. Dataset-only SQL uses the existing validators and ModelRun.
 It creates no synthetic package or evaluation. DuckDB remains the durable
 storage engine. Client transport reads native Arrow values in Control; the
@@ -183,8 +185,12 @@ actual run's SourceSnapshot from the native SessionConfig extension. The
 provider retains only an immutable source name and schema. The provider
 records projection indices and returns a native StreamingTableExec. A retained
 logical plan therefore has no installation-time or tenant-specific snapshot.
-LocalTable uses the same session extension mechanism and delegates its scan
-to the registered MemTable. Execution changes no retained TableScan node.
+Local admission uses empty native MemTables. Before native optimization,
+Session uses the native logical transformation API to bind those scans to the
+current run's MemTables. It checks the complete Arrow schema, including field
+metadata and nullability. This transformation does not change the retained
+logical plan or replace durable SourceProvider scans. The custom LocalTable
+provider and its separate SessionConfig lookup are deleted.
 
 [SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) captures
 requested Arrow rows and all original source receipts in one Data snapshot.
@@ -193,6 +199,11 @@ context references, and result references. Data bounds keys, scanned bytes,
 retained input, and graph traversal. Source selection keeps explicit profile,
 notification, node, binding, and time bounds. Disabled source capabilities
 return a structured unavailable error.
+
+Data emits durable inputs only. Query expands a retained profile, context, or
+trace frame into its Arrow tables. The unused Behavior, DiscoveryContext,
+Target, and TraceMeasurement input variants are deleted. Trace measurement
+mapping calls its real table adapter directly.
 
 The event provider uses DataFusion interval analysis for supported physical
 filters. The provider narrows the intake-time read conservatively and leaves

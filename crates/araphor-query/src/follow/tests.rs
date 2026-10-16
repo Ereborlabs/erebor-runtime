@@ -385,7 +385,8 @@ fn native_graph_admission() {
 fn local_cursor_denied() {
     let fixture = Fixture::new(Limits::default());
     let schema = crate::sources::SourceSnapshot::schemas()
-        .remove("events")
+        .get("events")
+        .cloned()
         .unwrap();
     let state = fixture
         .engine

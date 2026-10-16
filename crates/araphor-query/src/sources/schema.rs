@@ -1,12 +1,18 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType::*, Field, Schema, SchemaRef, TimeUnit};
 
 use super::SourceSnapshot;
 
 impl SourceSnapshot {
-    pub(crate) fn schemas() -> BTreeMap<String, SchemaRef> {
+    pub(crate) fn schemas() -> &'static BTreeMap<String, SchemaRef> {
+        static SCHEMAS: LazyLock<BTreeMap<String, SchemaRef>> =
+            LazyLock::new(SourceSnapshot::build_schemas);
+        &SCHEMAS
+    }
+
+    fn build_schemas() -> BTreeMap<String, SchemaRef> {
         let mut schemas = BTreeMap::new();
         let mut insert = |name: &str, fields: Vec<Field>| {
             let (join_keys, description) = match name {
