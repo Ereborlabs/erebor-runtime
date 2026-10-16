@@ -74,7 +74,7 @@ impl AnalysisPackageOwner {
                 .ok_or_else(|| Code::Missing.error("installed export"))?;
             let mut results = Vec::new();
             for result in self.store.package_results(&active.key)? {
-                let installed: InstalledContext = Self::decode(&result.activation.metadata)?;
+                let installed: InstalledContext = Self::decode(&result.commit.activation.metadata)?;
                 match Self::permits(grant, &installed.grant) {
                     Err(crate::Error::Package {
                         code: Code::Denied, ..
@@ -127,7 +127,7 @@ impl AnalysisPackageOwner {
         let result = self
             .store
             .package_result(key.tenant_id, id)?
-            .filter(|result| result.key == key)
+            .filter(|result| result.commit.activation.key == key)
             .ok_or_else(|| Code::Missing.error("package result"))?;
         let output = Self::result_output(grant, &result)?;
         self.check(grant, Action::Inspect)?;
@@ -138,8 +138,9 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         result: &PackageResultV1,
     ) -> Result<sdk::wire::Output> {
-        let installed: InstalledContext = Self::decode(&result.activation.metadata)?;
+        let installed: InstalledContext = Self::decode(&result.commit.activation.metadata)?;
         Self::permits(grant, &installed.grant)?;
+        let result = &result.commit;
         let mut output: sdk::wire::Output = Self::decode(&result.datasets)?;
         output.checkpoint = if result.checkpoint.is_empty() {
             None
@@ -182,11 +183,11 @@ impl AnalysisPackageOwner {
         let stored = self
             .store
             .package_result(key.tenant_id, id)?
-            .filter(|result| result.key == key)
+            .filter(|result| result.commit.activation.key == key)
             .ok_or_else(|| Code::Missing.error("package result"))?;
         let revision = self
             .store
-            .package_revision(key.tenant_id, package, &stored.revision)?
+            .package_revision(key.tenant_id, package, &stored.commit.activation.revision)?
             .ok_or_else(|| Code::Missing.error("result artifact"))?;
         let artifact = revision.decode_artifact()?;
         let model = artifact
@@ -220,7 +221,7 @@ impl AnalysisPackageOwner {
             tests: Vec::new(),
             output: None,
         };
-        let current = active.active && active.revision == stored.revision;
+        let current = active.active && active.revision == stored.commit.activation.revision;
         let readiness = if current {
             super::PackageReadinessV1::Ready
         } else {
@@ -229,7 +230,7 @@ impl AnalysisPackageOwner {
         let mut status = PackageExportStatusV1::new(
             &artifact,
             model,
-            &stored.activation,
+            &stored.commit.activation,
             readiness,
             vec![PackageReceiptV1::try_from(&stored)?],
         );

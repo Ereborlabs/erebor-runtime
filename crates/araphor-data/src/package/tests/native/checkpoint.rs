@@ -57,8 +57,8 @@ async fn native_overflow_keeps_checkpoint() -> TestResult {
     assert_eq!(after.result_id, before.result_id);
     assert_eq!(after.checkpoint_revision, before.checkpoint_revision);
     let original = fixture.result(receipt)?;
-    assert_eq!(original.datasets, stored.datasets);
-    assert_eq!(original.checkpoint, stored.checkpoint);
+    assert_eq!(original.commit.datasets, stored.commit.datasets);
+    assert_eq!(original.commit.checkpoint, stored.commit.checkpoint);
     assert_eq!(fixture.store.package_results(&before.key)?.len(), 1);
     assert_eq!(fixture.owner.operations.available_permits(), 4);
     Ok(())

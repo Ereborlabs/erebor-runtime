@@ -26,7 +26,7 @@ impl AnalysisStore {
             result_id VARCHAR PRIMARY KEY, tenant_id BLOB NOT NULL, scope_id VARCHAR NOT NULL,
             package_id VARCHAR NOT NULL, export_name VARCHAR NOT NULL, revision VARCHAR NOT NULL,
             window_id VARCHAR NOT NULL, datasets BLOB NOT NULL, checkpoint BLOB NOT NULL,
-            dependencies VARCHAR NOT NULL, stale BOOLEAN NOT NULL, commit_meta BLOB NOT NULL
+            stale BOOLEAN NOT NULL, commit_meta BLOB NOT NULL
         );
         CREATE TABLE IF NOT EXISTS package_heads (
             tenant_id BLOB NOT NULL, scope_id VARCHAR NOT NULL, package_id VARCHAR NOT NULL,
@@ -50,7 +50,7 @@ impl AnalysisStore {
         UNION ALL SELECT tenant_id, 256 + octet_length(encode(result_id)) + octet_length(encode(scope_id))
             + octet_length(encode(package_id)) + octet_length(encode(export_name)) + octet_length(encode(revision))
             + octet_length(encode(window_id)) + octet_length(datasets) + octet_length(checkpoint)
-            + octet_length(encode(dependencies)) + octet_length(commit_meta) FROM package_results
+            + octet_length(commit_meta) FROM package_results
         UNION ALL SELECT tenant_id, 256 + octet_length(encode(scope_id)) + octet_length(encode(package_id))
             + octet_length(encode(export_name)) + octet_length(encode(window_id)) + octet_length(encode(result_id))
             FROM package_heads
@@ -82,7 +82,6 @@ impl AnalysisStore {
                 LEFT JOIN package_revisions p ON p.tenant_id = r.tenant_id AND p.package_id = r.package_id AND p.revision = r.revision
                 WHERE x.result_id IS NULL OR x.tenant_id <> r.tenant_id OR x.processor_id <> 'analysis-package'
                 OR p.package_id IS NULL OR length(r.window_id) NOT BETWEEN 1 AND 256
-                OR octet_length(encode(r.dependencies)) > 1048576
                 OR octet_length(r.datasets) + octet_length(r.checkpoint) > 16777216
                 OR octet_length(r.commit_meta) NOT BETWEEN 1 AND 16777216"),
             ("invalid package head", "SELECT 1 FROM package_heads h LEFT JOIN package_results r

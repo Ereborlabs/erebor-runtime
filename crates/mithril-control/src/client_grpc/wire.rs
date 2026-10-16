@@ -85,73 +85,6 @@ impl Parameters {
     }
 }
 
-pub(super) struct WireValue(pub(super) proto::QueryValue);
-
-impl TryFrom<&Value> for WireValue {
-    type Error = Status;
-
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        use proto::query_value::Kind;
-
-        let kind = match value {
-            Value::Null => Kind::Null(true),
-            Value::Boolean(value) => Kind::Boolean(*value),
-            Value::TinyInt(value) => Kind::Signed(i64::from(*value)),
-            Value::SmallInt(value) => Kind::Signed(i64::from(*value)),
-            Value::Int(value) => Kind::Signed(i64::from(*value)),
-            Value::BigInt(value) => Kind::Signed(*value),
-            Value::HugeInt(value) => Kind::Integer128(value.to_string()),
-            Value::UHugeInt(value) => Kind::Unsigned128(value.to_string()),
-            Value::UTinyInt(value) => Kind::Unsigned(u64::from(*value)),
-            Value::USmallInt(value) => Kind::Unsigned(u64::from(*value)),
-            Value::UInt(value) => Kind::Unsigned(u64::from(*value)),
-            Value::UBigInt(value) => Kind::Unsigned(*value),
-            Value::Float(value) => Kind::Real(f64::from(*value)),
-            Value::Double(value) => Kind::Real(*value),
-            Value::Decimal(value) => Kind::Decimal(proto::QueryDecimal {
-                width: u32::from(value.width()),
-                scale: u32::from(value.scale()),
-                unscaled: value.value().to_string(),
-            }),
-            Value::Timestamp(unit, value) => Kind::Timestamp(Self::timestamp(*unit, *value)),
-            Value::Text(value) => Kind::Text(value.clone()),
-            Value::Blob(value) => Kind::Binary(value.clone()),
-            Value::Date32(value) => Kind::Date(*value),
-            Value::Time64(unit, value) => Kind::Time(Self::timestamp(*unit, *value)),
-            Value::Interval {
-                months,
-                days,
-                nanos,
-            } => Kind::Interval(proto::QueryInterval {
-                months: *months,
-                days: *days,
-                nanoseconds: *nanos,
-            }),
-            _ => {
-                return Err(Status::unimplemented(
-                    "The query value type is unsupported.",
-                ))
-            }
-        };
-        Ok(Self(proto::QueryValue { kind: Some(kind) }))
-    }
-}
-
-impl WireValue {
-    fn timestamp(unit: TimeUnit, value: i64) -> proto::QueryTimestamp {
-        proto::QueryTimestamp {
-            value,
-            unit: match unit {
-                TimeUnit::Second => "second",
-                TimeUnit::Millisecond => "millisecond",
-                TimeUnit::Microsecond => "microsecond",
-                TimeUnit::Nanosecond => "nanosecond",
-            }
-            .into(),
-        }
-    }
-}
-
 pub(super) struct WireFrame {
     pub(super) message: proto::QueryFrame,
     // Keep the native output lease until the transport advances or closes.
@@ -161,13 +94,16 @@ pub(super) struct WireFrame {
 impl TryFrom<QueryFrame> for WireFrame {
     type Error = Status;
 
-    fn try_from(owner: QueryFrame) -> Result<Self, Self::Error> {
+    fn try_from(mut owner: QueryFrame) -> Result<Self, Self::Error> {
         use proto::query_frame::Payload;
 
         let mut message = Self::header(&owner);
-        let payload = match &owner.payload {
+        let payload = match &mut owner.payload {
             QueryPayload::Metadata(metadata) => Payload::Metadata(proto::QueryMetadata {
-                columns: metadata.columns.iter().map(Self::column).collect(),
+                columns: std::mem::take(&mut metadata.columns)
+                    .into_iter()
+                    .map(Self::column)
+                    .collect(),
                 evaluated_utc_ns: metadata.evaluated_utc_ns,
                 dependency_revision: metadata.dependency_revision,
                 row_limit: metadata.row_limit as u64,
@@ -221,6 +157,65 @@ impl TryFrom<QueryFrame> for WireFrame {
 }
 
 impl WireFrame {
+    fn value(value: Value) -> Result<proto::QueryValue, Status> {
+        use proto::query_value::Kind;
+
+        let kind = match value {
+            Value::Null => Kind::Null(true),
+            Value::Boolean(value) => Kind::Boolean(value),
+            Value::TinyInt(value) => Kind::Signed(i64::from(value)),
+            Value::SmallInt(value) => Kind::Signed(i64::from(value)),
+            Value::Int(value) => Kind::Signed(i64::from(value)),
+            Value::BigInt(value) => Kind::Signed(value),
+            Value::HugeInt(value) => Kind::Integer128(value.to_string()),
+            Value::UHugeInt(value) => Kind::Unsigned128(value.to_string()),
+            Value::UTinyInt(value) => Kind::Unsigned(u64::from(value)),
+            Value::USmallInt(value) => Kind::Unsigned(u64::from(value)),
+            Value::UInt(value) => Kind::Unsigned(u64::from(value)),
+            Value::UBigInt(value) => Kind::Unsigned(value),
+            Value::Float(value) => Kind::Real(f64::from(value)),
+            Value::Double(value) => Kind::Real(value),
+            Value::Decimal(value) => Kind::Decimal(proto::QueryDecimal {
+                width: u32::from(value.width()),
+                scale: u32::from(value.scale()),
+                unscaled: value.value().to_string(),
+            }),
+            Value::Timestamp(unit, value) => Kind::Timestamp(Self::timestamp(unit, value)),
+            Value::Text(value) => Kind::Text(value),
+            Value::Blob(value) => Kind::Binary(value),
+            Value::Date32(value) => Kind::Date(value),
+            Value::Time64(unit, value) => Kind::Time(Self::timestamp(unit, value)),
+            Value::Interval {
+                months,
+                days,
+                nanos,
+            } => Kind::Interval(proto::QueryInterval {
+                months,
+                days,
+                nanoseconds: nanos,
+            }),
+            _ => {
+                return Err(Status::unimplemented(
+                    "The query value type is unsupported.",
+                ))
+            }
+        };
+        Ok(proto::QueryValue { kind: Some(kind) })
+    }
+
+    fn timestamp(unit: TimeUnit, value: i64) -> proto::QueryTimestamp {
+        proto::QueryTimestamp {
+            value,
+            unit: match unit {
+                TimeUnit::Second => "second",
+                TimeUnit::Millisecond => "millisecond",
+                TimeUnit::Microsecond => "microsecond",
+                TimeUnit::Nanosecond => "nanosecond",
+            }
+            .into(),
+        }
+    }
+
     pub(super) fn header(owner: &QueryFrame) -> proto::QueryFrame {
         proto::QueryFrame {
             schema_version: owner.schema_version,
@@ -237,25 +232,25 @@ impl WireFrame {
         }
     }
 
-    fn rows(result: &QueryResult) -> Result<proto::QueryRows, Status> {
+    fn rows(result: &mut QueryResult) -> Result<proto::QueryRows, Status> {
         Ok(proto::QueryRows {
-            rows: result
-                .rows
-                .iter()
-                .map(|row| Self::row(row))
+            rows: std::mem::take(&mut result.rows)
+                .into_iter()
+                .map(Self::row)
                 .collect::<Result<_, _>>()?,
-            positions: result
-                .positions
-                .iter()
-                .copied()
+            positions: std::mem::take(&mut result.positions)
+                .into_iter()
                 .map(Self::position)
                 .collect(),
             limited: result.limited,
             evaluated_utc_ns: result.evaluated_utc_ns,
-            missing_contexts: result.missing_contexts.iter().map(Self::context).collect(),
-            graph_traversal: result.graph_traversal.as_ref().map(|receipt| {
+            missing_contexts: std::mem::take(&mut result.missing_contexts)
+                .into_iter()
+                .map(Self::context)
+                .collect(),
+            graph_traversal: result.graph_traversal.take().map(|receipt| {
                 proto::GraphTraversalReceipt {
-                    result_ids: receipt.result_ids.clone(),
+                    result_ids: receipt.result_ids,
                     unique_subject_count: receipt.unique_subject_count as u64,
                     versioned_subject_count: receipt.versioned_subject_count as u64,
                     relationship_count: receipt.relationship_count as u64,
@@ -266,19 +261,19 @@ impl WireFrame {
         })
     }
 
-    fn row(values: &[Value]) -> Result<proto::QueryRow, Status> {
+    fn row(values: Vec<Value>) -> Result<proto::QueryRow, Status> {
         Ok(proto::QueryRow {
             values: values
-                .iter()
-                .map(|value| WireValue::try_from(value).map(|value| value.0))
+                .into_iter()
+                .map(Self::value)
                 .collect::<Result<_, _>>()?,
         })
     }
 
-    fn column(column: &QueryColumn) -> proto::QueryColumn {
+    fn column(column: QueryColumn) -> proto::QueryColumn {
         proto::QueryColumn {
-            name: column.name.clone(),
-            data_type: column.data_type.clone(),
+            name: column.name,
+            data_type: column.data_type,
             units: column.units.into(),
             null_meaning: column.null_meaning.into(),
             join_keys: column.join_keys.into(),
@@ -294,11 +289,11 @@ impl WireFrame {
         }
     }
 
-    fn context(context: &AnalysisContextKeyV1) -> proto::ContextKey {
+    fn context(context: AnalysisContextKeyV1) -> proto::ContextKey {
         proto::ContextKey {
-            owner_id: context.owner_id.clone(),
-            entity_key: context.entity_key.clone(),
-            lifetime_key: context.lifetime_key.clone(),
+            owner_id: context.owner_id,
+            entity_key: context.entity_key,
+            lifetime_key: context.lifetime_key,
             owner_revision: context.owner_revision,
         }
     }
@@ -376,7 +371,7 @@ mod tests {
                 Kind::Unsigned128(u128::MAX.to_string()),
             ),
         ] {
-            assert_eq!(WireValue::try_from(&native)?.0.kind, Some(kind));
+            assert_eq!(WireFrame::value(native)?.kind, Some(kind));
         }
         let parameters = Parameters::try_from(vec![
             proto::QueryValue {
@@ -410,7 +405,17 @@ mod tests {
                 nanos: i64::MIN,
             },
         ];
-        let row = WireFrame::row(&values)?;
+        let (Value::Text(text), Value::Blob(binary)) = (&values[2], &values[3]) else {
+            return Err("scalar buffers absent".into());
+        };
+        let owned = (text.as_ptr(), binary.as_ptr());
+        let row = WireFrame::row(values)?;
+        let (Some(Kind::Text(text)), Some(Kind::Binary(binary))) =
+            (&row.values[2].kind, &row.values[3].kind)
+        else {
+            return Err("wire scalar buffers absent".into());
+        };
+        assert_eq!((text.as_ptr(), binary.as_ptr()), owned);
         assert_eq!(
             row.values,
             vec![
@@ -457,7 +462,7 @@ mod tests {
                 },
             ]
         );
-        assert!(WireValue::try_from(&Value::List(vec![Value::Null])).is_err());
+        assert!(WireFrame::value(Value::List(vec![Value::Null])).is_err());
         Ok(())
     }
 
@@ -588,11 +593,14 @@ mod tests {
             owner: "source receipt",
             readiness: "Reported",
         };
+        let owned = (column.name.as_ptr(), column.data_type.as_ptr());
+        let column = WireFrame::column(column);
+        assert_eq!((column.name.as_ptr(), column.data_type.as_ptr()), owned);
         assert_eq!(
-            WireFrame::column(&column),
+            column,
             proto::QueryColumn {
-                name: column.name,
-                data_type: column.data_type,
+                name: "cursor".into(),
+                data_type: "UBIGINT".into(),
                 units: "source cursor".into(),
                 null_meaning: "unavailable".into(),
                 join_keys: "source_id,cpu_id".into(),
@@ -613,8 +621,22 @@ mod tests {
             lifetime_key: vec![128, 0],
             owner_revision: u64::MAX,
         };
+        let owned = (
+            context.owner_id.as_ptr(),
+            context.entity_key.as_ptr(),
+            context.lifetime_key.as_ptr(),
+        );
+        let context = WireFrame::context(context);
         assert_eq!(
-            WireFrame::context(&context),
+            (
+                context.owner_id.as_ptr(),
+                context.entity_key.as_ptr(),
+                context.lifetime_key.as_ptr()
+            ),
+            owned
+        );
+        assert_eq!(
+            context,
             proto::ContextKey {
                 owner_id: "owner".into(),
                 entity_key: vec![0, 255],

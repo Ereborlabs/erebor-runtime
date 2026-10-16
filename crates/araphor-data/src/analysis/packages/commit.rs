@@ -1,7 +1,7 @@
 use duckdb::{params, OptionalExt as _, Transaction};
 use snafu::ResultExt as _;
 
-use super::{PackageCommitMetadata, PackageCommitV1, PackageResultRefV1};
+use super::{PackageCommitV1, PackageResultRefV1};
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
@@ -48,7 +48,7 @@ impl AnalysisStore {
     }
 
     pub(super) fn package_contract(input: &PackageCommitV1) -> Result<Vec<u8>> {
-        serde_json::to_vec(&PackageCommitMetadata::from(input)).context(JsonSnafu {
+        serde_json::to_vec(input).context(JsonSnafu {
             path: "<package-result>",
         })
     }
@@ -75,16 +75,12 @@ impl AnalysisStore {
             transaction,
             input.activation.key.tenant_id,
             &input.result_id,
+            &self.root,
         )?;
         let Some(retained) = retained else {
             return AnalysisConflictSnafu.fail();
         };
-        if contract != Self::package_contract(input)?
-            || retained.request != input.request
-            || retained.metadata != input.metadata
-            || retained.datasets != input.datasets
-            || retained.checkpoint != input.checkpoint
-        {
+        if contract != Self::package_contract(input)? || retained.commit != *input {
             return AnalysisConflictSnafu.fail();
         }
         Ok(Some(PackageResultRefV1 {
@@ -126,12 +122,9 @@ impl AnalysisStore {
             VALUES (?, ?, 'analysis-package', ?, ?, ?)",
             params![input.result_id, key.tenant_id.as_slice(), input.metadata, input.request, revision],
         ).context(AnalysisDatabaseSnafu { operation: "insert package receipt" })?;
-        let dependencies = serde_json::to_string(&input.dependencies).context(JsonSnafu {
-            path: "<package-result-dependencies>",
-        })?;
         transaction
             .execute(
-                "INSERT INTO package_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false, ?)",
+                "INSERT INTO package_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, false, ?)",
                 params![
                     input.result_id,
                     key.tenant_id.as_slice(),
@@ -142,7 +135,6 @@ impl AnalysisStore {
                     input.window_id,
                     input.datasets,
                     input.checkpoint,
-                    dependencies,
                     Self::package_contract(input)?
                 ],
             )

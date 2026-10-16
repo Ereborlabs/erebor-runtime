@@ -24,7 +24,7 @@ async fn suspended_package_renewal_restart() -> TestResult {
     let installed = fixture.install(package.clone(), None).await?;
     let original = &installed.exports[0].results[0];
     let historical = fixture.result(&original.result_id)?;
-    assert!(!historical.checkpoint.is_empty());
+    assert!(!historical.commit.checkpoint.is_empty());
 
     fixture.authority.set_revision(0);
     fixture.owner.reconcile().await?;
@@ -58,7 +58,7 @@ async fn suspended_package_renewal_restart() -> TestResult {
         export.results[0].result_id
     );
     let retained = fixture.result(&original.result_id)?;
-    assert_eq!(retained.checkpoint, historical.checkpoint);
-    assert_eq!(retained.datasets, historical.datasets);
+    assert_eq!(retained.commit.checkpoint, historical.commit.checkpoint);
+    assert_eq!(retained.commit.datasets, historical.commit.datasets);
     Ok(())
 }

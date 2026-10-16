@@ -42,11 +42,11 @@ impl TryFrom<&PackageResultV1> for PackageReceiptV1 {
     type Error = crate::Error;
 
     fn try_from(result: &PackageResultV1) -> crate::Result<Self> {
-        let metadata: ResultContext = AnalysisPackageOwner::decode(&result.metadata)?;
+        let metadata: ResultContext = AnalysisPackageOwner::decode(&result.commit.metadata)?;
         Ok(Self {
             target: metadata.target,
             artifact: metadata.artifact,
-            result_id: result.result_id.clone(),
+            result_id: result.commit.result_id.clone(),
             commit_revision: result.commit_revision,
             input_revisions: metadata.inputs,
             coverage: metadata.coverage,

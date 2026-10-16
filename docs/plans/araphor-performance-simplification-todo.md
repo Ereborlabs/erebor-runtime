@@ -41,11 +41,13 @@ Documentation and test consolidation do not establish that result.
 | Control context | One ordered source index and one replay cursor replace separate change maps and domain cursors. Preserve distinct-source conflicts, bounded replay, and retry after a failed durable write. | Not done |
 | Package transport | SDK wire types own datasets, inputs, reasons, outputs, and checkpoints. Remove Data's second wire model. Keep each boundary's current limits and error classes. | Not done |
 | Raw storage | The raw journal owns its physical segments, append decision, and recovery scan. Remove the generic segment owner and second frame decode. Keep acknowledgement before SQL publication, sealed length checks, leases, pins, quota, and recovery after database loss. | Done |
-| Discovery and graph values | The existing built-ins crate owns shared pure values. Data retains source qualification and host output checks. Remove mirrored values and field conversion owners. Execute the selected installed artifact. | Not done |
+| Discovery and graph values | The existing built-ins crate owns shared pure values. Data retains source qualification and host output checks. Remove mirrored values and field conversion owners. Execute the selected installed artifact. | Done |
 | Follow positions | SQL views expose position aliases from existing columns. Remove copied hidden values from each input row. Keep position type checks, repeat-call denial, bounds, and source cleanup. | Done |
 | Native graph rows | Append from canonical graph values and decode native cells into those values. Remove buffered row DTOs and their byte formulas. Keep native schema, result-scoped charges, explicit flushes, rollback, bounds, and corruption checks. | Done |
 | SQL admission | Use the production parser for the former offline proof cases. Remove the unused parser. Keep fixed-bound disjunction parity, source scope, parameter bounds, and moving-clock denial. | Done |
 | Discovery page admission | Reuse the admitted snapshot and input-byte total. Remove the second detector execution, merge, and input-size pass for an accepted page. Keep candidate bounds, context references, progress, and commit authorization. | Done |
+| Package result contract | Store `PackageCommitV1` as the canonical contract. Remove the cloned metadata DTO and duplicate dependency JSON column. Keep native index checks, full retry identity, authorization, dependency references, and exact charges. | Done |
+| Query transport | Move owned values into transport output. Remove the scalar wrapper and text, binary, column, and context-key clones. Keep output leases through the next poll or drop. | Done |
 
 Do not replace native pointer checks with IPC copies or remove the supported
 graph traversal contract to obtain a line count. Reuse must remove an owner or
@@ -120,11 +122,39 @@ No new performance test or benchmark is approved. Do not infer speed gains
 from changed test-suite durations. Record removed work from the final source.
 Measure latency only after approval of a specific workload and its limits.
 
-Result: **Not done**. The current source removes 2,119 nonblank production Rust
-lines from `7b7b407a` and 963 from `aa390d9f`. The current component changes
-remove 534 from `d69f03c5`. Another 3,881 must be removed to meet the target.
+Result: **Not done**. The current source removes 2,137 nonblank production Rust
+lines from `7b7b407a` and 984 from `aa390d9f`. The package contract and transport
+changes remove 18 from `6509fa70`. Another 3,863 must be removed to meet the target.
 Continue component refactoring. Documentation and test deletion do not close
 this result.
+
+The package contract and transport iteration passed the affected Data,
+Control, and end-to-end test build in 179.37 seconds. All 83 selected Data
+tests passed. Of the 29 selected Control tests, 25 passed on the first run.
+Four cases lost their 60-second fixture session during concurrent setup.
+Those four cases passed unchanged in a sequential run. No assertion or
+deadline was removed. All 112 selected functional cases have passing results.
+Strict Clippy passed for these three crates and their test targets in 87.87
+seconds. Formatting and `git diff --check` passed. Source and test binary
+hashes stayed fixed. The records are `/tmp/araphor-contract-build3.json`,
+`/tmp/araphor-contract-tests1.json`, `/tmp/araphor-contract-failed-tests1.json`,
+and `/tmp/araphor-contract-clippy2.json`.
+
+Six native libraries were built from the current locked source in 42.18
+seconds. All 12 native Data cases and the installed native detector end-to-end
+case passed. The latter ran with `PATH` empty. Source, artifact, and test binary
+hashes stayed fixed. These checks cover Linux, `x86_64-unknown-linux-gnu`, and
+glibc 2.39. They do not qualify other targets. The records are
+`/tmp/araphor-deletion-native-build.json` and
+`/tmp/araphor-deletion-native-qualification.json`. This qualification covers
+the shared values, direct graph storage, and package contract changes.
+
+The current count record is `/tmp/araphor-contract-syntax-counts2.json`.
+The count also excludes code that is available only through the
+`test-fixtures` or `test-support` features. Other feature code remains
+production code. This correction changes the earlier `aa390d9f` comparison
+from 963 to 966 deleted lines before this iteration. It does not change the
+earlier 2,119-line comparison with `7b7b407a`.
 
 The direct-storage iteration passed the affected test build in 353.74 seconds,
 strict Clippy, and all 130 selected tests: 18 built-in cases, 95 Data cases,
@@ -136,7 +166,7 @@ source cleanup. Source and test binary hashes stayed fixed. The records are
 `/tmp/araphor-direct-tests1.json`, and
 `/tmp/araphor-direct-admission-tests1.json`.
 
-The current count record is `/tmp/araphor-direct-syntax-counts1.json`. The
+The direct-storage count record is `/tmp/araphor-direct-syntax-counts2.json`. The
 extraction change reduces stored pipeline and operation-closure symbols from
 51 to five in the Data test binary. That compiled-code reduction does not
 count toward the source target and does not measure production latency.
@@ -160,9 +190,9 @@ and test binary hashes stayed fixed during the test run. The records are
 
 Strict Clippy passed for the two affected libraries after two local lint fixes:
 use `?` for an optional atom key, and import test-only names under `cfg(test)`.
-The record is `/tmp/araphor-components-clippy3.json`. Current native artifact
-qualification remains pending. Shared value changes require rebuilt native
-and Wasm packages; an older artifact is not current proof.
+The record is `/tmp/araphor-components-clippy3.json`. The native qualification
+above uses rebuilt native and Wasm packages. Shared value changes require
+these current artifacts; an older artifact is not current proof.
 All 18 built-in tests passed again after the lint fixes. Their record is
 `/tmp/araphor-components-builtins-tests2.json`. Formatting passed for both
 affected crates.
@@ -173,7 +203,7 @@ The records are `/tmp/araphor-deletion-build5.json`,
 `/tmp/araphor-deletion-clippy2.json`, and
 `/tmp/araphor-components-focused2.json`. The broader CI run was interrupted
 at the user's request to use relevant checks per iteration. It is not a passing
-CI receipt. Current native artifact qualification remains pending.
+CI receipt. The current native qualification is recorded above.
 
 The previous check at `7b7b407a` ran on 2026-10-15. The source manifest contains 1,401 input
 files. Its SHA-256 is:

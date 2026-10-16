@@ -1145,24 +1145,25 @@ async fn observability_grpc_trace_stream() -> TestResult {
         trace_id: vec![6; 16],
         bookmark: Vec::new(),
     };
-    let mut stream = fixture
-        .service
-        .watch_trace(fixture.request(request.clone(), false)?)
-        .await?
-        .into_inner();
+    let input = fixture.request(request.clone(), false)?;
+    let access = fixture.service.authenticate(&input, false).await?;
+    let mut stream = fixture.service.watch(input.into_inner(), access).await?;
     let metadata = Fixture::next(&mut stream).await?;
     assert_eq!(metadata.store_uuid.len(), 16);
     assert!(matches!(
         metadata.payload,
         Some(proto::trace_frame::Payload::Metadata(_))
     ));
+    assert!(!stream.holds_output());
     let output = Fixture::next(&mut stream).await?;
+    assert!(stream.holds_output());
     assert_eq!(output.sequence, 1);
     assert!(output.commit_revision <= output.read_revision);
     assert!(
         matches!(output.payload, Some(proto::trace_frame::Payload::Output(value)) if value.bytes == b"hello")
     );
     let checkpoint = Fixture::next(&mut stream).await?;
+    assert!(!stream.holds_output());
     assert!(matches!(
         checkpoint.payload,
         Some(proto::trace_frame::Payload::Checkpoint(_))

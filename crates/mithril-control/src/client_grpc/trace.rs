@@ -422,20 +422,26 @@ impl TraceTransport {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn holds_output(&self) -> bool {
+        self.held.is_some()
+    }
+
     fn output(&mut self) -> Result<proto::TraceFrame, Status> {
         let frame = self
             .held
-            .as_ref()
+            .as_mut()
+            .and_then(Arc::get_mut)
             .ok_or_else(|| Status::internal("Trace output is absent."))?;
-        let QueryPayload::Append { result } = &frame.payload else {
+        let QueryPayload::Append { result } = &mut frame.payload else {
             return Err(Status::internal("Trace output operation changed."));
         };
         let row = result
             .rows
-            .get(self.row)
+            .get_mut(self.row)
             .ok_or_else(|| Status::internal("Trace output row is absent."))?;
         let [Value::Blob(execution), index, sequence, Value::Text(kind), Value::Blob(bytes), ..] =
-            row.as_slice()
+            row.as_mut_slice()
         else {
             return Err(Status::data_loss("Trace output schema changed."));
         };
@@ -455,11 +461,12 @@ impl TraceTransport {
             .positions
             .get(self.row)
             .ok_or_else(|| Status::data_loss("Trace output has no committed position."))?;
-        let payload = if kind == "terminal" {
+        let position = (position.commit_revision, position.ordinal);
+        let payload = if kind.as_str() == "terminal" {
             let terminal: crate::TraceTerminalV1 = serde_json::from_slice(bytes)
                 .map_err(|_| Status::data_loss("The retained trace terminal is invalid."))?;
             terminal.validate().map_err(ClientGrpcOwner::failure)?;
-            if terminal.execution_id.as_slice() != execution {
+            if terminal.execution_id.as_slice() != execution.as_slice() {
                 return Err(Status::data_loss("The terminal names another execution."));
             }
             let value = proto::TraceTerminal {
@@ -477,14 +484,15 @@ impl TraceTransport {
             proto::trace_frame::Payload::Terminal(value)
         } else {
             proto::trace_frame::Payload::Output(proto::TraceOutput {
-                kind: kind.clone(),
-                bytes: bytes.clone(),
+                kind: std::mem::take(kind),
+                bytes: std::mem::take(bytes),
             })
         };
+        let execution = std::mem::take(execution);
         Ok(proto::TraceFrame {
-            commit_revision: position.commit_revision,
-            ordinal: position.ordinal,
-            execution_id: execution.clone(),
+            commit_revision: position.0,
+            ordinal: position.1,
+            execution_id: execution,
             sequence,
             target_index: index as u32,
             ..self.frame(payload)
@@ -496,6 +504,9 @@ impl Stream for TraceTransport {
     type Item = Result<proto::TraceFrame, Status>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.held.as_ref().is_some_and(|frame| matches!(&frame.payload, QueryPayload::Append { result } if self.row >= result.rows.len())) {
+            self.held = None;
+        }
         if self.done {
             return Poll::Ready(None);
         }
@@ -574,12 +585,6 @@ impl Stream for TraceTransport {
                 }
                 let output = self.output();
                 self.row += 1;
-                if let Some(frame) = &self.held {
-                    if matches!(&frame.payload, QueryPayload::Append { result } if self.row >= result.rows.len())
-                    {
-                        self.held = None;
-                    }
-                }
                 if output.is_err() {
                     self.done = true;
                 }

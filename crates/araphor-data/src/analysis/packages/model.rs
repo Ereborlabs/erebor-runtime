@@ -57,66 +57,33 @@ pub(crate) struct PackageResultRefV1 {
     pub commit_revision: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PackageResultV1 {
-    pub key: PackageKeyV1,
-    pub activation: PackageActivationV1,
-    pub window_id: String,
-    pub revision: String,
-    pub result_id: String,
-    pub request: Vec<u8>,
-    pub metadata: Vec<u8>,
-    pub datasets: Vec<u8>,
-    pub checkpoint: Vec<u8>,
-    pub dependencies: Vec<PackageResultRefV1>,
+    pub commit: PackageCommitV1,
     pub commit_revision: u64,
     pub stale: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct PackageCommitV1 {
     pub activation: PackageActivationV1,
+    #[serde(rename = "checkpoint_revision")]
     pub expected_checkpoint_revision: u64,
     pub window_id: String,
     pub result_id: String,
+    #[serde(skip)]
     pub request: Vec<u8>,
+    #[serde(skip)]
     pub metadata: Vec<u8>,
+    #[serde(skip)]
     pub datasets: Vec<u8>,
+    #[serde(skip)]
     pub checkpoint: Vec<u8>,
     pub dependencies: Vec<PackageResultRefV1>,
     pub source_revisions: Vec<(String, u64)>,
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub context_refs: Vec<AnalysisContextRefV1>,
     pub created_utc_ns: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct PackageCommitMetadata {
-    pub activation: PackageActivationV1,
-    pub checkpoint_revision: u64,
-    pub window_id: String,
-    pub result_id: String,
-    pub dependencies: Vec<PackageResultRefV1>,
-    pub source_revisions: Vec<(String, u64)>,
-    pub witnesses: Vec<AnalysisWitnessV1>,
-    pub context_refs: Vec<AnalysisContextRefV1>,
-    pub created_utc_ns: u64,
-}
-
-impl From<&PackageCommitV1> for PackageCommitMetadata {
-    fn from(input: &PackageCommitV1) -> Self {
-        Self {
-            activation: input.activation.clone(),
-            checkpoint_revision: input.expected_checkpoint_revision,
-            window_id: input.window_id.clone(),
-            result_id: input.result_id.clone(),
-            dependencies: input.dependencies.clone(),
-            source_revisions: input.source_revisions.clone(),
-            witnesses: input.witnesses.clone(),
-            context_refs: input.context_refs.clone(),
-            created_utc_ns: input.created_utc_ns,
-        }
-    }
 }
 
 impl PackageKeyV1 {

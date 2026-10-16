@@ -36,7 +36,7 @@ impl AnalysisStore {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             ).optional().context(AnalysisDatabaseSnafu { operation: "read current package metadata" })?;
             let Some((body, metadata)) = row else { return Ok(None); };
-            let metadata: super::PackageCommitMetadata = serde_json::from_slice(&metadata)
+            let metadata: super::PackageCommitV1 = serde_json::from_slice(&metadata)
                 .context(JsonSnafu { path: "<package-commit>" })?;
             if metadata.witnesses.iter().any(|witness| witness.expires_utc_ns <= now) {
                 return Ok(None);
@@ -268,33 +268,44 @@ impl AnalysisStore {
         tenant: [u8; 16],
         id: &str,
     ) -> Result<Option<PackageResultV1>> {
-        self.read_snapshot(|reader| Self::package_result_from(reader, tenant, id))
+        self.read_snapshot(|reader| Self::package_result_from(reader, tenant, id, &self.root))
     }
 
     pub(super) fn package_result_from(
         reader: &Connection,
         tenant: [u8; 16],
         id: &str,
+        root: &std::path::Path,
     ) -> Result<Option<PackageResultV1>> {
         let row = reader.query_row(
             "SELECT r.scope_id, r.package_id, r.export_name, r.window_id, r.revision,
-                x.request_meta, x.body, r.datasets, r.checkpoint, r.dependencies, x.commit_revision, r.stale, r.commit_meta
+                x.request_meta, x.body, r.datasets, r.checkpoint, x.commit_revision, r.stale, r.commit_meta
              FROM package_results r JOIN analysis_results x USING (result_id)
              WHERE r.tenant_id = ? AND r.result_id = ?",
             params![tenant.as_slice(), id],
-            |row| Ok((PackageResultV1 {
-                key: PackageKeyV1 { tenant_id: tenant, scope_id: row.get(0)?, package_id: row.get(1)?, export: row.get(2)? },
-                activation: serde_json::from_slice::<super::PackageCommitMetadata>(&row.get::<_, Vec<u8>>(12)?)
-                    .map_err(|error| duckdb::Error::FromSqlConversionFailure(12, duckdb::types::Type::Blob, Box::new(error)))?.activation,
-                window_id: row.get(3)?, revision: row.get(4)?, result_id: id.into(), request: row.get(5)?,
-                metadata: row.get(6)?, datasets: row.get(7)?, checkpoint: row.get(8)?, dependencies: Vec::new(),
-                commit_revision: row.get(10)?, stale: row.get(11)?,
-            }, row.get::<_, String>(9)?)),
+            |row| {
+                let mut commit: super::PackageCommitV1 = serde_json::from_slice(&row.get::<_, Vec<u8>>(11)?)
+                    .map_err(|error| duckdb::Error::FromSqlConversionFailure(11, duckdb::types::Type::Blob, Box::new(error)))?;
+                let invalid = if commit.result_id != id || commit.activation.key.tenant_id != tenant {
+                    Some("the retained package result contract differs")
+                } else if commit.activation.key != (PackageKeyV1 {
+                    tenant_id: tenant, scope_id: row.get(0)?, package_id: row.get(1)?, export: row.get(2)?,
+                }) || commit.window_id != row.get::<_, String>(3)? || commit.activation.revision != row.get::<_, String>(4)? {
+                    Some("the retained package result key differs")
+                } else {
+                    None
+                };
+                commit.request = row.get(5)?;
+                commit.metadata = row.get(6)?;
+                commit.datasets = row.get(7)?;
+                commit.checkpoint = row.get(8)?;
+                Ok((PackageResultV1 { commit, commit_revision: row.get(9)?, stale: row.get(10)? }, invalid))
+            },
         ).optional().context(AnalysisDatabaseSnafu { operation: "read package result" })?;
-        row.map(|(mut result, dependencies)| {
-            result.dependencies = serde_json::from_str(&dependencies).context(JsonSnafu {
-                path: "<result-dependencies>",
-            })?;
+        row.map(|(result, invalid)| {
+            if let Some(reason) = invalid {
+                return Self::reject_path(root, reason);
+            }
             Ok(result)
         })
         .transpose()
@@ -303,8 +314,7 @@ impl AnalysisStore {
     pub(crate) fn package_results(&self, key: &PackageKeyV1) -> Result<Vec<PackageResultV1>> {
         self.read_snapshot(|reader| {
             let bytes: u64 = reader.query_row("SELECT COALESCE(SUM(octet_length(r.datasets) + octet_length(r.checkpoint)
-                + octet_length(x.body) + octet_length(x.request_meta) + octet_length(r.commit_meta)
-                + length(r.dependencies)), 0)::UBIGINT
+                + octet_length(x.body) + octet_length(x.request_meta) + octet_length(r.commit_meta)), 0)::UBIGINT
                 FROM package_heads h JOIN package_results r USING (result_id) JOIN analysis_results x USING (result_id)
                 WHERE h.tenant_id = ? AND h.scope_id = ? AND h.package_id = ? AND h.export_name = ?",
                 params![key.tenant_id.as_slice(), key.scope_id, key.package_id, key.export], |row| row.get(0),
@@ -321,7 +331,7 @@ impl AnalysisStore {
             ).context(AnalysisDatabaseSnafu { operation: "select package results" })?
                 .collect::<duckdb::Result<Vec<_>>>().context(AnalysisDatabaseSnafu { operation: "decode package result keys" })?;
             if ids.len() > MAX_PACKAGE_ROWS { return self.reject("the package results exceed their row limit"); }
-            ids.into_iter().map(|id| Self::package_result_from(reader, key.tenant_id, &id)?
+            ids.into_iter().map(|id| Self::package_result_from(reader, key.tenant_id, &id, &self.root)?
                 .ok_or_else(|| self.state_error("the package result is absent"))).collect()
         })
     }

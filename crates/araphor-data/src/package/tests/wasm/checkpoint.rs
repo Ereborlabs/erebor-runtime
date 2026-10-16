@@ -133,10 +133,10 @@ pub(in crate::package::tests) async fn replay(
     assert_state(&fixture, &second, target, 9)?;
     assert_ne!(second.exports[0].results[0].result_id, receipt.result_id);
     let original = fixture.result(&receipt.result_id)?;
-    assert_eq!(original.datasets, retained.datasets);
-    assert_eq!(original.checkpoint, retained.checkpoint);
+    assert_eq!(original.commit.datasets, retained.commit.datasets);
+    assert_eq!(original.commit.checkpoint, retained.commit.checkpoint);
     assert_eq!(original.commit_revision, retained.commit_revision);
-    assert_eq!(original.metadata, retained.metadata);
+    assert_eq!(original.commit.metadata, retained.commit.metadata);
     let old = fixture.execute(run("first")).await?;
     assert_receipt(&old.exports[0].results[0], &receipt)?;
     let output = fixture.output("runtime-fixture", "accumulate", &receipt.result_id)?;

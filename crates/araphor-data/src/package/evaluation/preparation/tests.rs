@@ -163,7 +163,7 @@ async fn automatic_clock_ticks() -> TestResult {
                 .store
                 .commit_package(&prepared, || control.check())?;
             let stored = fixture.result(&committed.result_id)?;
-            let saved: ResultContext = AnalysisPackageOwner::decode(&stored.metadata)?;
+            let saved: ResultContext = AnalysisPackageOwner::decode(&stored.commit.metadata)?;
             assert_eq!(saved.context.time_utc_ns, tick as i64);
             let active = fixture.store.package_activation_page(None)?.remove(0);
             let repeated = RunPreparation {

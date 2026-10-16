@@ -33,9 +33,13 @@ impl QueryOwner {
             .store
             .package_result(key.tenant_id, &id)?
             .filter(|result| {
-                !result.stale && result.key == key && result.revision == reference.revision
+                !result.stale
+                    && result.commit.activation.key == key
+                    && result.commit.activation.revision == reference.revision
             })
             .ok_or_else(|| Code::Incomplete.error("dependency freshness"))?;
+        let commit_revision = result.commit_revision;
+        let result = result.commit;
         let installed: InstalledContext =
             AnalysisPackageOwner::decode(&result.activation.metadata)?;
         AnalysisPackageOwner::permits(request.grant, &installed.grant)?;
@@ -77,7 +81,7 @@ impl QueryOwner {
                 data,
                 revision: sdk::Revision {
                     owner: format!("{}.{}", reference.package, reference.export),
-                    id: format!("{}:{}", result.result_id, result.commit_revision),
+                    id: format!("{}:{}", result.result_id, commit_revision),
                     window: None,
                 },
                 coverage: metadata.coverage,
@@ -86,7 +90,7 @@ impl QueryOwner {
             contexts,
             dependencies: vec![PackageResultRefV1 {
                 result_id: result.result_id,
-                commit_revision: result.commit_revision,
+                commit_revision,
             }],
             source_revisions: Vec::new(),
             _lease: self.budget.retained_input(bytes)?,

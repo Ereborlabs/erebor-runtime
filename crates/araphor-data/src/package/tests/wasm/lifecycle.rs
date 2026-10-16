@@ -80,7 +80,7 @@ async fn wasm_installed_lifecycle() -> TestResult {
         .map_err(|_| PackageErrorCodeV1::Incomplete.error("fixture commit observation"))?
         .take()
         .ok_or("upgrade commit observation absent")?;
-    assert_eq!(committed.revision, "2");
+    assert_eq!(committed.commit.activation.revision, "2");
     let receipt = PackageReceiptV1::try_from(&committed)?;
     assert_eq!(receipt.target, "wasm");
     assert!(!receipt.stale);
@@ -92,7 +92,7 @@ async fn wasm_installed_lifecycle() -> TestResult {
         .ok_or("returned upgrade receipt absent")?;
     if returned.stale {
         let saved: crate::package::evaluation::ResultContext =
-            AnalysisPackageOwner::decode(&committed.metadata)?;
+            AnalysisPackageOwner::decode(&committed.commit.metadata)?;
         assert!(AnalysisPackageOwner::clock_changed(
             true,
             saved.context.time_utc_ns,
@@ -100,7 +100,7 @@ async fn wasm_installed_lifecycle() -> TestResult {
         ));
     }
     assert_receipt(&returned, &receipt)?;
-    let output: sdk::wire::Output = AnalysisPackageOwner::decode(&committed.datasets)?;
+    let output: sdk::wire::Output = AnalysisPackageOwner::decode(&committed.commit.datasets)?;
     assert_eq!(
         crate::AnalysisPackageOwner::output_rows(&output)?["data"],
         serde_json::json!([{"value":7}])

@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
-use super::{PackageCommitMetadata, PackageRevisionRefV1};
+use super::{PackageCommitV1, PackageRevisionRefV1};
 use crate::{AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
@@ -69,46 +69,48 @@ impl AnalysisStore {
                 }
             }
         }
-        let mut statement = reader.prepare("SELECT r.result_id, r.tenant_id, r.commit_meta, r.dependencies FROM package_results r")
-            .context(AnalysisDatabaseSnafu { operation: "prepare retained package results" })?;
+        let mut statement = reader
+            .prepare("SELECT r.result_id, r.tenant_id, r.commit_meta FROM package_results r")
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare retained package results",
+            })?;
         let rows = statement
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, Vec<u8>>(1)?,
                     row.get::<_, Vec<u8>>(2)?,
-                    row.get::<_, String>(3)?,
                 ))
             })
             .context(AnalysisDatabaseSnafu {
                 operation: "read retained package results",
             })?;
         for row in rows {
-            let (id, tenant, contract, dependencies) = row.context(AnalysisDatabaseSnafu {
+            let (id, tenant, contract) = row.context(AnalysisDatabaseSnafu {
                 operation: "decode retained package result",
             })?;
-            let contract: PackageCommitMetadata =
+            let contract: PackageCommitV1 =
                 serde_json::from_slice(&contract).context(JsonSnafu { path: root })?;
-            if contract.result_id != id
-                || contract.activation.key.tenant_id.as_slice() != tenant
-                || serde_json::to_string(&contract.dependencies)
-                    .context(JsonSnafu { path: root })?
-                    != dependencies
-            {
+            if contract.result_id != id || contract.activation.key.tenant_id.as_slice() != tenant {
                 return Self::reject_path(root, "the retained package result contract differs");
             }
-            let result = Self::package_result_from(reader, contract.activation.key.tenant_id, &id)?
-                .ok_or_else(|| {
-                    crate::AnalysisStateSnafu {
-                        path: root,
-                        reason: "the retained package result is absent",
-                    }
-                    .build()
-                })?;
-            if result.key != contract.activation.key
-                || result.revision != contract.activation.revision
-                || result.window_id != contract.window_id
-                || contract.source_revisions.len() > 64
+            let result =
+                Self::package_result_from(reader, contract.activation.key.tenant_id, &id, root)?
+                    .ok_or_else(|| {
+                        crate::AnalysisStateSnafu {
+                            path: root,
+                            reason: "the retained package result is absent",
+                        }
+                        .build()
+                    })?;
+            if serde_json::to_vec(&contract.dependencies)
+                .context(JsonSnafu { path: root })?
+                .len()
+                > super::MAX_PACKAGE_METADATA_BYTES
+            {
+                return Self::reject_path(root, "invalid package result");
+            }
+            if contract.source_revisions.len() > 64
                 || contract
                     .source_revisions
                     .windows(2)
@@ -128,7 +130,15 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "count retained package references",
                 })?;
-            if count != contract.dependencies.len() as u64 {
+            if count != contract.dependencies.len() as u64
+                || contract
+                    .dependencies
+                    .iter()
+                    .map(|dependency| &dependency.result_id)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != contract.dependencies.len()
+            {
                 return Self::reject_path(root, "the retained package references differ");
             }
             for dependency in contract.dependencies {

@@ -171,7 +171,7 @@ impl AnalysisPackageOwner {
                     package_id: active.key.package_id.clone(),
                     revision: active.revision.clone(),
                 })?;
-                if previous.request != Self::request(active, id, &context, artifact)? {
+                if previous.commit.request != Self::request(active, id, &context, artifact)? {
                     return Err(Code::Conflict.error("evaluation retry"));
                 }
                 control.check()?;

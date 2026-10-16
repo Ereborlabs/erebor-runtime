@@ -137,7 +137,7 @@ impl AnalysisStore {
                     operation: "decode package evidence manifest",
                 })?;
                 let (source_witnesses, source_contexts) = if processor == "analysis-package" {
-                    let contract: super::PackageCommitMetadata = serde_json::from_slice(&metadata)
+                    let contract: super::PackageCommitV1 = serde_json::from_slice(&metadata)
                         .context(JsonSnafu {
                             path: "<package-evidence>",
                         })?;

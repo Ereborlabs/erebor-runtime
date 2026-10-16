@@ -36,9 +36,9 @@ async fn native_host_fault_restart() -> TestResult {
             Some(before.clone())
         );
         let retained = fixture.result(result_id)?;
-        assert_eq!(retained.datasets, stored.datasets);
-        assert_eq!(retained.checkpoint, stored.checkpoint);
-        assert_eq!(retained.metadata, stored.metadata);
+        assert_eq!(retained.commit.datasets, stored.commit.datasets);
+        assert_eq!(retained.commit.checkpoint, stored.commit.checkpoint);
+        assert_eq!(retained.commit.metadata, stored.commit.metadata);
         assert_eq!(fixture.owner.operations.available_permits(), 4);
         let recovered = fixture.execute(run("after-panic")).await?;
         assert_output(&fixture, &recovered, "native", 9)?;
@@ -84,14 +84,14 @@ async fn native_host_fault_restart() -> TestResult {
         }
         let fixture = Fixture::open(root.clone())?;
         let retained = fixture.result(before_id)?;
-        assert_eq!(retained.datasets, stored.datasets);
-        assert_eq!(retained.checkpoint, stored.checkpoint);
-        assert_eq!(retained.metadata, stored.metadata);
+        assert_eq!(retained.commit.datasets, stored.commit.datasets);
+        assert_eq!(retained.commit.checkpoint, stored.commit.checkpoint);
+        assert_eq!(retained.commit.metadata, stored.commit.metadata);
         assert_eq!(retained.commit_revision, stored.commit_revision);
         let original = fixture.result(&initial_id)?;
-        assert_eq!(original.datasets, stored_initial.datasets);
-        assert_eq!(original.checkpoint, stored_initial.checkpoint);
-        assert_eq!(original.metadata, stored_initial.metadata);
+        assert_eq!(original.commit.datasets, stored_initial.commit.datasets);
+        assert_eq!(original.commit.checkpoint, stored_initial.commit.checkpoint);
+        assert_eq!(original.commit.metadata, stored_initial.commit.metadata);
         let replay = fixture.execute(run("before-fault")).await?;
         assert_eq!(replay.exports[0].results[0].result_id, initial_id);
         assert_output(&fixture, &replay, "native", 6)?;

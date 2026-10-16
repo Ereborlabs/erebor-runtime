@@ -102,13 +102,13 @@ async fn query_reads_later_output() -> TestResult {
         );
         let stored = fixture.result(&receipt.result_id)?;
         assert_eq!(
-            stored.dependencies,
+            stored.commit.dependencies,
             vec![PackageResultRefV1 {
                 result_id: source.result_id.clone(),
                 commit_revision: source.commit_revision,
             }]
         );
-        let metadata: ResultContext = serde_json::from_slice(&stored.metadata)?;
+        let metadata: ResultContext = serde_json::from_slice(&stored.commit.metadata)?;
         assert_eq!(metadata.inputs, receipt.input_revisions);
         assert_eq!(metadata.input_coverage.len(), 2);
         for reopen in [false, true] {

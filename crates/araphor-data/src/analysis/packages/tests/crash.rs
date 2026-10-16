@@ -55,8 +55,8 @@ fn packages_commit_crashes() -> TestResult {
                 assert_eq!(current.result_id.as_deref(), Some("after"));
                 assert_eq!(current.checkpoint_revision, result.commit_revision);
                 assert_eq!(current.revision, if upgrade { "v2" } else { "v1" });
-                assert_eq!(result.checkpoint, b"state");
-                assert_eq!(result.datasets, b"rows");
+                assert_eq!(result.commit.checkpoint, b"state");
+                assert_eq!(result.commit.datasets, b"rows");
             }
         }
     }

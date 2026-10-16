@@ -87,7 +87,7 @@ impl AnalysisPackageOwner {
         }
         let prior = previous
             .as_ref()
-            .map(|previous| Self::decode::<ResultContext>(&previous.metadata))
+            .map(|previous| Self::decode::<ResultContext>(&previous.commit.metadata))
             .transpose()?;
         if action == Action::Inspect {
             if let Some(prior) = prior
@@ -210,11 +210,11 @@ impl ModelRun<'_> {
         let checkpoint = if self.unchanged && !rebuild {
             self.previous
                 .as_ref()
-                .filter(|previous| !previous.checkpoint.is_empty())
+                .filter(|previous| !previous.commit.checkpoint.is_empty())
                 .map(|previous| {
                     AnalysisPackageOwner::decode_checkpoint(
                         &AnalysisPackageOwner::decode::<sdk::wire::Checkpoint>(
-                            &previous.checkpoint,
+                            &previous.commit.checkpoint,
                         )?,
                         self.model,
                     )

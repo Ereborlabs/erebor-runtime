@@ -8,6 +8,7 @@ mod context;
 mod crash;
 mod evidence;
 mod lifecycle;
+mod representation;
 
 fn package(id: &str, revision: &str) -> crate::Result<PackageRevisionV1> {
     let mut descriptor = araphor_analysis_sdk::Package::new(
@@ -164,8 +165,8 @@ fn packages_replace_invalidates_dependents() -> TestResult {
     store.commit_package(&replacement, || Ok(()))?;
     let results = store.package_results(&first.key)?;
     assert_eq!(results.len(), 1);
-    assert!(results[0].datasets.is_empty());
-    assert_eq!(results[0].result_id, "first-2");
+    assert!(results[0].commit.datasets.is_empty());
+    assert_eq!(results[0].commit.result_id, "first-2");
     assert!(store.package_results(&second.key)?[0].stale);
     dependent.activation = store
         .package_activation(&second.key)?

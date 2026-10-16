@@ -77,6 +77,15 @@ retains at most one previous installed snapshot across calls. The last
 snapshot reference releases its metadata lease. The last bundle reference
 releases its content lease.
 
+[PackageCommitV1](../../crates/araphor-data/src/analysis/packages/model.rs)
+owns the commit contract and its payloads. The stored result retains this
+contract. It has no second metadata DTO or dependency JSON column. The
+[result reader](../../crates/araphor-data/src/analysis/packages/read.rs)
+checks native tenant, installation, window, and revision indexes against the
+contract. Dependency references keep their native index and exact revision
+checks. [Representation tests](../../crates/araphor-data/src/analysis/packages/tests/representation.rs)
+cover canonical bytes, complete retry identity, corruption, backup, and charges.
+
 ## Shared analysis values
 
 The existing built-ins crate owns the pure
@@ -235,6 +244,15 @@ waits on a change or closed channel. Watch drop joins the worker. Package
 execution also checks its grant before and after work and at commit.
 The synchronous watch uses a separate event thread. A blocked caller's Tokio
 executor cannot prevent that thread from receiving an authority change.
+
+[WireFrame](../../crates/mithril-control/src/client_grpc/wire.rs) moves owned
+query rows, text, binary values, columns, and context keys into transport
+output. The original frame retains its memory lease until the next poll or
+drop. [TraceTransport](../../crates/mithril-control/src/client_grpc/trace.rs)
+checks the output schema, sequence, position, and terminal identity before it
+moves buffers. It also retains the last output frame until the next poll.
+The scalar and transport tests retain their existing value and denial checks.
+New pointer checks prove that text and binary buffers are moved.
 
 ## Durable context, capacity, retention, and quota: items 3, 9, 16, and 17
 
