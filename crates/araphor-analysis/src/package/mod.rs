@@ -36,7 +36,6 @@ pub struct AnalysisPackageOwner {
     operations: Arc<tokio::sync::Semaphore>,
     lifecycle: Arc<std::sync::Mutex<()>>,
     wasm: wasm::WasmExecution,
-    native: native::NativeExecution,
     pub(crate) limits: crate::AnalysisLimits,
 }
 

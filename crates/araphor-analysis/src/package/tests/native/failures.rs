@@ -1,5 +1,91 @@
 use super::*;
 
+#[test]
+fn native_caps_defer_admission() -> TestResult {
+    use crate::AnalysisReadControl;
+    use araphor_analysis_sdk as sdk;
+
+    for (bytes, code, field) in [
+        (
+            0,
+            PackageErrorCodeV1::Invalid,
+            "native resource configuration",
+        ),
+        (
+            1024,
+            PackageErrorCodeV1::Unsupported,
+            "in-process native resource limits",
+        ),
+    ] {
+        let fixture = Fixture::new_backend_limits(
+            Default::default(),
+            crate::AnalysisLimits {
+                native: crate::NativeLimits {
+                    memory_bytes: Some(bytes),
+                    cpu_seconds: None,
+                },
+                ..Default::default()
+            },
+        )?;
+        let mut bundle = super::super::bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
+        let artifact = &mut bundle.artifacts[0];
+        artifact.implementations = vec![PackageImplementationV1::Native {
+            export: "count".into(),
+            artifact: b"invalid".to_vec(),
+            qualification: Some(araphor_data::Qualification {
+                exports: vec!["count".into()],
+                target: "foreign-target".into(),
+                cpu_features: Vec::new(),
+                contract_version: 1,
+                system_libraries: Vec::new(),
+                dependencies: Vec::new(),
+            }),
+        }];
+        let model = &artifact.descriptor.exports[0];
+        let admitted =
+            crate::model::AdmittedExport::compile(&fixture.owner.query, artifact, model)?;
+        let evaluation = sdk::Evaluation {
+            export: "count".into(),
+            inputs: Vec::new(),
+            parameters: None,
+            checkpoint: None,
+            context: sdk::EvaluationContext {
+                id: "native-cap".into(),
+                time_utc_ns: 0,
+                seed: None,
+                limits: model.limits,
+            },
+        };
+        let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
+        for error in [
+            fixture.owner.admit_artifact(artifact, &control).err(),
+            fixture
+                .owner
+                .evaluate_artifact([1; 16], artifact, &admitted, &evaluation, &control)
+                .err(),
+        ] {
+            assert!(matches!(
+                error,
+                Some(crate::Error::Data {
+                    source: araphor_data::Error::Package {
+                        code: actual,
+                        field: actual_field,
+                        ..
+                    }
+                }) if actual == code && actual_field == field
+            ));
+        }
+        control.cancel()?;
+        assert!(matches!(
+            fixture.owner.admit_artifact(artifact, &control),
+            Err(crate::Error::Data {
+                source: araphor_data::Error::AnalysisReadCancelled { .. }
+            })
+        ));
+    }
+    Ok(())
+}
+
 #[tokio::test]
 #[ignore = "requires source-built native artifacts in ARAPHOR_NATIVE_DIR"]
 async fn native_errors_commit_no_output() -> TestResult {

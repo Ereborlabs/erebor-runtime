@@ -1,9 +1,7 @@
-use araphor_analysis_sdk as sdk;
 use serde::{Deserialize, Serialize};
-use snafu::IntoError as _;
 
 use super::PackageErrorCodeV1 as Code;
-use crate::{AnalysisReadControl, Result};
+use crate::Result;
 
 mod artifact;
 mod files;
@@ -12,7 +10,8 @@ mod loading;
 #[cfg(test)]
 use araphor_data::Dependency;
 use araphor_data::Qualification;
-use artifact::NativeAdmission;
+pub(super) use artifact::NativeAdmission;
+pub(super) use loading::NativeLibrary;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -32,44 +31,6 @@ impl NativeLimits {
                 .into());
         }
         Ok(())
-    }
-}
-
-pub(crate) struct NativeExecution {
-    limits: NativeLimits,
-}
-
-impl NativeExecution {
-    pub(crate) fn new(limits: NativeLimits) -> Result<Self> {
-        Ok(Self { limits })
-    }
-
-    pub(crate) fn admit(&self, artifact: &[u8], qualification: &Qualification) -> Result<()> {
-        self.limits.validate()?;
-        NativeAdmission::validate(qualification, artifact)
-    }
-
-    pub(crate) fn evaluate(
-        &self,
-        package: &sdk::Package,
-        evaluation: &sdk::Evaluation,
-        artifact: &[u8],
-        qualification: &Qualification,
-        output_limits: sdk::Limits,
-        control: &AnalysisReadControl,
-    ) -> Result<sdk::Output> {
-        control.check()?;
-        self.admit(artifact, qualification)?;
-        control.check()?;
-        let loaded = loading::NativeLibrary::load(artifact, qualification, control);
-        control.check()?;
-        let library = loaded?;
-        let invocation =
-            sdk::native::Invocation::new(package, evaluation, || control.check().is_err())
-                .map_err(|source| crate::AnalysisContractSnafu.into_error(source))?;
-        let result = library.call(invocation, output_limits);
-        control.check()?;
-        result
     }
 }
 
@@ -102,33 +63,6 @@ mod tests {
             Err(crate::Error::Data {
                 source: araphor_data::Error::Package {
                     code: Code::Unsupported,
-                    ..
-                }
-            })
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn caps_allow_owner_startup() -> Result<()> {
-        let execution = NativeExecution::new(NativeLimits {
-            memory_bytes: Some(1024),
-            cpu_seconds: None,
-        })?;
-        let qualification = Qualification {
-            exports: vec!["detect".into()],
-            target: env!("ARAPHOR_NATIVE_TARGET").into(),
-            cpu_features: Vec::new(),
-            contract_version: 1,
-            system_libraries: Vec::new(),
-            dependencies: Vec::new(),
-        };
-        assert!(matches!(
-            execution.admit(b"invalid", &qualification),
-            Err(crate::Error::Data {
-                source: araphor_data::Error::Package {
-                    code: Code::Unsupported,
-                    field: "in-process native resource limits",
                     ..
                 }
             })

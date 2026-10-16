@@ -8,17 +8,12 @@ use super::Code;
 use crate::Result;
 use araphor_data::Qualification;
 
-pub(super) struct NativeAdmission;
+pub(in crate::package) struct NativeAdmission;
 
 impl NativeAdmission {
     pub(crate) fn validate(qualification: &Qualification, artifact: &[u8]) -> Result<()> {
         let mut systems = BTreeMap::new();
         for library in &qualification.system_libraries {
-            if !Self::system_name(&library.name) {
-                return Err(crate::Error::from(
-                    Code::Invalid.error("native system library identity"),
-                ));
-            }
             let path = Self::system_path(&library.name)?;
             let bytes = std::fs::read(&path)
                 .map_err(|source| crate::IoSnafu { path: &path }.into_error(source))?;
@@ -240,7 +235,10 @@ impl NativeAdmission {
     }
 
     pub(super) fn system_path(name: &str) -> Result<PathBuf> {
-        if Path::new(name).is_absolute() && Self::system_name(name) {
+        if !Self::system_name(name) {
+            return Err(Code::Invalid.error("native system library identity").into());
+        }
+        if Path::new(name).is_absolute() {
             return std::fs::canonicalize(name)
                 .map_err(|source| crate::IoSnafu { path: name }.into_error(source));
         }

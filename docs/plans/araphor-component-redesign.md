@@ -202,6 +202,37 @@ for Query, Data, Analysis, CLI, Control, and E2E library and test targets.
 The combined record is `/tmp/araphor-native-owners-qualification1.json`.
 These times describe functional checks. They do not prove a speed improvement.
 
+### Native invocation ownership
+
+Implementation and selected host verification: **Done**. NativeExecution and
+the package owner's matching field are deleted. Admission validates the owned
+native options and artifact. Execution validates the options, loads the pinned
+NativeLibrary, and calls it with a fresh SDK Invocation. The library owns its
+ABI table, file pins, dependency handles, invocation, and producer release
+callbacks. The caller checks cancellation before it returns a load error.
+The library checks cancellation before and after the native call.
+
+Execution no longer performs a separate artifact inspection and system-library
+read before loading. The loader validates the complete qualification against
+the same system files that it pins. The required library-name check now runs
+inside system_path before file lookup. Invalid absolute and parent paths retain
+their typed denial. No native option default or configured limit changes.
+
+All 18 native admission and loader cases pass in 1.02 seconds. All nine actual
+native package cases pass in 218.55 seconds, including the eight opt-in cases.
+They cover lifecycle, checkpoints, failed output, interruption, expiry,
+configured limits, and recovery after a host fault. The selected checks pass
+185 distinct cases. Strict Clippy passes for the six affected crates in
+82 seconds. Full workspace CI is not run, as the user instructs. The record is
+`/tmp/araphor-native-owners-qualification1.json`.
+
+This slice removes 90 nonblank production Rust lines: 56 from input ownership
+and 34 from native invocation ownership. Tests and documentation are excluded.
+The complete count adds 918 production lines from `537f9de3`, removes 1,311
+from `7b7b407a`, and removes 158 from `aa390d9f`. The record is
+`/tmp/araphor-native-rewrite-count9.json`. The 6,000-line target still requires
+4,689 more net deletions. The complete redesign remains **Not done**.
+
 The obsolete Data extraction row-page framework is also deleted. Query already
 owns Arrow batches through its actual projection callback. Data retains atomic
 snapshots, receipts, read guards, byte bounds, and complete source frontiers.

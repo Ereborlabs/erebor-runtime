@@ -112,14 +112,11 @@ impl AnalysisPackageOwner {
                         .min(capacity as u64),
                     ..bounded.context.limits
                 };
-                self.native.evaluate(
-                    package,
-                    &bounded,
-                    artifact,
-                    qualification,
-                    limits,
-                    &control,
-                )?
+                control.check()?;
+                self.limits.native.validate()?;
+                let loaded = super::native::NativeLibrary::load(artifact, qualification, &control);
+                control.check()?;
+                loaded?.call(package, &bounded, limits, &control)?
             }
             _ => return Err(Code::Unsupported.error("model target").into()),
         };
@@ -155,7 +152,8 @@ impl AnalysisPackageOwner {
                     qualification: Some(qualification),
                     ..
                 } => {
-                    self.native.admit(artifact, qualification)?;
+                    self.limits.native.validate()?;
+                    super::native::NativeAdmission::validate(qualification, artifact)?;
                 }
                 _ => {}
             }

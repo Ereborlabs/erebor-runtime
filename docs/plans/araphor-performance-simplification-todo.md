@@ -101,6 +101,15 @@ are deleted. Canonical source schemas are shared across reads. Four unused Data
 input variants and synthetic trace dispatch are deleted. The selected Query,
 Data extraction, and Analysis model checks pass 158 cases; one Data history case
 is ignored. Strict Clippy passes for the six affected crates and test targets.
+NativeExecution and its owner field are also deleted. NativeLibrary owns the
+invocation. Its pinned-file validation replaces repeated runtime inspection
+and system-library reads. All 27 selected native cases pass, including eight
+opt-in package cases. The combined record covers 185 selected cases:
+`/tmp/araphor-native-owners-qualification1.json`.
+The slice removes 90 nonblank production Rust lines. The latest complete count
+removes 1,311 from `7b7b407a` and adds 918 from `537f9de3`. Another 4,689 must be
+removed for the 6,000-line target. The record is
+`/tmp/araphor-native-rewrite-count9.json`. Complete redesign: **Not done**.
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

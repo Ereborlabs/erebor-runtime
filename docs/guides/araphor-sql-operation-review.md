@@ -114,6 +114,16 @@ Analysis checks captured context and result references through the same
 Engine.store before it retains model provenance. Data checks the exact
 dependency revisions again at the durable commit boundary.
 
+Native execution calls the actual
+[NativeLibrary](../../crates/araphor-analysis/src/package/native/loading.rs)
+owner. The stateless NativeExecution wrapper is deleted. The loader checks the
+qualification against its pinned files. Execution does not repeat artifact
+inspection and system-library reads before loading. Native admission remains
+a separate trust boundary. The native options remain on AnalysisPackageOwner.
+The library creates a fresh SDK Invocation and keeps all code and file pins
+through output copying and producer release callbacks. The caller checks
+cancellation after loading; the library checks it before and after the call.
+
 The Session checks retained local table bytes, including the dataset row
 index, before registration. Earlier local tables remain charged. Source
 capture and model-input results use the native input category. Client and
@@ -387,6 +397,7 @@ The current source reading route is:
 - [Planner tests](../../crates/araphor-query/src/planner/tests.rs): native names, CTE scope, parameters, visible row indices, joins, windows, and rejection of writes.
 - [Source tests](../../crates/araphor-query/src/sources/tests.rs): `unused_source_receipts`, `empty_filter_progress`, zero-column counts, native interval pruning, and timestamp precision.
 - [Execution tests](../../crates/araphor-query/src/execution/tests.rs): repeated native plans, local bindings, runtime entry modes, cancellation, permits, and input/output category separation.
+- [Native loader tests](../../crates/araphor-analysis/src/package/native/loading.rs) and [native package cases](../../crates/araphor-analysis/src/package/tests/native/mod.rs): pinned files, ABI and dependency errors, invalid paths, disabled options, cancellation, checkpoints, lifecycle, and host fault recovery.
 - [Memory tests](../../crates/araphor-query/src/memory.rs): shared buffers, nested children, borrowed aliases, capacity denial, and producer cancellation.
 - [Native template tests](../../crates/araphor-query/src/stream/tests.rs) and [physical kernel tests](../../crates/araphor-query/src/stream/physical/kernel/tests.rs): native parameters, NULL filters, zero-column row counts, native COUNT updates and retractions, aliases, errors, exact metadata, borrowed arrays, and schema checks.
 - [Raw change tests](../../crates/araphor-data/src/analysis/extraction/changes/tests.rs): existing-journal replay, retirement ranges, complete frontiers, scope, and resource bounds.

@@ -8,7 +8,7 @@ use super::files::{FilePin, MappedFiles};
 use super::{Code, NativeAdmission, Qualification};
 use crate::{AnalysisReadControl, Result};
 
-pub(super) struct NativeLibrary {
+pub(in crate::package) struct NativeLibrary {
     api: *const sdk::native::Api,
     _library: Library,
     _dependencies: Vec<Library>,
@@ -18,7 +18,7 @@ pub(super) struct NativeLibrary {
 
 impl NativeLibrary {
     #[allow(unsafe_code)]
-    pub(super) fn load(
+    pub(in crate::package) fn load(
         artifact: &[u8],
         qualification: &Qualification,
         control: &AnalysisReadControl,
@@ -112,13 +112,21 @@ impl NativeLibrary {
     }
 
     #[allow(unsafe_code)]
-    pub(super) fn call<F: Fn() -> bool>(
+    pub(in crate::package) fn call(
         &self,
-        invocation: sdk::native::Invocation<'_, F>,
+        package: &sdk::Package,
+        evaluation: &sdk::Evaluation,
         output_limits: sdk::Limits,
+        control: &AnalysisReadControl,
     ) -> Result<sdk::Output> {
+        control.check()?;
+        let invocation =
+            sdk::native::Invocation::new(package, evaluation, || control.check().is_err())
+                .map_err(|source| crate::AnalysisContractSnafu.into_error(source))?;
         // The library pin covers copying output and all producer release callbacks.
-        unsafe { invocation.call(&*self.api, output_limits) }.map_err(Self::failure)
+        let result = unsafe { invocation.call(&*self.api, output_limits) }.map_err(Self::failure);
+        control.check()?;
+        result
     }
 
     fn failure(source: sdk::Error) -> crate::Error {
@@ -301,6 +309,34 @@ mod tests {
     }
 
     #[test]
+    fn loading_rejects_system_paths() {
+        for name in ["/araphor-native-missing.so", "../araphor-native-missing.so"] {
+            let qualification = Qualification {
+                exports: vec!["detect".into()],
+                target: env!("ARAPHOR_NATIVE_TARGET").into(),
+                cpu_features: Vec::new(),
+                contract_version: 1,
+                system_libraries: vec![araphor_data::LibraryRequirement {
+                    name: name.into(),
+                    symbols: Vec::new(),
+                    versions: Vec::new(),
+                }],
+                dependencies: Vec::new(),
+            };
+            assert!(matches!(
+                NativeLibrary::load(b"invalid", &qualification, &AnalysisReadControl::default()),
+                Err(crate::Error::Data {
+                    source: araphor_data::Error::Package {
+                        code: Code::Invalid,
+                        field: "native system library identity",
+                        ..
+                    }
+                })
+            ));
+        }
+    }
+
+    #[test]
     fn admission_checks_system_requirements() -> std::result::Result<(), Box<dyn std::error::Error>>
     {
         let mut fixture = LibraryFixture::build(
@@ -312,15 +348,26 @@ mod tests {
             .first_mut()
             .ok_or("fixture imports no system library")?;
         library.symbols.push("araphor_missing_system_symbol".into());
-        assert!(matches!(
-            super::NativeAdmission::validate(&fixture.qualification, &fixture.bytes),
-            Err(crate::Error::Data {
-                source: araphor_data::Error::Package {
-                    code: Code::Unsupported,
-                    ..
-                }
-            })
-        ));
+        for error in [
+            super::NativeAdmission::validate(&fixture.qualification, &fixture.bytes).err(),
+            NativeLibrary::load(
+                &fixture.bytes,
+                &fixture.qualification,
+                &AnalysisReadControl::default(),
+            )
+            .err(),
+        ] {
+            assert!(matches!(
+                error,
+                Some(crate::Error::Data {
+                    source: araphor_data::Error::Package {
+                        code: Code::Unsupported,
+                        field: "native system symbol",
+                        ..
+                    }
+                })
+            ));
+        }
         Ok(())
     }
 
@@ -338,16 +385,26 @@ mod tests {
                 artifact: vec![1],
                 digest: Qualification::digest(&[2]),
             });
-        assert!(matches!(
-            super::NativeAdmission::validate(&fixture.qualification, &fixture.bytes),
-            Err(crate::Error::Data {
-                source: araphor_data::Error::Package {
-                    code: Code::Invalid,
-                    field: "native dependency identity",
-                    ..
-                }
-            })
-        ));
+        for error in [
+            super::NativeAdmission::validate(&fixture.qualification, &fixture.bytes).err(),
+            NativeLibrary::load(
+                &fixture.bytes,
+                &fixture.qualification,
+                &AnalysisReadControl::default(),
+            )
+            .err(),
+        ] {
+            assert!(matches!(
+                error,
+                Some(crate::Error::Data {
+                    source: araphor_data::Error::Package {
+                        code: Code::Invalid,
+                        field: "native dependency identity",
+                        ..
+                    }
+                })
+            ));
+        }
         Ok(())
     }
 
