@@ -1,4 +1,5 @@
 use super::*;
+use datafusion::arrow::datatypes::Schema;
 use duckdb::{params, params_from_iter, Connection};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;

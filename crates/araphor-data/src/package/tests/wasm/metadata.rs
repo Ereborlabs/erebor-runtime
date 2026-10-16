@@ -247,14 +247,14 @@ async fn mixed_metadata_install_retry() -> TestResult {
     let PackageImplementationV1::Sql { program, .. } = &mut source.implementations[0] else {
         return Err("SQL implementation absent".into());
     };
-    program.outputs.insert(
-        "rows".into(),
-        "SELECT 'changed'::BLOB AS value WHERE false".into(),
+    program
+        .outputs
+        .insert("rows".into(), "SELECT value FROM input WHERE 1 = 0".into());
+    let rejected = fixture.install(package, None).await;
+    assert!(
+        matches!(&rejected, Err(crate::Error::AnalysisConflict { .. })),
+        "{rejected:?}"
     );
-    assert!(matches!(
-        fixture.install(package, None).await,
-        Err(crate::Error::AnalysisConflict { .. })
-    ));
     assert_eq!(
         fixture.store.package_revision([1; 16], "sql.rows", "1")?,
         retained

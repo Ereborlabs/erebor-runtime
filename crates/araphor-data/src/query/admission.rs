@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Bound, ControlFlow};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Field, FieldRef, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{Field, FieldRef, SchemaRef};
 use datafusion::catalog::default_table_source::provider_as_source;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, DFSchema, Result as EngineResult, ScalarValue, TableReference};
@@ -1823,7 +1823,7 @@ mod tests;
 #[cfg(test)]
 mod engine_tests {
     use super::*;
-    use datafusion::arrow::datatypes::DataType as ArrowType;
+    use datafusion::arrow::datatypes::{DataType as ArrowType, Schema};
 
     #[test]
     fn retained_clock_parameter() -> Result<()> {
