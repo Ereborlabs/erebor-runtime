@@ -254,6 +254,14 @@ impl QueryPlan {
     }
 
     pub(super) fn dependencies(&self, now_ns: u64) -> Result<AnalysisSelectionV1> {
+        self.dependencies_bound(now_ns, &self.evaluation_at(now_ns)?)
+    }
+
+    pub(super) fn dependencies_bound(
+        &self,
+        now_ns: u64,
+        bound: &QueryBinding,
+    ) -> Result<AnalysisSelectionV1> {
         let mut selection = self.selection(now_ns);
         let trace_sql = ["traces", "trace_output", "trace_measurements"]
             .iter()
@@ -286,7 +294,6 @@ impl QueryPlan {
         }
         match &self.template {
             QueryTemplate::Client(sql) => {
-                let bound = sql.bind_at(now_ns)?;
                 let (first, last) = selection.time_range().unwrap_or((1, 0));
                 let from = match bound.received_from {
                     Bound::Included(value) => value.max(first),

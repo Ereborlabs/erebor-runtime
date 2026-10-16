@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use datafusion::datasource::MemTable;
+use datafusion::{datasource::MemTable, logical_expr::LogicalPlan};
 use snafu::ResultExt as _;
 
 use crate::analysis::{AnalysisExtractLimits, AnalysisExtractionV1, PackageResultRefV1};
-use crate::query::{budget::QueryLease, InputProjection, InputRelations};
+use crate::query::{budget::QueryLease, engine::QueryEngine, InputProjection, InputRelations};
 use crate::{
     AnalysisContextRefV1, AnalysisReadControl, AnalysisSelectionV1, AnalysisWitnessV1, QueryOwner,
     QueryPlan, QuerySql, Result,
@@ -31,13 +31,14 @@ impl SourceRows {
         now: u64,
         bounds: AnalysisExtractLimits,
         control: &AnalysisReadControl,
+        query: &LogicalPlan,
     ) -> Result<Self> {
         let stage = control.within(owner.limits.extract_timeout)?;
         let mut witnesses = Vec::new();
         let mut contexts = Vec::new();
         let mut results = Vec::new();
         let project = ModelProjection {
-            inner: InputProjection::new(&plan.template, selection, now),
+            inner: InputProjection::new(&plan.template, selection, now, Some(query)),
             witnesses: &mut witnesses,
             contexts: &mut contexts,
             results: &mut results,
@@ -87,7 +88,8 @@ impl super::super::operation::ModelOperation<'_> {
             })
             .collect();
         let plan = QueryPlan::model(request.grant.selection.clone(), sql.clone())?;
-        let selection = plan.dependencies(request.now)?;
+        let binding = sql.bind_complete(request.now)?;
+        let selection = plan.dependencies_bound(request.now, &binding)?;
         let tables = self.bound.clone();
         let bounds = AnalysisExtractLimits {
             scan_bytes: owner.limits.scan_bytes,
@@ -98,8 +100,19 @@ impl super::super::operation::ModelOperation<'_> {
                 .min(request.model.limits.max_bytes as usize),
             ..Default::default()
         };
-        self.engine()?;
-        let mut rows = SourceRows::extract(owner, &plan, &selection, request.now, bounds, control)?;
+        let preparation = control.within(owner.limits.evaluate_timeout)?;
+        let (state, _) = self.engine()?;
+        let (query, actual) = QueryEngine::prepare(state, &binding, None)?;
+        preparation.check()?;
+        let mut rows = SourceRows::extract(
+            owner,
+            &plan,
+            &selection,
+            request.now,
+            bounds,
+            control,
+            &query,
+        )?;
         let input = std::mem::take(&mut rows.inputs);
         let held = input.allocation_bytes();
         if held > bounds.input_bytes {
@@ -148,7 +161,7 @@ impl super::super::operation::ModelOperation<'_> {
                 ),
             );
         }
-        let batches = executor.query(sql, &port.schema)?;
+        let batches = executor.query_schema((query, actual), Some(&port.schema))?;
         let bytes = batches
             .iter()
             .fold(executor.bytes().saturating_add(held), |bytes, batch| {

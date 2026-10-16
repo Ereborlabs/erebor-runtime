@@ -66,7 +66,7 @@ impl QueryOwner {
         for (port, data) in ports.iter().zip(inputs) {
             executor.table(&port.name, &port.schema, &data.batches)?;
         }
-        let batches = executor.query_schema(&query, None)?;
+        let batches = executor.query(&query, None)?;
         let bytes = batches.iter().fold(executor.bytes(), |bytes, batch| {
             bytes.saturating_add(QueryLease::batch_overhead(batch))
         });

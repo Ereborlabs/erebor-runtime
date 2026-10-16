@@ -245,7 +245,7 @@ impl InputRelations {
     pub(super) fn graph_prefix<'a>(
         cache: &'a mut (Option<Vec<u8>>, Option<Vec<u8>>),
         graph: &crate::GraphSnapshotV1,
-        fields: Option<&BTreeSet<String>>,
+        fields: Option<&BTreeSet<&'static str>>,
         graph_inputs: bool,
         sink: &mut ProjectionSink<'_, ()>,
     ) -> Result<(&'a [u8], &'a [u8])> {

@@ -287,10 +287,22 @@ fn pruned_source_evidence() -> TestResult {
     let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
     let mut model = model(&[("source", 7)]);
     let mut revisions = Vec::new();
-    for predicate in ["operation = 7", "operation = 7 AND false"] {
-        model.inputs[0].source = sdk::InputSource::Query(format!(
-            "SELECT CAST(operation AS UBIGINT) AS value FROM events WHERE {predicate}"
-        ));
+    let mut witnesses = Vec::new();
+    for (sql, expected_rows) in [
+        (
+            "SELECT CAST(operation AS UBIGINT) AS value FROM events WHERE operation = 7",
+            1,
+        ),
+        (
+            "SELECT CAST(operation AS UBIGINT) AS value FROM events WHERE operation = 7 AND false",
+            0,
+        ),
+        (
+            "WITH unused AS (SELECT operation FROM events) SELECT CAST(7 AS UBIGINT) AS value",
+            1,
+        ),
+    ] {
+        model.inputs[0].source = sdk::InputSource::Query(sql.into());
         let (operation, inputs) = owner.model_operation([1; 16]).inputs(
             request(&model, &grant, &active),
             &control()?,
@@ -311,13 +323,17 @@ fn pruned_source_evidence() -> TestResult {
                 .iter()
                 .map(|batch| batch.num_rows())
                 .sum::<usize>(),
-            usize::from(predicate == "operation = 7")
+            expected_rows
         );
         revisions.push(inputs.inputs[0].revision.clone());
+        witnesses.push(inputs.witnesses.clone());
         drop(operation);
         drop(inputs);
     }
     assert_ne!(revisions[0], revisions[1]);
+    assert_eq!(revisions[0], revisions[2]);
+    assert_eq!(witnesses[0], witnesses[1]);
+    assert_eq!(witnesses[0], witnesses[2]);
     Ok(())
 }
 

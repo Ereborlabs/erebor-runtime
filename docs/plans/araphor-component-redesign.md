@@ -89,11 +89,12 @@ A query needs admission
   -> SqlToRel resolves the SELECT clauses against those bound plans
   -> QuerySql retains the logical plan, dependencies, labels, and clock facts
 
-A run receives admitted batches
+A run prepares its fixed source selection
   -> QuerySql::bind_complete binds parameter values and the captured clock
-  -> QueryEngine::plan optimizes the logical plan once
-  -> the current extraction owner has supplied qualified batches and provenance
-  -> QueryEngine::plan replaces each TableScan source with an admitted MemTable
+  -> QueryEngine::prepare optimizes the logical plan once
+  -> InputProjection selects canonical fields from the optimized TableScan projections
+  -> the current extraction owner supplies qualified batches and full source provenance
+  -> QueryEngine::bind_sources consumes that same plan and supplies admitted MemTables
   -> QueryEngine::stream creates the physical plan and its batch stream
 
 EmptyTable has no data statistics. Treat a schema-only scan as an unknown
@@ -101,8 +102,16 @@ source during planning. Binder records base relations while it walks the full
 original abstract syntax tree (AST), including unused CTEs. A constant-false predicate can remove a
 scan during optimization. The retained source inventory therefore supplies
 dependency and witness scope before pruning. The original AST also supplies
-time bounds, event fields, source-column facts, and append cursor facts.
+time bounds, source-column facts, and append cursor facts.
 The transient planning AST does not replace those facts.
+
+Field selection comes from standard optimized scans for all built-in tables.
+The source no longer retains a separate event-field AST collector. Extraction
+still uses every original admitted dependency, including unused CTEs and
+sources removed by optimizer pruning. A source with no requested column keeps
+one existing canonical field so its real buffer retains the source lease.
+Its physical scan can still project zero columns. Finding inputs also retain
+the keys required to select their latest revision before SQL filtering.
 
 Binder stores each completed child plan in the standard PlannerContext.
 SqlToRel plans the full SELECT directly. Binder uses the admitted child
@@ -700,9 +709,54 @@ The records are `/tmp/araphor-df-plan-stage-build2.json`,
 `/tmp/araphor-df-plan-stage-native1.json`, and
 `/tmp/araphor-df-plan-stage-callers1.json`.
 
-This deliverable removes 42 nonblank production Rust lines from `34a8199c`.
-The complete redesign still adds 2,180 from `537f9de3`. The complete change
-removes 49 from `7b7b407a` and adds 1,104 from `aa390d9f`. Another 5,951
-must be removed to meet the required target. The records are
+Direct plan commit `dc2da897` removes 42 nonblank production Rust lines from
+`34a8199c`. At that commit, the redesign adds 2,180 from `537f9de3`. The
+complete change removes 49 from `7b7b407a` and adds 1,104 from `aa390d9f`.
+Another 5,951 must be removed at that point. The records are
 `/tmp/araphor-df-plan-stage-count1.json` and
 `/tmp/araphor-arrow-engine-count9.json`. Complete redesign: **Not done**.
+
+Source scan projection: **Done**. QueryEngine prepares the optimized logical
+plan before extraction. InputProjection derives canonical source fields from
+its TableScans. QueryEngine binds the admitted MemTables to that same plan.
+Logical optimization still runs once. The source removes the event-field AST
+collector and its separate projection rule. Original dependencies retain
+authority and evidence scope before pruning.
+
+The final affected Data build passes in 146.22 seconds. Strict Clippy passes
+for Data, Control, and E2E test targets in 11.83 seconds. All 263 distinct
+selected cases pass: 259 query cases and four package cases. The existing
+32 KiB query case now returns all eight rows for a narrow ordered projection.
+A query that requires its large catalog payload still rejects at that limit.
+The count case proves a zero-column scan with a real canonical source buffer
+that retains its charge. Source schema identity, latest finding keys, unused
+CTE witnesses, and record fanout checks remain.
+
+The first run reports 258 query cases and three package cases passed. Two
+test expectations fail. An added unused-CTE case incorrectly expects a
+different revision for identical input content. The corrected case requires
+equal revisions and equal full witness vectors. Both original revision cases
+remain. The old combined budget case now fits because COUNT(*) reads fewer
+columns. The test retains that success at the same limit and adds a query
+that needs the large description column. It checks the original exact denial,
+public error category, three authorization calls, cleanup, and high-limit
+parity. Production source and manifests do not change after that first run.
+Only the two corrected cases run again; both pass in 40.77 seconds. Source and
+test binary hashes remain fixed within each check. Native and caller runtime
+qualification are not repeated for this internal source change.
+
+The records are `/tmp/araphor-source-plan-qualification1.json`,
+`/tmp/araphor-source-plan-build4.json`,
+`/tmp/araphor-source-plan-clippy2.json`,
+`/tmp/araphor-source-plan-query1.json`,
+`/tmp/araphor-source-plan-packages1.json`, and
+`/tmp/araphor-source-plan-failed2.json`.
+
+This deliverable adds 80 nonblank production Rust lines from `dc2da897`.
+The complete redesign adds 2,260 from `537f9de3`. The complete change adds
+31 from `7b7b407a` and 1,184 from `aa390d9f`. Another 6,031 must be removed
+to meet the required target. The records are
+`/tmp/araphor-source-plan-count1.json` and
+`/tmp/araphor-arrow-engine-count10.json`. Complete redesign: **Not done**.
+The proposed native DataFusion result-name, numeric, and SQL scope changes
+have no approval. The current SQL contract remains in effect.

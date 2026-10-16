@@ -343,8 +343,17 @@ impl QueryOwner {
         control: &AnalysisReadControl,
         mut lease: QueryLease,
     ) -> Result<QueryResult> {
-        let selection = plan.dependencies(now_ns)?;
-        let project = InputProjection::new(&plan.template, &selection, now_ns);
+        let binding = plan.evaluation_at(now_ns)?;
+        let selection = plan.dependencies_bound(now_ns, &binding)?;
+        let preparation = control.within(self.limits.evaluate_timeout)?;
+        let state = engine::QueryEngine::state()?;
+        let (query, schema) = engine::QueryEngine::prepare(
+            &state,
+            &binding,
+            Some(self.limits.output_rows.saturating_add(1)),
+        )?;
+        preparation.check()?;
+        let project = InputProjection::new(&plan.template, &selection, now_ns, Some(&query));
         let bounds = crate::analysis::AnalysisExtractLimits {
             scan_bytes: self.limits.scan_bytes,
             input_bytes: self.limits.input_bytes,
@@ -414,11 +423,10 @@ impl QueryOwner {
         }
         self.check_output(summary_bytes)?;
         let evaluation = control.stage(self.limits.evaluate_timeout)?;
-        let binding = plan.evaluation_at(now_ns)?;
         let output = evaluation::QueryEvaluation::run(
             self,
             &input,
-            &binding,
+            (state, query, schema),
             evaluation::EvaluationLimits {
                 rows: self.limits.output_rows,
                 bytes: self.limits.output_bytes,

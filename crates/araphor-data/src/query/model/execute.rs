@@ -5,6 +5,7 @@ use araphor_analysis_sdk as sdk;
 use datafusion::arrow::array::{RecordBatchOptions, UInt64Array};
 use datafusion::datasource::MemTable;
 use datafusion::execution::SessionState;
+use datafusion::logical_expr::LogicalPlan;
 use snafu::ResultExt as _;
 
 use super::{schema::ModelSchema, AdmittedModel, SqlModelV1};
@@ -129,7 +130,7 @@ impl<'a> ModelExecution<'a> {
                     .checked_sub(port.name.len() as u64)
                     .ok_or_else(limit)?;
                 self.limits = remaining;
-                let batches = self.query(query, &port.schema)?;
+                let batches = self.query(query, Some(&port.schema))?;
                 let bytes = batches.iter().fold(0_u64, |bytes, batch| {
                     bytes.saturating_add(batch.get_array_memory_size() as u64)
                 });
@@ -149,18 +150,8 @@ impl<'a> ModelExecution<'a> {
     pub(super) fn query(
         &mut self,
         query: &QuerySql,
-        schema: &sdk::Schema,
-    ) -> Result<Vec<sdk::RecordBatch>> {
-        self.query_schema(query, Some(schema))
-    }
-
-    pub(super) fn query_schema(
-        &mut self,
-        query: &QuerySql,
         schema: Option<&sdk::Schema>,
     ) -> Result<Vec<sdk::RecordBatch>> {
-        self.rows = 0;
-        self.batches = 0;
         let now = u64::try_from(self.time_utc_ns).map_err(|_| {
             crate::QueryInvalidSnafu {
                 field: "model evaluation time",
@@ -168,6 +159,17 @@ impl<'a> ModelExecution<'a> {
             .build()
         })?;
         let bound = query.bind_complete(now)?;
+        let prepared = QueryEngine::prepare(self.state, &bound, None)?;
+        self.query_schema(prepared, schema)
+    }
+
+    pub(super) fn query_schema(
+        &mut self,
+        prepared: (LogicalPlan, Arc<sdk::Schema>),
+        schema: Option<&sdk::Schema>,
+    ) -> Result<Vec<sdk::RecordBatch>> {
+        self.rows = 0;
+        self.batches = 0;
         let limits = sdk::Limits {
             max_bytes: self
                 .limits
@@ -175,7 +177,8 @@ impl<'a> ModelExecution<'a> {
                 .min(self.byte_limit.saturating_sub(self.bytes) as u64),
             ..self.limits
         };
-        let (plan, actual) = QueryEngine::plan(self.state, &bound, &self.tables, None)?;
+        let (plan, actual) = prepared;
+        let plan = QueryEngine::bind_sources(plan, &self.tables)?;
         let schema = schema.map(|schema| Arc::new(schema.clone()));
         let state = self.state.clone();
         let lease = self.lease.clone();
@@ -291,7 +294,7 @@ impl<'a> ModelExecution<'a> {
     ) -> Result<Vec<sdk::RecordBatch>> {
         let limit = self.limits.max_rows;
         self.limits.max_rows = self.limits.max_bytes / 16;
-        let result = self.query(query, schema);
+        let result = self.query(query, Some(schema));
         self.limits.max_rows = limit;
         result
     }
@@ -351,7 +354,7 @@ mod tests {
             model.limits,
             &owner.limits,
         );
-        let batches = probe.query(&admitted.outputs["rows"], &port.schema)?;
+        let batches = probe.query(&admitted.outputs["rows"], Some(&port.schema))?;
         assert_eq!(probe.rows, 1);
         let capacity = probe.bytes() + std::mem::size_of::<u64>() - 1;
         drop(probe);
@@ -406,7 +409,7 @@ mod tests {
             &owner.limits,
         );
         let query = QuerySql::admit_relations("SELECT true AS value WHERE false", BTreeMap::new())?;
-        let batches = executor.query(&query, &schema)?;
+        let batches = executor.query(&query, Some(&schema))?;
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 0);
         assert_eq!(batches[0].schema().as_ref(), &schema);
@@ -415,7 +418,7 @@ mod tests {
         let empty_bytes = executor.bytes();
         assert_eq!(empty_bytes, QueryEngine::batch_bytes(&batches[0]));
         let query = QuerySql::admit_relations("SELECT true AS value", BTreeMap::new())?;
-        let batches = executor.query(&query, &schema)?;
+        let batches = executor.query(&query, Some(&schema))?;
         assert_eq!(executor.rows, 1);
         assert_eq!(executor.batches, 1);
         assert_eq!(
@@ -448,7 +451,7 @@ mod tests {
             sdk::Limits::default(),
             &owner.limits,
         );
-        let batches = probe.query(&query, &schema)?;
+        let batches = probe.query(&query, Some(&schema))?;
         let capacity = probe.bytes();
         drop(batches);
         drop(probe);
@@ -472,7 +475,7 @@ mod tests {
             );
             let query = QuerySql::admit_relations(sql, BTreeMap::new())?;
             assert!(matches!(
-                executor.query(&query, &schema),
+                executor.query(&query, Some(&schema)),
                 Err(crate::Error::QueryLimit { resource: "model output", limit, .. })
                     if limit == capacity,
             ));

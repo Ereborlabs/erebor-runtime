@@ -3,6 +3,8 @@ use std::mem::{size_of, take};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::logical_expr::LogicalPlan;
 use prost::Message as _;
 use sdk::arrow_array::{
     builder::*, Array as _, ArrayRef, BinaryArray, RecordBatchOptions, StringArray, UInt64Array,
@@ -91,7 +93,7 @@ macro_rules! relation {
 
         impl $crate::query::input::InputRelations {
             pub(super) fn $method(&mut self, $sink: &mut $crate::analysis::ProjectionSink<'_, ()>,
-                projection: Option<&std::collections::BTreeSet<String>>, ($($argument,)*): ($($argument_type,)*)) -> $crate::Result<bool> {
+                projection: Option<&std::collections::BTreeSet<&'static str>>, ($($argument,)*): ($($argument_type,)*)) -> $crate::Result<bool> {
                 $($setup)*
                 let ($($field,)*) = ($(if $schema.selects(projection, stringify!($field)) {
                     Some($value)
@@ -192,7 +194,7 @@ impl InputSchema {
         (self.canonical)(self)
     }
 
-    pub(super) fn selects(&self, projection: Option<&BTreeSet<String>>, name: &str) -> bool {
+    pub(super) fn selects(&self, projection: Option<&BTreeSet<&'static str>>, name: &str) -> bool {
         projection.is_none_or(|columns| columns.contains(name))
             || (self.name == "findings"
                 && matches!(name, "tenant_id" | "finding_id" | "commit_revision"))
@@ -200,32 +202,32 @@ impl InputSchema {
 
     fn fields<'a>(
         &'a self,
-        projection: Option<&'a BTreeSet<String>>,
+        projection: Option<&'a BTreeSet<&'static str>>,
     ) -> impl Iterator<Item = &'a InputField> {
         self.columns
             .iter()
             .filter(move |field| self.selects(projection, field.0))
     }
 
-    fn projected_schema(&self, projection: Option<&BTreeSet<String>>) -> Arc<sdk::Schema> {
+    fn projected_schema(&self, projection: Option<&BTreeSet<&'static str>>) -> Arc<sdk::Schema> {
         let schema = self.arrow_schema();
-        let Some(projection) = projection else {
+        if self.fields(projection).count() == self.columns.len() {
             return schema;
-        };
+        }
         Arc::new(sdk::Schema::new(
             self.columns
                 .iter()
                 .zip(schema.fields())
-                .filter(|(field, _)| self.selects(Some(projection), field.0))
+                .filter(|(field, _)| self.selects(projection, field.0))
                 .map(|(_, field)| Arc::clone(field))
                 .collect::<Vec<_>>(),
         ))
     }
 
-    pub(super) fn schema_bytes(&self, projection: Option<&BTreeSet<String>>) -> usize {
-        let Some(_) = projection else {
+    pub(super) fn schema_bytes(&self, projection: Option<&BTreeSet<&'static str>>) -> usize {
+        if self.fields(projection).count() == self.columns.len() {
             return 0;
-        };
+        }
         self.fields(projection).fold(
             size_of::<sdk::Schema>() + 4 * size_of::<usize>(),
             |bytes, _| bytes.saturating_add(2 * size_of::<Arc<sdk::Field>>()),
@@ -276,7 +278,7 @@ impl InputBatch {
 
     fn new(
         schema: &InputSchema,
-        projection: Option<&BTreeSet<String>>,
+        projection: Option<&BTreeSet<&'static str>>,
         sink: &mut ProjectionSink<'_, ()>,
     ) -> Result<Self> {
         sink.charge(
@@ -564,7 +566,7 @@ impl InputRelations {
     pub(super) fn append(
         &mut self,
         schema: &'static InputSchema,
-        projection: Option<&BTreeSet<String>>,
+        projection: Option<&BTreeSet<&'static str>>,
         sink: &mut ProjectionSink<'_, ()>,
         sizes: &[Option<usize>],
         write: impl FnOnce(&mut [Box<dyn ArrayBuilder>]) -> Result<()>,
@@ -635,7 +637,7 @@ impl InputRelations {
         mut self,
         extraction: &mut AnalysisExtractionV1<()>,
         template: &QueryTemplate,
-        projections: &BTreeMap<&'static str, BTreeSet<String>>,
+        projections: &BTreeMap<&'static str, BTreeSet<&'static str>>,
         graph_inputs: bool,
         control: &crate::AnalysisReadControl,
     ) -> Result<Self> {
@@ -676,13 +678,7 @@ impl InputRelations {
             )
         {
             if !self.tables.contains_key(schema.name) {
-                let projection =
-                    projections
-                        .get(schema.name)
-                        .or_else(|| match (schema.name, template) {
-                            ("events", QueryTemplate::Client(sql)) => sql.event_fields(),
-                            _ => None,
-                        });
+                let projection = projections.get(schema.name);
                 let batch = InputBatch::new(schema, projection, &mut sink)?;
                 self.tables.insert(schema.name, batch);
             }
@@ -1237,12 +1233,13 @@ pub(super) const SCHEMAS: &[InputSchema] = &[
 
 pub(super) struct InputProjection<'a> {
     template: &'a QueryTemplate,
+    plan: Option<&'a LogicalPlan>,
     pub(super) selection: &'a crate::AnalysisSelectionV1,
     now_utc_ns: u64,
     recipes: Vec<RecipeInput>,
     pub(super) graph_inputs: bool,
     pub(super) inputs: InputRelations,
-    pub(super) projections: BTreeMap<&'static str, BTreeSet<String>>,
+    pub(super) projections: BTreeMap<&'static str, BTreeSet<&'static str>>,
 }
 
 struct RecipeInput {
@@ -1255,9 +1252,11 @@ impl<'a> InputProjection<'a> {
         template: &'a QueryTemplate,
         selection: &'a crate::AnalysisSelectionV1,
         now_utc_ns: u64,
+        plan: Option<&'a LogicalPlan>,
     ) -> Self {
         Self {
             template,
+            plan,
             selection,
             now_utc_ns,
             recipes: Vec::new(),
@@ -1267,10 +1266,84 @@ impl<'a> InputProjection<'a> {
         }
     }
 
+    fn prepare_columns(&mut self, sink: &mut ProjectionSink<'_, ()>) -> Result<()> {
+        let Some(plan) = self.plan.take() else {
+            return Ok(());
+        };
+        for schema in SCHEMAS {
+            if self.needs(schema.name) && !self.projections.contains_key(schema.name) {
+                sink.charge(
+                    11 * size_of::<(&str, BTreeSet<&'static str>)>() + 16 * size_of::<usize>(),
+                )?;
+                self.projections.insert(schema.name, BTreeSet::new());
+            }
+        }
+        let mut charge = Ok(());
+        plan.apply_with_subqueries(|plan| {
+            let LogicalPlan::TableScan(scan) = plan else {
+                return Ok(TreeNodeRecursion::Continue);
+            };
+            let Some(schema) = SCHEMAS
+                .iter()
+                .find(|schema| schema.name == scan.table_name.table())
+            else {
+                return Ok(TreeNodeRecursion::Continue);
+            };
+            let Some(fields) = self.projections.get_mut(schema.name) else {
+                return Ok(TreeNodeRecursion::Continue);
+            };
+            for field in scan.projected_schema.fields() {
+                let name = schema
+                    .columns
+                    .iter()
+                    .find(|column| column.0 == field.name())
+                    .ok_or_else(|| {
+                        datafusion::common::DataFusionError::Plan(
+                            "source column declaration is absent".into(),
+                        )
+                    })?
+                    .0;
+                if !fields.contains(name) {
+                    charge = sink.charge(11 * size_of::<&str>() + 16 * size_of::<usize>());
+                    if charge.is_err() {
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
+                    fields.insert(name);
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .context(crate::QueryEngineSnafu {
+            operation: "inspect source columns",
+        })?;
+        charge?;
+        for schema in SCHEMAS {
+            let Some(fields) = self
+                .projections
+                .get_mut(schema.name)
+                .filter(|fields| fields.is_empty())
+            else {
+                continue;
+            };
+            // Keep one source buffer with its lease when the scan needs no columns.
+            if let Some(field) = schema.columns.iter().min_by_key(|field| {
+                if field.1 == sdk::DataType::Boolean {
+                    0
+                } else {
+                    field.1.primitive_width().unwrap_or(usize::MAX)
+                }
+            }) {
+                sink.charge(11 * size_of::<&str>() + 16 * size_of::<usize>())?;
+                fields.insert(field.0);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn graph(selection: &'a crate::AnalysisSelectionV1) -> Self {
         let mut project = Self {
             graph_inputs: true,
-            ..Self::new(&QueryTemplate::Catalog, selection, 0)
+            ..Self::new(&QueryTemplate::Catalog, selection, 0, None)
         };
         for schema in [&SUBJECTS, &RELATIONSHIPS] {
             project.projections.insert(
@@ -1279,7 +1352,7 @@ impl<'a> InputProjection<'a> {
                     .columns
                     .iter()
                     .filter(|field| field.0 != "graph_revision")
-                    .map(|field| field.0.to_owned())
+                    .map(|field| field.0)
                     .collect(),
             );
         }
@@ -1296,10 +1369,11 @@ impl<'a> InputProjection<'a> {
     }
 
     pub(super) fn finish(
-        self,
+        mut self,
         extraction: &mut AnalysisExtractionV1<()>,
         control: &crate::AnalysisReadControl,
     ) -> Result<InputRelations> {
+        self.prepare_columns(&mut extraction.sink(control))?;
         self.inputs.finish(
             extraction,
             self.template,
@@ -1336,13 +1410,7 @@ impl<'a> InputProjection<'a> {
                 if operation.is_some_and(|operation| operation != decoded.operation) {
                     return Ok(true);
                 }
-                let fields = self
-                    .projections
-                    .get("events")
-                    .or_else(|| match self.template {
-                        QueryTemplate::Client(sql) => sql.event_fields(),
-                        _ => None,
-                    });
+                let fields = self.projections.get("events");
                 let accepted = self.inputs.event(
                     sink,
                     fields,
@@ -1478,7 +1546,7 @@ impl InputRelations {
         sources: &[AnalysisSourceSnapshotV1],
         enabled: (bool, bool, bool),
         template: &QueryTemplate,
-        projections: &BTreeMap<&'static str, BTreeSet<String>>,
+        projections: &BTreeMap<&'static str, BTreeSet<&'static str>>,
         sink: &mut ProjectionSink<'_, ()>,
     ) -> Result<()> {
         if template.reads_relation("coverage") {
@@ -1622,6 +1690,7 @@ impl crate::analysis::AnalysisProjection for InputProjection<'_> {
         sink: &mut crate::analysis::ProjectionSink<'_, ()>,
     ) -> Result<bool> {
         sink.check()?;
+        self.prepare_columns(sink)?;
         match &input {
             AnalysisInputV1::Context(context) => {
                 self.emit(AnalysisInputV1::Context(context), sink)?;
@@ -1839,10 +1908,16 @@ pub(super) mod tests {
             let schema = definition.arrow_schema();
             assert!(Arc::ptr_eq(&schema, &definition.arrow_schema()));
             assert_eq!(definition.schema_bytes(None), 0);
+            let all = definition.columns.iter().map(|field| field.0).collect();
+            assert!(Arc::ptr_eq(
+                &schema,
+                &definition.projected_schema(Some(&all))
+            ));
+            assert_eq!(definition.schema_bytes(Some(&all)), 0);
             for (field, expected) in schema.fields().iter().zip(definition.columns) {
                 assert_eq!(field.as_ref(), &expected.arrow_field(definition.owner));
             }
-            let names = BTreeSet::from([definition.columns[0].0.to_owned()]);
+            let names = BTreeSet::from([definition.columns[0].0]);
             let projected = definition.projected_schema(Some(&names));
             for field in projected.fields() {
                 let source = schema
@@ -1852,7 +1927,12 @@ pub(super) mod tests {
                     .ok_or("canonical field absent")?;
                 assert!(Arc::ptr_eq(source, field));
             }
-            assert!(definition.schema_bytes(Some(&names)) > 0);
+            if projected.fields().len() == schema.fields().len() {
+                assert!(Arc::ptr_eq(&projected, &schema));
+                assert_eq!(definition.schema_bytes(Some(&names)), 0);
+            } else {
+                assert!(definition.schema_bytes(Some(&names)) > 0);
+            }
         }
         let mut extraction = empty_input();
         let mut input = InputRelations::default();
@@ -1997,6 +2077,15 @@ pub(super) mod tests {
         input.finish(extraction, template, &BTreeMap::new(), false, &control)
     }
 
+    fn source_plan(
+        state: &datafusion::execution::SessionState,
+        binding: &super::super::QueryBinding,
+        tables: &BTreeMap<String, Arc<MemTable>>,
+    ) -> Result<LogicalPlan> {
+        let (plan, _) = super::super::engine::QueryEngine::prepare(state, binding, None)?;
+        super::super::engine::QueryEngine::bind_sources(plan, tables)
+    }
+
     fn table_context(input: &InputRelations) -> TestResult<SessionContext> {
         let context = SessionContext::new();
         for (name, table) in &input.tables {
@@ -2032,7 +2121,7 @@ pub(super) mod tests {
         let selection = crate::AnalysisSelectionV1::new([1; 16], Vec::new());
         let mut extraction = empty_input();
         let control = crate::AnalysisReadControl::default();
-        let mut project = InputProjection::new(&template, &selection, 0);
+        let mut project = InputProjection::new(&template, &selection, 0, None);
         assert!(project.emit(input, &mut extraction.sink(&control))?);
         let input = project.finish(&mut extraction, &control)?;
         assert!(input.allocation_bytes() > 0);
@@ -2073,7 +2162,7 @@ pub(super) mod tests {
         let mut extraction = empty_input();
         let before = extraction.input_bytes;
         let mut input = InputRelations::default();
-        let projection = BTreeSet::from(["catalog_json".to_owned()]);
+        let projection = BTreeSet::from(["catalog_json"]);
         let mut wrote = false;
         let result = input.append(
             &EVENTS,
@@ -2100,7 +2189,7 @@ pub(super) mod tests {
     #[test]
     fn query_input_findings_reserve_finish() -> TestResult {
         let control = crate::AnalysisReadControl::default();
-        let fields = BTreeSet::from(["finding_id".to_owned()]);
+        let fields = BTreeSet::from(["finding_id"]);
         let sizes = FINDINGS
             .columns
             .iter()
@@ -2254,8 +2343,8 @@ pub(super) mod tests {
         )?;
         let binding = sql.bind_at(0)?;
         let state = QueryEngine::state()?;
-        let (plan, _) = QueryEngine::plan(&state, &binding, &tables, None)?;
-        let (shared_plan, _) = QueryEngine::plan(&state, &sql.bind_complete(0)?, &tables, None)?;
+        let plan = source_plan(&state, &binding, &tables)?;
+        let shared_plan = source_plan(&state, &sql.bind_complete(0)?, &tables)?;
         assert_eq!(input.allocation_bytes(), before);
         assert_eq!(table.schema.fields().len(), EVENTS.columns.len());
         assert!(table
@@ -2304,7 +2393,7 @@ pub(super) mod tests {
         assert!(weak.upgrade().is_some());
         drop(shared_plan);
         assert!(weak.upgrade().is_none());
-        assert!(QueryEngine::plan(&state, &binding, &BTreeMap::new(), None).is_err());
+        assert!(source_plan(&state, &binding, &BTreeMap::new()).is_err());
         Ok(())
     }
 
@@ -2350,9 +2439,7 @@ pub(super) mod tests {
                 )]);
                 let binding = QuerySql::admit("SELECT operation FROM events", Vec::new(), false)?
                     .bind_at(0)?;
-                assert!(
-                    QueryEngine::plan(&QueryEngine::state()?, &binding, &tables, None).is_err()
-                );
+                assert!(source_plan(&QueryEngine::state()?, &binding, &tables).is_err());
             }
         }
         assert!(QuerySql::admit(
@@ -3117,10 +3204,165 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn query_input_planned_columns() -> TestResult {
+        use super::super::{engine::QueryEngine, QuerySql};
+
+        let mut operation_bytes = None;
+        for (sql, expected) in [
+            ("SELECT operation FROM events", BTreeSet::from(["operation"])),
+            ("SELECT a.operation FROM events a JOIN events b ON a.operation = b.operation", BTreeSet::from(["operation"])),
+            ("WITH unused AS (SELECT catalog_json FROM events), chosen AS (SELECT operation, source_cursor FROM events) SELECT operation FROM chosen WHERE source_cursor > 0 ORDER BY operation", BTreeSet::from(["operation", "source_cursor"])),
+            ("SELECT e.operation FROM events e JOIN context_versions c ON e.tenant_id = c.tenant_id WHERE c.owner_revision > 0", BTreeSet::from(["operation", "tenant_id"])),
+        ] {
+            let sql = QuerySql::admit(sql, Vec::new(), false)?;
+            let (query, _) = QueryEngine::prepare(&QueryEngine::state()?, &sql.bind_complete(0)?, None)?;
+            let template = QueryTemplate::Client(sql);
+            let selection = crate::AnalysisSelectionV1::tenant([1; 16]);
+            let mut project = InputProjection::new(&template, &selection, 0, Some(&query));
+            let mut extraction = empty_input();
+            let control = crate::AnalysisReadControl::default();
+            project.prepare_columns(&mut extraction.sink(&control))?;
+            assert_eq!(project.projections["events"], expected);
+            if project.needs("context_versions") {
+                assert_eq!(project.projections["context_versions"], BTreeSet::from(["tenant_id", "owner_revision"]));
+            }
+            let charged = extraction.input_bytes;
+            if expected == BTreeSet::from(["operation"]) {
+                assert_eq!(charged, *operation_bytes.get_or_insert(charged));
+            }
+            project.prepare_columns(&mut extraction.sink(&control))?;
+            assert_eq!(extraction.input_bytes, charged);
+            let input = project.finish(&mut extraction, &control)?;
+            assert_eq!(input.tables["events"].schema.fields().len(), expected.len());
+        }
+        let sql = QuerySql::admit("SELECT operation FROM events", Vec::new(), false)?;
+        let (query, _) =
+            QueryEngine::prepare(&QueryEngine::state()?, &sql.bind_complete(0)?, None)?;
+        let template = QueryTemplate::Client(sql);
+        let selection = crate::AnalysisSelectionV1::tenant([1; 16]);
+        let control = crate::AnalysisReadControl::default();
+        let mut project = InputProjection::new(&template, &selection, 0, Some(&query));
+        let mut extraction = empty_input();
+        extraction.limits.input_bytes = 0;
+        assert!(matches!(
+            project.prepare_columns(&mut extraction.sink(&control)),
+            Err(crate::Error::AnalysisInputTooLarge { .. })
+        ));
+        assert!(project.projections.is_empty());
+        let project = InputProjection::new(&template, &selection, 0, Some(&query));
+        let mut extraction = empty_input();
+        let input = project.finish(&mut extraction, &control)?;
+        assert_eq!(input.tables["events"].schema.fields().len(), 1);
+        assert_eq!(input.tables["events"].schema.field(0).name(), "operation");
+        Ok(())
+    }
+
+    #[test]
+    fn query_input_planned_count_lease() -> TestResult {
+        use super::super::{budget::QueryBudget, engine::QueryEngine, QuerySql};
+        use crate::analysis::AnalysisProjection as _;
+        use datafusion::common::tree_node::TreeNodeRecursion;
+
+        let sql = QuerySql::admit("SELECT COUNT(*) AS count FROM events", Vec::new(), false)?;
+        let state = QueryEngine::state()?;
+        let (query, _) = QueryEngine::prepare(&state, &sql.bind_complete(0)?, None)?;
+        let mut scans = 0;
+        query.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan {
+                scans += 1;
+                assert_eq!(scan.projection.as_deref(), Some([].as_slice()));
+                assert!(scan.projected_schema.fields().is_empty());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(scans, 1);
+        let template = QueryTemplate::Client(sql);
+        let selection = crate::AnalysisSelectionV1::tenant([1; 16]);
+        let control = crate::AnalysisReadControl::default();
+        let mut project = InputProjection::new(&template, &selection, 0, Some(&query));
+        let mut extraction = empty_input();
+        for received in [5_500_000_000, 7_000_000_000] {
+            let record = EvidenceRecord::default();
+            assert!(project.project(
+                AnalysisInputV1::Event {
+                    identity: &identity(),
+                    cpu_id: 0,
+                    received_utc_ns: received,
+                    record: &framed(&record),
+                    decoded: Some(&record),
+                },
+                &mut extraction.sink(&control)
+            )?);
+        }
+        let mut input = project.finish(&mut extraction, &control)?;
+        assert_eq!(input.input_rows, 2);
+        assert_eq!(input.next_expiry(10), Some(16_000_000_000));
+        let mut table = input.tables.remove("events").ok_or("events absent")?;
+        assert_eq!(table.schema.fields().len(), 1);
+        let canonical = EVENTS.arrow_schema();
+        assert!(canonical
+            .fields()
+            .iter()
+            .any(|field| Arc::ptr_eq(field, &table.schema.fields()[0])));
+        assert_ne!(table.schema.field(0).name(), "__row_index");
+        let bytes = input.allocation_bytes();
+        let budget = QueryBudget::new(super::super::QueryLimits {
+            input_bytes: bytes,
+            input_capacity: bytes,
+            ..Default::default()
+        });
+        let lease = budget.retained_input(bytes)?;
+        for batch in &mut table.batches {
+            *batch = lease.retain_batch(batch)?;
+        }
+        let buffer = table.batches[0].column(0).to_data().buffers()[0].clone();
+        let reference = lease.test_reference();
+        let tables = BTreeMap::from([(
+            "events".into(),
+            Arc::new(MemTable::try_new(table.schema, vec![table.batches])?),
+        )]);
+        let query = QueryEngine::bind_sources(query, &tables)?;
+        drop(tables);
+        drop(input);
+        drop(lease);
+        assert!(reference.upgrade().is_some());
+        assert!(budget.retained_input(1).is_err());
+        let batches = QueryEngine::default().run(&control, async move {
+            let stream = QueryEngine::stream(state, query, None).await?;
+            datafusion::physical_plan::common::collect(stream)
+                .await
+                .context(crate::QueryEngineSnafu {
+                    operation: "read test count",
+                })
+        })?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(sdk::RecordBatch::num_rows)
+                .sum::<usize>(),
+            1
+        );
+        assert_eq!(
+            batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .ok_or("count type")?
+                .value(0),
+            2
+        );
+        assert!(reference.upgrade().is_some());
+        drop(buffer);
+        assert!(reference.upgrade().is_none());
+        drop(budget.retained_input(bytes)?);
+        Ok(())
+    }
+
+    #[test]
     fn query_input_zero_column_rows_and_expiry() -> TestResult {
         let template = QueryTemplate::Events { operation: None };
         let selection = crate::AnalysisSelectionV1::new([1; 16], vec![identity()]);
-        let mut project = InputProjection::new(&template, &selection, 0);
+        let mut project = InputProjection::new(&template, &selection, 0, None);
         project.projections.insert("events", BTreeSet::new());
         let mut extraction = empty_input();
         let control = crate::AnalysisReadControl::default();
@@ -3158,9 +3400,7 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn query_input_latest_findings_before_filter() -> TestResult {
-        let fields = BTreeSet::from(
-            ["tenant_id", "finding_id", "commit_revision", "severity"].map(str::to_owned),
-        );
+        let fields = BTreeSet::from(["tenant_id", "finding_id", "commit_revision", "severity"]);
         let schema = FINDINGS.projected_schema(Some(&fields));
         let severity = Arc::new(StringArray::from(vec!["high", "low"]));
         let address = severity.value_data().as_ptr();
@@ -3249,7 +3489,7 @@ pub(super) mod tests {
             else {
                 return Ok(true);
             };
-            let fields = BTreeSet::from(["operation".to_owned()]);
+            let fields = BTreeSet::from(["operation"]);
             for _ in 0..self.count {
                 if !self.inputs.event(
                     sink,

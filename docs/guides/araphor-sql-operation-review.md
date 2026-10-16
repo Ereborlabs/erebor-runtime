@@ -46,11 +46,11 @@ sequenceDiagram
     Input->>Store: Read exact committed Table outputs
     opt Named source or Query input
         Input->>Input: Reserve capacity and create SessionState once
-        Input->>Store: Extract qualified Arrow batches and provenance
         Input->>Input: Bind values and the captured clock
-        Input->>Engine: Execute retained plan with admitted MemTables
-        Engine->>Engine: Optimize the logical plan
-        Engine->>Engine: Replace scans and read the physical stream
+        Input->>Engine: Optimize the retained logical plan once
+        Input->>Store: Extract projected Arrow batches and full provenance
+        Input->>Engine: Supply admitted MemTables to the same plan
+        Engine->>Engine: Read the physical stream
         Engine-->>Input: Bounded Arrow output
     end
     Input-->>Package: Ordered Arrow inputs and provenance
@@ -108,7 +108,9 @@ holds each bound CTE and derived-query plan. SqlToRel plans each full SELECT
 directly. Binder uses the admitted source schemas for policy and compatibility
 checks. It checks joins before optimizer pruning. Binder also checks unused windows and
 excludes the model row index during wildcard expansion. The original AST
-supplies time bounds, event fields, source-column facts, and append facts.
+supplies time bounds, source-column facts, and append facts. Optimized
+TableScan projections supply the fields to allocate. The separate event-field
+AST collector is removed.
 
 [ModelSchema](../../crates/araphor-data/src/query/model/schema.rs) supplies the
 allowed Arrow schema map for each stage. Source SQL sees authorized built-in
@@ -117,12 +119,14 @@ and prior checkpoint tables. Checkpoint, evidence, and reason SQL also see
 completed output tables. A private table name alone does not authorize access.
 The retained plan can reference only its admitted sources.
 
-[QueryEngine::plan](../../crates/araphor-data/src/query/engine/batches.rs)
-optimizes a plan clone, then replaces each bound TableScan source with an
-admitted MemTable. The replacement maps requested columns by exact field name
-and checks their types. QuerySql keeps the source inventory. SourceRows
-captures provenance before predicate pruning. The optimized plan does not
-define that scope. A failed source read does not execute the model or commit
+[QueryEngine::prepare](../../crates/araphor-data/src/query/engine/batches.rs)
+optimizes a plan clone before extraction. InputProjection derives canonical
+column sets from its standard TableScan projections. QueryEngine::bind_sources
+consumes that same plan and supplies admitted MemTables. The replacement maps
+requested columns by exact field name and checks their types. QuerySql keeps
+the original source inventory. SourceRows captures that full provenance,
+including unused CTEs and sources removed by optimizer pruning. The optimized
+plan does not define source authority or evidence scope. A failed source read does not execute the model or commit
 state. Dropping the operation releases its state and
 reservations. Returned batches retain the leases for their buffers.
 
@@ -200,6 +204,17 @@ are removed; all pass. Strict Clippy passes for Data, Control, and E2E test
 targets. Their runtime integration cases are not repeated for this change.
 The [plan result](../plans/araphor-component-redesign.md#qualification-and-acceptance)
 lists those separate receipts and the current production count.
+
+The source scan change prepares one optimized plan before extraction and
+executes that same plan with admitted MemTables. All 263 selected cases pass:
+259 query cases and four package cases. The final build and strict Clippy for
+Data and its callers pass. Only two test files change after the first
+258-query and three-package pass. Both corrected cases pass on the final
+build. The count case checks retained real source buffers with a zero-column
+scan. The budget cases keep both narrow-query success and wide-query denial
+at unchanged limits. The unused-CTE case keeps full witnesses and the existing
+content-based revision rule. The result record is
+`/tmp/araphor-source-plan-qualification1.json`.
 
 The complete earlier receipts remain at
 `7b7b407adf347d389984553a4d212bfce37b75b5:docs/guides/araphor-sql-operation-review.md`.

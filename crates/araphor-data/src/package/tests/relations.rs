@@ -299,7 +299,8 @@ async fn alias_import_budget() -> TestResult {
     };
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let now = crate::package::AnalysisPackageOwner::now();
-    for combined in [false, true] {
+    let mut catalog_count = None;
+    for (combined, wide) in [(false, false), (true, false), (true, true)] {
         let mut model = installed.exports[0].descriptor.clone();
         let (limit, resource) = if combined {
             model.inputs = vec![
@@ -313,7 +314,12 @@ async fn alias_import_budget() -> TestResult {
                 sdk::InputPort {
                     port: sdk::Port::new("later", schema.clone()),
                     source: sdk::InputSource::Query(
-                        "SELECT COUNT(*)::UBIGINT AS count FROM catalog".into(),
+                        if wide {
+                            "SELECT COUNT(*)::UBIGINT AS count FROM catalog WHERE LENGTH(description) > 0"
+                        } else {
+                            "SELECT COUNT(*)::UBIGINT AS count FROM catalog"
+                        }
+                        .into(),
                     ),
                 },
             ];
@@ -362,22 +368,29 @@ async fn alias_import_budget() -> TestResult {
                 Ok(())
             },
         );
-        let denied = if combined {
-            matches!(&result, Err(crate::Error::AnalysisInputTooLarge { resource: actual, .. }) if *actual == resource)
+        let actual = if combined && !wide {
+            let (operation, inputs) = result?;
+            operation.release_inputs()?;
+            Some(inputs)
         } else {
-            matches!(&result, Err(crate::Error::QueryLimit { resource: actual, .. }) if *actual == resource)
+            let denied = if combined {
+                matches!(&result, Err(crate::Error::AnalysisInputTooLarge { resource: actual, .. }) if *actual == resource)
+            } else {
+                matches!(&result, Err(crate::Error::QueryLimit { resource: actual, .. }) if *actual == resource)
+            };
+            assert!(
+                denied,
+                "combined={combined}, wide={wide}, calls={calls}, expected={resource}, result={:?}",
+                result.as_ref().map(|_| ())
+            );
+            assert_eq!(
+                crate::query::QueryErrorCode::from(
+                    result.as_ref().err().ok_or("input budget denial absent")?
+                ),
+                crate::query::QueryErrorCode::InputTooLarge,
+            );
+            None
         };
-        assert!(
-            denied,
-            "combined={combined}, calls={calls}, expected={resource}, result={:?}",
-            result.as_ref().map(|_| ())
-        );
-        assert_eq!(
-            crate::query::QueryErrorCode::from(
-                result.as_ref().err().ok_or("input budget denial absent")?
-            ),
-            crate::query::QueryErrorCode::InputTooLarge,
-        );
         assert_eq!(calls, 3);
         let released = owner.query_datasets(
             [1; 16],
@@ -416,6 +429,38 @@ async fn alias_import_budget() -> TestResult {
             .batches
             .iter()
             .all(|batch| batch.num_rows() == 0));
+        if combined {
+            let later = &inputs
+                .inputs
+                .iter()
+                .find(|input| input.data.name == "later")
+                .ok_or("later input")?
+                .data;
+            assert_eq!(later.batches.len(), 1);
+            assert_eq!(later.batches[0].num_rows(), 1);
+            let count = later.batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<sdk::arrow_array::UInt64Array>()
+                .ok_or("catalog count")?
+                .value(0);
+            assert!(count > 0);
+            assert_eq!(count, *catalog_count.get_or_insert(count));
+        }
+        if let Some(actual) = actual {
+            assert_eq!(actual.inputs.len(), inputs.inputs.len());
+            for (actual, expected) in actual.inputs.iter().zip(&inputs.inputs) {
+                assert_eq!(actual.data.name, expected.data.name);
+                assert_eq!(actual.data.batches, expected.data.batches);
+                assert_eq!(actual.revision, expected.revision);
+                assert_eq!(actual.coverage, expected.coverage);
+            }
+            assert_eq!(actual.dependencies, inputs.dependencies);
+            assert_eq!(actual.source_revisions, inputs.source_revisions);
+            assert_eq!(actual.witnesses, inputs.witnesses);
+            assert_eq!(actual.contexts, inputs.contexts);
+        }
+        assert_eq!(owner.input_charge(), 0);
         operation.release_inputs()?;
         drop(inputs);
     }

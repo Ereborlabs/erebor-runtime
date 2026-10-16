@@ -199,6 +199,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn builtin_source_has_no_dataset_index() -> Result<()> {
+        use crate::query::QuerySql;
+
+        let schema = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]);
+        let model = sdk::Model::new("source", vec![sdk::Port::new("events", schema)], Vec::new());
+        let sources = ModelSchema::sources(&model)?;
+        assert!(sources
+            .values()
+            .all(|schema| schema.index_of("__row_index").is_err()));
+        assert!(
+            QuerySql::admit_relations("SELECT events.__row_index FROM events", sources).is_err()
+        );
+        QuerySql::admit_relations(
+            "SELECT events.__row_index FROM events",
+            ModelSchema::relations(&model)?,
+        )?;
+        Ok(())
+    }
+
+    #[test]
     fn relation_retains_arrow_schema() -> Result<()> {
         let field = sdk::Field::new(
             "ReceivedAt",

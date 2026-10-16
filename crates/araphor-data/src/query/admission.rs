@@ -60,7 +60,6 @@ struct AdmittedSql {
     tests: Vec<TimeTest>,
     clocks: usize,
     follow: bool,
-    event_fields: Option<BTreeSet<String>>,
     event_operation: Option<u32>,
 }
 
@@ -171,11 +170,11 @@ impl QuerySql {
         };
         let dependencies = binder.dependencies.clone();
         let clocks = binder.clocks;
-        let event_fields = Self::event_fields_for(&query, clocks);
-        let event_operation = event_fields.as_ref().and_then(|_| {
-            let (select, alias) = TimeTest::direct_events(&query)?;
-            Self::event_operation_for(select.selection.as_ref()?, &alias, &parameters)
-        });
+        let event_operation = TimeTest::direct_events(&query)
+            .filter(|_| clocks == 0 && Self::append_shape(&query))
+            .and_then(|(select, alias)| {
+                Self::event_operation_for(select.selection.as_ref()?, &alias, &parameters)
+            });
         let source_columns = Self::source_columns(&query);
         if clocks > 0 {
             let index = parameters.len() + 1;
@@ -209,37 +208,13 @@ impl QuerySql {
                 tests,
                 clocks,
                 follow,
-                event_fields,
                 event_operation,
             }),
         })
     }
 
-    pub(super) fn event_fields(&self) -> Option<&BTreeSet<String>> {
-        self.program.event_fields.as_ref()
-    }
-
     pub(super) fn event_operation(&self) -> Option<u32> {
         self.program.event_operation
-    }
-
-    fn event_fields_for(query: &Query, clocks: usize) -> Option<BTreeSet<String>> {
-        let (_, alias) = TimeTest::direct_events(query)?;
-        if clocks != 0 || !Self::append_shape(query) {
-            return None;
-        }
-        let mut fields = BTreeSet::from(["commit_revision".into(), "ordinal".into()]);
-        let _ = visit_expressions(query, |expr| {
-            if let Expr::CompoundIdentifier(parts) = expr {
-                if let [table, column] = parts.as_slice() {
-                    if table.value == alias {
-                        fields.insert(column.value.clone());
-                    }
-                }
-            }
-            ControlFlow::<()>::Continue(())
-        });
-        Some(fields)
     }
 
     fn event_operation_for(expr: &Expr, alias: &str, parameters: &[Value]) -> Option<u32> {
@@ -340,7 +315,6 @@ impl QuerySql {
             .saturating_add(parameters)
             .saturating_add(self.program.tests.capacity() * size_of::<TimeTest>())
             .saturating_add(tree(&self.program.dependencies))
-            .saturating_add(self.program.event_fields.as_ref().map_or(0, tree))
     }
 
     pub fn parameters(&self) -> &[Value] {
@@ -3809,18 +3783,32 @@ mod engine_tests {
             Vec::new(), false,
         )?;
         assert_eq!(sql.event_operation(), Some(2));
+        assert!(sql.source_column("source_cursor").is_some());
+        let bound = sql.bind_at(2_000)?;
+        let (plan, _) = QueryEngine::prepare(&QueryEngine::state()?, &bound, None)?;
+        let mut fields = BTreeSet::new();
+        plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan {
+                fields.extend(
+                    scan.projected_schema
+                        .fields()
+                        .iter()
+                        .map(|field| field.name().clone()),
+                );
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .map_err(|_| Binder::invalid("test source projection"))?;
         assert_eq!(
-            sql.event_fields(),
-            Some(&BTreeSet::from([
+            fields,
+            BTreeSet::from([
                 "commit_revision".into(),
                 "ordinal".into(),
                 "source_cursor".into(),
                 "operation".into(),
                 "received_at".into(),
-            ]))
+            ])
         );
-        assert!(sql.source_column("source_cursor").is_some());
-        let bound = sql.bind_at(2_000)?;
         assert!(bound.append);
         assert_eq!(bound.received_from, Bound::Included(1_000));
         assert_eq!(bound.plan()?.schema().fields().len(), 3);

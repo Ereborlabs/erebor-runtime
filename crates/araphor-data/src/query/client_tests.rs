@@ -2412,8 +2412,22 @@ async fn query_event_projection() -> TestResult {
         vec![],
         false,
     )?;
+    let result = fixture.query(&ordered).await?;
+    assert_eq!(
+        result.rows,
+        (1..=8)
+            .map(|cursor| vec![Value::UInt(if cursor % 2 == 0 { 7 } else { 9 })])
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(result.input_rows, 8);
+    drop(result);
+    let payload = fixture.plan(
+        "SELECT catalog_json FROM events ORDER BY source_cursor",
+        vec![],
+        false,
+    )?;
     assert!(matches!(
-        fixture.query(&ordered).await,
+        fixture.query(&payload).await,
         Err(crate::Error::AnalysisInputTooLarge { .. } | crate::Error::QueryLimit { .. })
     ));
     fixture.owner = Arc::new(QueryOwner::new(

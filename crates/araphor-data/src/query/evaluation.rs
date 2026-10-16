@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use datafusion::datasource::MemTable;
+use datafusion::execution::SessionState;
+use datafusion::logical_expr::LogicalPlan;
 use duckdb::core::LogicalTypeId;
 use duckdb::types::{Value, ValueRef};
 use snafu::ResultExt as _;
@@ -10,7 +12,7 @@ use snafu::ResultExt as _;
 use super::engine::QueryEngine;
 use super::input::InputRelations;
 use super::values::QueryValues;
-use super::{Column, QueryBinding, QueryLease, QueryOperation, QueryOwner};
+use super::{Column, QueryLease, QueryOperation, QueryOwner};
 use crate::{AnalysisReadControl, Result, StorePositionV1};
 
 pub(super) struct EvaluationLimits {
@@ -35,7 +37,7 @@ impl QueryEvaluation {
     pub(super) fn run(
         owner: &QueryOwner,
         input: &InputRelations,
-        binding: &QueryBinding,
+        prepared: (SessionState, LogicalPlan, Arc<sdk::Schema>),
         limits: EvaluationLimits,
         position: StorePositionV1,
         control: &AnalysisReadControl,
@@ -62,9 +64,8 @@ impl QueryEvaluation {
                 ),
             );
         }
-        let fetch = limits.rows.saturating_add(1);
-        let state = QueryEngine::state()?;
-        let (plan, schema) = QueryEngine::plan(&state, binding, &tables, Some(fetch))?;
+        let (state, plan, schema) = prepared;
+        let plan = QueryEngine::bind_sources(plan, &tables)?;
         let read = control.within(control.remaining()?)?;
         let retained = lease.clone();
         #[cfg(test)]
@@ -341,6 +342,7 @@ mod tests {
     use datafusion::arrow::array::{StringArray, UInt32Array, UInt64Array};
 
     use super::*;
+    use crate::QueryBinding;
 
     type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -506,11 +508,13 @@ mod tests {
             vec![Value::Text(text.clone()), Value::Text(text.clone())],
             0,
         )?;
+        let state = QueryEngine::state()?;
+        let (query, schema) = QueryEngine::prepare(&state, &binding, Some(3))?;
         let lease = owner.budget.evaluate([1; 16])?;
         let output = QueryEvaluation::run(
             &owner,
             &InputRelations::default(),
-            &binding,
+            (state, query, schema),
             limits(2, 1024 * 1024, QueryOperation::Replace),
             StorePositionV1 {
                 commit_revision: 0,
@@ -533,11 +537,13 @@ mod tests {
             Vec::new(),
             0,
         )?;
+        let state = QueryEngine::state()?;
+        let (query, schema) = QueryEngine::prepare(&state, &binding, Some(3))?;
         let lease = owner.budget.evaluate([1; 16])?;
         let output = QueryEvaluation::run(
             &owner,
             &InputRelations::default(),
-            &binding,
+            (state, query, schema),
             limits(2, 1024 * 1024, QueryOperation::Replace),
             StorePositionV1 {
                 commit_revision: 0,

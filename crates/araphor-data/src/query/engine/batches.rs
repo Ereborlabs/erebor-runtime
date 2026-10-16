@@ -62,10 +62,9 @@ impl QueryEngine {
             })
     }
 
-    pub(in crate::query) fn plan(
+    pub(in crate::query) fn prepare(
         state: &SessionState,
         binding: &QueryBinding,
-        tables: &BTreeMap<String, Arc<MemTable>>,
         fetch: Option<usize>,
     ) -> Result<(LogicalPlan, Arc<sdk::Schema>)> {
         let mut plan = binding.plan()?;
@@ -81,6 +80,13 @@ impl QueryEngine {
             operation: "optimize query",
         })?;
         let schema = binding.output_schema(plan.schema().as_arrow())?;
+        Ok((plan, schema))
+    }
+
+    pub(in crate::query) fn bind_sources(
+        plan: LogicalPlan,
+        tables: &BTreeMap<String, Arc<MemTable>>,
+    ) -> Result<LogicalPlan> {
         let plan = plan
             .transform_up(|plan| {
                 if let LogicalPlan::Filter(mut filter) = plan {
@@ -134,7 +140,7 @@ impl QueryEngine {
                 operation: "bind selected Arrow sources",
             })?
             .data;
-        Ok((plan, schema))
+        Ok(plan)
     }
 
     pub(in crate::query) async fn stream(
@@ -177,7 +183,8 @@ impl QueryEngine {
         control: &AnalysisReadControl,
         lease: &QueryLease,
     ) -> Result<Vec<sdk::RecordBatch>> {
-        let (plan, schema) = Self::plan(state, binding, tables, None)?;
+        let (plan, schema) = Self::prepare(state, binding, None)?;
+        let plan = Self::bind_sources(plan, tables)?;
         let state = state.clone();
         let lease = lease.clone();
         self.run(control, async move {
