@@ -5,9 +5,10 @@ use datafusion::execution::SessionState;
 
 use araphor_analysis_sdk as sdk;
 
+#[cfg(test)]
+use super::SqlModelV1;
 use super::{
     execute::ModelExecution, AdmittedExport, ModelInputRequest, ModelInputs, SqlModelOutputV1,
-    SqlModelV1,
 };
 use crate::query::{budget::QueryLease, engine::QueryEngine};
 use crate::{AnalysisReadControl, QueryOwner, Result};
@@ -238,27 +239,16 @@ impl ModelOperation<'_> {
             inputs: BTreeMap::new(),
             model: Some(program.admit(model)?),
         };
-        self.evaluate_admitted(package, program, &admitted, evaluation, control)
+        self.evaluate_admitted(package, &admitted, evaluation, control)
     }
 
     pub(crate) fn evaluate_admitted(
         mut self,
         package: &sdk::Package,
-        program: &SqlModelV1,
         admitted: &AdmittedExport,
         evaluation: &sdk::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<SqlModelOutputV1> {
-        let model = package
-            .exports
-            .iter()
-            .find(|model| model.name == evaluation.export)
-            .ok_or_else(|| {
-                crate::QueryInvalidSnafu {
-                    field: "model export",
-                }
-                .build()
-            })?;
         let admitted = admitted.model.as_ref().ok_or_else(|| {
             crate::QueryInvalidSnafu {
                 field: "model admitted program",
@@ -281,7 +271,7 @@ impl ModelOperation<'_> {
                 lease.reserve_output(capacity)?;
                 Ok(lease)
             },
-            |control, host, lease| {
+            |model, control, host, lease| {
                 let mut executor = ModelExecution::new(
                     self.owner,
                     &state,
@@ -292,7 +282,7 @@ impl ModelOperation<'_> {
                     host,
                 );
                 executor.register(model, evaluation, self.bound, host.input_bytes)?;
-                let output = executor.evaluate(model, program, admitted)?;
+                let output = executor.evaluate(model, admitted)?;
                 let bytes = executor.bytes();
                 drop(executor);
                 drop(state);

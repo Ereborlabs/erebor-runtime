@@ -24,7 +24,7 @@ impl QueryOwner {
             evaluation,
             control,
             |capacity| self.budget.component(tenant, capacity, preflight),
-            |control, host, lease| {
+            |_model, control, host, lease| {
                 control.check()?;
                 let output = execute(control, host)?;
                 lease.shrink_input(retained)?;
@@ -52,7 +52,7 @@ impl QueryOwner {
             evaluation,
             control,
             |capacity| self.budget.component(tenant, capacity, preflight),
-            |control, host, lease| {
+            |_model, control, host, lease| {
                 control.check()?;
                 let input = sdk::wire::Evaluation::encode(package, evaluation)
                     .context(crate::AnalysisContractSnafu)?;

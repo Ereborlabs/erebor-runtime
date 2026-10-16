@@ -19,10 +19,10 @@ impl AnalysisPackageOwner {
     ) -> Result<SqlModelOutputV1> {
         self.query.check_analysis_input(evaluation)?;
         match artifact.implementation(&evaluation.export)? {
-            PackageImplementationV1::Sql { program, .. } => self
+            PackageImplementationV1::Sql { .. } => self
                 .query
                 .model_operation(tenant)
-                .evaluate_admitted(&artifact.descriptor, program, admitted, evaluation, control),
+                .evaluate_admitted(&artifact.descriptor, admitted, evaluation, control),
             PackageImplementationV1::Wasm {
                 artifact: bytes, ..
             } => {

@@ -122,7 +122,8 @@ fn model_output_deadline() -> TestResult {
         &evaluation,
         &caller,
         |capacity| owner.budget.model([1; 16], capacity),
-        |local, _, _| {
+        |model, local, _, _| {
+            assert!(std::ptr::eq(model, &package.exports[0]));
             std::thread::sleep(local.remaining()? + Duration::from_millis(1));
             Ok((output.clone(), bytes))
         },
@@ -137,7 +138,7 @@ fn model_output_deadline() -> TestResult {
         &evaluation,
         &caller,
         |capacity| owner.budget.model([1; 16], capacity),
-        |_, _, _| Ok((output, bytes)),
+        |_, _, _, _| Ok((output, bytes)),
     )?;
     assert_eq!(result.output.datasets[0].batches[0].num_rows(), 1);
     Ok(())

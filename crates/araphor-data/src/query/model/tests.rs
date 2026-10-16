@@ -311,5 +311,175 @@ fn sql_model_exact_parameters() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn admitted_program_order() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    let owner = fixture.owner(QueryLimits {
+        evaluate_timeout: Duration::from_secs(30),
+        ..Default::default()
+    })?;
+    let mut model = sdk::Model::new(
+        "ordered",
+        Vec::new(),
+        vec![port("ZRows", "count"), port("ARows", "count")],
+    );
+    model.checkpoint = Some(sdk::CheckpointSpec {
+        version: 1,
+        datasets: vec![port("ZState", "count"), port("AState", "count")],
+    });
+    model.reasons = ["ordered.z", "ordered.a"]
+        .map(|code| sdk::Reason {
+            code: code.into(),
+            details: port("details", "count").schema,
+        })
+        .into();
+    let mut program = SqlModelV1 {
+        outputs: BTreeMap::from([
+            ("ARows".into(), "SELECT 9::UBIGINT AS count".into()),
+            ("ZRows".into(), "SELECT 7::UBIGINT AS count".into()),
+        ]),
+        checkpoint: BTreeMap::from([
+            ("AState".into(), "SELECT count FROM output_ARows".into()),
+            ("ZState".into(), "SELECT count FROM output_ZRows".into()),
+        ]),
+        reasons: vec![
+            SqlReasonV1 {
+                output: "ARows".into(),
+                code: "ordered.a".into(),
+                sql: "SELECT __row_index AS output_row, count FROM output_ARows".into(),
+            },
+            SqlReasonV1 {
+                output: "ZRows".into(),
+                code: "ordered.z".into(),
+                sql: "SELECT __row_index AS output_row, count FROM output_ZRows".into(),
+            },
+        ],
+        ..Default::default()
+    };
+    for (output, code) in [("missing", "ordered.a"), ("ARows", "missing")] {
+        let mut invalid = program.clone();
+        invalid.reasons[0].output = output.into();
+        invalid.reasons[0].code = code.into();
+        assert!(QueryOwner::admit_model(&model, &invalid).is_err());
+    }
+    let mut admitted = AdmittedExport::admit(&model, Some(&program))?;
+    let before = admitted.allocated_bytes();
+    let growth = {
+        let plan = admitted.model.as_mut().ok_or("admitted model")?;
+        assert_eq!(plan.outputs[0].original(), program.outputs["ZRows"]);
+        assert_eq!(plan.outputs[1].original(), program.outputs["ARows"]);
+        assert_eq!(plan.checkpoint[0].original(), program.checkpoint["ZState"]);
+        assert_eq!(plan.checkpoint[1].original(), program.checkpoint["AState"]);
+        assert_eq!((plan.reasons[0].0, plan.reasons[0].1), (1, 1));
+        assert_eq!((plan.reasons[1].0, plan.reasons[1].1), (0, 0));
+        let mut growth = 0;
+        for statements in [&mut plan.outputs, &mut plan.checkpoint] {
+            let capacity = statements.capacity();
+            statements.reserve_exact(8);
+            growth += (statements.capacity() - capacity) * std::mem::size_of::<QuerySql>();
+        }
+        let capacity = plan.reasons.capacity();
+        plan.reasons.reserve_exact(8);
+        growth +=
+            (plan.reasons.capacity() - capacity) * std::mem::size_of::<(usize, usize, QuerySql)>();
+        growth
+    };
+    assert_eq!(admitted.allocated_bytes(), before + growth);
+    program.outputs.clear();
+    program.checkpoint.clear();
+    program.reasons.clear();
+    let package = sdk::Package::new("ordered", "1", vec![model.clone()]);
+    let evaluation = sdk::Evaluation {
+        export: model.name.clone(),
+        inputs: Vec::new(),
+        parameters: None,
+        context: sdk::EvaluationContext {
+            id: "ordered".into(),
+            time_utc_ns: 100,
+            seed: None,
+            limits: model.limits,
+        },
+        checkpoint: None,
+    };
+    let output = owner.model_operation([1; 16]).evaluate_admitted(
+        &package,
+        &admitted,
+        &evaluation,
+        &control()?,
+    )?;
+    for (index, expected) in [7, 9].into_iter().enumerate() {
+        let data = &output.output.datasets[index];
+        assert_eq!(data.name, model.outputs[index].name);
+        assert_eq!(
+            data.batches,
+            vec![batch(&model.outputs[index], vec![expected])?]
+        );
+    }
+    let checkpoint = output.output.checkpoint.as_ref().ok_or("checkpoint")?;
+    for (index, expected) in [7, 9].into_iter().enumerate() {
+        let port = &model.checkpoint.as_ref().ok_or("checkpoint spec")?.datasets[index];
+        assert_eq!(checkpoint.datasets[index].name, port.name);
+        assert_eq!(
+            checkpoint.datasets[index].batches,
+            vec![batch(port, vec![expected])?]
+        );
+    }
+    assert_eq!(output.output.reasons.len(), 2);
+    for (reason, (dataset, code, value)) in output
+        .output
+        .reasons
+        .iter()
+        .zip([("ARows", "ordered.a", 9), ("ZRows", "ordered.z", 7)])
+    {
+        assert_eq!(
+            reason.output,
+            sdk::RowRef {
+                dataset: dataset.into(),
+                row: 0
+            }
+        );
+        assert_eq!(reason.code, code);
+        assert_eq!(
+            reason.details,
+            batch(&port("details", "count"), vec![value])?
+        );
+    }
+    drop(output);
+    for (output, reason) in [(usize::MAX, 1), (1, usize::MAX)] {
+        let plan = admitted.model.as_mut().ok_or("admitted model")?;
+        (plan.reasons[0].0, plan.reasons[0].1) = (output, reason);
+        assert!(matches!(
+            owner.model_operation([1; 16]).evaluate_admitted(
+                &package,
+                &admitted,
+                &evaluation,
+                &control()?
+            ),
+            Err(crate::Error::QueryInvalid {
+                field: "model reason declaration",
+                ..
+            })
+        ));
+        assert_eq!(owner.input_charge(), 0);
+    }
+    let plan = admitted.model.as_mut().ok_or("admitted model")?;
+    (plan.reasons[0].0, plan.reasons[0].1) = (1, 1);
+    plan.outputs.pop();
+    assert!(matches!(
+        owner.model_operation([1; 16]).evaluate_admitted(
+            &package,
+            &admitted,
+            &evaluation,
+            &control()?
+        ),
+        Err(crate::Error::QueryInvalid {
+            field: "model admitted output",
+            ..
+        })
+    ));
+    assert_eq!(owner.input_charge(), 0);
+    Ok(())
+}
+
 mod clock;
 mod types;

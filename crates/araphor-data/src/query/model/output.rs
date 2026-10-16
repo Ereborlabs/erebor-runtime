@@ -1,7 +1,7 @@
 use araphor_analysis_sdk as sdk;
 use sdk::arrow_array::{Array, StringArray, UInt64Array};
 
-use super::{execute::ModelExecution, SqlReasonV1};
+use super::execute::ModelExecution;
 use crate::{QuerySql, Result};
 
 impl ModelExecution<'_> {
@@ -53,15 +53,14 @@ impl ModelExecution<'_> {
     pub(super) fn reasons(
         &mut self,
         model: &sdk::Model,
-        programs: &[SqlReasonV1],
-        queries: &[QuerySql],
+        queries: &[(usize, usize, QuerySql)],
     ) -> Result<Vec<sdk::ReasonValue>> {
         let mut reasons = Vec::new();
-        for (program, query) in programs.iter().zip(queries) {
-            let spec = model
-                .reasons
-                .iter()
-                .find(|reason| reason.code == program.code)
+        for (output, reason, query) in queries {
+            let (output, spec) = model
+                .outputs
+                .get(*output)
+                .zip(model.reasons.get(*reason))
                 .ok_or_else(|| {
                     crate::QueryInvalidSnafu {
                         field: "model reason declaration",
@@ -101,8 +100,8 @@ impl ModelExecution<'_> {
                 for row in 0..batch.num_rows() {
                     self.owned(
                         std::mem::size_of::<sdk::ReasonValue>()
-                            + program.output.len()
-                            + program.code.len()
+                            + output.name.len()
+                            + spec.code.len()
                             + spec.details.fields().len() * 16,
                     )?;
                     reasons.try_reserve_exact(1).map_err(|_| {
@@ -113,10 +112,10 @@ impl ModelExecution<'_> {
                     })?;
                     reasons.push(sdk::ReasonValue {
                         output: sdk::RowRef {
-                            dataset: program.output.clone(),
+                            dataset: output.name.clone(),
                             row: rows.value(row),
                         },
-                        code: program.code.clone(),
+                        code: spec.code.clone(),
                         details: details.slice(row, 1),
                     });
                 }

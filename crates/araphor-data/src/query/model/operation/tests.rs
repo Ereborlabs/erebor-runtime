@@ -157,7 +157,6 @@ fn operation_inputs_match() -> TestResult {
     ));
     let output = operation.evaluate_admitted(
         &package,
-        &program,
         &admitted,
         &evaluation(actual.inputs.clone(), &model),
         &control()?,
@@ -432,7 +431,6 @@ fn named_alias_revision() -> TestResult {
         previous = Some(inputs.inputs[0].revision.clone());
         let result = operation.evaluate_admitted(
             &package,
-            &program,
             &admitted,
             &evaluation(inputs.inputs.clone(), &model),
             &control()?,

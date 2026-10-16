@@ -515,6 +515,15 @@ code-owned template once. QueryBinding shares its immutable plan through an
 Arc. Each evaluation supplies fresh parameter and clock values. Parameter
 substitution occurs once before logical optimization.
 
+AdmittedModel stores output and checkpoint plans in descriptor order. It
+binds each reason plan to checked output and reason descriptor indices.
+Runtime execution accepts this admitted program and the checked descriptor.
+It does not receive the raw SqlModelV1 blueprint. QueryOwner passes the model
+from the SDK CheckedEvaluation into execution. ModelOperation does not search
+the package exports again. Retained-byte accounting includes vector capacity,
+reason indices, and all admitted queries. Public transient admission remains
+checked. The signed bundle still retains its original blueprint.
+
 Each run supplies its own tenant, grant, source batches, clock, checkpoint,
 bindings, and mutable execution state. A historical snapshot does not permit
 a current-state commit.
@@ -799,3 +808,36 @@ complete redesign adds 2,264 from `537f9de3`. The current tree adds 35 from
 `7b7b407a`; another 6,035 must be removed to meet the production target. The
 count record is `/tmp/araphor-arrow-engine-count11.json`. The count excludes
 tests, documents, and blank lines. Complete redesign: **Not done**.
+
+Admitted SQL model execution: **Done**. Runtime execution consumes only the
+admitted plans and the checked SDK model. Output and checkpoint plans use
+descriptor order. Reason plans use checked descriptor indices. The raw
+blueprint remains in the signed bundle. Its names are not bound again during
+execution. Retained memory includes each vector's capacity and all queries.
+
+All 52 affected cases pass. The first run passes 51 and rejects the new test
+fixture because its reason namespace differs from its package name. Only the
+new test file changes after that run. The fixture uses the required namespace,
+and the test receives a name that follows the repository rule. The corrected
+case passes on the final build. The final affected Data build passes in 114.74
+seconds. Strict Clippy for Data, Control, and E2E test targets passes in 10.97
+seconds. Production and manifests remain unchanged between these runs. The
+cases cover descriptor order, independent admitted execution, reason binding,
+vector capacity, exact installed pairing, current grants, snapshot reuse,
+invalid indices, and cleanup. Native and caller runtime cases are not repeated.
+
+The records are `/tmp/araphor-admitted-runtime-build1.json`,
+`/tmp/araphor-admitted-runtime-build2.json`,
+`/tmp/araphor-admitted-runtime-build3.json`,
+`/tmp/araphor-admitted-runtime-tests1.json`,
+`/tmp/araphor-admitted-runtime-failed2.json`,
+`/tmp/araphor-admitted-runtime-final3.json`,
+`/tmp/araphor-admitted-runtime-clippy2.json`, and
+`/tmp/araphor-admitted-runtime-qualification1.json`.
+
+This change removes 17 nonblank production Rust lines from `ca3b51c3`. The
+complete redesign adds 2,247 from `537f9de3`. The current tree adds 18 from
+`7b7b407a`; another 6,018 must be removed to meet the production target. The
+count record is `/tmp/araphor-arrow-engine-count12.json`. The count excludes
+tests, documents, and blank lines. Complete redesign: **Not done**. No speed
+measurement is made. The native SQL behavior proposals remain unapproved.

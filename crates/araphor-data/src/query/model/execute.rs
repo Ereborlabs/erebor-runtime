@@ -8,7 +8,7 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::LogicalPlan;
 use snafu::ResultExt as _;
 
-use super::{schema::ModelSchema, AdmittedModel, SqlModelV1};
+use super::{schema::ModelSchema, AdmittedModel};
 use crate::query::{budget::QueryLease, engine::QueryEngine};
 use crate::{AnalysisReadControl, QueryLimits, QueryOwner, QuerySql, Result};
 
@@ -60,7 +60,6 @@ impl<'a> ModelExecution<'a> {
     pub(super) fn evaluate(
         &mut self,
         model: &sdk::Model,
-        program: &SqlModelV1,
         admitted: &AdmittedModel,
     ) -> Result<sdk::Output> {
         let datasets = self.datasets(&model.outputs, &admitted.outputs)?;
@@ -92,7 +91,7 @@ impl<'a> ModelExecution<'a> {
         self.limits.max_bytes = output_limit;
         let checkpoint = checkpoint?;
         let evidence = self.evidence(admitted.evidence.as_ref())?;
-        let reasons = self.reasons(model, &program.reasons, &admitted.reasons)?;
+        let reasons = self.reasons(model, &admitted.reasons)?;
         Ok(sdk::Output {
             datasets,
             evidence,
@@ -101,11 +100,13 @@ impl<'a> ModelExecution<'a> {
         })
     }
 
-    fn datasets(
-        &mut self,
-        ports: &[sdk::Port],
-        queries: &BTreeMap<String, QuerySql>,
-    ) -> Result<Vec<sdk::Dataset>> {
+    fn datasets(&mut self, ports: &[sdk::Port], queries: &[QuerySql]) -> Result<Vec<sdk::Dataset>> {
+        if ports.len() != queries.len() {
+            return crate::QueryInvalidSnafu {
+                field: "model admitted output",
+            }
+            .fail();
+        }
         let limits = self.limits;
         let mut remaining = limits;
         let byte_limit = self.byte_limit;
@@ -118,13 +119,8 @@ impl<'a> ModelExecution<'a> {
         };
         let result = ports
             .iter()
-            .map(|port| {
-                let query = queries.get(&port.name).ok_or_else(|| {
-                    crate::QueryInvalidSnafu {
-                        field: "model admitted output",
-                    }
-                    .build()
-                })?;
+            .zip(queries)
+            .map(|(port, query)| {
                 remaining.max_bytes = remaining
                     .max_bytes
                     .checked_sub(port.name.len() as u64)
@@ -317,6 +313,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::query::{engine::QueryEngine, tests::QueryFixture};
+    use crate::SqlModelV1;
 
     use super::*;
 
@@ -354,7 +351,7 @@ mod tests {
             model.limits,
             &owner.limits,
         );
-        let batches = probe.query(&admitted.outputs["rows"], Some(&port.schema))?;
+        let batches = probe.query(&admitted.outputs[0], Some(&port.schema))?;
         assert_eq!(probe.rows, 1);
         let capacity = probe.bytes() + std::mem::size_of::<u64>() - 1;
         drop(probe);

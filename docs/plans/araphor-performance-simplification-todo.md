@@ -133,11 +133,11 @@ No new performance test or benchmark is approved. Do not infer speed gains
 from changed test-suite durations. Record removed work from the final source.
 Measure latency only after approval of a specific workload and its limits.
 
-Result: **Not done**. The current DataFusion working tree adds 35 nonblank
-production Rust lines from `7b7b407a` and 1,188 from `aa390d9f`.
-The redesign adds 2,264 from the baseline `537f9de3`.
-Another 6,035 must be removed to meet the target. The count record is
-`/tmp/araphor-arrow-engine-count11.json`. It includes the new query modules
+Result: **Not done**. The current DataFusion working tree adds 18 nonblank
+production Rust lines from `7b7b407a` and 1,171 from `aa390d9f`.
+The redesign adds 2,247 from the baseline `537f9de3`.
+Another 6,018 must be removed to meet the target. The count record is
+`/tmp/araphor-arrow-engine-count12.json`. It includes the new query modules
 and excludes tests and documents. Engine functional qualification passes:
 439 ordinary Data cases, 12 native Data cases, six Control cases, and three
 E2E cases. The final affected build, strict Clippy, and formatting pass. The
@@ -156,6 +156,11 @@ Canonical Arrow fields replace 431 parallel InputField descriptors. Model
 stages move one imported-table map. The change adds four production lines and
 passes 260 query cases, six package cases, and strict Clippy for Data and its
 callers. The plan records the stopped broad package selection separately.
+SQL model execution consumes only the admitted program and checked SDK model.
+Descriptor order replaces two retained statement maps. Checked indices bind
+reason declarations. This change removes 17 production lines and passes 52
+affected cases and strict Clippy. The plan records the new fixture correction
+and test-only source extension. The complete reduction remains open.
 Continue component refactoring. Documentation and test deletion do not close
 this result.
 

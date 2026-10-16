@@ -76,6 +76,15 @@ its source owners and leases. Query inputs cannot refer to other Query inputs. B
 by package output aliases. Errors release the operation state and leases
 through Rust ownership.
 
+[SqlModelV1::admit](../../crates/araphor-data/src/query/model.rs) stores output
+and checkpoint plans in descriptor order. Each reason plan retains its checked
+output and reason descriptor indices. ModelExecution consumes only this
+admitted program. It does not receive the raw SQL blueprint. QueryOwner passes
+the exact model from SDK CheckedEvaluation into execution. The runtime checks
+vector widths and reason indices. InstalledBundle retains the exact package,
+descriptor, and admitted-program pairing. Public transient calls still perform
+admission. Retained memory includes vector capacity and every admitted query.
+
 Each original Table input retains its evidence and exact dependency once.
 A derived Query input combines inherited coverage and hashes the inherited
 input revisions, including when SQL returns zero rows. Witness normalization
@@ -231,6 +240,16 @@ provenance, capacity denial, and cleanup. A broad package selection is stopped
 before the six affected cases run. The interrupted run is not counted as
 qualification. Native and caller runtime cases are not repeated. The result
 record is `/tmp/araphor-canonical-fields-qualification1.json`.
+
+The admitted SQL model execution change passes 52 affected cases. The first
+run passes 51 cases and rejects the new test's invalid reason namespace. Only
+that test file then changes. The final test uses the required namespace and
+a shorter name. It passes against the final affected build. Strict Clippy for
+Data and its callers passes. Production and manifests remain unchanged.
+The cases check descriptor order, independent admitted execution, reason
+bindings, vector capacity, installed pairing, current grants, snapshot reuse,
+invalid indices, and cleanup. Native and caller runtime cases are not repeated.
+The result record is `/tmp/araphor-admitted-runtime-qualification1.json`.
 
 The complete earlier receipts remain at
 `7b7b407adf347d389984553a4d212bfce37b75b5:docs/guides/araphor-sql-operation-review.md`.

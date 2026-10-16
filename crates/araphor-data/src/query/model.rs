@@ -72,31 +72,27 @@ impl AdmittedExport {
     }
 
     pub(crate) fn allocated_bytes(&self) -> usize {
-        let maps = std::iter::once(&self.inputs).chain(
-            self.model
-                .iter()
-                .flat_map(|model| [&model.outputs, &model.checkpoint]),
+        use std::mem::size_of;
+
+        let node = size_of::<(String, QuerySql)>()
+            .saturating_mul(11)
+            .saturating_add(16 * size_of::<usize>());
+        let mut bytes = self.inputs.keys().fold(
+            size_of::<Self>().saturating_add(node.saturating_mul(self.inputs.len())),
+            |bytes, name| bytes.saturating_add(name.capacity()),
         );
-        let mut bytes = std::mem::size_of::<Self>();
-        for map in maps {
-            let node = std::mem::size_of::<(String, QuerySql)>()
-                .saturating_mul(11)
-                .saturating_add(16 * std::mem::size_of::<usize>());
-            bytes = bytes.saturating_add(node.saturating_mul(map.len()));
-            for (name, sql) in map {
-                bytes = bytes
-                    .saturating_add(name.capacity())
-                    .saturating_add(sql.allocated_bytes());
-            }
-        }
         if let Some(model) = &self.model {
-            bytes =
-                bytes.saturating_add(model.reasons.capacity() * std::mem::size_of::<QuerySql>());
-            for sql in model.evidence.iter().chain(&model.reasons) {
-                bytes = bytes.saturating_add(sql.allocated_bytes());
-            }
+            bytes = bytes
+                .saturating_add(model.outputs.capacity() * size_of::<QuerySql>())
+                .saturating_add(model.checkpoint.capacity() * size_of::<QuerySql>())
+                .saturating_add(model.reasons.capacity() * size_of::<(usize, usize, QuerySql)>());
         }
-        bytes
+        self.inputs
+            .values()
+            .chain(self.model.iter().flat_map(AdmittedModel::queries))
+            .fold(bytes, |bytes, sql| {
+                bytes.saturating_add(sql.allocated_bytes())
+            })
     }
 }
 
@@ -189,7 +185,7 @@ impl QueryOwner {
             model: Some(program.admit(model)?),
         };
         self.model_operation(tenant)
-            .evaluate_admitted(package, program, &admitted, evaluation, control)
+            .evaluate_admitted(package, &admitted, evaluation, control)
     }
 
     fn evaluate_model_reserved(
@@ -199,6 +195,7 @@ impl QueryOwner {
         control: &AnalysisReadControl,
         reserve: impl FnOnce(usize) -> Result<QueryLease>,
         execute: impl FnOnce(
+            &sdk::Model,
             &AnalysisReadControl,
             &super::QueryLimits,
             &mut QueryLease,
@@ -226,7 +223,7 @@ impl QueryOwner {
             output_capacity: capacity,
             ..self.limits.clone()
         };
-        let (mut output, bytes) = execute(&control, &host, &mut lease)?;
+        let (mut output, bytes) = execute(model, &control, &host, &mut lease)?;
         checked
             .validate_output(&output)
             .context(crate::AnalysisContractSnafu)?;
@@ -273,19 +270,19 @@ impl QueryOwner {
 }
 
 struct AdmittedModel {
-    outputs: BTreeMap<String, QuerySql>,
-    checkpoint: BTreeMap<String, QuerySql>,
+    outputs: Vec<QuerySql>,
+    checkpoint: Vec<QuerySql>,
     evidence: Option<QuerySql>,
-    reasons: Vec<QuerySql>,
+    reasons: Vec<(usize, usize, QuerySql)>,
 }
 
 impl AdmittedModel {
     fn queries(&self) -> impl Iterator<Item = &QuerySql> {
         self.outputs
-            .values()
-            .chain(self.checkpoint.values())
+            .iter()
+            .chain(&self.checkpoint)
             .chain(self.evidence.iter())
-            .chain(&self.reasons)
+            .chain(self.reasons.iter().map(|(_, _, sql)| sql))
     }
 }
 
@@ -326,15 +323,25 @@ impl SqlModelV1 {
         }
         let mut reasons = Vec::new();
         for reason in &self.reasons {
-            if !model.outputs.iter().any(|port| port.name == reason.output)
-                || !model.reasons.iter().any(|spec| spec.code == reason.code)
-            {
+            let output = model
+                .outputs
+                .iter()
+                .position(|port| port.name == reason.output);
+            let spec = model
+                .reasons
+                .iter()
+                .position(|spec| spec.code == reason.code);
+            let (Some(output), Some(spec)) = (output, spec) else {
                 return crate::QueryInvalidSnafu {
                     field: "model reason binding",
                 }
                 .fail();
-            }
-            reasons.push(QuerySql::admit_relations(&reason.sql, relations.clone())?);
+            };
+            reasons.push((
+                output,
+                spec,
+                QuerySql::admit_relations(&reason.sql, relations.clone())?,
+            ));
         }
         Ok(AdmittedModel {
             outputs,
@@ -348,7 +355,7 @@ impl SqlModelV1 {
         ports: &[sdk::Port],
         queries: &BTreeMap<String, String>,
         relations: &BTreeMap<String, std::sync::Arc<sdk::Schema>>,
-    ) -> Result<BTreeMap<String, QuerySql>> {
+    ) -> Result<Vec<QuerySql>> {
         if ports.len() != queries.len() {
             return crate::QueryInvalidSnafu {
                 field: "model output queries",
@@ -365,10 +372,7 @@ impl SqlModelV1 {
                     }
                     .build()
                 })?;
-                Ok((
-                    port.name.clone(),
-                    QuerySql::admit_relations(sql, relations.clone())?,
-                ))
+                QuerySql::admit_relations(sql, relations.clone())
             })
             .collect()
     }

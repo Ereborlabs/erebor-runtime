@@ -237,15 +237,12 @@ impl ModelRun<'_> {
             checkpoint,
         };
         let evaluated = match implementation {
-            crate::PackageImplementationV1::Sql { program, .. } => {
-                self.operation.evaluate_admitted(
-                    &self.artifact.descriptor,
-                    program,
-                    self.admitted,
-                    &evaluation,
-                    control,
-                )?
-            }
+            crate::PackageImplementationV1::Sql { .. } => self.operation.evaluate_admitted(
+                &self.artifact.descriptor,
+                self.admitted,
+                &evaluation,
+                control,
+            )?,
             _ => {
                 self.operation.release_inputs()?;
                 self.owner.evaluate_artifact(
