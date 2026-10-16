@@ -146,6 +146,18 @@ adds eight nonblank production Rust lines. The verified complete count removes
 1,340 from `7b7b407a` and adds 889 from `537f9de3`:
 `/tmp/araphor-fixed-binary-count2.json`. Another 4,660 must be removed for the
 6,000-line target. Complete redesign: **Not done**.
+The subscription physical plan now includes the actual JournalExec child.
+The hidden Source factory is deleted. Native bounded source execution,
+Inexact filters, complete receipts, and native optimizer checks remain.
+The journal enforces Tokio's cooperative budget between signed messages.
+All 102 Query cases and the E2E query-follow contract pass. Strict Query
+Clippy and scoped formatting pass. The record is
+`/tmp/araphor-journal-owner-qualification1.json`. This change adds 139 nonblank
+production Rust lines. The complete count removes 1,201 from `7b7b407a` and
+adds 1,028 from `537f9de3`: `/tmp/araphor-native-rewrite-count11.json`.
+Another 4,799 must be removed for the 6,000-line target. General maintained
+SQL, clock epochs, the append source replacement, and the complete redesign
+remain **Not done**. Full workspace CI is not run, as instructed.
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

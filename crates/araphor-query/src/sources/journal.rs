@@ -1,4 +1,6 @@
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -8,21 +10,192 @@ use araphor_data::{
 };
 use datafusion::arrow::array::{BooleanArray, RecordBatch, UInt32Array, UInt64Array};
 use datafusion::arrow::compute::filter_record_batch;
-use datafusion::common::DataFusionError;
+use datafusion::common::{DataFusionError, Result as NativeResult};
 use datafusion::execution::memory_pool::MemoryReservation;
+use datafusion::execution::TaskContext;
 use datafusion::logical_expr::interval_arithmetic::Interval;
+use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, SchedulingType};
+use datafusion::physical_plan::streaming::StreamingTableExec;
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream,
+};
 use futures_util::stream;
 use snafu::ResultExt as _;
 use tokio::sync::watch;
 
-use super::{Input, Message, Run};
+use super::{Captured, ReadMode, Removal, SourceSnapshot};
 use crate::execution::{Engine, PendingRead};
-use crate::sources::{Captured, ReadMode, Removal, SourceSnapshot};
+use crate::stream::{Input, Message, Run};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
-pub(super) struct Source {
+#[derive(Debug)]
+pub(crate) struct JournalExec {
+    columns: Vec<usize>,
+    positions: [usize; 2],
+    requests: Arc<BTreeMap<String, BTreeSet<usize>>>,
+    received: Option<Interval>,
+    properties: Arc<PlanProperties>,
+}
+
+impl JournalExec {
+    pub(crate) fn new(
+        source: &StreamingTableExec,
+        received: Option<Interval>,
+    ) -> NativeResult<Self> {
+        if source.is_infinite() || source.limit().is_some() || source.partitions().len() != 1 {
+            return Err(DataFusionError::NotImplemented(
+                "committed native evidence scan".into(),
+            ));
+        }
+        let schema = source.schema();
+        let canonical = &SourceSnapshot::schemas()["events"];
+        let columns = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                canonical
+                    .index_of(field.name())
+                    .map_err(DataFusionError::from)
+            })
+            .collect::<NativeResult<Vec<_>>>()?;
+        if canonical.project(&columns)? != *schema {
+            return Err(DataFusionError::Execution(
+                "maintained source schema changed".into(),
+            ));
+        }
+        let positions = [
+            canonical.index_of("commit_revision")?,
+            canonical.index_of("ordinal")?,
+        ];
+        let mut requested = columns.iter().copied().collect::<BTreeSet<_>>();
+        requested.extend(positions);
+        let requests = Arc::new(BTreeMap::from([("events".to_owned(), requested)]));
+        let properties = Arc::new(
+            PlanProperties::new(
+                EquivalenceProperties::new(schema),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Incremental,
+                // The store bounds live raw records. Retirements remove cached rows.
+                Boundedness::Unbounded {
+                    requires_infinite_memory: false,
+                },
+            )
+            .with_scheduling_type(SchedulingType::Cooperative),
+        );
+        Ok(Self {
+            columns,
+            positions,
+            requests,
+            received,
+            properties,
+        })
+    }
+
+    pub(crate) fn execute_committed(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<Input> {
+        if partition != 0 {
+            return Err(DataFusionError::Execution(
+                "Journal has one partition".into(),
+            ))
+            .context(SqlSnafu);
+        }
+        let run = context
+            .session_config()
+            .get_extension::<Run>()
+            .ok_or_else(|| DataFusionError::Execution("source run is absent".into()))
+            .context(SqlSnafu)?;
+        run.control.check()?;
+        if run.sources.len() != 1 || !run.sources.contains("events") {
+            return Err(DataFusionError::NotImplemented(
+                "maintained original evidence inventory".into(),
+            ))
+            .context(SqlSnafu);
+        }
+        let changes = run.engine.store().subscribe_revision();
+        let state = Changes {
+            memory: run.engine.memory().reserve_input(0).context(SqlSnafu)?,
+            pending_memory: run.engine.memory().reserve_input(0).context(SqlSnafu)?,
+            run,
+            columns: self.columns.clone(),
+            positions: self.positions,
+            requests: Arc::clone(&self.requests),
+            received: self.received.clone(),
+            retained: Vec::new(),
+            frontier: None,
+            changes,
+            pending: VecDeque::new(),
+        };
+        Ok(Box::pin(stream::try_unfold(state, |mut state| {
+            tokio::task::coop::cooperative(async move {
+                if state.pending.is_empty() && !state.capture().await? {
+                    return Ok(None);
+                }
+                let message = state.pending.pop_front().ok_or_else(|| {
+                    InvalidSnafu {
+                        field: "committed source",
+                    }
+                    .build()
+                })?;
+                Ok(Some((message, state)))
+            })
+        })))
+    }
+}
+
+impl DisplayAs for JournalExec {
+    fn fmt_as(&self, _format: DisplayFormatType, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("JournalExec: source=events")
+    }
+}
+
+impl ExecutionPlan for JournalExec {
+    fn name(&self) -> &str {
+        "JournalExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        Vec::new()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> NativeResult<Arc<dyn ExecutionPlan>> {
+        if !children.is_empty() {
+            return Err(DataFusionError::Internal("Journal has no child".into()));
+        }
+        Ok(self)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> NativeResult<SendableRecordBatchStream> {
+        Err(DataFusionError::NotImplemented(
+            "signed source changes require committed execution".into(),
+        ))
+    }
+}
+
+struct Changes {
     run: Arc<Run>,
     columns: Vec<usize>,
+    positions: [usize; 2],
+    requests: Arc<BTreeMap<String, BTreeSet<usize>>>,
     received: Option<Interval>,
     retained: Vec<Chunk>,
     frontier: Option<StorePositionV1>,
@@ -43,41 +216,7 @@ struct Key {
     position: StorePositionV1,
 }
 
-impl Source {
-    pub(super) fn new(
-        run: Arc<Run>,
-        columns: Vec<usize>,
-        received: Option<Interval>,
-    ) -> Result<Self> {
-        let changes = run.engine.store().subscribe_revision();
-        Ok(Self {
-            memory: run.engine.memory().reserve_input(0).context(SqlSnafu)?,
-            pending_memory: run.engine.memory().reserve_input(0).context(SqlSnafu)?,
-            run,
-            columns,
-            received,
-            retained: Vec::new(),
-            frontier: None,
-            changes,
-            pending: VecDeque::new(),
-        })
-    }
-
-    pub(super) fn execute(self) -> Input {
-        Box::pin(stream::try_unfold(self, |mut state| async move {
-            if state.pending.is_empty() && !state.capture().await? {
-                return Ok(None);
-            }
-            let message = state.pending.pop_front().ok_or_else(|| {
-                InvalidSnafu {
-                    field: "committed source",
-                }
-                .build()
-            })?;
-            Ok(Some((message, state)))
-        }))
-    }
-
+impl Changes {
     async fn capture(&mut self) -> Result<bool> {
         let engine = Arc::clone(&self.run.engine);
         let control = Arc::clone(&self.run.control);
@@ -122,27 +261,16 @@ impl Source {
         if let Some(received) = &self.received {
             capture.set_received(received.clone()).context(SqlSnafu)?;
         }
-        let schema = SourceSnapshot::providers()["events"].schema();
-        let revision = schema
-            .index_of("commit_revision")
-            .map_err(DataFusionError::from)
-            .context(SqlSnafu)?;
-        let ordinal = schema
-            .index_of("ordinal")
-            .map_err(DataFusionError::from)
-            .context(SqlSnafu)?;
-        let mut columns = self.columns.iter().copied().collect::<BTreeSet<_>>();
-        columns.extend([revision, ordinal]);
-        let requests = BTreeMap::from([("events".to_owned(), columns)]);
+        let requests = Arc::clone(&self.requests);
         let mode = self.frontier.map_or(ReadMode::Snapshot, ReadMode::Changes);
-        let sources = self.run.sources.clone();
+        let run = Arc::clone(&self.run);
         let worker = Arc::clone(&stage);
         let capture_permit = Arc::clone(&permit);
         let mut captured = stage
             .query_async(async move {
                 tokio::task::spawn_blocking(move || {
                     let _permit = capture_permit;
-                    capture.read(&sources, &requests, mode, &worker)
+                    capture.read(&run.sources, &requests, mode, &worker)
                 })
                 .await
                 .map_err(|source| crate::Error::Sql {
@@ -155,7 +283,7 @@ impl Source {
         control.check()?;
         engine.check_read(&captured.receipt).await?;
         let evaluation = Arc::new(control.within(engine.limits().evaluate_timeout)?);
-        let result = self.apply(&engine, &captured, revision, ordinal, &evaluation)?;
+        let result = self.apply(&engine, &captured, &evaluation)?;
         evaluation.check()?;
         let count = self
             .retained
@@ -233,8 +361,6 @@ impl Source {
         &mut self,
         engine: &Engine,
         captured: &Captured,
-        revision: usize,
-        ordinal: usize,
         control: &AnalysisReadControl,
     ) -> Result<(Vec<RecordBatch>, Vec<RecordBatch>)> {
         let rows = self
@@ -310,7 +436,7 @@ impl Source {
         self.retained.retain(|chunk| chunk.batch.num_rows() != 0);
         let mut witnesses = captured.receipt.witnesses.iter();
         let batches = captured
-            .project("events", &[revision, ordinal])
+            .project("events", &self.positions)
             .context(SqlSnafu)?;
         let inputs = captured
             .project("events", &self.columns)

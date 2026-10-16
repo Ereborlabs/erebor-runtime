@@ -11,7 +11,6 @@ use crate::sources::ArrowSnapshot;
 use crate::Result;
 
 pub(crate) mod physical;
-mod source;
 #[cfg(test)]
 mod tests;
 

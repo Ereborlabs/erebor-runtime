@@ -12,6 +12,7 @@ use araphor_data::{
     TraceIdentityV1, UnconfirmedNotificationConcernV1, ValidatedEvidenceBatchV1,
     NOTIFICATION_STATE_OWNER,
 };
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion::logical_expr::LogicalPlan;
 use futures_util::StreamExt as _;
@@ -757,11 +758,87 @@ async fn native_subscribe_execution() {
             control: Arc::clone(&control),
             now: 2_000_000_000,
         }));
+    assert!(state
+        .physical_optimizers()
+        .iter()
+        .any(|rule| rule.name() == "SanityCheckPlan"));
+    assert!(state
+        .physical_optimizers()
+        .iter()
+        .any(|rule| rule.name() == "EnsureCooperative"));
     let logical = crate::planner::subscription::Subscribe::plan(plan).unwrap();
     let physical = state.create_physical_plan(&logical).await.unwrap();
     assert!(physical
         .as_any()
         .is::<crate::stream::physical::SubscribeExec>());
+    {
+        use datafusion::physical_plan::execution_plan::{
+            Boundedness, EmissionType, SchedulingType,
+        };
+        use datafusion::physical_plan::streaming::StreamingTableExec;
+
+        let children = physical.children();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].properties().boundedness, Boundedness::Bounded);
+        let mut scans = 0;
+        let mut scan_schema = None;
+        children[0]
+            .apply(|node| {
+                if node.as_any().is::<StreamingTableExec>() {
+                    scans += 1;
+                    scan_schema = Some(node.schema());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+        assert_eq!(scans, 1);
+        assert!(children[1].as_any().is::<crate::sources::JournalExec>());
+        assert_eq!(children[1].schema(), scan_schema.unwrap());
+        assert_eq!(
+            children[1].properties().boundedness,
+            Boundedness::Unbounded {
+                requires_infinite_memory: false,
+            }
+        );
+        assert_eq!(
+            children[1].properties().emission_type,
+            EmissionType::Incremental
+        );
+        assert_eq!(
+            children[1].properties().scheduling_type,
+            SchedulingType::Cooperative
+        );
+        match children[1].execute(0, state.task_ctx()) {
+            Err(DataFusionError::NotImplemented(_)) => {}
+            Err(error) => panic!("journal returned {error:?}"),
+            Ok(_) => panic!("signed changes became unsigned rows"),
+        }
+        let journal = Arc::clone(children[1]);
+        let context = state.task_ctx();
+        tokio::spawn(async move {
+            use crate::stream::Message;
+
+            let mut input = journal
+                .as_any()
+                .downcast_ref::<crate::sources::JournalExec>()
+                .unwrap()
+                .execute_committed(0, context)
+                .unwrap();
+            assert!(matches!(input.next().await, Some(Ok(Message::Begin(_)))));
+            for _ in 0..128 {
+                if !tokio::task::coop::has_budget_remaining() {
+                    break;
+                }
+                tokio::task::consume_budget().await;
+            }
+            assert!(!tokio::task::coop::has_budget_remaining());
+            let mut pending = Box::pin(input.next());
+            assert!(futures_util::poll!(pending.as_mut()).is_pending());
+            assert!(matches!(pending.await, Some(Ok(Message::Insert(_)))));
+        })
+        .await
+        .unwrap();
+    }
     let mut stream = datafusion::physical_plan::execute_stream(physical, state.task_ctx()).unwrap();
     let first = stream.next().await.unwrap().unwrap();
     assert_eq!(
@@ -868,6 +945,57 @@ async fn count_consumes_committed_changes() {
         .memory()
         .reserve_output(fixture.engine.limits().output_capacity)
         .is_ok());
+}
+
+#[tokio::test]
+async fn journal_keeps_residual_filter() {
+    let fixture = Fixture::new(Limits::default());
+    fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
+    let clock = TestClock::new(2_000_000_000);
+    let mut subscription = fixture.subscribe(
+        "SELECT count(*) AS total FROM events WHERE source_cursor > 1",
+        clock,
+        None,
+        true,
+    );
+    let first = next(&mut subscription).await;
+    assert_eq!(values(&first, 0), vec![ScalarValue::Int64(Some(2))]);
+    assert_eq!(first.snapshot.witnesses.len(), 3);
+    fixture.commit(&fixture.source, 4, 1, 1_500_000_000);
+    let second = next(&mut subscription).await;
+    assert_eq!(values(&second, 0), vec![ScalarValue::Int64(Some(3))]);
+    assert_eq!(second.snapshot.witnesses.len(), 4);
+    assert!(second.cursor.read_revision() > first.cursor.read_revision());
+    drop(first);
+    drop(second);
+    araphor_data::EvidenceRetentionOwner::new(fixture.store.as_ref())
+        .retain(&fixture.source, u64::MAX)
+        .unwrap();
+    let removed = next(&mut subscription).await;
+    assert_eq!(values(&removed, 0), vec![ScalarValue::Int64(Some(0))]);
+    assert_eq!(removed.snapshot.page.extraction.scanned_bytes, 0);
+    assert!(removed.snapshot.witnesses.is_empty());
+}
+
+#[tokio::test]
+async fn empty_scan_keeps_receipts() {
+    let fixture = Fixture::new(Limits::default());
+    fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
+    let mut subscription = fixture.subscribe(
+        "SELECT count(*) AS total FROM events WHERE false",
+        TestClock::new(2_000_000_000),
+        None,
+        true,
+    );
+    let first = next(&mut subscription).await;
+    assert_eq!(values(&first, 0), vec![ScalarValue::Int64(Some(0))]);
+    assert_eq!(first.snapshot.witnesses.len(), 3);
+    assert_eq!(first.operation, Operation::Replace);
+    assert_eq!(
+        first.cursor.read_revision(),
+        first.snapshot.page.extraction.meta.commit_revision
+    );
+    assert_eq!(first.snapshot.page.scanned_through.ordinal, u32::MAX);
 }
 
 #[tokio::test]

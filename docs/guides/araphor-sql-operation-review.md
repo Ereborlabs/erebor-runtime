@@ -342,8 +342,9 @@ use this path.
   -> [Session::subscribe](../../crates/araphor-query/src/execution.rs) wraps the admitted native SQL plan with [Subscribe](../../crates/araphor-query/src/planner/subscription.rs)
   -> native SessionState runs its logical optimizer and physical planner
   -> [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) supplies the native source execution plan and records its projection and time bounds
-  -> the registered ExtensionPlanner returns [SubscribeExec](../../crates/araphor-query/src/stream/physical.rs)
-  -> native physical optimizers process that plan and its child
+  -> [SubscriptionPlanner](../../crates/araphor-query/src/planner/subscription.rs) creates JournalExec from the actual native scan
+  -> the registered ExtensionPlanner returns [SubscribeExec](../../crates/araphor-query/src/stream/physical.rs) with the native SQL child and the journal child
+  -> native physical optimizers process that plan and both children
 
 SubscribeExec retains the native input and output execution plans. Its physical
 execution binds Arrow change batches through native MemorySourceConfig and
@@ -351,8 +352,17 @@ execution binds Arrow change batches through native MemorySourceConfig and
 expressions. No second SQL parser or expression compiler runs for a change.
 The former Processor and standalone aggregate helper are deleted.
 
+The native SQL child remains bounded. Its StreamingTableExec and
+SnapshotPartition supply the finite source schema and compiled expressions.
+Native global AggregateExec finishes at end of input. The unbounded journal
+therefore remains a separate physical child. The journal stores the exact
+native projected schema, canonical indices, and capture request once. Each
+execute_committed call creates its own watch, pending changes, live beforeimages,
+and reservations from the actual TaskContext. The hidden Source factory and
+its separate stream module are deleted.
+
 [State::advance](../../crates/araphor-query/src/follow/mod.rs) consumes the next completed physical result
-  -> [Source](../../crates/araphor-query/src/stream/source.rs) reads the initial snapshot or waits for a later committed revision
+  -> [JournalExec::execute_committed](../../crates/araphor-query/src/sources/journal.rs) reads the initial snapshot or waits for a later committed revision
   -> [AnalysisStore::change_rows](../../crates/araphor-data/src/analysis/extraction.rs) reads raw inserts and retirements through one captured revision
   -> the physical input emits one evaluation stage, Arrow changes, and a complete commit frontier
   -> native input plans process the Arrow batches
@@ -372,10 +382,34 @@ The physical kernel retracts their filtered values. Each result receipt keeps
 witnesses for all retained input, including rows removed by SQL filters.
 Native Arrow equality suppresses an unchanged COUNT result.
 
+The event provider keeps its Inexact filter promise. Native residual filters
+process both inserted rows and retired beforeimages. If native optimization
+removes the scan, no journal child is created. The existing complete snapshot
+route returns the native result with all original source receipts. The
+`journal_keeps_residual_filter` and `empty_scan_keeps_receipts` tests cover
+these cases.
+
+JournalExec declares unbounded incremental output with finite live state.
+Data admits raw evidence under finite byte quotas. Each raw record has a
+positive encoded size. On reopen, the bound includes the initially retained
+bytes if a new quota is lower. Exact retirements remove live keys and drop
+empty chunks. The journal retains one pending capture and no history ledger.
+This bound applies to the admitted events source. It is not a complete heap
+size measurement or a bound for other maintained operators.
+
+The native EnsureCooperative and SanityCheckPlan rules remain enabled.
+Each journal stream step uses Tokio's cooperative future wrapper. The existing
+`native_subscribe_execution` test checks both rules and the real physical
+children. It exhausts the Tokio task budget before polling a queued Insert.
+The poll yields, then returns that same Insert after the budget is renewed.
+The wrapper does not preempt synchronous work inside a capture.
+
 DataFusion RecordBatchStream carries Arrow batches and a schema. It does not
 carry a commit frontier or Araphor read receipt. The actual planned SubscribeExec
 therefore supplies `execute_committed` for Query cursors. Its standard native
 `execute` delegates to the same execution and returns the Arrow batches.
+JournalExec rejects unsigned execute with native NotImplemented. Signed
+inserts and deletes require the committed route through SubscribeExec.
 The registered planner delegates ordinary planning to DataFusion.
 
 Each State currently owns one physical execution stream. A shared maintained
@@ -384,6 +418,13 @@ of the complete result. Broader maintained operators and clock processing are
 **Not done**. The selected host qualification passes 195 distinct cases. Wider qualification
 is **Not done**.
 The complete redesign is **Not done**.
+
+The current journal ownership change passes all 102 Query cases and the
+E2E query-follow contract. Strict Query Clippy and scoped formatting pass.
+The exact source hashes and checks are in
+`/tmp/araphor-journal-owner-qualification1.json`. This change adds 139 nonblank
+production Rust lines. It removes a hidden source owner; it does not meet the
+complete reduction target. Full workspace CI is not run, as instructed.
 
 [ClientGrpcOwner::query_request](../../crates/mithril-control/src/client_grpc/query.rs) supplies QueryEncoder and the request duration
   -> [Delivery::new](../../crates/araphor-query/src/follow/delivery.rs) retains the native Subscription, adapter, control, deadlines, and conversion reservation

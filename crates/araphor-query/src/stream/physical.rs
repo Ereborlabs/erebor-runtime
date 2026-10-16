@@ -11,7 +11,6 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::Count;
-use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -27,9 +26,8 @@ use datafusion::physical_plan::{
 use futures_util::{stream, StreamExt as _, TryStreamExt as _};
 use snafu::ResultExt as _;
 
-use super::source::Source;
 use super::{Input, Message, Output, OutputStream, Run};
-use crate::sources::SourceSnapshot;
+use crate::sources::JournalExec;
 use crate::{Result, SqlSnafu};
 
 mod kernel;
@@ -37,7 +35,7 @@ mod kernel;
 #[derive(Debug)]
 pub(crate) struct SubscribeExec {
     input: Arc<dyn ExecutionPlan>,
-    received: Option<Interval>,
+    journal: Option<Arc<dyn ExecutionPlan>>,
     compiled: Option<Arc<Compiled>>,
     properties: Arc<PlanProperties>,
 }
@@ -46,14 +44,25 @@ pub(crate) struct SubscribeExec {
 struct Compiled {
     aggregate: Arc<dyn ExecutionPlan>,
     source: Arc<dyn ExecutionPlan>,
-    columns: Vec<usize>,
 }
 
 impl SubscribeExec {
     pub(crate) fn new(
         input: Arc<dyn ExecutionPlan>,
-        received: Option<Interval>,
+        journal: Option<Arc<dyn ExecutionPlan>>,
     ) -> NativeResult<Self> {
+        if journal
+            .as_ref()
+            .is_some_and(|source| !source.as_any().is::<JournalExec>())
+        {
+            return Err(DataFusionError::Internal(
+                "Subscribe source is not a committed journal".into(),
+            ));
+        }
+        let compiled = match journal.as_ref() {
+            Some(source) => Self::compile(&input, source)?,
+            None => None,
+        };
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(input.schema()),
             Partitioning::UnknownPartitioning(1),
@@ -63,14 +72,17 @@ impl SubscribeExec {
             },
         ));
         Ok(Self {
-            compiled: Self::compile(&input)?.map(Arc::new),
+            compiled: compiled.map(Arc::new),
             input,
-            received,
+            journal,
             properties,
         })
     }
 
-    fn compile(input: &Arc<dyn ExecutionPlan>) -> NativeResult<Option<Compiled>> {
+    fn compile(
+        input: &Arc<dyn ExecutionPlan>,
+        journal: &Arc<dyn ExecutionPlan>,
+    ) -> NativeResult<Option<Compiled>> {
         let mut node = Arc::clone(input);
         let aggregate = loop {
             if node.as_any().is::<AggregateExec>() {
@@ -122,22 +134,14 @@ impl SubscribeExec {
             };
             node = Arc::clone(child);
         }
-        let schema = &SourceSnapshot::schemas()["events"];
-        let columns = node
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| schema.index_of(field.name()).map_err(DataFusionError::from))
-            .collect::<NativeResult<Vec<_>>>()?;
-        if schema.project(&columns)? != *node.schema() {
+        if journal.schema() != node.schema() {
             return Err(DataFusionError::Execution(
-                "maintained source schema changed".into(),
+                "maintained source scan changed".into(),
             ));
         }
         Ok(Some(Compiled {
             aggregate,
             source: node,
-            columns,
         }))
     }
 
@@ -158,12 +162,6 @@ impl SubscribeExec {
             .ok_or_else(|| DataFusionError::Execution("subscription run is absent".into()))
             .context(SqlSnafu)?;
         run.control.check()?;
-        if run.sources.len() != 1 || !run.sources.contains("events") {
-            return Err(DataFusionError::NotImplemented(
-                "maintained original evidence inventory".into(),
-            ))
-            .context(SqlSnafu);
-        }
         let compiled = self
             .compiled
             .as_ref()
@@ -175,13 +173,14 @@ impl SubscribeExec {
             .downcast_ref::<AggregateExec>()
             .ok_or_else(|| DataFusionError::Internal("native COUNT descriptor changed".into()))
             .context(SqlSnafu)?;
+        let journal = self
+            .journal
+            .as_ref()
+            .and_then(|source| source.as_any().downcast_ref::<JournalExec>())
+            .ok_or_else(|| DataFusionError::NotImplemented("native journal source".into()))
+            .context(SqlSnafu)?;
         let input = Inputs {
-            input: Source::new(
-                Arc::clone(&run),
-                compiled.columns.clone(),
-                self.received.clone(),
-            )?
-            .execute(),
+            input: journal.execute_committed(partition, Arc::clone(&context))?,
             plan: Arc::clone(aggregate.input()),
             source: Arc::clone(&compiled.source),
             context: Arc::clone(&context),
@@ -269,26 +268,30 @@ impl ExecutionPlan for SubscribeExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
+        let mut children = vec![&self.input];
+        children.extend(self.journal.iter());
+        children
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        self.children()
+            .iter()
+            .map(|_| Distribution::SinglePartition)
+            .collect()
     }
 
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> NativeResult<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
+        if children.len() != self.children().len() {
             return Err(DataFusionError::Internal(
-                "Subscribe requires one child".into(),
+                "Subscribe child count changed".into(),
             ));
         }
-        Ok(Arc::new(Self::new(
-            children.remove(0),
-            self.received.clone(),
-        )?))
+        let input = children.remove(0);
+        let journal = children.into_iter().next();
+        Ok(Arc::new(Self::new(input, journal)?))
     }
 
     fn execute(

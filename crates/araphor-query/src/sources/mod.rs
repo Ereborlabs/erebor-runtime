@@ -24,11 +24,13 @@ use crate::memory::Memory;
 mod batch;
 #[cfg(test)]
 mod bounds;
+mod journal;
 mod rows;
 mod schema;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use journal::JournalExec;
 pub use rows::ArrowSnapshot;
 pub(crate) use rows::{Captured, Removal};
 

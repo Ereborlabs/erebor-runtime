@@ -353,6 +353,51 @@ for the 6,000-line target. The records are
 `/tmp/araphor-fixed-binary-count1.json` and
 `/tmp/araphor-fixed-binary-count2.json`. Complete redesign: **Not done**.
 
+### Native journal source ownership
+
+Implementation and selected host verification: **Done**. The registered
+subscription planner creates JournalExec from the actual native source scan.
+SubscribeExec retains the bounded native SQL child and the unbounded journal
+child. Native physical optimizers see both children. The journal checks the
+exact projected schema, including metadata. It computes canonical indices
+and the capture request once. Each execution owns its source watch, live
+beforeimages, pending changes, and reservations. The hidden Source factory
+and its stream module are deleted. The native bounded StreamingTableExec and
+SnapshotPartition remain.
+
+The journal carries signed Arrow changes and complete commit receipts.
+Native RecordBatchStream cannot carry those values. JournalExec therefore
+rejects unsigned execution. SubscribeExec is the native Arrow execution entry
+and uses the same committed execution path. Native global AggregateExec
+remains in the bounded SQL child. The maintained path still supports ordinary
+global COUNT over one admitted events source.
+
+The first patch fails two cases because native EnsureCooperative wraps its
+noncooperative journal. Each journal step now uses Tokio's cooperative future
+wrapper. The native optimizer remains enabled. A test exhausts the task budget
+and proves that a queued Insert yields before delivery. SanityCheckPlan also
+remains enabled. Finite raw admission quotas and exact retirement bound the
+journal's live source state. This proof does not apply to arbitrary operators.
+Watch ordering, read guards, stage deadlines, permits, full witnesses, and
+complete source frontiers retain their owners.
+
+All 102 Query cases and the E2E query-follow contract pass. The latter retains
+eight behavior checks. The remaining 100 Query cases take 18.39 seconds; the
+two focused physical cases take 0.54 and 0.71 seconds. The E2E case takes
+16.15 seconds. Strict Query Clippy and scoped formatting pass. The record is
+`/tmp/araphor-journal-owner-qualification1.json`. The event provider retains
+Inexact pushdown and native residual filters. The tests cover insertion,
+retirement, and original receipts when native optimization removes the scan.
+Full workspace CI is not run, as instructed.
+
+This change adds 139 nonblank production Rust lines. Code relocation gives no
+reduction credit. The complete count adds 1,028 lines from `537f9de3` and
+removes 1,201 from `7b7b407a`. Another 4,799 must be removed for the 6,000-line
+target. The record is `/tmp/araphor-native-rewrite-count11.json`. General
+maintained SQL, clock epochs, shared maintained-query ownership, and the append
+source replacement remain **Not done**. Complete redesign: **Not done**.
+These functional checks establish no performance improvement.
+
 ### Shared subscription owner
 
 The user requires Query to own subscription behavior used by Control and
