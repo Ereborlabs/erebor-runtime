@@ -102,6 +102,7 @@ async fn automatic_clock_ticks() -> TestResult {
                 .insert("rows".into(), "SELECT count FROM source".into());
         }
         fixture.install(package.clone(), None).await?;
+        let package = InstalledBundle::new(&fixture.owner.query, package)?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
         for (offset, expected) in [(0, 1), (1, 0), (2, 0), (3, 0)] {
             let now = START + period * offset + 123;
@@ -200,6 +201,7 @@ async fn unchanged_model_stays_current() -> TestResult {
     let fixture = Fixture::new()?;
     let package = bundle("1", "SELECT 3::UBIGINT AS count");
     fixture.install(package.clone(), None).await?;
+    let package = InstalledBundle::new(&fixture.owner.query, package)?;
     let active = fixture.store.package_activation_page(None)?.remove(0);
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let request = RunPreparation {
@@ -241,6 +243,7 @@ async fn unchanged_input_skips_extraction() -> TestResult {
         ),
     });
     fixture.install(package.clone(), None).await?;
+    let package = InstalledBundle::new(&fixture.owner.query, package)?;
     let owner = AnalysisPackageOwner::new(
         fixture.store.clone(),
         std::sync::Arc::new(QueryOwner::new(

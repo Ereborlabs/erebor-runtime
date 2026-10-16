@@ -39,6 +39,7 @@ async fn admitted_inspection_tracks_replacement() -> TestResult {
     let fixture = Fixture::new()?;
     let original = bundle("1", "SELECT 3::UBIGINT AS count");
     fixture.install(original.clone(), None).await?;
+    let original = super::InstalledBundle::new(&fixture.owner.query, original)?;
     let control = crate::AnalysisReadControl::default();
     let response = fixture.owner.inspect(
         &fixture.grant,
@@ -56,6 +57,7 @@ async fn admitted_inspection_tracks_replacement() -> TestResult {
             bundle: replacement.clone(),
         })
         .await?;
+    let replacement = super::InstalledBundle::new(&fixture.owner.query, replacement)?;
     for admitted in [&original, &replacement] {
         let response = fixture.owner.inspect(
             &fixture.grant,

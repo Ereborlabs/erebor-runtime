@@ -87,7 +87,7 @@ impl AnalysisPackageOwner {
                 if self.store.package_activation(&key)?.is_some() {
                     continue;
                 }
-                self.install(grant, Self::DOMAIN_SCOPE, &bundle, None, false, control)?;
+                self.install(grant, Self::DOMAIN_SCOPE, bundle, None, false, control)?;
             }
         }
         InstalledAnalysis::new(self.clone(), Self::DOMAIN_SCOPE)

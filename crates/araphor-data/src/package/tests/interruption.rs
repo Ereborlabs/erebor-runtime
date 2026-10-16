@@ -170,6 +170,7 @@ async fn package_busy_preserves_result() -> TestResult {
     let fixture = Fixture::new()?;
     let package = source_bundle(&fixture)?;
     fixture.install(package.clone(), None).await?;
+    let installed = fixture.owner.load_installed([1; 16], &package.root)?;
     let before = fixture.activation("test.model")?;
     let (entered, ready) = mpsc::channel();
     let (release, resumed) = mpsc::channel();
@@ -192,13 +193,9 @@ async fn package_busy_preserves_result() -> TestResult {
             Err(crate::Error::AnalysisBusy { .. })
         ));
         assert!(matches!(
-            fixture.owner.evaluate_active(
-                &before,
-                "automatic",
-                true,
-                &crate::package::PackageBundleRef::new(&package)?,
-                &control
-            ),
+            fixture
+                .owner
+                .evaluate_active(&before, "automatic", true, &installed, &control),
             Err(crate::Error::AnalysisBusy { .. })
         ));
         assert_eq!(

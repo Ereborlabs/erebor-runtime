@@ -45,6 +45,61 @@ pub struct SqlModelOutputV1 {
     _lease: QueryLease,
 }
 
+pub(crate) struct AdmittedExport {
+    pub(crate) inputs: BTreeMap<String, QuerySql>,
+    model: Option<AdmittedModel>,
+}
+
+impl AdmittedExport {
+    pub(crate) fn admit(model: &sdk::Model, program: Option<&SqlModelV1>) -> Result<Self> {
+        Ok(Self {
+            inputs: QueryOwner::admit_inputs(model)?,
+            model: program.map(|program| program.admit(model)).transpose()?,
+        })
+    }
+
+    pub(crate) fn input_clock(&self) -> bool {
+        self.inputs
+            .values()
+            .any(|sql| sql.uses_clock() || sql.dependencies().contains("notifications"))
+    }
+
+    pub(crate) fn model_clock(&self) -> bool {
+        self.model
+            .iter()
+            .flat_map(AdmittedModel::queries)
+            .any(QuerySql::uses_clock)
+    }
+
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        let maps = std::iter::once(&self.inputs).chain(
+            self.model
+                .iter()
+                .flat_map(|model| [&model.outputs, &model.checkpoint]),
+        );
+        let mut bytes = std::mem::size_of::<Self>();
+        for map in maps {
+            let node = std::mem::size_of::<(String, QuerySql)>()
+                .saturating_mul(11)
+                .saturating_add(16 * std::mem::size_of::<usize>());
+            bytes = bytes.saturating_add(node.saturating_mul(map.len()));
+            for (name, sql) in map {
+                bytes = bytes
+                    .saturating_add(name.capacity())
+                    .saturating_add(sql.allocated_bytes());
+            }
+        }
+        if let Some(model) = &self.model {
+            bytes =
+                bytes.saturating_add(model.reasons.capacity() * std::mem::size_of::<QuerySql>());
+            for sql in model.evidence.iter().chain(&model.reasons) {
+                bytes = bytes.saturating_add(sql.allocated_bytes());
+            }
+        }
+        bytes
+    }
+}
+
 impl SqlModelOutputV1 {
     pub(crate) fn into_parts(self) -> (sdk::Output, QueryLease) {
         (self.output, self._lease)
@@ -106,10 +161,9 @@ impl QueryOwner {
         Ok(queries)
     }
 
+    #[cfg(test)]
     pub(crate) fn inputs_use_clock(model: &sdk::Model) -> Result<bool> {
-        Ok(Self::admit_inputs(model)?
-            .values()
-            .any(|sql| sql.uses_clock() || sql.dependencies().contains("notifications")))
+        Ok(AdmittedExport::admit(model, None)?.input_clock())
     }
 
     pub fn evaluate_model(
@@ -120,8 +174,22 @@ impl QueryOwner {
         evaluation: &sdk::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<SqlModelOutputV1> {
+        let model = package
+            .exports
+            .iter()
+            .find(|model| model.name == evaluation.export)
+            .ok_or_else(|| {
+                crate::QueryInvalidSnafu {
+                    field: "model export",
+                }
+                .build()
+            })?;
+        let admitted = AdmittedExport {
+            inputs: BTreeMap::new(),
+            model: Some(program.admit(model)?),
+        };
         self.model_operation(tenant)
-            .evaluate(package, program, evaluation, control)
+            .evaluate_admitted(package, program, &admitted, evaluation, control)
     }
 
     fn evaluate_model_reserved(
@@ -186,16 +254,20 @@ struct AdmittedModel {
     reasons: Vec<QuerySql>,
 }
 
-impl SqlModelV1 {
-    pub(crate) fn uses_clock(&self, model: &sdk::Model) -> Result<bool> {
-        let admitted = self.admit(model)?;
-        Ok(admitted
-            .outputs
+impl AdmittedModel {
+    fn queries(&self) -> impl Iterator<Item = &QuerySql> {
+        self.outputs
             .values()
-            .chain(admitted.checkpoint.values())
-            .chain(admitted.evidence.iter())
-            .chain(admitted.reasons.iter())
-            .any(QuerySql::uses_clock))
+            .chain(self.checkpoint.values())
+            .chain(self.evidence.iter())
+            .chain(&self.reasons)
+    }
+}
+
+impl SqlModelV1 {
+    #[cfg(test)]
+    pub(crate) fn uses_clock(&self, model: &sdk::Model) -> Result<bool> {
+        Ok(AdmittedExport::admit(model, Some(self))?.model_clock())
     }
 
     fn admit(&self, model: &sdk::Model) -> Result<AdmittedModel> {

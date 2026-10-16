@@ -15,8 +15,13 @@ fn shared_executable_checks_sql() -> TestResult {
     fixture
         .owner
         .admit_artifact(artifact, &crate::AnalysisReadControl::default())?;
+    drop(crate::package::installed::snapshot::InstalledBundle::new(
+        &fixture.owner.query,
+        package.clone(),
+    )?);
 
     second.name = "invalid-sql".into();
+    let artifact = &mut package.artifacts[0];
     artifact.descriptor.exports.push(second);
     artifact.implementations.push(PackageImplementationV1::Sql {
         export: "invalid-sql".into(),
@@ -26,9 +31,7 @@ fn shared_executable_checks_sql() -> TestResult {
         },
     });
     assert!(matches!(
-        fixture
-            .owner
-            .admit_artifact(artifact, &crate::AnalysisReadControl::default()),
+        crate::package::installed::snapshot::InstalledBundle::new(&fixture.owner.query, package),
         Err(crate::Error::QueryInvalid { .. })
     ));
     Ok(())

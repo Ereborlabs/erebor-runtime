@@ -30,7 +30,7 @@ mod graph;
 pub(crate) mod graph_tests;
 mod input;
 mod model;
-pub(crate) use model::{ModelInputRequest, ModelInputs, ModelOperation};
+pub(crate) use model::{AdmittedExport, ModelInputRequest, ModelInputs, ModelOperation};
 mod notification;
 #[cfg(test)]
 mod owner_tests;

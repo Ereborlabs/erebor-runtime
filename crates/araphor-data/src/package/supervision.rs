@@ -150,10 +150,7 @@ impl AnalysisPackageOwner {
                     .is_none_or(|bundle| bundle.value.root != context.root)
                 {
                     bundle = None;
-                    bundle = Some(InstalledBundle::new(
-                        &self.query,
-                        self.load_bundle(active.key.tenant_id, &context.root)?,
-                    )?);
+                    bundle = Some(self.load_installed(active.key.tenant_id, &context.root)?);
                 }
                 let bundle = bundle
                     .as_ref()
@@ -172,13 +169,13 @@ impl AnalysisPackageOwner {
                     .find(|model| model.name == active.key.export)
                     .ok_or_else(|| Code::Missing.error("installed export"))?;
                 if context.prepared != artifact.prepared(&active.key.export)
-                    || context.clock != artifact.clock_dependency(model)?
+                    || context.clock != bundle.clock(artifact, model)?
                 {
                     return Err(Code::Invalid.error("activation model flags"));
                 }
                 if !context.prepared {
                     let stage = Self::grant_control(&context.grant, stage.clone())?;
-                    self.evaluate_active(&active, "automatic", true, &admission, &stage)?;
+                    self.evaluate_active(&active, "automatic", true, bundle, &stage)?;
                 }
                 Ok(())
             })();

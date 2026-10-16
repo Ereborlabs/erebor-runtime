@@ -55,11 +55,12 @@ impl AnalysisPackageOwner {
             .first()
             .ok_or_else(|| Code::Missing.error("installed package"))?;
         let context: InstalledContext = Self::decode(&active.metadata)?;
-        let bundle = self.load_bundle(grant.selection.tenant_id, &context.root)?;
-        let admitted = super::PackageBundleRef::new(&bundle)?;
+        let bundle = self.load_installed(grant.selection.tenant_id, &context.root)?;
+        let admitted = bundle.admission();
         self.authority.admit(grant, &admitted)?;
-        let mut response = self.inspect(grant, scope, package, None, control)?;
+        let mut response = self.inspect(grant, scope, package, Some(&bundle), control)?;
         for artifact in bundle
+            .value
             .artifacts
             .iter()
             .filter(|artifact| artifact.descriptor.id == package)
@@ -69,12 +70,11 @@ impl AnalysisPackageOwner {
                 .iter()
                 .filter(|fixture| name.is_none_or(|name| name == fixture.name))
             {
-                let model = artifact
-                    .descriptor
-                    .exports
-                    .iter()
-                    .find(|model| model.name == fixture.export)
-                    .ok_or_else(|| Code::Invalid.error("fixture export"))?;
+                let (_, model, program) = bundle.export(
+                    &artifact.descriptor.id,
+                    &artifact.descriptor.revision,
+                    &fixture.export,
+                )?;
                 let mut inputs = Vec::new();
                 for input in &fixture.inputs {
                     let port = model
@@ -112,6 +112,7 @@ impl AnalysisPackageOwner {
                 let output = self.evaluate_artifact(
                     grant.selection.tenant_id,
                     artifact,
+                    program,
                     &evaluation,
                     control,
                 )?;

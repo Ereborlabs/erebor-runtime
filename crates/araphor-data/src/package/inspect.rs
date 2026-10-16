@@ -3,9 +3,10 @@ use crate::{AnalysisReadControl, Result};
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
+use super::installed::snapshot::InstalledBundle;
 use super::owner::InstalledContext;
 use super::{
-    AnalysisPackageOwner, PackageActionV1 as Action, PackageBundleV1, PackageErrorCodeV1 as Code,
+    AnalysisPackageOwner, PackageActionV1 as Action, PackageErrorCodeV1 as Code,
     PackageExportStatusV1, PackageGrantV1, PackageReceiptV1, PackageResponseV1,
 };
 
@@ -38,7 +39,7 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         scope: &str,
         package: &str,
-        admitted: Option<&PackageBundleV1>,
+        admitted: Option<&InstalledBundle>,
         control: &AnalysisReadControl,
     ) -> Result<PackageResponseV1> {
         self.check(grant, Action::Inspect)?;
@@ -49,9 +50,9 @@ impl AnalysisPackageOwner {
             Self::permits(grant, &context.grant)?;
             let loaded;
             let artifact = match admitted
-                .filter(|bundle| bundle.root == context.root)
+                .filter(|bundle| bundle.value.root == context.root)
                 .and_then(|bundle| {
-                    bundle.artifacts.iter().find(|artifact| {
+                    bundle.value.artifacts.iter().find(|artifact| {
                         artifact.descriptor.id == package
                             && artifact.descriptor.revision == active.revision
                     })

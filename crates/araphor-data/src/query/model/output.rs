@@ -54,7 +54,7 @@ impl ModelExecution<'_> {
         &mut self,
         model: &sdk::Model,
         programs: &[SqlReasonV1],
-        queries: Vec<QuerySql>,
+        queries: &[QuerySql],
     ) -> Result<Vec<sdk::ReasonValue>> {
         let mut reasons = Vec::new();
         for (program, query) in programs.iter().zip(queries) {
@@ -84,7 +84,7 @@ impl ModelExecution<'_> {
                     )
                     .collect::<Vec<_>>(),
             );
-            for batch in self.references(&query, &schema)? {
+            for batch in self.references(query, &schema)? {
                 let rows = Self::indices(&batch, 0)?;
                 let details = sdk::RecordBatch::try_new_with_options(
                     std::sync::Arc::new(spec.details.clone()),

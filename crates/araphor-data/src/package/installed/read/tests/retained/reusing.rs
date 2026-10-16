@@ -225,12 +225,8 @@ fn reuse_excludes_other_scope() -> TestResult {
 
 #[test]
 fn reuse_releases_before_loading() -> TestResult {
-    let capacity = 2 * araphor_analysis_builtins::components::RUNTIME.len();
-    let mut fixture = Fixture::new_limits(QueryLimits {
-        input_bytes: capacity,
-        input_capacity: capacity,
-        ..Default::default()
-    })?;
+    let capacity = QueryLimits::default().input_capacity;
+    let mut fixture = Fixture::new()?;
     let selected = component();
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(60))?;
     fixture.owner.execute_sync(
@@ -248,6 +244,21 @@ fn reuse_releases_before_loading() -> TestResult {
     let previous = execution.snapshot([1; 16])?;
     let pins = Arc::downgrade(previous.snapshot.as_ref().ok_or("previous snapshot")?);
     let bundle = Arc::downgrade(&pins.upgrade().ok_or("previous pins")?.bundles[0]);
+    let retained = fixture.owner.query.input_charge();
+    let mut updated = selected;
+    updated.root.revision = "2".into();
+    updated.artifacts[0].descriptor.revision = "2".into();
+    let transient = crate::package::installed::snapshot::InstalledBundle::new(
+        &fixture.owner.query,
+        updated.clone(),
+    )?;
+    let transient_bytes = fixture.owner.query.input_charge() - retained;
+    drop(transient);
+    let pressure = fixture.owner.query.retain_analysis_input(
+        capacity
+            .checked_sub(retained + transient_bytes)
+            .ok_or("snapshot pressure capacity")?,
+    )?;
     assert!(matches!(
         execution.snapshot([1; 16]),
         Err(crate::Error::AnalysisBusy {
@@ -255,15 +266,12 @@ fn reuse_releases_before_loading() -> TestResult {
             ..
         })
     ));
-    let mut updated = selected;
-    updated.root.revision = "2".into();
-    updated.artifacts[0].descriptor.revision = "2".into();
     fixture.renew();
     fixture.owner.execute_sync(
         fixture.grant.clone(),
         PackageRequestV1::Update {
             scope_id: "test".into(),
-            bundle: updated,
+            bundle: updated.clone(),
         },
         &control,
     )?;
@@ -271,9 +279,16 @@ fn reuse_releases_before_loading() -> TestResult {
     assert!(pins.upgrade().is_none());
     assert!(bundle.upgrade().is_none());
     assert_eq!(current.pins()[0].revision, "2");
+    assert_eq!(
+        current.snapshot.as_ref().ok_or("current snapshot")?.bundles[0]
+            .value
+            .root,
+        updated.root
+    );
     let context: InstalledContext = AnalysisPackageOwner::decode(&current.pins()[0].metadata)?;
     assert_eq!(context.grant, fixture.grant);
     drop(current);
+    drop(pressure);
     drop(fixture.owner.query.retain_analysis_input(capacity)?);
     Ok(())
 }

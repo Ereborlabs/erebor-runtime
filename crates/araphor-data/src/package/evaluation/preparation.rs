@@ -5,12 +5,12 @@ use crate::analysis::{PackageActivationV1, PackageCommitV1, PackageResultV1};
 use crate::{AnalysisReadControl, QueryOwner, Result};
 
 use super::{ResultContext, RunPreparation};
+use crate::package::installed::snapshot::InstalledBundle;
 use crate::package::owner::{ClockDependency, InstalledContext};
 use crate::package::{
-    AnalysisPackageOwner, PackageActionV1 as Action, PackageArtifactV1, PackageBundleV1,
-    PackageErrorCodeV1 as Code,
+    AnalysisPackageOwner, PackageActionV1 as Action, PackageArtifactV1, PackageErrorCodeV1 as Code,
 };
-use crate::query::{ModelInputRequest, ModelInputs, ModelOperation};
+use crate::query::{AdmittedExport, ModelInputRequest, ModelInputs, ModelOperation};
 
 pub(in crate::package) struct ModelRun<'a> {
     owner: &'a AnalysisPackageOwner,
@@ -18,6 +18,7 @@ pub(in crate::package) struct ModelRun<'a> {
     context: &'a InstalledContext,
     artifact: &'a PackageArtifactV1,
     model: &'a sdk::Model,
+    admitted: &'a AdmittedExport,
     id: &'a str,
     now: u64,
     operation: ModelOperation<'a>,
@@ -30,7 +31,7 @@ impl AnalysisPackageOwner {
     pub(in crate::package) fn prepare_at(
         &self,
         active: &PackageActivationV1,
-        bundle: &PackageBundleV1,
+        bundle: &InstalledBundle,
         request: RunPreparation<'_>,
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageCommitV1>> {
@@ -45,7 +46,7 @@ impl AnalysisPackageOwner {
         &'a self,
         active: &'a PackageActivationV1,
         context: &'a InstalledContext,
-        bundle: &'a PackageBundleV1,
+        bundle: &'a InstalledBundle,
         request: RunPreparation<'a>,
         action: Action,
         control: &AnalysisReadControl,
@@ -56,7 +57,7 @@ impl AnalysisPackageOwner {
         } else {
             request.now
         };
-        if action == Action::Run && bundle.root != context.root {
+        if action == Action::Run && bundle.value.root != context.root {
             return Err(Code::Conflict.error("activation package root"));
         }
         if request.automatic
@@ -66,16 +67,8 @@ impl AnalysisPackageOwner {
         {
             return Ok(None);
         }
-        let artifact = bundle.artifact(&crate::PackageRefV1 {
-            package_id: active.key.package_id.clone(),
-            revision: active.revision.clone(),
-        })?;
-        let model = artifact
-            .descriptor
-            .exports
-            .iter()
-            .find(|model| model.name == active.key.export)
-            .ok_or_else(|| Code::Missing.error("active export"))?;
+        let (artifact, model, admitted) =
+            bundle.export(&active.key.package_id, &active.revision, &active.key.export)?;
         let previous = active
             .result_id
             .as_deref()
@@ -97,16 +90,20 @@ impl AnalysisPackageOwner {
                 now = prior.context.time_utc_ns as u64;
             }
         }
-        let prepared = self.query.model_operation(active.key.tenant_id).inputs(
-            ModelInputRequest {
-                activation: active,
-                model,
-                grant: &context.grant,
-                now,
-            },
-            control,
-            || self.check(&context.grant, action),
-        );
+        let prepared = self
+            .query
+            .model_operation(active.key.tenant_id)
+            .inputs_admitted(
+                ModelInputRequest {
+                    activation: active,
+                    model,
+                    grant: &context.grant,
+                    now,
+                },
+                admitted,
+                control,
+                || self.check(&context.grant, action),
+            );
         let (operation, inputs) = match prepared {
             Ok(prepared) => prepared,
             Err(crate::Error::Package {
@@ -145,6 +142,7 @@ impl AnalysisPackageOwner {
             context,
             artifact,
             model,
+            admitted,
             id: request.id,
             now,
             operation,
@@ -240,14 +238,20 @@ impl ModelRun<'_> {
         };
         let evaluated = match implementation {
             crate::PackageImplementationV1::Sql { program, .. } => {
-                self.operation
-                    .evaluate(&self.artifact.descriptor, program, &evaluation, control)?
+                self.operation.evaluate_admitted(
+                    &self.artifact.descriptor,
+                    program,
+                    self.admitted,
+                    &evaluation,
+                    control,
+                )?
             }
             _ => {
                 drop(self.operation);
                 self.owner.evaluate_artifact(
                     self.active.key.tenant_id,
                     self.artifact,
+                    self.admitted,
                     &evaluation,
                     control,
                 )?

@@ -22,6 +22,7 @@ impl BundleMemory {
         value: &PackageBundleV1,
         digest: &String,
         identities: &Vec<Vec<Option<crate::PackageArtifactIdentityV1>>>,
+        programs: &Vec<Vec<Option<crate::query::AdmittedExport>>>,
     ) -> Result<usize> {
         let mut memory = Self {
             bytes: Self::bundle(value)?,
@@ -32,6 +33,13 @@ impl BundleMemory {
             memory.vector(entries)?;
             for identity in entries.iter().flatten() {
                 memory.add(identity.allocated_bytes())?;
+            }
+        }
+        memory.vector(programs)?;
+        for entries in programs {
+            memory.vector(entries)?;
+            for program in entries.iter().flatten() {
+                memory.add(program.allocated_bytes())?;
             }
         }
         Ok(memory.bytes)

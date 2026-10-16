@@ -62,9 +62,13 @@ A model clock requires computation at the due tick. Notification inputs need
 clock refresh because their `overdue` value depends on time.
 
 [InstalledBundle](../../crates/araphor-data/src/package/installed/snapshot.rs)
-owns immutable content, its digest, implementation identities, and one memory
-lease. [BundleMemory](../../crates/araphor-data/src/package/installed/snapshot/memory.rs)
-charges the wrapper, vectors, strings, descriptors, fixtures, and code.
+owns immutable content, its digest, implementation identities, admitted
+export programs, and one memory lease.
+[BundleMemory](../../crates/araphor-data/src/package/installed/snapshot/memory.rs)
+charges the wrapper, vectors, strings, descriptors, fixtures, code, and retained
+admission data. SQL reserves AST nodes by token count and string storage by
+byte count. Admission tests one export's retained charge before the next
+export. This does not establish a transient parser-memory limit.
 [PackageBundleRef](../../crates/araphor-data/src/package/bundle.rs) exposes a
 content-derived digest without a caller-supplied digest field.
 [ClientAuth](../../crates/mithril-control/src/client_auth/packages.rs) checks
@@ -76,6 +80,33 @@ inapplicable snapshot before it loads another bundle. The graph operation
 retains at most one previous installed snapshot across calls. The last
 snapshot reference releases its metadata lease. The last bundle reference
 releases its content lease.
+
+[InstalledBundle::new](../../crates/araphor-data/src/package/installed/snapshot.rs) An exact OCI closure is loaded
+  -> [InstalledBundle::new](../../crates/araphor-data/src/package/installed/snapshot.rs) the existing InstalledBundle owner verifies its digest and descriptor
+  -> [AdmittedExport::admit](../../crates/araphor-data/src/query/model.rs) it performs each export's policy and declaration admission once
+  -> [AdmittedExport](../../crates/araphor-data/src/query/model.rs) it retains parsed SQL, scoped dependencies, relation contracts, and clock use
+  -> [InstalledBundle::export](../../crates/araphor-data/src/package/installed/snapshot.rs) it retains export indices and the exact artifact identity
+  -> [QuerySql::allocated_bytes](../../crates/araphor-data/src/query/admission.rs) it charges the complete retained plan through the existing QueryLease
+
+The retained program contains no tenant, grant, source batch, physical plan,
+or live stream. Manual execution, lifecycle operations, freshness checks,
+supervision, fixtures, and snapshots use this representation.
+[ModelOperation](../../crates/araphor-data/src/query/model/operation.rs) borrows
+the admitted queries. A run binds current inputs and one frozen clock. It
+does not clone the retained query maps. Public standalone model execution
+checks output SQL against supplied datasets. It does not execute or admit
+unused source SQL. Transient dataset SQL still checks each caller's schemas.
+
+[operation_inputs_match](../../crates/araphor-data/src/query/model/operation/tests.rs)
+compares retained execution with standalone output and provenance.
+[named_alias_revision](../../crates/araphor-data/src/query/model/operation/tests.rs)
+reuses one program while new evidence changes its input and revision.
+[admitted_capacity_is_charged](../../crates/araphor-data/src/package/installed/snapshot/memory/tests.rs)
+checks the retained program charge.
+[sql_model_state_provenance](../../crates/araphor-data/src/query/model/tests.rs)
+checks the standalone supplied-input boundary. The current iteration's
+passing evidence belongs in the implementation plan after these cases run.
+DataFusion execution remains **Not implemented** in this source slice.
 
 [PackageCommitV1](../../crates/araphor-data/src/analysis/packages/model.rs)
 owns the commit contract and its payloads. The stored result retains this

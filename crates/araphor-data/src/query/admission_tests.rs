@@ -5,6 +5,16 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 struct Fixture;
 
+#[test]
+fn retained_literal_charge() -> TestResult {
+    let short = Fixture::admit("SELECT 'x' AS value", vec![])?;
+    let long = Fixture::admit(&format!("SELECT '{}' AS value", "x".repeat(8_000)), vec![])?;
+    let added = long.allocated_bytes() - short.allocated_bytes();
+    assert!(added >= 16_000);
+    assert!(added < 32 * 1024);
+    Ok(())
+}
+
 impl Fixture {
     fn admit(sql: &str, parameters: Vec<Value>) -> Result<QuerySql> {
         QuerySql::admit(sql, parameters, false)

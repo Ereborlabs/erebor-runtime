@@ -53,7 +53,13 @@ fn oversized_input_precedes_compilation() -> TestResult {
     };
     let control = crate::AnalysisReadControl::default();
     assert!(matches!(
-        owner.evaluate_artifact([1; 16], artifact, &evaluation, &control),
+        owner.evaluate_artifact(
+            [1; 16],
+            artifact,
+            &crate::query::AdmittedExport::admit(model, None)?,
+            &evaluation,
+            &control
+        ),
         Err(crate::Error::QueryLimit {
             resource: "analysis input memory",
             ..

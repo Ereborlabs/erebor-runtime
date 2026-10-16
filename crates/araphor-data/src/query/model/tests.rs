@@ -112,6 +112,17 @@ fn sql_model_state_provenance() -> TestResult {
     let mut bad = program.clone();
     bad.evidence = Some("SELECT 'counts' AS output_dataset, CAST(0 AS UBIGINT) AS output_row, 'events' AS input_dataset, CAST(99 AS UBIGINT) AS input_row".into());
     drop(result);
+    let mut supplied = package.clone();
+    supplied.exports[0].input_mode = sdk::InputMode::Resolved;
+    supplied.exports[0].inputs[0].source =
+        sdk::InputSource::Query("SELECT missing FROM absent".into());
+    assert!(AdmittedExport::admit(&supplied.exports[0], Some(&program)).is_err());
+    let supplied = owner.evaluate_model([1; 16], &supplied, &program, &evaluation, &control()?)?;
+    assert_eq!(
+        supplied.output.datasets[0].batches[0],
+        batch(&counts, vec![3])?
+    );
+    drop(supplied);
     let mut reused = program.clone();
     reused
         .checkpoint

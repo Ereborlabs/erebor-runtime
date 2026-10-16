@@ -50,6 +50,92 @@ fn bundle_capacity_is_charged() -> TestResult {
 }
 
 #[test]
+fn admitted_capacity_is_charged() -> TestResult {
+    let fixture = crate::package::tests::Fixture::new()?;
+    let value = crate::package::tests::bundle("1", "SELECT 7::UBIGINT AS count");
+    let retained = InstalledBundle::new(&fixture.owner.query, value.clone())?;
+    let bytes = BundleMemory::retained(
+        &retained.value,
+        &retained.digest,
+        &retained.identities,
+        &retained.programs,
+    )?;
+    assert!(
+        retained.programs[0][0]
+            .as_ref()
+            .ok_or("admitted export")?
+            .allocated_bytes()
+            > 0
+    );
+    let query = crate::QueryOwner::new(
+        fixture.store.clone(),
+        crate::QueryLimits {
+            input_bytes: 1,
+            input_capacity: bytes - 1,
+            ..Default::default()
+        },
+    )?;
+    assert!(matches!(
+        InstalledBundle::new(&query, value),
+        Err(crate::Error::AnalysisBusy {
+            resource: "query input capacity",
+            ..
+        })
+    ));
+    drop(query.retain_analysis_input(bytes - 1)?);
+    Ok(())
+}
+
+#[test]
+fn admission_stops_at_capacity() -> TestResult {
+    let fixture = crate::package::tests::Fixture::new()?;
+    let mut value = crate::package::tests::bundle("1", "SELECT 7::UBIGINT AS count");
+    let artifact = &mut value.artifacts[0];
+    let mut model = artifact.descriptor.exports[0].clone();
+    model.name = "later".into();
+    artifact.descriptor.exports.push(model);
+    let PackageImplementationV1::Sql { program, .. } = &artifact.implementations[0] else {
+        return Err("SQL implementation".into());
+    };
+    let first =
+        crate::query::AdmittedExport::admit(&artifact.descriptor.exports[0], Some(program))?;
+    let mut program = program.clone();
+    program
+        .outputs
+        .insert("rows".into(), "SELECT missing FROM absent".into());
+    artifact.implementations.push(PackageImplementationV1::Sql {
+        export: "later".into(),
+        program,
+    });
+    let bytes = BundleMemory::retained(
+        &value,
+        &value.digest()?,
+        &vec![vec![None, None]],
+        &vec![vec![None, None]],
+    )?
+    .checked_add(first.allocated_bytes())
+    .ok_or("program capacity")?
+        - 1;
+    let query = crate::QueryOwner::new(
+        fixture.store.clone(),
+        crate::QueryLimits {
+            input_bytes: 1,
+            input_capacity: bytes,
+            ..Default::default()
+        },
+    )?;
+    assert!(matches!(
+        InstalledBundle::new(&query, value),
+        Err(crate::Error::AnalysisBusy {
+            resource: "query input capacity",
+            ..
+        })
+    ));
+    drop(query.retain_analysis_input(bytes)?);
+    Ok(())
+}
+
+#[test]
 fn fixture_capacity_is_charged() -> TestResult {
     let mut fixture = PackageFixtureV1 {
         name: "retained".into(),

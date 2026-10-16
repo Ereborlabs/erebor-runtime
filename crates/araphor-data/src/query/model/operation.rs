@@ -4,8 +4,8 @@ use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
 use super::{
-    execute::ModelExecution, schema::ModelSchema, ModelInputRequest, ModelInputs, SqlModelOutputV1,
-    SqlModelV1,
+    execute::ModelExecution, schema::ModelSchema, AdmittedExport, ModelInputRequest, ModelInputs,
+    SqlModelOutputV1, SqlModelV1,
 };
 use crate::query::{budget::QueryLease, evaluation::QueryEvaluation, input::ScopedSources};
 use crate::{AnalysisReadControl, QueryOwner, Result};
@@ -42,9 +42,21 @@ impl ModelOperation<'_> {
         Ok((connection, &mut self.sources))
     }
 
+    #[cfg(test)]
     pub(crate) fn inputs(
+        self,
+        request: ModelInputRequest<'_>,
+        control: &AnalysisReadControl,
+        authorize: impl FnMut() -> Result<()>,
+    ) -> Result<(Self, ModelInputs)> {
+        let admitted = AdmittedExport::admit(request.model, None)?;
+        self.inputs_admitted(request, &admitted, control, authorize)
+    }
+
+    pub(crate) fn inputs_admitted(
         mut self,
         request: ModelInputRequest<'_>,
+        admitted: &AdmittedExport,
         control: &AnalysisReadControl,
         mut authorize: impl FnMut() -> Result<()>,
     ) -> Result<(Self, ModelInputs)> {
@@ -56,7 +68,7 @@ impl ModelOperation<'_> {
         if request.model.input_mode == sdk::InputMode::Provided {
             return Err(crate::PackageErrorCodeV1::Missing.error("host-prepared inputs"));
         }
-        let queries = QueryOwner::admit_inputs(request.model)?;
+        let queries = &admitted.inputs;
         let model = request.model;
         let limits = sdk::Limits {
             max_bytes: model
@@ -155,8 +167,9 @@ impl ModelOperation<'_> {
         Ok((self, selected))
     }
 
+    #[cfg(test)]
     pub(crate) fn evaluate(
-        mut self,
+        self,
         package: &sdk::Package,
         program: &SqlModelV1,
         evaluation: &sdk::Evaluation,
@@ -172,7 +185,37 @@ impl ModelOperation<'_> {
                 }
                 .build()
             })?;
-        let admitted = program.admit(model)?;
+        let admitted = AdmittedExport {
+            inputs: BTreeMap::new(),
+            model: Some(program.admit(model)?),
+        };
+        self.evaluate_admitted(package, program, &admitted, evaluation, control)
+    }
+
+    pub(crate) fn evaluate_admitted(
+        mut self,
+        package: &sdk::Package,
+        program: &SqlModelV1,
+        admitted: &AdmittedExport,
+        evaluation: &sdk::Evaluation,
+        control: &AnalysisReadControl,
+    ) -> Result<SqlModelOutputV1> {
+        let model = package
+            .exports
+            .iter()
+            .find(|model| model.name == evaluation.export)
+            .ok_or_else(|| {
+                crate::QueryInvalidSnafu {
+                    field: "model export",
+                }
+                .build()
+            })?;
+        let admitted = admitted.model.as_ref().ok_or_else(|| {
+            crate::QueryInvalidSnafu {
+                field: "model admitted program",
+            }
+            .build()
+        })?;
         self.engine()?;
         let (connection, lease) = self.engine.take().ok_or_else(|| {
             crate::QueryInvalidSnafu {

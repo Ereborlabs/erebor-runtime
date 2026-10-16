@@ -4,6 +4,7 @@ use crate::analysis::{PackageActivationV1, PackageKeyV1};
 use crate::{AnalysisReadControl, Result};
 
 use super::admission::ModelRef;
+use super::installed::snapshot::InstalledBundle;
 use super::owner::InstalledContext;
 #[cfg(test)]
 mod tests;
@@ -22,7 +23,7 @@ impl AnalysisPackageOwner {
         &self,
         grant: &PackageGrantV1,
         scope: &str,
-        bundle: &PackageBundleV1,
+        bundle: PackageBundleV1,
         parameters: Option<serde_json::Value>,
         upgrade: bool,
         control: &AnalysisReadControl,
@@ -34,14 +35,16 @@ impl AnalysisPackageOwner {
             Action::Install
         };
         self.check(grant, action)?;
-        let admitted = super::PackageBundleRef::new(bundle)?;
+        let admitted = super::PackageBundleRef::new(&bundle)?;
         self.authority.admit(grant, &admitted)?;
         bundle.validate()?;
-        for artifact in &bundle.artifacts {
+        let bundle = InstalledBundle::new(&self.query, bundle)?;
+        let admitted = bundle.admission();
+        for artifact in &bundle.value.artifacts {
             self.admit_artifact(artifact, control)?;
         }
-        Self::check_parameters(bundle, parameters.as_ref())?;
-        let activations = self.model_activations(grant, scope, bundle, &parameters, upgrade)?;
+        Self::check_parameters(&bundle.value, parameters.as_ref())?;
+        let activations = self.model_activations(grant, scope, &bundle, &parameters, upgrade)?;
         let prior_roots = if upgrade {
             self.store
                 .package_activations(grant.selection.tenant_id, scope, None)?
@@ -50,7 +53,9 @@ impl AnalysisPackageOwner {
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .map(|context| context.root)
-                .filter(|root| root.package_id == bundle.root.package_id && *root != bundle.root)
+                .filter(|root| {
+                    root.package_id == bundle.value.root.package_id && *root != bundle.value.root
+                })
                 .collect::<BTreeSet<_>>()
         } else {
             BTreeSet::new()
@@ -60,6 +65,7 @@ impl AnalysisPackageOwner {
             .map(|root| self.load_bundle(grant.selection.tenant_id, root))
             .collect::<Result<Vec<_>>>()?;
         let records = bundle
+            .value
             .artifacts
             .iter()
             .map(|artifact| self.install_revision(grant, artifact))
@@ -68,8 +74,8 @@ impl AnalysisPackageOwner {
             self.store.install_package(&records, || control.check())
         })?;
         for activation in activations {
-            if let Err(error) = self.install_model(grant, &admitted, activation, upgrade, control) {
-                for artifact in &bundle.artifacts {
+            if let Err(error) = self.install_model(grant, &bundle, activation, upgrade, control) {
+                for artifact in &bundle.value.artifacts {
                     self.store.collect_package(
                         grant.selection.tenant_id,
                         &artifact.descriptor.id,
@@ -85,18 +91,24 @@ impl AnalysisPackageOwner {
             })?;
         }
         // The lifecycle lock prevents package replacement during this inspection.
-        self.inspect(grant, scope, &bundle.root.package_id, Some(bundle), control)
+        self.inspect(
+            grant,
+            scope,
+            &bundle.value.root.package_id,
+            Some(&bundle),
+            control,
+        )
     }
 
     fn install_model(
         &self,
         grant: &PackageGrantV1,
-        admitted: &super::PackageBundleRef<'_>,
+        bundle: &InstalledBundle,
         prepared: ModelActivation,
         upgrade: bool,
         control: &AnalysisReadControl,
     ) -> Result<()> {
-        let bundle = admitted.bundle();
+        let admitted = bundle.admission();
         control.check()?;
         let ModelActivation {
             mut active,
@@ -110,7 +122,7 @@ impl AnalysisPackageOwner {
         };
         if let Some(old) = previous.as_ref().filter(|_| reuse) {
             if old.metadata != active.metadata || old.grant_id != active.grant_id {
-                self.authorize_commit(grant, action, admitted, || {
+                self.authorize_commit(grant, action, &admitted, || {
                     self.store
                         .renew_package(old, &active.metadata, &grant.principal, || control.check())
                 })?;
@@ -125,7 +137,7 @@ impl AnalysisPackageOwner {
                 return Err(Code::Unsupported.error("upgrade target"));
             }
             active.checkpoint_revision = previous.as_ref().map_or(0, |old| old.checkpoint_revision);
-            let artifact = bundle.artifact(&super::PackageRefV1 {
+            let artifact = bundle.value.artifact(&super::PackageRefV1 {
                 package_id: active.key.package_id.clone(),
                 revision: active.revision.clone(),
             })?;
@@ -151,7 +163,7 @@ impl AnalysisPackageOwner {
                     .ok_or_else(|| Code::Conflict.error("prepared evaluation"))?,
                 )
             };
-            self.authorize_commit(grant, action, admitted, || {
+            self.authorize_commit(grant, action, &admitted, || {
                 self.store.activate_package(
                     &active,
                     previous.as_ref().map(|old| old.generation),
@@ -160,7 +172,7 @@ impl AnalysisPackageOwner {
                 )
             })?;
         } else {
-            let active = self.authorize_commit(grant, action, admitted, || {
+            let active = self.authorize_commit(grant, action, &admitted, || {
                 self.store.activate_package(
                     &active,
                     previous.as_ref().map(|old| old.generation),
@@ -169,7 +181,7 @@ impl AnalysisPackageOwner {
                 )
             })?;
             if active.active {
-                self.start_model(grant, admitted, &active, control)?;
+                self.start_model(grant, bundle, &active, control)?;
             }
         }
         Ok(())
@@ -178,12 +190,12 @@ impl AnalysisPackageOwner {
     fn start_model(
         &self,
         grant: &PackageGrantV1,
-        admitted: &super::PackageBundleRef<'_>,
+        bundle: &InstalledBundle,
         active: &PackageActivationV1,
         control: &AnalysisReadControl,
     ) -> Result<()> {
-        let bundle = admitted.bundle();
         let artifact = bundle
+            .value
             .artifacts
             .iter()
             .find(|artifact| artifact.descriptor.id == active.key.package_id)
@@ -195,7 +207,7 @@ impl AnalysisPackageOwner {
             active,
             &format!("install:{}", active.generation),
             false,
-            admitted,
+            bundle,
             control,
         ) {
             let crate::Error::Package {
@@ -210,7 +222,7 @@ impl AnalysisPackageOwner {
             context.readiness = PackageReadinessV1::MissingInput {
                 input: field.into(),
             };
-            self.authorize_commit(grant, Action::Install, admitted, || {
+            self.authorize_commit(grant, Action::Install, &bundle.admission(), || {
                 self.store.update_package_metadata(
                     &active.key,
                     active.generation,

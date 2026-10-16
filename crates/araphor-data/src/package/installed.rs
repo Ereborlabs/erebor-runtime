@@ -94,24 +94,12 @@ impl InstalledAnalysis {
         self.owner
             .authority
             .admit(&context.grant, &bundle.admission())?;
-        let artifact = bundle
-            .value
-            .artifacts
-            .iter()
-            .find(|artifact| {
-                artifact.descriptor.id == package && artifact.descriptor.revision == active.revision
-            })
-            .ok_or_else(|| Code::Missing.error("installed artifact"))?;
+        let (artifact, model, admitted) =
+            bundle.export(package, &active.revision, &evaluation.export)?;
         let implementation = artifact.implementation(&evaluation.export)?;
         if !artifact.prepared(&evaluation.export) {
             return Err(Code::Unsupported.error("host-prepared target"));
         }
-        let model = artifact
-            .descriptor
-            .exports
-            .iter()
-            .find(|model| model.name == evaluation.export)
-            .ok_or_else(|| Code::Missing.error("installed export"))?;
         let mut effective = evaluation.clone();
         if implementation.target() == "wasm" {
             effective.context.limits = self.owner.query.component_limits(effective.context.limits);
@@ -130,7 +118,7 @@ impl InstalledAnalysis {
             .context(crate::AnalysisContractSnafu)?;
         let result = self
             .owner
-            .evaluate_artifact(tenant, artifact, &effective, &control);
+            .evaluate_artifact(tenant, artifact, admitted, &effective, &control);
         self.owner.check(&context.grant, Action::Run)?;
         self.owner
             .authority

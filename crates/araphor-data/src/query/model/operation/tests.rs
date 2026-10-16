@@ -113,6 +113,7 @@ fn operation_inputs_match() -> TestResult {
     program
         .outputs
         .insert("other".into(), "SELECT value FROM second".into());
+    let admitted = AdmittedExport::admit(&model, Some(&program))?;
     let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
     let (baseline, expected_inputs) = owner.model_operation([1; 16]).inputs(
         request(&model, &grant, &active),
@@ -132,8 +133,9 @@ fn operation_inputs_match() -> TestResult {
         &model,
     )?)?;
     drop(expected);
-    let (operation, actual) = owner.model_operation([1; 16]).inputs(
+    let (operation, actual) = owner.model_operation([1; 16]).inputs_admitted(
         request(&model, &grant, &active),
+        &admitted,
         &control()?,
         || Ok(()),
     )?;
@@ -153,9 +155,10 @@ fn operation_inputs_match() -> TestResult {
             ..
         })
     ));
-    let output = operation.evaluate(
+    let output = operation.evaluate_admitted(
         &package,
         &program,
+        &admitted,
         &evaluation(actual.inputs.clone(), &model),
         &control()?,
     )?;
@@ -382,6 +385,13 @@ fn named_alias_revision() -> TestResult {
         fixture.source.tenant_id,
         vec![fixture.source.clone()],
     ));
+    let mut program = SqlModelV1::default();
+    program.outputs.insert(
+        "result".into(),
+        "SELECT source_cursor FROM \"activity-log\"".into(),
+    );
+    let package = sdk::Package::new("fixture", "1", vec![model.clone()]);
+    let admitted = AdmittedExport::admit(&model, Some(&program))?;
     let mut previous = None;
     for cursor in 1..=2 {
         if cursor == 2 {
@@ -389,8 +399,12 @@ fn named_alias_revision() -> TestResult {
         }
         let operation = owner.model_operation(fixture.source.tenant_id);
         assert!(operation.engine.is_none());
-        let (operation, inputs) =
-            operation.inputs(request(&model, &grant, &active), &control()?, || Ok(()))?;
+        let (operation, inputs) = operation.inputs_admitted(
+            request(&model, &grant, &active),
+            &admitted,
+            &control()?,
+            || Ok(()),
+        )?;
         assert_eq!(inputs.inputs[0].data.name, "selected");
         assert_eq!(inputs.inputs[0].data.batches[0].num_rows(), 0);
         assert!(!inputs.source_revisions.is_empty());
@@ -399,15 +413,10 @@ fn named_alias_revision() -> TestResult {
             assert_ne!(inputs.inputs[0].revision, previous);
         }
         previous = Some(inputs.inputs[0].revision.clone());
-        let mut program = SqlModelV1::default();
-        program.outputs.insert(
-            "result".into(),
-            "SELECT source_cursor FROM \"activity-log\"".into(),
-        );
-        let package = sdk::Package::new("fixture", "1", vec![model.clone()]);
-        let result = operation.evaluate(
+        let result = operation.evaluate_admitted(
             &package,
             &program,
+            &admitted,
             &evaluation(inputs.inputs.clone(), &model),
             &control()?,
         )?;

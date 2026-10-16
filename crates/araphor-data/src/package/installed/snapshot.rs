@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
 use crate::analysis::PackageActivationV1;
-use crate::query::QueryLease;
+use crate::query::{AdmittedExport, QueryLease};
 use crate::{QueryOwner, Result};
 
-use super::super::{PackageBundleV1, PackageErrorCodeV1 as Code, PackageRefV1};
+use super::super::{
+    AnalysisPackageOwner, PackageArtifactV1, PackageBundleV1, PackageErrorCodeV1 as Code,
+    PackageImplementationV1, PackageRefV1,
+};
 use super::InstalledAnalysis;
 
 mod memory;
@@ -13,6 +16,7 @@ pub(in crate::package) struct InstalledBundle {
     pub(in crate::package) value: PackageBundleV1,
     digest: String,
     identities: Vec<Vec<Option<super::super::PackageArtifactIdentityV1>>>,
+    programs: Vec<Vec<Option<AdmittedExport>>>,
     _lease: QueryLease,
 }
 
@@ -36,18 +40,101 @@ impl InstalledBundle {
                     .collect()
             })
             .collect::<Result<Vec<Vec<_>>>>()?;
-        let bytes = memory::BundleMemory::retained(&value, &digest, &identities)?;
-        let lease = query.retain_analysis_input(bytes)?;
-        Ok(Arc::new(Self {
+        let bytes = memory::BundleMemory::retained(&value, &digest, &identities, &Vec::new())?;
+        let mut bundle = Self {
             value,
             digest,
             identities,
-            _lease: lease,
-        }))
+            programs: Vec::new(),
+            _lease: query.retain_analysis_input(bytes)?,
+        };
+        bundle._lease.grow_input(
+            bundle.value.artifacts.len() * std::mem::size_of::<Vec<Option<AdmittedExport>>>(),
+        )?;
+        bundle.programs.reserve_exact(bundle.value.artifacts.len());
+        for artifact in &bundle.value.artifacts {
+            let count = artifact.descriptor.exports.len();
+            bundle
+                ._lease
+                .grow_input(count * std::mem::size_of::<Option<AdmittedExport>>())?;
+            let mut entries = Vec::with_capacity(count);
+            for model in &artifact.descriptor.exports {
+                let program = match artifact.implementation(&model.name) {
+                    Ok(PackageImplementationV1::Sql { program, .. }) => Some(program),
+                    Ok(_) => None,
+                    Err(crate::Error::Package {
+                        code: Code::Unsupported,
+                        ..
+                    }) => {
+                        entries.push(None);
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                let program = AdmittedExport::admit(model, program)?;
+                bundle._lease.grow_input(program.allocated_bytes())?;
+                entries.push(Some(program));
+            }
+            bundle.programs.push(entries);
+        }
+        Ok(Arc::new(bundle))
     }
 
     pub(in crate::package) fn admission(&self) -> super::super::PackageBundleRef<'_> {
         super::super::PackageBundleRef::retained(&self.value, &self.digest)
+    }
+
+    pub(in crate::package) fn export(
+        &self,
+        package: &str,
+        revision: &str,
+        export: &str,
+    ) -> Result<(
+        &PackageArtifactV1,
+        &araphor_analysis_sdk::Model,
+        &AdmittedExport,
+    )> {
+        let index = self
+            .value
+            .artifacts
+            .iter()
+            .position(|artifact| {
+                artifact.descriptor.id == package && artifact.descriptor.revision == revision
+            })
+            .ok_or_else(|| Code::Missing.error("installed artifact"))?;
+        let artifact = &self.value.artifacts[index];
+        let model = artifact
+            .descriptor
+            .exports
+            .iter()
+            .position(|model| model.name == export)
+            .ok_or_else(|| Code::Missing.error("installed export"))?;
+        let program = self.programs[index][model]
+            .as_ref()
+            .ok_or_else(|| Code::Unsupported.error("model target"))?;
+        Ok((artifact, &artifact.descriptor.exports[model], program))
+    }
+
+    pub(in crate::package) fn clock(
+        &self,
+        artifact: &PackageArtifactV1,
+        model: &araphor_analysis_sdk::Model,
+    ) -> Result<super::super::owner::ClockDependency> {
+        use super::super::owner::ClockDependency;
+        let (_, _, admitted) = self.export(
+            &artifact.descriptor.id,
+            &artifact.descriptor.revision,
+            &model.name,
+        )?;
+        Ok(
+            if artifact.implementation(&model.name)?.target() != "sql" || admitted.model_clock() {
+                ClockDependency::Model
+            } else if admitted.input_clock() {
+                ClockDependency::Inputs
+            } else {
+                ClockDependency::None
+            },
+        )
     }
 
     pub(super) fn identity(
@@ -68,6 +155,16 @@ impl InstalledBundle {
             .position(|implementation| std::ptr::eq(implementation, selected))
             .ok_or_else(|| Code::Missing.error("installed export"))?;
         Ok(self.identities[artifact][implementation].clone())
+    }
+}
+
+impl AnalysisPackageOwner {
+    pub(in crate::package) fn load_installed(
+        &self,
+        tenant: [u8; 16],
+        root: &PackageRefV1,
+    ) -> Result<Arc<InstalledBundle>> {
+        InstalledBundle::new(&self.query, self.load_bundle(tenant, root)?)
     }
 }
 
@@ -113,6 +210,6 @@ impl InstalledAnalysis {
         if let Some(snapshot) = &self.snapshot {
             return snapshot.bundle(root);
         }
-        InstalledBundle::new(&self.owner.query, self.owner.load_bundle(tenant, root)?)
+        self.owner.load_installed(tenant, root)
     }
 }

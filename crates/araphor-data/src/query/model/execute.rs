@@ -49,9 +49,9 @@ impl<'a> ModelExecution<'a> {
         &mut self,
         model: &sdk::Model,
         program: &SqlModelV1,
-        admitted: AdmittedModel,
+        admitted: &AdmittedModel,
     ) -> Result<sdk::Output> {
-        let datasets = self.datasets(&model.outputs, admitted.outputs)?;
+        let datasets = self.datasets(&model.outputs, &admitted.outputs)?;
         for (port, data) in model.outputs.iter().zip(&datasets) {
             self.table(
                 &format!("output_{}", port.name),
@@ -63,7 +63,7 @@ impl<'a> ModelExecution<'a> {
             .checkpoint
             .as_ref()
             .map(|spec| {
-                self.datasets(&spec.datasets, admitted.checkpoint)
+                self.datasets(&spec.datasets, &admitted.checkpoint)
                     .map(|datasets| sdk::Checkpoint {
                         version: spec.version,
                         datasets,
@@ -71,7 +71,7 @@ impl<'a> ModelExecution<'a> {
             })
             .transpose()?;
         let evidence = self.evidence(admitted.evidence.as_ref())?;
-        let reasons = self.reasons(model, &program.reasons, admitted.reasons)?;
+        let reasons = self.reasons(model, &program.reasons, &admitted.reasons)?;
         Ok(sdk::Output {
             datasets,
             evidence,
@@ -83,12 +83,12 @@ impl<'a> ModelExecution<'a> {
     fn datasets(
         &mut self,
         ports: &[sdk::Port],
-        mut queries: BTreeMap<String, QuerySql>,
+        queries: &BTreeMap<String, QuerySql>,
     ) -> Result<Vec<sdk::Dataset>> {
         ports
             .iter()
             .map(|port| {
-                let query = queries.remove(&port.name).ok_or_else(|| {
+                let query = queries.get(&port.name).ok_or_else(|| {
                     crate::QueryInvalidSnafu {
                         field: "model admitted output",
                     }
@@ -96,7 +96,7 @@ impl<'a> ModelExecution<'a> {
                 })?;
                 Ok(sdk::Dataset {
                     name: port.name.clone(),
-                    batches: self.query(&query, &port.schema)?,
+                    batches: self.query(query, &port.schema)?,
                 })
             })
             .collect()

@@ -5,6 +5,7 @@ use snafu::ResultExt as _;
 use crate::analysis::{PackageActivationV1, PackageResultRefV1};
 use crate::{AnalysisReadControl, Result};
 
+use super::installed::snapshot::InstalledBundle;
 use super::owner::InstalledContext;
 use super::{
     AnalysisPackageOwner, PackageActionV1 as Action, PackageErrorCodeV1 as Code, PackageGrantV1,
@@ -71,15 +72,15 @@ impl AnalysisPackageOwner {
         if context.grant.selection != grant.selection {
             return Err(Code::Conflict.error("activation scope or parameters"));
         }
-        let bundle = self.load_bundle(grant.selection.tenant_id, &context.root)?;
-        let admitted = super::PackageBundleRef::new(&bundle)?;
+        let bundle = self.load_installed(grant.selection.tenant_id, &context.root)?;
+        let admitted = bundle.admission();
         self.authority.admit(grant, &admitted)?;
         let root = super::PackageRefV1 {
             package_id: package.into(),
             revision: active.revision.clone(),
         };
         let mut receipts = Vec::new();
-        for reference in bundle.order_for(&root, export)? {
+        for reference in bundle.value.order_for(&root, export)? {
             let key = Self::key(grant, scope, &reference);
             let mut active = self
                 .store
@@ -113,15 +114,13 @@ impl AnalysisPackageOwner {
                 })?;
             }
             let loaded;
-            let dependency;
-            let admission = if saved.root == bundle.root {
-                &admitted
+            let selected = if saved.root == bundle.value.root {
+                &bundle
             } else {
-                loaded = self.load_bundle(grant.selection.tenant_id, &saved.root)?;
-                dependency = super::PackageBundleRef::new(&loaded)?;
-                &dependency
+                loaded = self.load_installed(grant.selection.tenant_id, &saved.root)?;
+                &loaded
             };
-            if let Some(receipt) = self.evaluate_active(&active, id, false, admission, control)? {
+            if let Some(receipt) = self.evaluate_active(&active, id, false, selected, control)? {
                 receipts.push((active.key.export, active.key.package_id, receipt));
             }
         }
@@ -150,24 +149,24 @@ impl AnalysisPackageOwner {
         active: &PackageActivationV1,
         id: &str,
         automatic: bool,
-        admission: &super::PackageBundleRef<'_>,
+        bundle: &InstalledBundle,
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageResultRefV1>> {
         let context: InstalledContext = Self::decode(&active.metadata)?;
         control.check()?;
-        if admission.bundle().root != context.root {
+        if bundle.value.root != context.root {
             return Err(Code::Conflict.error("activation package root"));
         }
-        let bundle = admission.bundle();
+        let admission = bundle.admission();
         self.check(&context.grant, Action::Run)?;
-        self.authority.admit(&context.grant, admission)?;
+        self.authority.admit(&context.grant, &admission)?;
         if !automatic {
             let result_id = Self::result_id(active, id)?;
             if let Some(previous) = self
                 .store
                 .package_result(active.key.tenant_id, &result_id)?
             {
-                let artifact = bundle.artifact(&super::PackageRefV1 {
+                let artifact = bundle.value.artifact(&super::PackageRefV1 {
                     package_id: active.key.package_id.clone(),
                     revision: active.revision.clone(),
                 })?;
@@ -202,7 +201,7 @@ impl AnalysisPackageOwner {
                 return Err(error);
             }
         };
-        let receipt = self.authorize_commit(&context.grant, Action::Run, admission, || {
+        let receipt = self.authorize_commit(&context.grant, Action::Run, &admission, || {
             self.store.commit_package(&prepared, || control.check())
         })?;
         Ok(Some(receipt))

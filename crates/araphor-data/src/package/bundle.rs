@@ -187,26 +187,6 @@ impl PackageArtifactV1 {
             revision: self.descriptor.revision.clone(),
         }
     }
-
-    pub(super) fn clock_dependency(
-        &self,
-        model: &sdk::Model,
-    ) -> Result<super::owner::ClockDependency> {
-        use super::owner::ClockDependency;
-
-        let clocked = match self.implementation(&model.name)? {
-            PackageImplementationV1::Sql { program, .. } => program.uses_clock(model)?,
-            PackageImplementationV1::Wasm { .. } | PackageImplementationV1::Native { .. } => true,
-            _ => return Err(Code::Unsupported.error("model target")),
-        };
-        Ok(if clocked {
-            ClockDependency::Model
-        } else if crate::QueryOwner::inputs_use_clock(model)? {
-            ClockDependency::Inputs
-        } else {
-            ClockDependency::None
-        })
-    }
 }
 
 impl PackageBundleV1 {

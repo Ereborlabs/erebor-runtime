@@ -78,10 +78,7 @@ impl InstalledAnalysis {
             {
                 bundle.clone()
             } else {
-                InstalledBundle::new(
-                    &self.owner.query,
-                    self.owner.load_bundle(tenant, &reference.root)?,
-                )?
+                self.owner.load_installed(tenant, &reference.root)?
             };
             self.owner
                 .authority

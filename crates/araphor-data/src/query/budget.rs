@@ -190,6 +190,35 @@ impl QueryBudget {
 }
 
 impl QueryLease {
+    pub(crate) fn grow_input(&mut self, bytes: usize) -> Result<()> {
+        if matches!(self.kind, LeaseKind::Stream) {
+            return crate::QueryLimitSnafu {
+                resource: "query input bytes",
+                limit: self.input_bytes,
+            }
+            .fail();
+        }
+        let mut usage = self.budget.usage.lock().map_err(|_| {
+            crate::QueryInvalidSnafu {
+                field: "query budget lock",
+            }
+            .build()
+        })?;
+        let total = usage
+            .input_bytes
+            .checked_add(bytes)
+            .filter(|total| *total <= self.budget.limits.input_capacity)
+            .ok_or_else(|| {
+                crate::AnalysisBusySnafu {
+                    resource: "query input capacity",
+                }
+                .build()
+            })?;
+        usage.input_bytes = total;
+        self.input_bytes += bytes;
+        Ok(())
+    }
+
     pub(super) fn reserve_output(&mut self, bytes: usize) -> Result<()> {
         if !matches!(self.kind, LeaseKind::Evaluation) || self.bytes != 0 {
             return crate::QueryInvalidSnafu {
@@ -338,8 +367,71 @@ impl std::fmt::Debug for QueryLease {
 }
 
 #[cfg(test)]
+impl super::QueryOwner {
+    pub(crate) fn input_charge(&self) -> usize {
+        self.budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .input_bytes
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_input_growth() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            input_bytes: 1,
+            input_capacity: 10,
+            ..Default::default()
+        });
+        let mut retained = budget.retained_input(3)?;
+        let other = budget.retained_input(2)?;
+        retained.grow_input(5)?;
+        for bytes in [1, usize::MAX] {
+            assert!(matches!(
+                retained.grow_input(bytes),
+                Err(crate::Error::AnalysisBusy {
+                    resource: "query input capacity",
+                    ..
+                })
+            ));
+            assert_eq!(retained.input_bytes, 8);
+            assert_eq!(
+                budget
+                    .usage
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .input_bytes,
+                10
+            );
+        }
+        let mut stream = budget.stream([1; 16])?;
+        assert!(matches!(
+            stream.grow_input(1),
+            Err(crate::Error::QueryLimit {
+                resource: "query input bytes",
+                ..
+            })
+        ));
+        drop(stream);
+        drop(other);
+        retained.grow_input(2)?;
+        drop(retained);
+        drop(budget.retained_input(10)?);
+        assert_eq!(
+            budget
+                .usage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .input_bytes,
+            0
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn query_scope_wakeup() -> Result<()> {

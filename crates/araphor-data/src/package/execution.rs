@@ -13,18 +13,16 @@ impl AnalysisPackageOwner {
         &self,
         tenant: [u8; 16],
         artifact: &PackageArtifactV1,
+        admitted: &crate::query::AdmittedExport,
         evaluation: &sdk::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<SqlModelOutputV1> {
         self.query.check_analysis_input(evaluation)?;
         match artifact.implementation(&evaluation.export)? {
-            PackageImplementationV1::Sql { program, .. } => self.query.evaluate_model(
-                tenant,
-                &artifact.descriptor,
-                program,
-                evaluation,
-                control,
-            ),
+            PackageImplementationV1::Sql { program, .. } => self
+                .query
+                .model_operation(tenant)
+                .evaluate_admitted(&artifact.descriptor, program, admitted, evaluation, control),
             PackageImplementationV1::Wasm {
                 artifact: bytes, ..
             } => {
@@ -99,45 +97,21 @@ impl AnalysisPackageOwner {
         artifact: &PackageArtifactV1,
         control: &AnalysisReadControl,
     ) -> Result<()> {
-        let mut admitted = Vec::new();
-        for model in &artifact.descriptor.exports {
+        for implementation in &artifact.implementations {
             control.check()?;
-            match artifact.implementation(&model.name) {
-                Ok(PackageImplementationV1::Sql { program, .. }) => {
-                    crate::QueryOwner::admit_model(model, program)?;
+            match implementation {
+                PackageImplementationV1::Wasm { artifact, .. } => {
+                    self.wasm.admit(artifact, control)?;
                 }
-                Ok(implementation @ PackageImplementationV1::Wasm { artifact, .. }) => {
-                    if !admitted
-                        .iter()
-                        .any(|previous| std::ptr::eq(*previous, implementation))
-                    {
-                        self.wasm.admit(artifact, control)?;
-                        admitted.push(implementation);
-                    }
-                }
-                Ok(
-                    implementation @ PackageImplementationV1::Native {
-                        artifact,
-                        qualification: Some(qualification),
-                        ..
-                    },
-                ) => {
-                    if !admitted
-                        .iter()
-                        .any(|previous| std::ptr::eq(*previous, implementation))
-                    {
-                        self.native.admit(artifact, qualification)?;
-                        admitted.push(implementation);
-                    }
-                }
-                Err(crate::Error::Package {
-                    code: Code::Unsupported,
+                PackageImplementationV1::Native {
+                    artifact,
+                    qualification: Some(qualification),
                     ..
-                }) => continue,
-                Err(error) => return Err(error),
-                _ => return Err(Code::Unsupported.error("model target")),
+                } => {
+                    self.native.admit(artifact, qualification)?;
+                }
+                _ => {}
             }
-            crate::QueryOwner::admit_inputs(model)?;
         }
         Ok(())
     }

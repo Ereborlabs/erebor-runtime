@@ -13,6 +13,7 @@ use sqlparser::ast::{
 };
 use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer};
 use time::PrimitiveDateTime;
 
 use super::{input::SCHEMAS, QueryOperation};
@@ -224,6 +225,48 @@ impl QuerySql {
         self.clocks != 0
     }
 
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        use std::mem::size_of;
+
+        // Reserve AST nodes per token and string storage per byte.
+        let node =
+            size_of::<Query>() + size_of::<Select>() + size_of::<Expr>() + size_of::<TableFactor>();
+        let sql = self.query.to_string();
+        let tokens = Tokenizer::new(&DuckDbDialect {}, &sql)
+            .tokenize()
+            .map(|tokens| {
+                tokens
+                    .iter()
+                    .filter(|token| !matches!(token, Token::Whitespace(_)))
+                    .count()
+            })
+            .unwrap_or(sql.len());
+        let tree = |names: &BTreeSet<String>| {
+            names.iter().fold(
+                names.len().max(1) * (11 * size_of::<String>() + 16 * size_of::<usize>()),
+                |bytes, name| bytes.saturating_add(name.capacity()),
+            )
+        };
+        let parameters = self.parameters.iter().fold(
+            self.parameters.capacity() * size_of::<Value>(),
+            |bytes, value| {
+                bytes.saturating_add(match value {
+                    Value::Text(value) => value.capacity(),
+                    Value::Blob(value) => value.capacity(),
+                    _ => 0,
+                })
+            },
+        );
+        size_of::<Self>()
+            .saturating_add(self.original.capacity())
+            .saturating_add(tokens.saturating_mul(2 * node))
+            .saturating_add(sql.len().saturating_mul(2))
+            .saturating_add(parameters)
+            .saturating_add(self.tests.capacity() * size_of::<TimeTest>())
+            .saturating_add(tree(&self.dependencies))
+            .saturating_add(self.event_fields.as_ref().map_or(0, tree))
+    }
+
     pub fn parameters(&self) -> &[Value] {
         &self.parameters
     }
@@ -303,12 +346,14 @@ impl QuerySql {
     }
 
     pub(super) fn bind_complete(&self, now_ns: u64) -> Result<QueryBinding> {
-        let mut complete = self.clone();
-        complete.operation = QueryOperation::Replace;
-        complete.bind_at(now_ns)
+        self.bind(now_ns, false)
     }
 
     pub fn bind_at(&self, now_ns: u64) -> Result<QueryBinding> {
+        self.bind(now_ns, self.operation == QueryOperation::Append)
+    }
+
+    fn bind(&self, now_ns: u64, append: bool) -> Result<QueryBinding> {
         let mut query = self.query.clone();
         let mut parameters = self.parameters.clone();
         if self.clocks > 0 {
@@ -318,7 +363,6 @@ impl QuerySql {
             ));
             let _ = query.visit(&mut FrozenClock(parameters.len()));
         }
-        let append = self.operation == QueryOperation::Append;
         if append {
             Self::append_positions(&mut query)?;
         }

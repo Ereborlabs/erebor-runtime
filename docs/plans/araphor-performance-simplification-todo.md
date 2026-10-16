@@ -19,7 +19,7 @@ every distinct input, fault, boundary, and assertion.
 
 | Owner | Required deletion |
 | --- | --- |
-| Query | One table registration and SQL execution path. Keep the existing native adapter and remove duplicate plan classification. |
+| Query | One Arrow registration and SQL execution path. The approved component redesign removes the DuckDB query adapter and duplicate physical schemas. DuckDB retains durable storage. |
 | Package | One input/freshness comparison. Remove optional admitted-bundle loading and per-export task handoff. Wait on changes and actual deadlines. |
 | SDK and built-ins | One checked computation entry. Keep standalone, import, and host boundary checks. |
 | Control context | The authoritative transaction application identifies changed keys. Remove the second transaction interpreter. |
@@ -62,9 +62,20 @@ actual lifetimes. Query input preparation uses the admitted relations and
 columns. Storage charges current encoded bytes. Current-format recovery,
 tenant isolation, evidence, exact revisions, deadlines, and cleanup remain.
 
-DuckDB remains the execution engine. Arrow contracts remain independent of
-that engine. This work adds no service, broker, provider framework, engine
-pool, or DataFusion dependency. It adds no older-format reader or migration.
+The approved [component redesign](araphor-component-redesign.md) replaces the
+in-memory query engine with DataFusion. DuckDB retains durable storage.
+Arrow remains the canonical query data format. This work adds no service,
+broker, provider framework, fallback backend, or older-format reader.
+
+The user requests a study of local DataFusion and Mangroves before the next
+component redesign. The [redesign proposal](araphor-component-redesign.md)
+records the source findings, replacement owners, and required proof. The
+study is complete. The user approves implementation of the redesign and
+requires a commit for each deliverable. The 6,000-line production target
+remains in force.
+The source coherence review records the connected callers and compatibility
+work. The synchronous API boundary, resource behavior, compiled parity, and
+net replacement count remain unproved.
 
 ## Implementation flow
 
@@ -122,9 +133,9 @@ No new performance test or benchmark is approved. Do not infer speed gains
 from changed test-suite durations. Record removed work from the final source.
 Measure latency only after approval of a specific workload and its limits.
 
-Result: **Not done**. The current source removes 2,229 nonblank production Rust
-lines from `7b7b407a` and 1,076 from `aa390d9f`. The shared SDK codec changes
-remove 92 from `1fb58d37`. Another 3,771 must be removed to meet the target.
+Result: **Not done**. The current source removes 2,036 nonblank production Rust
+lines from `7b7b407a` and 883 from `aa390d9f`. The shared SDK codec changes
+remove 92 from `1fb58d37`. Another 3,964 must be removed to meet the target.
 Continue component refactoring. Documentation and test deletion do not close
 this result.
 

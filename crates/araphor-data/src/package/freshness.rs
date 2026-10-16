@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 
 use crate::{AnalysisReadControl, Result};
 
+use super::installed::snapshot::InstalledBundle;
 use super::owner::InstalledContext;
-use super::{AnalysisPackageOwner, PackageActionV1, PackageBundleV1, PackageGrantV1, PackageRefV1};
+use super::{AnalysisPackageOwner, PackageActionV1, PackageGrantV1, PackageRefV1};
 
 impl AnalysisPackageOwner {
     pub(super) fn refresh_package(
@@ -11,7 +12,7 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         scope: &str,
         package: &str,
-        admitted: Option<&PackageBundleV1>,
+        admitted: Option<&InstalledBundle>,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         let mut seen = BTreeSet::new();
@@ -19,10 +20,10 @@ impl AnalysisPackageOwner {
             let context: InstalledContext = Self::decode(&installed.metadata)?;
             Self::permits(grant, &context.grant)?;
             let loaded;
-            let bundle = match admitted.filter(|bundle| bundle.root == context.root) {
+            let bundle = match admitted.filter(|bundle| bundle.value.root == context.root) {
                 Some(bundle) => bundle,
                 None => {
-                    loaded = self.load_bundle(installed.key.tenant_id, &context.root)?;
+                    loaded = self.load_installed(installed.key.tenant_id, &context.root)?;
                     &loaded
                 }
             };
@@ -30,7 +31,7 @@ impl AnalysisPackageOwner {
                 package_id: package.into(),
                 revision: installed.revision.clone(),
             };
-            for reference in bundle.order_for(&root, Some(&installed.key.export))? {
+            for reference in bundle.value.order_for(&root, Some(&installed.key.export))? {
                 control.check()?;
                 let key = Self::key(grant, scope, &reference);
                 if !seen.insert((key.package_id.clone(), key.export.clone())) {

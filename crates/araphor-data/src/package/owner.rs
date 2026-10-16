@@ -133,9 +133,9 @@ impl AnalysisPackageOwner {
                 scope_id,
                 bundle,
                 parameters,
-            } => self.install(&grant, &scope_id, &bundle, parameters, false, control),
+            } => self.install(&grant, &scope_id, bundle, parameters, false, control),
             PackageRequestV1::Update { scope_id, bundle } => {
-                self.install(&grant, &scope_id, &bundle, None, true, control)
+                self.install(&grant, &scope_id, bundle, None, true, control)
             }
             PackageRequestV1::Inspect {
                 scope_id,
@@ -168,7 +168,7 @@ impl AnalysisPackageOwner {
                     revision,
                 };
                 let bundle = self.load_bundle(grant.selection.tenant_id, &root)?;
-                self.install(&grant, &scope_id, &bundle, None, true, control)
+                self.install(&grant, &scope_id, bundle, None, true, control)
             }
             PackageRequestV1::Remove {
                 scope_id,

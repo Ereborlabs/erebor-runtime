@@ -2,6 +2,7 @@ use crate::analysis::PackageActivationV1;
 use crate::{QueryOwner, Result};
 
 use super::super::admission::ModelRef;
+use super::super::installed::snapshot::InstalledBundle;
 use super::super::owner::{ClockDependency, InstalledContext};
 use super::super::{
     AnalysisPackageOwner, PackageBundleV1, PackageErrorCodeV1 as Code, PackageGrantV1,
@@ -19,12 +20,12 @@ impl AnalysisPackageOwner {
         &self,
         grant: &PackageGrantV1,
         scope: &str,
-        bundle: &PackageBundleV1,
+        bundle: &InstalledBundle,
         parameters: &Option<serde_json::Value>,
         upgrade: bool,
     ) -> Result<Vec<ModelActivation>> {
         let mut activations = Vec::new();
-        for key in bundle.order()? {
+        for key in bundle.value.order()? {
             let activation =
                 self.model_activation(grant, scope, bundle, &key, parameters, upgrade)?;
             activations.push(activation);
@@ -36,12 +37,12 @@ impl AnalysisPackageOwner {
         &self,
         grant: &PackageGrantV1,
         scope: &str,
-        bundle: &PackageBundleV1,
+        bundle: &InstalledBundle,
         key: &ModelRef,
         parameters: &Option<serde_json::Value>,
         upgrade: bool,
     ) -> Result<ModelActivation> {
-        let artifact = bundle.artifact(&key.package)?;
+        let artifact = bundle.value.artifact(&key.package)?;
         let storage_key = Self::key(grant, scope, key);
         let previous = self.store.package_activation(&storage_key)?;
         let prior = previous
@@ -94,7 +95,7 @@ impl AnalysisPackageOwner {
         } else {
             InstalledContext {
                 grant: grant.clone(),
-                root: bundle.root.clone(),
+                root: bundle.value.root.clone(),
                 parameters,
                 readiness,
                 status_checkpoint: previous
@@ -105,7 +106,7 @@ impl AnalysisPackageOwner {
                     Self::readiness(artifact, &key.export),
                     PackageReadinessV1::Ready
                 ) {
-                    artifact.clock_dependency(model)?
+                    bundle.clock(artifact, model)?
                 } else {
                     ClockDependency::None
                 },
@@ -116,8 +117,8 @@ impl AnalysisPackageOwner {
             context.status_checkpoint = 0;
         }
         context.grant = grant.clone();
-        if key.package == bundle.root {
-            context.root = bundle.root.clone();
+        if key.package == bundle.value.root {
+            context.root = bundle.value.root.clone();
         }
         let metadata = Self::encode(&context)?;
         if metadata.len() > crate::analysis::MAX_PACKAGE_METADATA_BYTES {

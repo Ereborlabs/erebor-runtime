@@ -24,6 +24,10 @@ master plan invented for them.
 - [Araphor performance simplification TODO](araphor-performance-simplification-todo.md) —
   the user approves all 17 source-audit items. The file records implementation
   and verification status for each item.
+- [Araphor component redesign](araphor-component-redesign.md) — the user
+  approves one Arrow query operation and retained package admission. DataFusion
+  replaces query execution. DuckDB retains durable storage. The source studies
+  and coherence review are complete; implementation and parity remain open.
 - [Araphor Data test runtime reduction](araphor-data-test-runtime-reduction.md) —
   the seven approved corrections and final Rust qualification are complete.
   The record preserves the complete inventory and observed timing limits.
