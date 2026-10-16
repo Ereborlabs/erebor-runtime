@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use snafu::IntoError as _;
 
 use super::budget::QueryLease;
-use super::input::SCHEMAS;
+use super::input::{InputSchema, SCHEMAS};
 use super::{
     QueryLimits, QueryOperation, QueryPlan, QueryResult, QueryTemplate, QUERY_SCHEMA_VERSION,
 };
@@ -792,9 +792,9 @@ impl QueryColumn {
     fn new(plan: &QueryPlan, name: &str, data_type: &str) -> Result<Self> {
         if let QueryTemplate::Client(sql) = &plan.template {
             let (units, null_meaning, join_keys, owner, readiness) = match sql.source_column(name) {
-                Some((schema, field)) => (
-                    field.2,
-                    field.3,
+                Some((schema, ordinal)) => (
+                    InputSchema::units(&schema.fields()[ordinal]),
+                    schema.absence[ordinal],
                     schema.join_keys,
                     schema.owner,
                     schema.readiness,
@@ -840,10 +840,11 @@ impl QueryColumn {
             "old_revision" | "new_revision" => ("owner revision, not store revision", ""),
             "changed" => ("exact context body difference", ""),
             _ => schema
-                .columns
+                .fields()
                 .iter()
-                .find(|field| field.0 == name)
-                .map(|field| (field.2, field.3))
+                .enumerate()
+                .find(|(_, field)| field.name() == name)
+                .map(|(ordinal, field)| (InputSchema::units(field), schema.absence[ordinal]))
                 .ok_or_else(|| {
                     crate::QueryInvalidSnafu {
                         field: "result column",

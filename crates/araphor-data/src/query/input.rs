@@ -81,13 +81,15 @@ macro_rules! relation {
     }) => {
         $visibility const $schema: $crate::query::input::InputSchema = $crate::query::input::InputSchema {
             name: $name,
-            columns: &[$($crate::query::input::InputField(stringify!($field), $crate::query::input::column!(@type $kind), $units, $absence)),*],
+            absence: &[$($absence),*],
             join_keys: $keys, owner: $owner, readiness: $readiness, description: $description,
-            canonical: |schema| {
+            canonical: || {
                 static SCHEMA: std::sync::OnceLock<std::sync::Arc<araphor_analysis_sdk::Schema>> = std::sync::OnceLock::new();
-                SCHEMA.get_or_init(|| std::sync::Arc::new(araphor_analysis_sdk::Schema::new(
-                    schema.columns.iter().map(|field| std::sync::Arc::new(field.arrow_field(schema.owner))).collect::<Vec<_>>()
-                ))).clone()
+                SCHEMA.get_or_init(|| std::sync::Arc::new(araphor_analysis_sdk::Schema::new(vec![
+                    $(std::sync::Arc::new($crate::query::input::InputSchema::field(
+                        stringify!($field), $crate::query::input::column!(@type $kind), $units, $absence, $owner,
+                    ))),*
+                ])))
             },
         };
 
@@ -115,27 +117,63 @@ macro_rules! relation {
     };
 }
 
-pub(super) struct InputField(
-    pub(super) &'static str,
-    pub(super) sdk::DataType,
-    pub(super) &'static str,
-    pub(super) &'static str,
-);
-
 pub(super) struct InputSchema {
     pub(super) name: &'static str,
-    pub(super) columns: &'static [InputField],
+    pub(super) absence: &'static [&'static str],
     pub(super) join_keys: &'static str,
     pub(super) owner: &'static str,
     pub(super) readiness: &'static str,
     pub(super) description: &'static str,
-    pub(super) canonical: fn(&InputSchema) -> Arc<sdk::Schema>,
+    pub(super) canonical: fn() -> &'static Arc<sdk::Schema>,
 }
 
-impl InputField {
-    pub(super) fn sql_type(&self) -> &'static str {
+impl InputSchema {
+    pub(super) fn field(
+        name: &str,
+        kind: sdk::DataType,
+        units: &str,
+        absence: &str,
+        owner: &str,
+    ) -> sdk::Field {
+        let host_type = match name {
+            "tenant_id" => "[u8;16]",
+            "source_key" => "araphor-data.EvidenceIntakeIdentityV1",
+            "graph_revision" => "araphor-data.GraphRevisionV1",
+            "subject_id" | "from_subject_id" | "to_subject_id" => "araphor-data.GraphSubjectKeyV1",
+            "authority" => "araphor-data.GraphSubjectAuthorityV1",
+            "relationship_key" => "araphor-data.GraphEdgeKeyV1",
+            "evidence" => "Vec<araphor-data.DiscoveryRecordIdV1>",
+            "proof_quality" => "araphor-data.ProofQualityV1",
+            "required_coverage_interval_ids" => "Vec<[u8;16]>",
+            _ => match kind {
+                sdk::DataType::Binary => "Vec<u8>",
+                sdk::DataType::Utf8 => "String",
+                sdk::DataType::UInt64 => "u64",
+                sdk::DataType::UInt32 => "u32",
+                sdk::DataType::Int32 => "i32",
+                sdk::DataType::Boolean => "bool",
+                _ => "i64",
+            },
+        };
+        sdk::Field::new(name, kind, !absence.is_empty()).with_metadata(HashMap::from([
+            ("araphor.owner".into(), owner.into()),
+            ("araphor.description".into(), units.into()),
+            ("araphor.host_type".into(), host_type.into()),
+            (
+                "araphor.encoding".into(),
+                if units.starts_with("JSON") {
+                    "serde-json-v1"
+                } else {
+                    "native"
+                }
+                .into(),
+            ),
+        ]))
+    }
+
+    pub(super) fn sql_type(field: &sdk::Field) -> &'static str {
         use sdk::DataType::*;
-        match self.1 {
+        match field.data_type() {
             Boolean => "Boolean",
             UInt32 => "UInteger",
             UInt64 => "UBigint",
@@ -148,50 +186,16 @@ impl InputField {
         }
     }
 
-    fn host_type(&self) -> &'static str {
-        match self.0 {
-            "tenant_id" => "[u8;16]",
-            "source_key" => "araphor-data.EvidenceIntakeIdentityV1",
-            "graph_revision" => "araphor-data.GraphRevisionV1",
-            "subject_id" | "from_subject_id" | "to_subject_id" => "araphor-data.GraphSubjectKeyV1",
-            "authority" => "araphor-data.GraphSubjectAuthorityV1",
-            "relationship_key" => "araphor-data.GraphEdgeKeyV1",
-            "evidence" => "Vec<araphor-data.DiscoveryRecordIdV1>",
-            "proof_quality" => "araphor-data.ProofQualityV1",
-            "required_coverage_interval_ids" => "Vec<[u8;16]>",
-            _ => match self.1 {
-                sdk::DataType::Binary => "Vec<u8>",
-                sdk::DataType::Utf8 => "String",
-                sdk::DataType::UInt64 => "u64",
-                sdk::DataType::UInt32 => "u32",
-                sdk::DataType::Int32 => "i32",
-                sdk::DataType::Boolean => "bool",
-                _ => "i64",
-            },
-        }
+    pub(super) fn units(field: &sdk::Field) -> &str {
+        &field.metadata()["araphor.description"]
     }
 
-    pub(super) fn arrow_field(&self, owner: &str) -> sdk::Field {
-        sdk::Field::new(self.0, self.1.clone(), !self.3.is_empty()).with_metadata(HashMap::from([
-            ("araphor.owner".into(), owner.into()),
-            ("araphor.description".into(), self.2.into()),
-            ("araphor.host_type".into(), self.host_type().into()),
-            (
-                "araphor.encoding".into(),
-                if self.2.starts_with("JSON") {
-                    "serde-json-v1"
-                } else {
-                    "native"
-                }
-                .into(),
-            ),
-        ]))
+    pub(super) fn fields(&self) -> &'static [Arc<sdk::Field>] {
+        (self.canonical)().fields()
     }
-}
 
-impl InputSchema {
     pub(super) fn arrow_schema(&self) -> Arc<sdk::Schema> {
-        (self.canonical)(self)
+        Arc::clone((self.canonical)())
     }
 
     pub(super) fn selects(&self, projection: Option<&BTreeSet<&'static str>>, name: &str) -> bool {
@@ -200,35 +204,32 @@ impl InputSchema {
                 && matches!(name, "tenant_id" | "finding_id" | "commit_revision"))
     }
 
-    fn fields<'a>(
+    fn selected_fields<'a>(
         &'a self,
         projection: Option<&'a BTreeSet<&'static str>>,
-    ) -> impl Iterator<Item = &'a InputField> {
-        self.columns
+    ) -> impl Iterator<Item = &'static Arc<sdk::Field>> + 'a {
+        self.fields()
             .iter()
-            .filter(move |field| self.selects(projection, field.0))
+            .filter(move |field| self.selects(projection, field.name()))
     }
 
     fn projected_schema(&self, projection: Option<&BTreeSet<&'static str>>) -> Arc<sdk::Schema> {
         let schema = self.arrow_schema();
-        if self.fields(projection).count() == self.columns.len() {
+        if self.selected_fields(projection).count() == self.fields().len() {
             return schema;
         }
         Arc::new(sdk::Schema::new(
-            self.columns
-                .iter()
-                .zip(schema.fields())
-                .filter(|(field, _)| self.selects(projection, field.0))
-                .map(|(_, field)| Arc::clone(field))
+            self.selected_fields(projection)
+                .cloned()
                 .collect::<Vec<_>>(),
         ))
     }
 
     pub(super) fn schema_bytes(&self, projection: Option<&BTreeSet<&'static str>>) -> usize {
-        if self.fields(projection).count() == self.columns.len() {
+        if self.selected_fields(projection).count() == self.fields().len() {
             return 0;
         }
-        self.fields(projection).fold(
+        self.selected_fields(projection).fold(
             size_of::<sdk::Schema>() + 4 * size_of::<usize>(),
             |bytes, _| bytes.saturating_add(2 * size_of::<Arc<sdk::Field>>()),
         )
@@ -572,15 +573,15 @@ impl InputRelations {
         write: impl FnOnce(&mut [Box<dyn ArrayBuilder>]) -> Result<()>,
     ) -> Result<bool> {
         InputBatch::check_offsets(sizes.iter().flatten().copied().max().unwrap_or_default())?;
-        let bytes = schema.fields(projection).zip(sizes.iter().flatten()).fold(
-            0usize,
-            |bytes, (field, data)| {
+        let bytes = schema
+            .selected_fields(projection)
+            .zip(sizes.iter().flatten())
+            .fold(0usize, |bytes, (field, data)| {
                 bytes
-                    .saturating_add(InputBatch::fixed_width(&field.1))
+                    .saturating_add(InputBatch::fixed_width(field.data_type()))
                     .saturating_add(*data)
                     .saturating_add(1)
-            },
-        );
+            });
         if !sink.admit(bytes)? {
             return Ok(false);
         }
@@ -976,7 +977,7 @@ relation! {
 }
 
 relation! {
-    pub(super) CATALOG, catalog_row(sink; schema: &InputSchema, ordinal: usize, field: &InputField, readiness: &str) {
+    pub(super) CATALOG, catalog_row(sink; schema: &InputSchema, ordinal: usize, field: &sdk::Field, readiness: &str) {
         name: "catalog",
         join_keys: "relation,ordinal",
         owner: "araphor-data.QueryOwner",
@@ -987,11 +988,11 @@ relation! {
         fields {
             relation: Utf8("relation name", "") => Some(schema.name);
             ordinal: UInt32("zero-based column index", "") => Some(ordinal as u32);
-            column_name: Utf8("column name", "") => Some(field.0);
-            data_type: Utf8("DuckDB logical type", "") => Some(field.sql_type());
-            units: Utf8("field units and representation", "") => Some(field.2);
-            nullable: Boolean("whether the column can be NULL", "") => Some(!field.3.is_empty());
-            null_meaning: Utf8("NULL meaning; empty for required fields", "") => Some(field.3);
+            column_name: Utf8("column name", "") => Some(field.name().as_str());
+            data_type: Utf8("DuckDB logical type", "") => Some(InputSchema::sql_type(field));
+            units: Utf8("field units and representation", "") => Some(InputSchema::units(field));
+            nullable: Boolean("whether the column can be NULL", "") => Some(field.is_nullable());
+            null_meaning: Utf8("NULL meaning; empty for required fields", "") => Some(schema.absence[ordinal]);
             join_keys: Utf8("exact keys and join restrictions", "") => Some(schema.join_keys);
             owner: Utf8("data owner", "") => Some(schema.owner);
             readiness: Utf8("available or unavailable", "") => Some(readiness);
@@ -1294,15 +1295,16 @@ impl<'a> InputProjection<'a> {
             };
             for field in scan.projected_schema.fields() {
                 let name = schema
-                    .columns
+                    .fields()
                     .iter()
-                    .find(|column| column.0 == field.name())
+                    .find(|column| column.name() == field.name())
                     .ok_or_else(|| {
                         datafusion::common::DataFusionError::Plan(
                             "source column declaration is absent".into(),
                         )
                     })?
-                    .0;
+                    .name()
+                    .as_str();
                 if !fields.contains(name) {
                     charge = sink.charge(11 * size_of::<&str>() + 16 * size_of::<usize>());
                     if charge.is_err() {
@@ -1326,15 +1328,15 @@ impl<'a> InputProjection<'a> {
                 continue;
             };
             // Keep one source buffer with its lease when the scan needs no columns.
-            if let Some(field) = schema.columns.iter().min_by_key(|field| {
-                if field.1 == sdk::DataType::Boolean {
+            if let Some(field) = schema.fields().iter().min_by_key(|field| {
+                if field.data_type() == &sdk::DataType::Boolean {
                     0
                 } else {
-                    field.1.primitive_width().unwrap_or(usize::MAX)
+                    field.data_type().primitive_width().unwrap_or(usize::MAX)
                 }
             }) {
                 sink.charge(11 * size_of::<&str>() + 16 * size_of::<usize>())?;
-                fields.insert(field.0);
+                fields.insert(field.name().as_str());
             }
         }
         Ok(())
@@ -1349,10 +1351,10 @@ impl<'a> InputProjection<'a> {
             project.projections.insert(
                 schema.name,
                 schema
-                    .columns
+                    .fields()
                     .iter()
-                    .filter(|field| field.0 != "graph_revision")
-                    .map(|field| field.0)
+                    .filter(|field| field.name().as_str() != "graph_revision")
+                    .map(|field| field.name().as_str())
                     .collect(),
             );
         }
@@ -1611,7 +1613,7 @@ impl InputRelations {
                 } else {
                     schema.readiness
                 };
-                for (ordinal, field) in schema.columns.iter().enumerate() {
+                for (ordinal, field) in schema.fields().iter().enumerate() {
                     self.catalog_row(
                         sink,
                         projections.get("catalog"),
@@ -1908,16 +1910,33 @@ pub(super) mod tests {
             let schema = definition.arrow_schema();
             assert!(Arc::ptr_eq(&schema, &definition.arrow_schema()));
             assert_eq!(definition.schema_bytes(None), 0);
-            let all = definition.columns.iter().map(|field| field.0).collect();
+            let all = definition
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect();
             assert!(Arc::ptr_eq(
                 &schema,
                 &definition.projected_schema(Some(&all))
             ));
             assert_eq!(definition.schema_bytes(Some(&all)), 0);
-            for (field, expected) in schema.fields().iter().zip(definition.columns) {
-                assert_eq!(field.as_ref(), &expected.arrow_field(definition.owner));
+            assert!(schema.metadata().is_empty());
+            assert_eq!(schema.fields().len(), definition.absence.len());
+            for (field, absence) in schema.fields().iter().zip(definition.absence) {
+                assert_eq!(field.is_nullable(), !absence.is_empty());
+                assert_eq!(field.metadata().len(), 4);
+                assert_eq!(field.metadata()["araphor.owner"], definition.owner);
+                assert_eq!(
+                    field.metadata()["araphor.encoding"],
+                    if InputSchema::units(field).starts_with("JSON") {
+                        "serde-json-v1"
+                    } else {
+                        "native"
+                    }
+                );
+                assert!(field.metadata().contains_key("araphor.host_type"));
             }
-            let names = BTreeSet::from([definition.columns[0].0]);
+            let names = BTreeSet::from([definition.fields()[0].name().as_str()]);
             let projected = definition.projected_schema(Some(&names));
             for field in projected.fields() {
                 let source = schema
@@ -1934,6 +1953,19 @@ pub(super) mod tests {
                 assert!(definition.schema_bytes(Some(&names)) > 0);
             }
         }
+        assert_eq!(
+            CANONICAL_TEST_SOURCE.fields(),
+            &[Arc::new(
+                sdk::Field::new("value", sdk::DataType::UInt64, false).with_metadata(
+                    HashMap::from([
+                        ("araphor.owner".into(), "test.owner".into()),
+                        ("araphor.description".into(), "count".into()),
+                        ("araphor.host_type".into(), "u64".into()),
+                        ("araphor.encoding".into(), "native".into()),
+                    ])
+                )
+            )]
+        );
         let mut extraction = empty_input();
         let mut input = InputRelations::default();
         assert!(input.canonical_test_source(
@@ -1945,6 +1977,62 @@ pub(super) mod tests {
             &input.tables[CANONICAL_TEST_SOURCE.name].schema,
             &CANONICAL_TEST_SOURCE.arrow_schema(),
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn query_input_field_metadata() -> TestResult {
+        for (definition, name, nullable, units, absence, owner, host_type, encoding) in [
+            (
+                &EVENTS,
+                "tenant_id",
+                false,
+                "16-byte ID",
+                "",
+                "araphor-data.AnalysisStore",
+                "[u8;16]",
+                "native",
+            ),
+            (
+                &EVENTS,
+                "catalog_json",
+                true,
+                "unchanged catalog bytes",
+                "No decision context is present.",
+                "araphor-data.AnalysisStore",
+                "Vec<u8>",
+                "native",
+            ),
+            (
+                &RELATIONSHIPS,
+                "source_key",
+                false,
+                "JSON exact accepted source lifetime",
+                "",
+                "araphor-data.GraphAndFindingOwner",
+                "araphor-data.EvidenceIntakeIdentityV1",
+                "serde-json-v1",
+            ),
+        ] {
+            let (ordinal, field) = definition
+                .fields()
+                .iter()
+                .enumerate()
+                .find(|(_, field)| field.name() == name)
+                .ok_or("metadata field absent")?;
+            assert_eq!(definition.absence[ordinal], absence);
+            assert_eq!(
+                field.as_ref(),
+                &sdk::Field::new(name, sdk::DataType::Binary, nullable).with_metadata(
+                    HashMap::from([
+                        ("araphor.owner".into(), owner.into()),
+                        ("araphor.description".into(), units.into()),
+                        ("araphor.host_type".into(), host_type.into()),
+                        ("araphor.encoding".into(), encoding.into()),
+                    ])
+                )
+            );
+        }
         Ok(())
     }
 
@@ -2061,9 +2149,9 @@ pub(super) mod tests {
 
     fn value<'a>(schema: &InputSchema, row: &'a [Value], name: &str) -> TestResult<&'a Value> {
         let index = schema
-            .columns
+            .fields()
             .iter()
-            .position(|field| field.0 == name)
+            .position(|field| field.name().as_str() == name)
             .ok_or("column absent")?;
         row.get(index).ok_or_else(|| "row value absent".into())
     }
@@ -2191,9 +2279,9 @@ pub(super) mod tests {
         let control = crate::AnalysisReadControl::default();
         let fields = BTreeSet::from(["finding_id"]);
         let sizes = FINDINGS
-            .columns
+            .fields()
             .iter()
-            .map(|field| match field.0 {
+            .map(|field| match field.name().as_str() {
                 "tenant_id" => Some(16),
                 "commit_revision" => Some(0),
                 "finding_id" => Some("finding".len()),
@@ -2346,7 +2434,7 @@ pub(super) mod tests {
         let plan = source_plan(&state, &binding, &tables)?;
         let shared_plan = source_plan(&state, &sql.bind_complete(0)?, &tables)?;
         assert_eq!(input.allocation_bytes(), before);
-        assert_eq!(table.schema.fields().len(), EVENTS.columns.len());
+        assert_eq!(table.schema.fields().len(), EVENTS.fields().len());
         assert!(table
             .schema
             .field_with_name("__araphor_commit_revision")
@@ -2614,7 +2702,7 @@ pub(super) mod tests {
                 Value::UInt(607),
             ]
         );
-        assert_eq!(mapped.len(), EVENTS.columns.len());
+        assert_eq!(mapped.len(), EVENTS.fields().len());
         let expected = mapped.clone();
         let mut extraction = empty_input();
         let mut input = InputRelations::default();
@@ -2848,11 +2936,11 @@ pub(super) mod tests {
     fn query_input_context_pages() -> TestResult {
         let context = context();
         let mapped = mapped(AnalysisInputV1::Context(&context))?;
-        assert_eq!(CONTEXTS.columns.len(), 9);
+        assert_eq!(CONTEXTS.fields().len(), 9);
         assert!(!CONTEXTS
-            .columns
+            .fields()
             .iter()
-            .any(|field| field.0 == "content_sha256"));
+            .any(|field| field.name().as_str() == "content_sha256"));
         assert_eq!(
             mapped,
             vec![
@@ -2955,7 +3043,7 @@ pub(super) mod tests {
             rows(&input, "catalog")?.len(),
             SCHEMAS
                 .iter()
-                .map(|schema| schema.columns.len())
+                .map(|schema| schema.fields().len())
                 .sum::<usize>()
         );
         Ok(())
@@ -3125,7 +3213,7 @@ pub(super) mod tests {
             rows.len(),
             SCHEMAS
                 .iter()
-                .map(|schema| schema.columns.len())
+                .map(|schema| schema.fields().len())
                 .sum::<usize>()
         );
         for relation in ["traces", "trace_output", "trace_measurements"] {
@@ -3143,11 +3231,17 @@ pub(super) mod tests {
         }
         for schema in [&TRACES, &TRACE_OUTPUT, &TRACE_MEASUREMENTS] {
             for name in ["tenant_id", "request_id", "execution_id"] {
-                assert!(schema.columns.iter().any(|field| field.0 == name));
+                assert!(schema
+                    .fields()
+                    .iter()
+                    .any(|field| field.name().as_str() == name));
             }
         }
         for name in ["source_sha256", "commit_revision", "ordinal"] {
-            assert!(TRACE_OUTPUT.columns.iter().any(|field| field.0 == name));
+            assert!(TRACE_OUTPUT
+                .fields()
+                .iter()
+                .any(|field| field.name().as_str() == name));
         }
         let context = table_context(&input)?;
         assert!(context

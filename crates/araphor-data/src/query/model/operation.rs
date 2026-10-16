@@ -291,7 +291,7 @@ impl ModelOperation<'_> {
                     evaluation.context.limits,
                     host,
                 );
-                executor.register(model, evaluation, &self.bound, host.input_bytes)?;
+                executor.register(model, evaluation, self.bound, host.input_bytes)?;
                 let output = executor.evaluate(model, program, admitted)?;
                 let bytes = executor.bytes();
                 drop(executor);

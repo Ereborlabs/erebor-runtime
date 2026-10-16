@@ -2516,12 +2516,12 @@ async fn query_client_tenant_scope() -> TestResult {
             .map(|column| column.name.as_str())
             .collect::<Vec<_>>(),
         schema
-            .columns
+            .fields()
             .iter()
-            .map(|field| field.0)
+            .map(|field| field.name().as_str())
             .collect::<Vec<_>>()
     );
-    assert_eq!(rows.columns.len(), schema.columns.len());
+    assert_eq!(rows.columns.len(), schema.fields().len());
     assert!(rows
         .columns
         .iter()

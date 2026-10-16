@@ -40,21 +40,26 @@ fn query_sql_rejects_names() -> TestResult {
 #[test]
 fn query_column_tracks_source() -> TestResult {
     let direct = QuerySql::admit("SELECT operation FROM events", Vec::new(), false)?;
-    let (relation, field) = direct.source_column("operation").ok_or("source absent")?;
+    let (relation, index) = direct.source_column("operation").ok_or("source absent")?;
+    let field = &relation.fields()[index];
     assert_eq!(relation.name, "events");
-    assert_eq!(field.0, "operation");
-    assert!(!field.2.is_empty());
+    assert_eq!(field.name(), "operation");
+    assert!(!crate::query::input::InputSchema::units(field).is_empty());
     for (statement, name) in [
         ("SELECT e.operation AS chosen FROM events e", "chosen"),
         ("SELECT operation AS reason FROM events", "reason"),
     ] {
         let sql = QuerySql::admit(statement, Vec::new(), false)?;
-        let (origin, column) = sql.source_column(name).ok_or("source absent")?;
+        let (origin, ordinal) = sql.source_column(name).ok_or("source absent")?;
+        let column = &origin.fields()[ordinal];
         assert_eq!(origin.name, relation.name);
-        assert_eq!(column.0, field.0);
-        assert_eq!(column.1, field.1);
-        assert_eq!(column.2, field.2);
-        assert_eq!(column.3, field.3);
+        assert_eq!(column.name(), field.name());
+        assert_eq!(column.data_type(), field.data_type());
+        assert_eq!(
+            crate::query::input::InputSchema::units(column),
+            crate::query::input::InputSchema::units(field)
+        );
+        assert_eq!(origin.absence[ordinal], relation.absence[index]);
     }
     for statement in [
         "SELECT COUNT(*) AS operation FROM events",

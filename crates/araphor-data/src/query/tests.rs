@@ -111,7 +111,7 @@ impl QueryFixture {
             output_rows: if matches!(template, QueryTemplate::Catalog) {
                 input::SCHEMAS
                     .iter()
-                    .map(|schema| schema.columns.len())
+                    .map(|schema| schema.fields().len())
                     .sum()
             } else {
                 QueryLimits::default().output_rows
@@ -132,9 +132,15 @@ impl QueryFixture {
             .threads(1)?;
         let connection = Connection::open_in_memory_with_flags(config)?;
         let fields = schema
-            .columns
+            .fields()
             .iter()
-            .map(|field| format!("\"{}\" {}", field.0, field.sql_type()))
+            .map(|field| {
+                format!(
+                    "\"{}\" {}",
+                    field.name().as_str(),
+                    crate::query::input::InputSchema::sql_type(field)
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         connection.execute_batch(&format!("CREATE TABLE {relation} ({fields})"))?;
@@ -899,7 +905,7 @@ fn query_input_catalog() -> TestResult {
     let owner = fixture.owner(QueryLimits {
         output_rows: input::SCHEMAS
             .iter()
-            .map(|schema| schema.columns.len())
+            .map(|schema| schema.fields().len())
             .sum(),
         ..Default::default()
     })?;
@@ -911,7 +917,7 @@ fn query_input_catalog() -> TestResult {
         result.rows.len(),
         input::SCHEMAS
             .iter()
-            .map(|schema| schema.columns.len())
+            .map(|schema| schema.fields().len())
             .sum::<usize>()
     );
     assert_eq!(result.scanned_bytes, Some(0));
@@ -935,7 +941,7 @@ fn query_input_catalog() -> TestResult {
         .iter()
         .flat_map(|schema| {
             schema
-                .columns
+                .fields()
                 .iter()
                 .enumerate()
                 .map(move |(ordinal, _)| (schema.name, ordinal as u32))

@@ -13,7 +13,7 @@ impl ModelExecution<'_> {
         &mut self,
         model: &sdk::Model,
         evaluation: &sdk::Evaluation,
-        bound: &BTreeMap<String, Arc<MemTable>>,
+        bound: BTreeMap<String, Arc<MemTable>>,
         input_limit: usize,
     ) -> Result<()> {
         Self::check_input(
@@ -31,14 +31,10 @@ impl ModelExecution<'_> {
                 ),
             input_limit,
         )?;
-        self.tables.extend(
-            bound
-                .iter()
-                .map(|(name, table)| (name.clone(), Arc::clone(table))),
-        );
+        self.tables = bound;
         for port in &model.inputs {
             let port = &port.port;
-            if bound.contains_key(&port.name.to_ascii_lowercase()) {
+            if self.tables.contains_key(&port.name.to_ascii_lowercase()) {
                 continue;
             }
             self.table(

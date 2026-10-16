@@ -90,7 +90,7 @@ impl super::super::operation::ModelOperation<'_> {
         let plan = QueryPlan::model(request.grant.selection.clone(), sql.clone())?;
         let binding = sql.bind_complete(request.now)?;
         let selection = plan.dependencies_bound(request.now, &binding)?;
-        let tables = self.bound.clone();
+        let tables = std::mem::take(&mut self.bound);
         let bounds = AnalysisExtractLimits {
             scan_bytes: owner.limits.scan_bytes,
             input_bytes: owner
@@ -174,7 +174,12 @@ impl super::super::operation::ModelOperation<'_> {
             }
             .fail();
         }
+        for schema in crate::query::input::SCHEMAS {
+            executor.tables.remove(schema.name);
+        }
+        let tables = std::mem::take(&mut executor.tables);
         drop(executor);
+        self.bound = tables;
         self.retained_bytes = self.retained_bytes.saturating_add(bytes);
         if !rows.extraction.trace_reads.is_empty() {
             owner.store.check_trace_reads(

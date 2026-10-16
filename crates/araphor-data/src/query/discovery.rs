@@ -244,9 +244,9 @@ mod tests {
 
     fn field<'a>(schema: &InputSchema, row: &'a [Value], name: &str) -> TestResult<&'a Value> {
         let index = schema
-            .columns
+            .fields()
             .iter()
-            .position(|field| field.0 == name)
+            .position(|field| field.name().as_str() == name)
             .ok_or("query field absent")?;
         row.get(index).ok_or_else(|| "query value absent".into())
     }
@@ -266,8 +266,8 @@ mod tests {
             atom: Some(&profile.snapshot.atoms[0]),
             discovery_enabled: true,
         })?;
-        assert_eq!(summary.len(), BEHAVIORS.columns.len());
-        assert_eq!(atom.len(), BEHAVIORS.columns.len());
+        assert_eq!(summary.len(), BEHAVIORS.fields().len());
+        assert_eq!(atom.len(), BEHAVIORS.fields().len());
         assert_eq!(
             field(&BEHAVIORS, &summary, "coverage_revision")?,
             &Value::UBigInt(2)
@@ -411,7 +411,7 @@ mod tests {
             body: b"unchanged qualified owner fact".to_vec(),
         };
         let row = mapped(AnalysisInputV1::DiscoveryContext(&fact))?;
-        assert_eq!(row.len(), CONTEXT.columns.len());
+        assert_eq!(row.len(), CONTEXT.fields().len());
         assert_eq!(
             field(&CONTEXT, &row, "body")?,
             &Value::Blob(fact.body.clone())
@@ -444,7 +444,7 @@ mod tests {
         };
         let stored = AnalysisContextVersionV1::try_from(&document)?;
         let row = mapped(AnalysisInputV1::DiscoveryContext(&stored))?;
-        assert_eq!(row.len(), CONTEXT.columns.len());
+        assert_eq!(row.len(), CONTEXT.fields().len());
         assert_eq!(
             field(&CONTEXT, &row, "subject_revision")?,
             &Value::UBigInt(3)

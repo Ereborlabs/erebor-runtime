@@ -94,9 +94,15 @@ impl Fixture {
             .filter(|schema| matches!(schema.name, "events" | "coverage"))
         {
             let fields = schema
-                .columns
+                .fields()
                 .iter()
-                .map(|field| format!("\"{}\" {}", field.0, field.sql_type()))
+                .map(|field| {
+                    format!(
+                        "\"{}\" {}",
+                        field.name().as_str(),
+                        crate::query::input::InputSchema::sql_type(field)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             let positions = if schema.name == "events" {

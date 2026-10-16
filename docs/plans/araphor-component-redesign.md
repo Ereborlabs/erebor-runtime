@@ -133,11 +133,25 @@ model fixture whose final plan is Union. Internal physical operators can
 merge partitions. Use ORDER BY when result order is required. The route
 uses standard stream composition and adds no physical operator.
 
-A TableScan projection indexes its original source schema. QueryEngine::plan
+A TableScan projection indexes its original source schema. QueryEngine::bind_sources
 maps each requested field to the admitted MemTable by exact field name. It
 checks the field type and builds a new TableScan with the mapped indices.
 The scan keeps its filters and fetch bound. Replacing only the provider Arc
 would leave incorrect indices when extraction supplies a reduced schema.
+
+Each source declaration creates one canonical Arrow schema. Emission, SQL
+binding, projection, catalog rows, and result metadata read its fields. The
+source no longer stores a parallel InputField name, type, and unit descriptor.
+InputSchema retains relation facts and ordered absence text. The Arrow field
+metadata keeps the same four keys and values. A static schema owner preserves
+borrowed field metadata and shared Schema and Field allocation identities.
+
+ModelOperation owns one map of admitted Table aliases. Each source statement
+moves that map into ModelExecution. The statement removes its temporary
+built-in tables before it returns the map. Final model execution consumes the
+same map. Failure drops the transferred map and operation lease handles.
+Shared buffer reservations remain until their last owner drops. This route
+removes registry copies between source and output stages.
 
 ### Owners to replace
 
@@ -760,3 +774,28 @@ to meet the required target. The records are
 `/tmp/araphor-arrow-engine-count10.json`. Complete redesign: **Not done**.
 The proposed native DataFusion result-name, numeric, and SQL scope changes
 have no approval. The current SQL contract remains in effect.
+
+Canonical source fields: **Done**. One Arrow schema replaces 431 parallel
+InputField descriptors. Schema and Field allocation sharing remains intact.
+Metadata tests check exact key sets, host types, encodings, nullability, and
+absence text. Model stages move one imported-table map and remove temporary
+built-in tables before the next stage.
+
+The affected Data build passes in 189.42 seconds. All 266 selected cases pass:
+260 query cases and six package cases. Strict Clippy passes for Data, Control,
+and E2E test targets in 37.19 seconds. Source and test binary hashes remain
+fixed. The first package selector starts 147 cases and is stopped. That
+interrupted run is not a qualification result. The six affected cases then
+pass. The records are `/tmp/araphor-canonical-fields-build1.json`,
+`/tmp/araphor-canonical-fields-query1.json`,
+`/tmp/araphor-canonical-fields-packages1.json`,
+`/tmp/araphor-canonical-fields-packages2.json`,
+`/tmp/araphor-canonical-fields-clippy1.json`, and
+`/tmp/araphor-canonical-fields-qualification1.json`. Native and caller runtime
+cases are not repeated for this change. No speed measurement is made.
+
+This change adds four nonblank production Rust lines from `3fd07cac`. The
+complete redesign adds 2,264 from `537f9de3`. The current tree adds 35 from
+`7b7b407a`; another 6,035 must be removed to meet the production target. The
+count record is `/tmp/araphor-arrow-engine-count11.json`. The count excludes
+tests, documents, and blank lines. Complete redesign: **Not done**.

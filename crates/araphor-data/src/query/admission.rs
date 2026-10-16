@@ -355,10 +355,10 @@ impl QuerySql {
                     return None;
                 };
                 schema
-                    .columns
+                    .fields()
                     .iter()
-                    .find(|field| field.0 == column.value)
-                    .map(|field| (schema.name, field.0))
+                    .find(|field| field.name().as_str() == column.value)
+                    .map(|field| (schema.name, field.name().as_str()))
             })
             .collect()
     }
@@ -366,10 +366,7 @@ impl QuerySql {
     pub(super) fn source_column(
         &self,
         name: &str,
-    ) -> Option<(
-        &'static super::input::InputSchema,
-        &'static super::input::InputField,
-    )> {
+    ) -> Option<(&'static super::input::InputSchema, usize)> {
         let mut selected = self
             .program
             .output_names
@@ -382,8 +379,11 @@ impl QuerySql {
         }
         let (table, column) = (*source)?;
         let schema = SCHEMAS.iter().find(|schema| schema.name == table)?;
-        let field = schema.columns.iter().find(|field| field.0 == column)?;
-        Some((schema, field))
+        let ordinal = schema
+            .fields()
+            .iter()
+            .position(|field| field.name() == column)?;
+        Some((schema, ordinal))
     }
 
     pub fn moving_seconds(&self) -> Option<u32> {
@@ -3869,14 +3869,14 @@ mod engine_tests {
             .ok_or_else(|| Binder::invalid("test schema"))?;
         assert_eq!(
             binding.plan()?.schema().fields().len(),
-            schema.columns.len()
+            schema.fields().len()
         );
         assert_eq!(
             binding
                 .output_schema(binding.plan()?.schema().as_arrow())?
                 .fields()
                 .len(),
-            schema.columns.len()
+            schema.fields().len()
         );
         Ok(())
     }

@@ -66,11 +66,12 @@ sequenceDiagram
 
 Output-only input resolution creates no SQL state and takes no SQL evaluation
 slot. ModelOperation creates SessionState and its query lease on first SQL
-use. The operation retains admitted Table aliases as MemTables. Each source
-statement moves its leased built-in batches into ordinary MemTables in a
-local ModelExecution table map. Built-in tables receive no model row index.
-Dataset aliases retain their dataset-global row indices. Dropping that
-executor drops the local map. Running execution retains
+use. The operation owns one map of admitted Table aliases as MemTables. Each
+source statement takes that map and adds its leased built-in batches as
+ordinary MemTables. Built-in tables receive no model row index. Dataset
+aliases retain their dataset-global row indices. The statement removes its
+temporary built-in tables before it returns the map. Final model execution
+consumes the same map. Running execution retains
 its source owners and leases. Query inputs cannot refer to other Query inputs. Built-in names cannot be replaced
 by package output aliases. Errors release the operation state and leases
 through Rust ownership.
@@ -91,6 +92,12 @@ returned Arrow inputs retain their buffer leases. These checks use the
 existing host limits.
 
 Source declarations and datasets use canonical Arrow 58 schemas and batches.
+Emission, SQL binding, projection, catalog rows, and result metadata read the
+same Arrow fields. InputSchema retains relation facts and ordered absence
+text. It stores no parallel field name, type, or unit descriptors. Each source
+keeps one static Schema Arc. Full projection shares that schema; reduced
+projection shares its Field Arcs. Field metadata keeps its existing four keys
+and values. Canonical source schema metadata remains empty.
 The query engine is DataFusion 53.1.0. Dataset-only SQL uses the existing
 dataset validators and ModelExecution directly. It creates no synthetic
 package or evaluation. DuckDB remains the durable storage engine. Public
@@ -215,6 +222,15 @@ scan. The budget cases keep both narrow-query success and wide-query denial
 at unchanged limits. The unused-CTE case keeps full witnesses and the existing
 content-based revision rule. The result record is
 `/tmp/araphor-source-plan-qualification1.json`.
+
+The canonical source-field and table-map changes pass the affected Data build,
+260 query cases, six package cases, and strict Clippy for Data and its callers.
+The metadata tests check exact dictionaries and shared Schema and Field
+allocations. Operation and package cases preserve alias scope, source
+provenance, capacity denial, and cleanup. A broad package selection is stopped
+before the six affected cases run. The interrupted run is not counted as
+qualification. Native and caller runtime cases are not repeated. The result
+record is `/tmp/araphor-canonical-fields-qualification1.json`.
 
 The complete earlier receipts remain at
 `7b7b407adf347d389984553a4d212bfce37b75b5:docs/guides/araphor-sql-operation-review.md`.

@@ -526,9 +526,9 @@ mod tests {
                         }
                         .build()
                     })?
-                    .columns
+                    .fields()
                     .iter()
-                    .map(|field| field.0)
+                    .map(|field| field.name().as_str())
                     .collect::<Vec<_>>()
             } else {
                 expected
