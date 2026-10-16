@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::DiscoveryValidate as _;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
@@ -10,6 +11,16 @@ use crate::{
     GraphInvalidSnafu, ProcessorScopeV1, Result,
 };
 
+pub use araphor_analysis_builtins::graph::{
+    GraphContextActionV1, GraphFactValueV1, GraphPolicyActivationV1, GraphReadCompletionV1,
+    GraphReadPathV1, GraphSubjectAuthorityV1, GraphSubjectKeyV1, GraphSubjectKindV1,
+    KubernetesStageProofV1, PolicyObservationProvenanceV1, PolicyProvenanceStateV1,
+};
+
+pub trait GraphValidate {
+    fn validate(&self) -> Result<()>;
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum FindingSeverityV1 {
     Info,
@@ -18,55 +29,8 @@ pub enum FindingSeverityV1 {
     Critical,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GraphSubjectKindV1 {
-    Task,
-    Process,
-    ExecutionSet,
-    Socket,
-    Artifact,
-    Request,
-    CredentialLease,
-    KubernetesObject,
-    ProviderObject,
-    External,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(
-    tag = "authority",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    deny_unknown_fields
-)]
-pub enum GraphSubjectAuthorityV1 {
-    Native {
-        node_id: String,
-        node_boot_id: [u8; 16],
-        label_epoch: u64,
-    },
-    Provider {
-        authority_id: String,
-    },
-    Kubernetes {
-        cluster_id: String,
-    },
-    External {
-        authority_id: String,
-    },
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphSubjectKeyV1 {
-    pub tenant_id: [u8; 16],
-    pub authority: GraphSubjectAuthorityV1,
-    pub kind: GraphSubjectKindV1,
-    pub identity: Vec<u8>,
-}
-
-impl GraphSubjectKeyV1 {
-    pub fn validate(&self) -> Result<()> {
+impl GraphValidate for GraphSubjectKeyV1 {
+    fn validate(&self) -> Result<()> {
         let valid_authority = match &self.authority {
             GraphSubjectAuthorityV1::Native {
                 node_id,
@@ -97,23 +61,6 @@ impl GraphSubjectKeyV1 {
             .fail();
         }
         Ok(())
-    }
-
-    pub fn native(
-        source: &EvidenceIntakeIdentityV1,
-        kind: GraphSubjectKindV1,
-        identity: Vec<u8>,
-    ) -> Self {
-        Self {
-            tenant_id: source.tenant_id,
-            authority: GraphSubjectAuthorityV1::Native {
-                node_id: source.node_id.clone(),
-                node_boot_id: source.node_boot_id,
-                label_epoch: source.label_epoch,
-            },
-            kind,
-            identity,
-        }
     }
 }
 
@@ -213,31 +160,8 @@ impl GraphRevisionV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum PolicyProvenanceStateV1 {
-    Exact,
-    Missing,
-    Contradicted,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PolicyObservationProvenanceV1 {
-    pub source: EvidenceIntakeIdentityV1,
-    pub profile_generation_ref_id: u64,
-    pub observations: Vec<DiscoveryRecordIdV1>,
-    pub policy_source_revision_id: Option<String>,
-    pub candidate_content_id: Option<String>,
-    pub target_snapshot_digest: Option<String>,
-    pub node_bound_generation_digest: Option<String>,
-    pub activation_acknowledgement: Option<AnalysisContextKeyV1>,
-    pub state: PolicyProvenanceStateV1,
-    pub limits: Vec<String>,
-}
-
-impl PolicyObservationProvenanceV1 {
-    pub fn validate(&self) -> Result<()> {
+impl GraphValidate for PolicyObservationProvenanceV1 {
+    fn validate(&self) -> Result<()> {
         if !self.source.valid()
             || (self.profile_generation_ref_id == 0
                 && self.state != PolicyProvenanceStateV1::Missing)
@@ -664,134 +588,6 @@ impl TryFrom<&[u8]> for GraphSnapshotV1 {
 pub struct GraphFactV1 {
     pub record_id: DiscoveryRecordIdV1,
     pub value: GraphFactValueV1,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GraphReadPathV1 {
-    Read,
-    Mmap,
-    InheritedFd,
-    IoUring,
-    Memory,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GraphContextActionV1 {
-    OutsideAuthority,
-    InMemory,
-    PayloadUnobservable,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphReadCompletionV1 {
-    pub admission_record: DiscoveryRecordIdV1,
-    pub owner: String,
-    pub completion_id: String,
-    pub task_cookie: u64,
-    pub process_instance_id: [u8; 16],
-    pub object_id: [u8; 16],
-    pub file_description_id: String,
-    pub path: GraphReadPathV1,
-    pub result: i64,
-    pub byte_count: u64,
-    pub credential_lease_id: Option<String>,
-    pub principal_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct KubernetesStageProofV1 {
-    pub cluster_id: String,
-    pub carried_request_id: Option<String>,
-    pub audit_id: Option<String>,
-    pub object_uid: Option<String>,
-    pub resource_version: Option<String>,
-    pub owner_uid: Option<String>,
-    pub pod_uid: Option<String>,
-    pub node_id: Option<String>,
-    pub full_container_id: Option<String>,
-    pub remote_admission_id: Option<String>,
-    pub proof_quality: ProofQualityV1,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphPolicyActivationV1 {
-    pub tenant_id: String,
-    pub node_id: String,
-    pub node_boot_id: Vec<u8>,
-    pub label_epoch: u64,
-    pub candidate_content_id: String,
-    pub policy_source_revision_id: String,
-    pub target_snapshot_digest: String,
-    pub state: String,
-    pub node_bound_generation_digest: Option<String>,
-    pub profile_generation_ref_id: Option<u64>,
-    pub readback_digest: Option<String>,
-    pub probe_result_digest: Option<String>,
-    pub reason_code: Option<String>,
-    pub observed_utc_ns: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "value", rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GraphFactValueV1 {
-    Policy(PolicyObservationProvenanceV1),
-    Activation(GraphPolicyActivationV1),
-    Context {
-        subject: GraphSubjectKeyV1,
-        action_id: String,
-        classification: GraphContextActionV1,
-        proof_quality: ProofQualityV1,
-    },
-    Credential {
-        object_id: [u8; 16],
-        expected_access: bool,
-        reviewed_policy_revision: String,
-        completion: Option<GraphReadCompletionV1>,
-        proof_quality: ProofQualityV1,
-        principal_id: Option<String>,
-    },
-    Baseline {
-        role_id: u32,
-        state_id: u32,
-        outside_reviewed_baseline: bool,
-        reviewed_policy_revision: String,
-    },
-    NativeParent {
-        parent: GraphSubjectKeyV1,
-        child: GraphSubjectKeyV1,
-        proof_quality: ProofQualityV1,
-    },
-    AuthorityUse {
-        authority_id: String,
-        process_instance_id: Option<[u8; 16]>,
-        task_cookie: Option<u64>,
-        credential_object_id: Option<[u8; 16]>,
-        socket_object_id: Option<[u8; 16]>,
-        request_id: Option<String>,
-        credential_lease_id: Option<String>,
-        principal_id: String,
-        operation_id: String,
-        outside_reviewed_behavior: bool,
-        proof_quality: ProofQualityV1,
-        workload_binding: Option<GraphSubjectKeyV1>,
-    },
-    Channel {
-        task_cookie: u64,
-        process_instance_id: [u8; 16],
-        socket_object_id: [u8; 16],
-        authority_id: String,
-        carried_request_id: String,
-        credential_lease_id: String,
-        principal_id: String,
-        operation_id: String,
-        proof_quality: ProofQualityV1,
-    },
-    Kubernetes(KubernetesStageProofV1),
 }
 
 impl GraphFactV1 {

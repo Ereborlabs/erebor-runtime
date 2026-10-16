@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use crate::DiscoveryValidate as _;
+
 use crate::{
     AnalysisReadControl, DiscoveryContextBindingV1, DiscoveryCoverageV1, DiscoveryInputManifestV1,
     DiscoveryInvalidSnafu, DiscoveryLifecycleEntryV1, DiscoveryLifecycleStateV1,

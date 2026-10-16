@@ -27,8 +27,7 @@ fn duplicate_context_projection() -> TestResult {
     let repeated = DiscoveryOwner::derive_recorded(&input, &execution)?;
     assert_eq!(repeated.snapshot, single.snapshot);
     assert_eq!(repeated.duplicate_deliveries, 1023);
-    let adapter = Adapter::new(input.records.iter().map(|record| &record.id));
-    let projected = adapter.observation(&input, &input.records[0])?;
+    let projected = Adapter::observation(&input, &input.records[0])?;
     assert!(!serde_json::to_string(&projected)?.contains("subject_revision"));
     Ok(())
 }
@@ -171,5 +170,58 @@ fn merge_groups_preserve_attribution() -> TestResult {
     let mut groups = snapshot.display_groups(&execution)?;
     groups[0].key.image_digest.push_str("-invented");
     assert!(Adapter::validate_groups(&snapshot, &groups).is_err());
+    Ok(())
+}
+
+#[test]
+fn comparison_keeps_source_proof() -> TestResult {
+    let input = input()?;
+    let execution = crate::InstalledAnalysis::testing(None, input.tenant_id)?;
+    let snapshot = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
+    let groups = snapshot.display_groups(&execution)?;
+    let validate = |value: &DiscoveryComparisonV1| {
+        Adapter::validate_comparison(&snapshot, &snapshot, &groups, &groups, value)
+    };
+    let mut result = DiscoveryComparisonV1::default();
+    validate(&result)?;
+    result.added.push(groups[0].clone());
+    validate(&result)?;
+    result.added[0].count += 1;
+    assert!(matches!(
+        validate(&result),
+        Err(Error::DiscoveryInvalid {
+            field: "analysis group reference",
+            ..
+        })
+    ));
+    result.added.clear();
+    result.new_resources.push(snapshot.atoms[0].key.clone());
+    validate(&result)?;
+    result.new_resources[0].generation += 1;
+    assert!(matches!(
+        validate(&result),
+        Err(Error::DiscoveryInvalid {
+            field: "analysis resource reference",
+            ..
+        })
+    ));
+    result.new_resources.clear();
+    result.coverage_before = snapshot.coverage.clone();
+    assert!(matches!(
+        validate(&result),
+        Err(Error::DiscoveryInvalid {
+            field: "analysis comparison proof",
+            ..
+        })
+    ));
+    result.coverage_before.clear();
+    result.lifecycle_before = snapshot.lifecycle.clone();
+    assert!(matches!(
+        validate(&result),
+        Err(Error::DiscoveryInvalid {
+            field: "analysis comparison proof",
+            ..
+        })
+    ));
     Ok(())
 }

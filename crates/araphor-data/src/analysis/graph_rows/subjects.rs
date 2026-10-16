@@ -1,4 +1,5 @@
 use super::GraphRows;
+use crate::GraphValidate as _;
 use crate::{
     AnalysisDatabaseSnafu, AnalysisReadControl, GraphInvalidSnafu, GraphSubjectKeyV1, Result,
 };

@@ -48,19 +48,11 @@ impl DiscoveryOwner {
     ) -> Result<DiscoveryRecordedResultV1> {
         control.check()?;
         input.validate()?;
-        let adapter = Adapter::new(
-            input
-                .records
-                .iter()
-                .map(|row| &row.id)
-                .chain(input.contexts.iter().map(|row| &row.record_id))
-                .chain(input.exclusions.iter().map(|row| &row.record_id)),
-        );
         let original: BTreeMap<_, _> = input.records.iter().map(|row| (&row.id, row)).collect();
         let records = input
             .records
             .iter()
-            .map(|row| adapter.observation(input, row))
+            .map(|row| Adapter::observation(input, row))
             .collect::<Result<Vec<_>>>()?;
         let contexts = input
             .contexts
@@ -69,21 +61,6 @@ impl DiscoveryOwner {
                 Adapter::context(input.proof_kind, row, original.get(&row.record_id).copied())
             })
             .collect::<Result<Vec<_>>>()?;
-        let coverage = input
-            .coverage
-            .iter()
-            .map(Adapter::coverage)
-            .collect::<Result<Vec<_>>>()?;
-        let lifecycle = input
-            .lifecycle
-            .iter()
-            .map(|row| adapter.lifecycle(row))
-            .collect::<Result<Vec<_>>>()?;
-        let exclusions = input
-            .exclusions
-            .iter()
-            .map(|row| adapter.disposition(row))
-            .collect::<Result<Vec<_>>>()?;
         let output = Adapter::run_control(
             execution,
             input.tenant_id,
@@ -91,9 +68,9 @@ impl DiscoveryOwner {
             vec![
                 Adapter::dataset("records", &records)?,
                 Adapter::dataset("contexts", &contexts)?,
-                Adapter::dataset("coverage", &coverage)?,
-                Adapter::dataset("lifecycle", &lifecycle)?,
-                Adapter::dataset("exclusions", &exclusions)?,
+                Adapter::dataset("coverage", &input.coverage)?,
+                Adapter::dataset("lifecycle", &input.lifecycle)?,
+                Adapter::dataset("exclusions", &input.exclusions)?,
                 Adapter::dataset(
                     "observed",
                     &[input.proof_kind == DiscoveryProofKindV1::ObservedRuntime],
@@ -102,7 +79,7 @@ impl DiscoveryOwner {
             revision.into(),
             control,
         )?;
-        let result = adapter.snapshot(
+        let result = Adapter::snapshot(
             &output.output,
             input.tenant_id,
             input.source_revision.clone(),
@@ -116,7 +93,6 @@ impl DiscoveryOwner {
 
 impl Adapter {
     fn observation(
-        &self,
         input: &DiscoveryInputManifestV1,
         record: &DiscoveryRecordV1,
     ) -> Result<builtin::Record> {
@@ -137,21 +113,12 @@ impl Adapter {
                 .build()
             })?;
         Ok(builtin::Record {
-            id: self.identity(&record.id)?,
+            id: record.id.clone(),
             bytes: Self::revision(record)?,
-            cursor: record.id.durable_cursor,
             range: range as u64,
             temporal: wire.temporal_coverage,
-            operation: builtin::Operation {
-                family: wire.effect_family,
-                operation: wire.operation,
-                argument: wire.operation_argument.unwrap_or_default(),
-                wildcard: false,
-            },
+            effect: (&wire).into(),
             generation: wire.profile_generation_ref_id,
-            object: wire.exact_object_id.to_vec(),
-            decision: wire.decision,
-            kernel_result: wire.kernel_result,
             original_sequence: record.original_kernel_sequence,
             source: wire
                 .decision_context
@@ -177,31 +144,16 @@ impl Adapter {
             atom_key: record
                 .map(|record| Self::atom_key(record, context, proof))
                 .transpose()?,
-            record: Self::json(&context.record_id)?,
-            operation: builtin::Operation {
-                family: u32::from(context.static_key.effect_family),
-                operation: u32::from(context.static_key.operation),
-                argument: context.static_key.operation_argument,
-                wildcard: context.static_key.argument_wildcard,
-            },
-            lifetime: builtin::Lifetime {
-                process: context.process_instance_id.to_vec(),
-                entry: context.entry_instance_id.to_vec(),
-                binding: context.binding_id.to_vec(),
-                role: context.role_id,
-                state: context.state_id,
-                rule: context.entry_rule_id,
-                sequence: 0,
-            },
+            record_id: context.record_id.clone(),
         })
     }
     pub(super) fn atom_key(
         record: &DiscoveryRecordV1,
         context: &DiscoveryContextBindingV1,
         proof: DiscoveryProofKindV1,
-    ) -> Result<String> {
+    ) -> Result<BehaviorAtomKeyV1> {
         let wire = record.decode()?;
-        Self::json(&BehaviorAtomKeyV1 {
+        Ok(BehaviorAtomKeyV1 {
             stream: record.id.stream.clone(),
             cpu_id: record.id.cpu_id,
             subject_revision: context.subject_revision.clone(),

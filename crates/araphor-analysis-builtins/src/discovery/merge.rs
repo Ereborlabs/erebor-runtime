@@ -4,14 +4,19 @@ use crate::Rows;
 use araphor_analysis_sdk as sdk;
 use serde::de::DeserializeOwned;
 
-use super::{Atom, Counts, Coverage, Discovery, Disposition, Lifecycle, Side, Snapshot};
+use super::{
+    BehaviorAtomV1 as Atom, Counts, Discovery, DiscoveryCoverageV1 as Coverage,
+    DiscoveryLifecycleEntryV1 as Lifecycle, DiscoveryUnresolvedV1 as Disposition, Side, Snapshot,
+};
 
 impl Discovery {
     pub(super) fn merge(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
         let snapshots = Rows::input::<Snapshot>(input, "snapshots")?;
         Self::require(snapshots.len() == 2, "snapshot count")?;
         Self::same(
-            snapshots[0].identity == snapshots[1].identity,
+            snapshots[0].tenant_id == snapshots[1].tenant_id
+                && snapshots[0].source_revision == snapshots[1].source_revision
+                && snapshots[0].proof_kind == snapshots[1].proof_kind,
             "snapshot source",
         )?;
         let [left_atoms, right_atoms] = Self::split::<Atom>(input, "atoms")?;
@@ -42,9 +47,9 @@ impl Discovery {
                 .into_iter()
                 .chain(right_unresolved)
                 .collect();
-            unresolved.sort_by(|left, right| left.id.cmp(&right.id));
+            unresolved.sort_by(|left, right| left.record_id.cmp(&right.record_id));
             let mut excluded: Vec<_> = left_excluded.into_iter().chain(right_excluded).collect();
-            excluded.sort_by(|left, right| left.id.cmp(&right.id));
+            excluded.sort_by(|left, right| left.record_id.cmp(&right.record_id));
             let lifecycle =
                 Self::merge_lifecycle(left_lifecycle.into_iter().chain(right_lifecycle).collect())?;
             let counts = Self::merge_counts(&snapshots[0].counts, &snapshots[1].counts)?;
@@ -76,16 +81,16 @@ impl Discovery {
     }
 
     fn merge_atoms(rows: impl Iterator<Item = Atom>) -> sdk::Result<Vec<Atom>> {
-        let mut atoms = BTreeMap::<String, Atom>::new();
+        let mut atoms = BTreeMap::<super::BehaviorAtomKeyV1, Atom>::new();
         for row in rows {
             if let Some(known) = atoms.get_mut(&row.key) {
                 Self::add(&mut known.count, row.count)?;
-                known.first = known.first.min(row.first);
-                known.last = known.last.max(row.last);
-                known.samples.extend(row.samples);
-                known.samples.sort();
-                known.samples.dedup();
-                known.samples.truncate(8);
+                known.first_cursor = known.first_cursor.min(row.first_cursor);
+                known.last_cursor = known.last_cursor.max(row.last_cursor);
+                known.evidence_sample.extend(row.evidence_sample);
+                known.evidence_sample.sort();
+                known.evidence_sample.dedup();
+                known.evidence_sample.truncate(8);
             } else {
                 atoms.insert(row.key.clone(), row);
             }

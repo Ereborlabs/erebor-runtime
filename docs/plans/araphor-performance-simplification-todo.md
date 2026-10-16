@@ -11,8 +11,8 @@ Earlier source and verification records in that plan remain historical.
 
 ## Approved deletion work
 
-The user requires at least 6,000 real net deleted lines. Count nonblank lines
-and report Rust, tests, and documents separately. Report both `7b7b407a` and
+The user requires at least 6,000 net deleted nonblank production Rust lines.
+Tests and documents do not count toward this target. Report both `7b7b407a` and
 `aa390d9f` as comparison points. Do not count blank-line removal, code movement,
 or compressed formatting as simplification. Consolidated tests must retain
 every distinct input, fault, boundary, and assertion.
@@ -40,6 +40,9 @@ Documentation and test consolidation do not establish that result.
 | --- | --- | --- |
 | Control context | One ordered source index and one replay cursor replace separate change maps and domain cursors. Preserve distinct-source conflicts, bounded replay, and retry after a failed durable write. | Not done |
 | Package transport | SDK wire types own datasets, inputs, reasons, outputs, and checkpoints. Remove Data's second wire model. Keep each boundary's current limits and error classes. | Not done |
+| Raw storage | The raw journal owns its physical segments, append decision, and recovery scan. Remove the generic segment owner and second frame decode. Keep acknowledgement before SQL publication, sealed length checks, leases, pins, quota, and recovery after database loss. | Done |
+| Discovery and graph values | The existing built-ins crate owns shared pure values. Data retains source qualification and host output checks. Remove mirrored values and field conversion owners. Execute the selected installed artifact. | Not done |
+| Follow positions | SQL views expose position aliases from existing columns. Remove copied hidden values from each input row. Keep position type checks, repeat-call denial, bounds, and source cleanup. | Done |
 
 Do not replace native pointer checks with IPC copies or remove the supported
 graph traversal contract to obtain a line count. Reuse must remove an owner or
@@ -114,12 +117,37 @@ No new performance test or benchmark is approved. Do not infer speed gains
 from changed test-suite durations. Record removed work from the final source.
 Measure latency only after approval of a specific workload and its limits.
 
-Result: **Not done**. The first deletion iteration removes 272 nonblank
-production Rust lines from `7b7b407a`. It does not meet the 6,000-line target.
-Continue component refactoring. Do not use documentation or test deletion to
-close this result.
+Result: **Not done**. The current source removes 1,585 nonblank production Rust
+lines from `7b7b407a` and 429 from `aa390d9f`. The current component changes
+remove 1,324 from `238e3ff9`. Another 4,415 must be removed to meet the target.
+Continue component refactoring. Documentation and test deletion do not close
+this result.
 
-The current iteration passed the workspace test build, strict Clippy, and all
+The count uses Rust syntax spans to exclude test items, parameters, fields,
+expressions, local bindings, and match arms. A test-only parameter does not
+exclude its function body. Added shared type files are included, so code moves
+cancel. The count records are `/tmp/araphor-components-syntax-counts1.json`
+and `/tmp/araphor-components-syntax-head-counts.json`. These records replace
+the earlier regular-expression counts.
+
+The affected Data and built-ins test build passed in 386.61 seconds. All 18
+built-in tests and 391 selected Data tests passed. The selected tests include
+raw append, quota, recovery after database loss, truncation, backup, restore,
+leases, graph and Discovery outputs, SQL positions, and source cleanup. Source
+and test binary hashes stayed fixed during the test run. The records are
+`/tmp/araphor-components-build2.json` and
+`/tmp/araphor-components-tests1.json`.
+
+Strict Clippy passed for the two affected libraries after two local lint fixes:
+use `?` for an optional atom key, and import test-only names under `cfg(test)`.
+The record is `/tmp/araphor-components-clippy3.json`. Current native artifact
+qualification remains pending. Shared value changes require rebuilt native
+and Wasm packages; an older artifact is not current proof.
+All 18 built-in tests passed again after the lint fixes. Their record is
+`/tmp/araphor-components-builtins-tests2.json`. Formatting passed for both
+affected crates.
+
+Commit `238e3ff9` passed the workspace test build, strict Clippy, and all
 170 selected functional cases. Its source did not change during these checks.
 The records are `/tmp/araphor-deletion-build5.json`,
 `/tmp/araphor-deletion-clippy2.json`, and

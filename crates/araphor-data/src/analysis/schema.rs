@@ -8,46 +8,6 @@ use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result};
 
 const MAX_SOURCES: u64 = 4096;
 
-impl EvidenceIntakeIdentityV1 {
-    pub(crate) const MAX_KEY_BYTES: usize = 67 + crate::MAX_NODE_ID_BYTES;
-
-    pub fn exact_key(&self) -> Vec<u8> {
-        self.key()
-    }
-
-    pub(crate) fn valid(&self) -> bool {
-        crate::node_id_is_valid(&self.node_id)
-            && self.tenant_id != [0; 16]
-            && self.node_boot_id != [0; 16]
-            && self.source_id != [0; 16]
-            && self.label_epoch != 0
-            && self.source_epoch != 0
-    }
-
-    pub(crate) fn key(&self) -> Vec<u8> {
-        let mut key = Vec::with_capacity(67 + self.node_id.len());
-        key.push(0);
-        key.extend_from_slice(&self.tenant_id);
-        key.extend_from_slice(&self.node_boot_id);
-        key.extend_from_slice(&self.source_id);
-        key.extend_from_slice(&self.label_epoch.to_be_bytes());
-        key.extend_from_slice(&self.source_epoch.to_be_bytes());
-        key.extend_from_slice(&(self.node_id.len() as u16).to_be_bytes());
-        key.extend_from_slice(self.node_id.as_bytes());
-        key
-    }
-
-    pub(super) fn epoch_key(&self) -> Vec<u8> {
-        let mut key = Vec::with_capacity(42 + self.node_id.len());
-        key.extend_from_slice(&self.tenant_id);
-        key.extend_from_slice(&(self.node_id.len() as u16).to_be_bytes());
-        key.extend_from_slice(self.node_id.as_bytes());
-        key.extend_from_slice(&self.source_id);
-        key.extend_from_slice(&self.source_epoch.to_be_bytes());
-        key
-    }
-}
-
 impl AnalysisStore {
     pub(super) fn validate_state(writer: &Connection, root: &Path) -> Result<()> {
         let meta = Self::read_meta_from(writer, &root.join("analysis.duckdb"))?;

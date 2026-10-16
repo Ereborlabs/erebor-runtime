@@ -1,3 +1,4 @@
+use crate::GraphValidate as _;
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};

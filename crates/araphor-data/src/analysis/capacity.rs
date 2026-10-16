@@ -427,11 +427,10 @@ mod tests {
                 .lock()
                 .map_err(|_| store.state_error("raw lock"))?;
             let (_, evidence, diagnostic) = raw
-                .segments
                 .storage_summary()?
                 .ok_or_else(|| store.state_error("segment summary"))?;
             assert_eq!((evidence, diagnostic), (count, 0));
-            let summary = store.storage_for_append(&raw.segments, 0, 0)?;
+            let summary = store.storage_for_append(&raw, 0, 0)?;
             let inspected = AnalysisStore::storage_at(&root, 0, 0)?;
             assert_eq!(
                 (summary.file_bytes, summary.allocated_bytes),
@@ -449,7 +448,6 @@ mod tests {
             .raw
             .lock()
             .map_err(|_| store.state_error("raw lock"))?
-            .segments
             .seal_all()?;
         check(&store, 1)?;
         store.accept_validated_batch(source.clone(), batch(3))?;
@@ -473,8 +471,8 @@ mod tests {
                 .raw
                 .lock()
                 .map_err(|_| store.state_error("raw lock"))?;
-            assert!(raw.segments.storage_summary()?.is_none());
-            let summary = store.storage_for_append(&raw.segments, 0, 0)?;
+            assert!(raw.storage_summary()?.is_none());
+            let summary = store.storage_for_append(&raw, 0, 0)?;
             let inspected = store.storage_usage()?;
             assert_eq!(
                 (summary.file_bytes, summary.allocated_bytes),
@@ -488,7 +486,7 @@ mod tests {
                 .lock()
                 .map_err(|_| store.state_error("raw lock"))?;
             assert_eq!(
-                store.storage_for_append(&raw.segments, 0, 0)?.file_bytes,
+                store.storage_for_append(&raw, 0, 0)?.file_bytes,
                 store.storage_usage()?.file_bytes
             );
         }
@@ -866,18 +864,18 @@ impl AnalysisStore {
 
     pub(super) fn storage_for_append(
         &self,
-        segments: &super::raw_segments::EvidenceSegmentOwner,
+        raw: &super::raw::RawJournal,
         entries: usize,
         diagnostics: usize,
     ) -> Result<StorageUsageV1> {
-        Self::inspect_storage(&self.root, entries, diagnostics, Some(segments))
+        Self::inspect_storage(&self.root, entries, diagnostics, Some(raw))
     }
 
     fn inspect_storage(
         root: &Path,
         mut entries: usize,
         mut diagnostics: usize,
-        segments: Option<&super::raw_segments::EvidenceSegmentOwner>,
+        raw: Option<&super::raw::RawJournal>,
     ) -> Result<StorageUsageV1> {
         if diagnostics > MAX_DIAGNOSTIC_ENTRIES {
             return StorageCapacitySnafu {
@@ -889,10 +887,7 @@ impl AnalysisStore {
             available_bytes: StorageUsageV1::free_bytes(root)?,
             ..Default::default()
         };
-        let known = segments
-            .map(|segments| segments.storage_summary())
-            .transpose()?
-            .flatten();
+        let known = raw.map(|raw| raw.storage_summary()).transpose()?.flatten();
         let segment_root = root.join("segments");
         let mut pending = vec![root.to_path_buf()];
         while let Some(directory) = pending.pop() {

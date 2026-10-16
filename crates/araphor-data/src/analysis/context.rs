@@ -14,26 +14,7 @@ const MAX_CONTEXT_BYTES: usize = 32 * 1024;
 const MAX_CONTEXT_KEY_BYTES: usize = 256;
 type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, u64);
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct AnalysisContextKeyV1 {
-    pub tenant_id: [u8; 16],
-    pub owner_id: String,
-    pub entity_key: Vec<u8>,
-    pub lifetime_key: Vec<u8>,
-    pub owner_revision: u64,
-}
-
-impl AnalysisContextKeyV1 {
-    pub(crate) fn valid(&self) -> bool {
-        self.tenant_id != [0; 16]
-            && !self.owner_id.is_empty()
-            && self.owner_id.len() <= 128
-            && !self.entity_key.is_empty()
-            && self.entity_key.len() <= MAX_CONTEXT_KEY_BYTES
-            && !self.lifetime_key.is_empty()
-            && self.lifetime_key.len() <= MAX_CONTEXT_KEY_BYTES
-    }
-}
+pub use araphor_analysis_builtins::graph::AnalysisContextKeyV1;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ContextSensitivityV1 {

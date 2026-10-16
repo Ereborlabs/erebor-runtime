@@ -335,7 +335,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
             replay_floor.ok_or_else(|| self.store.state_error("the expired position is absent"))?;
         let previous_floor = AnalysisStore::replay_floor_from(&transaction, tenant)?;
         let floor_changed = previous_floor.is_none_or(|prior| replay_floor > prior);
-        raw.segments.seal_all()?;
+        raw.seal_all()?;
         raw.project_paths(&transaction)?;
         for segment_id in &selected {
             transaction.execute(
@@ -493,12 +493,7 @@ mod tests {
         let foreign = identity(2);
         for cursor in 1..=18 {
             store.accept_validated_batch(source.clone(), batch(cursor, b"x"))?;
-            store
-                .raw
-                .lock()
-                .map_err(|_| "raw lock")?
-                .segments
-                .seal_all()?;
+            store.raw.lock().map_err(|_| "raw lock")?.seal_all()?;
         }
         store.accept_validated_batch(foreign.clone(), batch(1, b"z"))?;
         let scope = ProcessorScopeV1 {

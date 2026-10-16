@@ -260,6 +260,10 @@ impl SegmentFile {
         Ok(bytes)
     }
 
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub(super) fn length(&self) -> Result<u64> {
         Ok(self
             .file

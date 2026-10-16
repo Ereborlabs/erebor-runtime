@@ -25,43 +25,13 @@ impl BehaviorSnapshotV1 {
         control: &AnalysisReadControl,
     ) -> Result<Self> {
         control.check()?;
-        let adapter = Adapter::new(
-            Adapter::references(self)
-                .into_iter()
-                .chain(Adapter::references(next)),
-        );
         let snapshots = [self, next];
-        let metadata = snapshots
-            .iter()
-            .map(|snapshot| Adapter::metadata(snapshot))
-            .collect::<Result<Vec<_>>>()?;
-        let atoms = Adapter::sides(&snapshots, |snapshot| {
-            snapshot.atoms.iter().map(|row| adapter.atom(row)).collect()
-        })?;
-        let coverage = Adapter::sides(&snapshots, |snapshot| {
-            snapshot.coverage.iter().map(Adapter::coverage).collect()
-        })?;
-        let unresolved = Adapter::sides(&snapshots, |snapshot| {
-            snapshot
-                .unresolved
-                .iter()
-                .map(|row| adapter.disposition(row))
-                .collect()
-        })?;
-        let excluded = Adapter::sides(&snapshots, |snapshot| {
-            snapshot
-                .excluded
-                .iter()
-                .map(|row| adapter.disposition(row))
-                .collect()
-        })?;
-        let lifecycle = Adapter::sides(&snapshots, |snapshot| {
-            snapshot
-                .lifecycle
-                .iter()
-                .map(|row| adapter.lifecycle(row))
-                .collect()
-        })?;
+        let metadata = snapshots.map(Adapter::metadata);
+        let atoms = Adapter::sides(&snapshots, |snapshot| &snapshot.atoms);
+        let coverage = Adapter::sides(&snapshots, |snapshot| &snapshot.coverage);
+        let unresolved = Adapter::sides(&snapshots, |snapshot| &snapshot.unresolved);
+        let excluded = Adapter::sides(&snapshots, |snapshot| &snapshot.excluded);
+        let lifecycle = Adapter::sides(&snapshots, |snapshot| &snapshot.lifecycle);
         let output = Adapter::run_control(
             execution,
             self.tenant_id,
@@ -77,14 +47,13 @@ impl BehaviorSnapshotV1 {
             revision.into(),
             control,
         )?;
-        let snapshot = adapter
-            .snapshot(
-                &output.output,
-                self.tenant_id,
-                self.source_revision.clone(),
-                self.proof_kind,
-            )?
-            .snapshot;
+        let snapshot = Adapter::snapshot(
+            &output.output,
+            self.tenant_id,
+            self.source_revision.clone(),
+            self.proof_kind,
+        )?
+        .snapshot;
         Adapter::validate_merge(self, next, &snapshot)?;
         control.check()?;
         Ok(snapshot)
@@ -95,65 +64,17 @@ impl BehaviorSnapshotV1 {
         execution: &crate::InstalledAnalysis,
     ) -> Result<Vec<BehaviorDisplayGroupV1>> {
         self.validate()?;
-        let adapter = Adapter::new(Adapter::references(self));
-        let atoms = self
-            .atoms
-            .iter()
-            .map(|atom| {
-                Ok(builtin::GroupAtom {
-                    group: Adapter::json(&BehaviorDisplayKeyV1::from(&atom.key))?,
-                    source: Adapter::json(&atom.key.stream)?,
-                    cpu: atom.key.cpu_id,
-                    interval: atom.key.coverage_interval_id,
-                    atom: adapter.atom(atom)?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let coverage = self
-            .coverage
-            .iter()
-            .map(Adapter::coverage)
-            .collect::<Result<Vec<_>>>()?;
         let output = Adapter::run(
             execution,
             self.tenant_id,
             "groups",
             vec![
-                Adapter::dataset("atoms", &atoms)?,
-                Adapter::dataset("coverage", &coverage)?,
+                Adapter::dataset("atoms", &self.atoms)?,
+                Adapter::dataset("coverage", &self.coverage)?,
             ],
             Adapter::revision(self)?,
         )?;
-        let mut groups = Adapter::output::<builtin::Group>(&output.output, "groups")?
-            .into_iter()
-            .map(|row| {
-                Ok(BehaviorDisplayGroupV1 {
-                    key: Adapter::decode(&row.key)?,
-                    count: row.count,
-                    members: row
-                        .members
-                        .into_iter()
-                        .map(|index| {
-                            Adapter::at(&self.atoms, index, "analysis atom reference")
-                                .map(|row| row.key.clone())
-                        })
-                        .collect::<Result<_>>()?,
-                    evidence_sample: row
-                        .samples
-                        .into_iter()
-                        .map(|id| adapter.record(id))
-                        .collect::<Result<_>>()?,
-                    coverage: row
-                        .coverage
-                        .into_iter()
-                        .map(|index| {
-                            Adapter::at(&self.coverage, index, "analysis coverage reference")
-                                .cloned()
-                        })
-                        .collect::<Result<_>>()?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut groups = Adapter::output::<BehaviorDisplayGroupV1>(&output.output, "groups")?;
         groups.sort_by(|left, right| left.key.cmp(&right.key));
         Adapter::validate_groups(self, &groups)?;
         Ok(groups)
@@ -161,13 +82,11 @@ impl BehaviorSnapshotV1 {
 }
 
 impl Adapter {
-    fn metadata(snapshot: &BehaviorSnapshotV1) -> Result<builtin::Snapshot> {
-        Ok(builtin::Snapshot {
-            identity: Self::json(&(
-                snapshot.tenant_id,
-                &snapshot.source_revision,
-                snapshot.proof_kind,
-            ))?,
+    fn metadata(snapshot: &BehaviorSnapshotV1) -> builtin::Snapshot {
+        builtin::Snapshot {
+            tenant_id: snapshot.tenant_id,
+            source_revision: snapshot.source_revision.clone(),
+            proof_kind: snapshot.proof_kind,
             counts: builtin::Counts {
                 duplicates: 0,
                 accepted: snapshot.accepted_records,
@@ -175,25 +94,29 @@ impl Adapter {
                 unresolved: snapshot.unresolved_records,
                 excluded: snapshot.excluded_records,
             },
-        })
+        }
     }
 
-    fn sides<T>(
+    fn sides<T: Clone>(
         snapshots: &[&BehaviorSnapshotV1; 2],
-        project: impl Fn(&BehaviorSnapshotV1) -> Result<Vec<T>>,
-    ) -> Result<Vec<builtin::Side<T>>> {
-        let mut rows = Vec::new();
-        for (side, snapshot) in snapshots.iter().enumerate() {
-            rows.extend(project(snapshot)?.into_iter().map(|value| builtin::Side {
-                side: side as u8,
-                value,
-            }));
-        }
-        Ok(rows)
+        project: impl Fn(&BehaviorSnapshotV1) -> &[T],
+    ) -> Vec<builtin::Side<T>> {
+        snapshots
+            .iter()
+            .enumerate()
+            .flat_map(|(side, snapshot)| {
+                project(snapshot)
+                    .iter()
+                    .cloned()
+                    .map(move |value| builtin::Side {
+                        side: side as u8,
+                        value,
+                    })
+            })
+            .collect()
     }
 
     pub(super) fn snapshot(
-        &self,
         output: &sdk::Output,
         tenant_id: [u8; 16],
         source_revision: String,
@@ -211,26 +134,11 @@ impl Adapter {
             included_records: counts.included,
             unresolved_records: counts.unresolved,
             excluded_records: counts.excluded,
-            atoms: Self::output::<builtin::Atom>(output, "atoms")?
-                .into_iter()
-                .map(|row| self.host_atom(row))
-                .collect::<Result<_>>()?,
-            coverage: Self::output::<builtin::Coverage>(output, "coverage")?
-                .into_iter()
-                .map(Self::host_coverage)
-                .collect::<Result<_>>()?,
-            unresolved: Self::output::<builtin::Disposition>(output, "unresolved")?
-                .into_iter()
-                .map(|row| self.host_disposition(row))
-                .collect::<Result<_>>()?,
-            excluded: Self::output::<builtin::Disposition>(output, "excluded")?
-                .into_iter()
-                .map(|row| self.host_disposition(row))
-                .collect::<Result<_>>()?,
-            lifecycle: Self::output::<builtin::Lifecycle>(output, "lifecycle")?
-                .into_iter()
-                .map(|row| self.host_lifecycle(row))
-                .collect::<Result<_>>()?,
+            atoms: Self::output(output, "atoms")?,
+            coverage: Self::output(output, "coverage")?,
+            unresolved: Self::output(output, "unresolved")?,
+            excluded: Self::output(output, "excluded")?,
+            lifecycle: Self::output(output, "lifecycle")?,
         };
         snapshot
             .atoms

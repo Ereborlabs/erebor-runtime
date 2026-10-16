@@ -8,7 +8,7 @@ impl Computation {
             self.process_record(row as u64)?;
         }
         for (index, fact) in self.facts.iter().enumerate() {
-            let FactValue::Context { classification } = fact.value else {
+            let FactValue::Context { classification, .. } = fact.value else {
                 continue;
             };
             self.subjects.push(Subject {
@@ -64,28 +64,27 @@ impl Computation {
         let mut parents = Vec::new();
         for (index, fact) in self.facts(row) {
             match &fact.value {
-                FactValue::Parent {
-                    child_task,
-                    child_process,
-                    qualified,
+                FactValue::NativeParent {
+                    child,
+                    proof_quality,
+                    ..
                 } => {
-                    if *qualified
-                        && ((record.task > 0 && *child_task == Some(record.task))
-                            || (record.process.is_some() && *child_process == record.process))
+                    if proof_quality.parent_qualified()
+                        && child.matches_local(record.task, record.process)
                     {
                         parents.push(index as u64);
                         ancestry = true;
                     }
                 }
                 FactValue::Baseline {
-                    role,
-                    state,
-                    outside,
-                    reviewed,
-                } if record.role == Some(*role) && record.state == Some(*state) => {
-                    if *reviewed {
-                        deviations.insert(*outside);
-                    } else if *outside {
+                    role_id,
+                    state_id,
+                    outside_reviewed_baseline,
+                    ..
+                } if record.role == Some(*role_id) && record.state == Some(*state_id) => {
+                    if fact.reviewed {
+                        deviations.insert(*outside_reviewed_baseline);
+                    } else if *outside_reviewed_baseline {
                         baseline_unproved = true;
                     }
                 }

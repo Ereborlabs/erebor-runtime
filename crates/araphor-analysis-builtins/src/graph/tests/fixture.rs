@@ -25,6 +25,7 @@ pub(super) fn fact(record: u64, value: FactValue) -> Fact {
     Fact {
         identity: record,
         record,
+        reviewed: true,
         value,
     }
 }
@@ -92,4 +93,43 @@ pub(super) fn findings(
         fixture.evaluation.context.limits,
     )?;
     Ok((rows, report.output))
+}
+
+pub(super) fn identity(cursor: u64) -> crate::discovery::DiscoveryRecordIdV1 {
+    crate::discovery::DiscoveryRecordIdV1 {
+        stream: crate::discovery::EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        },
+        cpu_id: 0,
+        durable_cursor: cursor + 1,
+    }
+}
+
+pub(super) fn subject(kind: GraphSubjectKindV1, bytes: Vec<u8>) -> GraphSubjectKeyV1 {
+    GraphSubjectKeyV1::native(&identity(0).stream, kind, bytes)
+}
+
+pub(super) fn proof() -> ProofQualityV1 {
+    ProofQualityV1 {
+        source_authority: SourceAuthorityV1::AuthoritativeProvider,
+        local_subject_binding: LocalSubjectBindingV1::ExactTask,
+        remote_subject_binding: RemoteSubjectBindingV1::ExactRequest,
+        operation_result_authority: OperationResultAuthorityV1::AuthoritativeSucceeded,
+        temporal_coverage: TemporalCoverageV1::Complete,
+        integrity: ProofIntegrityV1::AuthenticatedChannel,
+    }
+}
+
+pub(super) fn context(classification: ContextClass) -> FactValue {
+    FactValue::Context {
+        subject: subject(GraphSubjectKindV1::Task, 3_u64.to_be_bytes().to_vec()),
+        action_id: "context".into(),
+        classification,
+        proof_quality: proof(),
+    }
 }

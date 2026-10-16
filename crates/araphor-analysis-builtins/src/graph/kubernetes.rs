@@ -12,40 +12,50 @@ impl Computation {
                 record: fact.record,
                 context: None,
             });
+            let qualified = stage.proof_quality.kubernetes_qualified();
             let mut missing = Vec::new();
             for (proved, name) in [
-                (stage.request, "CARRIED_REQUEST_MISSING"),
-                (stage.audit, "KUBERNETES_AUDIT_MISSING"),
-                (stage.object && stage.version, "OBJECT_VERSION_MISSING"),
-                (stage.owner && stage.pod, "OWNER_POD_BRIDGE_MISSING"),
-                (stage.node, "SCHEDULER_NODE_MISSING"),
                 (
-                    stage.container && stage.admission,
+                    stage.carried_request_id.is_some(),
+                    "CARRIED_REQUEST_MISSING",
+                ),
+                (stage.audit_id.is_some(), "KUBERNETES_AUDIT_MISSING"),
+                (
+                    stage.object_uid.is_some() && stage.resource_version.is_some(),
+                    "OBJECT_VERSION_MISSING",
+                ),
+                (
+                    stage.owner_uid.is_some() && stage.pod_uid.is_some(),
+                    "OWNER_POD_BRIDGE_MISSING",
+                ),
+                (stage.node_id.is_some(), "SCHEDULER_NODE_MISSING"),
+                (
+                    stage.full_container_id.is_some() && stage.remote_admission_id.is_some(),
                     "REMOTE_RUNTIME_ADMISSION_MISSING",
                 ),
-                (stage.qualified, "KUBERNETES_SOURCE_QUALIFICATION_MISSING"),
+                (qualified, "KUBERNETES_SOURCE_QUALIFICATION_MISSING"),
             ] {
                 if !proved {
                     missing.push(name.into());
                 }
             }
-            self.state.value = if !stage.qualified {
+            self.state.value = if !qualified {
                 "KUBERNETES_PROOF_MISSING"
-            } else if stage.container && stage.admission {
+            } else if stage.full_container_id.is_some() && stage.remote_admission_id.is_some() {
                 "REMOTE_ADMISSION"
-            } else if stage.node {
+            } else if stage.node_id.is_some() {
                 "KUBERNETES_SCHEDULED"
-            } else if stage.object && stage.version {
+            } else if stage.object_uid.is_some() && stage.resource_version.is_some() {
                 "KUBERNETES_OBJECT"
-            } else if stage.audit {
+            } else if stage.audit_id.is_some() {
                 "KUBERNETES_AUDIT"
-            } else if stage.request {
+            } else if stage.carried_request_id.is_some() {
                 "KUBERNETES_REQUEST"
             } else {
                 "KUBERNETES_PROOF_MISSING"
             }
             .into();
-            if stage.object {
+            if stage.object_uid.is_some() {
                 self.edge(
                     fact.record,
                     Some(index as u64),

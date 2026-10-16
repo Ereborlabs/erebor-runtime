@@ -212,26 +212,6 @@ impl DiscoveryOwner {
     }
 }
 
-impl From<(&DiscoveryRecordIdV1, &BehaviorAtomKeyV1)> for DiscoveryContextBindingV1 {
-    fn from((record_id, key): (&DiscoveryRecordIdV1, &BehaviorAtomKeyV1)) -> Self {
-        Self {
-            record_id: record_id.clone(),
-            subject_revision: key.subject_revision.clone(),
-            image_digest: key.image_digest.clone(),
-            configuration_digest: key.configuration_digest.clone(),
-            process_instance_id: key.process_instance_id,
-            entry_instance_id: key.entry_instance_id,
-            binding_id: key.binding_id,
-            role_id: key.role_id,
-            state_id: key.state_id,
-            entry_rule_id: key.entry_rule_id,
-            catalog_revision: key.catalog_revision,
-            static_key: key.static_key.clone(),
-            policy_revision: key.policy_revision.clone(),
-        }
-    }
-}
-
 fn source_matches(
     atom: &BehaviorAtomV1,
     record: &DiscoveryRecordV1,

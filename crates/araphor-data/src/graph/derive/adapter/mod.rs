@@ -4,8 +4,6 @@ use araphor_analysis_sdk as sdk;
 use super::*;
 use crate::AnalysisContractSnafu;
 
-mod authority;
-mod credential;
 mod edges;
 mod facts;
 mod output;

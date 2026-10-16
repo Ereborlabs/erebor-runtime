@@ -49,9 +49,14 @@ impl ScopedSources {
             entry.insert(source);
         }
         self.sources[view].replace(Some(table.clone()))?;
+        let positions = if table.positions {
+            ", commit_revision AS __araphor_commit_revision, ordinal AS __araphor_ordinal"
+        } else {
+            ""
+        };
         connection
             .execute_batch(&format!(
-                "CREATE TEMP VIEW \"{view}\" AS SELECT * FROM \"{function}\"()"
+                "CREATE TEMP VIEW \"{view}\" AS SELECT *{positions} FROM \"{function}\"()"
             ))
             .context(crate::AnalysisDatabaseSnafu {
                 operation: "create query input view",
@@ -1868,7 +1873,8 @@ impl InputRelations {
                 .build()
             };
             let table = Arc::get_mut(table).ok_or_else(invalid)?;
-            if table.columns.is_empty()
+            if table.positions
+                || table.columns.is_empty()
                 || table.columns.iter().any(|column| {
                     !schema
                         .columns
@@ -1889,53 +1895,15 @@ impl InputRelations {
                 .position(|column| column.0 == "ordinal")
                 .ok_or_else(invalid)?;
             let width = table.columns.len();
-            let needed =
-                (width + 2).saturating_sub(table.columns.capacity()) * size_of::<InputColumn>();
-            Self::charge(&mut self.bytes, needed, limit)?;
-            let previous = table.columns.capacity();
-            table.columns.try_reserve_exact(2).map_err(|_| {
-                crate::QueryLimitSnafu {
-                    resource: "query input bytes",
-                    limit,
-                }
-                .build()
-            })?;
-            Self::charge(
-                &mut self.bytes,
-                (table.columns.capacity() - previous) * size_of::<InputColumn>() - needed,
-                limit,
-            )?;
-            table.columns.extend([
-                InputColumn("__araphor_commit_revision", UBigint),
-                InputColumn("__araphor_ordinal", UInteger),
-            ]);
-            for row in &mut table.rows {
+            for row in &table.rows {
                 if row.len() != width {
                     return Err(invalid());
                 }
-                let (Value::UBigInt(revision), Value::UInt(ordinal)) =
-                    (&row[revision], &row[ordinal])
-                else {
+                let (Value::UBigInt(_), Value::UInt(_)) = (&row[revision], &row[ordinal]) else {
                     return Err(invalid());
                 };
-                let positions = [Value::UBigInt(*revision), Value::UInt(*ordinal)];
-                let needed = (width + 2).saturating_sub(row.capacity()) * size_of::<Value>();
-                Self::charge(&mut self.bytes, needed, limit)?;
-                let previous = row.capacity();
-                row.try_reserve_exact(2).map_err(|_| {
-                    crate::QueryLimitSnafu {
-                        resource: "query input bytes",
-                        limit,
-                    }
-                    .build()
-                })?;
-                Self::charge(
-                    &mut self.bytes,
-                    (row.capacity() - previous) * size_of::<Value>() - needed,
-                    limit,
-                )?;
-                row.extend(positions);
             }
+            table.positions = true;
         }
         Ok(self)
     }
@@ -2016,6 +1984,7 @@ impl InputRelations {
         Ok(InputTable {
             columns,
             rows,
+            positions: false,
             #[cfg(test)]
             scan_gate: Default::default(),
         })
@@ -2154,39 +2123,42 @@ mod tests {
         let address = blob.as_ptr();
         let input = input.append_positions(1_000_000)?;
         let bound = input.allocation_bytes();
-        assert_eq!(
-            bound - before,
-            input
-                .tables
-                .iter()
-                .zip(columns)
-                .map(|(table, before)| (table.columns.capacity() - before)
-                    * size_of::<InputColumn>())
-                .sum::<usize>()
-                + (input.tables[0].rows[0].capacity() - capacity) * size_of::<Value>()
-        );
+        assert_eq!(bound, before);
+        for (table, before) in input.tables.iter().zip(columns) {
+            assert_eq!(table.columns.capacity(), before);
+        }
+        assert_eq!(input.tables[0].rows[0].capacity(), capacity);
         let Value::Blob(blob) = &input.tables[0].rows[0][43] else {
             return Err("catalog bytes are absent".into());
         };
         assert_eq!(blob.as_ptr(), address);
         assert_eq!(blob, &vec![42; 8192]);
-        assert_eq!(input.tables[0].rows[0].len(), EVENTS.columns.len() + 2);
+        assert_eq!(input.tables[0].rows[0].len(), EVENTS.columns.len());
+        assert_eq!(input.tables[0].columns.len(), EVENTS.columns.len());
+        assert!(input.tables[0].positions);
+        let weak = Arc::downgrade(&input.tables[0]);
         let connection = Connection::open_in_memory()?;
-        input.register(&connection, &mut ScopedSources::default())?;
-        let values = connection.query_row(
-            "SELECT operation, __araphor_commit_revision, __araphor_ordinal FROM events",
-            [],
-            |row| {
-                Ok((
-                    row.get::<_, u32>(0)?,
-                    row.get::<_, u64>(1)?,
-                    row.get::<_, u32>(2)?,
-                ))
-            },
-        )?;
-        assert_eq!(values, (7, 8, 9));
-        drop(connection);
+        let mut sources = ScopedSources::default();
+        input.register(&connection, &mut sources)?;
+        for _ in 0..2 {
+            let values = connection.query_row(
+                "SELECT operation, __araphor_commit_revision, __araphor_ordinal FROM events",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, u64>(1)?,
+                        row.get::<_, u32>(2)?,
+                    ))
+                },
+            )?;
+            assert_eq!(values, (7, 8, 9));
+        }
         drop(input);
+        assert!(weak.upgrade().is_some());
+        sources.clear(&connection)?;
+        assert!(weak.upgrade().is_none());
+        assert!(connection.prepare("SELECT operation FROM events").is_err());
         for limit in [bound, bound - 1] {
             let mut extraction = empty_input();
             let mut row = event(&EvidenceRecord {
@@ -2197,7 +2169,7 @@ mod tests {
             add_page(&mut extraction, AnalysisRelationV1::Events, row)?;
             let input = InputRelations::new(
                 &mut extraction,
-                limit,
+                1_000_000,
                 &QueryTemplate::Events { operation: None },
             )?;
             let result = input.append_positions(limit);

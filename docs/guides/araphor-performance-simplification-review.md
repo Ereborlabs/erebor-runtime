@@ -77,6 +77,23 @@ retains at most one previous installed snapshot across calls. The last
 snapshot reference releases its metadata lease. The last bundle reference
 releases its content lease.
 
+## Shared analysis values
+
+The existing built-ins crate owns the pure
+[discovery values](../../crates/araphor-analysis-builtins/src/discovery/model.rs)
+and [source identity](../../crates/araphor-analysis-builtins/src/discovery/source.rs).
+Host and guest use the same record IDs, atoms, coverage, lifecycle, groups, and
+comparison values. The separate string keys, rank maps, and value conversion
+owner are removed. Data retains context qualification and checks returned
+values against the exact admitted inputs.
+
+The same crate owns pure [graph facts and keys](../../crates/araphor-analysis-builtins/src/graph/model/domain.rs)
+and [proof values](../../crates/araphor-analysis-builtins/src/graph/model/proof.rs).
+Data retains reviewed-policy qualification, tenant joins, evidence lookup,
+and output proof checks. Both paths execute the selected installed artifact.
+Data reexports the shared types. Code that calls their host `validate` methods
+imports `DiscoveryValidate` or `GraphValidate` from `araphor_data`.
+
 ## Graph and built-in computation: items 2, 4, 5, and 14
 
 [graph_window_headers](../../crates/araphor-data/src/analysis/graph/windows.rs)
@@ -129,6 +146,11 @@ complete path. [InputProjection](../../crates/araphor-data/src/query/input.rs)
 keeps commit position fields. Model provenance is collected before pruning.
 `InputRelations` creates only admitted built-in tables. Unreferenced built-ins do
 not enter the operation catalog.
+
+[ScopedSources](../../crates/araphor-data/src/query/input.rs) exposes append
+positions as SQL aliases for existing commit and ordinal columns. Input rows
+retain their original width and values. Each statement still binds an
+independent scan cursor. Source cleanup releases the retained input.
 
 [package provenance reads](../../crates/araphor-data/src/analysis/packages/witnesses.rs)
 validate references before an empty-list return. Empty references need no
@@ -209,18 +231,24 @@ Coverage commits use the analysis owner and can progress while policy priority
 is held. A direct store test checks the final priority release for actual
 low-priority waiters. Neither check depends on an idle context poll.
 
-[EvidenceSegmentOwner](../../crates/araphor-data/src/analysis/raw_segments.rs)
-maintains owned file sizes, allocated bytes, and entry counts through append,
+[RawJournal](../../crates/araphor-data/src/analysis/raw.rs) owns physical raw
+segments. [Its segment methods](../../crates/araphor-data/src/analysis/raw_segments.rs)
+maintain file sizes, allocated bytes, and entry counts through append,
 seal, rotation, deletion, and recovery. [storage_for_append](../../crates/araphor-data/src/analysis/capacity.rs)
 uses those totals when the segment directory stamp matches. Current volume
 space, database files, and other entries still receive filesystem checks.
 A changed directory requires full inspection. Explicit `storage_usage` keeps
-the complete inspection path. Only the segment owner changes known segment
+the complete inspection path. Only the raw journal changes known segment
 files. Recovery and evidence reads retain their integrity checks.
 A changed directory type invalidates the cache. The append still reports its
 real filesystem error and keeps the existing writer-recovery rules.
 Raw acceptance still synchronizes evidence
 before [Control returns its acknowledgement](../../crates/mithril-control/src/evidence.rs).
+
+One append decision supplies the quota check and physical append. Recovery
+validates and indexes each frame once. A sealed file name contains its exact
+end offset. Recovery rejects a sealed file that loses a complete frame.
+The journal can recover accepted raw data without the analysis database.
 
 [retention](../../crates/araphor-data/src/analysis/retention.rs) uses existing
 source ranges and selects at most 16 eligible segments per visit. The current

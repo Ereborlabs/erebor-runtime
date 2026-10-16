@@ -217,7 +217,7 @@ impl RawJournal {
                 })?
         };
         for (id, saved) in names {
-            let path = self.segments.file_path(id)?;
+            let path = self.segment_path(id)?;
             let name = path
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -331,13 +331,14 @@ impl RawJournal {
                     .get(&id)
                     .ok_or_else(|| self.invalid("a catalogued raw segment is absent"))?;
                 let identity = RawIdentity::parse(&kind, &json, &self.root)?;
-                let path = self.segments.file_path(id)?;
+                let path = self.segment_path(id)?;
                 let current = path
                     .file_name()
                     .and_then(|name| name.to_str())
                     .ok_or_else(|| self.invalid("the raw segment name is invalid"))?;
                 let rotated = name.ends_with(".open")
-                    && name.split('.').take(4).eq(current.split('.').take(4));
+                    && current.ends_with(".seg")
+                    && name.split('.').take(2).eq(current.split('.').take(2));
                 if end != entry.reference.offset
                     || identity != entry.identity
                     || cpu != entry.commit.kind.cpu()
@@ -643,8 +644,8 @@ impl RawJournal {
         };
         let removed: Vec<_> = self
             .segments
-            .descriptors()
-            .map(|entry| entry.reference.id)
+            .keys()
+            .copied()
             .filter(|id| !ids.contains(id))
             .collect();
         self.forget_segments(removed)?;
@@ -753,7 +754,7 @@ impl RawJournal {
                 .context(AnalysisDatabaseSnafu {
                     operation: "read projected raw segment",
                 })?;
-            let path = self.segments.file_path(id)?;
+            let path = self.segment_path(id)?;
             let name = path
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -887,7 +888,7 @@ impl RawJournal {
         transaction
             .execute(
                 "UPDATE store_meta SET next_segment_id = ?",
-                params![self.segments.next_id()],
+                params![self.next_segment],
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "publish raw identity high water",
@@ -923,7 +924,7 @@ impl RawJournal {
             .context(AnalysisDatabaseSnafu {
                 operation: "read raw identity high water",
             })?;
-        self.segments.advance_id(next);
+        self.next_segment = self.next_segment.max(next);
         let mut statement = writer.prepare("SELECT identity_json, cpu_id, contiguous_cursor, coverage_revision, retained_floor FROM source_receipts")
             .context(AnalysisDatabaseSnafu { operation: "prepare durable raw receipts" })?;
         let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
@@ -1038,8 +1039,8 @@ impl RawJournal {
                     key,
                     RawSource {
                         receipt: RawReceipt::Diagnostic(receipt),
-                        stream: 0,
-                        sequence: 0,
+                        written: false,
+                        active: None,
                     },
                 );
             }

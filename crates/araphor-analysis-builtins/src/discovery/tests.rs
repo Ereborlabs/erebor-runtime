@@ -1,6 +1,11 @@
 use araphor_analysis_sdk as sdk;
 
 use super::*;
+use super::{
+    BehaviorAtomV1 as Atom, DiscoveryCoverageStateV1 as CoverageState,
+    DiscoveryCoverageV1 as Coverage, DiscoveryLifecycleEntryV1 as Lifecycle,
+    DiscoveryUnresolvedV1 as Disposition,
+};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -47,46 +52,29 @@ fn checked_input_keeps_json_errors() -> TestResult {
 }
 
 fn fixture() -> sdk::Result<sdk::Fixture> {
-    let operation = Operation {
-        family: 1,
-        operation: 1,
-        argument: 0,
-        wildcard: false,
+    let key = atom_key();
+    let id = |cursor| DiscoveryRecordIdV1 {
+        stream: key.stream.clone(),
+        cpu_id: 3,
+        durable_cursor: cursor,
     };
     let records: Vec<_> = [1, 2, 1]
         .into_iter()
         .map(|cursor| Record {
-            id: Identity {
-                order: cursor,
-                value: format!("source/cpu3/{cursor}"),
-            },
+            id: id(cursor),
             bytes: format!("exact-frame-{cursor}"),
-            cursor,
             range: 0,
             temporal: 1,
-            operation: operation.clone(),
+            effect: key.effect.clone(),
             generation: Some(9_007_199_254_740_999),
-            object: vec![7; 16],
-            decision: 1,
-            kernel_result: -13,
             original_sequence: Some(cursor + 100),
             source: None,
         })
         .collect();
     let contexts: Vec<_> = (1..=2)
         .map(|cursor| Context {
-            atom_key: Some("complete-host-atom-key".into()),
-            record: format!("source/cpu3/{cursor}"),
-            operation: operation.clone(),
-            lifetime: Lifetime {
-                process: vec![1; 16],
-                entry: vec![2; 16],
-                binding: vec![3; 16],
-                role: 1,
-                state: 1,
-                rule: 1,
-                sequence: 0,
-            },
+            atom_key: Some(key.clone()),
+            record_id: id(cursor),
         })
         .collect();
     let datasets = vec![
@@ -118,15 +106,15 @@ fn fixture() -> sdk::Result<sdk::Fixture> {
         Rows::encode(
             &Discovery::port::<Coverage>("coverage"),
             &[Coverage {
-                source: "complete-source-identity".into(),
-                cpu: 3,
-                first: 1,
-                last: 2,
-                expected: 2,
-                revision: 9_007_199_254_740_999,
-                interval: [4; 16],
+                stream: key.stream.clone(),
+                cpu_id: 3,
+                first_cursor: 1,
+                last_cursor: 2,
+                expected_records: 2,
+                coverage_revision: 9_007_199_254_740_999,
+                coverage_interval_id: [4; 16],
                 state: CoverageState::Healthy,
-                gaps: Vec::new(),
+                gap_reasons: Vec::new(),
             }],
             Discovery::limits(),
         )?,
@@ -200,17 +188,20 @@ fn sdk_derivation_fixture() -> TestResult {
     let atoms = output::<Atom>(&report.output, "atoms")?;
     assert_eq!(atoms.len(), 1);
     assert_eq!(atoms[0].count, 2);
-    assert!(atoms[0].prevented);
+    assert_eq!(
+        atoms[0].key.physical_result,
+        DiscoveryPhysicalResultV1::Prevented
+    );
     assert_eq!(
         atoms[0]
-            .samples
+            .evidence_sample
             .iter()
-            .map(|id| id.order)
+            .map(|id| id.durable_cursor)
             .collect::<Vec<_>>(),
         vec![1, 2]
     );
     assert_eq!(
-        output::<Coverage>(&report.output, "coverage")?[0].revision,
+        output::<Coverage>(&report.output, "coverage")?[0].coverage_revision,
         9_007_199_254_740_999
     );
     assert_eq!(output::<Lifecycle>(&report.output, "lifecycle")?.len(), 9);
@@ -263,4 +254,72 @@ fn sdk_bounded_derivation() -> TestResult {
     assert!(schema.contains("original_sequence"));
     assert!(schema.contains("generation"));
     Ok(())
+}
+
+fn atom_key() -> BehaviorAtomKeyV1 {
+    BehaviorAtomKeyV1 {
+        stream: EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        },
+        cpu_id: 3,
+        subject_revision: "subject".into(),
+        image_digest: "image".into(),
+        configuration_digest: "config".into(),
+        process_instance_id: [1; 16],
+        entry_instance_id: [2; 16],
+        binding_id: [3; 16],
+        role_id: 1,
+        state_id: 1,
+        entry_rule_id: 1,
+        catalog_revision: 1,
+        static_key: DiscoveryPolicyKeyV1 {
+            workload_selector_id: "workload".into(),
+            protected_scope_id: "scope".into(),
+            execution_set_id: "execution".into(),
+            entry_kind: "entry".into(),
+            role_id: "role".into(),
+            process_state_id: "state".into(),
+            effect_family: 1,
+            operation_id: "operation".into(),
+            operation: 1,
+            operation_argument: 0,
+            argument_wildcard: false,
+            object_selector: "object".into(),
+            binding_lifecycle: "lifecycle".into(),
+        },
+        policy_revision: DiscoveryPolicyRevisionV1 {
+            profile_id: "profile".into(),
+            profile_version: 1,
+            source_revision_id: "source".into(),
+            signed_profile_digest: "digest".into(),
+        },
+        generation: 9_007_199_254_740_999,
+        coverage_interval_id: [4; 16],
+        temporal_coverage: 1,
+        effect: DiscoveryEffectKeyV1 {
+            task_cookie: 7,
+            target_task_cookie: None,
+            process_lineage_id: Vec::new(),
+            authority_domain_id: Vec::new(),
+            execution_set_id: Vec::new(),
+            exact_object_id: vec![7; 16],
+            destination_id: 0,
+            policy_rule_id: 1,
+            reason: 0,
+            decision: 1,
+            effect_family: 1,
+            operation: 1,
+            operation_argument: Some(0),
+            configured_errno: -13,
+            kernel_result: -13,
+            exact_file_object: None,
+        },
+        physical_result: DiscoveryPhysicalResultV1::Unknown,
+        proof_kind: DiscoveryProofKindV1::RecordedInput,
+    }
 }

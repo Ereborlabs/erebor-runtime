@@ -207,7 +207,7 @@ impl AnalysisStore {
                 .raw
                 .lock()
                 .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
-            raw.segments.seal_all()?;
+            raw.seal_all()?;
             raw.project_paths(writer.get()?)?;
             raw.refresh_budget(writer.get()?)?;
         }
@@ -1262,7 +1262,7 @@ mod tests {
             manifest.segments[0]
                 .file_name
                 .split('.')
-                .take(4)
+                .take(2)
                 .collect::<Vec<_>>()
                 .join(".")
         );

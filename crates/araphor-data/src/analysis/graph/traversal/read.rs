@@ -1,3 +1,4 @@
+use crate::GraphValidate as _;
 use duckdb::{params_from_iter, Connection, Row};
 use snafu::ResultExt as _;
 

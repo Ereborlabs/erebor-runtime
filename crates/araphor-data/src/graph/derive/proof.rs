@@ -91,23 +91,4 @@ impl GraphDerivation<'_> {
             proof_quality: self.proof(record),
         }
     }
-
-    pub(super) fn qualified_result(proof: ProofQualityV1) -> bool {
-        matches!(
-            proof.source_authority,
-            SourceAuthorityV1::KernelDecision
-                | SourceAuthorityV1::AuthoritativeProvider
-                | SourceAuthorityV1::SignedCoordinator
-                | SourceAuthorityV1::AuthenticatedMeasurement
-        ) && matches!(
-            proof.local_subject_binding,
-            LocalSubjectBindingV1::ExactTask | LocalSubjectBindingV1::ExactProcess
-        ) && proof.temporal_coverage == TemporalCoverageV1::Complete
-            && matches!(
-                proof.integrity,
-                ProofIntegrityV1::Signed
-                    | ProofIntegrityV1::AuthenticatedChannel
-                    | ProofIntegrityV1::LocalAttested
-            )
-    }
 }

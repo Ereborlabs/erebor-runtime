@@ -12,10 +12,12 @@ mod groups;
 mod merge;
 mod model;
 mod ranges;
+mod source;
 #[cfg(test)]
 mod tests;
 
 pub use model::*;
+pub use source::*;
 
 pub struct Discovery;
 
@@ -31,11 +33,11 @@ impl Discovery {
 
     fn build_package() -> sdk::Package {
         let result = vec![
-            Self::port::<Atom>("atoms"),
-            Self::port::<Coverage>("coverage"),
-            Self::port::<Disposition>("unresolved"),
-            Self::port::<Disposition>("excluded"),
-            Self::port::<Lifecycle>("lifecycle"),
+            Self::port::<BehaviorAtomV1>("atoms"),
+            Self::port::<DiscoveryCoverageV1>("coverage"),
+            Self::port::<DiscoveryUnresolvedV1>("unresolved"),
+            Self::port::<DiscoveryUnresolvedV1>("excluded"),
+            Self::port::<DiscoveryLifecycleEntryV1>("lifecycle"),
             Self::port::<Counts>("counts"),
         ];
         let mut package = sdk::Package::new(
@@ -47,9 +49,9 @@ impl Discovery {
                     vec![
                         Self::port::<Record>("records"),
                         Self::port::<Context>("contexts"),
-                        Self::port::<Disposition>("exclusions"),
-                        Self::port::<Coverage>("coverage"),
-                        Self::port::<Lifecycle>("lifecycle"),
+                        Self::port::<DiscoveryUnresolvedV1>("exclusions"),
+                        Self::port::<DiscoveryCoverageV1>("coverage"),
+                        Self::port::<DiscoveryLifecycleEntryV1>("lifecycle"),
                         Self::port::<bool>("observed"),
                     ],
                     result.clone(),
@@ -58,31 +60,31 @@ impl Discovery {
                     "merge",
                     vec![
                         Self::port::<Snapshot>("snapshots"),
-                        Self::port::<Side<Atom>>("atoms"),
-                        Self::port::<Side<Coverage>>("coverage"),
-                        Self::port::<Side<Disposition>>("unresolved"),
-                        Self::port::<Side<Disposition>>("excluded"),
-                        Self::port::<Side<Lifecycle>>("lifecycle"),
+                        Self::port::<Side<BehaviorAtomV1>>("atoms"),
+                        Self::port::<Side<DiscoveryCoverageV1>>("coverage"),
+                        Self::port::<Side<DiscoveryUnresolvedV1>>("unresolved"),
+                        Self::port::<Side<DiscoveryUnresolvedV1>>("excluded"),
+                        Self::port::<Side<DiscoveryLifecycleEntryV1>>("lifecycle"),
                     ],
                     result,
                 ),
                 sdk::Model::new(
                     "groups",
                     vec![
-                        Self::port::<GroupAtom>("atoms"),
-                        Self::port::<Coverage>("coverage"),
+                        Self::port::<BehaviorAtomV1>("atoms"),
+                        Self::port::<DiscoveryCoverageV1>("coverage"),
                     ],
-                    vec![Self::port::<Group>("groups")],
+                    vec![Self::port::<BehaviorDisplayGroupV1>("groups")],
                 ),
                 sdk::Model::new(
                     "compare",
                     vec![
-                        Self::port::<MatchGroup>("groups"),
-                        Self::port::<Side<String>>("resources"),
-                        Self::port::<String>("forbidden"),
+                        Self::port::<Side<BehaviorDisplayGroupV1>>("groups"),
+                        Self::port::<Side<BehaviorAtomKeyV1>>("resources"),
+                        Self::port::<DiscoveryPolicyKeyV1>("forbidden"),
                         Self::port::<MatchState>("states"),
                     ],
-                    vec![Self::port::<Comparison>("comparison")],
+                    vec![Self::port::<DiscoveryComparisonV1>("comparison")],
                 ),
             ],
         );

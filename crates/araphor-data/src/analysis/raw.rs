@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -5,10 +6,10 @@ use std::sync::atomic::Ordering;
 use prost::Message as _;
 use snafu::ResultExt as _;
 
-use super::raw_segments::{
-    EvidenceSegmentBoundsV1, EvidenceSegmentOwner, EvidenceSegmentReadV1, EvidenceSegmentRefV1,
+use super::raw_segments::{DirectoryStamp, RawSegment};
+use super::{
+    AnalysisSourceReceiptV1, AnalysisStore, SegmentFile, StorageUsageV1, ValidatedEvidenceBatchV1,
 };
-use super::{AnalysisSourceReceiptV1, AnalysisStore, ValidatedEvidenceBatchV1};
 use crate::{EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, Result};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
@@ -584,11 +585,7 @@ impl AnalysisStore {
         let key = identity.key();
         let tenant = identity.tenant();
         if let RawIdentity::Diagnostic(trace) = &identity {
-            if raw
-                .sources
-                .get(&key)
-                .is_none_or(|source| source.stream == 0)
-            {
+            if raw.sources.get(&key).is_none_or(|source| !source.written) {
                 let (_, intent) = Self::read_trace_intent(
                     writer.get()?,
                     &self.root,
@@ -666,33 +663,12 @@ impl AnalysisStore {
                 raw.sources[&key].receipt.clone(),
             ));
         }
-        let (stream, sequence) = raw.next_position(&identity)?;
+        let append = raw.prepare_append(&identity, commit)?;
+        let commit = &append.commit;
+        let (id, added, created) = (append.id, append.added(), append.header.is_some());
         let terminal_only = matches!(&commit.kind, Some(RawKind::Diagnostic(progress))
             if progress.terminal && commit.spans.len() == 1
                 && commit.spans[0].first == progress.last_sequence + 1);
-        let (mut id, mut added, mut created) = raw.segments.append_plan(
-            &identity,
-            stream,
-            sequence,
-            commit.encoded_len() as u64 + 8,
-            false,
-        )?;
-        let rotate = terminal_only
-            && !created
-            && raw
-                .budget
-                .pins
-                .get(&id)
-                .is_some_and(|(_, expiry)| *expiry > batch.intake_utc_ns);
-        if rotate {
-            (id, added, created) = raw.segments.append_plan(
-                &identity,
-                stream,
-                sequence,
-                commit.encoded_len() as u64 + 8,
-                true,
-            )?;
-        }
         let json = identity.json(&self.root)?;
         let mut charge = added;
         if created {
@@ -716,11 +692,7 @@ impl AnalysisStore {
             charge += batch.terminal_bytes as u64;
         }
         let prepaid = terminal_only && charge <= released_reserve;
-        let initial = diagnostic
-            && !raw
-                .segments
-                .descriptors()
-                .any(|segment| segment.bounds.stream_id == stream);
+        let initial = diagnostic && !raw.segments.values().any(|segment| segment.source == key);
         let released_slots = if terminal {
             if initial {
                 2
@@ -814,17 +786,17 @@ impl AnalysisStore {
             }
         }
         let mut witnesses = raw.budget.contexts.get(&tenant).copied().unwrap_or(0);
-        for descriptor in raw.segments.descriptors() {
+        for (segment_id, segment) in &raw.segments {
             if raw
                 .budget
                 .pins
-                .get(&descriptor.reference.id)
+                .get(segment_id)
                 .is_some_and(|(tenant, expiry)| {
                     *tenant == identity.tenant() && *expiry > batch.intake_utc_ns
                 })
             {
-                witnesses += descriptor.reference.offset;
-                if descriptor.reference.id == id {
+                witnesses += segment.end;
+                if *segment_id == id {
                     witnesses += added;
                 }
             }
@@ -836,7 +808,7 @@ impl AnalysisStore {
             .fail();
         }
         let usage = self.storage_for_append(
-            &raw.segments,
+            &raw,
             usize::from(created && !diagnostic),
             trace_slots + usize::from(created && diagnostic),
         )?;
@@ -848,12 +820,7 @@ impl AnalysisStore {
         } else {
             self.storage.check_append(usage, projected)?;
         }
-        let _rotation = if created
-            && raw
-                .sources
-                .get(&key)
-                .is_some_and(|source| source.stream != 0)
-        {
+        let _rotation = if created && raw.sources.get(&key).is_some_and(|source| source.written) {
             drop(raw);
             #[cfg(any(test, feature = "test-fixtures"))]
             self.run_commit_hook(super::AnalysisCommitStage::BeforeRotation)?;
@@ -874,15 +841,12 @@ impl AnalysisStore {
         self.write_ready.store(false, Ordering::Release);
         #[cfg(test)]
         self.crash_at("evidence.before");
-        if rotate {
-            raw.segments.seal_stream(stream)?;
-        }
         let body_bytes = commit.body.len() as u64;
         let prior_cursor = raw
             .sources
             .get(&key)
             .map_or(0, |source| source.receipt.cursor());
-        raw.append(&identity, commit)?;
+        raw.append(&identity, append)?;
         #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(super::AnalysisCommitStage::AfterSync)?;
         #[cfg(test)]
@@ -1112,13 +1076,17 @@ impl TryFrom<&RawCommit> for RawMeta {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct RawLocation {
+    pub id: u64,
+    pub offset: u64,
+}
+
 #[derive(Clone)]
 pub(super) struct RawEntry {
     pub identity: RawIdentity,
     pub commit: RawMeta,
-    pub reference: EvidenceSegmentRefV1,
-    pub stream: u64,
-    pub sequence: u64,
+    pub reference: RawLocation,
     pub body_start: u64,
     pub body_bytes: usize,
     pub frame_bytes: usize,
@@ -1126,22 +1094,24 @@ pub(super) struct RawEntry {
 
 pub(super) struct RawSource {
     pub receipt: RawReceipt,
-    pub stream: u64,
-    pub sequence: u64,
+    pub written: bool,
+    pub active: Option<u64>,
 }
 
 impl From<AnalysisSourceReceiptV1> for RawSource {
     fn from(receipt: AnalysisSourceReceiptV1) -> Self {
         Self {
             receipt: RawReceipt::Evidence(receipt),
-            stream: 0,
-            sequence: 0,
+            written: false,
+            active: None,
         }
     }
 }
 
 pub(super) struct RawRead {
-    reader: EvidenceSegmentReadV1,
+    file: SegmentFile,
+    frame_start: u64,
+    frame_bytes: usize,
     span: RawRange,
     revision: u64,
     kind: RawKind,
@@ -1152,14 +1122,7 @@ pub(super) struct RawRead {
 
 impl RawRead {
     pub(super) fn read(&self, root: &Path) -> Result<Vec<super::AnalysisRecordV1>> {
-        let commit = self.reader.decode::<RawCommit>()?.pop().ok_or_else(|| {
-            crate::AnalysisStateSnafu {
-                path: root,
-                reason: "the frozen raw commit is absent",
-            }
-            .build()
-        })?;
-        commit.validate(root)?;
+        let commit = RawCommit::read(&self.file, self.frame_start, self.frame_bytes)?;
         let span = commit
             .spans
             .iter()
@@ -1204,7 +1167,11 @@ impl RawRead {
 
 pub(super) struct RawJournal {
     pub root: PathBuf,
-    pub segments: EvidenceSegmentOwner,
+    pub segments: BTreeMap<u64, RawSegment>,
+    pub next_segment: u64,
+    pub usage: StorageUsageV1,
+    pub diagnostics: usize,
+    pub directory: Cell<Option<DirectoryStamp>>,
     pub sources: BTreeMap<Vec<u8>, RawSource>,
     pub entries: BTreeMap<u64, RawEntry>,
     pub ranges: BTreeMap<(Vec<u8>, u64), (u64, usize)>,
@@ -1522,7 +1489,7 @@ impl RawJournal {
     pub(super) fn forget_segments(&mut self, ids: impl IntoIterator<Item = u64>) -> Result<()> {
         let ids: std::collections::BTreeSet<_> = ids.into_iter().collect();
         for id in &ids {
-            self.segments.forget(*id)?;
+            self.forget_segment(*id)?;
         }
         self.entries
             .retain(|_, entry| !ids.contains(&entry.reference.id));
@@ -1623,7 +1590,9 @@ impl RawJournal {
         last: u64,
     ) -> Result<RawRead> {
         Ok(RawRead {
-            reader: self.reader(entry.reference.id, entry.stream, entry.sequence)?,
+            file: SegmentFile::reader(self.segment_path(entry.reference.id)?)?,
+            frame_start: entry.reference.offset - entry.frame_bytes as u64,
+            frame_bytes: entry.frame_bytes,
             span: entry.commit.spans[index].clone(),
             revision: entry.commit.revision,
             kind: entry.commit.kind.clone(),
@@ -1632,74 +1601,6 @@ impl RawJournal {
             last,
         })
     }
-    pub(super) fn open(root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
-        let segments = EvidenceSegmentOwner::open(&root.join("segments"), committed)?;
-        Self::from_segments(root, segments)
-    }
-
-    pub(super) fn read_sealed(root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
-        let segments = EvidenceSegmentOwner::read_sealed(&root.join("segments"), committed)?;
-        Self::from_segments(root, segments)
-    }
-
-    fn from_segments(root: &Path, segments: EvidenceSegmentOwner) -> Result<Self> {
-        let identities: BTreeMap<_, _> = segments
-            .identities()
-            .map(|(stream, identity)| (stream, identity.clone()))
-            .collect();
-        let descriptors: Vec<_> = segments.descriptors().collect();
-        let mut journal = Self {
-            root: root.to_path_buf(),
-            segments,
-            sources: BTreeMap::new(),
-            entries: BTreeMap::new(),
-            ranges: BTreeMap::new(),
-            revision: 0,
-            budget: super::raw_catalog::RawBudget::default(),
-        };
-        for descriptor in descriptors {
-            let EvidenceSegmentBoundsV1 {
-                stream_id,
-                first_cursor,
-                last_cursor,
-            } = descriptor.bounds;
-            let identity = identities
-                .get(&stream_id)
-                .ok_or_else(|| journal.invalid("the raw stream identity is absent"))?;
-            for sequence in first_cursor..=last_cursor {
-                let reference = journal
-                    .segments
-                    .reference_at(descriptor.reference.id, sequence)?;
-                let reader = journal.reader(reference.id, stream_id, sequence)?;
-                let mut commits = reader.decode::<RawCommit>()?;
-                let commit = commits
-                    .pop()
-                    .ok_or_else(|| journal.invalid("the raw commit is absent"))?;
-                commit.validate(root)?;
-                let body_bytes = commit.body.len();
-                let body_start = reference
-                    .offset
-                    .checked_sub(4 + body_bytes as u64)
-                    .ok_or_else(|| journal.invalid("the raw payload offset is invalid"))?;
-                journal.publish(
-                    RawEntry {
-                        identity: identity.clone(),
-                        commit: RawMeta::try_from(&commit)?,
-                        reference,
-                        stream: stream_id,
-                        sequence,
-                        body_start,
-                        body_bytes,
-                        frame_bytes: commit.encoded_len() + 8,
-                    },
-                    &commit,
-                )?;
-            }
-        }
-        journal.refresh_receipts()?;
-        Ok(journal)
-    }
-
     fn prepare(
         &self,
         identity: &RawIdentity,
@@ -1868,76 +1769,7 @@ impl RawJournal {
         Ok(commit)
     }
 
-    pub(super) fn append(&mut self, identity: &RawIdentity, commit: RawCommit) -> Result<()> {
-        commit.validate(&self.root)?;
-        let key = identity.key();
-        let (stream, sequence) = self.next_position(identity)?;
-        let body_bytes = commit.body.len();
-        let length = u32::try_from(commit.encoded_len())
-            .map_err(|_| self.invalid("the raw commit is too large"))?;
-        let mut frame = Vec::with_capacity(length as usize + 8);
-        frame.extend_from_slice(&length.to_be_bytes());
-        commit
-            .encode(&mut frame)
-            .map_err(|_| self.invalid("the raw commit encoding failed"))?;
-        frame.extend_from_slice(&crc32c::crc32c(&frame).to_be_bytes());
-        let end = frame.len();
-        let written = self.segments.write_frames(
-            identity,
-            stream,
-            sequence,
-            sequence,
-            frame.into(),
-            vec![end],
-        )?;
-        let [written] = written.as_slice() else {
-            return Err(self.invalid("one raw commit crossed segment boundaries"));
-        };
-        if written.first_cursor != sequence || written.last_cursor != sequence {
-            return Err(self.invalid("the raw writer returned a different commit sequence"));
-        }
-        let reference = written.segment;
-        let body_start = reference.offset - 4 - body_bytes as u64;
-        self.publish(
-            RawEntry {
-                identity: identity.clone(),
-                commit: RawMeta::try_from(&commit)?,
-                reference,
-                stream,
-                sequence,
-                body_start,
-                body_bytes,
-                frame_bytes: end,
-            },
-            &commit,
-        )?;
-        self.refresh_source(&key)?;
-        Ok(())
-    }
-
-    fn next_position(&self, identity: &RawIdentity) -> Result<(u64, u64)> {
-        let key = identity.key();
-        let stream = match self.sources.get(&key).filter(|source| source.stream != 0) {
-            Some(source) => source.stream,
-            None => self
-                .sources
-                .values()
-                .map(|source| source.stream)
-                .max()
-                .unwrap_or(0)
-                .checked_add(1)
-                .ok_or_else(|| self.invalid("the raw stream identity is exhausted"))?,
-        };
-        let sequence = self
-            .sources
-            .get(&key)
-            .map_or(0, |source| source.sequence)
-            .checked_add(1)
-            .ok_or_else(|| self.invalid("the raw stream sequence is exhausted"))?;
-        Ok((stream, sequence))
-    }
-
-    fn publish(&mut self, entry: RawEntry, commit: &RawCommit) -> Result<()> {
+    pub(super) fn publish(&mut self, entry: RawEntry, commit: &RawCommit) -> Result<()> {
         if !entry.identity.valid() {
             return Err(self.invalid("the raw source identity is invalid"));
         }
@@ -1981,15 +1813,11 @@ impl RawJournal {
             .entry(key.clone())
             .or_insert_with(|| RawSource {
                 receipt: receipt.clone(),
-                stream: entry.stream,
-                sequence: 0,
+                written: true,
+                active: None,
             });
-        if source.stream == 0 {
-            source.stream = entry.stream;
-        }
         if !source.receipt.matches(&entry.identity)
             || source.receipt.cpu() != entry.commit.kind.cpu()
-            || source.stream != entry.stream
         {
             return Err(self.invalid("the recovered raw source binding conflicts"));
         }
@@ -2016,7 +1844,7 @@ impl RawJournal {
             }
             source.receipt = RawReceipt::Diagnostic(next);
         }
-        source.sequence = source.sequence.max(entry.sequence);
+        source.written = true;
         self.revision = self.revision.max(revision);
         for (index, span) in entry.commit.spans.iter().enumerate() {
             self.ranges
@@ -2026,7 +1854,7 @@ impl RawJournal {
         Ok(())
     }
 
-    fn refresh_source(&mut self, key: &[u8]) -> Result<()> {
+    pub(super) fn refresh_source(&mut self, key: &[u8]) -> Result<()> {
         let mut contiguous = self
             .sources
             .get(key)
@@ -2069,34 +1897,12 @@ impl RawJournal {
         }
     }
 
-    pub(super) fn reader(
-        &self,
-        id: u64,
-        stream: u64,
-        sequence: u64,
-    ) -> Result<EvidenceSegmentReadV1> {
-        self.segments
-            .open_read(
-                id,
-                EvidenceSegmentBoundsV1 {
-                    stream_id: stream,
-                    first_cursor: sequence,
-                    last_cursor: sequence,
-                },
-                1,
-                crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES + 65544,
-            )?
-            .ok_or_else(|| self.invalid("the raw commit exceeds its read bound"))
-    }
-
     pub(super) fn read_entry(&self, entry: &RawEntry) -> Result<RawCommit> {
-        let mut commits = self
-            .reader(entry.reference.id, entry.stream, entry.sequence)?
-            .decode::<RawCommit>()?;
-        let commit = commits
-            .pop()
-            .ok_or_else(|| self.invalid("the raw commit is absent"))?;
-        commit.validate(&self.root)?;
+        let commit = RawCommit::read(
+            &SegmentFile::reader(self.segment_path(entry.reference.id)?)?,
+            entry.reference.offset - entry.frame_bytes as u64,
+            entry.frame_bytes,
+        )?;
         if commit.revision != entry.commit.revision
             || commit.kind.as_ref() != Some(&entry.commit.kind)
             || commit.intake != entry.commit.intake
@@ -2135,7 +1941,7 @@ impl RawCommit {
         })
     }
 
-    fn validate(&self, root: &Path) -> Result<()> {
+    pub(super) fn validate(&self, root: &Path) -> Result<()> {
         let mut end = 0_u32;
         let mut ordinal = 0_usize;
         let mut prior = 0;
@@ -2924,7 +2730,8 @@ pub(super) mod tests {
         let mut journal = RawJournal::open(root, &BTreeMap::new())?;
         let raw = RawIdentity::Evidence(identity.clone());
         let commit = journal.prepare(&raw, &batch.clone().into(), 1)?;
-        journal.append(&raw, commit)?;
+        let append = journal.prepare_append(&raw, commit)?;
+        journal.append(&raw, append)?;
         assert_eq!(journal.outcome(&raw, 2), EvidenceStoreOutcomeV1::Pending);
         let batch = ValidatedEvidenceBatchV1 {
             first_cursor: 1,
@@ -2935,9 +2742,10 @@ pub(super) mod tests {
         };
         let commit = journal.prepare(&raw, &batch.clone().into(), 2)?;
         assert_eq!(commit.spans.len(), 2);
-        journal.append(&raw, commit)?;
+        let append = journal.prepare_append(&raw, commit)?;
+        journal.append(&raw, append)?;
         assert_eq!(journal.outcome(&raw, 3), EvidenceStoreOutcomeV1::Accepted);
-        let file = journal.segments.file_path(1)?.to_path_buf();
+        let file = journal.segment_path(1)?.to_path_buf();
         let length = std::fs::metadata(&file)?.len();
         drop(journal);
 
@@ -2967,6 +2775,24 @@ pub(super) mod tests {
         let stored =
             super::super::SegmentFile::reader(&file)?.read(entry.body_start, entry.body_bytes)?;
         assert_eq!(stored.as_slice(), body.as_ref());
+        assert!(!root.join("analysis.duckdb").exists());
+        let first_end = journal.entries[&1].reference.offset;
+        let mut journal = journal;
+        journal.seal_all()?;
+        let file = journal.segment_path(1)?.to_path_buf();
+        let sealed = std::fs::read(&file)?;
+        drop(journal);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&file)?
+            .set_len(first_end)?;
+        let shortened = std::fs::read(&file)?;
+        assert!(RawJournal::read_sealed(root, &BTreeMap::new()).is_err());
+        assert_eq!(std::fs::read(&file)?, shortened);
+        std::fs::write(&file, &sealed)?;
+        let journal = RawJournal::read_sealed(root, &BTreeMap::new())?;
+        assert_eq!(journal.sources[&identity.key()].receipt.cursor(), 3);
+        assert_eq!(journal.read_entry(&journal.entries[&2])?.body, body);
         assert!(!root.join("analysis.duckdb").exists());
         drop(journal);
         let file = std::fs::OpenOptions::new()

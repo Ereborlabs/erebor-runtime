@@ -8,6 +8,10 @@ mod process;
 
 pub use model::*;
 
+use GraphContextActionV1 as ContextClass;
+use GraphFactValueV1 as FactValue;
+use GraphReadPathV1 as ReadPath;
+
 #[derive(Clone, Copy, Debug)]
 pub enum Detector {
     Process,

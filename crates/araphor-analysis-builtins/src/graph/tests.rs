@@ -29,10 +29,10 @@ fn detector_declarations_stay_independent() {
 #[test]
 fn record_index_keeps_fact_ordinals() -> TestResult {
     let detector = Detector::Process;
-    let parent = FactValue::Parent {
-        child_task: Some(3),
-        child_process: Some([4; 16]),
-        qualified: true,
+    let parent = FactValue::NativeParent {
+        parent: subject(GraphSubjectKindV1::Task, 2_u64.to_be_bytes().to_vec()),
+        child: subject(GraphSubjectKindV1::Task, 3_u64.to_be_bytes().to_vec()),
+        proof_quality: proof(),
     };
     let fixture = fixture(
         detector,
@@ -40,12 +40,7 @@ fn record_index_keeps_fact_ordinals() -> TestResult {
         &[
             fact(1, parent.clone()),
             fact(0, parent.clone()),
-            fact(
-                2,
-                FactValue::Context {
-                    classification: ContextClass::InMemory,
-                },
-            ),
+            fact(2, context(ContextClass::InMemory)),
             fact(1, parent),
         ],
     )?;
@@ -95,11 +90,7 @@ fn process_context_classifications() -> TestResult {
         (ContextClass::InMemory, "IN_MEMORY_ONLY"),
         (ContextClass::PayloadUnobservable, "PAYLOAD_UNOBSERVABLE"),
     ] {
-        let fixture = fixture(
-            detector,
-            &[record()],
-            &[fact(0, FactValue::Context { classification })],
-        )?;
+        let fixture = fixture(detector, &[record()], &[fact(0, context(classification))])?;
         let (rows, _) = findings(detector, &fixture)?;
         assert_eq!(rows[1].reason, reason);
         assert!(!rows[1].confirmed);
@@ -115,9 +106,7 @@ fn fact_reference_is_exact() -> TestResult {
         &[record()],
         &[fact(
             u64::from(u32::MAX) + 1,
-            FactValue::Context {
-                classification: ContextClass::InMemory,
-            },
+            context(ContextClass::InMemory),
         )],
     )?;
     assert!(Detector::Process.evaluate(&fixture.evaluation).is_err());
@@ -127,17 +116,18 @@ fn fact_reference_is_exact() -> TestResult {
 #[test]
 fn kubernetes_retains_missing_proof() -> TestResult {
     let detector = Detector::Kubernetes;
-    let stage = Kubernetes {
-        qualified: true,
-        request: true,
-        audit: true,
-        object: true,
-        version: true,
-        owner: true,
-        pod: true,
-        node: true,
-        container: true,
-        admission: true,
+    let stage = KubernetesStageProofV1 {
+        cluster_id: "cluster".into(),
+        carried_request_id: Some("request".into()),
+        audit_id: Some("audit".into()),
+        object_uid: Some("object".into()),
+        resource_version: Some("1".into()),
+        owner_uid: Some("owner".into()),
+        pod_uid: Some("pod".into()),
+        node_id: Some("node".into()),
+        full_container_id: Some("container".into()),
+        remote_admission_id: Some("admission".into()),
+        proof_quality: proof(),
     };
     let fixture = fixture(
         detector,
@@ -174,57 +164,56 @@ fn credential_exact_and_missing() -> TestResult {
     channel.boottime = 11;
     let mut remote = read.clone();
     remote.boottime = 12;
-    let credential = Credential {
-        object: [6; 16],
-        expected: false,
-        reviewed: true,
-        successful: true,
-        completion: Some(Completion {
+    let credential = FactValue::Credential {
+        object_id: [6; 16],
+        expected_access: false,
+        reviewed_policy_revision: "reviewed".into(),
+        proof_quality: proof(),
+        completion: Some(GraphReadCompletionV1 {
+            admission_record: identity(0),
             owner: "node".into(),
-            id: "read".into(),
-            task: 3,
-            process: [4; 16],
-            object: [6; 16],
-            file_description: "fd".into(),
+            completion_id: "read".into(),
+            task_cookie: 3,
+            process_instance_id: [4; 16],
+            object_id: [6; 16],
+            file_description_id: "fd".into(),
             path: ReadPath::Read,
             result: 8,
-            bytes: 8,
-            lease: Some("lease".into()),
-            principal: Some("principal".into()),
+            byte_count: 8,
+            credential_lease_id: Some("lease".into()),
+            principal_id: Some("principal".into()),
         }),
-        principal: Some("principal".into()),
+        principal_id: Some("principal".into()),
     };
-    let channel_fact = Channel {
-        task: 3,
-        process: [4; 16],
-        socket: [7; 16],
-        authority: "provider".into(),
-        request: "request".into(),
-        lease: "lease".into(),
-        principal: "principal".into(),
-        operation: "write".into(),
-        successful: true,
+    let channel_fact = FactValue::Channel {
+        task_cookie: 3,
+        process_instance_id: [4; 16],
+        socket_object_id: [7; 16],
+        authority_id: "provider".into(),
+        carried_request_id: "request".into(),
+        credential_lease_id: "lease".into(),
+        principal_id: "principal".into(),
+        operation_id: "write".into(),
+        proof_quality: proof(),
     };
-    let authority = Authority {
-        id: "provider".into(),
-        process: Some([4; 16]),
-        task: Some(3),
-        credential: Some([6; 16]),
-        socket: Some([7; 16]),
-        request: Some("request".into()),
-        lease: Some("lease".into()),
-        principal: "principal".into(),
-        operation: "write".into(),
-        outside: true,
-        workload: Some(vec![5; 16]),
-        contextual: true,
-        direct: true,
-        result: ResultAuthority::Succeeded,
+    let authority = FactValue::AuthorityUse {
+        authority_id: "provider".into(),
+        process_instance_id: Some([4; 16]),
+        task_cookie: Some(3),
+        credential_object_id: Some([6; 16]),
+        socket_object_id: Some([7; 16]),
+        request_id: Some("request".into()),
+        credential_lease_id: Some("lease".into()),
+        principal_id: "principal".into(),
+        operation_id: "write".into(),
+        outside_reviewed_behavior: true,
+        workload_binding: Some(subject(GraphSubjectKindV1::ExecutionSet, vec![5; 16])),
+        proof_quality: proof(),
     };
     let facts = vec![
-        fact(0, FactValue::Credential(credential)),
-        fact(1, FactValue::Channel(channel_fact)),
-        fact(2, FactValue::Authority(authority)),
+        fact(0, credential),
+        fact(1, channel_fact),
+        fact(2, authority),
     ];
     let mut complete = fixture(detector, &[read, channel, remote], &facts)?;
     let batch = complete.evaluation.inputs[0].data.batches.remove(0);
@@ -272,10 +261,10 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
     let mut first = facts[2].clone();
     first.identity = 50;
     first.record = 4;
-    let FactValue::Authority(authority) = &mut first.value else {
+    let FactValue::AuthorityUse { proof_quality, .. } = &mut first.value else {
         return Err("authority fixture".into());
     };
-    authority.direct = false;
+    proof_quality.remote_subject_binding = RemoteSubjectBindingV1::Contextual;
     let mut earlier = facts[2].clone();
     earlier.identity = 90;
     earlier.record = 3;
@@ -311,9 +300,8 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
         } else {
             ("CONTEXTUAL_CREDENTIAL_PIVOT", vec![0, 3, 3, 4], 1)
         };
-        let FactValue::Credential(credential) = &computation.facts[0].value else {
-            return Err("credential fixture".into());
-        };
+        let credential = &computation.facts[0].value;
+        assert!(matches!(credential, FactValue::Credential { .. }));
         let mut joined_evidence = vec![0];
         let matched = computation.authorities(
             &computation.records[0],

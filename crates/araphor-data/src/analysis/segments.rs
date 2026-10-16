@@ -161,7 +161,7 @@ impl AnalysisStore {
             }
         }
         drop(expiry);
-        let current = raw.segments.directory_current()?;
+        let current = raw.directory_current()?;
         let mut charges = BTreeMap::<_, i64>::new();
         for (_, name, tenant, bytes) in removals {
             let path = super::raw::RawJournal::file_path(root, &name)?;
@@ -194,7 +194,7 @@ impl AnalysisStore {
             .context(IoSnafu { path: &directory })?
             .sync_all()
             .context(IoSnafu { path: &directory })?;
-        raw.segments.directory_changed(current)?;
+        raw.directory_changed(current)?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin segment cleanup",
         })?;
@@ -252,7 +252,7 @@ mod tests {
         let mut guard = store.maintenance_writer()?;
         let writer = guard.get_mut()?;
         let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
-        let files = [raw.segments.file_path(1)?, raw.segments.file_path(2)?];
+        let files = [raw.segment_path(1)?, raw.segment_path(2)?];
         let original = [fs::read(files[0])?, fs::read(files[1])?];
         let charge: u64 =
             writer.query_row("SELECT logical_bytes FROM tenant_usage", [], |row| {

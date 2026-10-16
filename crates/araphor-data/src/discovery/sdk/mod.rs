@@ -1,11 +1,10 @@
-use std::collections::BTreeMap;
-
 use araphor_analysis_builtins::{discovery as builtin, Rows};
 use araphor_analysis_sdk as sdk;
 use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Serialize};
 use snafu::ResultExt as _;
 
+#[cfg(test)]
 use super::super::*;
 use crate::{AnalysisContractSnafu, DiscoveryEncodingSnafu, Result};
 
@@ -15,52 +14,12 @@ mod context;
 #[cfg(test)]
 mod native;
 mod pages;
-mod project;
 mod snapshot;
 mod validation;
 
-struct Adapter {
-    identities: BTreeMap<DiscoveryRecordIdV1, u64>,
-}
+struct Adapter;
 
 impl Adapter {
-    fn at<'a, T>(rows: &'a [T], index: u64, field: &'static str) -> Result<&'a T> {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| rows.get(index))
-            .ok_or_else(|| crate::DiscoveryInvalidSnafu { field }.build())
-    }
-    fn new<'a>(records: impl IntoIterator<Item = &'a DiscoveryRecordIdV1>) -> Self {
-        let mut identities: BTreeMap<_, _> =
-            records.into_iter().map(|id| (id.clone(), 0)).collect();
-        for (index, (_, rank)) in identities.iter_mut().enumerate() {
-            *rank = index as u64;
-        }
-        Self { identities }
-    }
-
-    fn identity(&self, id: &DiscoveryRecordIdV1) -> Result<builtin::Identity> {
-        let order = self.identities.get(id).copied().ok_or_else(|| {
-            crate::DiscoveryInvalidSnafu {
-                field: "analysis identity",
-            }
-            .build()
-        })?;
-        Ok(builtin::Identity {
-            order,
-            value: Self::json(id)?,
-        })
-    }
-
-    fn record(&self, id: builtin::Identity) -> Result<DiscoveryRecordIdV1> {
-        let value: DiscoveryRecordIdV1 = Self::decode(&id.value)?;
-        crate::discovery::model::require(
-            self.identities.get(&value).copied() == Some(id.order),
-            "analysis record reference",
-        )?;
-        Ok(value)
-    }
-
     fn json(value: &impl Serialize) -> Result<String> {
         serde_json::to_string(value).context(DiscoveryEncodingSnafu)
     }

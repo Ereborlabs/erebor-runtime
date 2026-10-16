@@ -1,7 +1,5 @@
 //! Durable data owners shared by embedded and remote Araphor deployments.
 
-use serde::{Deserialize, Serialize};
-
 mod analysis;
 mod canonical;
 mod digest;
@@ -64,28 +62,9 @@ pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 4_096;
 pub const MAX_EVIDENCE_GRPC_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
 pub const MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES: usize = 4 * 1_024 * 1_024;
 pub const MAX_PENDING_EVIDENCE_RECORDS: u64 = 4_096;
-pub const MAX_NODE_ID_BYTES: usize = 128;
-
-#[must_use]
-pub fn node_id_is_valid(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_NODE_ID_BYTES
-        && !matches!(value, "." | "..")
-        && !value.chars().any(char::is_whitespace)
-        && !value.contains(['/', '\\', '\0'])
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-/// Separates retained input by authenticated source and source epoch.
-pub struct EvidenceIntakeIdentityV1 {
-    pub tenant_id: [u8; 16],
-    pub node_id: String,
-    pub node_boot_id: [u8; 16],
-    pub label_epoch: u64,
-    pub source_id: [u8; 16],
-    pub source_epoch: u64,
-}
+pub use araphor_analysis_builtins::discovery::{
+    node_id_is_valid, EvidenceIntakeIdentityV1, MAX_NODE_ID_BYTES,
+};
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use analysis::AnalysisCommitStage;

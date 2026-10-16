@@ -8,6 +8,19 @@ use crate::{
     EvidenceIntakeIdentityV1, EvidenceRecord, Result, WorkloadTargetFactV1,
 };
 
+pub use araphor_analysis_builtins::discovery::{
+    BehaviorAtomKeyV1, BehaviorAtomV1, BehaviorDisplayGroupV1, BehaviorDisplayKeyV1,
+    DiscoveryComparisonV1, DiscoveryContextBindingV1, DiscoveryCoverageStateV1,
+    DiscoveryCoverageV1, DiscoveryEffectKeyV1, DiscoveryFileObjectV1, DiscoveryGroupChangeV1,
+    DiscoveryLifecycleCaseV1, DiscoveryLifecycleEntryV1, DiscoveryLifecycleStateV1,
+    DiscoveryPhysicalResultV1, DiscoveryPolicyKeyV1, DiscoveryPolicyRevisionV1,
+    DiscoveryProofKindV1, DiscoveryRecordIdV1, DiscoveryUnresolvedV1,
+};
+
+pub trait DiscoveryValidate {
+    fn validate(&self) -> Result<()>;
+}
+
 pub const DISCOVERY_SCHEMA_VERSION: u32 = 3;
 pub const DISCOVERY_INPUT_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_DISCOVERY_RECORDS: usize = 1_000_000;
@@ -54,25 +67,8 @@ pub(crate) fn add(count: &mut u64, value: u64) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DiscoveryProofKindV1 {
-    ObservedRuntime,
-    RecordedInput,
-    Synthetic,
-    ConfigurationScan,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryRecordIdV1 {
-    pub stream: EvidenceIntakeIdentityV1,
-    pub cpu_id: u32,
-    pub durable_cursor: u64,
-}
-
-impl DiscoveryRecordIdV1 {
-    pub fn validate(&self) -> Result<()> {
+impl DiscoveryValidate for DiscoveryRecordIdV1 {
+    fn validate(&self) -> Result<()> {
         require(
             self.stream.valid() && self.durable_cursor > 0,
             "record identity",
@@ -80,31 +76,8 @@ impl DiscoveryRecordIdV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DiscoveryCoverageStateV1 {
-    Healthy,
-    Gapped,
-    Unknown,
-    Closed,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryCoverageV1 {
-    pub stream: EvidenceIntakeIdentityV1,
-    pub cpu_id: u32,
-    pub first_cursor: u64,
-    pub last_cursor: u64,
-    pub expected_records: u64,
-    pub coverage_revision: u64,
-    pub coverage_interval_id: [u8; 16],
-    pub state: DiscoveryCoverageStateV1,
-    pub gap_reasons: Vec<String>,
-}
-
-impl DiscoveryCoverageV1 {
-    pub fn validate(&self) -> Result<()> {
+impl DiscoveryValidate for DiscoveryCoverageV1 {
+    fn validate(&self) -> Result<()> {
         require(
             self.stream.valid()
                 && self.first_cursor > 0
@@ -131,53 +104,8 @@ impl DiscoveryCoverageV1 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryPolicyKeyV1 {
-    pub workload_selector_id: String,
-    pub protected_scope_id: String,
-    pub execution_set_id: String,
-    pub entry_kind: String,
-    pub role_id: String,
-    pub process_state_id: String,
-    pub effect_family: u16,
-    pub operation_id: String,
-    pub operation: u16,
-    pub operation_argument: u32,
-    pub argument_wildcard: bool,
-    pub object_selector: String,
-    pub binding_lifecycle: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryPolicyRevisionV1 {
-    pub profile_id: String,
-    pub profile_version: u64,
-    pub source_revision_id: String,
-    pub signed_profile_digest: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryContextBindingV1 {
-    pub record_id: DiscoveryRecordIdV1,
-    pub subject_revision: String,
-    pub image_digest: String,
-    pub configuration_digest: String,
-    pub process_instance_id: [u8; 16],
-    pub entry_instance_id: [u8; 16],
-    pub binding_id: [u8; 16],
-    pub role_id: u32,
-    pub state_id: u32,
-    pub entry_rule_id: u32,
-    pub catalog_revision: u64,
-    pub static_key: DiscoveryPolicyKeyV1,
-    pub policy_revision: DiscoveryPolicyRevisionV1,
-}
-
-impl DiscoveryContextBindingV1 {
-    pub fn validate(&self) -> Result<()> {
+impl DiscoveryValidate for DiscoveryContextBindingV1 {
+    fn validate(&self) -> Result<()> {
         self.record_id.validate()?;
         require(
             self.process_instance_id != [0; 16]
@@ -362,58 +290,6 @@ impl TryFrom<(&EvidenceIntakeIdentityV1, u32, &AnalysisRecordV1)> for DiscoveryR
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DiscoveryLifecycleCaseV1 {
-    Startup,
-    SteadyWork,
-    Probes,
-    Restart,
-    Rollout,
-    Shutdown,
-    Recovery,
-    ScheduledWork,
-    ApprovedMaintenance,
-}
-
-impl DiscoveryLifecycleCaseV1 {
-    pub const ALL: [Self; 9] = [
-        Self::Startup,
-        Self::SteadyWork,
-        Self::Probes,
-        Self::Restart,
-        Self::Rollout,
-        Self::Shutdown,
-        Self::Recovery,
-        Self::ScheduledWork,
-        Self::ApprovedMaintenance,
-    ];
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "state", rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DiscoveryLifecycleStateV1 {
-    Recorded { records: Vec<DiscoveryRecordIdV1> },
-    Declared { reason: String },
-    Missing,
-    NotApplicable { reason: String },
-    Unsupported { reason: String },
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryLifecycleEntryV1 {
-    pub case: DiscoveryLifecycleCaseV1,
-    pub state: DiscoveryLifecycleStateV1,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryUnresolvedV1 {
-    pub record_id: DiscoveryRecordIdV1,
-    pub reason: String,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryInputManifestV1 {
@@ -550,24 +426,6 @@ impl DiscoveryInputManifestV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DiscoveryPhysicalResultV1 {
-    Prevented,
-    Unknown,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryFileObjectV1 {
-    pub profile_generation_ref_id: u64,
-    pub mount_id_unique: u64,
-    pub inode: u64,
-    pub inode_generation: u64,
-    pub mount_namespace_inode: u32,
-    pub filesystem_device: u32,
-}
-
 impl From<&crate::EvidenceExactFileObject> for DiscoveryFileObjectV1 {
     fn from(value: &crate::EvidenceExactFileObject) -> Self {
         Self {
@@ -579,27 +437,6 @@ impl From<&crate::EvidenceExactFileObject> for DiscoveryFileObjectV1 {
             filesystem_device: value.filesystem_device,
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryEffectKeyV1 {
-    pub task_cookie: u64,
-    pub target_task_cookie: Option<u64>,
-    pub process_lineage_id: Vec<u8>,
-    pub authority_domain_id: Vec<u8>,
-    pub execution_set_id: Vec<u8>,
-    pub exact_object_id: Vec<u8>,
-    pub destination_id: u64,
-    pub policy_rule_id: u64,
-    pub reason: u32,
-    pub decision: u32,
-    pub effect_family: u32,
-    pub operation: u32,
-    pub operation_argument: Option<u32>,
-    pub configured_errno: i32,
-    pub kernel_result: i32,
-    pub exact_file_object: Option<DiscoveryFileObjectV1>,
 }
 
 impl From<&EvidenceRecord> for DiscoveryEffectKeyV1 {
@@ -629,33 +466,8 @@ impl From<&EvidenceRecord> for DiscoveryEffectKeyV1 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct BehaviorAtomKeyV1 {
-    pub stream: EvidenceIntakeIdentityV1,
-    pub cpu_id: u32,
-    pub subject_revision: String,
-    pub image_digest: String,
-    pub configuration_digest: String,
-    pub process_instance_id: [u8; 16],
-    pub entry_instance_id: [u8; 16],
-    pub binding_id: [u8; 16],
-    pub role_id: u32,
-    pub state_id: u32,
-    pub entry_rule_id: u32,
-    pub catalog_revision: u64,
-    pub static_key: DiscoveryPolicyKeyV1,
-    pub policy_revision: DiscoveryPolicyRevisionV1,
-    pub generation: u64,
-    pub coverage_interval_id: [u8; 16],
-    pub temporal_coverage: i32,
-    pub effect: DiscoveryEffectKeyV1,
-    pub physical_result: DiscoveryPhysicalResultV1,
-    pub proof_kind: DiscoveryProofKindV1,
-}
-
-impl BehaviorAtomKeyV1 {
-    pub fn validate(&self) -> Result<()> {
+impl DiscoveryValidate for BehaviorAtomKeyV1 {
+    fn validate(&self) -> Result<()> {
         require(
             self.stream.valid()
                 && self.process_instance_id != [0; 16]
@@ -727,16 +539,6 @@ impl BehaviorAtomKeyV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct BehaviorAtomV1 {
-    pub key: BehaviorAtomKeyV1,
-    pub count: u64,
-    pub first_cursor: u64,
-    pub last_cursor: u64,
-    pub evidence_sample: Vec<DiscoveryRecordIdV1>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct BehaviorSnapshotV1 {
     pub schema_version: u32,
     pub tenant_id: [u8; 16],
@@ -760,54 +562,6 @@ pub struct DiscoveryRecordedResultV1 {
     pub duplicate_deliveries: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct BehaviorDisplayKeyV1 {
-    pub subject_revision: String,
-    pub image_digest: String,
-    pub configuration_digest: String,
-    pub role_id: u32,
-    pub state_id: u32,
-    pub entry_rule_id: u32,
-    pub static_key: DiscoveryPolicyKeyV1,
-    pub policy_revision: DiscoveryPolicyRevisionV1,
-    pub source_reason: u32,
-    pub source_decision: u32,
-    pub kernel_result: i32,
-    pub physical_result: DiscoveryPhysicalResultV1,
-    pub proof_kind: DiscoveryProofKindV1,
-}
-
-impl From<&BehaviorAtomKeyV1> for BehaviorDisplayKeyV1 {
-    fn from(key: &BehaviorAtomKeyV1) -> Self {
-        Self {
-            subject_revision: key.subject_revision.clone(),
-            image_digest: key.image_digest.clone(),
-            configuration_digest: key.configuration_digest.clone(),
-            role_id: key.role_id,
-            state_id: key.state_id,
-            entry_rule_id: key.entry_rule_id,
-            static_key: key.static_key.clone(),
-            policy_revision: key.policy_revision.clone(),
-            source_reason: key.effect.reason,
-            source_decision: key.effect.decision,
-            kernel_result: key.effect.kernel_result,
-            physical_result: key.physical_result,
-            proof_kind: key.proof_kind,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct BehaviorDisplayGroupV1 {
-    pub key: BehaviorDisplayKeyV1,
-    pub count: u64,
-    pub members: Vec<BehaviorAtomKeyV1>,
-    pub evidence_sample: Vec<DiscoveryRecordIdV1>,
-    pub coverage: Vec<DiscoveryCoverageV1>,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryReviewedBaselineV1 {
@@ -815,27 +569,4 @@ pub struct DiscoveryReviewedBaselineV1 {
     pub reviewer: String,
     pub reviewed_utc_ns: u64,
     pub forbidden: Vec<DiscoveryPolicyKeyV1>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryGroupChangeV1 {
-    pub before: BehaviorDisplayGroupV1,
-    pub after: BehaviorDisplayGroupV1,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryComparisonV1 {
-    pub added: Vec<BehaviorDisplayGroupV1>,
-    pub removed: Vec<BehaviorDisplayGroupV1>,
-    pub changed_counts: Vec<DiscoveryGroupChangeV1>,
-    pub changed_results: Vec<DiscoveryGroupChangeV1>,
-    pub changed_identities: Vec<DiscoveryGroupChangeV1>,
-    pub new_resources: Vec<BehaviorAtomKeyV1>,
-    pub coverage_before: Vec<DiscoveryCoverageV1>,
-    pub coverage_after: Vec<DiscoveryCoverageV1>,
-    pub lifecycle_before: Vec<DiscoveryLifecycleEntryV1>,
-    pub lifecycle_after: Vec<DiscoveryLifecycleEntryV1>,
-    pub forbidden_groups: Vec<BehaviorDisplayGroupV1>,
 }

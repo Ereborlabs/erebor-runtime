@@ -28,7 +28,10 @@ impl BehaviorSnapshotV1 {
         let mut groups = Vec::new();
         for (side, values) in [&current, &previous].into_iter().enumerate() {
             for group in values {
-                groups.push(Adapter::match_group(side as u8, group)?);
+                groups.push(builtin::Side {
+                    side: side as u8,
+                    value: group.clone(),
+                });
             }
         }
         let mut resources = Vec::new();
@@ -38,25 +41,14 @@ impl BehaviorSnapshotV1 {
                 let key = &atom.key;
                 resources.push(builtin::Side {
                     side: side as u8,
-                    value: Adapter::json(&(
-                        &key.subject_revision,
-                        &key.static_key,
-                        &key.binding_id,
-                        &key.effect.exact_object_id,
-                        &key.effect.exact_file_object,
-                    ))?,
+                    value: key.clone(),
                 });
             }
             states.push(builtin::MatchState {
-                coverage: Adapter::json(&snapshot.coverage)?,
-                lifecycle: Adapter::json(&snapshot.lifecycle)?,
+                coverage: snapshot.coverage.clone(),
+                lifecycle: snapshot.lifecycle.clone(),
             });
         }
-        let forbidden = baseline
-            .forbidden
-            .iter()
-            .map(Adapter::json)
-            .collect::<Result<Vec<_>>>()?;
         let output = Adapter::run(
             &execution,
             self.tenant_id,
@@ -65,123 +57,76 @@ impl BehaviorSnapshotV1 {
                 Adapter::dataset("groups", &groups)?,
                 Adapter::dataset("resources", &resources)?,
                 Adapter::dataset("states", &states)?,
-                Adapter::dataset("forbidden", &forbidden)?,
+                Adapter::dataset("forbidden", &baseline.forbidden)?,
             ],
             Adapter::revision(&(self, baseline))?,
         )?;
-        let mut rows = Adapter::output::<builtin::Comparison>(&output.output, "comparison")?;
+        let mut rows = Adapter::output::<DiscoveryComparisonV1>(&output.output, "comparison")?;
         crate::discovery::model::require(rows.len() == 1, "analysis comparison")?;
         let result = rows.remove(0);
-        crate::discovery::model::require(
-            (self.coverage == baseline.snapshot.coverage || result.coverage_changed)
-                && (self.lifecycle == baseline.snapshot.lifecycle || result.lifecycle_changed),
-            "analysis comparison proof",
-        )?;
-        Ok(DiscoveryComparisonV1 {
-            added: Adapter::groups_at(&current, result.added)?,
-            removed: Adapter::groups_at(&previous, result.removed)?,
-            changed_counts: Adapter::changes(&current, &previous, result.counts)?,
-            changed_results: Adapter::changes(&current, &previous, result.outcomes)?,
-            changed_identities: Adapter::changes(&current, &previous, result.identities)?,
-            new_resources: result
-                .resources
-                .into_iter()
-                .map(|index| {
-                    Adapter::at(&self.atoms, index, "analysis resource reference")
-                        .map(|atom| atom.key.clone())
-                })
-                .collect::<Result<_>>()?,
-            coverage_before: if result.coverage_changed {
-                baseline.snapshot.coverage.clone()
-            } else {
-                Vec::new()
-            },
-            coverage_after: if result.coverage_changed {
-                self.coverage.clone()
-            } else {
-                Vec::new()
-            },
-            lifecycle_before: if result.lifecycle_changed {
-                baseline.snapshot.lifecycle.clone()
-            } else {
-                Vec::new()
-            },
-            lifecycle_after: if result.lifecycle_changed {
-                self.lifecycle.clone()
-            } else {
-                Vec::new()
-            },
-            forbidden_groups: Adapter::groups_at(&current, result.forbidden)?,
-        })
+        Adapter::validate_comparison(self, &baseline.snapshot, &current, &previous, &result)?;
+        Ok(result)
     }
 }
 
 impl Adapter {
-    fn match_group(side: u8, group: &BehaviorDisplayGroupV1) -> Result<builtin::MatchGroup> {
-        let key = &group.key;
-        Ok(builtin::MatchGroup {
-            side,
-            key: Self::json(key)?,
-            outcome: Self::json(&(
-                &key.subject_revision,
-                &key.image_digest,
-                &key.configuration_digest,
-                key.role_id,
-                key.state_id,
-                key.entry_rule_id,
-                &key.static_key,
-                &key.policy_revision,
-                key.proof_kind,
-            ))?,
-            identity: Self::json(&(
-                key.role_id,
-                key.state_id,
-                key.entry_rule_id,
-                &key.static_key,
-                key.source_reason,
-                key.source_decision,
-                key.kernel_result,
-                key.physical_result,
-                key.proof_kind,
-            ))?,
-            revision: Self::json(&(
-                &key.subject_revision,
-                &key.image_digest,
-                &key.configuration_digest,
-                &key.policy_revision,
-            ))?,
-            policy: Self::json(&key.static_key)?,
-            count: group.count,
-        })
-    }
-
-    fn group_at(groups: &[BehaviorDisplayGroupV1], index: u64) -> Result<BehaviorDisplayGroupV1> {
-        Self::at(groups, index, "analysis group reference").cloned()
-    }
-
-    fn groups_at(
+    pub(super) fn validate_comparison(
+        current: &BehaviorSnapshotV1,
+        previous: &BehaviorSnapshotV1,
         groups: &[BehaviorDisplayGroupV1],
-        indices: Vec<u64>,
-    ) -> Result<Vec<BehaviorDisplayGroupV1>> {
-        indices
-            .into_iter()
-            .map(|index| Self::group_at(groups, index))
-            .collect()
+        prior: &[BehaviorDisplayGroupV1],
+        result: &DiscoveryComparisonV1,
+    ) -> Result<()> {
+        crate::discovery::model::require(
+            Self::comparison_state(
+                &result.coverage_before,
+                &result.coverage_after,
+                &previous.coverage,
+                &current.coverage,
+            ) && Self::comparison_state(
+                &result.lifecycle_before,
+                &result.lifecycle_after,
+                &previous.lifecycle,
+                &current.lifecycle,
+            ),
+            "analysis comparison proof",
+        )?;
+        for (groups, input) in [
+            (&result.added, groups),
+            (&result.removed, prior),
+            (&result.forbidden_groups, groups),
+        ] {
+            crate::discovery::model::require(
+                groups.iter().all(|group| input.contains(group)),
+                "analysis group reference",
+            )?;
+        }
+        for change in result
+            .changed_counts
+            .iter()
+            .chain(&result.changed_results)
+            .chain(&result.changed_identities)
+        {
+            crate::discovery::model::require(
+                prior.contains(&change.before) && groups.contains(&change.after),
+                "analysis group reference",
+            )?;
+        }
+        crate::discovery::model::require(
+            result
+                .new_resources
+                .iter()
+                .all(|key| current.atoms.iter().any(|atom| &atom.key == key)),
+            "analysis resource reference",
+        )?;
+        Ok(())
     }
 
-    fn changes(
-        current: &[BehaviorDisplayGroupV1],
-        previous: &[BehaviorDisplayGroupV1],
-        pairs: Vec<(u64, u64)>,
-    ) -> Result<Vec<DiscoveryGroupChangeV1>> {
-        pairs
-            .into_iter()
-            .map(|(before, after)| {
-                Ok(DiscoveryGroupChangeV1 {
-                    before: Self::group_at(previous, before)?,
-                    after: Self::group_at(current, after)?,
-                })
-            })
-            .collect()
+    fn comparison_state<T: Eq>(before: &[T], after: &[T], previous: &[T], current: &[T]) -> bool {
+        if before.is_empty() && after.is_empty() {
+            previous == current
+        } else {
+            before == previous && after == current
+        }
     }
 }

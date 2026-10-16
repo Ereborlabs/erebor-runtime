@@ -104,7 +104,7 @@ impl Adapter {
             Self::context_matches(&wire, context, record, proof),
             "analysis source context",
         )?;
-        let mut key: BehaviorAtomKeyV1 = Self::decode(&Self::atom_key(record, context, proof)?)?;
+        let mut key = Self::atom_key(record, context, proof)?;
         key.physical_result = if wire.decision == 1 && wire.kernel_result < 0 {
             DiscoveryPhysicalResultV1::Prevented
         } else {

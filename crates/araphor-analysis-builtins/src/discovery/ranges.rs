@@ -2,24 +2,35 @@ use std::collections::BTreeMap;
 
 use araphor_analysis_sdk as sdk;
 
-use super::{Coverage, CoverageState, Discovery, Lifecycle, LifecycleState};
+use super::{
+    Discovery, DiscoveryCoverageStateV1 as CoverageState, DiscoveryCoverageV1 as Coverage,
+    DiscoveryLifecycleCaseV1, DiscoveryLifecycleEntryV1 as Lifecycle,
+    DiscoveryLifecycleStateV1 as LifecycleState,
+};
 
 impl Discovery {
     pub(super) fn merge_coverage(mut ranges: Vec<Coverage>) -> sdk::Result<Vec<Coverage>> {
         ranges.sort_by(|left, right| {
-            (&left.source, left.cpu, left.first).cmp(&(&right.source, right.cpu, right.first))
+            (&left.stream, left.cpu_id, left.first_cursor).cmp(&(
+                &right.stream,
+                right.cpu_id,
+                right.first_cursor,
+            ))
         });
         let mut output: Vec<Coverage> = Vec::new();
         for range in ranges {
             if let Some(previous) = output.last_mut() {
-                if previous.source == range.source && previous.cpu == range.cpu {
-                    Self::same(previous.last < range.first, "snapshot overlap")?;
-                    if previous.last.checked_add(1) == Some(range.first)
-                        && previous.revision == range.revision
-                        && previous.interval == range.interval
+                if previous.stream == range.stream && previous.cpu_id == range.cpu_id {
+                    Self::same(
+                        previous.last_cursor < range.first_cursor,
+                        "snapshot overlap",
+                    )?;
+                    if previous.last_cursor.checked_add(1) == Some(range.first_cursor)
+                        && previous.coverage_revision == range.coverage_revision
+                        && previous.coverage_interval_id == range.coverage_interval_id
                     {
-                        previous.last = range.last;
-                        Self::add(&mut previous.expected, range.expected)?;
+                        previous.last_cursor = range.last_cursor;
+                        Self::add(&mut previous.expected_records, range.expected_records)?;
                         previous.state = match (previous.state, range.state) {
                             (CoverageState::Gapped, _) | (_, CoverageState::Gapped) => {
                                 CoverageState::Gapped
@@ -32,9 +43,9 @@ impl Discovery {
                             }
                             _ => CoverageState::Healthy,
                         };
-                        previous.gaps.extend(range.gaps);
-                        previous.gaps.sort();
-                        previous.gaps.dedup();
+                        previous.gap_reasons.extend(range.gap_reasons);
+                        previous.gap_reasons.sort();
+                        previous.gap_reasons.dedup();
                         continue;
                     }
                 }
@@ -47,12 +58,14 @@ impl Discovery {
     pub(super) fn merge_lifecycle(input: Vec<Lifecycle>) -> sdk::Result<Vec<Lifecycle>> {
         let mut cases = BTreeMap::new();
         for entry in input {
-            Self::require(entry.case < 9, "lifecycle case")?;
             let state = cases.entry(entry.case).or_insert(LifecycleState::Missing);
             match (state, entry.state) {
                 (state @ LifecycleState::Missing, incoming) => *state = incoming,
                 (_, LifecycleState::Missing) => {}
-                (LifecycleState::Recorded(records), LifecycleState::Recorded(incoming)) => {
+                (
+                    LifecycleState::Recorded { records },
+                    LifecycleState::Recorded { records: incoming },
+                ) => {
                     records.extend(incoming);
                     records.sort();
                     records.dedup();
@@ -61,10 +74,11 @@ impl Discovery {
                 (state, incoming) => Self::same(*state == incoming, "lifecycle state")?,
             }
         }
-        Ok((0..9)
+        Ok(DiscoveryLifecycleCaseV1::ALL
+            .into_iter()
             .map(|case| {
                 let mut state = cases.remove(&case).unwrap_or(LifecycleState::Missing);
-                if let LifecycleState::Recorded(records) = &mut state {
+                if let LifecycleState::Recorded { records } = &mut state {
                     records.sort();
                 }
                 Lifecycle { case, state }

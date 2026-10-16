@@ -23,6 +23,7 @@ pub(super) struct InputColumn(pub(super) &'static str, pub(super) LogicalTypeId)
 pub(super) struct InputTable {
     pub(super) columns: Vec<InputColumn>,
     pub(super) rows: Vec<Vec<Value>>,
+    pub(super) positions: bool,
     #[cfg(test)]
     pub(super) scan_gate: std::sync::Mutex<Option<ScanGate>>,
 }
