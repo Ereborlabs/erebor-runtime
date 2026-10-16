@@ -328,6 +328,31 @@ must be removed for the 6,000-line target. The count records are
 `/tmp/araphor-native-subquery-count1.json` and
 `/tmp/araphor-native-subquery-count2.json`. Complete redesign: **Not done**.
 
+### Native cast allocation
+
+Implementation and selected host verification: **Done**. ModelArrays already
+uses Arrow's cast kernel for ordinary conversions. Its preflight now reserves
+the target width for each Binary to FixedSizeBinary row, including null rows.
+The estimate includes buffer alignment and validity storage. Checked arithmetic
+rejects overflow before allocation. The native cast, strict width check, and
+visible-null checks retain their behavior.
+
+Both new regressions fail on the old estimator. With the fix, all 12 selected
+array, schema, and model execution cases pass. The model regression requires
+the reservation failure before casting. It also checks that the output pool
+and evaluation slot are available after failure. Strict Analysis Clippy and
+scoped formatting pass. The record is
+`/tmp/araphor-fixed-binary-qualification1.json`. Unchanged package and Query
+runtime suites and full workspace CI are not repeated.
+
+This correctness fix adds eight nonblank production Rust lines. It establishes
+no code reduction or performance improvement. The verified count chain checks
+668 Rust file hashes. The complete result adds 889 lines from `537f9de3` and
+removes 1,340 from `7b7b407a`. Another 4,660 production lines must be removed
+for the 6,000-line target. The records are
+`/tmp/araphor-fixed-binary-count1.json` and
+`/tmp/araphor-fixed-binary-count2.json`. Complete redesign: **Not done**.
+
 ### Shared subscription owner
 
 The user requires Query to own subscription behavior used by Control and

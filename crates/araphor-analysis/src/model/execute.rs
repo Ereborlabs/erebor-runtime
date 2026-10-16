@@ -476,6 +476,77 @@ mod tests {
     }
 
     #[test]
+    fn fixed_binary_preflight_rejects() -> TestResult {
+        let fixture = QueryFixture::new()?;
+        let capacity = 64 * 1024;
+        let engine = fixture.owner(Limits {
+            output_capacity: capacity,
+            output_bytes: capacity,
+            ..Default::default()
+        })?;
+        let input_schema =
+            sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Binary, true)]);
+        let value = vec![7; 1024];
+        let mut values = vec![None; 200];
+        values[0] = Some(value.as_slice());
+        let input = sdk::Input {
+            data: sdk::Dataset {
+                name: "input".into(),
+                batches: vec![sdk::RecordBatch::try_new(
+                    Arc::new(input_schema.clone()),
+                    vec![Arc::new(sdk::arrow_array::BinaryArray::from(values))],
+                )?],
+            },
+            revision: sdk::Revision {
+                owner: "fixture".into(),
+                id: "1".into(),
+                window: None,
+            },
+            coverage: sdk::Coverage {
+                state: sdk::CoverageState::Complete,
+                limits: Vec::new(),
+            },
+        };
+        let mut model = sdk::Model::new(
+            "evaluate",
+            vec![sdk::Port::new("input", input_schema)],
+            vec![sdk::Port::new(
+                "rows",
+                sdk::Schema::new(vec![sdk::Field::new(
+                    "value",
+                    sdk::DataType::FixedSizeBinary(1024),
+                    true,
+                )]),
+            )],
+        );
+        model.limits.max_bytes = capacity as u64;
+        let package = sdk::Package::new("fixed-conversion", "1", vec![model.clone()]);
+        let program = SqlModelV1 {
+            outputs: BTreeMap::from([("rows".into(), "SELECT value FROM input".into())]),
+            ..Default::default()
+        };
+        let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+        let result = ModelRun::new(&engine, [1; 16], &control)?.evaluate_model(
+            &package,
+            &program,
+            &evaluation(&model, vec![input]),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::Error::Query {
+                source: araphor_query::Error::Sql {
+                    source: araphor_query::datafusion::common::DataFusionError::ResourcesExhausted(
+                        _
+                    ),
+                },
+            })
+        ));
+        drop(engine.memory().reserve_output(capacity)?);
+        drop(engine.reserve_evaluation([1; 16])?);
+        Ok(())
+    }
+
+    #[test]
     fn normalized_output_uses_capacity() -> TestResult {
         let fixture = QueryFixture::new()?;
         let capacity = 64 * 1024;

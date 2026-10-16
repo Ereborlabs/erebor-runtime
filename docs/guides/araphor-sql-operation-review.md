@@ -297,6 +297,16 @@ permitted conversions, nested nulls, and fixed binary widths. The boundary
 preserves declared Arrow metadata. The native planner applies no output-name
 repair or numeric-width emulation.
 
+[ModelArrays](../../crates/araphor-analysis/src/model/arrays.rs) calls Arrow's
+cast kernel for ordinary conversions. It rebuilds nested arrays only when the
+native cast does not support the declared type. Before conversion, it checks
+visible values for a declared Null type. Parent null masks and list slices
+exclude hidden values. The native cast alone does not preserve that rule.
+The same owner estimates new buffers before ModelRun reserves conversion
+memory. Binary to FixedSizeBinary includes the target width for null rows.
+The [model reservation regression](../../crates/araphor-analysis/src/model/execute.rs)
+requires reservation failure before casting and checks capacity recovery.
+
 [Memory](../../crates/araphor-query/src/memory.rs) uses native memory pools
 and MemoryReservation values for retained input and output. The default
 shared capacities are 128 MiB input and 16 MiB output. An Arrow allocation

@@ -138,6 +138,14 @@ case pass. Strict Query Clippy passes. The record is
 verified complete count removes 1,348 from `7b7b407a` and adds 881 from
 `537f9de3`: `/tmp/araphor-native-subquery-count2.json`. Another 4,652 must be
 removed for the 6,000-line target. Complete redesign: **Not done**.
+Native cast preflight now charges the target FixedSizeBinary width for null
+rows. Both regressions fail on the old estimator; all 12 selected conversion,
+schema, and model execution cases pass with the fix. Strict Analysis Clippy
+passes. The record is `/tmp/araphor-fixed-binary-qualification1.json`. The fix
+adds eight nonblank production Rust lines. The verified complete count removes
+1,340 from `7b7b407a` and adds 889 from `537f9de3`:
+`/tmp/araphor-fixed-binary-count2.json`. Another 4,660 must be removed for the
+6,000-line target. Complete redesign: **Not done**.
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

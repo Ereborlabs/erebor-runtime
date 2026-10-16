@@ -74,6 +74,14 @@ impl ModelArrays {
                 .and_then(|bytes| bytes.checked_add(validity))
                 .ok_or_else(overflow);
         }
+        if let (sdk::DataType::Binary, sdk::DataType::FixedSizeBinary(width)) =
+            (array.data_type(), kind)
+        {
+            let width = usize::try_from(*width).map_err(|_| overflow())?;
+            let values = align(array.len().checked_mul(width).ok_or_else(overflow)?)?;
+            let validity = align(array.len().div_ceil(8))?;
+            return values.checked_add(validity).ok_or_else(overflow);
+        }
         let fields = match kind {
             sdk::DataType::List(field) | sdk::DataType::FixedSizeList(field, _) => {
                 std::slice::from_ref(field)
@@ -230,6 +238,44 @@ mod tests {
     use super::*;
     use araphor_query::datafusion::arrow::buffer::NullBuffer;
     use sdk::arrow_array::StringViewArray;
+
+    #[test]
+    fn fixed_binary_cast_reservation() -> Result<()> {
+        use sdk::arrow_array::cast::AsArray as _;
+        use sdk::arrow_array::BinaryArray;
+
+        let value = vec![7; 1024];
+        let values: ArrayRef = Arc::new(BinaryArray::from(vec![
+            Some(value.as_slice()),
+            None,
+            Some(value.as_slice()),
+        ]));
+        let nonnull: ArrayRef = Arc::new(BinaryArray::from(vec![Some(value.as_slice()); 3]));
+        let nulls: ArrayRef = Arc::new(BinaryArray::from(vec![None::<&[u8]>; 3]));
+        for array in [
+            nonnull,
+            Arc::clone(&nulls),
+            values.slice(1, 2),
+            nulls.slice(1, 2),
+        ] {
+            let kind = sdk::DataType::FixedSizeBinary(1024);
+            let bytes = ModelArrays::conversion_bytes(&array, &kind)?;
+            let converted = ModelArrays::cast(&array, &kind)?;
+            assert!(bytes >= converted.get_buffer_memory_size());
+            assert_eq!(converted.len(), array.len());
+            assert_eq!(converted.null_count(), array.null_count());
+            let actual = converted.as_fixed_size_binary();
+            let expected = array.as_binary::<i32>();
+            for row in 0..array.len() {
+                assert_eq!(actual.is_null(row), expected.is_null(row));
+                if array.is_valid(row) {
+                    assert_eq!(actual.value(row), expected.value(row));
+                }
+            }
+        }
+        assert!(ModelArrays::cast(&values, &sdk::DataType::FixedSizeBinary(512)).is_err());
+        Ok(())
+    }
 
     #[test]
     fn null_view_cast_reservation() -> Result<()> {
