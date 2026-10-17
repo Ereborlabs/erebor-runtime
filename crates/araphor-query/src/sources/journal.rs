@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use araphor_data::{
     AnalysisExtractLimits, AnalysisReadControl, AnalysisStreamIdentityV1, AnalysisWitnessV1,
     StorePositionV1,
 };
-use datafusion::arrow::array::{BooleanArray, RecordBatch, UInt32Array, UInt64Array};
+use datafusion::arrow::array::{ArrayRef, BooleanArray, RecordBatch, UInt32Array, UInt64Array};
 use datafusion::arrow::compute::filter_record_batch;
 use datafusion::common::{DataFusionError, Result as NativeResult};
 use datafusion::execution::memory_pool::MemoryReservation;
@@ -25,8 +25,8 @@ use snafu::ResultExt as _;
 use tokio::sync::watch;
 
 use super::{Captured, ReadMode, Removal, SourceData, SourceOrigin, SourceSnapshot};
-use crate::execution::{Engine, PendingRead};
-use crate::stream::{Input, Message, Run};
+use crate::execution::Engine;
+use crate::stream::{Change, Input, Run};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
 #[derive(Debug)]
@@ -107,7 +107,6 @@ impl JournalExec {
         let changes = run.engine.store().subscribe_revision();
         let state = Changes {
             memory: run.engine.memory().reserve_input(0).context(SqlSnafu)?,
-            pending_memory: run.engine.memory().reserve_input(0).context(SqlSnafu)?,
             run,
             columns: self.columns.clone(),
             positions: self.positions,
@@ -116,20 +115,10 @@ impl JournalExec {
             retained: Vec::new(),
             frontier: None,
             changes,
-            pending: VecDeque::new(),
         };
         Ok(Box::pin(stream::try_unfold(state, |mut state| {
             tokio::task::coop::cooperative(async move {
-                if state.pending.is_empty() && !state.capture().await? {
-                    return Ok(None);
-                }
-                let message = state.pending.pop_front().ok_or_else(|| {
-                    InvalidSnafu {
-                        field: "committed source",
-                    }
-                    .build()
-                })?;
-                Ok(Some((message, state)))
+                Ok(state.capture().await?.map(|change| (change, state)))
             })
         })))
     }
@@ -189,8 +178,6 @@ struct Changes {
     frontier: Option<StorePositionV1>,
     changes: watch::Receiver<u64>,
     memory: MemoryReservation,
-    pending: VecDeque<Message>,
-    pending_memory: MemoryReservation,
 }
 
 struct Chunk {
@@ -205,7 +192,7 @@ struct Key {
 }
 
 impl Changes {
-    async fn capture(&mut self) -> Result<bool> {
+    async fn capture(&mut self) -> Result<Option<Change>> {
         let engine = Arc::clone(&self.run.engine);
         let control = Arc::clone(&self.run.control);
         if let Some(frontier) = self.frontier {
@@ -220,7 +207,7 @@ impl Changes {
                 })
                 .await?;
             if !changed {
-                return Ok(false);
+                return Ok(None);
             }
         }
         let permit = Arc::new(
@@ -229,10 +216,6 @@ impl Changes {
                 .await?,
         );
         let stage = Arc::new(control.within(engine.limits().extract_timeout)?);
-        let mut pending = PendingRead {
-            control: Arc::clone(&stage),
-            active: true,
-        };
         let capture = SourceSnapshot::new(
             Arc::clone(engine.store()),
             self.run.selection.clone(),
@@ -253,25 +236,35 @@ impl Changes {
         let run = Arc::clone(&self.run);
         let worker = Arc::clone(&stage);
         let capture_permit = Arc::clone(&permit);
-        let mut captured = stage
-            .query_async(async move {
-                tokio::task::spawn_blocking(move || {
-                    let _permit = capture_permit;
-                    capture.read(&run.sources, &requests, received.as_ref(), mode, &worker)
-                })
-                .await
-                .map_err(|source| crate::Error::Sql {
-                    source: DataFusionError::External(Box::new(source)),
-                })?
+        let mut captured = Engine::blocking(stage, move || {
+            let _permit = capture_permit;
+            capture
+                .read(&run.sources, &requests, received.as_ref(), mode, &worker)
                 .context(SqlSnafu)
-            })
-            .await?;
-        pending.active = false;
+        })
+        .await?;
         control.check()?;
         engine.check_read(&captured.receipt).await?;
         let evaluation = Arc::new(control.within(engine.limits().evaluate_timeout)?);
-        let result = self.apply(&engine, &captured, &evaluation)?;
+        let (before, after) = self.apply(&engine, &captured, &evaluation)?;
         evaluation.check()?;
+        let headers = |batches: &Vec<RecordBatch>| {
+            batches
+                .capacity()
+                .saturating_mul(size_of::<RecordBatch>())
+                .saturating_add(
+                    batches
+                        .iter()
+                        .map(|batch| batch.num_columns().saturating_mul(size_of::<ArrayRef>()))
+                        .sum::<usize>(),
+                )
+        };
+        let before_bytes = headers(&before);
+        let after_bytes = headers(&after);
+        // Native binding and opening each clone the active batch headers.
+        let metadata = before_bytes
+            .saturating_add(after_bytes)
+            .saturating_add(before_bytes.max(after_bytes).saturating_mul(2));
         let count = self
             .retained
             .iter()
@@ -297,6 +290,7 @@ impl Changes {
         if bytes
             .saturating_add(self.memory.size())
             .saturating_add(witness_bytes)
+            .saturating_add(metadata)
             > engine.limits().input_bytes
         {
             return Err(DataFusionError::ResourcesExhausted(
@@ -322,26 +316,18 @@ impl Changes {
             commit_revision: captured.receipt.page.extraction.meta.commit_revision,
             ordinal: u32::MAX,
         };
-        let (before, after) = result;
         evaluation.check()?;
-        let count = before.len().saturating_add(after.len()).saturating_add(2);
-        self.pending_memory
-            .try_resize(count.saturating_mul(size_of::<Message>()))
-            .map_err(|source| crate::Error::Capacity {
-                resource: "shared input",
-                source,
-            })?;
-        self.pending = VecDeque::with_capacity(count);
-        self.pending.push_back(Message::Begin(evaluation));
-        self.pending.extend(before.into_iter().map(Message::Delete));
-        self.pending.extend(after.into_iter().map(Message::Insert));
-        self.pending.push_back(Message::Commit {
+        let memory = engine.memory().reserve_input(metadata).context(SqlSnafu)?;
+        self.frontier = Some(position);
+        Ok(Some(Change {
+            before,
+            after,
             position,
             snapshot: captured.receipt,
+            control: evaluation,
             _permit: Some(permit),
-        });
-        self.frontier = Some(position);
-        Ok(true)
+            _memory: memory,
+        }))
     }
 
     fn apply(

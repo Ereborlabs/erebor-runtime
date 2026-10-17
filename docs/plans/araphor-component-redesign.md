@@ -112,6 +112,64 @@ no deletion credit. The complete count adds 1,155 from `537f9de3`, removes
 `/tmp/araphor-native-rewrite-count15.json`. The 6,000-line target still needs
 4,926 net production deletions. The complete redesign remains **Not done**.
 
+### Complete source changes in physical execution
+
+Implementation and selected host verification: **Done**.
+The atomic journal read no longer creates a synthetic Begin, Insert, Delete,
+and Commit queue. One private Change owns its complete before and after Arrow
+batches, exact receipt, complete frontier, evaluation control, permit, and
+metadata reservation. The separate physical Inputs adapter is deleted.
+
+Data completes one authorized snapshot or change read
+  -> Journal applies exact raw retirements and retains full input witnesses
+  -> Journal offers one complete Change through its cooperative stream
+  -> physical execution checks the exact advancing `(R, u32::MAX)` frontier
+  -> native MemorySourceConfig binds all before batches once
+  -> native FilterExec and ProjectionExec stream into native COUNT retractions
+  -> native MemorySourceConfig binds all after batches once
+  -> native operators stream into native COUNT updates
+  -> physical execution finishes the aggregate and native post-plan
+  -> the final read check completes before output and progress are offered
+
+A source or native batch fails
+  -> the physical stream drops the source and accumulator state
+  -> the stream returns one error and then ends
+  -> no output or frontier is offered for that change
+
+Native input streams retain cumulative byte checks across both signs. Change
+metadata stays charged through native pre-plan completion, including the two
+native batch-header copies. Payload buffers keep their existing native claims.
+Journal uses Engine::blocking instead of a second blocking-worker guard.
+The actual worker retains its permit. Source waits use the parent control;
+native pre-plan, accumulator, post-plan, and final checks share one evaluation
+control. The next source item is not polled before that output completes.
+
+SubscribeExec::compile remains the single owner of maintained COUNT eligibility.
+The repeated kernel checks are deleted. Native child replacement runs the same
+compile check. Unsupported aggregate tests now call that production owner.
+The tests retain positive COUNT, SUM, DISTINCT, GROUP BY, and partial-mode cases.
+
+The final affected Query check passes all 18 cases in 2.08 seconds. The cases
+cover native multi-batch filtering and projection, NULLs, aggregate FILTER,
+later-batch failure, source failure, complete frontiers, independent execution
+state, raw retirement, full witnesses, and cooperative source polling. The
+replacement-limit case checks cumulative transformed bytes across both signs.
+The E2E query-follow contract passes in 16.25 seconds and retains its eight
+behavior cases. Strict Clippy passes for Query, Control, E2E, and their test
+targets in 97 seconds. Scoped formatting and local guide links pass.
+
+This change removes 127 nonblank production Rust lines. The complete redesign
+removes 13 from `7b7b407a` and adds 2,216 from `537f9de3`. Another 5,987 net
+production deletions are required for the 6,000-line target. The records are
+`/tmp/araphor-committed-input-qualification1.json` and
+`/tmp/araphor-committed-input-count1.json`.
+
+DataFusion owns SQL planning, expressions, and COUNT accumulation. Change
+supplies the complete signed input and read proof for physical execution.
+General maintained SQL, Query-owned live detector scheduling, and the required
+production reduction remain **Not done**. Full workspace CI and benchmarks
+are not run, as instructed. No performance improvement is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

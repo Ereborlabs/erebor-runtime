@@ -219,7 +219,7 @@ execution, input, and memory selection passes all 40 cases.
 | --- | --- |
 | Finite-input owner checks | 65 SDK, 61 Data, 129 distinct Query, and 57 distinct Analysis cases pass across the corrected checks. Analysis includes eight explicit native cases. One Data release-history case remains ignored. |
 | Affected caller checks | The package E2E contract passes after the cold Wasm preparation deadline fix. Strict Clippy passes for the affected crate and caller test targets. Formatting and local document links pass. |
-| Production source count | This change adds 1,188 nonblank production lines. The complete redesign adds 114 from `7b7b407a`. Another 6,114 must be removed for the required target. |
+| Production source count at `b80e274b` | This change adds 1,188 nonblank production lines. At that commit, the complete redesign adds 114 from `7b7b407a`. Another 6,114 must be removed for the required target. |
 | Complete redesign and 6,000-line reduction | Not done. |
 
 The records are `/tmp/araphor-native-input-qualification1.json` and
@@ -234,6 +234,29 @@ The [component record](araphor-component-redesign.md#finite-resolved-input-owner
 and [review guide](../guides/araphor-sql-operation-review.md#current-table-and-query-input-flow)
 give the source route and test owners. This change supplies no benchmark or
 speed result.
+
+### Complete source changes in physical execution
+
+Implementation and selected host verification: **Done**. One private Change
+carries the complete signed Arrow input and commit proof. The synthetic
+Begin, Insert, Delete, and Commit queue and physical Inputs adapter are deleted.
+Native input plans bind once for all before batches and once for all after
+batches. SubscribeExec::compile owns COUNT eligibility; repeated kernel checks
+are deleted. Exact frontiers, full witnesses, cumulative byte checks, shared
+evaluation control, and actual worker permits remain.
+
+All 18 affected Query cases and the E2E query-follow contract pass. The E2E
+contract retains eight behavior cases. Strict Clippy passes for Query, Control,
+E2E, and their test targets. Scoped formatting and local document links pass.
+The records are `/tmp/araphor-committed-input-qualification1.json` and
+`/tmp/araphor-committed-input-count1.json`.
+
+This change removes 127 nonblank production Rust lines. The complete redesign
+removes 13 from `7b7b407a` and adds 2,216 from `537f9de3`. Another 5,987 net
+production deletions are required for the 6,000-line target. General maintained
+SQL, Query-owned live detector scheduling, and the complete reduction remain
+**Not done**. Full workspace CI and benchmarks are not run, as instructed.
+No performance improvement is claimed.
 
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and

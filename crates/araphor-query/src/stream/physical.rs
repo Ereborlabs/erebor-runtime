@@ -3,7 +3,7 @@ use std::fmt;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use araphor_data::{AnalysisReadControl, StorePositionV1};
+use araphor_data::StorePositionV1;
 use datafusion::arrow::array::{ArrayRef, RecordBatch};
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{DataFusionError, Result as NativeResult};
@@ -22,10 +22,10 @@ use datafusion::physical_plan::{
     execute_stream, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use futures_util::{stream, StreamExt as _, TryStreamExt as _};
+use futures_util::{stream, TryStreamExt as _};
 use snafu::ResultExt as _;
 
-use super::{Input, Message, Output, OutputStream, Run};
+use super::{Output, OutputStream, Run};
 use crate::execution::{Read, Retention};
 use crate::sources::{JournalExec, SourceData};
 use crate::{Result, SqlSnafu};
@@ -253,23 +253,11 @@ impl SubscribeExec {
             .and_then(|source| source.as_any().downcast_ref::<JournalExec>())
             .ok_or_else(|| DataFusionError::NotImplemented("native journal source".into()))
             .context(SqlSnafu)?;
-        let input = Inputs {
-            input: journal.execute_committed(partition, Arc::clone(&context))?,
-            plan: Arc::clone(aggregate.input()),
-            source: Arc::clone(&compiled.source),
-            context: Arc::clone(&context),
-            run: Arc::clone(&run),
-            active: None,
-            control: None,
-            bytes: 0,
-            memory: run.engine.memory().reserve_input(0).context(SqlSnafu)?,
-        };
-        let input = Box::pin(stream::try_unfold(input, |mut input| async move {
-            Ok(input.next().await?.map(|message| (message, input)))
-        }));
         let stream = kernel::execute(
             aggregate,
-            input,
+            journal.execute_committed(partition, Arc::clone(&context))?,
+            Arc::clone(&compiled.source),
+            Arc::clone(&context),
             Arc::clone(&run.engine),
             Arc::clone(&run.control),
         );
@@ -400,102 +388,6 @@ impl ExecutionPlan for SubscribeExec {
             self.schema(),
             stream,
         )))
-    }
-}
-
-struct Inputs {
-    input: Input,
-    plan: Arc<dyn ExecutionPlan>,
-    source: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
-    run: Arc<Run>,
-    active: Option<(SendableRecordBatchStream, bool)>,
-    control: Option<Arc<AnalysisReadControl>>,
-    bytes: usize,
-    memory: MemoryReservation,
-}
-
-impl Inputs {
-    async fn next(&mut self) -> Result<Option<Message>> {
-        loop {
-            if let Some((stream, retract)) = self.active.as_mut() {
-                let control = self.control.as_ref().ok_or_else(|| {
-                    crate::InvalidSnafu {
-                        field: "physical transaction",
-                    }
-                    .build()
-                })?;
-                if let Some(batch) = control
-                    .query_async(async { stream.try_next().await.context(SqlSnafu) })
-                    .await?
-                {
-                    self.bytes = self.bytes.saturating_add(batch.get_array_memory_size());
-                    if self.bytes > self.run.engine.limits().input_bytes {
-                        return Err(DataFusionError::ResourcesExhausted(
-                            "maintained native input".into(),
-                        ))
-                        .context(SqlSnafu);
-                    }
-                    self.run
-                        .engine
-                        .memory()
-                        .retain_input(&batch, &mut self.memory)
-                        .context(SqlSnafu)?;
-                    return Ok(Some(if *retract {
-                        Message::Delete(batch)
-                    } else {
-                        Message::Insert(batch)
-                    }));
-                }
-                self.active = None;
-            }
-            let Some(message) = self.input.next().await.transpose()? else {
-                return Ok(None);
-            };
-            let (batch, retract) = match message {
-                Message::Begin(control) => {
-                    if self.control.is_some() {
-                        return Err(DataFusionError::Execution(
-                            "physical transaction is already active".into(),
-                        ))
-                        .context(SqlSnafu);
-                    }
-                    control.check()?;
-                    self.control = Some(Arc::clone(&control));
-                    self.bytes = 0;
-                    return Ok(Some(Message::Begin(control)));
-                }
-                Message::Insert(batch) => (batch, false),
-                Message::Delete(batch) => (batch, true),
-                message @ Message::Commit { .. } => {
-                    let control = self.control.take().ok_or_else(|| {
-                        crate::InvalidSnafu {
-                            field: "physical transaction",
-                        }
-                        .build()
-                    })?;
-                    control.check()?;
-                    return Ok(Some(message));
-                }
-            };
-            self.control
-                .as_ref()
-                .ok_or_else(|| {
-                    crate::InvalidSnafu {
-                        field: "physical transaction",
-                    }
-                    .build()
-                })?
-                .check()?;
-            let stream = SubscribeExec::bind(
-                &self.plan,
-                &self.source,
-                vec![batch],
-                Arc::clone(&self.context),
-            )
-            .context(SqlSnafu)?;
-            self.active = Some((stream, retract));
-        }
     }
 }
 

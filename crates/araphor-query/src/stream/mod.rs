@@ -24,18 +24,17 @@ pub(crate) struct Run {
     pub after: Option<StorePositionV1>,
 }
 
-pub(super) enum Message {
-    Begin(Arc<AnalysisReadControl>),
-    Insert(RecordBatch),
-    Delete(RecordBatch),
-    Commit {
-        position: StorePositionV1,
-        snapshot: Arc<ArrowSnapshot>,
-        _permit: Option<Arc<Permit>>,
-    },
+pub(super) struct Change {
+    pub before: Vec<RecordBatch>,
+    pub after: Vec<RecordBatch>,
+    pub position: StorePositionV1,
+    pub snapshot: Arc<ArrowSnapshot>,
+    pub control: Arc<AnalysisReadControl>,
+    pub _permit: Option<Arc<Permit>>,
+    pub _memory: MemoryReservation,
 }
 
-pub(super) type Input = Pin<Box<dyn Stream<Item = Result<Message>> + Send>>;
+pub(super) type Input = Pin<Box<dyn Stream<Item = Result<Change>> + Send>>;
 
 pub(crate) struct Output {
     pub snapshot: Arc<ArrowSnapshot>,

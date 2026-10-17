@@ -9,7 +9,7 @@ use araphor_data::{
     AnalysisStore, ContextSensitivityV1, EvidenceIntakeIdentityV1, EvidenceRecord,
     GraphSubjectKeyV1, GraphSubjectKindV1, GraphTraversalV1, NotificationKeyV1,
     NotificationObligationV1, NotificationPriorityV1, NotificationSinkHealthV1, Selection,
-    TraceIdentityV1, UnconfirmedNotificationConcernV1, ValidatedEvidenceBatchV1,
+    StorePositionV1, TraceIdentityV1, UnconfirmedNotificationConcernV1, ValidatedEvidenceBatchV1,
     NOTIFICATION_STATE_OWNER,
 };
 use datafusion::arrow::array::{RecordBatch, StringViewArray};
@@ -1389,16 +1389,39 @@ async fn native_subscribe_execution() {
         }
         let journal = Arc::clone(children[1]);
         let context = state.task_ctx();
-        tokio::spawn(async move {
-            use crate::stream::Message;
-
+        let engine = Arc::clone(&fixture.engine);
+        let identity = fixture.source.clone();
+        let (ready, captured) = tokio::sync::oneshot::channel();
+        let (advance, committed) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
             let mut input = journal
                 .as_any()
                 .downcast_ref::<crate::sources::JournalExec>()
                 .unwrap()
                 .execute_committed(0, context)
                 .unwrap();
-            assert!(matches!(input.next().await, Some(Ok(Message::Begin(_)))));
+            let first = input.next().await.unwrap().unwrap();
+            assert!(first.before.is_empty());
+            assert_eq!(
+                first.after.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                1
+            );
+            assert_eq!(first.snapshot.witnesses.len(), 1);
+            assert_eq!(first.snapshot.witnesses[0].identity, identity);
+            assert_eq!(first.snapshot.witnesses[0].cursor, 1);
+            assert_eq!(
+                first.position,
+                StorePositionV1 {
+                    commit_revision: first.snapshot.page.extraction.meta.commit_revision,
+                    ordinal: u32::MAX,
+                }
+            );
+            assert!(engine.reserve_evaluation(identity.tenant_id).is_err());
+            first.control.check().unwrap();
+            let revision = first.position.commit_revision;
+            drop(first);
+            ready.send(revision).unwrap();
+            committed.await.unwrap();
             for _ in 0..128 {
                 if !tokio::task::coop::has_budget_remaining() {
                     break;
@@ -1408,16 +1431,53 @@ async fn native_subscribe_execution() {
             assert!(!tokio::task::coop::has_budget_remaining());
             let mut pending = Box::pin(input.next());
             assert!(futures_util::poll!(pending.as_mut()).is_pending());
-            assert!(matches!(pending.await, Some(Ok(Message::Insert(_)))));
-        })
-        .await
-        .unwrap();
+            let second = pending.await.unwrap().unwrap();
+            assert!(second.before.is_empty());
+            assert_eq!(
+                second
+                    .after
+                    .iter()
+                    .map(RecordBatch::num_rows)
+                    .sum::<usize>(),
+                1
+            );
+            assert!(second.position.commit_revision > revision);
+            assert_eq!(
+                second.position,
+                StorePositionV1 {
+                    commit_revision: second.snapshot.page.extraction.meta.commit_revision,
+                    ordinal: u32::MAX,
+                }
+            );
+            assert_eq!(second.snapshot.witnesses.len(), 2);
+            assert!(second
+                .snapshot
+                .witnesses
+                .iter()
+                .all(|witness| witness.identity == identity));
+            assert_eq!(
+                second
+                    .snapshot
+                    .witnesses
+                    .iter()
+                    .map(|witness| witness.cursor)
+                    .collect::<Vec<_>>(),
+                [1, 2]
+            );
+            assert!(engine.reserve_evaluation(identity.tenant_id).is_err());
+            second.control.check().unwrap();
+        });
+        let revision = captured.await.unwrap();
+        fixture.commit(&fixture.source, 2, 1, 1_250_000_000);
+        assert!(fixture.store.meta().unwrap().commit_revision > revision);
+        advance.send(()).unwrap();
+        worker.await.unwrap();
     }
     let mut stream = datafusion::physical_plan::execute_stream(physical, state.task_ctx()).unwrap();
     let first = stream.next().await.unwrap().unwrap();
     assert_eq!(
         ScalarValue::try_from_array(first.column(0), 0).unwrap(),
-        ScalarValue::Int64(Some(1))
+        ScalarValue::Int64(Some(2))
     );
     let capacity = fixture.engine.limits().output_capacity;
     let buffers = first.column(0).get_buffer_memory_size();
@@ -1451,7 +1511,7 @@ async fn native_subscribe_execution() {
         assert_eq!(retained, buffers);
         assert_eq!(
             ScalarValue::try_from_array(&borrowed, 0).unwrap(),
-            ScalarValue::Int64(Some(1))
+            ScalarValue::Int64(Some(2))
         );
         drop(
             fixture
@@ -1459,7 +1519,7 @@ async fn native_subscribe_execution() {
                 .reserve_evaluation(fixture.source.tenant_id)
                 .unwrap(),
         );
-        fixture.commit(&fixture.source, 2, 1, 1_500_000_000);
+        fixture.commit(&fixture.source, 3, 1, 1_500_000_000);
         tokio::time::timeout(Duration::from_secs(8), waiting)
             .await
             .unwrap()
@@ -1468,7 +1528,7 @@ async fn native_subscribe_execution() {
     };
     assert_eq!(
         ScalarValue::try_from_array(second.column(0), 0).unwrap(),
-        ScalarValue::Int64(Some(2))
+        ScalarValue::Int64(Some(3))
     );
     drop(second);
     control.cancel().unwrap();
@@ -1488,7 +1548,7 @@ async fn native_subscribe_execution() {
         .is_err());
     assert_eq!(
         ScalarValue::try_from_array(&borrowed, 0).unwrap(),
-        ScalarValue::Int64(Some(1))
+        ScalarValue::Int64(Some(2))
     );
     drop(borrowed);
     drop(

@@ -1,35 +1,48 @@
 use std::collections::BTreeSet;
+use std::mem::size_of;
 use std::time::Duration;
 
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisSelectionV1, AnalysisStore,
     ContextSensitivityV1,
 };
-use datafusion::arrow::array::{ArrayRef, BooleanArray, Int32Array};
+use datafusion::arrow::array::{Array as _, ArrayRef, BooleanArray, Int32Array, Int64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::ScalarValue;
 use datafusion::datasource::MemTable;
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::execution::TaskContext;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use tokio::sync::mpsc;
 
+use super::super::SubscribeExec;
 use super::*;
 use crate::execution::Limits;
+use crate::sources::{JournalExec, SourceData};
+use crate::stream::Change;
 
 struct Fixture {
     plan: Arc<dyn ExecutionPlan>,
+    source: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
     engine: Arc<Engine>,
     control: Arc<AnalysisReadControl>,
-    sender: mpsc::Sender<Result<Message>>,
+    sender: mpsc::Sender<Result<Change>>,
     output: OutputStream,
     revision: u64,
     _directory: tempfile::TempDir,
 }
 
 impl Fixture {
-    async fn plan(sql: &str) -> Arc<dyn ExecutionPlan> {
+    async fn plan(
+        sql: &str,
+    ) -> (
+        Arc<dyn ExecutionPlan>,
+        Arc<dyn ExecutionPlan>,
+        Arc<TaskContext>,
+    ) {
         let context =
             SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
         let schema = Arc::new(Schema::new(vec![
@@ -61,16 +74,38 @@ impl Fixture {
             }
         })
         .unwrap();
-        aggregate.unwrap()
+        let aggregate = aggregate.unwrap();
+        let mut source = Arc::clone(
+            aggregate
+                .as_any()
+                .downcast_ref::<AggregateExec>()
+                .unwrap()
+                .input(),
+        );
+        loop {
+            let children = source.children();
+            let next = match children.as_slice() {
+                [] => break,
+                [child] => Arc::clone(child),
+                _ => panic!("the fixture has one native source"),
+            };
+            source = next;
+        }
+        (aggregate, source, state.task_ctx())
     }
 
     async fn new(sql: &str) -> Self {
-        let plan = Self::plan(sql).await;
+        Self::bounded(sql, Limits::default().input_bytes).await
+    }
+
+    async fn bounded(sql: &str, input_bytes: usize) -> Self {
+        let (plan, source, context) = Self::plan(sql).await;
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(AnalysisStore::open(directory.path().join("data")).unwrap());
         let engine = Engine::new(
             store,
             Limits {
+                input_bytes,
                 extract_timeout: Duration::from_secs(5),
                 evaluate_timeout: Duration::from_secs(5),
                 ..Default::default()
@@ -85,11 +120,15 @@ impl Fixture {
         let output = execute(
             plan.as_any().downcast_ref::<AggregateExec>().unwrap(),
             Box::pin(input),
+            Arc::clone(&source),
+            Arc::clone(&context),
             Arc::clone(&engine),
             Arc::clone(&control),
         );
         Self {
             plan,
+            source,
+            context,
             engine,
             control,
             sender,
@@ -99,35 +138,45 @@ impl Fixture {
         }
     }
 
+    async fn canonical(&self, sql: &str) -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
+        let state = SessionStateBuilder::new_from_existing(
+            self.engine.catalog(Default::default()).unwrap(),
+        )
+        .with_optimizer_rules(vec![])
+        .with_physical_optimizer_rules(vec![Arc::new(CombinePartialFinalAggregate::new())])
+        .build();
+        let plan = crate::planner::Planner::new(&state)
+            .build(crate::parser::Parser::parse(sql).unwrap(), Vec::new())
+            .await
+            .unwrap();
+        let plan = state.create_physical_plan(&plan).await.unwrap();
+        let mut journal = None;
+        plan.apply(|node| {
+            if let Some(source) = SourceData::from_plan(node.as_ref()) {
+                assert!(journal.is_none());
+                assert_eq!(source.origin.durable(), Some("events"));
+                journal =
+                    Some(Arc::new(JournalExec::new(source).unwrap()) as Arc<dyn ExecutionPlan>);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .unwrap();
+        (plan, journal.unwrap())
+    }
+
     fn batch(&self, values: Vec<Option<i32>>, flags: Vec<Option<bool>>) -> RecordBatch {
         let columns: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(values)),
             Arc::new(BooleanArray::from(flags)),
         ];
-        let input = self
-            .plan
-            .as_any()
-            .downcast_ref::<AggregateExec>()
-            .unwrap()
-            .input_schema();
-        RecordBatch::try_new(input, columns).unwrap()
+        RecordBatch::try_new(self.source.schema(), columns).unwrap()
     }
 
-    async fn send(&self, message: Message) {
-        assert!(self.sender.send(Ok(message)).await.is_ok());
+    async fn send(&self, change: Change) {
+        assert!(self.sender.send(Ok(change)).await.is_ok());
     }
 
-    async fn begin(&self) -> Arc<AnalysisReadControl> {
-        let control = Arc::new(
-            self.control
-                .within(self.engine.limits().evaluate_timeout)
-                .unwrap(),
-        );
-        self.send(Message::Begin(Arc::clone(&control))).await;
-        control
-    }
-
-    async fn commit(&mut self) -> Arc<crate::sources::ArrowSnapshot> {
+    async fn snapshot(&mut self) -> Arc<crate::sources::ArrowSnapshot> {
         self.revision += 1;
         self.engine
             .store()
@@ -145,8 +194,7 @@ impl Fixture {
                 body: vec![1],
             })
             .unwrap();
-        let snapshot = self
-            .engine
+        self.engine
             .metadata(
                 AnalysisSelectionV1::new([1; 16], vec![]),
                 &BTreeSet::new(),
@@ -154,25 +202,44 @@ impl Fixture {
                 1,
             )
             .await
+            .unwrap()
+    }
+
+    async fn change(&mut self, before: &[RecordBatch], after: &[RecordBatch]) -> Change {
+        let snapshot = self.snapshot().await;
+        let before = before.to_vec();
+        let after = after.to_vec();
+        let mut memory = self
+            .engine
+            .memory()
+            .reserve_input((before.capacity() + after.capacity()) * size_of::<RecordBatch>())
             .unwrap();
-        self.send(Message::Commit {
+        for batch in before.iter().chain(&after) {
+            self.engine
+                .memory()
+                .retain_input(batch, &mut memory)
+                .unwrap();
+        }
+        Change {
+            before,
+            after,
             position: snapshot.page.scanned_through,
-            snapshot: Arc::clone(&snapshot),
+            snapshot,
+            control: Arc::new(
+                self.control
+                    .within(self.engine.limits().evaluate_timeout)
+                    .unwrap(),
+            ),
             _permit: None,
-        })
-        .await;
-        snapshot
+            _memory: memory,
+        }
     }
 
     async fn apply(&mut self, before: &[RecordBatch], after: &[RecordBatch]) -> Vec<i64> {
-        let control = self.begin().await;
-        for batch in before {
-            self.send(Message::Delete(batch.clone())).await;
-        }
-        for batch in after {
-            self.send(Message::Insert(batch.clone())).await;
-        }
-        let snapshot = self.commit().await;
+        let change = self.change(before, after).await;
+        let snapshot = Arc::clone(&change.snapshot);
+        let control = Arc::clone(&change.control);
+        self.send(change).await;
         let output = self.output.next().await.unwrap().unwrap();
         assert!(Arc::ptr_eq(&output.snapshot, &snapshot));
         assert!(Arc::ptr_eq(&output._control, &control));
@@ -262,67 +329,161 @@ async fn filter_precedes_native_argument_evaluation() {
 }
 
 #[tokio::test]
+async fn native_child_completes_cut() {
+    let mut fixture = Fixture::new(
+        "SELECT COUNT(value), COUNT(*) FILTER (WHERE flag), COUNT(*) \
+         FROM (SELECT CASE WHEN flag THEN 100 / value ELSE NULL END AS value, flag \
+         FROM input WHERE flag IS NOT FALSE)",
+    )
+    .await;
+    let native = fixture
+        .plan
+        .as_any()
+        .downcast_ref::<AggregateExec>()
+        .unwrap();
+    assert!(!Arc::ptr_eq(native.input(), &fixture.source));
+    let (mut filtered, mut projected) = (false, false);
+    native
+        .input()
+        .apply(|plan| {
+            filtered |= plan
+                .as_any()
+                .is::<datafusion::physical_plan::filter::FilterExec>();
+            projected |= plan
+                .as_any()
+                .is::<datafusion::physical_plan::projection::ProjectionExec>();
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .unwrap();
+    assert!(filtered && projected);
+    let first = vec![
+        fixture.batch(
+            vec![Some(0), Some(2), None],
+            vec![Some(false), Some(true), Some(true)],
+        ),
+        fixture.batch(vec![Some(5), Some(3)], vec![Some(true), None]),
+    ];
+    assert_eq!(fixture.apply(&[], &first).await, vec![2, 3, 4]);
+    let replacement = vec![
+        fixture.batch(vec![Some(4)], vec![Some(true)]),
+        fixture.batch(
+            vec![Some(0), Some(10), None],
+            vec![Some(false), Some(true), None],
+        ),
+    ];
+    assert_eq!(fixture.apply(&first, &replacement).await, vec![2, 2, 3]);
+    assert_eq!(fixture.apply(&replacement, &[]).await, vec![0, 0, 0]);
+}
+
+#[tokio::test]
 async fn native_error_closes_without_output() {
-    let mut fixture = Fixture::new("SELECT COUNT(10 / value) FROM input").await;
+    let mut fixture =
+        Fixture::new("SELECT COUNT(value) FROM (SELECT 10 / value AS value FROM input)").await;
     let first = fixture.batch(vec![Some(1)], vec![None]);
     assert_eq!(
         fixture.apply(&[], std::slice::from_ref(&first)).await,
         vec![1]
     );
-    fixture.begin().await;
-    fixture.send(Message::Delete(first)).await;
-    fixture
-        .send(Message::Insert(fixture.batch(vec![Some(0)], vec![None])))
+    let change = fixture
+        .change(
+            &[first],
+            &[
+                fixture.batch(vec![Some(2)], vec![None]),
+                fixture.batch(vec![Some(0)], vec![None]),
+            ],
+        )
         .await;
+    fixture.send(change).await;
     assert!(fixture.output.next().await.unwrap().is_err());
     assert!(fixture.output.next().await.is_none());
+    let change = fixture
+        .change(&[], &[fixture.batch(vec![Some(2)], vec![None])])
+        .await;
+    assert!(fixture.sender.send(Ok(change)).await.is_err());
+}
+
+#[tokio::test]
+async fn replacement_counts_both_signs() {
+    let limit = 4096;
+    let mut fixture = Fixture::bounded(
+        "SELECT COUNT(value) FROM (SELECT CAST(value AS BIGINT) AS value FROM input)",
+        limit,
+    )
+    .await;
+    let transformed = Int64Array::from(vec![Some(1); 256]);
+    let bytes = transformed.get_array_memory_size();
+    assert!(bytes <= limit);
+    assert!(bytes * 2 > limit);
+    let first = fixture.batch(vec![Some(1); 256], vec![None; 256]);
+    assert!(first.get_array_memory_size() * 2 <= limit);
+    assert_eq!(
+        fixture.apply(&[], std::slice::from_ref(&first)).await,
+        vec![256]
+    );
+    let replacement = fixture.batch(vec![Some(2); 256], vec![None; 256]);
+    let change = fixture.change(&[first], &[replacement]).await;
+    fixture.send(change).await;
+    assert!(matches!(
+        fixture.output.next().await.unwrap(),
+        Err(crate::Error::Sql { source: DataFusionError::ResourcesExhausted(reason) })
+            if reason == "maintained native input"
+    ));
     assert!(fixture
-        .sender
-        .send(Ok(Message::Insert(
-            fixture.batch(vec![Some(2)], vec![None])
-        )))
-        .await
-        .is_err());
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity)
+        .is_ok());
+    assert!(fixture.output.next().await.is_none());
 }
 
 #[tokio::test]
 async fn unsupported_aggregates_are_explicit() {
-    for sql in [
-        "SELECT SUM(value) FROM input",
-        "SELECT COUNT(DISTINCT value) FROM input",
-        "SELECT flag, COUNT(*) FROM input GROUP BY flag",
-    ] {
-        let mut fixture = Fixture::new(sql).await;
-        let native = fixture
-            .plan
+    let fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
+    let (single, journal) = fixture.canonical("SELECT COUNT(*) FROM events").await;
+    let compiled = SubscribeExec::compile(&single, &journal).unwrap().unwrap();
+    assert_eq!(
+        compiled
+            .aggregate
             .as_any()
             .downcast_ref::<AggregateExec>()
-            .unwrap();
+            .unwrap()
+            .mode(),
+        &AggregateMode::Single
+    );
+    for sql in [
+        "SELECT SUM(kernel_sequence) FROM events",
+        "SELECT COUNT(DISTINCT kernel_sequence) FROM events",
+        "SELECT operation_argument, COUNT(*) FROM events GROUP BY operation_argument",
+    ] {
+        let (plan, journal) = fixture.canonical(sql).await;
         if sql.contains("DISTINCT") {
-            assert!(native.aggr_expr()[0].is_distinct());
+            let mut distinct = false;
+            plan.apply(|node| {
+                if let Some(native) = node.as_any().downcast_ref::<AggregateExec>() {
+                    assert!(native.aggr_expr()[0].is_distinct());
+                    distinct = true;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+            assert!(distinct);
         }
-        let expected = if sql.contains("GROUP BY") {
-            "maintained global COUNT aggregate"
-        } else {
-            "maintained ordinary COUNT aggregate"
-        };
-        assert!(matches!(
-            fixture.output.next().await.unwrap(),
-            Err(crate::Error::Sql { source: DataFusionError::NotImplemented(reason) })
-                if reason == expected
-        ));
-        assert!(fixture.output.next().await.is_none());
+        assert!(SubscribeExec::compile(&plan, &journal).unwrap().is_none());
     }
 }
 
 #[tokio::test]
 async fn native_partial_mode_is_explicit() {
     let fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
-    let native = fixture
-        .plan
+    let (single, journal) = fixture.canonical("SELECT COUNT(*) FROM events").await;
+    let compiled = SubscribeExec::compile(&single, &journal).unwrap().unwrap();
+    let native = compiled
+        .aggregate
         .as_any()
         .downcast_ref::<AggregateExec>()
         .unwrap();
+    assert_eq!(native.mode(), &AggregateMode::Single);
     let partial = AggregateExec::try_new(
         AggregateMode::Partial,
         native.group_expr().clone(),
@@ -332,35 +493,33 @@ async fn native_partial_mode_is_explicit() {
         native.input_schema(),
     )
     .unwrap();
-    let mut output = execute(
-        &partial,
-        Box::pin(stream::pending()),
-        Arc::clone(&fixture.engine),
-        Arc::clone(&fixture.control),
-    );
-    assert!(matches!(
-        output.next().await.unwrap(),
-        Err(crate::Error::Sql { source: DataFusionError::NotImplemented(reason) })
-            if reason == "maintained global COUNT aggregate"
-    ));
-    assert!(output.next().await.is_none());
+    assert_eq!(partial.mode(), &AggregateMode::Partial);
+    let partial = Arc::new(partial) as Arc<dyn ExecutionPlan>;
+    assert!(SubscribeExec::compile(&partial, &journal)
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
 async fn commit_withholds_partial_changes() {
     let mut fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
-    fixture.begin().await;
-    fixture
-        .send(Message::Insert(fixture.batch(vec![Some(1)], vec![None])))
+    assert!(futures_util::poll!(fixture.output.next()).is_pending());
+    let change = fixture
+        .change(
+            &[],
+            &[
+                fixture.batch(vec![Some(1)], vec![None]),
+                fixture.batch(vec![Some(2)], vec![None]),
+            ],
+        )
         .await;
     assert!(futures_util::poll!(fixture.output.next()).is_pending());
-    fixture
-        .send(Message::Insert(fixture.batch(vec![Some(2)], vec![None])))
-        .await;
-    assert!(futures_util::poll!(fixture.output.next()).is_pending());
-    let snapshot = fixture.commit().await;
+    let snapshot = Arc::clone(&change.snapshot);
+    let control = Arc::clone(&change.control);
+    fixture.send(change).await;
     let output = fixture.output.next().await.unwrap().unwrap();
     assert!(Arc::ptr_eq(&output.snapshot, &snapshot));
+    assert!(Arc::ptr_eq(&output._control, &control));
     assert_eq!(
         ScalarValue::try_from_array(output.batches.unwrap()[0].column(0), 0).unwrap(),
         ScalarValue::Int64(Some(2))
@@ -370,16 +529,27 @@ async fn commit_withholds_partial_changes() {
 }
 
 #[tokio::test]
-async fn unfinished_input_releases_on_error() {
-    let fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
+async fn failed_transaction_releases_source() {
+    let mut fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
+    let change = fixture
+        .change(&[], &[fixture.batch(vec![Some(1)], vec![None])])
+        .await;
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity)
+        .is_err());
     let producer = Arc::new(());
     let weak = Arc::downgrade(&producer);
-    let message = Message::Insert(fixture.batch(vec![Some(1)], vec![None]));
-    let messages = vec![Message::Begin(Arc::clone(&fixture.control)), message].into_iter();
-    let input = stream::unfold((messages, producer), |(mut messages, producer)| async {
-        messages
-            .next()
-            .map(|message| (Ok(message), (messages, producer)))
+    let input = stream::unfold((Some(change), producer), |(change, producer)| async {
+        assert!(change.is_some());
+        drop(change);
+        Some((
+            Err(crate::Error::Sql {
+                source: DataFusionError::Execution("transaction failed".into()),
+            }),
+            (None, producer),
+        ))
     });
     let mut output = execute(
         fixture
@@ -388,15 +558,22 @@ async fn unfinished_input_releases_on_error() {
             .downcast_ref::<AggregateExec>()
             .unwrap(),
         Box::pin(input),
+        Arc::clone(&fixture.source),
+        Arc::clone(&fixture.context),
         Arc::clone(&fixture.engine),
         Arc::clone(&fixture.control),
     );
     assert!(matches!(
         output.next().await.unwrap(),
         Err(crate::Error::Sql { source: DataFusionError::Execution(reason) })
-            if reason == "maintained input ended before commit"
+            if reason == "transaction failed"
     ));
     assert!(weak.upgrade().is_none());
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity)
+        .is_ok());
     assert!(output.next().await.is_none());
 }
 
@@ -431,6 +608,8 @@ async fn upstream_error_releases_execution_before_delivery() {
             .downcast_ref::<AggregateExec>()
             .unwrap(),
         Box::pin(input),
+        Arc::clone(&fixture.source),
+        Arc::clone(&fixture.context),
         Arc::clone(&fixture.engine),
         Arc::clone(&fixture.control),
     );
@@ -456,27 +635,34 @@ async fn execute_states_are_independent() {
         fixture.apply(&[], std::slice::from_ref(&batch)).await,
         vec![2]
     );
-    fixture.begin().await;
-    let snapshot = fixture.commit().await;
+    let change = fixture.change(&[], &[]).await;
+    let snapshot = Arc::clone(&change.snapshot);
+    let control = Arc::clone(&change.control);
+    let independent_change = Change {
+        before: Vec::new(),
+        after: Vec::new(),
+        position: change.position,
+        snapshot: Arc::clone(&snapshot),
+        control: Arc::clone(&control),
+        _permit: None,
+        _memory: fixture.engine.memory().reserve_input(0).unwrap(),
+    };
+    fixture.send(change).await;
     let mut independent = execute(
         fixture
             .plan
             .as_any()
             .downcast_ref::<AggregateExec>()
             .unwrap(),
-        Box::pin(stream::iter([
-            Ok(Message::Begin(Arc::clone(&fixture.control))),
-            Ok(Message::Commit {
-                position: snapshot.page.scanned_through,
-                snapshot: Arc::clone(&snapshot),
-                _permit: None,
-            }),
-        ])),
+        Box::pin(stream::iter([Ok(independent_change)])),
+        Arc::clone(&fixture.source),
+        Arc::clone(&fixture.context),
         Arc::clone(&fixture.engine),
         Arc::clone(&fixture.control),
     );
     let output = independent.next().await.unwrap().unwrap();
     assert!(Arc::ptr_eq(&output.snapshot, &snapshot));
+    assert!(Arc::ptr_eq(&output._control, &control));
     assert_eq!(
         ScalarValue::try_from_array(output.batches.unwrap()[0].column(0), 0).unwrap(),
         ScalarValue::Int64(Some(0))
@@ -488,35 +674,25 @@ async fn execute_states_are_independent() {
 
 #[tokio::test]
 async fn commit_requires_complete_advancing_frontier() {
-    let mut fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
-    fixture.begin().await;
-    let snapshot = fixture.commit().await;
-    assert!(fixture.output.next().await.unwrap().is_ok());
-    fixture.begin().await;
-    fixture
-        .send(Message::Commit {
-            position: snapshot.page.scanned_through,
-            snapshot,
-            _permit: None,
-        })
-        .await;
-    assert!(fixture.output.next().await.unwrap().is_err());
-    assert!(fixture.output.next().await.is_none());
-
-    let mut fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
-    fixture.begin().await;
-    let snapshot = fixture.commit().await;
-    assert!(fixture.output.next().await.unwrap().is_ok());
-    fixture.begin().await;
-    let mut position = snapshot.page.scanned_through;
-    position.ordinal = 0;
-    fixture
-        .send(Message::Commit {
-            position,
-            snapshot,
-            _permit: None,
-        })
-        .await;
-    assert!(fixture.output.next().await.unwrap().is_err());
-    assert!(fixture.output.next().await.is_none());
+    for invalid in 0..3 {
+        let mut fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
+        let change = fixture.change(&[], &[]).await;
+        let snapshot = Arc::clone(&change.snapshot);
+        fixture.send(change).await;
+        assert!(fixture.output.next().await.unwrap().is_ok());
+        let mut change = fixture.change(&[], &[]).await;
+        assert!(change.position > snapshot.page.scanned_through);
+        match invalid {
+            0 => {
+                change.position = snapshot.page.scanned_through;
+                change.snapshot = snapshot;
+            }
+            1 => change.position.ordinal = 0,
+            2 => change.snapshot = snapshot,
+            _ => unreachable!(),
+        }
+        fixture.send(change).await;
+        assert!(fixture.output.next().await.unwrap().is_err());
+        assert!(fixture.output.next().await.is_none());
+    }
 }

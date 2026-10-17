@@ -493,8 +493,9 @@ use this path.
 
 SubscribeExec retains the native input and output execution plans. Its physical
 execution binds Arrow change batches through native MemorySourceConfig and
-`with_new_children`. Native FilterExec and ProjectionExec keep their compiled
-expressions. No second SQL parser or expression compiler runs for a change.
+`with_new_children`. It binds all before batches once and all after batches
+once for each complete source cut. Native FilterExec and ProjectionExec keep
+their compiled expressions. No second SQL parser or expression compiler runs for a change.
 The former Processor and standalone aggregate helper are deleted.
 
 The native SQL child remains bounded. Its DataSourceExec and SourceData
@@ -502,19 +503,19 @@ supply the finite source schema. Native operators retain compiled expressions.
 Native global AggregateExec finishes at end of input. The unbounded journal
 therefore remains a separate physical child. The journal stores the exact
 native projected schema, canonical indices, and capture request once. Each
-execute_committed call creates its own watch, pending changes, live beforeimages,
+execute_committed call creates its own watch, live beforeimages,
 and reservations from the actual TaskContext. The hidden Source factory and
 its separate stream module are deleted.
 
 [State::advance](../../crates/araphor-query/src/follow/mod.rs) consumes the next completed physical result
   -> [JournalExec::execute_committed](../../crates/araphor-query/src/sources/journal.rs) reads the initial snapshot or waits for a later committed revision
   -> [AnalysisStore::change_rows](../../crates/araphor-data/src/analysis/extraction.rs) reads raw inserts and retirements through one captured revision
-  -> the physical input emits one evaluation stage, Arrow changes, and a complete commit frontier
-  -> native input plans process the Arrow batches
+  -> [Changes::capture](../../crates/araphor-query/src/sources/journal.rs) offers one complete Change with before and after batches, the receipt, frontier, evaluation control, permit, and metadata reservation
+  -> [SubscribeExec::bind](../../crates/araphor-query/src/stream/physical.rs) supplies one native batch stream for each sign
   -> the private [physical kernel](../../crates/araphor-query/src/stream/physical/kernel.rs) calls native COUNT accumulators
-  -> the kernel finishes the complete frontier before native output plans run
-  -> the physical output retains its exact receipt, deadline, and evaluation permit
-  -> State returns Update with the receipt and cursor
+  -> [State::next](../../crates/araphor-query/src/stream/physical/kernel.rs) finishes the complete frontier before native output plans run
+  -> [Outputs::next](../../crates/araphor-query/src/stream/physical.rs) retains the exact receipt, deadline, and evaluation permit
+  -> [State::advance](../../crates/araphor-query/src/follow/mod.rs) returns Update with the receipt and cursor
 
 The change read uses the existing raw journal and
 [expired_ranges](../../crates/araphor-data/src/analysis/extraction/changes.rs).
@@ -526,6 +527,26 @@ position keys before SQL filters. A retirement removes those contributions.
 The physical kernel retracts their filtered values. Each result receipt keeps
 witnesses for all retained input, including rows removed by SQL filters.
 Native Arrow equality suppresses an unchanged COUNT result.
+
+The private [Change](../../crates/araphor-query/src/stream/mod.rs) is the
+completed source read. It carries signed batches and the exact receipt that a
+native RecordBatchStream cannot carry. The former Begin, Insert, Delete, and
+Commit queue is deleted. The separate physical Inputs adapter is deleted.
+The kernel validates the complete advancing frontier before accumulator
+updates. It checks cumulative transformed bytes across both signs and retains
+native array claims. It publishes no result if any later native batch fails.
+The input producer is not polled again until the current post-plan completes.
+SubscribeExec::compile owns maintained COUNT eligibility. The kernel receives
+that compiled native aggregate. Native child replacement repeats compilation;
+the kernel does not repeat the eligibility checks.
+
+Change retains its before and after vector metadata through native pre-plan
+execution. Its reservation also covers the native MemorySourceConfig and
+MemoryStream header copies. Shared payload buffers keep their existing claims.
+Journal capture uses Engine::blocking; its closure keeps the actual permit
+until the worker stops. The parent operation control governs source waits.
+Each complete change keeps one evaluation control through native pre-plan,
+accumulator updates, post-plan, and final read checks.
 
 The event provider keeps its Inexact filter promise. Native residual filters
 process both inserted rows and retired beforeimages. If native optimization
@@ -545,8 +566,9 @@ size measurement or a bound for other maintained operators.
 The native EnsureCooperative and SanityCheckPlan rules remain enabled.
 Each journal stream step uses Tokio's cooperative future wrapper. The existing
 `native_subscribe_execution` test checks both rules and the real physical
-children. It exhausts the Tokio task budget before polling a queued Insert.
-The poll yields, then returns that same Insert after the budget is renewed.
+children. It consumes one complete change, commits a second selected event,
+and exhausts the Tokio task budget before polling that change. The poll yields,
+then returns the complete second change after the budget is renewed.
 The wrapper does not preempt synchronous work inside a capture.
 
 DataFusion RecordBatchStream carries Arrow batches and a schema. It does not
@@ -580,6 +602,20 @@ The exact source hashes and checks are in
 `/tmp/araphor-journal-owner-qualification1.json`. This change adds 139 nonblank
 production Rust lines. It removes a hidden source owner; it does not meet the
 complete reduction target. Full workspace CI is not run, as instructed.
+
+The later complete-Change implementation passes all 18 affected Query cases
+and the E2E query-follow contract. Test execution takes 2.08 seconds and
+16.25 seconds respectively. The E2E contract retains eight behavior cases.
+The kernel cases include a native later-batch error and cumulative transformed
+byte limits across both signs. Unsupported aggregates use the actual compile
+check in their tests. Strict Clippy passes for Query, Control, E2E, and their
+test targets. Scoped formatting and local document links pass. The record is
+`/tmp/araphor-committed-input-qualification1.json`.
+
+This change removes 127 nonblank production Rust lines. The complete redesign
+removes 13 from `7b7b407a`; another 5,987 must be removed for the required target.
+The count record is `/tmp/araphor-committed-input-count1.json`. The complete
+redesign remains **Not done**. Full workspace CI and benchmarks are not run.
 
 [ClientGrpcOwner::query_request](../../crates/mithril-control/src/client_grpc/query.rs) supplies QueryEncoder and the request duration
   -> [Delivery::new](../../crates/araphor-query/src/follow/delivery.rs) retains the native Subscription, adapter, control, deadlines, and conversion reservation
@@ -658,7 +694,7 @@ below cover the later metadata, read-control, and registration changes.
 | --- | --- |
 | Query, Data, and SDK checks | 129 distinct Query cases, 61 Data cases, and 65 SDK cases pass. One Data release-history case remains ignored. The final affected Query selection passes all 40 cases. |
 | Analysis and affected caller checks | 57 distinct Analysis cases pass, including eight explicit native cases. The package E2E contract passes after the cold-compilation deadline fix. Strict Clippy passes for all affected crate and caller test targets. |
-| Production source count | This change adds 1,188 nonblank production lines. The complete redesign adds 114 from `7b7b407a`; another 6,114 must be removed for the required target. |
+| Production source count at `b80e274b` | This change adds 1,188 nonblank production lines. At that commit, the complete redesign adds 114 from `7b7b407a`; another 6,114 must be removed for the required target. |
 | Live input operation and shared watch/retry replacement | Not done. The existing Analysis lifecycle still drives automatic work. |
 
 The records are `/tmp/araphor-native-input-qualification1.json` and
