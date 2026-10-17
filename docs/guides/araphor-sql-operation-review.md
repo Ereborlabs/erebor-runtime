@@ -685,16 +685,38 @@ native allocation claims through their last consumer.
 
 [Engine::new](../../crates/araphor-query/src/execution.rs) creates the owned
 Tokio runtime and native SessionState. Native execution uses one target
-partition, planning concurrency one, a batch size of 200, a 64 MiB operator
-memory pool, and disabled spill storage. Engine supplies selected standard
-scalar, aggregate, and window functions. The engine registers no private
-numeric or time-bucket function. Fixed buckets use native `date_bin`.
+partition, planning concurrency one, a batch size of 200, and disabled spill
+storage. Engine uses SessionStateBuilder.with_default_features. Native
+DataFusion registers its scalar, aggregate, window, and table functions.
+The fixed Araphor function list is deleted. Native table factories, file
+formats, expression planners, and optimizer order remain.
 
-Engine::new constructs the admitted functions through native factories before
-one SessionState build. It does not build all default functions or rebuild
-the state to filter them. Native table factories, file formats, expression
-planners, and optimizer order remain. Native registration retains aliases and
-applies configuration updates. No table function is registered.
+Engine construction
+  -> [Limits](../../crates/araphor-query/src/execution.rs) validates optional execution_capacity
+  -> [RuntimeEnvBuilder](../../crates/araphor-query/src/execution.rs) uses its native unbounded pool when the setting is None
+  -> [Engine::new](../../crates/araphor-query/src/execution.rs) applies with_memory_limit for an explicit positive capacity
+  -> [SessionStateBuilder](../../crates/araphor-query/src/execution.rs) registers native default functions and the existing subscription planner
+
+An invalid zero capacity fails construction. Drop of a native reservation
+returns its operator charge to the native pool. Query input, output, SDK,
+cache, and compiler quota defaults still require separate changes.
+
+[native_registry_contract](../../crates/araphor-query/src/execution/tests.rs)
+compares all registered scalar, aggregate, and window names, aliases, and
+signatures with a native default SessionState. It also compares table-function
+names. [native_memory_limit_is_optional](../../crates/araphor-query/src/execution/tests.rs)
+checks default-unbounded and explicit-limit reservations and release.
+[native_functions_are_available](../../crates/araphor-query/src/planner/tests.rs)
+executes native scalar, aggregate, window, and generated-table SQL. Existing
+source tests retain denial checks for absent, cross-schema, and file sources.
+Selected verification passes 206 distinct Query cases across the full run
+and the corrected native-function case. Strict Query Clippy and test-caller
+checks for Analysis, Control, and E2E pass. The full Query run initially fails
+one obsolete random-function denial; the focused correction passes. No full
+workspace CI or performance check is run. The source records use the
+`/tmp/araphor-discovery-native-defaults-` prefix.
+
+The registry qualification below describes the earlier fixed function set.
 [native_registry_contract](../../crates/araphor-query/src/execution/tests.rs)
 compares fixed hashes from the prior implementation. The hashes cover registry
 keys, canonical names, and signatures. Functional cases provide the separate

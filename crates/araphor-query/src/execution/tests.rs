@@ -295,56 +295,84 @@ fn closed_catalog_keeps_locals() {
 
 #[test]
 fn native_registry_contract() {
-    use sha2::{Digest, Sha256};
+    use datafusion::execution::session_state::SessionStateBuilder;
 
     let fixture = Fixture::new(Limits::default());
     let state = fixture.engine.catalog(BTreeMap::new()).unwrap();
-    let scalar = state
-        .scalar_functions()
-        .iter()
-        .map(|(name, function)| {
-            (
-                name,
-                (function.name(), format!("{:?}", function.signature())),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let aggregate = state
-        .aggregate_functions()
-        .iter()
-        .map(|(name, function)| {
-            (
-                name,
-                (function.name(), format!("{:?}", function.signature())),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let window = state
-        .window_functions()
-        .iter()
-        .map(|(name, function)| {
-            (
-                name,
-                (function.name(), format!("{:?}", function.signature())),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let registries = [scalar, aggregate, window];
-    let hashes = registries.map(|registry| {
-        format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&registry).unwrap())
-        )
-    });
+    let native = SessionStateBuilder::new().with_default_features().build();
+    macro_rules! registry {
+        ($method:ident) => {
+            assert_eq!(
+                state
+                    .$method()
+                    .iter()
+                    .map(|(name, function)| (
+                        name,
+                        (function.name(), format!("{:?}", function.signature()))
+                    ))
+                    .collect::<BTreeMap<_, _>>(),
+                native
+                    .$method()
+                    .iter()
+                    .map(|(name, function)| (
+                        name,
+                        (function.name(), format!("{:?}", function.signature()))
+                    ))
+                    .collect::<BTreeMap<_, _>>(),
+            );
+        };
+    }
+    registry!(scalar_functions);
+    registry!(aggregate_functions);
+    registry!(window_functions);
     assert_eq!(
-        hashes,
-        [
-            "f20dedb795faaf1d282da73052fb3382288cd4b01d4ba43ee24c3a214f9d4047",
-            "7170ceb3761402d3378d5185ff9ebaed2509312c090bc409e0152c47eaeb2147",
-            "182ba93cf6a27b1472b6ce4f0c4d85849193cd1db47d04b1886571fe014bad92",
-        ]
+        state
+            .table_functions()
+            .keys()
+            .collect::<std::collections::BTreeSet<_>>(),
+        native
+            .table_functions()
+            .keys()
+            .collect::<std::collections::BTreeSet<_>>(),
     );
-    assert!(state.table_functions().is_empty());
+}
+
+#[test]
+fn native_memory_limit_is_optional() {
+    use datafusion::execution::memory_pool::{MemoryConsumer, MemoryLimit};
+
+    let defaults: Limits = serde_json::from_str("{}").unwrap();
+    assert_eq!(defaults.execution_capacity, None);
+    for capacity in [None, Some(64 * 1024 * 1024)] {
+        let fixture = Fixture::new(Limits {
+            execution_capacity: capacity,
+            ..Limits::default()
+        });
+        let runtime = fixture.engine.state.runtime_env();
+        let pool = &runtime.memory_pool;
+        let reservation = MemoryConsumer::new("native limit test").register(pool);
+        match capacity {
+            None => {
+                assert!(matches!(pool.memory_limit(), MemoryLimit::Infinite));
+                reservation.try_grow(65 * 1024 * 1024).unwrap();
+            }
+            Some(bytes) => {
+                assert!(
+                    matches!(pool.memory_limit(), MemoryLimit::Finite(limit) if limit == bytes)
+                );
+                reservation.try_grow(bytes).unwrap();
+                assert!(reservation.try_grow(1).is_err());
+            }
+        }
+        drop(reservation);
+        assert_eq!(pool.reserved(), 0);
+    }
+    assert!(Limits {
+        execution_capacity: Some(0),
+        ..Limits::default()
+    }
+    .validate()
+    .is_err());
 }
 
 #[test]

@@ -25,6 +25,55 @@ Caller migration compiles across Query, Analysis, Control, and E2E. Functional
 qualification is **Not done**. The checks below apply to their recorded
 source states.
 
+### Current user requirements
+
+The user requires all quotas to be configurable and disabled by default.
+This requirement replaces earlier instructions to retain mandatory quotas.
+No time-based polling is permitted. Source, authority, capacity, cancellation,
+and process completion events trigger work. A recorded window, expiry, or
+operation deadline can have one exact timer. A timer must not poll for changes.
+
+Native DataFusion supplies SQL parsing, logical planning, optimization,
+physical planning, and execution. Package execution uses this route and the
+same Query progress machinery. Use an Araphor extension only when DataFusion
+does not supply the required behavior. Keep state with its actual owner.
+All subagents are stopped, as requested by the user.
+
+Implementation of these complete requirements: **Not done**. Query, SDK,
+compiler, cache, and retained-store quota defaults need checks. The compiler
+process wait and storage lock wait still poll. The pending Discovery change
+uses source and context events in place of its periodic sweep.
+
+### Native function registration and optional operator memory
+
+Implementation and selected verification: **Done**.
+Engine uses SessionStateBuilder.with_default_features for native scalar,
+aggregate, window, and table functions. The fixed function list is deleted.
+Authorization still limits durable table providers. Native generated tables
+have no retained-store authority. No file-reading table function is registered
+by the pinned native defaults.
+
+The fixed 64 MiB DataFusion operator pool is deleted. Query Limits has an
+optional execution_capacity setting. None uses the native unbounded pool.
+An explicit positive value uses RuntimeEnvBuilder.with_memory_limit.
+Zero is invalid. This change does not yet disable the other Query quotas.
+The existing parser and logical-plan resource restrictions also remain.
+
+The Query run passes 205 cases and fails one old rejection of native random.
+The corrected case then passes in a focused run. All 206 distinct cases pass
+across these checks. Strict Query Clippy and test-caller checks for Analysis,
+Control, and E2E pass. The checks cover the worktree, which also contains the
+pending Discovery changes. The records are
+`/tmp/araphor-discovery-native-defaults-query.json`,
+`/tmp/araphor-discovery-native-defaults-subquery.json`,
+`/tmp/araphor-discovery-native-defaults-clippy.json`, and
+`/tmp/araphor-discovery-native-defaults-callers.json`.
+No full workspace CI or benchmark is run, as instructed.
+
+This deliverable deletes 24 nonblank production Rust lines. Tests and
+formatting are excluded. The complete redesign, other quota defaults,
+reactive execution, and the production reduction target remain **Not done**.
+
 ### Replacement checks on 2026-10-16
 
 | Check | Result |

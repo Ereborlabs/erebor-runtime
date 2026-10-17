@@ -561,9 +561,16 @@ async fn subqueries_keep_policy() {
         .unwrap();
     assert!(plan.get_parameter_names().unwrap().is_empty());
     assert_eq!(sources, BTreeMap::from([("events".to_owned(), None)]));
+    assert!(fixture
+        .engine
+        .prepare(
+            "SELECT source_cursor FROM events WHERE EXISTS (SELECT random() FROM events)",
+            vec![],
+        )
+        .await
+        .is_ok());
     for sql in [
         "SELECT source_cursor FROM events WHERE EXISTS (SELECT 1 FROM missing_source)",
-        "SELECT source_cursor FROM events WHERE EXISTS (SELECT random() FROM events)",
         "SELECT source_cursor FROM events WHERE EXISTS (SELECT 1 FROM events e JOIN coverage c ON e.source_cursor = e.source_cursor)",
         "SELECT source_cursor FROM events WHERE source_cursor IN (SELECT lag(source_cursor, 201) OVER (ORDER BY source_cursor) FROM events)",
     ] {

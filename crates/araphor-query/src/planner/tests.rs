@@ -185,12 +185,7 @@ async fn catalog_closes_sources_functions() {
         "SELECT * FROM information_schema.tables",
         "SELECT * FROM __araphor_missing",
         "SELECT * FROM read_csv('/tmp/not-a-query-source')",
-        "SELECT * FROM generate_series(1, 2)",
-        "SELECT * FROM range(2)",
-        "WITH ignored AS (SELECT * FROM generate_series(1, 2)) SELECT 1",
         "WITH ignored AS (SELECT * FROM read_csv('/tmp/not-a-query-source')) SELECT 1",
-        "SELECT random()",
-        "WITH ignored AS (SELECT random()) SELECT 1",
         "SELECT current_user",
     ] {
         assert!(plan(&catalog(), sql, vec![]).await.is_err(), "{sql}");
@@ -252,7 +247,7 @@ async fn catalog_closes_sources_functions() {
         ScalarValue::Int32(Some(4))
     );
     assert!(catalog.scalar_functions().contains_key("lower"));
-    assert!(!catalog.scalar_functions().contains_key("random"));
+    assert!(catalog.scalar_functions().contains_key("random"));
 }
 
 #[tokio::test]
@@ -265,7 +260,7 @@ async fn unused_windows_skip_resolution() {
     )
     .await
     .unwrap();
-    assert!(!catalog.scalar_functions().contains_key("random"));
+    assert!(catalog.scalar_functions().contains_key("random"));
     let statement =
         Parser::parse("SELECT operation FROM events WINDOW ignored AS (ORDER BY random())")
             .unwrap();
@@ -549,4 +544,26 @@ async fn planning_enforces_resource_limits() {
             .collect::<Vec<_>>(),
         ["wide"]
     );
+}
+
+#[tokio::test]
+async fn native_functions_are_available() {
+    let catalog = catalog();
+    for sql in [
+        "SELECT sqrt(9.0)",
+        "SELECT stddev_pop(pid) FROM events",
+        "SELECT first_value(operation) OVER (ORDER BY pid) FROM events",
+        "SELECT random()",
+        "SELECT * FROM generate_series(1, 2)",
+        "SELECT * FROM range(2)",
+        "WITH ignored AS (SELECT random()) SELECT 1",
+        "WITH ignored AS (SELECT * FROM generate_series(1, 2)) SELECT 1",
+    ] {
+        let logical = plan(&catalog, sql, vec![]).await.unwrap();
+        let rows = DataFrame::new(catalog.clone(), logical)
+            .collect()
+            .await
+            .unwrap();
+        assert!(!rows.is_empty(), "{sql}");
+    }
 }

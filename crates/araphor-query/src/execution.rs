@@ -19,10 +19,10 @@ use datafusion::common::DataFusionError;
 use datafusion::datasource::{provider_as_source, source_as_provider, MemTable};
 use datafusion::execution::config::SessionConfig;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
-use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryReservation};
+use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::execution::{SessionState, SessionStateDefaults, TaskContext};
+use datafusion::execution::{SessionState, TaskContext};
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::LogicalPlan;
@@ -31,7 +31,6 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     execute_stream, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
-use datafusion::{functions, functions_aggregate, functions_window};
 use futures_util::{StreamExt as _, TryStreamExt};
 use snafu::ResultExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -58,6 +57,7 @@ pub struct Limits {
     pub tenant_streams: usize,
     pub input_capacity: usize,
     pub output_capacity: usize,
+    pub execution_capacity: Option<usize>,
 }
 
 impl Default for Limits {
@@ -75,6 +75,7 @@ impl Default for Limits {
             tenant_streams: 4,
             input_capacity: 128 * 1024 * 1024,
             output_capacity: 16 * 1024 * 1024,
+            execution_capacity: None,
         }
     }
 }
@@ -95,6 +96,7 @@ impl Limits {
             || self.tenant_streams > self.global_streams
             || self.input_capacity < self.input_bytes
             || self.output_capacity < self.output_bytes
+            || self.execution_capacity == Some(0)
         {
             return InvalidSnafu {
                 field: "execution limits",
@@ -159,13 +161,13 @@ impl Engine {
             .map_err(|source| crate::Error::Sql {
                 source: DataFusionError::IoError(source),
             })?;
-        let native = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::new(GreedyMemoryPool::new(64 * 1024 * 1024)))
-            .with_disk_manager_builder(
-                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
-            )
-            .build_arc()
-            .context(SqlSnafu)?;
+        let mut native = RuntimeEnvBuilder::new().with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+        );
+        if let Some(bytes) = limits.execution_capacity {
+            native = native.with_memory_limit(bytes, 1.0);
+        }
+        let native = native.build_arc().context(SqlSnafu)?;
         let mut config = SessionConfig::new()
             .with_target_partitions(1)
             .with_batch_size(200);
@@ -176,33 +178,7 @@ impl Engine {
             Arc::new(crate::planner::subscription::PageLineage),
         );
         let state = SessionStateBuilder::new()
-            .with_table_factories(SessionStateDefaults::default_table_factories())
-            .with_file_formats(SessionStateDefaults::default_file_formats())
-            .with_expr_planners(SessionStateDefaults::default_expr_planners())
-            .with_scalar_functions(vec![
-                functions::math::abs(),
-                functions::core::coalesce(),
-                functions::datetime::now(config.options()),
-                functions::datetime::date_bin(),
-                functions::unicode::character_length(),
-                functions::string::lower(),
-                functions::core::nullif(),
-                functions::string::upper(),
-            ])
-            .with_aggregate_functions(vec![
-                functions_aggregate::average::avg_udaf(),
-                functions_aggregate::count::count_udaf(),
-                functions_aggregate::min_max::max_udaf(),
-                functions_aggregate::min_max::min_udaf(),
-                functions_aggregate::sum::sum_udaf(),
-            ])
-            .with_window_functions(vec![
-                functions_window::rank::dense_rank_udwf(),
-                functions_window::lead_lag::lag_udwf(),
-                functions_window::lead_lag::lead_udwf(),
-                functions_window::rank::rank_udwf(),
-                functions_window::row_number::row_number_udwf(),
-            ])
+            .with_default_features()
             .with_physical_optimizer_rules(optimizers)
             .with_config(config)
             .with_runtime_env(native)
