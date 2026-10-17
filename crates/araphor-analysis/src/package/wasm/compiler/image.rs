@@ -1,8 +1,9 @@
-use std::io::{Read as _, Write};
+use std::io::Write;
 
 use minicbor::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
+use tokio::io::{AsyncRead, AsyncReadExt as _};
 use wasmtime::{component::Component, Engine};
 
 use crate::Result;
@@ -90,7 +91,7 @@ impl CompilerImage {
             })
     }
 
-    pub(super) fn read(mut input: impl std::io::Read) -> Result<Self> {
+    pub(super) async fn read(input: impl AsyncRead + Unpin) -> Result<Self> {
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(MAX_REPLY_BYTES + 1)
@@ -100,9 +101,9 @@ impl CompilerImage {
                 operation: "component compiler reply allocation",
             })?;
         input
-            .by_ref()
             .take((MAX_REPLY_BYTES + 1) as u64)
             .read_to_end(&mut bytes)
+            .await
             .map_err(wasmtime::Error::new)
             .context(crate::PackageWasmSnafu {
                 code: Code::Incomplete,
@@ -214,15 +215,15 @@ mod tests {
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
-    #[test]
-    fn compiler_reply_rejects_corruption() -> TestResult {
+    #[tokio::test]
+    async fn compiler_reply_rejects_corruption() -> TestResult {
         let good = minicbor::to_vec(CompilerReply {
             version: 1,
             status: 2,
             image: &[],
             digest: &[],
         })?;
-        CompilerImage::read(good.as_slice())?.reply()?;
+        CompilerImage::read(good.as_slice()).await?.reply()?;
         let mut trailing = good.clone();
         trailing.push(0);
         let corrupted = minicbor::to_vec(CompilerReply {
@@ -232,10 +233,15 @@ mod tests {
             digest: &[0; 32],
         })?;
         for bytes in [Vec::new(), vec![0], trailing, corrupted] {
-            assert!(CompilerImage::read(bytes.as_slice())?.reply().is_err());
+            assert!(CompilerImage::read(bytes.as_slice())
+                .await?
+                .reply()
+                .is_err());
         }
         assert!(
-            CompilerImage::read(std::io::repeat(0).take((MAX_REPLY_BYTES + 1) as u64)).is_err()
+            CompilerImage::read(tokio::io::repeat(0).take((MAX_REPLY_BYTES + 1) as u64))
+                .await
+                .is_err()
         );
         Ok(())
     }

@@ -32,7 +32,7 @@ sha2.workspace = true
 snafu.workspace = true
 tempfile = "3.23.0"
 time.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 uuid.workspace = true
 wasmtime = { version = "=49.0.2", default-features = false, features = ["component-model", "runtime", "cranelift", "std"] }
 wasmparser = "=0.258.3"

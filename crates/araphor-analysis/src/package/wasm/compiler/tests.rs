@@ -181,8 +181,8 @@ fn compiler_reaps_interrupted_children() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn installation_rejects_native_images() -> TestResult {
+#[tokio::test]
+async fn installation_rejects_native_images() -> TestResult {
     let runtime = super::WasmExecution::new(crate::WasmLimits::default())?;
     let mut failed = false;
     let image = CompilerChild::capture(

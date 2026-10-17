@@ -40,8 +40,8 @@ does not supply the required behavior. Keep state with its actual owner.
 All subagents are stopped, as requested by the user.
 
 Implementation of these complete requirements: **Not done**. Query, SDK,
-compiler, cache, and retained-store quota defaults need checks. The compiler
-process wait and storage lock wait still poll. Discovery still has a separate
+compiler, cache, and retained-store quota defaults need checks. The storage
+lock wait still polls. Discovery still has a separate
 source sweep and seal scheduler. This design does not meet the user requirement.
 Every Discovery execution must consume a Query subscription, including finite
 execution and manual refresh. The subscription must supply the actual input
@@ -187,6 +187,45 @@ adds 616 lines against `7b7b407a`. The required 6,000-line deletion remains
 **Not done**. The count record is
 `/tmp/araphor-subscription-session-count1.json`. Discovery still has a separate
 source sweep and seal scheduler. Its replacement remains **Not done**.
+
+### Native compiler process completion
+
+Implementation and selected verification: **Done**.
+CompilerChild uses Tokio process completion and async pipe I/O. One scoped
+thread runs the current-thread runtime for synchronous callers. This thread
+also permits calls from an async application. The two pipe threads, 5 ms
+process-status loop, and custom child Drop implementation are deleted.
+
+Cancellation, expiry, and a caught I/O-task panic kill and reap the child
+before capture returns. The compiler failure flag prevents reuse after an
+unconfirmed reap. Tokio kill_on_drop protects child drop. The request writer
+uses native CBOR framing and borrows the source bytes. The duplicate request
+writer is deleted. Compiler CPU, wall-time, source, and reply quotas remain;
+their configurable defaults are **Not done**.
+
+The final selected run passes 30 cases. Four ignored worker entry points run
+through their parent cases. The run covers compiler reaping, cancellation,
+expiry, OS limits, async callers, cache pins, component quotas, parallel
+execution, and backend admission. The request case checks exact native CBOR
+bytes at byte-length boundaries and rejects a closed pipe. Strict Analysis
+Clippy and scoped formatting pass. The records are
+`/tmp/araphor-discovery-compiler-reactive-tests3.json` and
+`/tmp/araphor-discovery-compiler-reactive-lint2.json`.
+
+An earlier selected run passes 29 cases and fails one case at the store's
+filesystem reserve. After two obsolete generated binaries are removed, that
+unchanged case passes. The final complete selected run also passes that case.
+The records are `/tmp/araphor-discovery-compiler-reactive-tests1.json`,
+`/tmp/araphor-discovery-compiler-reactive-failed2.json`, and
+`/tmp/araphor-compiler-reactive-cache-cleanup1.json`. No full workspace CI or
+benchmark is run, as instructed.
+
+This deliverable adds 26 nonblank production Rust lines. The complete rewrite
+adds 642 lines against `7b7b407a`. The required 6,000-line deletion remains
+**Not done**. The counter verifies 710 Rust source hashes. Its record is
+`/tmp/araphor-compiler-reactive-count1.json`. Discovery still has a separate
+source sweep, input reader, and seal scheduler. Their replacement by actual
+Query input subscriptions remains **Not done**.
 
 ### Native function registration and optional operator memory
 

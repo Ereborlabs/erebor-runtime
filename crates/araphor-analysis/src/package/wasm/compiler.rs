@@ -1,7 +1,8 @@
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 
+use futures_util::FutureExt as _;
 use snafu::ResultExt as _;
 use wasmtime::component::Component;
 
@@ -19,17 +20,14 @@ mod tests;
 const WORKER_ARG: &str = "--araphor-component-compiler";
 const MAX_CPU_SECONDS: u64 = 30;
 const MAX_WALL_TIME: Duration = Duration::from_secs(45);
-const POLL_TIME: Duration = Duration::from_millis(5);
 
 #[cfg(test)]
 const TEST_ENTRY: &str = "package::wasm::compiler::tests::araphor_component_compiler";
 #[cfg(not(test))]
 const TEST_ENTRY: &str = "araphor_component_compiler";
 
-struct CompilerChild<'a> {
-    child: Child,
-    reaped: bool,
-    failed: &'a mut bool,
+struct CompilerChild {
+    child: tokio::process::Child,
 }
 
 #[derive(Debug, snafu::Snafu)]
@@ -38,7 +36,7 @@ struct CompilerProcessFailure {
     status: ExitStatus,
 }
 
-impl CompilerChild<'_> {
+impl CompilerChild {
     fn command(entry: &str, address: Option<u64>) -> Result<Command> {
         let executable = std::env::current_exe()
             .map_err(wasmtime::Error::new)
@@ -123,114 +121,125 @@ impl CompilerChild<'_> {
     ) -> Result<image::CompilerImage> {
         let control = control.within(MAX_WALL_TIME)?;
         control.check()?;
-        let mut command = Self::command(entry, limits.compiler_bytes)?;
+        let command = Self::command(entry, limits.compiler_bytes)?;
         std::thread::scope(|scope| {
-            let child =
-                command
-                    .spawn()
-                    .map_err(wasmtime::Error::new)
-                    .context(crate::PackageWasmSnafu {
-                        code: Code::Incomplete,
-                        operation: "component compiler start",
-                    })?;
-            let mut worker = CompilerChild {
-                child,
-                reaped: false,
-                failed,
-            };
-            let input = worker
-                .child
-                .stdin
-                .take()
-                .ok_or_else(|| Code::Incomplete.error("component compiler input"))?;
-            let output = worker
-                .child
-                .stderr
-                .take()
-                .ok_or_else(|| Code::Incomplete.error("component compiler output"))?;
-            let sender = std::thread::Builder::new()
-                .name("component-compiler-input".into())
-                .spawn_scoped(scope, move || {
-                    input::CompilerInput::write(limits.fuel.is_some(), bytes, input)
+            std::thread::Builder::new()
+                .name("component-compiler-io".into())
+                .spawn_scoped(scope, || {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(wasmtime::Error::new)
+                        .context(crate::PackageWasmSnafu {
+                            code: Code::Incomplete,
+                            operation: "component compiler I/O runtime",
+                        })?;
+                    runtime.block_on(async {
+                        control.check()?;
+                        let child = tokio::process::Command::from(command)
+                            .kill_on_drop(true)
+                            .spawn()
+                            .map_err(wasmtime::Error::new)
+                            .context(crate::PackageWasmSnafu {
+                                code: Code::Incomplete,
+                                operation: "component compiler start",
+                            })?;
+                        let mut worker = Self { child };
+                        *failed = true;
+                        let result = std::panic::AssertUnwindSafe(worker.run(
+                            bytes,
+                            limits,
+                            &control,
+                            #[cfg(test)]
+                            entered,
+                        ))
+                        .catch_unwind()
+                        .await
+                        .unwrap_or_else(|_| {
+                            Err(Code::Incomplete.error("component compiler I/O task").into())
+                        });
+                        *failed = if result.is_err() {
+                            let _killed = worker.child.start_kill();
+                            worker.child.wait().await.is_err()
+                        } else {
+                            false
+                        };
+                        result
+                    })
                 })
                 .map_err(wasmtime::Error::new)
                 .context(crate::PackageWasmSnafu {
                     code: Code::Incomplete,
-                    operation: "component compiler input thread",
-                })?;
-            let receiver = std::thread::Builder::new()
-                .name("component-compiler-output".into())
-                .spawn_scoped(scope, move || image::CompilerImage::read(output))
-                .map_err(wasmtime::Error::new)
-                .context(crate::PackageWasmSnafu {
-                    code: Code::Incomplete,
-                    operation: "component compiler output thread",
-                })?;
-            #[cfg(test)]
-            if let Some(entered) = entered {
-                entered
-                    .send(worker.child.id())
-                    .map_err(|_| Code::Incomplete.error("component compiler test signal"))?;
-            }
-            let status = worker.wait(&control)?;
-            let sent = sender
+                    operation: "component compiler I/O thread",
+                })?
                 .join()
-                .map_err(|_| Code::Incomplete.error("component compiler input thread"))?;
-            let image = receiver
-                .join()
-                .map_err(|_| Code::Incomplete.error("component compiler output thread"))?;
-            if !status.success() {
-                #[cfg(unix)]
-                let code = {
-                    use std::os::unix::process::ExitStatusExt as _;
-                    match status.signal() {
-                        Some(6 | 9 | 24) => Code::Limit,
-                        _ => Code::Incomplete,
-                    }
-                };
-                #[cfg(not(unix))]
-                let code = Code::Incomplete;
-                return Err(wasmtime::Error::new(CompilerProcessFailure { status })).context(
-                    crate::PackageWasmSnafu {
-                        code,
-                        operation: "component compiler process",
-                    },
-                );
-            }
-            sent?;
-            control.check()?;
-            image
+                .map_err(|_| Code::Incomplete.error("component compiler I/O thread"))?
         })
     }
 
-    fn wait(&mut self, control: &AnalysisReadControl) -> Result<ExitStatus> {
-        loop {
-            control.check()?;
-            if let Some(status) = self
-                .child
-                .try_wait()
-                .map_err(wasmtime::Error::new)
-                .context(crate::PackageWasmSnafu {
-                    code: Code::Incomplete,
-                    operation: "component compiler wait",
-                })?
-            {
-                self.reaped = true;
-                return Ok(status);
-            }
-            std::thread::sleep(POLL_TIME);
+    async fn run(
+        &mut self,
+        bytes: &[u8],
+        limits: WasmLimits,
+        control: &AnalysisReadControl,
+        #[cfg(test)] entered: Option<std::sync::mpsc::Sender<u32>>,
+    ) -> Result<image::CompilerImage> {
+        let input = self
+            .child
+            .stdin
+            .take()
+            .ok_or_else(|| Code::Incomplete.error("component compiler input"))?;
+        let output = self
+            .child
+            .stderr
+            .take()
+            .ok_or_else(|| Code::Incomplete.error("component compiler output"))?;
+        #[cfg(test)]
+        if let Some(entered) = entered {
+            entered
+                .send(
+                    self.child
+                        .id()
+                        .ok_or_else(|| Code::Incomplete.error("component compiler pid"))?,
+                )
+                .map_err(|_| Code::Incomplete.error("component compiler test signal"))?;
         }
-    }
-}
-
-impl Drop for CompilerChild<'_> {
-    fn drop(&mut self) {
-        if !self.reaped {
-            let _ = self.child.kill();
-            if self.child.wait().is_err() {
-                *self.failed = true;
-            }
+        let (sent, image, status) = control
+            .query_async(async {
+                Ok::<_, crate::Error>(tokio::join!(
+                    input::CompilerInput::write(limits.fuel.is_some(), bytes, input),
+                    image::CompilerImage::read(output),
+                    self.child.wait(),
+                ))
+            })
+            .await?;
+        let status = status
+            .map_err(wasmtime::Error::new)
+            .context(crate::PackageWasmSnafu {
+                code: Code::Incomplete,
+                operation: "component compiler wait",
+            })?;
+        if !status.success() {
+            #[cfg(unix)]
+            let code = {
+                use std::os::unix::process::ExitStatusExt as _;
+                match status.signal() {
+                    Some(6 | 9 | 24) => Code::Limit,
+                    _ => Code::Incomplete,
+                }
+            };
+            #[cfg(not(unix))]
+            let code = Code::Incomplete;
+            return Err(wasmtime::Error::new(CompilerProcessFailure { status })).context(
+                crate::PackageWasmSnafu {
+                    code,
+                    operation: "component compiler process",
+                },
+            );
         }
+        sent?;
+        control.check()?;
+        image
     }
 }
 

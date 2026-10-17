@@ -311,6 +311,29 @@ control. Native loading keeps its existing evaluation control. The
 proves that cold preparation completes before a one-nanosecond evaluation
 deadline rejects execution.
 
+[CompilerChild::capture](../../crates/araphor-analysis/src/package/wasm/compiler.rs) starts compilation
+  -> [CompilerChild::capture](../../crates/araphor-analysis/src/package/wasm/compiler.rs) starts one scoped I/O thread for synchronous callers
+  -> [CompilerChild::run](../../crates/araphor-analysis/src/package/wasm/compiler.rs) waits for Tokio process completion and both pipes in one runtime
+  -> [CompilerInput::write](../../crates/araphor-analysis/src/package/wasm/compiler/input.rs) sends the CBOR header and borrowed source bytes
+  -> [CompilerImage::read](../../crates/araphor-analysis/src/package/wasm/compiler/image.rs) receives the reply
+
+[AnalysisReadControl::query_async](../../crates/araphor-data/src/analysis/read.rs) reports cancellation or deadline expiry
+  -> [CompilerChild::capture](../../crates/araphor-analysis/src/package/wasm/compiler.rs) kills and reaps the child before returning
+  -> [WasmExecution::compiled](../../crates/araphor-analysis/src/package/wasm/cache.rs) keeps the compiler unavailable when reaping fails
+
+The scoped thread permits synchronous calls from an async application. The
+compiler has no process-status loop or sleep interval. A caught I/O-task panic
+uses the same kill and reap path. Tokio kill_on_drop also protects child drop.
+The request bytes and reply integrity checks do not change. The compiler's
+existing CPU, wall-time, source, and reply quotas remain.
+
+The [compiler lifecycle cases](../../crates/araphor-analysis/src/package/wasm/compiler/tests.rs)
+check cancellation, expiry, reaping, later compilation, OS limits, and calls
+from an async application. The [request codec cases](../../crates/araphor-analysis/src/package/wasm/compiler/input/tests.rs)
+compare async output with native CBOR encoding at each byte-length boundary.
+The cases also check source overflow and a closed pipe. These changes do not
+replace the separate Discovery source sweep.
+
 [CheckedEvaluation](../../crates/araphor-analysis-sdk/src/validation.rs)
 retains the validated package, model, and input by borrow. Its
 [encode](../../crates/araphor-analysis-sdk/src/wire/evaluation.rs) method

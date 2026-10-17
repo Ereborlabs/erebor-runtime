@@ -1,7 +1,8 @@
-use std::io::{Read as _, Write};
+use std::io::Read as _;
 
 use minicbor::{Decode, Encode};
 use snafu::ResultExt as _;
+use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 
 use crate::Result;
 
@@ -26,23 +27,44 @@ pub(super) struct CompilerInput {
 }
 
 impl CompilerInput {
-    pub(super) fn write(fuel: bool, source: &[u8], output: impl Write) -> Result<()> {
+    pub(super) async fn write(
+        fuel: bool,
+        source: &[u8],
+        mut output: impl AsyncWrite + Unpin,
+    ) -> Result<()> {
         if source.len() > MAX_SOURCE_BYTES {
             return Err(Code::Limit.error("component compiler source bytes").into());
         }
-        minicbor::encode(
-            CompilerRequest {
-                version: 1,
-                fuel,
-                source,
-            },
-            minicbor::encode::write::Writer::new(output),
-        )
-        .map_err(wasmtime::Error::new)
-        .context(crate::PackageWasmSnafu {
-            code: Code::Incomplete,
-            operation: "component compiler request write",
-        })
+        let mut header = [0; 32];
+        let mut encoder =
+            minicbor::Encoder::new(minicbor::encode::write::Cursor::new(&mut header[..]));
+        encoder
+            .array(3)
+            .and_then(|encoder| encoder.u8(1))
+            .and_then(|encoder| encoder.bool(fuel))
+            .and_then(|encoder| encoder.bytes_len(source.len() as u64))
+            .map_err(wasmtime::Error::new)
+            .context(crate::PackageWasmSnafu {
+                code: Code::Incomplete,
+                operation: "component compiler request framing",
+            })?;
+        let length = encoder.writer().position();
+        output
+            .write_all(&header[..length])
+            .await
+            .map_err(wasmtime::Error::new)
+            .context(crate::PackageWasmSnafu {
+                code: Code::Incomplete,
+                operation: "component compiler request write",
+            })?;
+        output
+            .write_all(source)
+            .await
+            .map_err(wasmtime::Error::new)
+            .context(crate::PackageWasmSnafu {
+                code: Code::Incomplete,
+                operation: "component compiler request write",
+            })
     }
 
     pub(super) fn read(mut input: impl std::io::Read) -> Result<Self> {
