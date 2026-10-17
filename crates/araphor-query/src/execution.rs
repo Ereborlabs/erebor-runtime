@@ -38,6 +38,7 @@ use crate::sources::{ArrowSnapshot, ReadMode, SourceSnapshot};
 use crate::{BusySnafu, InvalidSnafu, Result, SqlSnafu};
 
 mod admission;
+mod tables;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]

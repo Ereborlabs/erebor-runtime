@@ -79,6 +79,9 @@ async fn package_retry_revision() -> TestResult {
         .install(bundle("1", "SELECT 3::BIGINT UNSIGNED AS count"), None)
         .await?;
     let first = fixture.execute(run("same")).await?;
+    let active = fixture.activation("test.model")?;
+    let results = fixture.store.package_results(&active.key)?;
+    let meta = fixture.store.meta()?;
     let repeated = fixture.execute(run("same")).await?;
     assert_eq!(
         first.exports[0].results[0].result_id,
@@ -88,6 +91,9 @@ async fn package_retry_revision() -> TestResult {
         first.exports[0].results[0].commit_revision,
         repeated.exports[0].results[0].commit_revision
     );
+    assert_eq!(fixture.activation("test.model")?, active);
+    assert_eq!(fixture.store.package_results(&active.key)?, results);
+    assert_eq!(fixture.store.meta()?, meta);
     fixture
         .execute(Request::Update {
             scope_id: "test".into(),

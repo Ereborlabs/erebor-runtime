@@ -11,18 +11,6 @@ use crate::package::owner::{ClockDependency, InstalledContext};
 use crate::package::{AnalysisPackageOwner, PackageActionV1 as Action, PackageErrorCodeV1 as Code};
 
 impl AnalysisPackageOwner {
-    pub(in crate::package) fn prepare_at(
-        &self,
-        active: &PackageActivationV1,
-        bundle: &InstalledBundle,
-        request: RunPreparation<'_>,
-        control: &AnalysisReadControl,
-    ) -> Result<Option<PackageCommitV1>> {
-        control.check()?;
-        let context: InstalledContext = Self::decode(&active.metadata)?;
-        self.prepare_model(active, &context, bundle, request, Action::Run, control)
-    }
-
     pub(in crate::package) fn prepare_model(
         &self,
         active: &PackageActivationV1,

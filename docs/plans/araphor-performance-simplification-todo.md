@@ -306,6 +306,18 @@ still adds 1,132 from 7b7b407a; another 7,132 net deletions are required.
 The records are `/tmp/araphor-obsolete-run-qualification1.json` and
 `/tmp/araphor-obsolete-run-count1.json`. The complete redesign remains **Not done**.
 
+Query Session now supplies one indexed schema and batch builder for resolved
+and supplied model data. The duplicate ModelSchema production owner and
+Analysis indexing loop are deleted. Analysis retains stage visibility and
+complete-input admission. Manual Run reuses its decoded activation context.
+The count removes 22 nonblank production Rust lines from 97909397. The
+complete redesign still adds 1,110 from 7b7b407a; another 7,110 net deletions
+are required. The count is `/tmp/araphor-indexed-table-count1.json`.
+Selected verification is **Done**: 73 distinct cases pass across Query,
+Analysis, and explicit native execution. The qualification record is
+`/tmp/araphor-indexed-table-qualification1.json`. The complete redesign
+remains **Not done**.
+
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

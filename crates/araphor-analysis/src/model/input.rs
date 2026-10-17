@@ -1,9 +1,8 @@
-use std::sync::Arc;
-
 use araphor_analysis_sdk as sdk;
+use araphor_query::execution::Session;
 use snafu::ResultExt as _;
 
-use super::{operation::ModelRun, schema::ModelSchema};
+use super::operation::ModelRun;
 use crate::Result;
 
 impl ModelRun<'_> {
@@ -12,7 +11,7 @@ impl ModelRun<'_> {
         model: &sdk::Model,
         evaluation: &sdk::Evaluation,
     ) -> Result<()> {
-        Self::check_input(
+        self.session()?.check_input(
             evaluation
                 .inputs
                 .iter()
@@ -25,7 +24,6 @@ impl ModelRun<'_> {
                         .flat_map(|state| &state.datasets)
                         .flat_map(|data| &data.batches),
                 ),
-            self.owner.limits().input_bytes,
         )?;
         if let Some(inputs) = self.inputs.clone() {
             inputs.register(self.session()?)?;
@@ -63,29 +61,6 @@ impl ModelRun<'_> {
         Ok(())
     }
 
-    pub(super) fn check_input<'a>(
-        batches: impl Iterator<Item = &'a sdk::RecordBatch>,
-        limit: usize,
-    ) -> Result<usize> {
-        let bytes = batches.fold(0usize, |total, batch| {
-            total
-                .saturating_add(batch.get_array_memory_size())
-                .saturating_add(
-                    std::mem::size_of::<sdk::RecordBatch>()
-                        + batch.num_columns() * std::mem::size_of::<sdk::arrow_array::ArrayRef>(),
-                )
-                .saturating_add(batch.num_rows().saturating_mul(8))
-        });
-        if bytes > limit {
-            return crate::ModelLimitSnafu {
-                resource: "model input bytes",
-                limit,
-            }
-            .fail();
-        }
-        Ok(bytes)
-    }
-
     pub(super) fn table(
         &mut self,
         name: &str,
@@ -93,45 +68,11 @@ impl ModelRun<'_> {
         batches: &[sdk::RecordBatch],
     ) -> Result<()> {
         self.control.check()?;
-        let mut relation = std::collections::BTreeMap::new();
-        ModelSchema::relation(&mut relation, name, schema)?;
-        let schema = relation.remove(name).ok_or_else(|| {
-            crate::ModelInvalidSnafu {
-                field: "model table schema",
-            }
-            .build()
-        })?;
-        let reservation = self.memory.reserve_input(Self::check_input(
-            batches.iter(),
-            self.owner.limits().input_bytes,
-        )?)?;
-        let mut offset = 0u64;
-        let mut indexed = Vec::with_capacity(batches.len());
-        for batch in batches {
-            self.control.check()?;
-            let rows = u64::try_from(batch.num_rows()).map_err(|_| {
-                crate::ModelInvalidSnafu {
-                    field: "model row index",
-                }
-                .build()
-            })?;
-            let end = offset.checked_add(rows).ok_or_else(|| {
-                crate::ModelInvalidSnafu {
-                    field: "model row index",
-                }
-                .build()
-            })?;
-            let mut columns = batch.columns().to_vec();
-            columns.push(Arc::new(sdk::arrow_array::UInt64Array::from_iter_values(
-                offset..end,
-            )));
-            let batch = sdk::RecordBatch::try_new(Arc::clone(&schema), columns)
-                .map_err(sdk::Error::from)
-                .context(crate::AnalysisContractSnafu)?;
-            self.memory.retain_input(&batch, &reservation)?;
-            indexed.push(batch);
-            offset = end;
-        }
+        let schema = Session::indexed_schema(schema)?;
+        let reservation = self.memory.reserve_input(0)?;
+        let indexed = self
+            .session()?
+            .index_batches(schema.clone(), batches, &reservation, 0)?;
         drop(reservation);
         self.session()?.register(name, schema, &indexed)?;
         self.control.check()?;

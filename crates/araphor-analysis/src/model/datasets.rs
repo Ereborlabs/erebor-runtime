@@ -4,7 +4,7 @@ use araphor_analysis_sdk as sdk;
 use araphor_query::datafusion::execution::memory_pool::MemoryReservation;
 use snafu::ResultExt as _;
 
-use super::{operation::ModelRun, schema::ModelSchema, AdmittedModel};
+use super::{operation::ModelRun, AdmittedModel};
 use crate::Result;
 
 pub struct SqlDatasetOutputV1 {
@@ -38,7 +38,7 @@ impl ModelRun<'_> {
         sdk::Dataset::validate_all(inputs, &ports, limits).context(crate::AnalysisContractSnafu)?;
         let mut relations = BTreeMap::new();
         for port in &ports {
-            ModelSchema::relation(&mut relations, &port.name, &port.schema)?;
+            AdmittedModel::relation(&mut relations, &port.name, &port.schema)?;
         }
         let state = self.owner.catalog(relations.clone())?;
         let plan = AdmittedModel::plan(self.owner, &state, sql, &relations)?;
@@ -57,10 +57,8 @@ impl ModelRun<'_> {
             .unwrap_or(usize::MAX)
             .min(self.owner.limits().output_capacity);
         self.output_memory = Some(self.memory.reserve_output(0)?);
-        Self::check_input(
-            inputs.iter().flat_map(|data| &data.batches),
-            self.owner.limits().input_bytes,
-        )?;
+        self.session()?
+            .check_input(inputs.iter().flat_map(|data| &data.batches))?;
         for (port, data) in ports.iter().zip(inputs) {
             self.table(&port.name, &port.schema, &data.batches)?;
         }

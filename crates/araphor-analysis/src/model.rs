@@ -7,7 +7,7 @@ use araphor_query::datafusion::common::tree_node::TreeNodeRecursion;
 use araphor_query::datafusion::execution::memory_pool::MemoryReservation;
 use araphor_query::datafusion::execution::SessionState;
 use araphor_query::datafusion::logical_expr::LogicalPlan;
-use araphor_query::execution::Engine;
+use araphor_query::execution::{Engine, Session};
 use araphor_query::inputs::Inputs;
 use araphor_query::memory::Memory;
 use araphor_query::parser::Parser;
@@ -20,7 +20,6 @@ mod execute;
 mod input;
 mod operation;
 mod output;
-mod schema;
 pub use datasets::SqlDatasetOutputV1;
 pub use operation::ModelRun;
 
@@ -185,11 +184,11 @@ impl AdmittedModel {
     }
 
     fn admit(engine: &Engine, program: &SqlModelV1, model: &sdk::Model) -> Result<Self> {
-        let mut relations = schema::ModelSchema::relations(model)?;
+        let mut relations = Self::relations(model)?;
         let state = engine.catalog(relations.clone())?;
         let outputs = Self::outputs(engine, &state, &model.outputs, &program.outputs, &relations)?;
         for port in &model.outputs {
-            schema::ModelSchema::relation(
+            Self::relation(
                 &mut relations,
                 &format!("output_{}", port.name),
                 &port.schema,
@@ -273,7 +272,6 @@ impl AdmittedModel {
         ports
             .iter()
             .map(|port| {
-                schema::ModelSchema::validate(&port.schema)?;
                 let sql = queries.get(&port.name).ok_or_else(|| {
                     crate::ModelInvalidSnafu {
                         field: "model output query",
@@ -283,6 +281,44 @@ impl AdmittedModel {
                 Self::plan(engine, state, sql, relations)
             })
             .collect()
+    }
+
+    fn relations(model: &sdk::Model) -> Result<BTreeMap<String, Arc<sdk::Schema>>> {
+        let mut relations = BTreeMap::new();
+        for input in &model.inputs {
+            Self::relation(&mut relations, &input.port.name, &input.port.schema)?;
+        }
+        if !model.parameters.fields().is_empty() {
+            Self::relation(&mut relations, "parameters", &model.parameters)?;
+        }
+        if let Some(spec) = &model.checkpoint {
+            for port in &spec.datasets {
+                Self::relation(
+                    &mut relations,
+                    &format!("prior_{}", port.name),
+                    &port.schema,
+                )?;
+            }
+        }
+        Ok(relations)
+    }
+
+    fn relation(
+        relations: &mut BTreeMap<String, Arc<sdk::Schema>>,
+        name: &str,
+        schema: &sdk::Schema,
+    ) -> Result<()> {
+        let schema = Session::indexed_schema(schema)?;
+        match relations.entry(name.to_owned()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(schema);
+                Ok(())
+            }
+            std::collections::btree_map::Entry::Occupied(_) => crate::ModelInvalidSnafu {
+                field: "model relation collision",
+            }
+            .fail(),
+        }
     }
 
     fn plan(
@@ -308,3 +344,6 @@ impl AdmittedModel {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod schema;

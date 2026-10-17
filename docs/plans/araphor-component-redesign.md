@@ -369,6 +369,42 @@ complete redesign still adds 1,132 from 7b7b407a. Another 7,132 net production
 deletions are required. The complete redesign remains **Not done**. Full
 workspace CI and benchmarks are not run, as instructed.
 
+### One Query owner for indexed tables
+
+Implementation and selected host verification: **Done**.
+Query Session now checks indexed schemas and creates the dataset-global
+__row_index column for resolved inputs, supplied inputs, parameters,
+checkpoints, and output tables. The duplicate ModelSchema production owner,
+Analysis index loop, and Inputs schema builder are deleted. Analysis retains
+stage visibility and the complete supplied-input check. Native Arrow batches
+and the existing native MemTable registration remain the table representation.
+
+The builder reuses the caller's actual reservation. It claims existing buffers
+before it allocates index values. It keeps the retained metadata charge separate
+from prepaid payload bytes. Analysis no longer prepays an already claimed
+payload. Input preparation releases its temporary index-header charge when
+the capture takes those same headers. The builder prepays eight bytes for each
+UInt64 index value. No new limit, provider, table wrapper, or pool is added.
+
+Manual Run also reuses its decoded activation context. The prepare_at wrapper
+and its second decode are deleted. Manual evaluation returns its required
+receipt. Inspect keeps its optional preparation result and existing checks.
+
+The affected checks pass 73 distinct cases: 33 Query, 39 Analysis, and one
+explicit native checkpoint retry and restart case. The final Query run takes
+5.11 seconds. Analysis takes 49.77 seconds; the native case takes 50.06 seconds.
+Strict Query and Analysis Clippy passes in 11.13 seconds. Formatting passes
+for all 14 changed Rust files. All 254 local document links pass.
+The qualification record is `/tmp/araphor-indexed-table-qualification1.json`.
+
+The source count removes 22 nonblank production Rust lines from 97909397. The
+complete redesign still adds 1,110 from 7b7b407a; another 7,110 net production
+deletions are required. The counter checks 701 Rust hashes. A file-level
+cfg(test) attribute excludes the complete current schema test file from
+production. Its earlier production contents remain in the before count.
+The record is `/tmp/araphor-indexed-table-count1.json`. The complete redesign
+remains **Not done**. Full workspace CI and benchmarks are not run, as instructed.
+
 ## Intended end state
 
 ### RisingWave source correction
@@ -1414,7 +1450,7 @@ A zero-column Arrow batch must retain its row count for `COUNT(*)`.
 
 One operation does not grant every statement access to every relation. Keep
 the current stage-specific relation sets from
-[model schema construction](../../crates/araphor-analysis/src/model/schema.rs)
+[model relation construction](../../crates/araphor-analysis/src/model.rs)
 and [model evaluation](../../crates/araphor-analysis/src/model/execute.rs):
 
 | Statement | Allowed relations |

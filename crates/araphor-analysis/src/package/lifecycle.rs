@@ -144,9 +144,12 @@ impl AnalysisPackageOwner {
             let evaluated = if artifact.prepared(&active.key.export) {
                 None
             } else {
+                control.check()?;
+                let context: InstalledContext = Self::decode(&active.metadata)?;
                 Some(
-                    self.prepare_at(
+                    self.prepare_model(
                         &active,
+                        &context,
                         bundle,
                         super::evaluation::RunPreparation {
                             inputs: None,
@@ -158,6 +161,7 @@ impl AnalysisPackageOwner {
                             rebuild: true,
                             now: Self::now(),
                         },
+                        Action::Run,
                         control,
                     )?
                     .ok_or_else(|| Code::Conflict.error("prepared evaluation"))?,
@@ -203,8 +207,10 @@ impl AnalysisPackageOwner {
         if artifact.prepared(&active.key.export) {
             return Ok(());
         }
+        let mut context: InstalledContext = Self::decode(&active.metadata)?;
         if let Err(error) = self.evaluate_active(
             active,
+            &context,
             &format!("install:{}", active.generation),
             bundle,
             control,
@@ -212,7 +218,6 @@ impl AnalysisPackageOwner {
             let Some(field) = error.missing_input() else {
                 return Err(error);
             };
-            let mut context: InstalledContext = Self::decode(&active.metadata)?;
             context.readiness = PackageReadinessV1::MissingInput {
                 input: field.into(),
             };

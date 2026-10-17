@@ -107,9 +107,8 @@ impl AnalysisPackageOwner {
                 loaded = self.load_installed(grant.selection.tenant_id, &saved.root)?;
                 &loaded
             };
-            if let Some(receipt) = self.evaluate_active(&active, id, selected, control)? {
-                receipts.push((active.key.export, active.key.package_id, receipt));
-            }
+            let receipt = self.evaluate_active(&active, &saved, id, selected, control)?;
+            receipts.push((active.key.export, active.key.package_id, receipt));
         }
         let mut response = self.inspect(grant, scope, package, Some(&bundle), control)?;
         for (export, _, receipt) in receipts
@@ -134,11 +133,11 @@ impl AnalysisPackageOwner {
     pub(super) fn evaluate_active(
         &self,
         active: &PackageActivationV1,
+        context: &InstalledContext,
         id: &str,
         bundle: &InstalledBundle,
         control: &AnalysisReadControl,
-    ) -> Result<Option<PackageResultRefV1>> {
-        let context: InstalledContext = Self::decode(&active.metadata)?;
+    ) -> Result<PackageResultRefV1> {
         control.check()?;
         if bundle.value.root != context.root {
             return Err(Code::Conflict.error("activation package root").into());
@@ -155,18 +154,19 @@ impl AnalysisPackageOwner {
                 package_id: active.key.package_id.clone(),
                 revision: active.revision.clone(),
             })?;
-            if previous.commit.request != Self::request(active, id, &context, artifact)? {
+            if previous.commit.request != Self::request(active, id, context, artifact)? {
                 return Err(Code::Conflict.error("evaluation retry").into());
             }
             control.check()?;
             self.check(&context.grant, Action::Run)?;
-            return Ok(Some(PackageResultRefV1 {
+            return Ok(PackageResultRefV1 {
                 result_id,
                 commit_revision: previous.commit_revision,
-            }));
+            });
         }
-        let result = self.prepare_at(
+        let prepared = match self.prepare_model(
             active,
+            context,
             bundle,
             RunPreparation {
                 inputs: None,
@@ -174,21 +174,20 @@ impl AnalysisPackageOwner {
                 rebuild: false,
                 now: Self::now(),
             },
+            Action::Run,
             control,
-        );
-        let prepared = match result {
+        ) {
             Ok(Some(prepared)) => prepared,
-            Ok(None) => return Ok(None),
+            Ok(None) => return Err(Code::Conflict.error("prepared evaluation").into()),
             Err(error) if error.is_busy() => return Err(error),
             Err(error) => {
                 self.failed(active, &error, control)?;
                 return Err(error);
             }
         };
-        let receipt = self.authorize_commit(&context.grant, Action::Run, &admission, || {
+        self.authorize_commit(&context.grant, Action::Run, &admission, || {
             self.store.commit_package(&prepared, || control.check())
-        })?;
-        Ok(Some(receipt))
+        })
     }
 
     fn result_id(active: &PackageActivationV1, id: &str) -> Result<String> {

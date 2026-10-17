@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProvider;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::TableReference;
@@ -10,7 +9,7 @@ use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
 use snafu::ResultExt as _;
 
-use crate::execution::Engine;
+use crate::execution::{Engine, Session};
 use crate::parser::Parser;
 use crate::sources::{SourceOrigin, SourceProvider, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
@@ -48,7 +47,7 @@ impl Inputs {
                 if matches!(table, sdk::TableRef::Named(name) if name == &input.port.name) {
                     continue;
                 }
-                let schema = Self::table_schema(&input.port.schema)?;
+                let schema = Session::indexed_schema(&input.port.schema)?;
                 tables.insert(input.port.name.clone(), SourceProvider::port(slot, schema));
             }
         }
@@ -187,31 +186,6 @@ impl Inputs {
         )
         .and_then(LogicalPlanBuilder::build)
         .context(SqlSnafu)
-    }
-
-    pub(crate) fn table_schema(schema: &sdk::Schema) -> Result<SchemaRef> {
-        let mut names = BTreeSet::new();
-        if schema.fields().is_empty()
-            || schema
-                .fields()
-                .iter()
-                .any(|field| field.name() == "__row_index" || !names.insert(field.name()))
-        {
-            return InvalidSnafu {
-                field: "input schema",
-            }
-            .fail();
-        }
-        let mut fields = schema.fields().to_vec();
-        fields.push(Arc::new(sdk::Field::new(
-            "__row_index",
-            sdk::DataType::UInt64,
-            false,
-        )));
-        Ok(Arc::new(sdk::Schema::new_with_metadata(
-            fields,
-            schema.metadata().clone(),
-        )))
     }
 
     pub fn clocked(plan: &LogicalPlan) -> Result<bool> {

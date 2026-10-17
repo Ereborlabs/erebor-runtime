@@ -231,9 +231,10 @@ async fn automatic_clock_ticks() -> TestResult {
                     rebuild: false,
                     now,
                 };
+                let context: InstalledContext = AnalysisPackageOwner::decode(&selected.metadata)?;
                 let prepared = fixture
                     .owner
-                    .prepare_at(&selected, &package, request, &stage)?
+                    .prepare_model(&selected, &context, &package, request, Action::Run, &stage)?
                     .ok_or("clock evaluation")?;
                 assert_eq!(prepared.created_utc_ns, tick);
                 let metadata: ResultContext = AnalysisPackageOwner::decode(&prepared.metadata)?;
@@ -317,10 +318,12 @@ async fn unchanged_model_stays_current() -> TestResult {
             .is_err()
     );
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let context: InstalledContext = AnalysisPackageOwner::decode(&active.metadata)?;
     let manual = fixture
         .owner
-        .prepare_at(
+        .prepare_model(
             &active,
+            &context,
             &package,
             RunPreparation {
                 inputs: None,
@@ -328,6 +331,7 @@ async fn unchanged_model_stays_current() -> TestResult {
                 rebuild: false,
                 now: START + 123,
             },
+            Action::Run,
             &control,
         )?
         .ok_or("manual")?;

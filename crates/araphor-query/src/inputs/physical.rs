@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_data::{AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1};
-use datafusion::arrow::array::{ArrayRef, UInt64Array};
+use datafusion::arrow::array::ArrayRef;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use futures_util::TryStreamExt as _;
@@ -237,32 +237,16 @@ impl Inputs {
                 .transpose()
                 .context(SqlSnafu)?;
             let value = self.input(data, &snapshot, scope, &inherited, coverage.as_ref())?;
-            let indexed_schema = Self::table_schema(&port.schema)?;
-            let mut indexed = Vec::with_capacity(value.data.batches.len());
-            let mut offset = 0u64;
-            for batch in &value.data.batches {
-                let end = offset.checked_add(batch.num_rows() as u64).ok_or_else(|| {
-                    InvalidSnafu {
-                        field: "input row index",
-                    }
-                    .build()
-                })?;
-                memory
-                    .try_resize(
-                        InputSet::metadata_bytes(&inputs)
-                            .saturating_add(batch.num_rows().saturating_mul(8)),
-                    )
-                    .context(SqlSnafu)?;
-                let mut columns = batch.columns().to_vec();
-                columns.push(Arc::new(UInt64Array::from_iter_values(offset..end)));
-                let batch = sdk::RecordBatch::try_new(Arc::clone(&indexed_schema), columns)
-                    .map_err(sdk::Error::from)?;
-                memory_owner
-                    .retain_input(&batch, &memory)
-                    .context(SqlSnafu)?;
-                indexed.push(batch);
-                offset = end;
-            }
+            let indexed_schema = Session::indexed_schema(&port.schema)?;
+            let indexed = session.index_batches(
+                Arc::clone(&indexed_schema),
+                &value.data.batches,
+                &memory,
+                InputSet::metadata_bytes(&inputs),
+            )?;
+            memory
+                .try_resize(InputSet::metadata_bytes(&inputs))
+                .context(SqlSnafu)?;
             source
                 .bind_port(input.slot, indexed_schema, indexed)
                 .context(SqlSnafu)?;

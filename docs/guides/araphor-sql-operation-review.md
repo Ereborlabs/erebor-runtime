@@ -376,11 +376,41 @@ aliases. Native CTE alias counts and HAVING resolution apply.
 
 [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) supplies the
 source catalog from canonical providers and declared Table aliases.
-[ModelSchema](../../crates/araphor-analysis/src/model/schema.rs) supplies the
-local Arrow schema map for model execution. Output SQL sees model inputs,
+[AdmittedModel::relations](../../crates/araphor-analysis/src/model.rs) selects
+the local relations for model execution. Output SQL sees model inputs,
 parameters, and prior checkpoint tables. Checkpoint, evidence, and reason SQL
 also see completed output tables. The declared catalog defines local visibility.
 The authorized Data selection defines durable source scope.
+
+[Session::indexed_schema](../../crates/araphor-query/src/execution/tables.rs)
+checks local field names and adds the ordinary `__row_index` column. It retains
+the declared Arrow field and schema metadata.
+[Session::index_batches](../../crates/araphor-query/src/execution/tables.rs)
+creates the dataset-global index through the existing input reservation.
+Resolved inputs, supplied inputs, parameters, checkpoints, and output tables
+use this same Query implementation. Analysis retains stage visibility and
+checks the complete supplied input set before model execution.
+
+The builder claims existing buffers through the supplied reservation before
+it allocates the index. The metadata charge stays separate from the prepaid
+payload. The builder prepays eight bytes for each UInt64 index value. Input preparation
+releases temporary index-header prepayment before the capture takes ownership
+of those same headers. The existing native MemTable registration stays in use.
+[The table cases](../../crates/araphor-query/src/execution/tables/tests.rs)
+check prepaid capacity, existing claims, batch and empty-batch index continuity,
+Arrow metadata, empty tables, and aliases after the session closes.
+
+[AnalysisPackageOwner::evaluate_active](../../crates/araphor-analysis/src/package/evaluation.rs)
+reuses the context already decoded by manual Run. A repeated request checks
+the same stored request and returns its existing receipt. The
+[retry case](../../crates/araphor-analysis/src/package/tests/lifecycle.rs)
+also checks that activation, result heads, and store metadata do not change.
+
+The affected selection passes 73 distinct cases: 33 Query, 39 Analysis, and
+one explicit native checkpoint case. Its source scope is
+`/tmp/araphor-indexed-table-qualification1.json`. The source count is
+`/tmp/araphor-indexed-table-count1.json`. General maintained SQL, native
+execution pool contention, and the complete redesign remain **Not done**.
 
 [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) returns a
 native DataSourceExec with an immutable SourceData descriptor. The descriptor
