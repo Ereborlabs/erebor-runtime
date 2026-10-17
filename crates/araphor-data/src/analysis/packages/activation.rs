@@ -145,6 +145,7 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("package.after");
         self.revision.send_replace(revision);
+        self.activations.send_replace(revision);
         Ok(active)
     }
 
@@ -281,6 +282,7 @@ impl AnalysisStore {
         check()?;
         self.commit_metadata(transaction, "commit package removal")?;
         self.revision.send_replace(revision);
+        self.activations.send_replace(revision);
         Ok(())
     }
 

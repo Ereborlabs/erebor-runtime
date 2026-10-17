@@ -1,12 +1,126 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use arrow_buffer::{Buffer, MemoryPool as ArrowPool, MemoryReservation as ArrowReservation};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::memory_pool::{
-    GreedyMemoryPool, MemoryConsumer, MemoryPool, MemoryReservation,
+    GreedyMemoryPool, MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
 };
+use tokio::sync::watch;
+
+#[derive(Debug)]
+struct Pool {
+    native: GreedyMemoryPool,
+    capacity: Arc<Capacity>,
+    resource: &'static str,
+}
+
+#[derive(Debug)]
+struct Capacity {
+    released: Mutex<Releases>,
+    changes: watch::Sender<()>,
+}
+
+#[derive(Debug, Default)]
+struct Releases {
+    total: u64,
+    consumers: HashMap<usize, Consumer>,
+}
+
+#[derive(Debug)]
+struct Consumer {
+    released: Arc<AtomicU64>,
+    bytes: usize,
+    scoped: bool,
+}
+
+impl MemoryPool for Pool {
+    fn unregister(&self, consumer: &MemoryConsumer) {
+        self.capacity
+            .released
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .consumers
+            .remove(&consumer.id());
+    }
+
+    fn grow(&self, reservation: &MemoryReservation, bytes: usize) {
+        let mut released = self
+            .capacity
+            .released
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.native.grow(reservation, bytes);
+        if let Some(consumer) = released.consumers.get_mut(&reservation.consumer().id()) {
+            consumer.bytes += bytes;
+        }
+    }
+
+    fn shrink(&self, reservation: &MemoryReservation, bytes: usize) {
+        let mut released = self
+            .capacity
+            .released
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.native.shrink(reservation, bytes);
+        if let Some(consumer) = released.consumers.get_mut(&reservation.consumer().id()) {
+            consumer.bytes -= bytes;
+            if bytes != 0 {
+                consumer.released.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if bytes != 0 {
+            released.total = released.total.wrapping_add(1);
+            drop(released);
+            self.capacity.changes.send_replace(());
+        }
+    }
+
+    fn try_grow(&self, reservation: &MemoryReservation, bytes: usize) -> Result<()> {
+        let mut released = self
+            .capacity
+            .released
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let consumer = released
+            .consumers
+            .get_mut(&reservation.consumer().id())
+            .ok_or_else(|| DataFusionError::Internal("memory consumer is absent".into()))?;
+        let owned = if consumer.scoped {
+            consumer.bytes
+        } else {
+            reservation.size()
+        };
+        match self.native.try_grow(reservation, bytes) {
+            Err(source)
+                if matches!(self.native.memory_limit(), MemoryLimit::Finite(limit)
+                    if owned.saturating_add(bytes) <= limit) =>
+            {
+                Err(DataFusionError::External(Box::new(
+                    crate::Error::Capacity {
+                        resource: self.resource,
+                        source,
+                    },
+                )))
+            }
+            Ok(()) => {
+                consumer.bytes += bytes;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn reserved(&self) -> usize {
+        self.native.reserved()
+    }
+
+    fn memory_limit(&self) -> MemoryLimit {
+        self.native.memory_limit()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct BufferKey {
@@ -86,36 +200,129 @@ impl ArrowPool for Claim {
 
 #[derive(Debug)]
 pub struct Memory {
+    released: Arc<AtomicU64>,
+    family: [usize; 2],
     registry: Arc<Registry>,
     input: MemoryReservation,
-    input_pool: Arc<dyn MemoryPool>,
+    input_pool: Arc<Pool>,
     output: MemoryReservation,
-    output_pool: Arc<dyn MemoryPool>,
+    output_pool: Arc<Pool>,
     input_capacity: usize,
     output_capacity: usize,
 }
 
 impl Memory {
     pub fn new(input_capacity: usize, output_capacity: usize) -> Arc<Self> {
-        let input: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(input_capacity));
-        let output: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(output_capacity));
+        let (changes, _) = watch::channel(());
+        let capacity = Arc::new(Capacity {
+            released: Mutex::default(),
+            changes,
+        });
+        let pool = |bytes, resource| {
+            Arc::new(Pool {
+                native: GreedyMemoryPool::new(bytes),
+                capacity: Arc::clone(&capacity),
+                resource,
+            })
+        };
+        let input = pool(input_capacity, "shared input");
+        let output = pool(output_capacity, "shared output");
+        let released = Arc::default();
+        let input_reservation = Self::consumer("araphor input", &input, &released, false);
+        let output_reservation = Self::consumer("araphor output", &output, &released, false);
         Arc::new(Self {
+            released,
+            family: [
+                input_reservation.consumer().id(),
+                output_reservation.consumer().id(),
+            ],
             registry: Arc::clone(REGISTRY.get_or_init(Arc::default)),
-            input: MemoryConsumer::new("araphor input").register(&input),
+            input: input_reservation,
             input_pool: input,
-            output: MemoryConsumer::new("araphor output").register(&output),
+            output: output_reservation,
             output_pool: output,
             input_capacity,
             output_capacity,
         })
     }
 
+    fn consumer(
+        name: &str,
+        pool: &Arc<Pool>,
+        released: &Arc<AtomicU64>,
+        scoped: bool,
+    ) -> MemoryReservation {
+        let consumer = MemoryConsumer::new(name);
+        pool.capacity
+            .released
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .consumers
+            .insert(
+                consumer.id(),
+                Consumer {
+                    released: Arc::clone(released),
+                    bytes: 0,
+                    scoped,
+                },
+            );
+        let pool: Arc<dyn MemoryPool> = pool.clone();
+        consumer.register(&pool)
+    }
+
+    pub fn scope(&self) -> Arc<Self> {
+        let released = Arc::default();
+        Arc::new(Self {
+            input: Self::consumer("araphor input", &self.input_pool, &released, true),
+            output: Self::consumer("araphor output", &self.output_pool, &released, true),
+            released,
+            family: self.family,
+            registry: Arc::clone(&self.registry),
+            input_pool: Arc::clone(&self.input_pool),
+            output_pool: Arc::clone(&self.output_pool),
+            input_capacity: self.input_capacity,
+            output_capacity: self.output_capacity,
+        })
+    }
+
+    pub(crate) fn same_family(&self, other: &Self) -> bool {
+        self.family == other.family
+    }
+
+    pub fn capacity_epoch(&self) -> u64 {
+        let released = self
+            .input_pool
+            .capacity
+            .released
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        released
+            .total
+            .wrapping_sub(self.released.load(Ordering::Relaxed))
+    }
+
+    pub async fn capacity_changed(&self, epoch: u64) -> crate::Result<()> {
+        let mut changes = self.input_pool.capacity.changes.subscribe();
+        loop {
+            changes.borrow_and_update();
+            if self.capacity_epoch() != epoch {
+                return Ok(());
+            }
+            changes
+                .changed()
+                .await
+                .map_err(|source| crate::Error::Sql {
+                    source: DataFusionError::External(Box::new(source)),
+                })?;
+        }
+    }
+
     pub fn reserve_input(&self, bytes: usize) -> Result<MemoryReservation> {
-        Self::reserve(&self.input, bytes, self.input_capacity, "shared input")
+        Self::reserve(&self.input, bytes, self.input_capacity)
     }
 
     pub fn reserve_output(&self, bytes: usize) -> Result<MemoryReservation> {
-        Self::reserve(&self.output, bytes, self.output_capacity, "shared output")
+        Self::reserve(&self.output, bytes, self.output_capacity)
     }
 
     pub(crate) fn prepare_output(&self, bytes: usize) -> Result<MemoryReservation> {
@@ -154,7 +361,6 @@ impl Memory {
         anchor: &MemoryReservation,
         bytes: usize,
         capacity: usize,
-        resource: &'static str,
     ) -> Result<MemoryReservation> {
         if bytes > capacity {
             return Err(DataFusionError::ResourcesExhausted(format!(
@@ -163,14 +369,8 @@ impl Memory {
             )));
         }
         let reservation = anchor.new_empty();
-        Self::grow(&reservation, bytes, resource)?;
+        reservation.try_grow(bytes)?;
         Ok(reservation)
-    }
-
-    fn grow(reservation: &MemoryReservation, bytes: usize, resource: &'static str) -> Result<()> {
-        reservation.try_grow(bytes).map_err(|source| {
-            DataFusionError::External(Box::new(crate::Error::Capacity { resource, source }))
-        })
     }
 
     fn retain(
@@ -250,14 +450,14 @@ impl Memory {
                 DataFusionError::Internal("Arrow allocation reservation lock failed".into())
             })
             .and_then(|mut charges| {
-                if let std::collections::hash_map::Entry::Vacant(charge) =
-                    charges.entry(reservation.consumer().id())
-                {
-                    Self::grow(
-                        reservation,
-                        key.capacity.saturating_sub(reservation.size()),
-                        resource,
-                    )?;
+                if let std::collections::hash_map::Entry::Vacant(charge) = charges.entry(
+                    if reservation.consumer().id() == self.input.consumer().id() {
+                        self.family[0]
+                    } else {
+                        self.family[1]
+                    },
+                ) {
+                    reservation.try_grow(key.capacity.saturating_sub(reservation.size()))?;
                     charge.insert(reservation.split(key.capacity));
                 }
                 Ok(())
@@ -277,6 +477,119 @@ mod tests {
     use super::*;
     use datafusion::arrow::array::{Array, ArrayRef, Int64Array, ListArray, StringViewArray};
     use datafusion::arrow::datatypes::Int64Type;
+
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    #[tokio::test]
+    async fn scoped_releases_ignore_self() -> TestResult {
+        let memory = Memory::new(64, 64);
+        let first = memory.scope();
+        let other = memory.scope();
+        let epoch = first.capacity_epoch();
+        drop(first.reserve_input(16)?);
+        drop(first.reserve_output(16)?);
+        assert_eq!(first.capacity_epoch(), epoch);
+        let pending = first.capacity_changed(epoch);
+        tokio::pin!(pending);
+        assert!(futures_util::poll!(pending.as_mut()).is_pending());
+        let held = other.reserve_output(64)?;
+        assert!(first.reserve_output(1).is_err());
+        drop(held);
+        tokio::time::timeout(std::time::Duration::from_secs(1), pending).await??;
+        assert_ne!(first.capacity_epoch(), epoch);
+        drop(first.reserve_output(64)?);
+        let before = first.capacity_epoch();
+        drop(other.reserve_input(8)?);
+        first.capacity_changed(before).await?;
+        assert_eq!(memory.input_pool.reserved(), 0);
+        assert_eq!(memory.output_pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_aliases_share_charge() -> TestResult {
+        let column: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        let bytes = column.get_buffer_memory_size();
+        let batch = RecordBatch::try_from_iter([("value", column)])?;
+        let memory = Memory::new(bytes, bytes);
+        let first = memory.scope();
+        let other = memory.scope();
+        let input = first.reserve_input(bytes)?;
+        first.retain_input(&batch, &input)?;
+        other.retain_input(&batch, &other.reserve_input(0)?)?;
+        assert_eq!(memory.input_pool.reserved(), bytes);
+        let output = other.reserve_output(bytes)?;
+        other.retain_output(&batch, &output)?;
+        first.retain_output(&batch, &first.reserve_output(0)?)?;
+        assert_eq!(memory.output_pool.reserved(), bytes);
+        let alias = Arc::clone(batch.column(0));
+        drop((input, output, batch, first, other));
+        assert!(memory.reserve_input(1).is_err());
+        assert!(memory.reserve_output(1).is_err());
+        drop(alias);
+        drop(memory.reserve_input(bytes)?);
+        drop(memory.reserve_output(bytes)?);
+        let live = memory
+            .input_pool
+            .capacity
+            .released
+            .lock()
+            .map_err(|_| "capacity lock")?;
+        assert_eq!(live.consumers.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn native_resize_preserves_capacity() -> TestResult {
+        let memory = Memory::new(64, 64);
+        let scope = memory.scope();
+        let hold = memory.reserve_input(64)?;
+        let pending = scope.reserve_input(0)?;
+        let error = pending.try_resize(16).err().ok_or("capacity must fail")?;
+        assert!(matches!(error, DataFusionError::External(error)
+            if matches!(error.downcast_ref::<crate::Error>(),
+                Some(crate::Error::Capacity { resource: "shared input", .. }))));
+        assert_eq!(pending.size(), 0);
+        assert!(matches!(
+            pending.try_resize(65),
+            Err(DataFusionError::ResourcesExhausted(_))
+        ));
+        drop(hold);
+        pending.try_resize(64)?;
+        assert_eq!(memory.input_pool.reserved(), 64);
+        Ok(())
+    }
+
+    #[test]
+    fn retained_working_set_limit() -> TestResult {
+        let memory = Memory::new(64, 64);
+        let scope = memory.scope();
+        let held = scope.reserve_input(64)?;
+        let retained = held.split(40);
+        drop(held);
+        assert!(matches!(
+            scope.reserve_input(32),
+            Err(DataFusionError::ResourcesExhausted(_))
+        ));
+        assert!(matches!(
+            memory.reserve_input(32),
+            Err(DataFusionError::External(error))
+                if matches!(error.downcast_ref::<crate::Error>(),
+                    Some(crate::Error::Capacity { resource: "shared input", .. }))
+        ));
+        drop(retained);
+        drop(scope.reserve_input(64)?);
+        let output = scope.reserve_output(40)?;
+        assert!(matches!(
+            scope.reserve_output(32),
+            Err(DataFusionError::ResourcesExhausted(_))
+        ));
+        drop(output);
+        drop(scope.reserve_output(64)?);
+        assert_eq!(memory.input_pool.reserved(), 0);
+        assert_eq!(memory.output_pool.reserved(), 0);
+        Ok(())
+    }
 
     #[test]
     fn prepay_keeps_existing_charges() {

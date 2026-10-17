@@ -84,7 +84,19 @@ pub(super) struct AnalysisConnection<'a> {
     root: &'a Path,
     dirty: Option<&'a std::sync::atomic::AtomicBool>,
     _snapshot: Option<RwLockReadGuard<'a, ()>>,
-    _permit: Option<OwnedSemaphorePermit>,
+    _permit: Option<ReadPermit>,
+}
+
+pub(crate) struct ReadPermit {
+    permit: Option<OwnedSemaphorePermit>,
+    capacity: tokio::sync::watch::Sender<()>,
+}
+
+impl Drop for ReadPermit {
+    fn drop(&mut self) {
+        drop(self.permit.take());
+        self.capacity.send_replace(());
+    }
 }
 
 impl AnalysisConnection<'_> {
@@ -169,12 +181,15 @@ impl AnalysisStore {
         *readers[0] = Some(first);
         *readers[1] = Some(second);
         *writer = Some(connection);
-        self.revision.send_if_modified(|revision| {
+        let recovered = self.revision.send_if_modified(|revision| {
             let changed = *revision != meta.commit_revision;
             *revision = meta.commit_revision;
             changed
         });
         self.write_ready.store(true, Ordering::Release);
+        if recovered {
+            self.activations.send_replace(meta.commit_revision);
+        }
         Ok(())
     }
 
@@ -313,17 +328,42 @@ impl AnalysisStore {
         self.reader_wait(Some(control), self.reserve_reader()?)
     }
 
-    pub(crate) fn reserve_reader(&self) -> Result<OwnedSemaphorePermit> {
+    pub(crate) fn reserve_reader(&self) -> Result<ReadPermit> {
         self.read_slots
             .clone()
             .try_acquire_owned()
+            .map(|permit| ReadPermit {
+                permit: Some(permit),
+                capacity: self.capacity.clone(),
+            })
             .map_err(|_| AnalysisBusySnafu { resource: "reader" }.build())
+    }
+
+    pub async fn wait_capacity(&self) -> Result<()> {
+        let mut capacity = self.subscribe_capacity();
+        loop {
+            capacity.borrow_and_update();
+            match self.reserve_reader() {
+                Ok(permit) => {
+                    drop(permit);
+                    return Ok(());
+                }
+                Err(crate::Error::AnalysisBusy {
+                    resource: "reader", ..
+                }) => {}
+                Err(error) => return Err(error),
+            }
+            capacity
+                .changed()
+                .await
+                .map_err(|_| self.state_error("the reader capacity channel is closed"))?;
+        }
     }
 
     pub(super) fn reader_wait(
         &self,
         control: Option<&AnalysisReadControl>,
-        permit: OwnedSemaphorePermit,
+        permit: ReadPermit,
     ) -> Result<AnalysisConnection<'_>> {
         if self.raw_pending.load(Ordering::Acquire) {
             drop(self.writer_wait(control, true)?);

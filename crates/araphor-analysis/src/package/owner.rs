@@ -155,7 +155,7 @@ impl AnalysisPackageOwner {
                     package_id,
                     revision,
                 };
-                let bundle = self.load_bundle(grant.selection.tenant_id, &root)?;
+                let bundle = self.load_bundle(grant.selection.tenant_id, &root, Some(control))?;
                 self.install(&grant, &scope_id, bundle, None, true, control)
             }
             PackageRequestV1::Remove {
@@ -226,6 +226,7 @@ impl AnalysisPackageOwner {
         self.operations.clone().try_acquire_owned().map_err(|_| {
             crate::AnalysisBusySnafu {
                 resource: "package operation capacity",
+                requested: 1_usize,
             }
             .build()
         })
@@ -264,47 +265,7 @@ impl AnalysisPackageOwner {
         })
     }
 
-    pub async fn serve(self: Arc<Self>, mut stop: watch::Receiver<bool>) -> Result<()> {
-        let mut sources = self.store.subscribe_revision();
-        let mut authority = self.authority.changes();
-        let mut admitted = None;
-        let mut checked = None;
-        loop {
-            if *stop.borrow() {
-                return Ok(());
-            }
-            let revision = *authority.borrow_and_update();
-            let source_revision = *sources.borrow_and_update();
-            let (complete, deadline) = self
-                .reconcile_until(
-                    &mut stop,
-                    admitted != Some(revision),
-                    checked != Some(source_revision),
-                )
-                .await?;
-            if complete {
-                admitted = Some(revision);
-                checked = Some(source_revision);
-            }
-            if *stop.borrow() || stop.has_changed().is_err() {
-                return Ok(());
-            }
-            let wakeup = async {
-                if deadline == u64::MAX {
-                    std::future::pending::<()>().await;
-                } else {
-                    tokio::time::sleep(std::time::Duration::from_nanos(
-                        deadline.saturating_sub(Self::now()),
-                    ))
-                    .await;
-                }
-            };
-            tokio::select! {
-                changed = stop.changed() => { if changed.is_err() { return Ok(()); } }
-                changed = sources.changed() => { if changed.is_err() { return Ok(()); } }
-                changed = authority.changed() => { if changed.is_err() { return Ok(()); } }
-                () = wakeup => {}
-            }
-        }
+    pub async fn serve(self: Arc<Self>, stop: watch::Receiver<bool>) -> Result<()> {
+        self.supervise(stop).await
     }
 }

@@ -1,4 +1,5 @@
 use araphor_analysis_sdk as sdk;
+use std::sync::Arc;
 
 use crate::package::tests::{bundle, run, Fixture, TestResult};
 use crate::package::{PackageImplementationV1, PackageReadinessV1};
@@ -28,7 +29,7 @@ async fn suspended_package_renewal_restart() -> TestResult {
     assert!(!historical.commit.checkpoint.is_empty());
 
     fixture.authority.set_revision(0);
-    fixture.owner.reconcile().await?;
+    crate::package::tests::suspend(Arc::clone(&fixture.owner)).await?;
     let suspended = fixture.store.package_activation_page(None)?.remove(0);
     assert!(!suspended.active);
     assert!(fixture.execute(run("suspended")).await.is_err());

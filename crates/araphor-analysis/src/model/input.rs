@@ -101,7 +101,7 @@ impl ModelRun<'_> {
             }
             .build()
         })?;
-        let reservation = self.owner.memory().reserve_input(Self::check_input(
+        let reservation = self.memory.reserve_input(Self::check_input(
             batches.iter(),
             self.owner.limits().input_bytes,
         )?)?;
@@ -128,7 +128,7 @@ impl ModelRun<'_> {
             let batch = sdk::RecordBatch::try_new(Arc::clone(&schema), columns)
                 .map_err(sdk::Error::from)
                 .context(crate::AnalysisContractSnafu)?;
-            self.owner.memory().retain_input(&batch, &reservation)?;
+            self.memory.retain_input(&batch, &reservation)?;
             indexed.push(batch);
             offset = end;
         }

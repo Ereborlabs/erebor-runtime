@@ -12,6 +12,7 @@ use snafu::ResultExt as _;
 
 use super::Inputs;
 use crate::execution::{Engine, Session};
+use crate::memory::Memory;
 use crate::sources::{ArrowSnapshot, InputCapture, ReadMode, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
@@ -20,6 +21,7 @@ pub struct InputSet {
     pub snapshot: Option<Arc<ArrowSnapshot>>,
     pub now: u64,
     source: Option<Arc<SourceSnapshot>>,
+    memory_owner: Arc<Memory>,
     _memory: MemoryReservation,
 }
 
@@ -38,7 +40,7 @@ impl Inputs {
         engine.wait(async move { definition.execute(runtime, session, scope, now).await })
     }
 
-    async fn execute(
+    pub(super) async fn execute(
         self: &Arc<Self>,
         engine: Arc<Engine>,
         session: Session,
@@ -50,13 +52,15 @@ impl Inputs {
                 .error("host-prepared inputs")
                 .into());
         }
+        let memory_owner = Arc::clone(session.memory());
         if self.ports.is_empty() {
             return Ok(Arc::new(InputSet {
                 inputs: Vec::new(),
                 snapshot: None,
                 now,
                 source: None,
-                _memory: engine.memory().reserve_input(0).context(SqlSnafu)?,
+                _memory: memory_owner.reserve_input(0).context(SqlSnafu)?,
+                memory_owner,
             }));
         }
         let permit = Arc::new(engine.reserve_evaluation(session.selection().tenant_id)?);
@@ -124,7 +128,7 @@ impl Inputs {
             control.within(control.remaining()?)?,
             engine.limits().extract_timeout,
             now,
-            Arc::clone(engine.memory()),
+            Arc::clone(&memory_owner),
         );
         state.config_mut().set_extension(Arc::clone(&source));
         let snapshot = session
@@ -143,10 +147,7 @@ impl Inputs {
         }
         let execution = control.within(engine.limits().evaluate_timeout)?;
         let context = state.task_ctx();
-        let memory = engine
-            .memory()
-            .prepare_input(input_limit)
-            .context(SqlSnafu)?;
+        let memory = memory_owner.prepare_input(input_limit).context(SqlSnafu)?;
         let mut inputs = Vec::<sdk::Input>::with_capacity(self.ports.len());
         let (mut rows, mut bytes, mut count) = (0u64, 0u64, 0u64);
         let mut indexed_bytes = 0usize;
@@ -189,8 +190,7 @@ impl Inputs {
                     )
                     .into());
                 }
-                engine
-                    .memory()
+                memory_owner
                     .retain_input(&batch, &memory)
                     .context(SqlSnafu)?;
                 batches.push(batch);
@@ -257,8 +257,7 @@ impl Inputs {
                 columns.push(Arc::new(UInt64Array::from_iter_values(offset..end)));
                 let batch = sdk::RecordBatch::try_new(Arc::clone(&indexed_schema), columns)
                     .map_err(sdk::Error::from)?;
-                engine
-                    .memory()
+                memory_owner
                     .retain_input(&batch, &memory)
                     .context(SqlSnafu)?;
                 indexed.push(batch);
@@ -309,12 +308,17 @@ impl Inputs {
             snapshot: Some(snapshot),
             now,
             source: Some(source),
+            memory_owner,
             _memory: memory,
         }))
     }
 }
 
 impl InputSet {
+    pub fn memory(&self) -> &Arc<Memory> {
+        &self.memory_owner
+    }
+
     pub fn check(&self, engine: &Arc<Engine>, control: &AnalysisReadControl) -> Result<()> {
         control.check()?;
         if let Some(snapshot) = self
@@ -358,7 +362,7 @@ impl InputSet {
         revisions
     }
 
-    pub fn witnesses(&self) -> impl Iterator<Item = &araphor_data::AnalysisWitnessV1> {
+    pub fn witnesses(&self) -> impl Iterator<Item = &araphor_data::AnalysisWitnessV1> + Clone {
         self.snapshot
             .iter()
             .flat_map(|snapshot| &snapshot.witnesses)

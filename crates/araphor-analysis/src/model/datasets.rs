@@ -56,7 +56,7 @@ impl ModelRun<'_> {
         self.byte_limit = usize::try_from(limits.max_bytes)
             .unwrap_or(usize::MAX)
             .min(self.owner.limits().output_capacity);
-        self.output_memory = Some(self.owner.memory().reserve_output(0)?);
+        self.output_memory = Some(self.memory.reserve_output(0)?);
         Self::check_input(
             inputs.iter().flat_map(|data| &data.batches),
             self.owner.limits().input_bytes,

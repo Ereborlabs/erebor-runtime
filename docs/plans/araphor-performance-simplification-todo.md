@@ -282,6 +282,22 @@ production lines. The complete count removes 470 from `7b7b407a`; another
 5,530 must be removed. The complete redesign remains **Not done**. Full
 workspace CI and benchmarks are not run, as instructed.
 
+### Live detector inputs
+
+[Live input ownership](araphor-component-redesign.md#live-detector-input-ownership)
+moves source, time, witness, pending-cut, and completion checks to Query.
+Analysis retains lifecycle, authority, backend execution, and the Data commit.
+Unchanged running activations skip admission. Busy waits use actual resources.
+Implementation and selected host verification are **Done**. The affected
+checks pass 267 distinct cases. Strict Clippy and formatting pass. The records
+are `/tmp/araphor-live-input-qualification1.json` and
+`/tmp/araphor-live-input-count1.json`. This delivery adds 1,637 nonblank
+production Rust lines. The complete count adds 1,167 from 7b7b407a; another
+7,167 net deletions are required. The complete redesign remains **Not done**.
+General maintained SQL and the separate native execution pool review remain
+open. Full workspace CI and benchmarks are not run, as instructed. No
+performance improvement is claimed.
+
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

@@ -92,6 +92,7 @@ impl WasmExecution {
             cache: Mutex::new(cache),
             compiler: Mutex::new(false),
             running: AtomicUsize::new(0),
+            capacity: prepared.capacity.clone(),
             #[cfg(test)]
             entered: Mutex::new(None),
         })

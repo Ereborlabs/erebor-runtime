@@ -67,7 +67,7 @@ impl ModelRun<'_> {
         self.byte_limit = usize::try_from(requested)
             .unwrap_or(usize::MAX)
             .min(self.owner.limits().output_capacity);
-        self.output_memory = Some(self.owner.memory().reserve_output(0)?);
+        self.output_memory = Some(self.memory.reserve_output(0)?);
         self.control = self.control.within(self.owner.limits().evaluate_timeout)?;
         let now = u64::try_from(evaluation.context.time_utc_ns).map_err(|_| {
             crate::ModelInvalidSnafu {
@@ -102,7 +102,7 @@ impl ModelRun<'_> {
             }
             .build()
         })?;
-        SqlModelOutputV1::retain(output, self.owner.memory(), reservation)
+        SqlModelOutputV1::retain(output, &self.memory, reservation)
     }
 
     pub(super) fn check_evaluation(&self, evaluation: &sdk::Evaluation) -> Result<()> {
@@ -281,7 +281,7 @@ impl ModelRun<'_> {
                 }
                 .build()
             })?;
-            self.owner.memory().retain_output(&batch, memory)?;
+            self.memory.retain_output(&batch, memory)?;
             metadata = metadata.saturating_add(headers);
             memory.try_resize(metadata)?;
             normalized.push(batch);

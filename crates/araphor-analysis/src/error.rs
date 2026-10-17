@@ -67,6 +67,7 @@ pub enum Error {
     #[snafu(display("Analysis {resource} admission is full"))]
     AnalysisBusy {
         resource: &'static str,
+        requested: usize,
         #[snafu(implicit)]
         location: Location,
     },
@@ -115,23 +116,35 @@ impl Error {
     }
 
     pub(crate) fn is_busy(&self) -> bool {
+        self.busy_resource().is_some()
+    }
+
+    pub(crate) fn busy_resource(&self) -> Option<(&'static str, usize)> {
         let mut current: Option<&(dyn std::error::Error + 'static)> = Some(self);
         while let Some(error) = current {
-            if matches!(
-                error.downcast_ref::<Self>(),
-                Some(Self::AnalysisBusy { .. })
-            ) || matches!(
-                error.downcast_ref::<araphor_data::Error>(),
-                Some(araphor_data::Error::AnalysisBusy { .. })
-            ) || matches!(
-                error.downcast_ref::<araphor_query::Error>(),
-                Some(araphor_query::Error::Busy { .. } | araphor_query::Error::Capacity { .. })
-            ) {
-                return true;
+            if let Some(Self::AnalysisBusy {
+                resource,
+                requested,
+                ..
+            }) = error.downcast_ref::<Self>()
+            {
+                return Some((resource, *requested));
+            }
+            if let Some(araphor_data::Error::AnalysisBusy { resource, .. }) =
+                error.downcast_ref::<araphor_data::Error>()
+            {
+                return Some((resource, 1));
+            }
+            if let Some(
+                araphor_query::Error::Busy { resource, .. }
+                | araphor_query::Error::Capacity { resource, .. },
+            ) = error.downcast_ref::<araphor_query::Error>()
+            {
+                return Some((resource, 1));
             }
             current = Self::cause(error);
         }
-        false
+        None
     }
 
     pub(crate) fn package_code(&self) -> araphor_data::PackageErrorCodeV1 {

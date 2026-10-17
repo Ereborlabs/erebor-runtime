@@ -6,12 +6,13 @@ use std::sync::{
 
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
+use tokio::sync::watch;
 
 use crate::{AnalysisReadControl, Result};
 
 use super::{
-    admission::CompileBudget, bindings::AnalysisPackagePre, execution::GuestState, Code,
-    PreparedComponent,
+    admission::CompileBudget, bindings::AnalysisPackagePre, execution::GuestState, CapacityRelease,
+    Code, PreparedComponent,
 };
 
 pub(super) const MAX_CACHE_BYTES: usize = 80 * 1024 * 1024;
@@ -25,10 +26,10 @@ pub(super) struct CodeCache {
     budget: Arc<CacheBudget>,
 }
 
-#[derive(Default)]
 struct CacheBudget {
     bytes: AtomicUsize,
     entries: AtomicUsize,
+    capacity: watch::Sender<()>,
 }
 
 pub(super) struct CacheEntry {
@@ -40,6 +41,16 @@ pub(super) struct CacheEntry {
 struct CacheCharge {
     budget: Arc<CacheBudget>,
     bytes: usize,
+}
+
+impl Default for CacheBudget {
+    fn default() -> Self {
+        Self {
+            bytes: AtomicUsize::new(0),
+            entries: AtomicUsize::new(0),
+            capacity: watch::channel(()).0,
+        }
+    }
 }
 
 impl CacheCharge {
@@ -75,10 +86,34 @@ impl Drop for CacheCharge {
     fn drop(&mut self) {
         self.budget.bytes.fetch_sub(self.bytes, Ordering::AcqRel);
         self.budget.entries.fetch_sub(1, Ordering::AcqRel);
+        self.budget.capacity.send_replace(());
     }
 }
 
 impl CodeCache {
+    pub(super) fn new(capacity: watch::Sender<()>) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            budget: Arc::new(CacheBudget {
+                bytes: AtomicUsize::new(0),
+                entries: AtomicUsize::new(0),
+                capacity,
+            }),
+        }
+    }
+
+    pub(super) fn available(&self, requested: usize) -> bool {
+        let mut bytes = self.budget.bytes.load(Ordering::Acquire);
+        let mut entries = self.budget.entries.load(Ordering::Acquire);
+        for entry in &self.entries {
+            if Arc::strong_count(entry) == 1 {
+                bytes = bytes.saturating_sub(entry._reservation.bytes);
+                entries = entries.saturating_sub(1);
+            }
+        }
+        entries < MAX_CACHE_ENTRIES && requested <= MAX_CACHE_BYTES.saturating_sub(bytes)
+    }
+
     #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) fn charge(&self, digest: &[u8; 32]) -> Option<usize> {
         self.entries
@@ -96,7 +131,10 @@ impl CodeCache {
         self.entries
             .iter()
             .find(|entry| entry.digest == *digest)
-            .map(|entry| PreparedComponent(Arc::clone(entry)))
+            .map(|entry| PreparedComponent {
+                entry: Arc::clone(entry),
+                _release: CapacityRelease(self.budget.capacity.clone()),
+            })
     }
 
     fn reserve(&mut self, bytes: usize) -> Result<CacheCharge> {
@@ -114,6 +152,7 @@ impl CodeCache {
                 .ok_or_else(|| {
                     crate::AnalysisBusySnafu {
                         resource: "component cache capacity",
+                        requested: bytes,
                     }
                     .build()
                 })?;
@@ -133,7 +172,10 @@ impl CodeCache {
             _reservation: reservation,
         });
         self.entries.push_back(Arc::clone(&entry));
-        PreparedComponent(entry)
+        PreparedComponent {
+            entry,
+            _release: CapacityRelease(self.budget.capacity.clone()),
+        }
     }
 }
 
@@ -164,21 +206,23 @@ impl super::WasmExecution {
         if let Some(prepared) = self.cached(&digest)? {
             return Ok(prepared);
         }
-        let mut compiler = self.compiler.try_lock().map_err(|error| match error {
+        let compiler = self.compiler.try_lock().map_err(|error| match error {
             TryLockError::WouldBlock => crate::AnalysisBusySnafu {
                 resource: "component compiler",
+                requested: 1_usize,
             }
             .build(),
             TryLockError::Poisoned(_) => Code::Incomplete.error("component compiler lock").into(),
         })?;
-        if *compiler {
+        let mut compiler = (compiler, CapacityRelease(self.capacity.clone()));
+        if *compiler.0 {
             return Err(Code::Incomplete.error("component compiler recovery").into());
         }
         if let Some(prepared) = self.cached(&digest)? {
             return Ok(prepared);
         }
         CompileBudget::check(bytes, control)?;
-        let compiled = self.compile(bytes, control, &mut compiler, |image| {
+        let compiled = self.compile(bytes, control, &mut compiler.0, |image| {
             control.check()?;
             let charge = image
                 .checked_add(bytes.len())
@@ -280,6 +324,41 @@ mod tests {
             araphor_analysis_builtins::components::RUNTIME,
             &AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?,
         )?;
+        let mut eviction = CodeCache::default();
+        let mut changes = eviction.budget.capacity.subscribe();
+        let charge = eviction.reserve(MAX_CACHE_BYTES)?;
+        let pin = eviction.insert([0; 32], prepared.component().clone(), charge);
+        assert!(matches!(
+            eviction.reserve(1),
+            Err(crate::Error::AnalysisBusy { .. })
+        ));
+        assert!(!eviction.available(1));
+        changes.borrow_and_update();
+        drop(pin);
+        assert!(changes.has_changed()?);
+        assert_eq!(
+            eviction.budget.bytes.load(Ordering::Acquire),
+            MAX_CACHE_BYTES
+        );
+        assert!(eviction.available(1));
+        drop(eviction.reserve(1)?);
+
+        let mut exact = CodeCache::default();
+        let charge = exact.reserve(MAX_CACHE_BYTES - 8)?;
+        let pin = exact.insert([1; 32], prepared.component().clone(), charge);
+        assert!(exact.available(8));
+        assert!(!exact.available(9));
+        assert!(matches!(
+            exact.reserve(9),
+            Err(crate::Error::AnalysisBusy {
+                resource: "component cache capacity",
+                requested: 9,
+                ..
+            })
+        ));
+        drop(pin);
+        assert!(exact.available(9));
+
         for (count, bytes) in [(1, MAX_CACHE_BYTES), (MAX_CACHE_ENTRIES, 1)] {
             let mut cache = CodeCache::default();
             let mut handles = Vec::new();

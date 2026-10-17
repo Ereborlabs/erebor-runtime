@@ -19,9 +19,12 @@ impl AnalysisPackageOwner {
         control: &AnalysisReadControl,
     ) -> Result<PackageResponseV1> {
         self.check(grant, Action::Remove)?;
-        let selected = self
-            .store
-            .package_activations(grant.selection.tenant_id, scope, None)?;
+        let selected = self.store.package_activations_until(
+            grant.selection.tenant_id,
+            scope,
+            None,
+            control,
+        )?;
         let mut roots = BTreeSet::new();
         let mut dependency = false;
         for active in &selected {
@@ -40,7 +43,7 @@ impl AnalysisPackageOwner {
                 .into());
         }
         for root in roots {
-            let bundle = self.load_bundle(grant.selection.tenant_id, &root)?;
+            let bundle = self.load_bundle(grant.selection.tenant_id, &root, Some(control))?;
             let admitted = super::PackageBundleRef::new(&bundle)?;
             self.authorize_commit(grant, Action::Remove, &admitted, || {
                 self.remove_closure(grant, scope, &bundle, true, control)
@@ -62,21 +65,40 @@ impl AnalysisPackageOwner {
     pub(super) fn prune_orphans(
         &self,
         selected: &PackageActivationV1,
+        control: &AnalysisReadControl,
     ) -> Result<Option<PackageActivationV1>> {
+        control.check()?;
         let _lifecycle = self
             .lifecycle
             .lock()
             .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
+        control.check()?;
         let key = &selected.key;
-        let current = self
-            .activations(key.tenant_id, &key.scope_id, &key.package_id)?
+        let current = self.store.package_activations_until(
+            key.tenant_id,
+            &key.scope_id,
+            Some(&key.package_id),
+            control,
+        )?;
+        if current.len() > 64 {
+            return Err(Code::Limit.error("package exports").into());
+        }
+        let current = current
             .into_iter()
             .find(|active| active.key.export == key.export);
         let Some(current) = current else {
             return Ok(None);
         };
         let context: InstalledContext = Self::decode(&current.metadata)?;
-        let roots = self.activations(key.tenant_id, &key.scope_id, &context.root.package_id)?;
+        let roots = self.store.package_activations_until(
+            key.tenant_id,
+            &key.scope_id,
+            Some(&context.root.package_id),
+            control,
+        )?;
+        if roots.len() > 64 {
+            return Err(Code::Limit.error("package exports").into());
+        }
         let mut replacements = BTreeSet::new();
         for root in &roots {
             let installed: InstalledContext = Self::decode(&root.metadata)?;
@@ -88,7 +110,7 @@ impl AnalysisPackageOwner {
             }
         }
         for replacement in replacements {
-            let bundle = self.load_bundle(key.tenant_id, &replacement)?;
+            let bundle = self.load_bundle(key.tenant_id, &replacement, Some(control))?;
             if !bundle
                 .artifact(&replacement)?
                 .descriptor
@@ -102,11 +124,18 @@ impl AnalysisPackageOwner {
             {
                 continue;
             }
-            let obsolete = self.load_bundle(key.tenant_id, &context.root)?;
-            let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
-            self.prune_package(&context.grant, &key.scope_id, &obsolete, &control)?;
-            return Ok(self
-                .activations(key.tenant_id, &key.scope_id, &key.package_id)?
+            let obsolete = self.load_bundle(key.tenant_id, &context.root, Some(control))?;
+            self.prune_package(&context.grant, &key.scope_id, &obsolete, control)?;
+            let current = self.store.package_activations_until(
+                key.tenant_id,
+                &key.scope_id,
+                Some(&key.package_id),
+                control,
+            )?;
+            if current.len() > 64 {
+                return Err(Code::Limit.error("package exports").into());
+            }
+            return Ok(current
                 .into_iter()
                 .find(|active| active.key.export == key.export));
         }
@@ -121,9 +150,12 @@ impl AnalysisPackageOwner {
         removing: bool,
         control: &AnalysisReadControl,
     ) -> araphor_data::Result<()> {
-        let installed = self
-            .store
-            .package_activations(grant.selection.tenant_id, scope, None)?;
+        let installed = self.store.package_activations_until(
+            grant.selection.tenant_id,
+            scope,
+            None,
+            control,
+        )?;
         let mut models = BTreeMap::new();
         let mut roots = BTreeMap::new();
         for active in installed {
@@ -146,7 +178,10 @@ impl AnalysisPackageOwner {
         let mut retained = BTreeMap::new();
         for root in roots.keys() {
             control.check()?;
-            for model in self.load_bundle(grant.selection.tenant_id, root)?.order()? {
+            for model in self
+                .load_bundle(grant.selection.tenant_id, root, Some(control))?
+                .order()?
+            {
                 if models.contains_key(&model) {
                     retained.entry(model).or_insert_with(|| root.clone());
                 }

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use araphor_analysis_sdk as sdk;
 use snafu::{IntoError as _, ResultExt as _};
+use tokio::sync::watch;
 use wasmtime::{Engine, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
 
 use crate::{AnalysisReadControl, Result, WasmLimits};
@@ -15,7 +16,7 @@ use super::{
     Code, PreparedComponent,
 };
 
-const MAX_EVALUATIONS: usize = 4;
+pub(super) const MAX_EVALUATIONS: usize = 4;
 
 #[derive(snafu::Snafu)]
 #[snafu(display("{source}"))]
@@ -202,10 +203,13 @@ impl Drop for EpochWorker {
     }
 }
 
-pub(super) struct EvaluationPermit<'a>(&'a AtomicUsize);
+pub(super) struct EvaluationPermit<'a>(&'a AtomicUsize, &'a watch::Sender<()>);
 
 impl<'a> EvaluationPermit<'a> {
-    pub(super) fn acquire(running: &'a AtomicUsize) -> Result<Self> {
+    pub(super) fn acquire(
+        running: &'a AtomicUsize,
+        capacity: &'a watch::Sender<()>,
+    ) -> Result<Self> {
         running
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < MAX_EVALUATIONS).then_some(count + 1)
@@ -213,16 +217,18 @@ impl<'a> EvaluationPermit<'a> {
             .map_err(|_| {
                 crate::AnalysisBusySnafu {
                     resource: "component evaluations",
+                    requested: 1_usize,
                 }
                 .build()
             })?;
-        Ok(Self(running))
+        Ok(Self(running, capacity))
     }
 }
 
 impl Drop for EvaluationPermit<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
+        self.1.send_replace(());
     }
 }
 
@@ -234,7 +240,7 @@ impl super::WasmExecution {
         control: &AnalysisReadControl,
     ) -> Result<types::Output> {
         control.check()?;
-        let _permit = EvaluationPermit::acquire(&self.running)?;
+        let _permit = EvaluationPermit::acquire(&self.running, &self.capacity)?;
         if !Engine::same(&self.engine, prepared.component().engine()) {
             return Err(Code::Unsupported.error("component engine").into());
         }

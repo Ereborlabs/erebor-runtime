@@ -89,7 +89,7 @@ pub struct TraceIntentPageV1 {
     pub next_request: Option<[u8; 16]>,
 }
 
-pub struct TraceReadPermit(tokio::sync::OwnedSemaphorePermit);
+pub struct TraceReadPermit(super::connection::ReadPermit);
 
 impl AnalysisStore {
     pub fn reserve_trace_read(&self) -> Result<TraceReadPermit> {
@@ -108,33 +108,42 @@ impl AnalysisStore {
         }
         let mut reader = self.reader_wait(Some(control), permit.0)?;
         control.run(&mut reader, |snapshot| {
-            let mut statement = snapshot
-                .prepare("SELECT read_revoked FROM traces WHERE tenant_id = ? AND request_id = ?")
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare current trace reads",
-                })?;
-            for request in requests {
-                control.check()?;
-                let mut rows = statement
-                    .query(params![tenant.as_slice(), request.as_slice()])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "read current trace state",
-                    })?;
-                let row = rows.next().context(AnalysisDatabaseSnafu {
-                    operation: "read current trace row",
-                })?;
-                let Some(row) = row else {
-                    return crate::AnalysisReadDeniedSnafu.fail();
-                };
-                let revoked: bool = row.get(0).context(AnalysisDatabaseSnafu {
-                    operation: "decode current trace state",
-                })?;
-                if revoked {
-                    return crate::AnalysisReadDeniedSnafu.fail();
-                }
-            }
-            control.check()
+            Self::check_trace_reads_from(snapshot, tenant, requests, control)
         })
+    }
+
+    pub(in crate::analysis) fn check_trace_reads_from(
+        snapshot: &Connection,
+        tenant: [u8; 16],
+        requests: &[[u8; 16]],
+        control: &AnalysisReadControl,
+    ) -> Result<()> {
+        let mut statement = snapshot
+            .prepare("SELECT read_revoked FROM traces WHERE tenant_id = ? AND request_id = ?")
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare current trace reads",
+            })?;
+        for request in requests {
+            control.check()?;
+            let mut rows = statement
+                .query(params![tenant.as_slice(), request.as_slice()])
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read current trace state",
+                })?;
+            let row = rows.next().context(AnalysisDatabaseSnafu {
+                operation: "read current trace row",
+            })?;
+            let Some(row) = row else {
+                return crate::AnalysisReadDeniedSnafu.fail();
+            };
+            let revoked: bool = row.get(0).context(AnalysisDatabaseSnafu {
+                operation: "decode current trace state",
+            })?;
+            if revoked {
+                return crate::AnalysisReadDeniedSnafu.fail();
+            }
+        }
+        control.check()
     }
 
     pub(super) fn read_trace_receipt(

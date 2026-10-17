@@ -4,6 +4,7 @@ use crate::analysis::PackageActivationV1;
 use crate::model::AdmittedExport;
 use crate::{Engine, Result};
 use araphor_query::datafusion::execution::memory_pool::MemoryReservation;
+use araphor_query::memory::Memory;
 
 use super::super::{
     AnalysisPackageOwner, PackageArtifactV1, PackageBundleV1, PackageErrorCodeV1 as Code,
@@ -28,7 +29,11 @@ pub(super) struct InstalledSnapshot {
 }
 
 impl InstalledBundle {
-    pub(in crate::package) fn new(query: &Engine, value: PackageBundleV1) -> Result<Arc<Self>> {
+    pub(in crate::package) fn new(
+        query: &Engine,
+        value: PackageBundleV1,
+        memory: &Memory,
+    ) -> Result<Arc<Self>> {
         let digest = value.digest()?;
         let identities = value
             .artifacts
@@ -47,7 +52,7 @@ impl InstalledBundle {
             digest,
             identities,
             programs: Vec::new(),
-            _memory: query.memory().reserve_input(bytes)?,
+            _memory: memory.reserve_input(bytes)?,
         };
         bundle._memory.try_grow(
             bundle.value.artifacts.len() * std::mem::size_of::<Vec<Option<AdmittedExport>>>(),
@@ -170,7 +175,11 @@ impl AnalysisPackageOwner {
         tenant: [u8; 16],
         root: &PackageRefV1,
     ) -> Result<Arc<InstalledBundle>> {
-        InstalledBundle::new(&self.query, self.load_bundle(tenant, root)?)
+        InstalledBundle::new(
+            &self.query,
+            self.load_bundle(tenant, root, None)?,
+            self.query.memory(),
+        )
     }
 }
 

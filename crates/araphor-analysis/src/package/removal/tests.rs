@@ -196,7 +196,10 @@ async fn removal_reconciles_upgrade_orphan() -> TestResult {
     let orphan = fixture
         .store
         .activate_package(&prior, Some(removed.generation), None, || Ok(()))?;
-    assert!(fixture.owner.prune_orphans(&orphan)?.is_none());
+    assert!(fixture
+        .owner
+        .prune_orphans(&orphan, &crate::AnalysisReadControl::default())?
+        .is_none());
     let remaining = fixture.store.package_activations([1; 16], "test", None)?;
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].revision, "v2");

@@ -53,7 +53,11 @@ fn bundle_capacity_is_charged() -> TestResult {
 fn admitted_capacity_is_charged() -> TestResult {
     let fixture = crate::package::tests::Fixture::new()?;
     let value = crate::package::tests::bundle("1", "SELECT 7::BIGINT UNSIGNED AS count");
-    let retained = InstalledBundle::new(&fixture.owner.query, value.clone())?;
+    let retained = InstalledBundle::new(
+        &fixture.owner.query,
+        value.clone(),
+        fixture.owner.query.memory(),
+    )?;
     let bytes = BundleMemory::retained(
         &retained.value,
         &retained.digest,
@@ -76,7 +80,7 @@ fn admitted_capacity_is_charged() -> TestResult {
         },
     )?;
     assert_eq!(
-        InstalledBundle::new(&query, value)
+        InstalledBundle::new(&query, value, query.memory())
             .err()
             .ok_or("capacity admitted")?
             .package_code(),
@@ -128,7 +132,7 @@ fn admission_stops_at_capacity() -> TestResult {
         },
     )?;
     assert_eq!(
-        InstalledBundle::new(&query, value)
+        InstalledBundle::new(&query, value, query.memory())
             .err()
             .ok_or("capacity admitted")?
             .package_code(),
@@ -344,7 +348,11 @@ fn reuse_releases_before_loading() -> TestResult {
         },
         &control,
     )?;
-    let transient = InstalledBundle::new(&fixture.owner.query, updated.clone())?;
+    let transient = InstalledBundle::new(
+        &fixture.owner.query,
+        updated.clone(),
+        fixture.owner.query.memory(),
+    )?;
     let transient_bytes = transient._memory.size();
     drop(transient);
     let capacity = fixture.owner.query.limits().input_capacity;

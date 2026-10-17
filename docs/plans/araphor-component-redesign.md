@@ -274,6 +274,78 @@ Query-owned live detector scheduling, and the required production reduction
 remain **Not done**. Full workspace CI and benchmarks are not run, as instructed.
 No performance improvement is claimed.
 
+### Live detector input ownership
+
+Implementation and selected host verification: **Done**.
+Query InputOperation now owns source notices, input and model clocks, witness
+expiry, retained input offers, and actual commit-completion checks. Analysis
+retains activation registration, current authority, backend execution, and
+the authorized Data transaction. Analysis no longer scans source revisions or
+uses a retry interval to schedule automatic detector work.
+
+An input tick captures the admitted native input plans again. Equal input
+revisions and coverage suppress another backend offer. A model tick can reuse
+that cut with a new evaluation time. Busy retains the exact offered Arc and
+time until the original source proof fails. Completion reads the actual saved
+result head and activation precondition. A reader Busy failure retries that
+read without another backend call or transaction.
+
+Data checks the cut in one controlled metadata transaction. The check retains
+global relation notices, exact dependencies and context references, trace
+read authority, witness expiry, store identity, and recovery epoch. Raw
+witness checks use the retained journal index without decoding Arrow payload.
+Activation notices exclude ordinary source and result-checkpoint commits.
+Recovery sends one registry invalidation when it discovers a newer accepted
+revision after it restores trusted connections.
+
+Each live operation has native consumers on the existing shared pools.
+Buffer aliases retain one charge per category. Shared capacity waits ignore
+the operation's own cleanup. A retained operation that cannot fit its required
+allocations returns a permanent limit. Reader, evaluation, compiler, and code
+cache waits check their actual resource. Stop and authority changes cancel the
+shared token and wait for the blocking worker. Orphan cleanup uses the same
+registration control. Changed workers release their old bundles before
+replacement admission. Unchanged running registrations skip admission work.
+
+The [source review](../guides/araphor-sql-operation-review.md#live-detector-input-lifecycle)
+gives the reading route and ownership checks. The affected checks pass 267
+distinct Rust cases: 57 Data, 162 Query, 47 Analysis, and one package E2E case.
+The final connected check passes all 16 live Query cases, the Wasm readiness
+case, and the package E2E contract on the final source. The E2E case takes
+142.18 seconds. The earlier full Query check passes 161 cases before the last
+clock correction. The final live selection covers that correction. The
+explicit native cancellation, revocation, and expiry case also passes.
+
+The first Analysis selection passes 30 of 31 cases. Its clock fixture drops a
+pending next future during a quiet probe and cancels its own shared token.
+The corrected fixture retains that future and preserves the same 100-millisecond
+quiet interval. This check also finds a production clock error: stable input
+values must suppress backend work after recapture. The corrected guard checks
+model time only after input revisions and coverage match. A new Query case
+proves recapture at two ticks, no extra offer, and a later source-driven offer.
+Its first SQL fixture uses an unavailable function. The supported date_bin
+fixture passes with the same assertions.
+
+The next Analysis selection passes 18 of 19 cases. One lifecycle fixture reuses
+a one-second control across an update and separate inspections. Each inspection
+now gets its own one-second control. The failed case passes on its focused
+rerun. The Data fixture correction supplies a nonempty evidence record. No
+production timeout, memory capacity, or test assertion is weakened.
+
+Strict Clippy passes for Data, Query, Analysis, CLI, Control, E2E, and their
+test targets. Formatting passes for all 53 changed Rust files. The source
+count checks 699 Rust hashes. The records are
+`/tmp/araphor-live-input-qualification1.json` and
+`/tmp/araphor-live-input-count1.json`.
+
+This delivery adds 1,637 nonblank production Rust lines from dc2869ed. The
+complete redesign adds 3,396 from 537f9de3, 1,167 from 7b7b407a, and 2,320 from
+aa390d9f. Another 7,167 net production deletions are required. This delivery
+corrects ownership; it does not establish the required reduction. General
+maintained SQL and the complete redesign remain **Not done**. The separate
+native execution pool still needs a contention review. Full workspace CI and
+benchmarks are not run, as instructed. No performance improvement is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction
@@ -752,10 +824,10 @@ blank lines, and code movement give no production deletion credit. Later
 documentation edits do not change the counted Rust source. Full workspace CI
 and benchmarks are not run, as instructed.
 
-A live InputOperation, shared source watch, retained Busy retry, and actual
-commit-completion feedback are **Not done**. Analysis serve and supervision
-still drive automatic work. General maintained SQL and the complete redesign
-remain **Not done**. No benchmark or speed result is claimed. The finite source
+The finite delivery did not include a live InputOperation or actual
+commit-completion feedback. The live detector input ownership record above
+supplies that work. General maintained SQL and the complete redesign remain
+**Not done**. No benchmark or speed result is claimed. The finite source
 change does not establish the required 6,000-line reduction.
 
 ### Shared subscription owner

@@ -15,11 +15,13 @@ use crate::parser::Parser;
 use crate::sources::{SourceOrigin, SourceProvider, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
+mod live;
 mod physical;
 mod receipt;
 #[cfg(test)]
 mod tests;
 
+pub use live::InputOperation;
 pub use physical::InputSet;
 
 pub struct Inputs {

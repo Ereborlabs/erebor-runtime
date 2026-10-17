@@ -45,6 +45,90 @@ fn control() -> AnalysisReadControl {
     AnalysisReadControl::with_timeout(Duration::from_secs(10)).unwrap()
 }
 
+#[test]
+fn scoped_session_keeps_family() -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>
+{
+    let fixture = Fixture::new(Limits::default());
+    let scope = fixture.engine.memory().scope();
+    let session = fixture.engine.session_on(
+        AnalysisSelectionV1::tenant([1; 16]),
+        &control(),
+        1,
+        Arc::clone(&scope),
+    )?;
+    assert!(Arc::ptr_eq(session.memory(), &scope));
+    let foreign = crate::memory::Memory::new(1024, 1024);
+    assert!(matches!(
+        fixture
+            .engine
+            .session_on(AnalysisSelectionV1::tenant([1; 16]), &control(), 1, foreign,),
+        Err(crate::Error::Invalid {
+            field: "session memory owner",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn blocking_cancel_joins_worker(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let control = Arc::new(control());
+    let stage = Arc::clone(&control);
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let mut worker = tokio::spawn(async move {
+        Engine::blocking(stage, move || {
+            let _entered = entered.send(());
+            held.recv().map_err(|source| crate::Error::Sql {
+                source: datafusion::common::DataFusionError::External(Box::new(source)),
+            })?;
+            Ok(())
+        })
+        .await
+    });
+    ready.await?;
+    control.cancel()?;
+    assert!(tokio::time::timeout(Duration::from_millis(20), &mut worker)
+        .await
+        .is_err());
+    release.send(())?;
+    let error = tokio::time::timeout(Duration::from_secs(2), worker)
+        .await??
+        .err()
+        .ok_or("cancelled read must fail")?;
+    assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
+    Ok(())
+}
+
+#[tokio::test]
+async fn blocking_deadline_keeps_parent(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let parent = control();
+    let stage = Arc::new(parent.stage(Duration::from_millis(10))?);
+    let worker_stage = Arc::clone(&stage);
+    let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ended = Arc::clone(&stopped);
+    let error = Engine::blocking(stage, move || {
+        while worker_stage.check().is_ok() {
+            std::thread::yield_now();
+        }
+        let result = worker_stage.check().map_err(crate::Error::from);
+        ended.store(true, std::sync::atomic::Ordering::Release);
+        result
+    })
+    .await
+    .err()
+    .ok_or("expired worker must fail")?;
+    assert_eq!(
+        crate::Failure::from(&error),
+        crate::Failure::DeadlineExceeded
+    );
+    assert!(stopped.load(std::sync::atomic::Ordering::Acquire));
+    parent.stage(Duration::from_secs(1))?.check()?;
+    Ok(())
+}
+
 fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![Field::new(
         "value",

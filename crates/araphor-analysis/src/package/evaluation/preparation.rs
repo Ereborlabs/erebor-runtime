@@ -33,7 +33,7 @@ impl AnalysisPackageOwner {
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageCommitV1>> {
         control.check()?;
-        let mut now = if request.automatic {
+        let mut now = if request.automatic && request.inputs.is_none() {
             Self::clock_tick(request.now)
         } else {
             request.now
@@ -42,6 +42,7 @@ impl AnalysisPackageOwner {
             return Err(Code::Conflict.error("activation package root").into());
         }
         if request.automatic
+            && request.inputs.is_none()
             && self
                 .inputs_current(active, context.clock, request.now, true, control)?
                 .0
@@ -75,16 +76,19 @@ impl AnalysisPackageOwner {
             return Err(Code::Denied.error("model input tenant").into());
         }
         self.check(&context.grant, action)?;
-        let prepared = admitted
-            .inputs
-            .read(
-                self.query.clone(),
-                context.grant.selection.clone(),
-                active.key.scope_id.clone(),
-                control,
-                now,
-            )
-            .map_err(crate::Error::from);
+        let prepared = match request.inputs {
+            Some(inputs) => Ok(std::sync::Arc::clone(inputs)),
+            None => admitted
+                .inputs
+                .read(
+                    self.query.clone(),
+                    context.grant.selection.clone(),
+                    active.key.scope_id.clone(),
+                    control,
+                    now,
+                )
+                .map_err(crate::Error::from),
+        };
         let inputs = match prepared {
             Ok(inputs) => inputs,
             Err(error) if action == Action::Inspect && error.missing_input().is_some() => {
@@ -112,6 +116,7 @@ impl AnalysisPackageOwner {
         }
         if action == Action::Inspect
             || (request.automatic
+                && request.inputs.is_none()
                 && current
                 && previous.as_ref().is_some_and(|previous| !previous.stale))
         {

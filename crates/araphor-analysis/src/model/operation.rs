@@ -3,6 +3,7 @@ use std::sync::Arc;
 use araphor_analysis_sdk as sdk;
 use araphor_query::datafusion::execution::memory_pool::MemoryReservation;
 use araphor_query::execution::{Engine, Session};
+use araphor_query::memory::Memory;
 
 use crate::{AnalysisReadControl, AnalysisSelectionV1, Result};
 use araphor_query::inputs::InputSet;
@@ -12,6 +13,7 @@ pub struct ModelRun<'a> {
     pub(super) session: Option<Session>,
     tenant: [u8; 16],
     pub(crate) inputs: Option<Arc<InputSet>>,
+    pub(crate) memory: Arc<Memory>,
     pub(super) output_memory: Option<MemoryReservation>,
     pub(super) control: AnalysisReadControl,
     pub(super) time_utc_ns: i64,
@@ -34,6 +36,7 @@ impl<'a> ModelRun<'a> {
             session: None,
             tenant,
             inputs: None,
+            memory: Arc::clone(owner.memory()),
             output_memory: None,
             control: control.within(control.remaining()?)?,
             time_utc_ns: 0,
@@ -73,6 +76,7 @@ impl<'a> ModelRun<'a> {
                 .into());
         }
         let mut run = Self::new(owner, tenant, control)?;
+        run.memory = Arc::clone(inputs.memory());
         run.inputs = Some(inputs);
         Ok(run)
     }
@@ -86,7 +90,12 @@ impl<'a> ModelRun<'a> {
         })?;
         if self.session.is_none() {
             self.time_utc_ns = time;
-            self.session = Some(self.owner.session(selection, &self.control, now)?);
+            self.session = Some(self.owner.session_on(
+                selection,
+                &self.control,
+                now,
+                Arc::clone(&self.memory),
+            )?);
         } else if self.time_utc_ns != time {
             return crate::ModelInvalidSnafu {
                 field: "changed model evaluation time",

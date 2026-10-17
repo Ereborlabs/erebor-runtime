@@ -16,6 +16,7 @@ pub(crate) use araphor_data::ResultContext;
 
 #[derive(Clone, Copy)]
 pub(super) struct RunPreparation<'a> {
+    pub(super) inputs: Option<&'a std::sync::Arc<araphor_query::inputs::InputSet>>,
     pub(super) id: &'a str,
     pub(super) rebuild: bool,
     pub(super) automatic: bool,
@@ -172,6 +173,7 @@ impl AnalysisPackageOwner {
             active,
             bundle,
             RunPreparation {
+                inputs: None,
                 id,
                 rebuild: false,
                 automatic,

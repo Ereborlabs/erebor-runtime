@@ -237,25 +237,7 @@ impl AnalysisStore {
             {
                 return AnalysisConflictSnafu.fail();
             }
-            let current: bool = transaction
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM analysis_results a
-                LEFT JOIN package_results r ON r.result_id = a.result_id
-                WHERE a.tenant_id = ? AND a.result_id = ? AND a.commit_revision = ?
-                AND (r.result_id IS NULL OR (r.scope_id = ? AND NOT r.stale
-                    AND EXISTS (SELECT 1 FROM package_heads h WHERE h.result_id = r.result_id))))",
-                    params![
-                        input.activation.key.tenant_id.as_slice(),
-                        dependency.result_id,
-                        dependency.commit_revision,
-                        input.activation.key.scope_id
-                    ],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "check exact package dependency",
-                })?;
-            if !current {
+            if !Self::package_dependency_current(transaction, &input.activation.key, dependency)? {
                 return AnalysisConflictSnafu.fail();
             }
         }

@@ -201,6 +201,7 @@ async fn input_authority_rejects_foreign_or_revoked_grants() -> TestResult {
                 &denied,
                 &installed,
                 RunPreparation {
+                    inputs: None,
                     id: "denied-input",
                     rebuild: false,
                     automatic: false,

@@ -306,15 +306,21 @@ impl Engine {
             control: Arc::clone(&control),
             active: true,
         };
-        control
+        let mut worker = tokio::task::spawn_blocking(operation);
+        let result = control
             .query_async(async {
-                let result = tokio::task::spawn_blocking(operation).await;
+                let result = (&mut worker).await;
                 pending.active = false;
                 result.map_err(|source| crate::Error::Sql {
                     source: DataFusionError::External(Box::new(source)),
                 })?
             })
-            .await
+            .await;
+        if pending.active {
+            let _result = worker.await;
+            pending.active = false;
+        }
+        result
     }
 
     pub fn catalog(&self, schemas: BTreeMap<String, SchemaRef>) -> Result<SessionState> {
@@ -368,14 +374,31 @@ impl Engine {
         control: &AnalysisReadControl,
         now: u64,
     ) -> Result<Session> {
+        self.session_on(selection, control, now, Arc::clone(&self.memory))
+    }
+
+    pub fn session_on(
+        self: &Arc<Self>,
+        selection: AnalysisSelectionV1,
+        control: &AnalysisReadControl,
+        now: u64,
+        memory: Arc<Memory>,
+    ) -> Result<Session> {
         if !selection.valid() {
             return InvalidSnafu {
                 field: "source selection",
             }
             .fail();
         }
+        if !self.memory.same_family(&memory) {
+            return InvalidSnafu {
+                field: "session memory owner",
+            }
+            .fail();
+        }
         Ok(Session {
             engine: Arc::clone(self),
+            memory,
             selection,
             control: Arc::new(control.within(control.remaining()?)?),
             now,
@@ -414,7 +437,7 @@ impl Engine {
             }))
     }
 
-    pub(crate) async fn acquire_evaluation(&self, tenant: [u8; 16]) -> Result<Permit> {
+    pub async fn acquire_evaluation(&self, tenant: [u8; 16]) -> Result<Permit> {
         let tenant = self.tenant(tenant)?;
         let error = |_| {
             BusySnafu {
@@ -501,6 +524,7 @@ pub enum Read {
 #[derive(Clone)]
 pub struct Session {
     engine: Arc<Engine>,
+    memory: Arc<Memory>,
     selection: AnalysisSelectionV1,
     control: Arc<AnalysisReadControl>,
     now: u64,
@@ -516,6 +540,10 @@ pub(crate) enum Retention {
 }
 
 impl Session {
+    pub fn memory(&self) -> &Arc<Memory> {
+        &self.memory
+    }
+
     pub(crate) fn engine(&self) -> &Arc<Engine> {
         &self.engine
     }
@@ -567,10 +595,9 @@ impl Session {
             });
         }
         let table = MemTable::try_new(schema, vec![batches.to_vec()]).context(SqlSnafu)?;
-        let reservation = self.engine.memory.reserve_input(0).context(SqlSnafu)?;
+        let reservation = self.memory.reserve_input(0).context(SqlSnafu)?;
         for batch in batches {
-            self.engine
-                .memory
+            self.memory
                 .retain_input(batch, &reservation)
                 .context(SqlSnafu)?;
         }
@@ -607,7 +634,6 @@ impl Session {
                     .reserve_evaluation(session.selection.tenant_id)?,
             );
             let reservation = session
-                .engine
                 .memory
                 .prepare_output(session.output_bytes)
                 .context(SqlSnafu)?;
@@ -695,7 +721,7 @@ impl Session {
         R: Borrow<MemoryReservation> + Send + 'a,
     {
         let schema = stream.schema();
-        let memory = Arc::clone(&self.engine.memory);
+        let memory = Arc::clone(&self.memory);
         let engine = Arc::clone(&self.engine);
         let (rows, bytes) = (self.output_rows, self.output_bytes);
         let stream = futures_util::stream::try_unfold(
@@ -908,8 +934,7 @@ impl Session {
         let reservation = match retention {
             Retention::Input => None,
             Retention::Output => Some(
-                self.engine
-                    .memory
+                self.memory
                     .prepare_output(self.output_bytes)
                     .context(SqlSnafu)?,
             ),
@@ -926,7 +951,7 @@ impl Session {
             self.control.within(self.control.remaining()?)?,
             self.engine.limits.extract_timeout,
             self.now,
-            Arc::clone(&self.engine.memory),
+            Arc::clone(&self.memory),
         );
         let mut config = context.session_config().clone();
         config.set_extension(Arc::clone(&snapshot));
@@ -956,7 +981,6 @@ impl Session {
         let reservation = match reservation {
             Some(reservation) => reservation,
             None => self
-                .engine
                 .memory
                 .reserve_input(self.output_bytes)
                 .context(SqlSnafu)?,

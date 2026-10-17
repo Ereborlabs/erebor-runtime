@@ -1,7 +1,11 @@
-use std::sync::{atomic::AtomicUsize, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex, TryLockError,
+};
 
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
+use tokio::sync::watch;
 use wasmtime::{component::Linker, Config, Engine, OptLevel};
 
 use crate::{AnalysisReadControl, Result, WasmLimits};
@@ -28,16 +32,29 @@ pub(crate) struct WasmExecution {
     cache: Mutex<cache::CodeCache>,
     compiler: Mutex<bool>,
     running: AtomicUsize,
+    capacity: watch::Sender<()>,
     #[cfg(test)]
     entered: Mutex<Option<execution::GuestEntry>>,
 }
 
 #[derive(Clone)]
-pub(super) struct PreparedComponent(Arc<cache::CacheEntry>);
+pub(super) struct PreparedComponent {
+    entry: Arc<cache::CacheEntry>,
+    _release: CapacityRelease,
+}
+
+#[derive(Clone)]
+struct CapacityRelease(watch::Sender<()>);
+
+impl Drop for CapacityRelease {
+    fn drop(&mut self) {
+        self.0.send_replace(());
+    }
+}
 
 impl PreparedComponent {
     fn component(&self) -> &bindings::AnalysisPackagePre<execution::GuestState> {
-        &self.0.prepared
+        &self.entry.prepared
     }
 
     fn instance_pre(&self) -> &wasmtime::component::InstancePre<execution::GuestState> {
@@ -46,6 +63,49 @@ impl PreparedComponent {
 }
 
 impl WasmExecution {
+    pub(in crate::package) async fn wait_capacity(
+        &self,
+        resource: &str,
+        requested: usize,
+    ) -> Result<()> {
+        let mut changes = self.capacity.subscribe();
+        loop {
+            changes.borrow_and_update();
+            let ready = match resource {
+                "component evaluations" => {
+                    self.running.load(Ordering::Acquire) < execution::MAX_EVALUATIONS
+                }
+                "component compiler" => match self.compiler.try_lock() {
+                    Ok(compiler) => {
+                        if *compiler {
+                            return Err(Code::Incomplete
+                                .error("component compiler recovery")
+                                .into());
+                        }
+                        true
+                    }
+                    Err(TryLockError::WouldBlock) => false,
+                    Err(TryLockError::Poisoned(_)) => {
+                        return Err(Code::Incomplete.error("component compiler lock").into())
+                    }
+                },
+                "component cache capacity" => self
+                    .cache
+                    .lock()
+                    .map_err(|_| Code::Incomplete.error("component cache lock"))?
+                    .available(requested),
+                _ => return Err(Code::Invalid.error("component capacity resource").into()),
+            };
+            if ready {
+                return Ok(());
+            }
+            changes
+                .changed()
+                .await
+                .map_err(|_| Code::Incomplete.error("component capacity watch"))?;
+        }
+    }
+
     pub(crate) fn limits(limits: sdk::Limits, quota: &WasmLimits) -> sdk::Limits {
         sdk::Limits {
             max_batches: limits.max_batches.min(1024),
@@ -68,14 +128,16 @@ impl WasmExecution {
             code: Code::Unsupported,
             operation: "analysis host bindings",
         })?;
+        let capacity = watch::channel(()).0;
         Ok(Self {
             limits,
             epoch: Arc::new(execution::EpochTicker::new(engine.clone())),
             engine,
             linker,
-            cache: Mutex::new(cache::CodeCache::default()),
+            cache: Mutex::new(cache::CodeCache::new(capacity.clone())),
             compiler: Mutex::new(false),
             running: AtomicUsize::new(0),
+            capacity,
             #[cfg(test)]
             entered: Mutex::new(None),
         })

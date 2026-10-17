@@ -162,7 +162,7 @@ async fn package_cancel_capacity() -> TestResult {
         .await?;
     fixture.authority.set_revision(0);
     assert!(fixture.execute(run("revoked")).await.is_err());
-    fixture.owner.reconcile().await?;
+    crate::package::tests::suspend(Arc::clone(&fixture.owner)).await?;
     let suspended = fixture.owner.activations([1; 16], "test", "test.model")?;
     assert_eq!(suspended.len(), 1);
     assert!(!suspended[0].active);

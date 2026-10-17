@@ -112,7 +112,7 @@ fn retained_trap_keeps_code() -> TestResult {
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let package = package();
     let prepared = runtime.prepare(COMPONENT, &control)?;
-    let retained = Arc::downgrade(&prepared.0);
+    let retained = Arc::downgrade(&prepared.entry);
     drop(prepared);
     let input = evaluation(&package, "trap", 0)?;
     let error = runtime

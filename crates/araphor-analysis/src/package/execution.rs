@@ -46,6 +46,7 @@ impl AnalysisPackageOwner {
         let preflight = self.exchange_preflight(package, evaluation)?;
         let tenant = run.tenant();
         let inputs = run.inputs.clone();
+        let memory = std::sync::Arc::clone(&run.memory);
         drop(run);
         let bounded = if matches!(implementation, PackageImplementationV1::Wasm { .. }) {
             let limits = self.component_limits(evaluation.context.limits);
@@ -75,8 +76,8 @@ impl AnalysisPackageOwner {
                 });
         let capacity = (requested as usize).min(self.query.limits().output_capacity);
         let _permit = self.query.reserve_evaluation(tenant)?;
-        let input_memory = self.query.memory().reserve_input(preflight)?;
-        let output_memory = self.query.memory().reserve_output(capacity)?;
+        let input_memory = memory.reserve_input(preflight)?;
+        let output_memory = memory.reserve_output(capacity)?;
         control.check()?;
         let retained = bounded.allocated_bytes();
         let (output, control) = match implementation {
@@ -149,7 +150,7 @@ impl AnalysisPackageOwner {
         if let Some(inputs) = &inputs {
             inputs.check(&self.query, &control)?;
         }
-        SqlModelOutputV1::retain(output, self.query.memory(), output_memory)
+        SqlModelOutputV1::retain(output, &memory, output_memory)
     }
 
     pub(super) fn admit_artifact(

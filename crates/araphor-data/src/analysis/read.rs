@@ -93,6 +93,15 @@ impl AnalysisReadControl {
         Ok(())
     }
 
+    pub async fn cancelled(&self) {
+        let cancelled = self.cancelled_event.notified();
+        tokio::pin!(cancelled);
+        let _registered = cancelled.as_mut().enable();
+        if !self.cancelled.load(Ordering::Acquire) {
+            cancelled.await;
+        }
+    }
+
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn on_read_step(&self, hook: impl FnOnce() -> Result<()> + Send + 'static) -> Result<()> {
         *self.read_step.lock().map_err(|_| Self::lock_error())? = Some(Box::new(hook));

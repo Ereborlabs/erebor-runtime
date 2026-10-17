@@ -319,10 +319,7 @@ impl AnalysisStore {
         max_bytes: usize,
     ) -> Result<super::AnalysisReadPageV1> {
         control.check()?;
-        let _permit = self
-            .read_slots
-            .try_acquire()
-            .map_err(|_| crate::AnalysisBusySnafu { resource: "reader" }.build())?;
+        let _permit = self.reserve_reader()?;
         let coordinator = self.raw_coordinator(control)?;
         let _snapshot = control.lock(|| self.maintenance.try_read())?;
         let raw = control.lock(|| self.raw.try_lock())?;
@@ -1504,16 +1501,25 @@ impl RawJournal {
         cursor: u64,
         revision: u64,
     ) -> Result<(&RawEntry, usize)> {
+        self.locate_retained(key, cursor, revision)
+            .ok_or_else(|| self.invalid("the raw witness cursor is absent"))
+    }
+
+    pub(super) fn locate_retained(
+        &self,
+        key: &[u8],
+        cursor: u64,
+        revision: u64,
+    ) -> Option<(&RawEntry, usize)> {
         let (_, &(id, index)) = self
             .ranges
             .range((key.to_vec(), 0)..=(key.to_vec(), cursor))
-            .next_back()
-            .ok_or_else(|| self.invalid("the raw witness range is absent"))?;
+            .next_back()?;
         let entry = &self.entries[&id];
         if id > revision || cursor > entry.commit.spans[index].last {
-            return Err(self.invalid("the raw witness cursor is absent"));
+            return None;
         }
-        Ok((entry, index))
+        Some((entry, index))
     }
 
     pub(super) fn select_ranges(

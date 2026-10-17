@@ -18,6 +18,7 @@ fn shared_executable_checks_sql() -> TestResult {
     drop(crate::package::installed::snapshot::InstalledBundle::new(
         &fixture.owner.query,
         package.clone(),
+        fixture.owner.query.memory(),
     )?);
 
     second.name = "invalid-sql".into();
@@ -31,7 +32,11 @@ fn shared_executable_checks_sql() -> TestResult {
         },
     });
     assert!(matches!(
-        crate::package::installed::snapshot::InstalledBundle::new(&fixture.owner.query, package),
+        crate::package::installed::snapshot::InstalledBundle::new(
+            &fixture.owner.query,
+            package,
+            fixture.owner.query.memory()
+        ),
         Err(crate::Error::Query { .. })
     ));
     Ok(())
@@ -218,7 +223,7 @@ async fn mixed_metadata_install_retry() -> TestResult {
     assert_eq!(
         fixture
             .owner
-            .load_bundle([1; 16], &package.root)?
+            .load_bundle([1; 16], &package.root, None)?
             .digest()?,
         digest
     );

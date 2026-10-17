@@ -139,7 +139,7 @@ fn fence_change(renew: bool) -> TestResult {
                 .enable_all()
                 .build()
                 .map_err(|_| Code::Incomplete.error("fixture runtime"))?
-                .block_on(owner.reconcile())
+                .block_on(crate::package::tests::suspend(owner))
         };
         let _finished = finished.send(result);
         Ok::<_, crate::Error>(())

@@ -21,6 +21,7 @@ pub(crate) struct Authority {
     revision: AtomicU64,
     changes: watch::Sender<u64>,
     pub before_admit: Mutex<Option<CommitObserver>>,
+    pub admissions: watch::Sender<u64>,
     pub before_commit: Mutex<Option<CommitObserver>>,
     pub after_commit: Mutex<Option<CommitObserver>>,
 }
@@ -54,7 +55,9 @@ impl PackageAuthorization for Authority {
         if let Some(mut observer) = observer {
             observer()?;
         }
-        self.check(grant, PackageActionV1::Run)
+        self.check(grant, PackageActionV1::Run)?;
+        self.admissions.send_modify(|count| *count += 1);
+        Ok(())
     }
 
     fn commit(
@@ -149,6 +152,7 @@ impl Fixture {
             revision: AtomicU64::new(1),
             changes: watch::channel(1).0,
             before_admit: Mutex::new(None),
+            admissions: watch::channel(0).0,
             before_commit: Mutex::new(None),
             after_commit: Mutex::new(None),
         });
@@ -312,5 +316,30 @@ pub(in crate::package) fn run(id: &str) -> PackageRequestV1 {
         export: None,
         evaluation_id: id.into(),
         parameters: None,
+    }
+}
+
+pub(crate) async fn suspend(owner: Arc<AnalysisPackageOwner>) -> Result<()> {
+    let mut changes = owner.store.subscribe_activations();
+    let (stop, receiver) = watch::channel(false);
+    let store = Arc::clone(&owner.store);
+    let worker = owner.serve(receiver);
+    tokio::pin!(worker);
+    loop {
+        tokio::select! {
+            result = &mut worker => return result,
+            changed = changes.changed() => {
+                changed.map_err(|_| PackageErrorCodeV1::Incomplete.error("fixture lifecycle watch"))?;
+                if store.package_activation_page(None)?.iter().all(|active| !active.active) {
+                    stop.send_replace(true);
+                    return worker.await;
+                }
+            }
+            () = tokio::time::sleep(Duration::from_secs(30)) => {
+                stop.send_replace(true);
+                let _result = worker.await;
+                return Err(PackageErrorCodeV1::Incomplete.error("fixture suspension deadline").into());
+            }
+        }
     }
 }

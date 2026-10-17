@@ -106,14 +106,57 @@ fn admission_bounds_compile_work() -> TestResult {
 #[test]
 fn evaluation_capacity_recovers() -> TestResult {
     let running = AtomicUsize::new(0);
+    let capacity = tokio::sync::watch::channel(()).0;
+    let mut changes = capacity.subscribe();
     let permits = (0..4)
-        .map(|_| EvaluationPermit::acquire(&running))
+        .map(|_| EvaluationPermit::acquire(&running, &capacity))
         .collect::<crate::Result<Vec<_>>>()?;
     assert!(matches!(
-        EvaluationPermit::acquire(&running),
+        EvaluationPermit::acquire(&running, &capacity),
         Err(crate::Error::AnalysisBusy { .. })
     ));
+    changes.borrow_and_update();
     drop(permits);
-    let _permit = EvaluationPermit::acquire(&running)?;
+    assert!(changes.has_changed()?);
+    let _permit = EvaluationPermit::acquire(&running, &capacity)?;
+    Ok(())
+}
+
+#[test]
+fn wait_checks_resource() -> TestResult {
+    use std::future::Future;
+    use std::task::{Context, Poll};
+
+    let runtime = WasmExecution::new(WasmLimits::default())?;
+    let mut context = Context::from_waker(futures_util::task::noop_waker_ref());
+    let permits = (0..super::execution::MAX_EVALUATIONS)
+        .map(|_| EvaluationPermit::acquire(&runtime.running, &runtime.capacity))
+        .collect::<crate::Result<Vec<_>>>()?;
+    let wait = runtime.wait_capacity("component evaluations", 1);
+    tokio::pin!(wait);
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    runtime.capacity.send_replace(());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    drop(permits);
+    assert!(matches!(
+        wait.as_mut().poll(&mut context),
+        Poll::Ready(Ok(()))
+    ));
+
+    let compiler = runtime
+        .compiler
+        .lock()
+        .map_err(|_| "compiler fixture lock")?;
+    let wait = runtime.wait_capacity("component compiler", 1);
+    tokio::pin!(wait);
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    runtime.capacity.send_replace(());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    drop(compiler);
+    runtime.capacity.send_replace(());
+    assert!(matches!(
+        wait.as_mut().poll(&mut context),
+        Poll::Ready(Ok(()))
+    ));
     Ok(())
 }

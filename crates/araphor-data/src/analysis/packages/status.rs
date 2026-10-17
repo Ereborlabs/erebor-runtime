@@ -85,6 +85,9 @@ impl AnalysisStore {
             return AnalysisConflictSnafu.fail();
         }
         let stale = expected.is_some() && Self::stale_package_heads(&transaction, key)?;
+        let activation_changed = current
+            .as_ref()
+            .is_some_and(|active| active.metadata != metadata);
         if !stale
             && current
                 .as_ref()
@@ -120,6 +123,9 @@ impl AnalysisStore {
         check()?;
         self.commit_metadata(transaction, "commit package status")?;
         self.revision.send_replace(revision);
+        if activation_changed {
+            self.activations.send_replace(revision);
+        }
         Ok(())
     }
 
@@ -169,6 +175,7 @@ impl AnalysisStore {
         check()?;
         self.commit_metadata(transaction, "commit package authority renewal")?;
         self.revision.send_replace(revision);
+        self.activations.send_replace(revision);
         Ok(renewed)
     }
 }

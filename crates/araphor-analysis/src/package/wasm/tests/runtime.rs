@@ -298,7 +298,9 @@ fn fixture_code_separates_state() -> TestResult {
     let package = package();
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let permits = (0..4)
-        .map(|_| super::super::execution::EvaluationPermit::acquire(&first.running))
+        .map(|_| {
+            super::super::execution::EvaluationPermit::acquire(&first.running, &first.capacity)
+        })
         .collect::<crate::Result<Vec<_>>>()?;
     let input = evaluation(&package, "isolation", 0)?;
     assert!(matches!(

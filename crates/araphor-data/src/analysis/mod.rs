@@ -114,6 +114,8 @@ pub struct AnalysisStore {
     graph_failures: Mutex<std::collections::BTreeSet<EvidenceIntakeIdentityV1>>,
     maintenance: RwLock<()>,
     revision: watch::Sender<u64>,
+    activations: watch::Sender<u64>,
+    capacity: watch::Sender<()>,
     retention_healthy: AtomicBool,
     write_ready: AtomicBool,
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -533,6 +535,8 @@ impl AnalysisStore {
         let raw = Self::recover_segments(&mut writer, &root)?;
         let meta = Self::read_meta_from(&writer, &path)?;
         let (revision, _) = watch::channel(meta.commit_revision);
+        let (activations, _) = watch::channel(meta.commit_revision);
+        let (capacity, _) = watch::channel(());
         let readers = [
             Mutex::new(Some(writer.try_clone().context(AnalysisDatabaseSnafu {
                 operation: "open first trusted reader",
@@ -561,6 +565,8 @@ impl AnalysisStore {
             discovery_owners: AtomicUsize::new(0),
             maintenance: RwLock::new(()),
             revision,
+            activations,
+            capacity,
             retention_healthy: AtomicBool::new(true),
             write_ready: AtomicBool::new(true),
             #[cfg(any(test, feature = "test-fixtures"))]
@@ -626,6 +632,14 @@ impl AnalysisStore {
 
     pub fn subscribe_revision(&self) -> watch::Receiver<u64> {
         self.revision.subscribe()
+    }
+
+    pub fn subscribe_activations(&self) -> watch::Receiver<u64> {
+        self.activations.subscribe()
+    }
+
+    pub fn subscribe_capacity(&self) -> watch::Receiver<()> {
+        self.capacity.subscribe()
     }
 
     pub fn meta(&self) -> Result<AnalysisStoreMetaV1> {

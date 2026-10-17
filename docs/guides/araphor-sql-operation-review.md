@@ -139,11 +139,11 @@ indexed bytes and aggregate references before it offers an InputSet. Missing
 input errors keep their typed cause through native DataFusion error wrappers.
 Install preserves MissingInput readiness. Inspect marks the retained result stale.
 
-This is finite input execution. A live InputOperation, shared source watch,
-retained Busy retry, and commit-completion feedback are **Not done**. Analysis
-still owns its serve and supervision decisions. Package lifecycle, backend
-admission, checkpoint selection, current authority, and the authorized Data
-compare-and-swap transaction remain at their existing owners.
+The [live detector input lifecycle](#live-detector-input-lifecycle) uses this
+finite input execution. Query now owns input change checks, time checks,
+retained Busy retry, and commit-completion feedback. Analysis retains package
+lifecycle, backend admission, checkpoint selection, current authority, and
+the authorized Data compare-and-swap transaction.
 
 Native execution calls the actual
 [NativeLibrary](../../crates/araphor-analysis/src/package/native/loading.rs)
@@ -200,6 +200,129 @@ DataFusion 53.1.0. Dataset-only SQL uses the existing validators and ModelRun.
 It creates no synthetic package or evaluation. DuckDB remains the durable
 storage engine. Client transport reads native Arrow values in Control; the
 transport path opens no DuckDB query connection.
+
+## Live detector input lifecycle
+
+[AnalysisPackageOwner::supervise](../../crates/araphor-analysis/src/package/supervision.rs) registers current installed activations
+  -> [Inputs::watch](../../crates/araphor-query/src/inputs/live.rs) creates one InputOperation for the exact activation and grant
+  -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) checks the current activation and saved result before input capture
+  -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) executes the admitted native input plans at one frozen time
+  -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) offers one retained Arc<InputSet> with its evaluation time
+  -> [AnalysisPackageOwner::evaluate_offer](../../crates/araphor-analysis/src/package/supervision.rs) checks authority and invokes the selected backend
+  -> [AnalysisPackageOwner::authorize_commit](../../crates/araphor-analysis/src/package/owner.rs) checks current authority for the result transaction
+  -> [AnalysisStore::commit_package](../../crates/araphor-data/src/analysis/packages/commit.rs) checks the activation, checkpoint, source revisions, and exact references in one transaction
+  -> [AnalysisStore::package_completed](../../crates/araphor-data/src/analysis/packages/input.rs) verifies the actual result head and stored activation precondition
+  -> [InputOperation::complete](../../crates/araphor-query/src/inputs/live.rs) checks the offered revisions, coverage, and evaluation time before it advances the local activation
+
+[AnalysisPackageOwner::serve_activation](../../crates/araphor-analysis/src/package/supervision.rs) receives a typed Busy failure
+  -> [AnalysisPackageOwner::wait_inputs](../../crates/araphor-analysis/src/package/supervision.rs) waits for the actual blocked resource or an input change
+  -> [InputOperation::retry](../../crates/araphor-query/src/inputs/live.rs) retains the offered input cut
+  -> [AnalysisStore::package_input_current](../../crates/araphor-data/src/analysis/packages/input.rs) checks that cut against current metadata and retained evidence
+  -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) offers the same Arc when the cut is valid, or captures a new cut when it is invalid
+
+[InputOperation::changed](../../crates/araphor-query/src/inputs/live.rs) waits for a source notice, a clock change, or a due deadline
+  -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) checks current state before it offers another input
+
+[AnalysisPackageOwner::serve_activation](../../crates/araphor-analysis/src/package/supervision.rs) receives stop, authority change, or grant expiry
+  -> [AnalysisReadControl::cancel](../../crates/araphor-data/src/analysis/read.rs) cancels the shared operation token
+  -> [AnalysisPackageOwner::serve_activation](../../crates/araphor-analysis/src/package/supervision.rs) waits for the actual blocking worker before it releases the task
+
+```mermaid
+sequenceDiagram
+    participant Analysis as AnalysisPackageOwner
+    participant Input as InputOperation
+    participant Data as AnalysisStore
+    Analysis->>Input: Request the next input offer
+    Input->>Data: Check metadata and capture a cut when required
+    Input-->>Analysis: Retained Arrow input cut and evaluation time
+    alt Backend returns Busy
+        Analysis->>Analysis: Wait for capacity or an input change
+        Analysis->>Input: Retry the retained offer
+        Input->>Data: Validate the pending cut
+    else Backend completes
+        Analysis->>Data: Authorized compare-and-swap transaction
+        Data-->>Analysis: Actual result receipt
+        Analysis->>Input: Complete with that receipt
+        Input->>Data: Read exact completion metadata
+        Data-->>Input: Post-commit activation and result context
+        Input->>Input: Check offer and advance local activation
+    end
+```
+
+The Query operation owns its pending cut, source receiver, clock receiver,
+deadlines, and memory scope. Data remains the durable activation and checkpoint
+owner. The pending cut stays alive during a Busy wait. A successful backend
+call does not acknowledge the cut. Completion requires the actual Data receipt.
+A reader Busy failure during completion retries that metadata read. The retry
+does not execute the backend or commit the result again.
+
+[InputOperation::changed](../../crates/araphor-query/src/inputs/live.rs) uses
+the existing Data revision receiver. The operation also records the next source
+change and live witness expiry. Model time uses 500-millisecond ticks. A model
+tick can reuse a completed input cut. After completion, an input query that
+reads the clock requires a new cut at the new tick. Equal input revisions and
+coverage suppress another backend offer when the model does not read time.
+A Busy retry retains the
+offered time with its valid cut. The InputSet retains its frozen input time.
+The operation supplies the model evaluation time separately. A fresh capture with
+expired evidence keeps Unknown coverage and excludes that evidence from the
+commit witnesses. A witness that expires after capture invalidates a pending
+cut before retry.
+
+[AnalysisStore::package_input_current](../../crates/araphor-data/src/analysis/packages/input.rs)
+uses one controlled metadata transaction. The check retains the existing
+global relation-revision rule, including notices from an unselected tenant.
+It checks store identity, schema, recovery epoch, current activation, exact
+dependencies, context references, trace authority, and retained live witnesses.
+The check reads no Arrow payload. The saved-result check also avoids input
+capture when the durable result remains current. Manual Inspect and Run keep
+the finite input entry point and their existing authority checks.
+
+[Memory::scope](../../crates/araphor-query/src/memory.rs) creates operation
+consumers on the existing shared pools. Native buffer claims remain shared
+within the same pool family. A scope does not charge the same buffer twice in
+one category. Its capacity wait excludes releases from its own consumers.
+The native MemoryPool hooks publish actual releases. These hooks add no pool
+or capacity limit. The scope's actual native allocation total distinguishes
+an impossible retained working set from temporary shared pressure.
+[AnalysisStore::wait_capacity](../../crates/araphor-data/src/analysis/connection.rs)
+checks the actual shared reader semaphore before it waits. An advisory wake
+does not admit another read while all slots remain held.
+
+[AnalysisReadControl::cancelled](../../crates/araphor-data/src/analysis/read.rs)
+waits for the shared cancellation token without a stage deadline. Each new
+read or backend stage retains that token and applies its bounded deadline.
+Registration and orphan cleanup use the supplied controlled Data reads.
+Analysis cancels and joins workers on stop or authority change. The registry
+stops changed or removed tasks before it loads replacement bundles.
+
+[AnalysisStore::subscribe_activations](../../crates/araphor-data/src/analysis/mod.rs)
+wakes the Analysis lifecycle registry for activation changes. Ordinary source
+and result-checkpoint commits do not send that wake. After recovery restores
+trusted connections, a newly discovered accepted revision also sends one
+registry invalidation. A no-op recovery sends none. The next input operation
+uses the actual activation and durable result head.
+
+The [Query live tests](../../crates/araphor-query/src/inputs/live/tests.rs)
+cover the same-cut Busy retry, model and input clock ticks, exact completion,
+quiet cancellation, durable-head restart, global notices, and expired evidence.
+The [Data metadata tests](../../crates/araphor-data/src/analysis/packages/tests/input.rs)
+cover exact references, forged completion, controlled registration, reader
+capacity, activation notices, and uncertain-commit recovery.
+
+The live-input delivery passes 267 distinct selected cases across the affected
+runs: 57 Data, 162 Query, 47 Analysis, and one package E2E case. The final
+connected check passes all 16 live Query cases, the Wasm readiness case, and
+the package E2E contract. Strict Clippy passes for all six affected crates and
+their test targets. Formatting passes for 53 changed Rust files. The record is
+`/tmp/araphor-live-input-qualification1.json`.
+
+The source count is `/tmp/araphor-live-input-count1.json`. This delivery adds
+1,637 nonblank production Rust lines. The complete change adds 1,167 from
+7b7b407a. The 6,000-line reduction and general maintained SQL remain **Not done**.
+The separate native execution pool needs a contention review. Full workspace
+CI and benchmarks are not run. Earlier records below retain their original
+source scope.
 
 ## Source access and failure
 

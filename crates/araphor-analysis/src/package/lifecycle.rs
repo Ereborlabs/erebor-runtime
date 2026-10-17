@@ -38,7 +38,7 @@ impl AnalysisPackageOwner {
         let admitted = super::PackageBundleRef::new(&bundle)?;
         self.authority.admit(grant, &admitted)?;
         bundle.validate()?;
-        let bundle = InstalledBundle::new(&self.query, bundle)?;
+        let bundle = InstalledBundle::new(&self.query, bundle, self.query.memory())?;
         let admitted = bundle.admission();
         for artifact in &bundle.value.artifacts {
             self.admit_artifact(artifact, control)?;
@@ -47,7 +47,7 @@ impl AnalysisPackageOwner {
         let activations = self.model_activations(grant, scope, &bundle, &parameters, upgrade)?;
         let prior_roots = if upgrade {
             self.store
-                .package_activations(grant.selection.tenant_id, scope, None)?
+                .package_activations_until(grant.selection.tenant_id, scope, None, control)?
                 .into_iter()
                 .map(|active| Self::decode::<InstalledContext>(&active.metadata))
                 .collect::<araphor_data::Result<Vec<_>>>()?
@@ -62,7 +62,7 @@ impl AnalysisPackageOwner {
         };
         let prior_bundles = prior_roots
             .iter()
-            .map(|root| self.load_bundle(grant.selection.tenant_id, root))
+            .map(|root| self.load_bundle(grant.selection.tenant_id, root, Some(control)))
             .collect::<araphor_data::Result<Vec<_>>>()?;
         let records = bundle
             .value
@@ -149,6 +149,7 @@ impl AnalysisPackageOwner {
                         &active,
                         bundle,
                         super::evaluation::RunPreparation {
+                            inputs: None,
                             id: &format!(
                                 "upgrade:{}:{}",
                                 previous.as_ref().map_or(0, |old| old.generation),

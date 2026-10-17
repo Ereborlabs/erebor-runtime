@@ -1,6 +1,7 @@
 mod activation;
 mod collection;
 mod commit;
+mod input;
 mod model;
 mod read;
 mod recovery;

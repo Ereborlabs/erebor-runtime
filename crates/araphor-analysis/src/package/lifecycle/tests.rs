@@ -39,14 +39,14 @@ async fn admitted_inspection_tracks_replacement() -> TestResult {
     let fixture = Fixture::new()?;
     let original = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
     fixture.install(original.clone(), None).await?;
-    let original = super::InstalledBundle::new(&fixture.owner.query, original)?;
-    let control = crate::AnalysisReadControl::default();
+    let original =
+        super::InstalledBundle::new(&fixture.owner.query, original, fixture.owner.query.memory())?;
     let response = fixture.owner.inspect(
         &fixture.grant,
         "test",
         "test.model",
         Some(&original),
-        &control,
+        &crate::AnalysisReadControl::default(),
     )?;
     assert_eq!(response.exports[0].revision, "1");
     assert_eq!(response.exports[0].results.len(), 1);
@@ -57,14 +57,18 @@ async fn admitted_inspection_tracks_replacement() -> TestResult {
             bundle: replacement.clone(),
         })
         .await?;
-    let replacement = super::InstalledBundle::new(&fixture.owner.query, replacement)?;
+    let replacement = super::InstalledBundle::new(
+        &fixture.owner.query,
+        replacement,
+        fixture.owner.query.memory(),
+    )?;
     for admitted in [&original, &replacement] {
         let response = fixture.owner.inspect(
             &fixture.grant,
             "test",
             "test.model",
             Some(admitted),
-            &control,
+            &crate::AnalysisReadControl::default(),
         )?;
         assert_eq!(response.exports[0].revision, "2");
         assert!(!response.exports[0].results.is_empty());
@@ -75,7 +79,7 @@ async fn admitted_inspection_tracks_replacement() -> TestResult {
                 "other",
                 "test.model",
                 Some(admitted),
-                &control,
+                &crate::AnalysisReadControl::default(),
             )?
             .exports
             .is_empty());
@@ -83,9 +87,13 @@ async fn admitted_inspection_tracks_replacement() -> TestResult {
     let mut denied = fixture.grant.clone();
     denied.revision += 1;
     assert!(matches!(
-        fixture
-            .owner
-            .inspect(&denied, "test", "test.model", Some(&replacement), &control,),
+        fixture.owner.inspect(
+            &denied,
+            "test",
+            "test.model",
+            Some(&replacement),
+            &crate::AnalysisReadControl::default(),
+        ),
         Err(crate::Error::Data {
             source: araphor_data::Error::Package {
                 code: crate::package::PackageErrorCodeV1::Denied,

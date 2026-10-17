@@ -57,6 +57,7 @@ impl AnalysisPackageOwner {
                     &context,
                     bundle,
                     super::evaluation::RunPreparation {
+                        inputs: None,
                         id: "inspect",
                         rebuild: false,
                         automatic: true,

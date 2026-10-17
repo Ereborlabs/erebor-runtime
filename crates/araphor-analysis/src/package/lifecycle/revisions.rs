@@ -77,21 +77,34 @@ impl AnalysisPackageOwner {
         &self,
         tenant: [u8; 16],
         root: &PackageRefV1,
+        control: Option<&crate::AnalysisReadControl>,
     ) -> araphor_data::Result<PackageBundleV1> {
         let mut pending = vec![root.clone()];
         let mut seen = BTreeSet::new();
         let mut artifacts = Vec::new();
         while let Some(reference) = pending.pop() {
+            if let Some(control) = control {
+                control.check()?;
+            }
             if !seen.insert(reference.clone()) {
                 continue;
             }
             if seen.len() > 64 {
                 return Err(Code::Limit.error("dependency closure"));
             }
-            let record = self
-                .store
-                .package_revision(tenant, &reference.package_id, &reference.revision)?
-                .ok_or_else(|| Code::Missing.error("installed artifact"))?;
+            let record = match control {
+                Some(control) => self.store.package_revision_until(
+                    tenant,
+                    &reference.package_id,
+                    &reference.revision,
+                    control,
+                ),
+                None => {
+                    self.store
+                        .package_revision(tenant, &reference.package_id, &reference.revision)
+                }
+            }?
+            .ok_or_else(|| Code::Missing.error("installed artifact"))?;
             artifacts.push(record.decode_artifact()?);
             pending.extend(
                 record
@@ -181,7 +194,7 @@ mod tests {
         assert_eq!(*fixture.store.subscribe_revision().borrow(), before);
         drop(saved);
         let fixture = fixture.reopen()?;
-        let restored = fixture.owner.load_bundle([1; 16], &package.root)?;
+        let restored = fixture.owner.load_bundle([1; 16], &package.root, None)?;
         assert_eq!(restored.artifacts, package.artifacts);
         let digest = restored.digest()?;
         let bytes = restored.encode()?;

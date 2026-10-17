@@ -1,4 +1,5 @@
 use araphor_analysis_sdk as sdk;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::package::tests::{bundle, Fixture, TestResult};
@@ -75,6 +76,35 @@ fn notification_deadline(fixture: &Fixture, period: u64) -> TestResult<crate::No
     Ok(router)
 }
 
+struct Clock {
+    now: std::sync::atomic::AtomicU64,
+    changes: tokio::sync::watch::Sender<u64>,
+}
+
+impl Clock {
+    fn new(now: u64) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            now: std::sync::atomic::AtomicU64::new(now),
+            changes: tokio::sync::watch::channel(now).0,
+        })
+    }
+
+    fn set(&self, now: u64) {
+        self.now.store(now, std::sync::atomic::Ordering::Release);
+        self.changes.send_replace(now);
+    }
+}
+
+impl araphor_query::follow::Clock for Clock {
+    fn now_ns(&self) -> araphor_query::Result<u64> {
+        Ok(self.now.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+}
+
 #[tokio::test]
 async fn automatic_clock_ticks() -> TestResult {
     for source in [None, Some(EXPIRY), Some(NOTIFICATION_COUNT)] {
@@ -103,85 +133,151 @@ async fn automatic_clock_ticks() -> TestResult {
                 .insert("rows".into(), "SELECT count FROM source".into());
         }
         fixture.install(package.clone(), None).await?;
-        let package = InstalledBundle::new(&fixture.owner.query, package)?;
-        let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-        for (offset, expected) in [(0, 1), (1, 0), (2, 0), (3, 0)] {
-            let now = START + period * offset + 123;
-            let active = fixture.store.package_activation_page(None)?.remove(0);
-            let context: InstalledContext = AnalysisPackageOwner::decode(&active.metadata)?;
-            assert_eq!(
-                context.clock,
-                if source.is_some() {
-                    ClockDependency::Inputs
-                } else {
-                    ClockDependency::Model
-                },
-                "source: {source:?}"
-            );
-            let (current, next) =
-                fixture
-                    .owner
-                    .inputs_current(&active, context.clock, now, false, &control)?;
-            assert!(!current);
-            assert_eq!(next, AnalysisPackageOwner::clock_tick(now) + period);
-            let prior = if source.is_some() && offset >= 2 {
-                Some((
-                    fixture.store.meta()?,
-                    fixture.store.package_results(&active.key)?,
-                ))
+        let package =
+            InstalledBundle::new(&fixture.owner.query, package, fixture.owner.query.memory())?;
+        let active = fixture.store.package_activation_page(None)?.remove(0);
+        let context: InstalledContext = AnalysisPackageOwner::decode(&active.metadata)?;
+        assert_eq!(
+            context.clock,
+            if source.is_some() {
+                ClockDependency::Inputs
             } else {
-                None
-            };
-            let request = RunPreparation {
-                id: "tick",
-                rebuild: false,
-                automatic: true,
-                now,
-            };
-            let prepared = fixture
-                .owner
-                .prepare_at(&active, &package, request, &control)?;
-            if let Some((meta, heads)) = prior {
-                assert!(prepared.is_none(), "source: {source:?}, offset: {offset}");
-                assert_eq!(fixture.store.meta()?, meta);
-                assert_eq!(fixture.store.package_results(&active.key)?, heads);
+                ClockDependency::Model
+            },
+            "source: {source:?}"
+        );
+        let (_, _, admitted) =
+            package.export(&active.key.package_id, &active.revision, &active.key.export)?;
+        let clock = Clock::new(START + 123);
+        let mut operation = admitted.inputs.watch(
+            fixture.owner.query.clone(),
+            active,
+            clock.clone(),
+            admitted.model_clock(),
+        )?;
+        assert!(!Arc::ptr_eq(
+            operation.memory(),
+            fixture.owner.query.memory()
+        ));
+        let memory = Arc::clone(operation.memory());
+        let control = Arc::clone(operation.control());
+        let mut active = operation.activation().clone();
+        let (offers, mut arrivals) = tokio::sync::mpsc::channel(1);
+        let (receipts, mut commits) = tokio::sync::mpsc::channel::<(
+            crate::analysis::PackageResultRefV1,
+            tokio::sync::oneshot::Sender<crate::analysis::PackageActivationV1>,
+        )>(1);
+        let driver = tokio::spawn(async move {
+            while let Some(inputs) = operation.next().await? {
+                offers
+                    .send((
+                        inputs,
+                        operation.activation().clone(),
+                        operation.now(),
+                        Arc::clone(operation.control()),
+                    ))
+                    .await
+                    .map_err(|_| {
+                        crate::PackageErrorCodeV1::Incomplete.error("clock offer receiver")
+                    })?;
+                let Some((receipt, ack)) = commits.recv().await else {
+                    break;
+                };
+                operation.complete(&receipt).await?;
+                let _sent = ack.send(operation.activation().clone());
+            }
+            Ok::<_, crate::Error>(())
+        });
+        let result = async {
+            for (offset, expected) in [(0, 1), (1, 0), (2, 0), (3, 0)] {
+                let now = START + period * offset + 123;
+                clock.set(now);
+                if source.is_some() && offset >= 2 {
+                    let meta = fixture.store.meta()?;
+                    let heads = fixture.store.package_results(&active.key)?;
+                    assert!(
+                        tokio::time::timeout(Duration::from_millis(100), arrivals.recv())
+                            .await
+                            .is_err(),
+                        "source: {source:?}, offset: {offset}"
+                    );
+                    assert_eq!(fixture.store.meta()?, meta);
+                    assert_eq!(fixture.store.package_results(&active.key)?, heads);
+                    assert_eq!(
+                        fixture.store.package_activation(&active.key)?.as_ref(),
+                        Some(&active)
+                    );
+                    continue;
+                }
+                let (inputs, selected, now, stage) =
+                    tokio::time::timeout(Duration::from_secs(30), arrivals.recv())
+                        .await?
+                        .ok_or("clock input offer")?;
+                assert_eq!(selected, active);
+                assert!(Arc::ptr_eq(inputs.memory(), &memory));
+                let run = crate::model::ModelRun::prepared(
+                    &fixture.owner.query,
+                    [1; 16],
+                    &stage,
+                    Arc::clone(&inputs),
+                )?;
+                assert!(Arc::ptr_eq(&run.memory, &memory));
+                drop(run);
+                let tick = START + period * offset;
+                assert_eq!(now, tick);
+                let request = RunPreparation {
+                    inputs: Some(&inputs),
+                    id: "tick",
+                    rebuild: false,
+                    automatic: true,
+                    now,
+                };
+                let prepared = fixture
+                    .owner
+                    .prepare_at(&selected, &package, request, &stage)?
+                    .ok_or("clock evaluation")?;
+                assert_eq!(prepared.created_utc_ns, tick);
+                let metadata: ResultContext = AnalysisPackageOwner::decode(&prepared.metadata)?;
+                assert_eq!(metadata.context.time_utc_ns, tick as i64);
+                let output: sdk::wire::Output = AnalysisPackageOwner::decode(&prepared.datasets)?;
+                assert_eq!(
+                    crate::AnalysisPackageOwner::output_rows(&output)?["rows"],
+                    serde_json::json!([{"count":expected}])
+                );
+                let committed = fixture.store.commit_package(&prepared, || stage.check())?;
+                let (ack, acknowledged) = tokio::sync::oneshot::channel();
+                receipts
+                    .send((committed.clone(), ack))
+                    .await
+                    .map_err(|_| "clock commit receiver")?;
+                active = acknowledged.await?;
+                let stored = fixture.result(&committed.result_id)?;
+                let saved: ResultContext = AnalysisPackageOwner::decode(&stored.commit.metadata)?;
+                assert_eq!(saved.context.time_utc_ns, tick as i64);
+                clock.set(tick + period - 1);
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), arrivals.recv())
+                        .await
+                        .is_err()
+                );
                 assert_eq!(
                     fixture.store.package_activation(&active.key)?.as_ref(),
                     Some(&active)
                 );
-                continue;
             }
-            let prepared = prepared.ok_or("clock evaluation")?;
-            let tick = AnalysisPackageOwner::clock_tick(now);
-            assert_eq!(prepared.created_utc_ns, tick);
-            let metadata: ResultContext = AnalysisPackageOwner::decode(&prepared.metadata)?;
-            assert_eq!(metadata.context.time_utc_ns, tick as i64);
-            let output: sdk::wire::Output = AnalysisPackageOwner::decode(&prepared.datasets)?;
-            assert_eq!(
-                crate::AnalysisPackageOwner::output_rows(&output)?["rows"],
-                serde_json::json!([{"count":expected}])
-            );
-            let committed = fixture
-                .store
-                .commit_package(&prepared, || control.check())?;
-            let stored = fixture.result(&committed.result_id)?;
-            let saved: ResultContext = AnalysisPackageOwner::decode(&stored.commit.metadata)?;
-            assert_eq!(saved.context.time_utc_ns, tick as i64);
-            let active = fixture.store.package_activation_page(None)?.remove(0);
-            let repeated = RunPreparation {
-                id: "same-tick",
-                rebuild: false,
-                automatic: true,
-                now: tick + period - 1,
-            };
-            assert!(fixture
-                .owner
-                .prepare_at(&active, &package, repeated, &control)?
-                .is_none());
-            assert_eq!(
-                fixture.store.package_activation(&active.key)?.as_ref(),
-                Some(&active)
-            );
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        }
+        .await;
+        drop(receipts);
+        control.cancel()?;
+        let stopped = driver.await?;
+        result?;
+        match stopped {
+            Err(error)
+                if erebor_runtime_error::ErrorExt::status_code(&error)
+                    == erebor_runtime_error::StatusCode::Cancelled => {}
+            Err(error) => return Err(error.into()),
+            Ok(()) => return Err("clock actor ended without cancellation".into()),
         }
         let active = fixture.store.package_activation_page(None)?.remove(0);
         fixture.owner.inspect(
@@ -189,7 +285,7 @@ async fn automatic_clock_ticks() -> TestResult {
             "test",
             &active.key.package_id,
             Some(&package),
-            &control,
+            &AnalysisReadControl::with_timeout(Duration::from_secs(30))?,
         )?;
         let stored = fixture.result(active.result_id.as_deref().ok_or("active result")?)?;
         assert_eq!(stored.stale, source.is_none());
@@ -202,31 +298,50 @@ async fn unchanged_model_stays_current() -> TestResult {
     let fixture = Fixture::new()?;
     let package = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
     fixture.install(package.clone(), None).await?;
-    let package = InstalledBundle::new(&fixture.owner.query, package)?;
+    let package =
+        InstalledBundle::new(&fixture.owner.query, package, fixture.owner.query.memory())?;
     let active = fixture.store.package_activation_page(None)?.remove(0);
+    let (_, _, admitted) =
+        package.export(&active.key.package_id, &active.revision, &active.key.export)?;
+    let mut operation = admitted.inputs.watch(
+        fixture.owner.query.clone(),
+        active.clone(),
+        Clock::new(START),
+        false,
+    )?;
+    let parent = Arc::clone(operation.control());
+    let pending = operation.next();
+    tokio::pin!(pending);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut pending)
+            .await
+            .is_err()
+    );
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-    let request = RunPreparation {
-        id: "tick",
-        rebuild: false,
-        automatic: true,
-        now: START,
-    };
-    assert!(fixture
-        .owner
-        .prepare_at(&active, &package, request, &control)?
-        .is_none());
-    let request = RunPreparation {
-        id: "manual",
-        rebuild: false,
-        automatic: false,
-        now: START + 123,
-    };
     let manual = fixture
         .owner
-        .prepare_at(&active, &package, request, &control)?
+        .prepare_at(
+            &active,
+            &package,
+            RunPreparation {
+                inputs: None,
+                id: "manual",
+                rebuild: false,
+                automatic: false,
+                now: START + 123,
+            },
+            &control,
+        )?
         .ok_or("manual")?;
     let metadata: ResultContext = AnalysisPackageOwner::decode(&manual.metadata)?;
     assert_eq!(metadata.context.time_utc_ns, (START + 123) as i64);
+    parent.cancel()?;
+    assert!(matches!(
+        pending.await,
+        Err(araphor_query::Error::Data {
+            source: araphor_data::Error::AnalysisReadCancelled { .. },
+        })
+    ));
     Ok(())
 }
 
@@ -244,7 +359,8 @@ async fn unchanged_input_skips_extraction() -> TestResult {
         ),
     });
     fixture.install(package.clone(), None).await?;
-    let package = InstalledBundle::new(&fixture.owner.query, package)?;
+    let package =
+        InstalledBundle::new(&fixture.owner.query, package, fixture.owner.query.memory())?;
     let owner = AnalysisPackageOwner::new(
         Engine::new(
             fixture.store.clone(),
@@ -257,20 +373,19 @@ async fn unchanged_input_skips_extraction() -> TestResult {
         fixture.authority.clone(),
     )?;
     let active = fixture.store.package_activation_page(None)?.remove(0);
-    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-    assert!(owner
-        .prepare_at(
-            &active,
-            &package,
-            RunPreparation {
-                id: "unchanged",
-                rebuild: false,
-                automatic: true,
-                now: START,
-            },
-            &control
-        )?
-        .is_none());
+    let (_, _, admitted) =
+        package.export(&active.key.package_id, &active.revision, &active.key.export)?;
+    let mut operation =
+        admitted
+            .inputs
+            .watch(owner.query.clone(), active, Clock::new(START), false)?;
+    let pending = operation.next();
+    tokio::pin!(pending);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut pending)
+            .await
+            .is_err()
+    );
     fixture
         .store
         .commit_context(&crate::AnalysisContextVersionV1 {
@@ -286,18 +401,8 @@ async fn unchanged_input_skips_extraction() -> TestResult {
             sensitivity: crate::ContextSensitivityV1::Tenant,
             body: b"{}".to_vec(),
         })?;
-    assert!(owner
-        .prepare_at(
-            &active,
-            &package,
-            RunPreparation {
-                id: "changed",
-                rebuild: false,
-                automatic: true,
-                now: START,
-            },
-            &control
-        )
+    assert!(tokio::time::timeout(Duration::from_secs(30), &mut pending)
+        .await?
         .is_err());
     Ok(())
 }
