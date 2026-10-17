@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use tokio::sync::watch;
+
 use araphor_analysis_sdk as sdk;
 use araphor_data::analysis::{PackageCommitV1, PackageKeyV1, PackageRevisionV1};
 use araphor_data::{
@@ -16,25 +18,35 @@ type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Sen
 
 const NOW: u64 = 1_700_000_000_000_000_000;
 
-struct TestClock(watch::Sender<u64>);
+struct TestClock {
+    now: std::sync::atomic::AtomicU64,
+    reads: std::sync::atomic::AtomicUsize,
+    changes: watch::Sender<u64>,
+}
 
 impl TestClock {
     fn new() -> Arc<Self> {
-        Arc::new(Self(watch::channel(NOW).0))
+        Arc::new(Self {
+            now: std::sync::atomic::AtomicU64::new(NOW),
+            reads: std::sync::atomic::AtomicUsize::new(0),
+            changes: watch::channel(NOW).0,
+        })
     }
 
     fn set(&self, now: u64) {
-        self.0.send_replace(now);
+        self.now.store(now, std::sync::atomic::Ordering::SeqCst);
+        self.changes.send_replace(now);
     }
 }
 
 impl Clock for TestClock {
     fn now_ns(&self) -> Result<u64> {
-        Ok(*self.0.borrow())
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.now.load(std::sync::atomic::Ordering::SeqCst))
     }
 
     fn changes(&self) -> watch::Receiver<u64> {
-        self.0.subscribe()
+        self.changes.subscribe()
     }
 }
 
@@ -410,18 +422,14 @@ async fn clocks_select_input_recapture() -> TestResult {
         let first = next(&mut operation).await?;
         let receipt = fixture.commit(&operation, &first, "tick-first", operation.now())?;
         operation.complete(&receipt).await?;
-        fixture.clock.set(NOW + InputOperation::TICK);
+        fixture.clock.set(NOW + 500_000_000);
         let second = next(&mut operation).await?;
         assert!(Arc::ptr_eq(second.memory(), operation.memory()));
         assert_eq!(Arc::ptr_eq(&first, &second), !input_clock);
-        assert_eq!(operation.now(), NOW + InputOperation::TICK);
+        assert_eq!(operation.now(), NOW + 500_000_000);
         assert_eq!(
             second.now,
-            if input_clock {
-                NOW + InputOperation::TICK
-            } else {
-                NOW
-            }
+            if input_clock { NOW + 500_000_000 } else { NOW }
         );
     }
     Ok(())
@@ -454,7 +462,7 @@ async fn stable_clock_recaptures_quietly() -> TestResult {
             let _sent = captured.send(());
             Ok(())
         })?;
-        fixture.clock.set(NOW + offset * InputOperation::TICK);
+        fixture.clock.set(NOW + offset * 500_000_000);
         tokio::select! {
             result = &mut pending => {
                 result?;
@@ -618,7 +626,7 @@ async fn raw_recapture_renews_lease() -> TestResult {
         .map(|witness| witness.expires_utc_ns)
         .min()
         .ok_or("live witness")?;
-    fixture.clock.set(InputOperation::eligible(expiry));
+    fixture.clock.set(expiry);
     operation.retry();
     let expired = next(&mut operation).await?;
     assert!(!Arc::ptr_eq(&first, &expired));
@@ -716,9 +724,8 @@ async fn quiet_cancel_expiry_release() -> TestResult {
     operation.pending = None;
     drop(input);
     operation.witness = u64::MAX;
-    operation.source_time = u64::MAX;
-    operation.deferred = 0;
-    operation.clock_changes.borrow_and_update();
+    operation.progress.clear();
+    operation.progress.begin()?;
     let control = Arc::clone(operation.control());
     {
         let waiting = operation.changed();
@@ -746,18 +753,6 @@ async fn quiet_cancel_expiry_release() -> TestResult {
             .reserve_input(fixture.engine.limits().input_capacity)?,
     );
     Ok(())
-}
-
-#[test]
-fn source_deadline_rounds_up() {
-    assert_eq!(
-        InputOperation::eligible(NOW + 1),
-        NOW + InputOperation::TICK
-    );
-    assert_eq!(
-        InputOperation::eligible(NOW + InputOperation::TICK),
-        NOW + InputOperation::TICK
-    );
 }
 
 #[tokio::test]
@@ -791,5 +786,234 @@ async fn drop_retains_input_capacity() -> TestResult {
             .memory()
             .reserve_input(fixture.engine.limits().input_capacity)?,
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn idle_clock_waits_for_data() -> TestResult {
+    for clocked in [false, true] {
+        let fixture = Fixture::new(clocked)?;
+        let mut operation = fixture.watch(true)?;
+        let first = next(&mut operation).await?;
+        let receipt = fixture.commit(&operation, &first, "idle-first", operation.now())?;
+        operation.complete(&receipt).await?;
+        let control = Arc::clone(operation.control());
+        let pending = operation.next();
+        tokio::pin!(pending);
+        tokio::select! {
+            value = &mut pending => panic!("completion repeated an offer: {}", value?.is_some()),
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+        let clock_reads = fixture
+            .clock
+            .reads
+            .load(std::sync::atomic::Ordering::SeqCst);
+        fixture
+            .clock
+            .now
+            .store(NOW + 650_000_123, std::sync::atomic::Ordering::SeqCst);
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = Arc::clone(&reads);
+        control.on_read_step(move || {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })?;
+        tokio::select! {
+            value = &mut pending => panic!("idle clock repeated an offer: {}", value?.is_some()),
+            _ = tokio::time::sleep(Duration::from_millis(650)) => {}
+        }
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            fixture
+                .clock
+                .reads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            clock_reads
+        );
+        Fixture::event_into(&fixture.store, &fixture.source, 2)?;
+        let second = tokio::time::timeout(Duration::from_secs(5), pending)
+            .await??
+            .ok_or("source update")?;
+        assert_eq!(count(&second), 2);
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn source_deadline_fires_once() -> TestResult {
+    let fixture = Fixture::new(false)?;
+    let mut operation = fixture.watch(false)?;
+    let first = next(&mut operation).await?;
+    let time = operation.now();
+    operation.progress.captured(
+        first
+            .snapshot
+            .as_ref()
+            .ok_or("snapshot")?
+            .page
+            .extraction
+            .meta
+            .commit_revision,
+        Some(NOW - 3),
+    );
+    operation.changed().await?;
+    assert!(operation.clock_changed);
+    operation.witness = NOW - 2;
+    tokio::time::timeout(Duration::from_secs(1), operation.changed()).await??;
+    {
+        let changed = operation.changed();
+        tokio::pin!(changed);
+        tokio::select! {
+            value = &mut changed => panic!("source deadline repeated: {}", value.is_ok()),
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+    }
+    operation.retry();
+    let retried = next(&mut operation).await?;
+    assert!(Arc::ptr_eq(&first, &retried));
+    assert_eq!(operation.now(), time);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_expires_without_commit() -> TestResult {
+    let mut fixture = Fixture::new(false)?;
+    fixture.model.inputs[0].source = sdk::InputSource::Query(
+        "SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) AS value FROM events WHERE received_at >= now() - INTERVAL '2 seconds'".into(),
+    );
+    fixture.active = Fixture::install(
+        &fixture.store,
+        &fixture.source,
+        &fixture.model,
+        "window-input",
+    )?;
+    fixture.inputs = Arc::new(Inputs::admit(&fixture.engine, &fixture.model)?);
+    let mut operation = fixture.watch(false)?;
+    let first = next(&mut operation).await?;
+    assert_eq!(count(&first), 1);
+    let expiry = first.expiry.ok_or("window expiry")?;
+    assert_eq!(expiry, (NOW - 1) / 1000 * 1000 + 2_000_000_000 + 1000);
+    let receipt = fixture.commit(&operation, &first, "window-first", operation.now())?;
+    operation.complete(&receipt).await?;
+    fixture.clock.set(expiry);
+    let second = next(&mut operation).await?;
+    assert_eq!(count(&second), 0);
+    assert_eq!(second.now, expiry);
+    assert_eq!(second.expiry, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn idle_stage_renews_on_event() -> TestResult {
+    let fixture = Fixture::new(false)?;
+    let mut operation = fixture.watch(false)?;
+    let first = next(&mut operation).await?;
+    let receipt = fixture.commit(&operation, &first, "idle-stage", operation.now())?;
+    operation.complete(&receipt).await?;
+    operation.control = Arc::new(operation.control.stage(Duration::from_millis(10))?);
+    let control = Arc::clone(operation.control());
+    let pending = operation.next();
+    tokio::pin!(pending);
+    tokio::select! {
+        value = &mut pending => panic!("idle stage returned: {}", value?.is_some()),
+        _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+    }
+    assert!(control.check().is_err());
+    Fixture::event_into(&fixture.store, &fixture.source, 2)?;
+    let second = tokio::time::timeout(Duration::from_secs(5), pending)
+        .await??
+        .ok_or("source update")?;
+    assert_eq!(count(&second), 2);
+    second.check(
+        &fixture.engine,
+        &AnalysisReadControl::with_timeout(Duration::from_secs(1))?,
+    )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn capture_preserves_clock_notice() -> TestResult {
+    let fixture = Fixture::new(false)?;
+    let mut operation = fixture.watch(true)?;
+    let clock = Arc::clone(&fixture.clock);
+    operation.control().on_read_step(move || {
+        clock.set(NOW + 123);
+        Ok(())
+    })?;
+    let first = next(&mut operation).await?;
+    let time = operation.now();
+    assert_eq!(time, NOW);
+    operation.changed().await?;
+    assert!(operation.clock_changed);
+    let retried = next(&mut operation).await?;
+    assert!(Arc::ptr_eq(&first, &retried));
+    assert_eq!(operation.now(), time);
+    let receipt = fixture.commit(&operation, &first, "clock-captured", time)?;
+    operation.complete(&receipt).await?;
+    let second = next(&mut operation).await?;
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(second.now, time);
+    assert_eq!(operation.now(), NOW + 123);
+    Ok(())
+}
+
+struct ClosedClock;
+
+impl Clock for ClosedClock {
+    fn now_ns(&self) -> Result<u64> {
+        Ok(NOW)
+    }
+    fn changes(&self) -> watch::Receiver<u64> {
+        watch::channel(0).1
+    }
+}
+
+#[tokio::test]
+async fn closed_clock_ends_wait() -> TestResult {
+    let fixture = Fixture::new(false)?;
+    let mut operation = fixture.inputs.watch(
+        Arc::clone(&fixture.engine),
+        fixture.active.clone(),
+        Arc::new(ClosedClock),
+        false,
+    )?;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), operation.changed())
+            .await?
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn clock_demand_survives_busy() -> TestResult {
+    let fixture = Fixture::new(false)?;
+    let mut operation = fixture.watch(true)?;
+    let first = next(&mut operation).await?;
+    let receipt = fixture.commit(&operation, &first, "before-busy", operation.now())?;
+    operation.complete(&receipt).await?;
+    let active = operation.activation().clone();
+    drop(operation);
+    let mut restarted = fixture.inputs.watch(
+        Arc::clone(&fixture.engine),
+        active,
+        fixture.clock.clone(),
+        true,
+    )?;
+    fixture.clock.set(NOW + 123);
+    let held = fixture.engine.reserve_evaluation([1; 16])?;
+    let failure = tokio::time::timeout(Duration::from_secs(5), restarted.next())
+        .await?
+        .err()
+        .ok_or("input capacity was not busy")?;
+    assert_eq!(crate::Failure::from(&failure), crate::Failure::Busy);
+    assert!(restarted.clock_changed);
+    drop(held);
+    restarted.retry();
+    let second = next(&mut restarted).await?;
+    assert_eq!(count(&second), 1);
+    assert_eq!(restarted.now(), NOW + 123);
+    assert_eq!(second.inputs[0].revision, first.inputs[0].revision);
     Ok(())
 }

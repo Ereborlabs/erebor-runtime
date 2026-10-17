@@ -19,6 +19,7 @@ pub struct InputSet {
     pub inputs: Vec<sdk::Input>,
     pub snapshot: Option<Arc<ArrowSnapshot>>,
     pub now: u64,
+    pub(super) expiry: Option<u64>,
     source: Option<Arc<SourceSnapshot>>,
     memory_owner: Arc<Memory>,
     _memory: MemoryReservation,
@@ -57,6 +58,7 @@ impl Inputs {
                 inputs: Vec::new(),
                 snapshot: None,
                 now,
+                expiry: None,
                 source: None,
                 _memory: memory_owner.reserve_input(0).context(SqlSnafu)?,
                 memory_owner,
@@ -70,6 +72,16 @@ impl Inputs {
         }
         let mut requests = self.sources.clone();
         let scopes = self.scopes(session.selection(), &physical, &mut requests)?;
+        if self.plans.iter().any(|port| port.window.is_some()) {
+            if let Some(Some(columns)) = requests.get_mut("events") {
+                columns.insert(
+                    SourceSnapshot::schemas()["events"]
+                        .index_of("received_utc_ns")
+                        .map_err(datafusion::common::DataFusionError::from)
+                        .context(SqlSnafu)?,
+                );
+            }
+        }
         let mut ranges = Vec::new();
         for (input, scope) in self.plans.iter().zip(&scopes) {
             if input
@@ -134,6 +146,19 @@ impl Inputs {
             return Err(araphor_data::PackageErrorCodeV1::Unsupported
                 .error("mutable discovery input")
                 .into());
+        }
+        let mut expiry = snapshot.next_change;
+        for (port, scope) in self.plans.iter().zip(&scopes) {
+            if let Some(window) = port.window {
+                let selected = window.selection(&scope.selection, now);
+                let received = selected
+                    .time_range()
+                    .map(|range| source.received_min(range))
+                    .transpose()
+                    .context(SqlSnafu)?
+                    .flatten();
+                expiry = expiry.into_iter().chain(window.expiry(received)).min();
+            }
         }
         let execution = control.within(engine.limits().evaluate_timeout)?;
         let context = state.task_ctx();
@@ -281,6 +306,7 @@ impl Inputs {
             inputs,
             snapshot: Some(snapshot),
             now,
+            expiry,
             source: Some(source),
             memory_owner,
             _memory: memory,

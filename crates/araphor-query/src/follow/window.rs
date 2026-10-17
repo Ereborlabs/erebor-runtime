@@ -13,8 +13,8 @@ use crate::{InvalidSnafu, Result, SqlSnafu};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Window {
-    width: u64,
-    inclusive: bool,
+    inclusive: Option<u64>,
+    exclusive: Option<u64>,
 }
 
 impl Window {
@@ -33,6 +33,16 @@ impl Window {
         })
         .context(SqlSnafu)?;
         Ok(count)
+    }
+
+    pub(crate) fn infer(plan: &LogicalPlan) -> Result<Option<Self>> {
+        match Self::from_plan(plan) {
+            Err(crate::Error::Invalid {
+                field: "follow clock filter",
+                ..
+            }) => Ok(None),
+            result => result,
+        }
     }
 
     pub(crate) fn from_plan(plan: &LogicalPlan) -> Result<Option<Self>> {
@@ -76,9 +86,10 @@ impl Window {
             }
             .fail();
         }
-        Ok(windows
-            .into_iter()
-            .min_by_key(|window| (window.width, window.inclusive)))
+        Ok(Some(Self {
+            inclusive: windows.iter().filter_map(|window| window.inclusive).min(),
+            exclusive: windows.iter().filter_map(|window| window.exclusive).min(),
+        }))
     }
 
     fn predicate(expression: &Expr, schema: &datafusion::common::DFSchema) -> Option<Self> {
@@ -122,9 +133,10 @@ impl Window {
             }
             _ => return None,
         };
+        let width = u64::try_from(width).ok().filter(|width| *width != 0)?;
         Some(Self {
-            width: u64::try_from(width).ok().filter(|width| *width != 0)?,
-            inclusive,
+            inclusive: inclusive.then_some(width),
+            exclusive: (!inclusive).then_some(width),
         })
     }
 
@@ -138,12 +150,14 @@ impl Window {
         original: &AnalysisSelectionV1,
         now: u64,
     ) -> AnalysisSelectionV1 {
-        let threshold = i128::from(now) - i128::from(self.width);
-        let micros = if self.inclusive {
-            (threshold + 999).div_euclid(1000)
-        } else {
-            threshold.div_euclid(1000) + 1
-        };
+        let threshold = |width: &u64| (i128::from(now) - i128::from(*width)) / 1000;
+        let micros = self
+            .inclusive
+            .iter()
+            .map(threshold)
+            .chain(self.exclusive.iter().map(|width| threshold(width) + 1))
+            .max()
+            .unwrap_or(0);
         let lower = u64::try_from(micros.max(0) * 1000).unwrap_or(u64::MAX);
         let mut selection = original.clone();
         selection.received_from = match original.received_from {
@@ -156,9 +170,18 @@ impl Window {
 
     pub(crate) fn expiry(&self, received: Option<u64>) -> Option<u64> {
         received.and_then(|received| {
-            (received / 1000 * 1000)
-                .checked_add(self.width)?
-                .checked_add(u64::from(self.inclusive))
+            let received = received / 1000 * 1000;
+            self.inclusive
+                .and_then(|width| received.checked_add(width)?.checked_add(1000))
+                .into_iter()
+                .chain(self.exclusive.and_then(|width| {
+                    if received == 0 {
+                        Some(width.saturating_sub(999))
+                    } else {
+                        received.checked_add(width)
+                    }
+                }))
+                .min()
         })
     }
 }

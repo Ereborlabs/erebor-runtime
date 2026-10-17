@@ -1701,6 +1701,16 @@ async fn moving_window_nanoseconds() {
         Bound::Included(1_000_000_000)
     );
     clock.set(2_000_000_001);
+    let retained = next(&mut subscription).await;
+    assert!(retained.clock_changed);
+    assert!(retained.batches.is_none());
+    assert_eq!(
+        retained.snapshot.selection.received_from,
+        Bound::Included(1_000_000_000)
+    );
+    let mut native = fixture.subscribe(sql, clock.clone(), None, false);
+    assert_eq!(values(&next(&mut native).await, 0), values(&first, 0));
+    clock.set(2_000_001_000);
     let expired = next(&mut subscription).await;
     assert!(expired.clock_changed);
     assert_eq!(values(&expired, 0), vec![ScalarValue::Int64(Some(0))]);
@@ -1726,7 +1736,7 @@ async fn moving_window_nanoseconds() {
             .unwrap()
             .unwrap()
             .expiry(Some(1_000_000_123)),
-        Some(2_000_000_001)
+        Some(2_000_001_000)
     );
 }
 
@@ -1885,5 +1895,68 @@ fn clock_requires_time_filter() {
         let (plan, sources) = fixture.plan(sql, vec![]);
         assert!(Subscription::new(Arc::clone(&fixture.engine), plan, sources, fixture.selection(),
             Arc::new(AnalysisReadControl::default()), b"authority", None, TestClock::new(0), true).is_err());
+    }
+}
+
+#[tokio::test]
+async fn window_matches_native_precision() {
+    for received in [1, 123, 1_000_000_123] {
+        let fixture = Fixture::new(Limits::default());
+        fixture.commit(&fixture.source, 1, 1, received);
+        let timestamp = received / 1000 * 1000;
+        for (interval, width) in [("1 second", 1_000_000_000u64), ("1001 nanoseconds", 1001)] {
+            let strict = |width: u64| {
+                if timestamp == 0 {
+                    width.saturating_sub(999)
+                } else {
+                    timestamp + width
+                }
+            };
+            let inclusive = timestamp + width + 1000;
+            let cases = [
+                (format!("received_at > now() - INTERVAL '{interval}'"), strict(width)),
+                (format!("received_at >= now() - INTERVAL '{interval}'"), inclusive),
+                (format!("received_at >= now() - INTERVAL '{interval}' AND received_at > now() - INTERVAL '{} nanoseconds'", width + 1), inclusive.min(strict(width + 1))),
+                (format!("received_at >= now() - INTERVAL '{interval}' AND received_at > now() - INTERVAL '{} nanoseconds'", width + 1500), inclusive.min(strict(width + 1500))),
+            ];
+            for (predicate, expiry) in cases {
+                let sql = format!("SELECT count(*) AS total FROM events WHERE {predicate}");
+                let (plan, _) = fixture.plan(&sql, vec![]);
+                let window = Window::from_plan(&plan).unwrap().unwrap();
+                assert_eq!(window.expiry(Some(received)), Some(expiry), "{sql}");
+                for (now, expected) in [(expiry - 1, 1), (expiry, 0)] {
+                    let clock = TestClock::new(now);
+                    let mut native = fixture.subscribe(&sql, clock, None, false);
+                    let direct = next(&mut native).await;
+                    assert_eq!(
+                        values(&direct, 0),
+                        [ScalarValue::Int64(Some(expected))],
+                        "received={received}, now={now}, sql={sql}"
+                    );
+                    let session = fixture
+                        .engine
+                        .session(
+                            window.selection(&fixture.selection(), now),
+                            &AnalysisReadControl::with_timeout(Duration::from_secs(5)).unwrap(),
+                            now,
+                        )
+                        .unwrap();
+                    let (_, batches) = session
+                        .execute(
+                            Arc::clone(&plan),
+                            &BTreeMap::from([("events".into(), None)]),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        batches
+                            .iter()
+                            .map(|batch| ScalarValue::try_from_array(batch.column(0), 0).unwrap())
+                            .collect::<Vec<_>>(),
+                        values(&direct, 0),
+                        "received={received}, now={now}, sql={sql}",
+                    );
+                }
+            }
+        }
     }
 }

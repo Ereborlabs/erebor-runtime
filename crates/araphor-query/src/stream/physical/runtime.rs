@@ -7,13 +7,13 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::ExecutionPlan;
 use snafu::ResultExt as _;
-use tokio::sync::watch;
 use tokio::time::Instant;
 
 use super::{kernel::Kernel, Compiled, Mode, SubscribeExec};
 use crate::execution::{Engine, Read};
 use crate::follow::Operation;
 use crate::sources::{ArrowSnapshot, Changes, JournalExec};
+use crate::stream::progress::{Progress, Wake};
 use crate::stream::{Event, Output, Run};
 use crate::{Result, SqlSnafu};
 
@@ -23,19 +23,13 @@ pub(super) struct Runtime {
     schema: datafusion::arrow::datatypes::SchemaRef,
     context: Arc<TaskContext>,
     maintained: Option<Maintained>,
-    changes: watch::Receiver<u64>,
-    clock_changes: watch::Receiver<u64>,
+    progress: Progress,
     snapshot: Option<Arc<ArrowSnapshot>>,
     revision: u64,
     position: Option<StorePositionV1>,
     content: Option<[u8; 32]>,
-    expiry: Option<u64>,
     evaluated: u64,
     exhausted: bool,
-    dirty: bool,
-    clock_dirty: bool,
-    changes_open: bool,
-    clock_open: bool,
     ended: bool,
     health: Option<Instant>,
     last_run: Option<Instant>,
@@ -48,20 +42,13 @@ struct Maintained {
     compiled: Arc<Compiled>,
 }
 
-enum Wake {
-    Store,
-    Clock,
-    Health,
-}
-
 impl Runtime {
     pub(super) fn new(
         physical: &SubscribeExec,
         context: Arc<TaskContext>,
         run: Arc<Run>,
         initial: Option<(Arc<crate::execution::Permit>, u64)>,
-        changes: watch::Receiver<u64>,
-        clock_changes: watch::Receiver<u64>,
+        progress: Progress,
     ) -> Result<Self> {
         if matches!(physical.mode, Mode::Page { lowered: false }) {
             return Err(DataFusionError::Internal(
@@ -114,17 +101,11 @@ impl Runtime {
             schema: physical.schema(),
             context,
             maintained,
-            changes,
-            clock_changes,
+            progress,
             snapshot: None,
             content: None,
-            expiry: None,
             evaluated: 0,
             exhausted: true,
-            dirty: false,
-            clock_dirty: false,
-            changes_open: true,
-            clock_open: true,
             ended: false,
             health: None,
             last_run: None,
@@ -146,63 +127,30 @@ impl Runtime {
         if self.run.operation == Operation::Append && !self.exhausted {
             return self.evaluate(false).await.map(Some);
         }
-        loop {
-            self.run.control.check()?;
-            if self.clock_dirty {
-                self.clock_dirty = false;
-                return self.health_update(true).await.map(Some);
-            }
-            if self.dirty {
-                self.dirty = false;
-                if self.changed().await? {
-                    return self.evaluate(false).await.map(Some);
+        {
+            let health = self
+                .health
+                .unwrap_or_else(|| Instant::now() + Duration::from_secs(15));
+            match self
+                .run
+                .control
+                .query_async(self.progress.next(&self.run.control, None, Some(health)))
+                .await?
+            {
+                Wake::Source => {
+                    if self.changed().await? {
+                        return self.evaluate(false).await.map(Some);
+                    }
+                    return self.health_update(false).await.map(Some);
                 }
-                return self.health_update(false).await.map(Some);
-            }
-            match self.wait().await? {
-                Wake::Store => self.dirty = true,
                 Wake::Clock => return self.health_update(true).await.map(Some),
                 Wake::Health => return self.health_update(false).await.map(Some),
             }
         }
     }
 
-    async fn wait(&mut self) -> Result<Wake> {
-        let now = self.run.clock.now_ns()?;
-        if self.expiry.is_some_and(|expiry| expiry <= now) {
-            return Ok(Wake::Clock);
-        }
-        let expiry = self
-            .expiry
-            .map(|expiry| Duration::from_nanos(expiry.saturating_sub(now)));
-        let health = self
-            .health
-            .unwrap_or_else(|| Instant::now() + Duration::from_secs(15));
-        let control = Arc::clone(&self.run.control);
-        control.query_async(async {
-            loop {
-                tokio::select! {
-                    changed = self.changes.changed(), if self.changes_open => {
-                        if changed.is_err() { self.changes_open = false; continue; }
-                        self.changes.borrow_and_update();
-                        return Ok(Wake::Store);
-                    }
-                    changed = self.clock_changes.changed(), if self.clock_open => {
-                        if changed.is_err() { self.clock_open = false; continue; }
-                        self.clock_changes.borrow_and_update();
-                        return Ok(Wake::Clock);
-                    }
-                    _ = tokio::time::sleep(expiry.unwrap_or(Duration::from_secs(86_400))), if expiry.is_some() => {
-                        return Ok(Wake::Clock);
-                    }
-                    _ = tokio::time::sleep_until(health) => return Ok(Wake::Health),
-                }
-            }
-        }).await
-    }
-
     async fn changed(&mut self) -> Result<bool> {
-        self.changes.borrow_and_update();
+        self.progress.observe();
         let selection = self
             .snapshot
             .as_ref()
@@ -211,8 +159,7 @@ impl Runtime {
             .clone();
         let (meta, revision) = self.dependencies(selection).await?;
         self.check_store(&meta)?;
-        self.dirty = self.changes.has_changed().unwrap_or(false)
-            || *self.changes.borrow() > meta.commit_revision;
+        self.progress.checked(meta.commit_revision);
         Ok(revision > self.revision)
     }
 
@@ -286,9 +233,7 @@ impl Runtime {
                         )
                         .await?,
                 );
-                self.changes.borrow_and_update();
-                self.clock_changes.borrow_and_update();
-                (permit, self.run.clock.now_ns()?, false)
+                (permit, self.progress.begin()?, false)
             }
         };
         let selection = self.run.window.map_or_else(
@@ -376,16 +321,14 @@ impl Runtime {
         self.check_store(&output.snapshot.page.extraction.meta)?;
         self.revision = output.snapshot.page.extraction.meta.commit_revision;
         self.position = Some(output.position);
-        self.dirty =
-            self.changes.has_changed().unwrap_or(false) || *self.changes.borrow() > self.revision;
-        self.clock_dirty = self.clock_changes.has_changed().unwrap_or(false);
-        self.expiry = self
+        let expiry = self
             .run
             .window
             .and_then(|window| window.expiry(output.snapshot.received_min))
             .into_iter()
             .chain(output.snapshot.next_change)
             .min();
+        self.progress.captured(self.revision, expiry);
         self.snapshot = Some(Arc::clone(&output.snapshot));
         self.evaluated = now;
         self.exhausted = self.run.operation == Operation::Replace
@@ -402,14 +345,13 @@ impl Runtime {
     }
 
     async fn health_update(&mut self, clock_changed: bool) -> Result<Event> {
-        let clock_changed = clock_changed || self.clock_changes.has_changed().unwrap_or(false);
+        let clock_changed = clock_changed || self.progress.clock_pending();
         if (self.run.window.is_some() || self.run.sources.contains_key("notifications"))
             && clock_changed
         {
             return self.evaluate(true).await;
         }
-        self.clock_changes.borrow_and_update();
-        let now = self.run.clock.now_ns()?;
+        let now = self.progress.time()?;
         let selection = self.run.window.map_or_else(
             || self.run.selection.clone(),
             |window| window.selection(&self.run.selection, now),
@@ -424,8 +366,6 @@ impl Runtime {
             .control
             .query_async(self.run.engine.check_read(&snapshot))
             .await?;
-        self.dirty |= self.changes.has_changed().unwrap_or(false)
-            || *self.changes.borrow() > snapshot.page.extraction.meta.commit_revision;
         self.snapshot = Some(Arc::clone(&snapshot));
         self.health = Some(Instant::now() + Duration::from_secs(15));
         Ok(Event {

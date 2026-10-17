@@ -27,6 +27,12 @@ every distinct input, fault, boundary, and assertion.
 | Storage | One selected-set cleanup validates expiry, synchronizes removal, and commits quota changes. Remove per-segment global scans. |
 | Documentation | One current source route per contract. Remove repeated implementation and verification prose. |
 
+Package execution must use Query's shared source progress owner. Source
+notices, explicit clock notices, and actual deadlines wake the operation.
+Do not add periodic package polling or round live evaluation time. Preserve
+the complete input graph and actual Data commit receipt. Client health updates
+do not schedule package execution.
+
 The benchmark remains on hold. The user requires relevant builds and tests
 for each iteration. This instruction replaces the general full-workspace CI
 rule for this work.
@@ -544,6 +550,39 @@ lines. The complete redesign adds 423 production lines from 7b7b407a; another
 6,423 net deletions remain. The record is `/tmp/araphor-removal-map-count1.json`.
 Backend and caller runtime suites, full workspace CI, and benchmarks are not
 run. Complete redesign: **Not done**. No speed result is claimed.
+
+### Shared source progress and exact window deadlines
+
+The current source implements the user's shared-progress requirement in
+[Progress](../../crates/araphor-query/src/stream/progress.rs). Native Query
+Runtime and live InputOperation use the same watch registration, capture-start,
+revision, and deadline owner. The duplicate watch loops are deleted. Native
+capture remains with SourceSnapshot and the existing operators. Package
+execution retains the complete admitted input graph, exact offer, scoped
+memory, and actual Data commit-completion checks.
+
+Live package execution has no 500-millisecond polling timer or rounded
+calculation time. Native and Wasm models remain clock-dependent; backend type
+alone does not arm a timer. Source notices, explicit clock notices, and actual
+deadlines cause work. Query client health remains separate. Each source
+deadline fires once until capture records the next deadline.
+
+The shared Window selection and expiry match DataFusion 53's microsecond
+timestamp conversion. Input ports use their own captured event ranges. Exact
+nanosecond grants remain intact. Strict and inclusive windows retain the
+negative threshold that converts to zero.
+
+Result for this slice: **Done**. The Query run passes 198 cases. After a
+test-only clock-counter change, all 22 live-input cases pass again. Ten
+Analysis cases and three E2E contracts pass. The native contract uses an empty
+PATH. Strict Clippy and formatting pass. The
+[component record](araphor-component-redesign.md#shared-source-progress-and-exact-window-deadlines)
+gives exact evidence and limits. This slice adds 79 nonblank production Rust
+lines and 436 nonblank test Rust lines. It does not meet the deletion target.
+The complete redesign remains 502 production Rust lines above 7b7b407a.
+General maintained SQL, shared maintained query ownership, the complete
+redesign, and the 6,000-line production target remain **Not done**. Full
+workspace CI and benchmarks are not run. No speed result is claimed.
 
 ## Implementation flow
 

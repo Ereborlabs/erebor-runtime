@@ -13,6 +13,7 @@ use crate::sources::ArrowSnapshot;
 use crate::Result;
 
 pub(crate) mod physical;
+pub(crate) mod progress;
 #[cfg(test)]
 mod tests;
 

@@ -7,7 +7,7 @@ use araphor_data::{
     AnalysisReadModeV1, AnalysisSelectionV1, AnalysisStreamIdentityV1, AnalysisTableRead,
     AnalysisTableRequests, AnalysisWitnessV1, Selection,
 };
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{RecordBatch, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
@@ -152,6 +152,44 @@ impl Captured {
 }
 
 impl SourceSnapshot {
+    pub(crate) fn received_min(&self, range: (u64, u64)) -> Result<Option<u64>> {
+        let captured = self
+            .captured
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
+        let captured = captured.as_ref().ok_or_else(|| {
+            DataFusionError::Internal("the source snapshot is not captured".into())
+        })?;
+        let Some((_, indices, batches)) = captured
+            .tables
+            .iter()
+            .find_map(|(origin, table)| (origin.durable() == Some("events")).then_some(table))
+        else {
+            return Ok(None);
+        };
+        let canonical = Self::schemas()["events"].index_of("received_utc_ns")?;
+        let column = indices
+            .binary_search(&canonical)
+            .map_err(|_| DataFusionError::Internal("window intake time is not captured".into()))?;
+        let mut received = None;
+        for batch in batches {
+            self.control.check().map_err(Self::data_error)?;
+            let values = batch
+                .column(column)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal("window intake time has an invalid type".into())
+                })?;
+            for value in values.iter().flatten() {
+                if (range.0..=range.1).contains(&value) {
+                    received = Some(received.map_or(value, |old: u64| old.min(value)));
+                }
+            }
+        }
+        Ok(received)
+    }
+
     pub(crate) fn selection(
         scope: &AnalysisSelectionV1,
         sources: &AnalysisTableRequests,

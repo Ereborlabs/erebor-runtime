@@ -679,3 +679,28 @@ async fn subscription_prunes_columns() {
         .all(|batch| batch.schema() == subscription.schema()));
     subscription.cancel().unwrap();
 }
+
+#[tokio::test]
+async fn clock_keeps_pending_source() {
+    let fixture = Fixture::new(Limits::default());
+    fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
+    let clock = TestClock::new(2_000_000_000);
+    let mut subscription = fixture.subscribe(
+        "SELECT count(*) AS total FROM events",
+        clock.clone(),
+        None,
+        true,
+    );
+    let first = next(&mut subscription).await;
+    fixture.commit(&fixture.source, 2, 1, 2_500_000_000);
+    clock.set(3_000_000_000);
+    let health = next(&mut subscription).await;
+    assert!(health.clock_changed);
+    assert!(health.batches.is_none());
+    assert_eq!(health.cursor, first.cursor);
+    assert_eq!(health.evaluated_utc_ns, first.evaluated_utc_ns);
+    let changed = next(&mut subscription).await;
+    assert_eq!(values(&changed, 0), [ScalarValue::Int64(Some(2))]);
+    assert!(changed.cursor.read_revision() > first.cursor.read_revision());
+    assert!(!changed.clock_changed);
+}

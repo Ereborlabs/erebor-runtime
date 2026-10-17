@@ -22,6 +22,7 @@ use datafusion::physical_plan::{
 use futures_util::{stream, TryStreamExt as _};
 use snafu::ResultExt as _;
 
+use super::progress::Progress;
 use super::{Output, OutputStream, Run};
 use crate::sources::{JournalExec, SourceData};
 use crate::{Result, SqlSnafu};
@@ -57,12 +58,7 @@ struct Compiled {
     source: Arc<dyn ExecutionPlan>,
 }
 
-type Initial = (
-    Arc<crate::execution::Permit>,
-    u64,
-    tokio::sync::watch::Receiver<u64>,
-    tokio::sync::watch::Receiver<u64>,
-);
+type Initial = (Arc<crate::execution::Permit>, u64, Progress);
 
 impl SubscribeExec {
     pub(crate) fn new(
@@ -195,11 +191,8 @@ impl SubscribeExec {
                 .query_async(run.engine.acquire_evaluation(run.selection.tenant_id))
                 .await?,
         );
-        let mut changes = run.engine.store().subscribe_revision();
-        let mut clock_changes = run.clock.changes();
-        changes.borrow_and_update();
-        clock_changes.borrow_and_update();
-        let now = run.clock.now_ns()?;
+        let mut progress = Progress::new(run.engine.store(), Arc::clone(&run.clock));
+        let now = progress.begin()?;
         let session = run
             .engine
             .session(run.selection.clone(), &run.control, now)?;
@@ -215,11 +208,7 @@ impl SubscribeExec {
             .downcast_ref::<Self>()
             .ok_or_else(|| DataFusionError::Internal("subscription physical root changed".into()))
             .context(SqlSnafu)?;
-        subscription.execute_committed(
-            0,
-            state.task_ctx(),
-            Some((permit, now, changes, clock_changes)),
-        )
+        subscription.execute_committed(0, state.task_ctx(), Some((permit, now, progress)))
     }
 
     pub(crate) fn execute_committed(
@@ -240,19 +229,14 @@ impl SubscribeExec {
             .ok_or_else(|| DataFusionError::Execution("subscription run is absent".into()))
             .context(SqlSnafu)?;
         run.control.check()?;
-        let (initial, changes, clock_changes) = match initial {
-            Some((permit, now, changes, clock_changes)) => {
-                (Some((permit, now)), changes, clock_changes)
-            }
-            None => {
-                let mut changes = run.engine.store().subscribe_revision();
-                let mut clock_changes = run.clock.changes();
-                changes.borrow_and_update();
-                clock_changes.borrow_and_update();
-                (None, changes, clock_changes)
-            }
+        let (initial, progress) = match initial {
+            Some((permit, now, progress)) => (Some((permit, now)), progress),
+            None => (
+                None,
+                Progress::new(run.engine.store(), Arc::clone(&run.clock)),
+            ),
         };
-        let state = runtime::Runtime::new(self, context, run, initial, changes, clock_changes)?;
+        let state = runtime::Runtime::new(self, context, run, initial, progress)?;
         Ok(Box::pin(stream::try_unfold(
             state,
             |mut state| async move { Ok(state.next().await?.map(|output| (output, state))) },

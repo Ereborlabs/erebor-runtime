@@ -264,8 +264,11 @@ transport path opens no DuckDB query connection.
   -> [AnalysisStore::package_input_current](../../crates/araphor-data/src/analysis/packages/input.rs) checks that cut against current metadata and retained evidence
   -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) offers the same Arc when the cut is valid, or captures a new cut when it is invalid
 
-[InputOperation::changed](../../crates/araphor-query/src/inputs/live.rs) waits for a source notice, a clock change, or a due deadline
-  -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) checks current state before it offers another input
+[Progress::new and begin](../../crates/araphor-query/src/stream/progress.rs) register the source and clock watches before physical planning or capture
+  -> [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) or [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) completes its native capture
+  -> [Progress::captured](../../crates/araphor-query/src/stream/progress.rs) records the captured revision and next source deadline
+  -> [Progress::next](../../crates/araphor-query/src/stream/progress.rs) waits for a source notice, an explicit clock notice, or a due deadline
+  -> Runtime returns a SQL update, or InputOperation checks and offers the complete package input
 
 [AnalysisPackageOwner::serve_activation](../../crates/araphor-analysis/src/package/supervision.rs) receives stop, authority change, or grant expiry
   -> [AnalysisReadControl::cancel](../../crates/araphor-data/src/analysis/read.rs) cancels the shared operation token
@@ -293,25 +296,61 @@ sequenceDiagram
     end
 ```
 
-The Query operation owns its pending cut, source receiver, clock receiver,
-deadlines, and memory scope. Data remains the durable activation and checkpoint
-owner. The pending cut stays alive during a Busy wait. A successful backend
-call does not acknowledge the cut. Completion requires the actual Data receipt.
-A reader Busy failure during completion retries that metadata read. The retry
-does not execute the backend or commit the result again.
+The shared [Progress](../../crates/araphor-query/src/stream/progress.rs)
+owner replaces the separate source and clock watch loops in Runtime and
+InputOperation. Its constructor registers both watches. Its begin method fixes
+the capture time. A metadata-only health read acknowledges clock notices and
+keeps pending source notices. It records the last checked source revision, the captured source deadline,
+and the deadlines that have already fired. Notices received during planning or
+capture remain pending. Each recorded source deadline fires once. A later grant or witness deadline
+remains active. A new capture records the next source deadline.
 
-[InputOperation::changed](../../crates/araphor-query/src/inputs/live.rs) uses
-the existing Data revision receiver. The operation also records the next source
-change and live witness expiry. Model time uses 500-millisecond ticks. A model
-tick can reuse a completed input cut. After completion, an input query that
-reads the clock requires a new cut at the new tick. Equal input revisions and
-coverage suppress another backend offer when the model does not read time.
-A Busy retry retains the
-offered time with its valid cut. The InputSet retains its frozen input time.
-The operation supplies the model evaluation time separately. A fresh capture with
-expired evidence keeps Unknown coverage and excludes that evidence from the
-commit witnesses. A witness that expires after capture invalidates a pending
-cut before retry.
+| Owner | Retained state and output |
+| --- | --- |
+| Progress | Source and clock watches, watch admission, last checked source revision, and captured source deadline. Both consumers use this owner. |
+| Runtime | SQL plan, captured Arrow output, source frontier, and client cursor progress. |
+| InputOperation | Complete admitted input graph, exact activation and grant, retained Arc<InputSet>, evaluation time, memory scope, and commit completion. |
+| Analysis and Data | Current authority, selected backend, durable activation, checkpoint, result, and transaction. |
+
+A package offer contains the complete input graph. A generic batch stream or
+client cursor does not replace its commit protocol. The pending cut stays alive
+during a Busy wait. A successful backend call does not acknowledge the cut.
+Completion requires the actual Data receipt. A reader Busy failure during
+completion retries that metadata read without another backend call or result
+commit.
+
+Live package execution has no 500-millisecond polling timer and does not round
+its evaluation time to a tick. Source notices, explicit clock notices, and
+actual deadlines cause work. Native and Wasm models remain clock-dependent,
+but their backend type does not arm a timer. An arbitrary now() expression
+runs again only after a source notice, explicit clock notice, or another actual
+deadline. A model clock change can reuse a completed input cut. An input clock
+change requires a new cut after completion. Equal input revisions and coverage
+suppress another backend offer when the model does not read time. The client
+subscription can request its existing health deadline. Package execution
+supplies no health deadline.
+
+[Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) uses the
+shared [Window](../../crates/araphor-query/src/follow/window.rs) rules to compute
+the next supported event-window expiry. Each input port uses its own source
+range. The complete input graph supplies the earliest port or source deadline.
+SourceSnapshot reads the required canonical received_utc_ns column from the
+same captured tables. The extra column uses the existing input quotas. This calculation keeps original selection and evidence
+scope.
+
+The native received_at timestamp uses microseconds. DataFusion 53 converts the
+nanosecond time expression to this unit with truncation toward zero. Window
+selection and expiry use the same rule. For example, a row in the zero
+microsecond bucket with a strict 1,001-nanosecond window expires at time 2
+nanoseconds. The threshold is then -999 nanoseconds and converts to zero. The
+inclusive form expires at time 2,001 nanoseconds. Native finite SQL supplies
+the expected result at each boundary.
+
+A Busy retry retains the offered time with its valid cut. The InputSet retains
+its frozen input time. The operation supplies model evaluation time separately.
+A fresh capture with expired evidence keeps Unknown coverage and excludes that
+evidence from commit witnesses. A witness that expires after capture invalidates
+a pending cut before retry.
 
 [AnalysisStore::package_input_current](../../crates/araphor-data/src/analysis/packages/input.rs)
 uses one controlled metadata transaction. The check retains the existing
@@ -357,8 +396,22 @@ registry invalidation. A no-op recovery sends none. The next input operation
 uses the actual activation and durable result head.
 
 The [Query live tests](../../crates/araphor-query/src/inputs/live/tests.rs)
-cover the same-cut Busy retry, model and input clock ticks, exact completion,
+cover the same-cut Busy retry, model and input clock changes, exact completion,
 quiet cancellation, durable-head restart, global notices, and expired evidence.
+The added cases check idle clock-dependent models without repeated reads,
+one-shot source expiry, later witness expiry, window expiry without a commit,
+stage renewal after an idle wait, clock notices during capture or Busy, and
+closed clock watches.
+[Input window tests](../../crates/araphor-query/src/inputs/tests.rs) check each
+port's expiry and an exact nanosecond grant bound.
+[Native window tests](../../crates/araphor-query/src/follow/tests.rs) compare
+inclusive and strict selection and expiry with finite native SQL, including
+mixed strict and inclusive predicates and the negative threshold that converts
+to zero. The Query run passes all 198 cases. After a test-only clock-counter
+change, all 22 live-input cases pass again. Ten Analysis cases and three E2E
+contracts pass. Strict Clippy and formatting pass. The
+[component record](../plans/araphor-component-redesign.md#shared-source-progress-and-exact-window-deadlines)
+gives the commands, source hashes, initial failures, and qualification limits.
 The [Data metadata tests](../../crates/araphor-data/src/analysis/packages/tests/input.rs)
 cover exact references, forged completion, controlled registration, reader
 capacity, activation notices, and uncertain-commit recovery.
@@ -787,8 +840,11 @@ also has no complete size API. This guide makes no complete heap-bound claim.
 
 [Subscription](../../crates/araphor-query/src/follow/mod.rs) checks the request
 and binds the cursor. The physical [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs)
-retains the native plan, original source names, selection, clock, and processing
-frontier. Append plans use bounded Data position pages. Replacement
+retains the native plan, original source names, selection, and processing
+frontier. Its [Progress](../../crates/araphor-query/src/stream/progress.rs)
+owner also serves live package inputs. Progress registers the watches before
+physical planning and records each completed capture revision and deadline.
+Append plans use bounded Data position pages. Replacement
 plans use the maintained COUNT path below when that path supports the plan.
 Other replacement plans compute the complete captured input for each update.
 Native expressions define supported moving windows. Notification source facts
@@ -914,8 +970,8 @@ supply the finite source schema. Native operators retain compiled expressions.
 Native global AggregateExec finishes at end of input. The unbounded journal
 therefore remains a separate physical child. The journal stores the exact
 native projected schema, canonical indices, and capture request once. Each
-execute_committed call creates one Runtime with the actual source and clock
-watches. JournalExec::open creates its live beforeimages and reservations
+execute_committed call creates one Runtime with the shared Progress owner.
+JournalExec::open creates its live beforeimages and reservations
 from the actual TaskContext. The hidden Source factory and
 its separate stream module are deleted.
 

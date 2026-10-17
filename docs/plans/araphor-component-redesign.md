@@ -861,6 +861,99 @@ uses Data's existing entry budget; it does not measure allocator node overhead.
 Backend and caller runtime suites, full workspace CI, and benchmarks are not run.
 Complete redesign: **Not done**. No speed result is claimed.
 
+### Shared source progress and exact window deadlines
+
+The user requires package execution to use the same source progress owner as
+Query follow. Periodic package polling is not permitted. Source changes, explicit clock
+changes, and actual deadlines must supply the processing input. Live
+execution also retains the exact capture time. Client health updates must not schedule
+package execution.
+
+Implementation and selected host checks: **Done**. Earlier qualification
+records apply only to their recorded source. The verification below covers
+this shared progress owner and its native window deadlines.
+
+A query or live package operation starts
+  -> Progress registers the Data revision and explicit clock watches
+  -> Progress.begin fixes the exact capture time before native physical planning or capture
+  -> Runtime or Inputs::execute completes its existing native capture
+  -> Progress records the completed source revision and next source deadline
+  -> Progress waits for a source notice, explicit clock notice, or due deadline
+  -> Runtime returns Arrow updates and cursor progress, or InputOperation offers the complete package input graph
+
+A package backend returns Busy
+  -> InputOperation retains the exact input cut, memory scope, and evaluation time
+  -> Analysis waits for capacity or a source change
+  -> Data checks the retained source proof before another offer
+
+A package result commits
+  -> Data returns its actual receipt
+  -> InputOperation checks the exact activation, result head, input revisions, coverage, and time
+  -> InputOperation advances only after that check
+
+The [Progress owner](../../crates/araphor-query/src/stream/progress.rs) replaces
+the duplicate source and clock watch loops in native Runtime and InputOperation.
+Both output paths use its watch registration, begin, checked revision, captured
+revision, and deadline methods. SourceSnapshot and the existing native operators
+still perform capture and execution. Package input capture retains the complete
+admitted dependency graph. A generic stream does not replace package offers or
+the Data commit-completion protocol.
+
+Live package time is not quantized. Native and Wasm models remain
+clock-dependent, but their backend type does not create a periodic timer.
+Arbitrary now() expressions run again after source notices, explicit clock
+notices, or actual deadlines. Query's existing client health deadline remains
+separate from package work. A source deadline that has fired does not cause
+an immediate retry loop before the next capture records a deadline.
+
+[Window](../../crates/araphor-query/src/follow/window.rs) supplies the same
+selection and expiry rules to native follow and package inputs. Each input
+port retains its own source range. Inputs::execute uses captured canonical
+received_utc_ns values to select the earliest applicable deadline. DataFusion
+53 compares the native microsecond received_at timestamp after truncating the
+nanosecond time expression toward zero. Selection and expiry preserve both
+strict, inclusive, and mixed boundaries, including a negative threshold that
+converts to zero. Original grant bounds, receipts, references, and witnesses remain.
+
+The [SQL review](../guides/araphor-sql-operation-review.md#live-detector-input-lifecycle)
+links the owners and tests. New cases cover no idle reads for clock-dependent
+models, one-shot deadlines, expiry without a commit, capture-time notices,
+renewed stages, closed watches, per-port deadlines, exact grant bounds, and
+native window boundary parity. Separate cases retain clock demand across
+Busy and commit completion. A simultaneous clock and source change retains
+the pending source cut after a metadata-only health update.
+
+The Query run passes all 198 cases. A later test-only change counts clock
+reads and advances time without a clock notice. All 22 live-input cases pass
+again with that change. No production source changes after the full Query
+run. All ten selected Analysis cases pass. These cases cover clock events,
+unchanged results, supervision, Busy, grant expiry, cancellation, and stop
+before commit. The package and query-follow E2E contracts pass. The native
+E2E contract passes with an empty PATH. Its first attempt stops at the fixture
+guard because Python is present on PATH. Only that exact case is retried.
+These checks do not replace general backend or platform qualification.
+
+Strict Clippy passes for Query, Analysis, and E2E with warnings denied. The
+final check runs after the test-only change. Formatting passes for all 14
+changed Rust files. The qualification record contains exact commands, source
+hashes, binary hashes, native artifact hashes, and the initial failures:
+`/tmp/araphor-shared-progress-qualification1.json`. Initial new tests expose
+native timestamp coercion and invalid fixture inputs. The corrected cases
+retain the boundary, grant, output, and cleanup assertions.
+
+The syntax count verifies 708 Rust files. This slice adds **79 nonblank
+production Rust lines** and **436 nonblank test Rust lines**. The shared
+scheduler removes duplicate loops. Exact per-port deadlines and native window
+semantics add code. This slice does not meet the deletion target. The complete
+redesign remains **502 production Rust lines above** 7b7b407a. A further
+**6,502** net deletions are required. The count record is
+`/tmp/araphor-shared-progress-count1.json`.
+
+Result for this slice: **Done**. General maintained SQL, shared maintained
+query ownership, and the required 6,000-line production reduction remain
+**Not done**. Full workspace CI and benchmarks are not run, as instructed.
+No speed result is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

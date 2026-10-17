@@ -6,12 +6,12 @@ use araphor_data::{
     AnalysisReadControl, InstalledContext, PackageErrorCodeV1, PackageGrantV1, ResultContext,
 };
 use snafu::ResultExt as _;
-use tokio::sync::watch;
 
 use super::{InputSet, Inputs};
 use crate::execution::Engine;
 use crate::follow::Clock;
 use crate::memory::Memory;
+use crate::stream::progress::{Progress, Wake};
 use crate::Result;
 
 pub struct InputOperation {
@@ -20,9 +20,7 @@ pub struct InputOperation {
     memory: Arc<Memory>,
     active: PackageActivationV1,
     grant: PackageGrantV1,
-    clock: Arc<dyn Clock>,
-    changes: watch::Receiver<u64>,
-    clock_changes: watch::Receiver<u64>,
+    progress: Progress,
     control: Arc<AnalysisReadControl>,
     pending: Option<Arc<InputSet>>,
     model_clock: bool,
@@ -31,8 +29,7 @@ pub struct InputOperation {
     ended: bool,
     now: u64,
     witness: u64,
-    source_time: u64,
-    deferred: u64,
+    clock_changed: bool,
 }
 
 impl Drop for InputOperation {
@@ -56,9 +53,8 @@ impl Inputs {
                 .error("live input activation")
                 .into());
         }
-        let changes = engine.store().subscribe_revision();
-        let clock_changes = clock.changes();
-        let now = clock.now_ns()?;
+        let mut progress = Progress::new(engine.store(), clock);
+        let now = progress.begin()?;
         let control = InputOperation::stage(&installed.grant, now, None)?;
         let memory = engine.memory().scope();
         Ok(InputOperation {
@@ -67,34 +63,21 @@ impl Inputs {
             memory,
             active,
             grant: installed.grant,
-            clock,
-            changes,
-            clock_changes,
+            progress,
             control,
             pending: None,
             model_clock,
             offered: false,
             ready: true,
             ended: false,
-            now: InputOperation::tick(now),
+            now,
             witness: u64::MAX,
-            source_time: u64::MAX,
-            deferred: 0,
+            clock_changed: false,
         })
     }
 }
 
 impl InputOperation {
-    const TICK: u64 = 500_000_000;
-
-    fn tick(now: u64) -> u64 {
-        now - now % Self::TICK
-    }
-
-    fn eligible(now: u64) -> u64 {
-        Self::tick(now).saturating_add(u64::from(!now.is_multiple_of(Self::TICK)) * Self::TICK)
-    }
-
     fn stage(
         grant: &PackageGrantV1,
         now: u64,
@@ -137,46 +120,21 @@ impl InputOperation {
     }
 
     pub async fn changed(&mut self) -> Result<()> {
-        let now = self.clock.now_ns()?;
-        let tick = if self.inputs.clock || self.model_clock {
-            Self::tick(now).saturating_add(Self::TICK)
-        } else {
-            u64::MAX
-        };
         let deadline = self
             .grant
             .expires_utc_ns
             .unwrap_or(u64::MAX)
-            .min(self.witness)
-            .min(self.source_time)
-            .min(tick)
-            .min(if self.deferred > now {
-                self.deferred
-            } else {
-                u64::MAX
-            });
-        if deadline <= now {
-            self.ready = true;
-            return Ok(());
-        }
-        tokio::select! {
-            _ = self.control.cancelled() => {
-                self.control.check()?;
-            }
-            changed = self.changes.changed() => {
-                if changed.is_err() {
-                    return Err(PackageErrorCodeV1::Incomplete.error("live input source watch").into());
-                }
-                self.changes.borrow_and_update();
-            }
-            changed = self.clock_changes.changed() => {
-                if changed.is_err() {
-                    return Err(PackageErrorCodeV1::Incomplete.error("live input clock watch").into());
-                }
-                self.clock_changes.borrow_and_update();
-            }
-            _ = tokio::time::sleep(Duration::from_nanos(deadline.saturating_sub(now))), if deadline != u64::MAX => {}
-        }
+            .min(self.witness);
+        self.clock_changed |= matches!(
+            self.progress
+                .next(
+                    &self.control,
+                    (deadline != u64::MAX).then_some(deadline),
+                    None,
+                )
+                .await?,
+            Wake::Clock
+        );
         self.ready = true;
         Ok(())
     }
@@ -220,7 +178,7 @@ impl InputOperation {
                 .error("live input grant expired")
                 .into());
         }
-        let observed = *self.changes.borrow_and_update();
+        self.progress.observe();
         let Some(input) = self.pending.as_ref() else {
             return Ok(false);
         };
@@ -245,34 +203,12 @@ impl InputOperation {
                 .map_err(crate::Error::from)
         })
         .await?;
-        self.ready |= *self.changes.borrow() > observed;
+        self.ready |= self.progress.pending();
         if let Some(deadline) = deadline {
             self.witness = deadline;
             return Ok(true);
         }
-        self.deferred = input
-            .snapshot
-            .iter()
-            .flat_map(|snapshot| &snapshot.witnesses)
-            .filter(|witness| witness.expires_utc_ns <= now)
-            .map(|witness| Self::eligible(witness.expires_utc_ns))
-            .filter(|expiry| *expiry > now)
-            .min()
-            .unwrap_or(0);
         Ok(false)
-    }
-
-    fn rearm(&mut self) {
-        let observed = *self.changes.borrow_and_update();
-        self.clock_changes.borrow_and_update();
-        if let Some(snapshot) = self
-            .pending
-            .as_ref()
-            .and_then(|input| input.snapshot.as_ref())
-        {
-            self.ready |= observed > snapshot.page.extraction.meta.commit_revision;
-            self.source_time = snapshot.next_change.map(Self::eligible).unwrap_or(u64::MAX);
-        }
     }
 
     pub async fn next(&mut self) -> Result<Option<Arc<InputSet>>> {
@@ -284,54 +220,56 @@ impl InputOperation {
                 self.changed().await?;
             }
             self.ready = false;
-            let now = self.clock.now_ns()?;
+            let now = self.progress.now()?;
             self.control = Self::stage(&self.grant, now, Some(&self.control))?;
-            let tick = Self::tick(now);
+            let clock_changed = !self.offered && self.clock_changed;
             if !self.offered
-                && self.pending.as_ref().is_some_and(|input| {
-                    self.source_time <= tick || (self.inputs.clock && input.now != tick)
-                })
+                && self.pending.is_some()
+                && (self.progress.expired(now) || (self.inputs.clock && clock_changed))
             {
                 self.pending = None;
                 self.witness = u64::MAX;
-                self.source_time = u64::MAX;
+                self.progress.clear();
+            }
+            if !self.offered && clock_changed && self.model_clock {
+                self.now = now;
             }
             if self.pending.is_none() {
                 if !self.current().await? {
                     return Ok(None);
                 }
-                if self.deferred > now {
-                    continue;
-                }
-                let observed = *self.changes.borrow_and_update();
+                self.progress.observe();
                 if let Some((saved, deadline)) = self.saved(now, true).await? {
-                    if !(self.inputs.clock || self.model_clock)
-                        || saved.context.time_utc_ns == tick as i64
-                    {
+                    if !self.inputs.clock && (!clock_changed || !self.model_clock) {
                         self.now = saved.context.time_utc_ns as u64;
                         self.witness = deadline;
-                        self.ready = *self.changes.borrow() > observed;
+                        self.ready = self.progress.pending();
                         continue;
                     }
                 }
+                let now = self.progress.begin()?;
                 let session = self.engine.session_on(
                     self.grant.selection.clone(),
                     &self.control,
-                    tick,
+                    now,
                     Arc::clone(&self.memory),
                 )?;
-                self.pending = Some(
-                    self.inputs
-                        .execute(
-                            Arc::clone(&self.engine),
-                            session,
-                            self.active.key.scope_id.clone(),
-                            tick,
-                        )
-                        .await?,
-                );
-                self.now = tick;
-                self.rearm();
+                let input = self
+                    .inputs
+                    .execute(
+                        Arc::clone(&self.engine),
+                        session,
+                        self.active.key.scope_id.clone(),
+                        now,
+                    )
+                    .await?;
+                self.now = now;
+                if let Some(snapshot) = &input.snapshot {
+                    self.progress
+                        .captured(snapshot.page.extraction.meta.commit_revision, input.expiry);
+                    self.ready |= self.progress.pending();
+                }
+                self.pending = Some(input);
             } else if self
                 .pending
                 .as_ref()
@@ -340,7 +278,10 @@ impl InputOperation {
             {
                 return Ok(None);
             }
-            let checked = self.clock.now_ns()?;
+            if !self.offered {
+                self.clock_changed = false;
+            }
+            let checked = self.progress.now()?;
             if !self.valid(checked).await? {
                 if !self.current().await? {
                     return Ok(None);
@@ -348,8 +289,8 @@ impl InputOperation {
                 self.pending = None;
                 self.offered = false;
                 self.witness = u64::MAX;
-                self.source_time = u64::MAX;
-                self.ready = self.deferred <= checked;
+                self.progress.clear();
+                self.ready = true;
                 continue;
             }
             if self.offered {
@@ -360,14 +301,13 @@ impl InputOperation {
                     .pending
                     .as_ref()
                     .is_some_and(|input| saved.matches(&input.inputs))
-                    && (!self.model_clock || saved.context.time_utc_ns == tick as i64)
+                    && (!self.model_clock || saved.context.time_utc_ns == self.now as i64)
                 {
                     self.now = saved.context.time_utc_ns as u64;
                     self.witness = self.witness.min(deadline);
                     continue;
                 }
             }
-            self.now = tick;
             self.offered = true;
             return Ok(self.pending.as_ref().map(Arc::clone));
         }
@@ -381,7 +321,7 @@ impl InputOperation {
             .ok_or_else(|| {
                 PackageErrorCodeV1::Conflict.error("live input completion without an offer")
             })?;
-        self.control = Self::stage(&self.grant, self.clock.now_ns()?, Some(&self.control))?;
+        self.control = Self::stage(&self.grant, self.progress.now()?, Some(&self.control))?;
         self.control.check()?;
         let store = Arc::clone(self.engine.store());
         let before = self.active.clone();

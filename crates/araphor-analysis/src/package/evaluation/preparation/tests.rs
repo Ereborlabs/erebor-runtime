@@ -106,7 +106,7 @@ impl araphor_query::follow::Clock for Clock {
 }
 
 #[tokio::test]
-async fn automatic_clock_ticks() -> TestResult {
+async fn automatic_clock_events() -> TestResult {
     for source in [None, Some(EXPIRY), Some(NOTIFICATION_COUNT)] {
         let fixture = Fixture::new()?;
         let period = AnalysisPackageOwner::RECONCILE_INTERVAL.as_nanos() as u64;
@@ -240,8 +240,8 @@ async fn automatic_clock_ticks() -> TestResult {
                 )?;
                 assert!(Arc::ptr_eq(&run.memory, &memory));
                 drop(run);
-                let tick = START + period * offset;
-                assert_eq!(now, tick);
+                let time = START + period * offset + 123;
+                assert_eq!(now, time);
                 let request = RunPreparation {
                     inputs: Some(&inputs),
                     id: "tick",
@@ -253,9 +253,9 @@ async fn automatic_clock_ticks() -> TestResult {
                     .owner
                     .prepare_model(&selected, &context, &package, request, Action::Run, &stage)?
                     .ok_or("clock evaluation")?;
-                assert_eq!(prepared.created_utc_ns, tick);
+                assert_eq!(prepared.created_utc_ns, time);
                 let metadata: ResultContext = AnalysisPackageOwner::decode(&prepared.metadata)?;
-                assert_eq!(metadata.context.time_utc_ns, tick as i64);
+                assert_eq!(metadata.context.time_utc_ns, time as i64);
                 let output: sdk::wire::Output = AnalysisPackageOwner::decode(&prepared.datasets)?;
                 assert_eq!(
                     crate::AnalysisPackageOwner::output_rows(&output)?["rows"],
@@ -270,8 +270,10 @@ async fn automatic_clock_ticks() -> TestResult {
                 active = acknowledged.await?;
                 let stored = fixture.result(&committed.result_id)?;
                 let saved: ResultContext = AnalysisPackageOwner::decode(&stored.commit.metadata)?;
-                assert_eq!(saved.context.time_utc_ns, tick as i64);
-                clock.set(tick + period - 1);
+                assert_eq!(saved.context.time_utc_ns, time as i64);
+                clock
+                    .now
+                    .store(time + period - 124, std::sync::atomic::Ordering::Release);
                 assert!(
                     tokio::time::timeout(Duration::from_millis(100), arrivals.recv())
                         .await

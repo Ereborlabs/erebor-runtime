@@ -11,6 +11,7 @@ use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility
 use snafu::ResultExt as _;
 
 use crate::execution::{Engine, Session};
+use crate::follow::Window;
 use crate::parser::Parser;
 use crate::sources::{SourceOrigin, SourceProvider, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
@@ -36,6 +37,7 @@ pub struct Inputs {
 
 struct PortPlan {
     slot: usize,
+    window: Option<Window>,
     plan: Arc<LogicalPlan>,
     origins: BTreeSet<SourceOrigin>,
 }
@@ -113,8 +115,10 @@ impl Inputs {
                         (plan, BTreeSet::from([SourceOrigin::Package(slot)]))
                     }
                 };
+                let window = Window::infer(&plan)?;
                 plans.push(PortPlan {
                     slot,
+                    window,
                     plan: Arc::new(plan),
                     origins,
                 });

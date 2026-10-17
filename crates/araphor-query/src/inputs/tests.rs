@@ -1121,3 +1121,128 @@ fn quiet_check_skips_runtime() -> TestResult {
     })?;
     Ok(())
 }
+
+#[test]
+fn windows_keep_port_expiry() -> TestResult {
+    let fixture = Fixture::new()?;
+    let old = NOW - 8_000_000_000;
+    let recent = NOW - 1_000_000_000;
+    fixture.event(1, old)?;
+    fixture.event(2, recent)?;
+    let model = model(vec![
+        query("wide", "SELECT source_cursor AS value FROM events WHERE received_at >= now() - INTERVAL '10 seconds'"),
+        query("narrow", "SELECT source_cursor AS value FROM events WHERE received_at >= now() - INTERVAL '2 seconds'"),
+        sdk::InputPort {
+            port: port("chosen", vec![("source_cursor", sdk::DataType::UInt64)]),
+            source: sdk::InputSource::Table(sdk::TableRef::Named("events".into())),
+        },
+        query("dependent", "SELECT source_cursor AS value FROM chosen"),
+    ]);
+    let inputs = Arc::new(Inputs::admit(&fixture.engine, &model)?);
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let read = |now| {
+        inputs.read(
+            Arc::clone(&fixture.engine),
+            fixture.selection(),
+            "scope".into(),
+            &control,
+            now,
+        )
+    };
+    let first = read(NOW)?;
+    assert_eq!(
+        first
+            .snapshot
+            .as_ref()
+            .ok_or("snapshot absent")?
+            .received_min,
+        Some(old)
+    );
+    let expiry = recent / 1000 * 1000 + 2_000_000_000 + 1000;
+    assert_eq!(first.expiry, Some(expiry));
+    assert!(expiry > NOW);
+    assert_eq!(
+        first
+            .inputs
+            .iter()
+            .map(|input| input
+                .data
+                .batches
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum::<usize>())
+            .collect::<Vec<_>>(),
+        [2, 1, 2, 2]
+    );
+    drop(first);
+    let second = read(expiry)?;
+    let next = old / 1000 * 1000 + 10_000_000_000 + 1000;
+    assert_eq!(second.expiry, Some(next));
+    assert!(next > expiry);
+    assert_eq!(
+        second
+            .inputs
+            .iter()
+            .map(|input| input
+                .data
+                .batches
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum::<usize>())
+            .collect::<Vec<_>>(),
+        [2, 0, 2, 2]
+    );
+    drop(second);
+    let third = read(next)?;
+    assert_eq!(
+        third.expiry,
+        Some(recent / 1000 * 1000 + 10_000_000_000 + 1000)
+    );
+    assert_eq!(
+        third
+            .inputs
+            .iter()
+            .map(|input| input
+                .data
+                .batches
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum::<usize>())
+            .collect::<Vec<_>>(),
+        [1, 0, 2, 2]
+    );
+    Ok(())
+}
+
+#[test]
+fn window_keeps_nanosecond_grant() -> TestResult {
+    let fixture = Fixture::new()?;
+    let received = NOW - 1_000_000_000;
+    fixture.event(1, received)?;
+    let inputs = Arc::new(Inputs::admit(&fixture.engine, &model(vec![query(
+        "window", "SELECT source_cursor AS value FROM events WHERE received_at >= now() - INTERVAL '2 seconds'"
+    )]))?);
+    let mut selection = fixture.selection();
+    selection.received_from = std::ops::Bound::Excluded(received - 1);
+    let captured = inputs.read(
+        Arc::clone(&fixture.engine),
+        selection,
+        "scope".into(),
+        &AnalysisReadControl::with_timeout(Duration::from_secs(30))?,
+        NOW,
+    )?;
+    assert_eq!(
+        captured.expiry,
+        Some(received / 1000 * 1000 + 2_000_000_000 + 1000)
+    );
+    assert_eq!(
+        captured.inputs[0]
+            .data
+            .batches
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        1
+    );
+    Ok(())
+}
