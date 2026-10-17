@@ -81,6 +81,37 @@ and blank lines are excluded. The record is
 `/tmp/araphor-sql-admission-staged-count.json`. Other quota defaults and the
 Discovery input subscription replacement remain **Not done**.
 
+### Query waits for changes and due deadlines
+
+Implementation and selected verification: **Done**.
+Query Runtime no longer reads subscription metadata every 15 seconds. The
+health deadline, stored health time, and Health wake variant are removed.
+Progress waits for Data notices, context notices, explicit clock notices,
+cancellation, and the actual source or operation deadline. Metadata updates
+remain possible after an actual notice.
+
+The 500-millisecond replacement delay and stored last-run time are removed.
+A replacement query can execute when its input changes. The reported moving
+resolution is the native event timestamp precision of 1,000 nanoseconds, or
+one nanosecond for notification deadlines. This value is not a poll interval.
+
+The selected check passes 79 Query cases and 11 Control wire cases. It covers
+moving-window precision, notification deadlines, unchanged-result receipts,
+capacity, cancellation, and live package input deadlines. Strict Query,
+Analysis, and Control Clippy passes. E2E test callers compile. The records are
+`/tmp/araphor-discovery-native-admission-tests1.json`,
+`/tmp/araphor-discovery-native-admission-clippy1.json`, and
+`/tmp/araphor-discovery-native-admission-e2e1.json`. Formatting passes all 25
+changed Rust files. No full workspace CI or benchmark is run, as instructed.
+
+This deliverable deletes 30 nonblank production Rust lines. The two current
+deliverables delete 81 lines. The complete rewrite still adds 557 production
+Rust lines against `7b7b407a`; the required 6,000-line deletion is **Not done**.
+The counter verifies 710 Rust source hashes. Its record is
+`/tmp/araphor-native-admission-count1.json`.
+Discovery still owns a source sweep and seal scheduler. That replacement and
+the remaining compiler and storage polling are **Not done**.
+
 ### Native function registration and optional operator memory
 
 Implementation and selected verification: **Done**.

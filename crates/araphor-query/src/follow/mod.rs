@@ -196,7 +196,11 @@ impl Subscription {
         Ok(Self {
             engine,
             schema,
-            moving: (follow && (window.is_some() || source_clock)).then_some(500_000_000),
+            moving: if follow {
+                window.map(|_| 1_000).or(source_clock.then_some(1))
+            } else {
+                None
+            },
             control,
             resume,
             operation,

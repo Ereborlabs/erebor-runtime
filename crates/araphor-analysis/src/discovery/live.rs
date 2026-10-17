@@ -87,7 +87,7 @@ impl DiscoveryOwner {
                 }
                 Ok((None, _)) => {
                     tokio::select! {
-                        result = progress.next(&control, deadline, None) => { result?; }
+                        result = progress.next(&control, deadline) => { result?; }
                         changed = authority.changed() => {
                             if changed.is_err() { return Ok(()); }
                         }
@@ -100,7 +100,7 @@ impl DiscoveryOwner {
                     deadline = deadline.into_iter().chain(expiry).min();
                     tokio::select! {
                         result = packages.wait_capacity(*error, &memory, epoch, tenant) => { result?; }
-                        result = progress.next(&control, deadline, None) => { result?; }
+                        result = progress.next(&control, deadline) => { result?; }
                         changed = authority.changed() => {
                             if changed.is_err() { return Ok(()); }
                         }

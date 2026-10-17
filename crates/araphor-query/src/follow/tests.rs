@@ -1717,7 +1717,7 @@ async fn moving_window_nanoseconds() {
     let clock = TestClock::new(2_000_000_000);
     let sql = "SELECT count(*) AS total FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '1 second'";
     let mut subscription = fixture.subscribe(sql, clock.clone(), None, true);
-    assert_eq!(subscription.moving_resolution_ns(), Some(500_000_000));
+    assert_eq!(subscription.moving_resolution_ns(), Some(1_000));
     let first = next(&mut subscription).await;
     assert_eq!(values(&first, 0), vec![ScalarValue::Int64(Some(1))]);
     assert_eq!(

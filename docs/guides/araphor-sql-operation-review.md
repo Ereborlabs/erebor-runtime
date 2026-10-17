@@ -35,6 +35,20 @@ to None. The same Limits Arc is registered in native session configuration.
 Native SQL defines join and window behavior when these quotas are disabled.
 Control validates and moves transport values once before native binding.
 
+## Subscription execution triggers
+
+Read [Progress](../../crates/araphor-query/src/stream/progress.rs) and the
+[physical Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs).
+Runtime waits for source and clock notices or the recorded window deadline.
+There is no periodic metadata read or replacement delay. A metadata-only
+update preserves the completed cursor. The tests beside Follow and live
+Inputs cover source changes, window expiry, capacity, and cancellation.
+
+Discovery still calls this wake helper from a separate source sweep. This
+is **Not done** against the required architecture. The replacement must
+consume the actual Query input batches for live execution, finite execution,
+and manual refresh. An identity-only query must not invoke the old reader.
+
 ## Current table and query input flow
 
 The SDK declares each input as `Table(TableRef)` or `Query(String)`.

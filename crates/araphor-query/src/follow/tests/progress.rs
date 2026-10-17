@@ -31,13 +31,10 @@ async fn wake(
     control: &AnalysisReadControl,
     deadline: Option<u64>,
 ) -> Wake {
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        progress.next(control, deadline, None),
-    )
-    .await
-    .expect("progress wait timed out")
-    .expect("progress wait failed")
+    tokio::time::timeout(Duration::from_secs(1), progress.next(control, deadline))
+        .await
+        .expect("progress wait timed out")
+        .expect("progress wait failed")
 }
 
 #[tokio::test]
@@ -50,7 +47,7 @@ async fn progress_context_wakes_idle() {
     let revision = fixture.store.meta().unwrap().commit_revision;
     assert_eq!(progress.begin().unwrap(), 10);
     {
-        let waiting = progress.next(&control, None, None);
+        let waiting = progress.next(&control, None);
         tokio::pin!(waiting);
         assert!(futures_util::poll!(waiting.as_mut()).is_pending());
         context.send_replace(1);
@@ -118,7 +115,7 @@ async fn progress_preserves_concurrent_notices() {
     assert!(!progress.pending());
     assert!(!progress.clock_pending());
     {
-        let waiting = progress.next(&control, None, None);
+        let waiting = progress.next(&control, None);
         tokio::pin!(waiting);
         assert!(futures_util::poll!(waiting.as_mut()).is_pending());
         context.send_replace(2);
@@ -141,7 +138,7 @@ async fn progress_closed_context_is_explicit() {
     let control = AnalysisReadControl::default();
     progress.begin().unwrap();
     drop(context);
-    let error = tokio::time::timeout(Duration::from_secs(1), progress.next(&control, None, None))
+    let error = tokio::time::timeout(Duration::from_secs(1), progress.next(&control, None))
         .await
         .unwrap()
         .err()
@@ -165,7 +162,7 @@ async fn progress_without_context_waits_for_input() {
     let mut progress = Progress::new(&fixture.store, clock.clone(), None);
     let control = AnalysisReadControl::default();
     progress.begin().unwrap();
-    let waiting = progress.next(&control, None, None);
+    let waiting = progress.next(&control, None);
     tokio::pin!(waiting);
     assert!(futures_util::poll!(waiting.as_mut()).is_pending());
     let reads = clock.reads.load(Ordering::SeqCst);
@@ -204,7 +201,7 @@ async fn progress_context_keeps_deadline_consumed() {
         Wake::Source
     ));
     assert_eq!(progress.begin().unwrap(), 10);
-    let waiting = progress.next(&control, Some(10), None);
+    let waiting = progress.next(&control, Some(10));
     tokio::pin!(waiting);
     assert!(futures_util::poll!(waiting.as_mut()).is_pending());
     context.send_replace(2);

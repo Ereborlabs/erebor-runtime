@@ -127,11 +127,7 @@ impl InputOperation {
             .min(self.witness);
         self.clock_changed |= matches!(
             self.progress
-                .next(
-                    &self.control,
-                    (deadline != u64::MAX).then_some(deadline),
-                    None,
-                )
+                .next(&self.control, (deadline != u64::MAX).then_some(deadline),)
                 .await?,
             Wake::Clock
         );

@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use araphor_data::{AnalysisSelectionV1, AnalysisStoreMetaV1, StorePositionV1};
 use datafusion::common::DataFusionError;
@@ -7,7 +6,6 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::ExecutionPlan;
 use snafu::ResultExt as _;
-use tokio::time::Instant;
 
 use super::{kernel::Kernel, Compiled, Mode, SubscribeExec};
 use crate::execution::{Engine, Read};
@@ -31,8 +29,6 @@ pub(super) struct Runtime {
     evaluated: u64,
     exhausted: bool,
     ended: bool,
-    health: Option<Instant>,
-    last_run: Option<Instant>,
     initial: Option<(Arc<crate::execution::Permit>, u64)>,
 }
 
@@ -107,8 +103,6 @@ impl Runtime {
             evaluated: 0,
             exhausted: true,
             ended: false,
-            health: None,
-            last_run: None,
             initial,
         })
     }
@@ -128,23 +122,19 @@ impl Runtime {
             return self.evaluate(false).await.map(Some);
         }
         {
-            let health = self
-                .health
-                .unwrap_or_else(|| Instant::now() + Duration::from_secs(15));
             match self
                 .run
                 .control
-                .query_async(self.progress.next(&self.run.control, None, Some(health)))
+                .query_async(self.progress.next(&self.run.control, None))
                 .await?
             {
                 Wake::Source => {
                     if self.changed().await? {
                         return self.evaluate(false).await.map(Some);
                     }
-                    return self.health_update(false).await.map(Some);
+                    return self.metadata_update(false).await.map(Some);
                 }
-                Wake::Clock => return self.health_update(true).await.map(Some),
-                Wake::Health => return self.health_update(false).await.map(Some),
+                Wake::Clock => return self.metadata_update(true).await.map(Some),
             }
         }
     }
@@ -207,19 +197,6 @@ impl Runtime {
     }
 
     async fn evaluate(&mut self, clock_changed: bool) -> Result<Event> {
-        if self.run.follow && self.run.operation == Operation::Replace && self.maintained.is_none()
-        {
-            if let Some(last) = self.last_run {
-                let due = last + Duration::from_millis(500);
-                self.run
-                    .control
-                    .query_async(async {
-                        tokio::time::sleep_until(due).await;
-                        Ok::<_, crate::Error>(())
-                    })
-                    .await?;
-            }
-        }
         let (permit, now, reuse) = match self.initial.take() {
             Some((permit, now)) => (permit, now, true),
             None => {
@@ -333,8 +310,6 @@ impl Runtime {
         self.evaluated = now;
         self.exhausted = self.run.operation == Operation::Replace
             || (output.snapshot.page.exhausted && !output.limited);
-        self.last_run = Some(Instant::now());
-        self.health = Some(Instant::now() + Duration::from_secs(15));
         Ok(Event {
             output,
             completed: true,
@@ -344,7 +319,7 @@ impl Runtime {
         })
     }
 
-    async fn health_update(&mut self, clock_changed: bool) -> Result<Event> {
+    async fn metadata_update(&mut self, clock_changed: bool) -> Result<Event> {
         let clock_changed = clock_changed || self.progress.clock_pending();
         if (self.run.window.is_some() || self.run.sources.contains_key("notifications"))
             && clock_changed
@@ -367,7 +342,6 @@ impl Runtime {
             .query_async(self.run.engine.check_read(&snapshot))
             .await?;
         self.snapshot = Some(Arc::clone(&snapshot));
-        self.health = Some(Instant::now() + Duration::from_secs(15));
         Ok(Event {
             output: Output {
                 snapshot,

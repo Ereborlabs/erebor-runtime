@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use araphor_data::{AnalysisReadControl, AnalysisStore, PackageErrorCodeV1};
 use tokio::sync::watch;
-use tokio::time::Instant;
 
 use crate::follow::Clock;
 use crate::Result;
@@ -22,7 +21,6 @@ pub struct Progress {
 pub enum Wake {
     Source,
     Clock,
-    Health,
 }
 
 impl Progress {
@@ -102,7 +100,6 @@ impl Progress {
         &mut self,
         control: &AnalysisReadControl,
         deadline: Option<u64>,
-        health: Option<Instant>,
     ) -> Result<Wake> {
         if self.clock_pending() {
             self.clock_changes.borrow_and_update();
@@ -155,7 +152,6 @@ impl Progress {
                 self.elapsed |= self.expiry == deadline;
                 Ok(Wake::Clock)
             }
-            _ = tokio::time::sleep_until(health.unwrap_or_else(Instant::now)), if health.is_some() => Ok(Wake::Health),
         }
     }
 }
