@@ -183,6 +183,12 @@ impl State {
                     return Ok(Some(Output {
                         snapshot,
                         batches: Some(vec![batch]),
+                        positions: Vec::new(),
+                        position: StorePositionV1 {
+                            commit_revision: 0,
+                            ordinal: 0,
+                        },
+                        limited: false,
                         _memory: memory,
                         _permit,
                         _control: control,

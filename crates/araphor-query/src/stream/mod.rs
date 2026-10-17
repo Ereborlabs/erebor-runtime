@@ -21,6 +21,7 @@ pub(crate) struct Run {
     pub sources: BTreeSet<String>,
     pub control: Arc<AnalysisReadControl>,
     pub now: u64,
+    pub after: Option<StorePositionV1>,
 }
 
 pub(super) enum Message {
@@ -39,6 +40,9 @@ pub(super) type Input = Pin<Box<dyn Stream<Item = Result<Message>> + Send>>;
 pub(crate) struct Output {
     pub snapshot: Arc<ArrowSnapshot>,
     pub batches: Option<Vec<RecordBatch>>,
+    pub positions: Vec<StorePositionV1>,
+    pub position: StorePositionV1,
+    pub limited: bool,
     pub _memory: MemoryReservation,
     pub _permit: Option<Arc<Permit>>,
     pub _control: Arc<AnalysisReadControl>,

@@ -422,7 +422,12 @@ async fn unsupported_plans_stay_batch() {
                     0,
                 )
                 .unwrap()
-                .subscribe(&plan, &BTreeSet::from(["events".to_owned()]))
+                .subscribe(
+                    &plan,
+                    &BTreeSet::from(["events".to_owned()]),
+                    crate::execution::Read::Snapshot,
+                    Arc::new(fixture.engine.reserve_evaluation([1; 16]).unwrap())
+                )
                 .await
                 .unwrap()
                 .is_none(),

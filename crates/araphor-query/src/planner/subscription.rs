@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DFSchemaRef, DataFusionError, Result};
 use datafusion::datasource::source_as_provider;
@@ -10,6 +11,7 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::{
     Expr, Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility,
 };
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 
@@ -19,9 +21,51 @@ use crate::stream::physical::SubscribeExec;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub(crate) struct Subscribe {
     input: LogicalPlan,
+    append: bool,
 }
 
 impl Subscribe {
+    pub(crate) fn appendable(plan: &LogicalPlan) -> Result<bool> {
+        let LogicalPlan::Projection(projection) = plan else {
+            return Ok(false);
+        };
+        let mut has_subquery = false;
+        plan.apply_with_subqueries(|node| {
+            if matches!(node, LogicalPlan::Subquery(_)) {
+                has_subquery = true;
+                Ok(TreeNodeRecursion::Stop)
+            } else {
+                Ok(TreeNodeRecursion::Continue)
+            }
+        })?;
+        if has_subquery {
+            return Ok(false);
+        }
+        let mut input = projection.input.as_ref();
+        loop {
+            input = match input {
+                LogicalPlan::Filter(filter) => &filter.input,
+                LogicalPlan::SubqueryAlias(alias) => &alias.input,
+                LogicalPlan::TableScan(scan) => {
+                    return Ok(matches!(scan.table_name.table(), "events" | "trace_output")
+                        && scan.fetch.is_none()
+                        && source_as_provider(&scan.source)
+                            .is_ok_and(|provider| provider.as_any().is::<SourceProvider>()));
+                }
+                _ => return Ok(false),
+            };
+        }
+    }
+
+    pub(crate) fn page(input: LogicalPlan) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(Self {
+                input,
+                append: true,
+            }),
+        }))
+    }
+
     pub(crate) fn plan(input: LogicalPlan) -> Result<LogicalPlan> {
         let mut scans = 0;
         input.apply_with_subqueries(|node| {
@@ -68,7 +112,10 @@ impl Subscribe {
             ));
         }
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(Self { input }),
+            node: Arc::new(Self {
+                input,
+                append: false,
+            }),
         }))
     }
 }
@@ -106,6 +153,7 @@ impl UserDefinedLogicalNodeCore for Subscribe {
         }
         Ok(Self {
             input: inputs.remove(0),
+            append: self.append,
         })
     }
 }
@@ -136,14 +184,17 @@ impl ExtensionPlanner for SubscriptionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if !node.as_any().is::<Subscribe>() {
+        let Some(subscription) = node.as_any().downcast_ref::<Subscribe>() else {
             return Ok(None);
-        }
+        };
         let [input] = physical_inputs else {
             return Err(DataFusionError::Internal(
                 "Subscribe input is absent".into(),
             ));
         };
+        if subscription.append {
+            return Ok(Some(Arc::new(SubscribeExec::page(Arc::clone(input))?)));
+        }
         let mut scans = 0;
         let mut journal = None;
         input.apply(|node| {
@@ -164,5 +215,29 @@ impl ExtensionPlanner for SubscriptionPlanner {
             Arc::clone(input),
             journal,
         )?)))
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PageLineage;
+
+impl PhysicalOptimizerRule for PageLineage {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        match plan.as_any().downcast_ref::<SubscribeExec>() {
+            Some(subscription) => Ok(subscription.lower_page()?.unwrap_or(plan)),
+            None => Ok(plan),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "PageLineage"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
     }
 }

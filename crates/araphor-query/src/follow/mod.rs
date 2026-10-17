@@ -23,9 +23,9 @@ use tokio::time::Instant;
 
 use crate::execution::{Engine, Permit, Read, Retention};
 use crate::sources::ArrowSnapshot;
+use crate::stream::Output;
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
-mod append;
 mod clock;
 mod cursor;
 mod delivery;
@@ -119,12 +119,10 @@ impl Subscription {
         } else {
             None
         };
-        let page_plan = if clocks == 0 && !source_clock {
-            State::page_plan(&plan)?
-        } else {
-            None
-        };
-        let operation = if page_plan.is_some() {
+        let operation = if clocks == 0
+            && !source_clock
+            && crate::planner::subscription::Subscribe::appendable(&plan).context(SqlSnafu)?
+        {
             Operation::Append
         } else {
             Operation::Replace
@@ -140,7 +138,6 @@ impl Subscription {
         let state = State {
             engine: Arc::clone(&engine),
             plan,
-            page_plan,
             sources,
             selection,
             control: Arc::clone(&control),
@@ -249,7 +246,6 @@ impl Drop for Subscription {
 struct State {
     engine: Arc<Engine>,
     plan: Arc<LogicalPlan>,
-    page_plan: Option<LogicalPlan>,
     sources: BTreeSet<String>,
     selection: AnalysisSelectionV1,
     control: Arc<AnalysisReadControl>,
@@ -424,6 +420,21 @@ impl State {
                 cursor.check_store(&meta)?;
             }
         }
+        if self.operation == Operation::Append {
+            self.execution = self
+                .engine
+                .session(selection, &self.control, now)?
+                .subscribe(
+                    &self.plan,
+                    &self.sources,
+                    Read::Page(self.cursor.as_ref().map(Cursor::position)),
+                    permit,
+                )
+                .await?;
+            let result = self.advance(now).await;
+            self.execution = None;
+            return result;
+        }
         if !self.compiled {
             self.compiled = true;
             if self.follow
@@ -434,7 +445,12 @@ impl State {
                 self.execution = self
                     .engine
                     .session(self.selection.clone(), &self.control, now)?
-                    .subscribe(&self.plan, &self.sources)
+                    .subscribe(
+                        &self.plan,
+                        &self.sources,
+                        Read::Snapshot,
+                        Arc::clone(&permit),
+                    )
                     .await?;
             }
         }
@@ -443,91 +459,110 @@ impl State {
             return self.advance(now).await;
         }
         let session = self.engine.session(selection, &self.control, now)?;
-        let plan = self.page_plan.as_ref().unwrap_or(self.plan.as_ref());
-        let read = if self.operation == Operation::Append {
-            Read::Page(self.cursor.as_ref().map(Cursor::position))
-        } else {
-            Read::Snapshot
-        };
         let (snapshot, mut stream, permit, control, mut reservation) = session
-            .start(plan, &self.sources, read, Retention::Output, permit)
+            .start(
+                &self.plan,
+                &self.sources,
+                Read::Snapshot,
+                Retention::Output,
+                permit,
+            )
             .await?;
         if let Some(cursor) = &self.cursor {
             cursor.check_store(&snapshot.page.extraction.meta)?;
         }
-        let (batches, positions, position, limited) = if self.operation == Operation::Append {
-            self.append(&mut stream, &control, &mut reservation, &snapshot)
-                .await?
-        } else {
-            let mut batches = Vec::new();
-            let (mut rows, mut bytes) = (0usize, 0usize);
-            while let Some(batch) = control
-                .query_async(async { stream.try_next().await.context(SqlSnafu) })
-                .await?
-            {
-                if batch.num_rows() == 0 {
-                    continue;
-                }
-                rows = rows.saturating_add(batch.num_rows());
-                bytes = bytes.saturating_add(batch.get_array_memory_size());
-                if rows > self.engine.limits().output_rows
-                    || bytes > self.engine.limits().output_bytes
-                {
-                    return Err(Self::output_error());
-                }
-                self.engine
-                    .memory()
-                    .retain_output(&batch, &mut reservation)
-                    .context(SqlSnafu)?;
-                batches.push(batch);
+        let mut batches = Vec::new();
+        let (mut rows, mut bytes) = (0usize, 0usize);
+        while let Some(batch) = control
+            .query_async(async { stream.try_next().await.context(SqlSnafu) })
+            .await?
+        {
+            if batch.num_rows() == 0 {
+                continue;
             }
-            (
-                batches,
-                Vec::new(),
-                StorePositionV1 {
-                    commit_revision: 0,
-                    ordinal: 0,
-                },
-                false,
-            )
-        };
+            rows = rows.saturating_add(batch.num_rows());
+            bytes = bytes.saturating_add(batch.get_array_memory_size());
+            if rows > self.engine.limits().output_rows || bytes > self.engine.limits().output_bytes
+            {
+                return Err(Self::output_error());
+            }
+            self.engine
+                .memory()
+                .retain_output(&batch, &mut reservation)
+                .context(SqlSnafu)?;
+            batches.push(batch);
+        }
         drop(stream);
         drop(permit);
         control
             .query_async(self.engine.check_read(&snapshot))
             .await?;
-        let unchanged = if self.operation == Operation::Replace {
-            let hash = self.content_hash(&batches, &mut reservation, positions.capacity())?;
-            let unchanged = self.content == Some(hash);
-            self.content = Some(hash);
-            unchanged
-        } else {
-            false
-        };
+        let hash = self.content_hash(&batches, &mut reservation)?;
+        let unchanged = self.content == Some(hash);
+        self.content = Some(hash);
         let batches = (!unchanged).then_some(batches);
-        let retained = positions
-            .capacity()
-            .saturating_mul(size_of::<StorePositionV1>())
-            .saturating_add(batches.as_ref().map_or(0, |batches| {
-                batches
-                    .capacity()
-                    .saturating_mul(size_of::<RecordBatch>())
-                    .saturating_add(
-                        batches
-                            .iter()
-                            .map(|batch| {
-                                batch.num_columns()
-                                    * size_of::<datafusion::arrow::array::ArrayRef>()
-                            })
-                            .sum::<usize>(),
-                    )
-            }));
+        let retained = batches.as_ref().map_or(0, |batches| {
+            batches
+                .capacity()
+                .saturating_mul(size_of::<RecordBatch>())
+                .saturating_add(
+                    batches
+                        .iter()
+                        .map(|batch| {
+                            batch.num_columns() * size_of::<datafusion::arrow::array::ArrayRef>()
+                        })
+                        .sum::<usize>(),
+                )
+        });
         reservation
             .try_resize(retained)
             .map_err(|source| crate::Error::Capacity {
                 resource: "shared output",
                 source,
             })?;
+        self.finish(
+            Output {
+                snapshot,
+                batches,
+                positions: Vec::new(),
+                position: StorePositionV1 {
+                    commit_revision: 0,
+                    ordinal: 0,
+                },
+                limited: false,
+                _memory: reservation,
+                _permit: None,
+                _control: control,
+            },
+            now,
+            clock_changed,
+        )
+    }
+
+    async fn advance(&mut self, now: u64) -> Result<Update> {
+        let output = self
+            .execution
+            .as_mut()
+            .ok_or_else(Self::state_error)?
+            .try_next()
+            .await?
+            .ok_or_else(Self::state_error)?;
+        self.finish(output, now, false)
+    }
+
+    fn finish(&mut self, output: Output, now: u64, clock_changed: bool) -> Result<Update> {
+        let Output {
+            snapshot,
+            batches,
+            positions,
+            position,
+            limited,
+            _memory,
+            ..
+        } = output;
+        if let Some(cursor) = &self.cursor {
+            cursor.check_store(&snapshot.page.extraction.meta)?;
+        }
         let cursor = Cursor::new(
             &snapshot.page.extraction.meta,
             self.operation,
@@ -536,11 +571,6 @@ impl State {
             now,
         );
         self.cursor = Some(cursor.clone());
-        self.exhausted = if self.operation == Operation::Append {
-            snapshot.page.exhausted && !limited
-        } else {
-            true
-        };
         self.dirty = self.changes.has_changed().unwrap_or(false)
             || *self.changes.borrow() > snapshot.page.extraction.meta.commit_revision;
         self.clock_dirty = self.clock_changes.has_changed().unwrap_or(false);
@@ -552,6 +582,8 @@ impl State {
             .min();
         self.snapshot = Some(Arc::clone(&snapshot));
         self.evaluated = now;
+        self.exhausted =
+            self.operation == Operation::Replace || (snapshot.page.exhausted && !limited);
         self.last_run = Some(Instant::now());
         self.health = Some(Instant::now() + Duration::from_secs(15));
         Ok(Update {
@@ -564,54 +596,6 @@ impl State {
             positions,
             evaluated_utc_ns: now,
             limited: limited || !self.exhausted,
-            _memory: reservation,
-        })
-    }
-
-    async fn advance(&mut self, now: u64) -> Result<Update> {
-        let crate::stream::Output {
-            snapshot,
-            batches,
-            _memory,
-            ..
-        } = self
-            .execution
-            .as_mut()
-            .ok_or_else(Self::state_error)?
-            .try_next()
-            .await?
-            .ok_or_else(Self::state_error)?;
-        if let Some(cursor) = &self.cursor {
-            cursor.check_store(&snapshot.page.extraction.meta)?;
-        }
-        let cursor = Cursor::new(
-            &snapshot.page.extraction.meta,
-            self.operation,
-            self.binding,
-            StorePositionV1 {
-                commit_revision: 0,
-                ordinal: 0,
-            },
-            now,
-        );
-        self.cursor = Some(cursor.clone());
-        self.dirty = self.changes.has_changed().unwrap_or(false)
-            || *self.changes.borrow() > snapshot.page.extraction.meta.commit_revision;
-        self.clock_dirty = self.clock_changes.has_changed().unwrap_or(false);
-        self.snapshot = Some(Arc::clone(&snapshot));
-        self.evaluated = now;
-        self.exhausted = true;
-        self.health = Some(Instant::now() + Duration::from_secs(15));
-        Ok(Update {
-            snapshot,
-            batches,
-            cursor,
-            operation: self.operation,
-            exhausted: true,
-            clock_changed: false,
-            positions: Vec::new(),
-            evaluated_utc_ns: now,
-            limited: false,
             _memory,
         })
     }
@@ -620,11 +604,10 @@ impl State {
         &self,
         batches: &[RecordBatch],
         reservation: &mut MemoryReservation,
-        positions: usize,
     ) -> Result<[u8; 32]> {
-        let metadata = positions
-            .saturating_mul(size_of::<StorePositionV1>())
-            .saturating_add(batches.len().saturating_mul(size_of::<RecordBatch>()))
+        let metadata = batches
+            .len()
+            .saturating_mul(size_of::<RecordBatch>())
             .saturating_add(
                 batches
                     .iter()
@@ -646,7 +629,7 @@ impl State {
                 reservation
                     .try_resize(
                         metadata
-                            .saturating_add(Self::row_bytes(batch, row)?)
+                            .saturating_add(Output::row_bytes(batch, row)?)
                             .saturating_add(size_of::<ScalarValue>()),
                     )
                     .map_err(|source| crate::Error::Capacity {

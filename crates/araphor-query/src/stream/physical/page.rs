@@ -6,126 +6,101 @@ use datafusion::arrow::array::{
     Array, ArrayRef, BinaryViewArray, RecordBatch, StringViewArray, UInt32Array, UInt64Array,
 };
 use datafusion::arrow::compute::interleave_record_batch;
-use datafusion::arrow::datatypes::DataType;
-use datafusion::common::tree_node::TreeNodeRecursion;
-use datafusion::common::{Column, DataFusionError};
-use datafusion::datasource::source_as_provider;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::{DataFusionError, Result as NativeResult};
 use datafusion::execution::memory_pool::MemoryReservation;
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
-use datafusion::physical_plan::SendableRecordBatchStream;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::projection::ProjectionExpr;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::coop::CooperativeExec;
+use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
 
-use super::State;
-use crate::sources::ArrowSnapshot;
-use crate::sources::SourceProvider;
+use super::SubscribeExec;
+use crate::execution::{Engine, Permit};
+use crate::sources::{ArrowSnapshot, SourceData};
+use crate::stream::Output;
 use crate::{Result, SqlSnafu};
 
-impl State {
-    pub(super) fn page_plan(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
-        let LogicalPlan::Projection(projection) = plan else {
-            return Ok(None);
+impl SubscribeExec {
+    pub(super) fn page_input(
+        input: &Arc<dyn ExecutionPlan>,
+    ) -> NativeResult<Arc<dyn ExecutionPlan>> {
+        if let Some(source) = SourceData::from_plan(input.as_ref()) {
+            return source.positioned();
+        }
+        if input.as_any().is::<EmptyExec>() {
+            return Ok(Arc::clone(input));
+        }
+        let children = input.children();
+        let [child] = children.as_slice() else {
+            return Err(DataFusionError::NotImplemented(
+                "positioned unary plan".into(),
+            ));
         };
-        let mut has_subquery = false;
-        plan.apply_with_subqueries(|node| {
-            if matches!(node, LogicalPlan::Subquery(_)) {
-                has_subquery = true;
-                Ok(TreeNodeRecursion::Stop)
-            } else {
-                Ok(TreeNodeRecursion::Continue)
+        let projection = input.as_any().downcast_ref::<ProjectionExec>();
+        let filter = input.as_any().downcast_ref::<FilterExec>();
+        let transparent = input.as_any().is::<CooperativeExec>()
+            || (input.as_any().is::<CoalescePartitionsExec>()
+                && child.properties().partitioning.partition_count() == 1);
+        if projection.is_none() && filter.is_none() && !transparent {
+            return Err(DataFusionError::NotImplemented(
+                "positioned native operator".into(),
+            ));
+        }
+        let positioned = Self::page_input(child)?;
+        let width = child.schema().fields().len();
+        let schema = positioned.schema();
+        if schema.fields().len() == width {
+            return Ok(Arc::clone(input));
+        }
+        if schema.fields().len() != width + 2 {
+            return Err(DataFusionError::Execution(
+                "positioned input schema changed".into(),
+            ));
+        }
+        if let Some(projection) = projection {
+            let mut expressions = projection.expr().to_vec();
+            for index in width..width + 2 {
+                let field = schema.field(index);
+                expressions.push(ProjectionExpr::new(
+                    Arc::new(Column::new(field.name(), index)),
+                    field.name().clone(),
+                ));
             }
-        })
-        .context(SqlSnafu)?;
-        if has_subquery {
-            return Ok(None);
+            return Ok(Arc::new(ProjectionExec::try_new(expressions, positioned)?));
         }
-        let mut input = projection.input.as_ref();
-        loop {
-            input = match input {
-                LogicalPlan::Filter(filter) => &filter.input,
-                LogicalPlan::SubqueryAlias(alias) => &alias.input,
-                LogicalPlan::TableScan(scan)
-                    if matches!(scan.table_name.table(), "events" | "trace_output")
-                        && scan.fetch.is_none()
-                        && source_as_provider(&scan.source)
-                            .is_ok_and(|provider| provider.as_any().is::<SourceProvider>()) =>
-                {
-                    // These sources emit at most one row per position. The accepted operators do not add rows.
-                    break;
-                }
-                _ => return Ok(None),
-            };
+        if let Some(filter) = filter {
+            let mut builder = FilterExecBuilder::from(filter).with_input(positioned);
+            if let Some(projection) = filter.projection() {
+                let mut indices = projection.to_vec();
+                indices.extend([width, width + 1]);
+                builder = builder
+                    .apply_projection(None)?
+                    .apply_projection(Some(indices))?;
+            }
+            return Ok(Arc::new(builder.build()?));
         }
-        let schema = projection.input.schema();
-        let (Ok((revision, revision_field)), Ok((ordinal, ordinal_field))) = (
-            schema.qualified_field_with_unqualified_name("commit_revision"),
-            schema.qualified_field_with_unqualified_name("ordinal"),
-        ) else {
-            return Ok(None);
-        };
-        if revision_field.data_type() != &DataType::UInt64
-            || ordinal_field.data_type() != &DataType::UInt32
-        {
-            return Ok(None);
-        }
-        let mut revision_name = "__follow_revision".to_owned();
-        let mut ordinal_name = "__follow_ordinal".to_owned();
-        while plan
-            .schema()
-            .fields()
-            .iter()
-            .any(|field| field.name() == &revision_name)
-        {
-            revision_name.push('_');
-        }
-        while plan
-            .schema()
-            .fields()
-            .iter()
-            .any(|field| field.name() == &ordinal_name)
-        {
-            ordinal_name.push('_');
-        }
-        let mut expressions = projection.expr.clone();
-        expressions.push(
-            Expr::Column(Column::new(
-                revision.cloned(),
-                revision_field.name().clone(),
-            ))
-            .alias(&revision_name),
-        );
-        expressions.push(
-            Expr::Column(Column::new(ordinal.cloned(), ordinal_field.name().clone()))
-                .alias(&ordinal_name),
-        );
-        LogicalPlanBuilder::from(projection.input.as_ref().clone())
-            .project(expressions)
-            .and_then(|builder| {
-                builder.sort(vec![
-                    Expr::Column(Column::new_unqualified(revision_name)).sort(true, true),
-                    Expr::Column(Column::new_unqualified(ordinal_name)).sort(true, true),
-                ])
-            })
-            .and_then(LogicalPlanBuilder::build)
-            .map(Some)
-            .context(SqlSnafu)
+        Arc::clone(input).with_new_children(vec![positioned])
     }
+}
 
-    pub(super) async fn append(
-        &mut self,
+impl Output {
+    pub(super) async fn page(
+        engine: &Arc<Engine>,
+        schema: SchemaRef,
         stream: &mut SendableRecordBatchStream,
-        control: &AnalysisReadControl,
-        reservation: &mut MemoryReservation,
-        snapshot: &ArrowSnapshot,
-    ) -> Result<(
-        Vec<RecordBatch>,
-        Vec<StorePositionV1>,
-        StorePositionV1,
-        bool,
-    )> {
-        let width = self.plan.schema().fields().len();
+        control: Arc<AnalysisReadControl>,
+        mut reservation: MemoryReservation,
+        snapshot: Arc<ArrowSnapshot>,
+        permit: Arc<Permit>,
+    ) -> Result<Self> {
+        let width = schema.fields().len();
         let projection = (0..width).collect::<Vec<_>>();
-        let schema = Arc::clone(self.plan.schema().inner());
         let mut captured = Vec::new();
         let mut positions = Vec::new();
         let mut logical = 0usize;
@@ -137,16 +112,19 @@ impl State {
             if batch.num_rows() == 0 {
                 continue;
             }
+            if batch.num_columns() != width + 2 {
+                return Err(Self::page_error());
+            }
             let revisions = batch
                 .column(width)
                 .as_any()
                 .downcast_ref::<UInt64Array>()
-                .ok_or_else(Self::output_error)?;
+                .ok_or_else(Self::page_error)?;
             let ordinals = batch
                 .column(width + 1)
                 .as_any()
                 .downcast_ref::<UInt32Array>()
-                .ok_or_else(Self::output_error)?;
+                .ok_or_else(Self::page_error)?;
             captured.push(
                 batch
                     .project(&projection)
@@ -159,11 +137,11 @@ impl State {
             for row in 0..batch.num_rows() {
                 control.check()?;
                 let bytes = Self::row_bytes(public, row)?;
-                if positions.len() == self.engine.limits().output_rows
-                    || logical.saturating_add(bytes) > self.engine.limits().output_bytes
+                if positions.len() == engine.limits().output_rows
+                    || logical.saturating_add(bytes) > engine.limits().output_bytes
                 {
                     if positions.is_empty() {
-                        return Err(Self::output_error());
+                        return Err(Self::page_error());
                     }
                     limited = true;
                     break 'batches;
@@ -187,8 +165,8 @@ impl State {
                             .map(|batch| batch.num_columns() * size_of::<ArrayRef>())
                             .sum::<usize>(),
                     );
-                if staging > self.engine.limits().output_bytes {
-                    return Err(Self::output_error());
+                if staging > engine.limits().output_bytes {
+                    return Err(Self::page_error());
                 }
             }
         }
@@ -213,8 +191,8 @@ impl State {
                         .sum::<usize>(),
                 )
                 .saturating_add(scratch_bytes);
-            if staging > self.engine.limits().output_bytes {
-                return Err(Self::output_error());
+            if staging > engine.limits().output_bytes {
+                return Err(Self::page_error());
             }
             let scratch = reservation.split(scratch_bytes.min(reservation.size()));
             scratch
@@ -268,10 +246,10 @@ impl State {
                 )
                 .map_err(datafusion::common::DataFusionError::from)
                 .context(SqlSnafu)?;
-                if compact.get_array_memory_size() <= self.engine.limits().output_bytes {
-                    self.engine
+                if compact.get_array_memory_size() <= engine.limits().output_bytes {
+                    engine
                         .memory()
-                        .retain_output(&compact, reservation)
+                        .retain_output(&compact, &mut reservation)
                         .context(SqlSnafu)?;
                     batches.push(compact);
                     break;
@@ -280,19 +258,51 @@ impl State {
                 indices.pop();
                 limited = true;
                 if positions.is_empty() {
-                    return Err(Self::output_error());
+                    return Err(Self::page_error());
                 }
             }
         }
         let position = if limited {
-            positions.last().copied().ok_or_else(Self::output_error)?
+            positions.last().copied().ok_or_else(Self::page_error)?
         } else {
             snapshot.page.scanned_through
         };
-        Ok((batches, positions, position, limited))
+        control.query_async(engine.check_read(&snapshot)).await?;
+        let retained = positions
+            .capacity()
+            .saturating_mul(size_of::<StorePositionV1>())
+            .saturating_add(batches.capacity().saturating_mul(size_of::<RecordBatch>()))
+            .saturating_add(
+                batches
+                    .iter()
+                    .map(|batch| batch.num_columns() * size_of::<ArrayRef>())
+                    .sum::<usize>(),
+            );
+        reservation
+            .try_resize(retained)
+            .map_err(|source| crate::Error::Capacity {
+                resource: "shared output",
+                source,
+            })?;
+        Ok(Self {
+            snapshot,
+            batches: Some(batches),
+            positions,
+            position,
+            limited,
+            _memory: reservation,
+            _permit: Some(permit),
+            _control: control,
+        })
     }
 
-    pub(super) fn row_bytes(batch: &RecordBatch, row: usize) -> Result<usize> {
+    fn page_error() -> crate::Error {
+        crate::Error::Sql {
+            source: DataFusionError::ResourcesExhausted("query output".into()),
+        }
+    }
+
+    pub(crate) fn row_bytes(batch: &RecordBatch, row: usize) -> Result<usize> {
         let mut bytes = 0usize;
         for column in batch.columns() {
             bytes = bytes.saturating_add(

@@ -12,17 +12,19 @@ use araphor_data::{
     TraceIdentityV1, UnconfirmedNotificationConcernV1, ValidatedEvidenceBatchV1,
     NOTIFICATION_STATE_OWNER,
 };
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{RecordBatch, StringViewArray};
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, ScalarValue};
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use futures_util::StreamExt as _;
 use prost::Message as _;
 use tokio::sync::watch;
 
-use super::{Clock, Cursor, Fingerprint, Operation, State, Subscription, Update, Window};
+use super::{Clock, Cursor, Fingerprint, Operation, Subscription, Update, Window};
 use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
+
+mod trace;
 
 struct TestClock {
     now: AtomicU64,
@@ -278,7 +280,7 @@ fn lazy_native_shape() {
     ] {
         let (plan, sources) = fixture.plan(sql, vec![]);
         assert_eq!(
-            State::page_plan(&plan).unwrap().is_some(),
+            crate::planner::subscription::Subscribe::appendable(&plan).unwrap(),
             expected == Operation::Append
         );
         let subscription = Subscription::new(
@@ -396,7 +398,7 @@ fn local_cursor_denied() {
         .unwrap();
     let statement = Parser::parse("SELECT source_cursor FROM events").unwrap();
     let plan = fixture.engine.plan(&state, statement, vec![]).unwrap();
-    assert!(State::page_plan(&plan).unwrap().is_none());
+    assert!(!crate::planner::subscription::Subscribe::appendable(&plan).unwrap());
     let statement = Parser::parse(
         "SELECT operation FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '1 second'",
     )
@@ -658,6 +660,560 @@ async fn filtered_page_progress() {
 }
 
 #[tokio::test]
+async fn append_preserves_expressions() {
+    let fixture = Fixture::new(Limits {
+        output_rows: 2,
+        ..Default::default()
+    });
+    fixture.commit(&fixture.source, 1, 5, 1_000_000_000);
+    let positions = fixture
+        .store
+        .read_page(&fixture.source, 1)
+        .unwrap()
+        .records
+        .into_iter()
+        .map(|record| record.position)
+        .collect::<Vec<_>>();
+    let sql = "SELECT CAST(e.source_cursor AS BIGINT) + $1 AS \"MiXeD\", CASE WHEN e.source_cursor % 2 = 0 THEN CAST(NULL AS BIGINT) ELSE CAST(e.source_cursor AS BIGINT) END AS nullable, e.kernel_sequence AS \"Missing\" FROM events AS e WHERE e.source_cursor > $2 AND e.source_cursor < $3 AND e.kernel_sequence IS NULL";
+    let parameters = vec![
+        ScalarValue::Int32(Some(2)),
+        ScalarValue::UInt64(Some(1)),
+        ScalarValue::UInt64(Some(5)),
+    ];
+    let (plan, sources) = fixture
+        .engine
+        .prepare(sql, parameters.clone())
+        .await
+        .unwrap();
+    let schema = Arc::clone(plan.schema().inner());
+    assert!(plan.get_parameter_names().unwrap().is_empty());
+    assert_eq!(schema.field(0).name(), "MiXeD");
+    assert_eq!(schema.field(2).name(), "Missing");
+    assert_eq!(
+        schema.field(2).metadata(),
+        crate::sources::SourceSnapshot::schemas()["events"]
+            .field_with_name("kernel_sequence")
+            .unwrap()
+            .metadata()
+    );
+    let control = AnalysisReadControl::default();
+    let mut session = fixture
+        .engine
+        .session(fixture.selection(), &control, 2_000_000_000)
+        .unwrap();
+    session
+        .set_output(5, fixture.engine.limits().output_bytes)
+        .unwrap();
+    let (snapshot, expected) = session.execute(Arc::new(plan), &sources).unwrap();
+    let mut subscription = fixture
+        .engine
+        .subscribe(
+            sql,
+            parameters,
+            fixture.selection(),
+            Arc::new(AnalysisReadControl::default()),
+            b"expression principal",
+            None,
+            TestClock::new(2_000_000_000),
+            true,
+        )
+        .await
+        .unwrap();
+    let first = next(&mut subscription).await;
+    assert_eq!(first.operation, Operation::Append);
+    assert_eq!(first.positions.as_slice(), &positions[1..3]);
+    assert_eq!(first.cursor.position(), positions[2]);
+    assert_eq!(
+        values(&first, 0),
+        [ScalarValue::Int64(Some(4)), ScalarValue::Int64(Some(5))]
+    );
+    assert_eq!(
+        values(&first, 1),
+        [ScalarValue::Int64(None), ScalarValue::Int64(Some(3))]
+    );
+    assert_eq!(values(&first, 2), vec![ScalarValue::UInt64(None); 2]);
+    assert!(first.limited && !first.exhausted);
+    assert_eq!(first.snapshot.witnesses.len(), 5);
+    let second = next(&mut subscription).await;
+    assert_eq!(second.positions, vec![positions[3]]);
+    assert_eq!(values(&second, 0), [ScalarValue::Int64(Some(6))]);
+    assert_eq!(values(&second, 1), [ScalarValue::Int64(None)]);
+    assert_eq!(values(&second, 2), [ScalarValue::UInt64(None)]);
+    assert!(second.exhausted && !second.limited);
+    assert_eq!(
+        second.cursor.position(),
+        second.snapshot.page.scanned_through
+    );
+    assert_eq!(second.cursor.position().ordinal, u32::MAX);
+    assert_eq!(
+        snapshot.page.extraction.meta,
+        second.snapshot.page.extraction.meta
+    );
+    for column in 0..schema.fields().len() {
+        let actual = [values(&first, column), values(&second, column)].concat();
+        let expected = expected
+            .iter()
+            .flat_map(|batch| {
+                (0..batch.num_rows())
+                    .map(move |row| ScalarValue::try_from_array(batch.column(column), row).unwrap())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+    for update in [&first, &second] {
+        assert!(update
+            .batches
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|batch| batch.schema() == schema));
+    }
+    subscription.cancel().unwrap();
+}
+
+#[tokio::test]
+async fn append_positions_ignore_aliases() {
+    let sql = "SELECT CAST(91 AS BIGINT UNSIGNED) AS commit_revision, CAST(NULL AS INT UNSIGNED) AS ordinal, CAST(73 AS BIGINT UNSIGNED) AS \"__follow_revision\", CAST(29 AS BIGINT UNSIGNED) AS \"__follow_ordinal\", source_cursor FROM events";
+    for count in [2, 3] {
+        let fixture = Fixture::new(Limits {
+            output_rows: 2,
+            ..Default::default()
+        });
+        fixture.commit(&fixture.source, 1, count, 1_000_000_000);
+        let positions = fixture
+            .store
+            .read_page(&fixture.source, 1)
+            .unwrap()
+            .records
+            .into_iter()
+            .map(|record| record.position)
+            .collect::<Vec<_>>();
+        let (plan, _) = fixture.plan(sql, vec![]);
+        let schema = Arc::clone(plan.schema().inner());
+        let clock = TestClock::new(2_000_000_000);
+        let mut subscription = fixture.subscribe(sql, clock.clone(), None, true);
+        let first = next(&mut subscription).await;
+        assert_eq!(first.operation, Operation::Append);
+        assert_eq!(first.positions.as_slice(), &positions[..2]);
+        assert_eq!(values(&first, 0), vec![ScalarValue::UInt64(Some(91)); 2]);
+        assert_eq!(values(&first, 1), vec![ScalarValue::UInt32(None); 2]);
+        assert_eq!(values(&first, 2), vec![ScalarValue::UInt64(Some(73)); 2]);
+        assert_eq!(values(&first, 3), vec![ScalarValue::UInt64(Some(29)); 2]);
+        assert_eq!(
+            values(&first, 4),
+            [ScalarValue::UInt64(Some(1)), ScalarValue::UInt64(Some(2))]
+        );
+        assert!(first
+            .batches
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|batch| batch.schema() == schema));
+        if count == 2 {
+            assert!(first.exhausted && !first.limited);
+            assert_eq!(first.cursor.position(), first.snapshot.page.scanned_through);
+            assert_eq!(first.cursor.position().ordinal, u32::MAX);
+            subscription.cancel().unwrap();
+            continue;
+        }
+        assert!(!first.exhausted && first.limited);
+        assert_eq!(first.cursor.position(), positions[1]);
+        let cursor = Cursor::decode(&first.cursor.encode().unwrap()).unwrap();
+        drop(first);
+        subscription.cancel().unwrap();
+        drop(subscription);
+        let mut resumed = fixture.subscribe(sql, clock, Some(cursor), true);
+        let second = next(&mut resumed).await;
+        assert_eq!(second.positions, vec![positions[2]]);
+        assert_eq!(values(&second, 0), [ScalarValue::UInt64(Some(91))]);
+        assert_eq!(values(&second, 1), [ScalarValue::UInt32(None)]);
+        assert_eq!(values(&second, 2), [ScalarValue::UInt64(Some(73))]);
+        assert_eq!(values(&second, 3), [ScalarValue::UInt64(Some(29))]);
+        assert_eq!(values(&second, 4), [ScalarValue::UInt64(Some(3))]);
+        assert!(second.exhausted && !second.limited);
+        assert_eq!(
+            second.cursor.position(),
+            second.snapshot.page.scanned_through
+        );
+        assert_eq!(second.cursor.position().ordinal, u32::MAX);
+        assert!(second
+            .batches
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|batch| batch.schema() == schema));
+        resumed.cancel().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn append_constants_and_empty() {
+    let fixture = Fixture::new(Limits {
+        output_rows: 2,
+        ..Default::default()
+    });
+    fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
+    let positions = fixture
+        .store
+        .read_page(&fixture.source, 1)
+        .unwrap()
+        .records
+        .into_iter()
+        .map(|record| record.position)
+        .collect::<Vec<_>>();
+    for (sql, empty) in [
+        ("SELECT 7 AS value FROM events", false),
+        (
+            "SELECT source_cursor AS \"__follow_ordinal\" FROM events WHERE FALSE",
+            true,
+        ),
+    ] {
+        let (plan, _) = fixture.plan(sql, vec![]);
+        let schema = Arc::clone(plan.schema().inner());
+        let state = fixture.engine.catalog(BTreeMap::new()).unwrap();
+        let physical = state.create_physical_plan(&plan).await.unwrap();
+        let mut widths = Vec::new();
+        physical
+            .apply(|node| {
+                if crate::sources::SourceData::from_plan(node.as_ref()).is_some() {
+                    widths.push(node.schema().fields().len());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+        assert_eq!(widths, if empty { vec![] } else { vec![0] });
+        let mut subscription = fixture.subscribe(sql, TestClock::new(2_000_000_000), None, true);
+        assert_eq!(subscription.schema(), schema);
+        let first = next(&mut subscription).await;
+        assert_eq!(first.operation, Operation::Append);
+        assert_eq!(first.snapshot.page.extraction.sources.len(), 1);
+        assert_eq!(
+            first.snapshot.page.extraction.sources[0]
+                .receipt
+                .contiguous_cursor,
+            3
+        );
+        assert_eq!(first.snapshot.witnesses.len(), 3);
+        if empty {
+            assert!(first.positions.is_empty());
+            assert!(values(&first, 0).is_empty());
+            assert!(first.exhausted && !first.limited);
+            assert_eq!(first.cursor.position(), first.snapshot.page.scanned_through);
+            assert_eq!(first.cursor.position().ordinal, u32::MAX);
+        } else {
+            assert_eq!(first.positions.as_slice(), &positions[..2]);
+            assert_eq!(values(&first, 0), vec![ScalarValue::Int64(Some(7)); 2]);
+            assert_eq!(first.cursor.position(), positions[1]);
+            assert!(!first.exhausted && first.limited);
+            let second = next(&mut subscription).await;
+            assert_eq!(second.positions, vec![positions[2]]);
+            assert_eq!(values(&second, 0), [ScalarValue::Int64(Some(7))]);
+            assert!(second.exhausted && !second.limited);
+            assert_eq!(
+                second.cursor.position(),
+                second.snapshot.page.scanned_through
+            );
+            assert_eq!(second.cursor.position().ordinal, u32::MAX);
+            assert!(second
+                .batches
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|batch| batch.schema() == schema));
+        }
+        assert!(first
+            .batches
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|batch| batch.schema() == schema));
+        subscription.cancel().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn append_zero_columns() {
+    let fixture = Fixture::new(Limits {
+        output_rows: 2,
+        ..Default::default()
+    });
+    fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
+    let positions = fixture
+        .store
+        .read_page(&fixture.source, 1)
+        .unwrap()
+        .records
+        .into_iter()
+        .map(|record| record.position)
+        .collect::<Vec<_>>();
+    let (plan, sources) = fixture
+        .engine
+        .prepare("SELECT source_cursor FROM events", vec![])
+        .await
+        .unwrap();
+    let LogicalPlan::Projection(projection) = plan else {
+        panic!("the native projection is absent");
+    };
+    let plan = LogicalPlanBuilder::from(projection.input.as_ref().clone())
+        .project(Vec::<Expr>::new())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(plan.schema().fields().is_empty());
+    let mut subscription = Subscription::new(
+        Arc::clone(&fixture.engine),
+        Arc::new(plan),
+        sources,
+        fixture.selection(),
+        Arc::new(AnalysisReadControl::default()),
+        b"zero-column principal",
+        None,
+        TestClock::new(2_000_000_000),
+        true,
+    )
+    .unwrap();
+    let first = next(&mut subscription).await;
+    assert_eq!(first.operation, Operation::Append);
+    assert_eq!(first.positions.as_slice(), &positions[..2]);
+    assert!(first.positions[0] < first.positions[1]);
+    assert_eq!(first.cursor.position(), positions[1]);
+    assert!(!first.exhausted && first.limited);
+    let batches = first.batches.as_ref().unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].schema(), subscription.schema());
+    assert_eq!(batches[0].num_columns(), 0);
+    assert_eq!(batches[0].num_rows(), 2);
+    let second = next(&mut subscription).await;
+    assert_eq!(second.positions, vec![positions[2]]);
+    assert!(second.positions[0] > first.cursor.position());
+    assert!(second.exhausted && !second.limited);
+    assert_eq!(
+        second.cursor.position(),
+        second.snapshot.page.scanned_through
+    );
+    assert_eq!(
+        second.cursor.position(),
+        araphor_data::StorePositionV1 {
+            commit_revision: second.snapshot.page.extraction.meta.commit_revision,
+            ordinal: u32::MAX,
+        }
+    );
+    let batches = second.batches.as_ref().unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].schema(), subscription.schema());
+    assert_eq!(batches[0].num_columns(), 0);
+    assert_eq!(batches[0].num_rows(), 1);
+    subscription.cancel().unwrap();
+}
+
+#[tokio::test]
+async fn append_view_byte_limit() {
+    let fixture = Fixture::new(Limits {
+        output_bytes: 1024,
+        ..Default::default()
+    });
+    fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
+    let positions = fixture
+        .store
+        .read_page(&fixture.source, 1)
+        .unwrap()
+        .records
+        .into_iter()
+        .map(|record| record.position)
+        .collect::<Vec<_>>();
+    let large = "x".repeat(4096);
+    let sql = format!(
+        "SELECT CAST(CASE WHEN source_cursor = 2 THEN '{large}' ELSE 'tiny' END AS VARCHAR) AS value FROM events"
+    );
+    let clock = TestClock::new(2_000_000_000);
+    let mut subscription = fixture.subscribe(&sql, clock.clone(), None, true);
+    let first = next(&mut subscription).await;
+    assert_eq!(first.operation, Operation::Append);
+    assert_eq!(first.positions, vec![positions[0]]);
+    assert_eq!(first.cursor.position(), positions[0]);
+    assert!(first.limited && !first.exhausted);
+    let batches = first.batches.as_ref().unwrap();
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.schema(), subscription.schema());
+    assert_eq!(batch.num_columns(), 1);
+    assert_eq!(batch.num_rows(), 1);
+    assert!(batch.get_array_memory_size() <= fixture.engine.limits().output_bytes);
+    let view = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringViewArray>()
+        .unwrap();
+    assert_eq!(view.value(0), "tiny");
+    assert!(view.data_buffers().is_empty());
+    let borrowed = Arc::clone(batch.column(0));
+    let cursor = Cursor::decode(&first.cursor.encode().unwrap()).unwrap();
+    drop(first);
+    subscription.cancel().unwrap();
+    drop(subscription);
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity)
+        .is_ok());
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_output(fixture.engine.limits().output_capacity)
+        .is_err());
+    assert_eq!(
+        borrowed
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap()
+            .value(0),
+        "tiny"
+    );
+    let mut resumed = fixture.subscribe(&sql, clock.clone(), Some(cursor), true);
+    let error = tokio::time::timeout(Duration::from_secs(8), resumed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(crate::Failure::from(&error), crate::Failure::ResultTooLarge);
+    assert!(resumed.next().await.is_none());
+    resumed.cancel().unwrap();
+    drop(resumed);
+    drop(borrowed);
+    assert!(fixture
+        .engine
+        .reserve_evaluation(fixture.source.tenant_id)
+        .is_ok());
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity)
+        .is_ok());
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_output(fixture.engine.limits().output_capacity)
+        .is_ok());
+    let mut recovered = fixture.subscribe("SELECT source_cursor FROM events", clock, None, true);
+    let output = next(&mut recovered).await;
+    assert_eq!(output.positions, positions);
+    assert_eq!(
+        values(&output, 0),
+        [
+            ScalarValue::UInt64(Some(1)),
+            ScalarValue::UInt64(Some(2)),
+            ScalarValue::UInt64(Some(3)),
+        ]
+    );
+    assert!(output.exhausted && !output.limited);
+    assert_eq!(
+        output.cursor.position(),
+        output.snapshot.page.scanned_through
+    );
+    drop(output);
+    recovered.cancel().unwrap();
+    drop(recovered);
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity)
+        .is_ok());
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_output(fixture.engine.limits().output_capacity)
+        .is_ok());
+}
+
+#[tokio::test]
+async fn native_append_execution() {
+    let fixture = Fixture::new(Limits::default());
+    fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
+    let control = Arc::new(AnalysisReadControl::default());
+    let (plan, sources) = fixture
+        .engine
+        .prepare(
+            "SELECT source_cursor + source_cursor AS \"Value\", CAST(NULL AS BIGINT) AS nullable FROM events WHERE source_cursor > 1",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let schema = Arc::clone(plan.schema().inner());
+    let mut state = fixture.engine.catalog(BTreeMap::new()).unwrap();
+    state
+        .config_mut()
+        .set_extension(Arc::new(crate::stream::Run {
+            engine: Arc::clone(&fixture.engine),
+            selection: fixture.selection(),
+            sources,
+            control: Arc::clone(&control),
+            now: 2_000_000_000,
+            after: None,
+        }));
+    state.config_mut().set_extension(Arc::new(
+        fixture
+            .engine
+            .reserve_evaluation(fixture.source.tenant_id)
+            .unwrap(),
+    ));
+    let logical = crate::planner::subscription::Subscribe::page(plan).unwrap();
+    let physical = state.create_physical_plan(&logical).await.unwrap();
+    assert!(physical
+        .as_any()
+        .is::<crate::stream::physical::SubscribeExec>());
+    assert_eq!(physical.schema(), schema);
+    let context = state.task_ctx();
+    drop(state);
+    let mut stream = datafusion::physical_plan::execute_stream(physical, context).unwrap();
+    let batch = stream.next().await.unwrap().unwrap();
+    assert_eq!(batch.schema(), schema);
+    assert_eq!(batch.num_columns(), 2);
+    assert_eq!(batch.num_rows(), 2);
+    assert_eq!(
+        (0..2)
+            .map(|row| ScalarValue::try_from_array(batch.column(0), row).unwrap())
+            .collect::<Vec<_>>(),
+        [ScalarValue::UInt64(Some(4)), ScalarValue::UInt64(Some(6))]
+    );
+    assert_eq!(
+        (0..2)
+            .map(|row| ScalarValue::try_from_array(batch.column(1), row).unwrap())
+            .collect::<Vec<_>>(),
+        vec![ScalarValue::Int64(None); 2]
+    );
+    drop(
+        fixture
+            .engine
+            .reserve_evaluation(fixture.source.tenant_id)
+            .unwrap(),
+    );
+    let borrowed = Arc::clone(batch.column(0));
+    drop(batch);
+    assert!(stream.next().await.is_none());
+    drop(stream);
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity)
+        .is_ok());
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_output(fixture.engine.limits().output_capacity)
+        .is_err());
+    assert_eq!(
+        ScalarValue::try_from_array(&borrowed, 0).unwrap(),
+        ScalarValue::UInt64(Some(4))
+    );
+    drop(borrowed);
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_output(fixture.engine.limits().output_capacity)
+        .is_ok());
+}
+
+#[tokio::test]
 async fn evaluation_wait_and_cancel() {
     let fixture = Fixture::new(Limits::default());
     fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
@@ -740,6 +1296,33 @@ async fn native_subscribe_execution() {
         .await
         .unwrap();
     let mut state = fixture.engine.catalog(Default::default()).unwrap();
+    let defaults = datafusion::physical_optimizer::optimizer::PhysicalOptimizer::new();
+    let native = defaults
+        .rules
+        .iter()
+        .map(|rule| rule.name())
+        .collect::<Vec<_>>();
+    let actual = state
+        .physical_optimizers()
+        .iter()
+        .map(|rule| rule.name())
+        .collect::<Vec<_>>();
+    assert_eq!(actual.len(), native.len() + 1);
+    assert_eq!(
+        &actual[actual.len() - 2..],
+        &["PageLineage", "SanityCheckPlan"]
+    );
+    assert_eq!(
+        actual.iter().filter(|name| **name == "PageLineage").count(),
+        1
+    );
+    assert_eq!(
+        actual
+            .into_iter()
+            .filter(|name| *name != "PageLineage")
+            .collect::<Vec<_>>(),
+        native
+    );
     state
         .config_mut()
         .set_extension(Arc::new(crate::stream::Run {
@@ -748,6 +1331,7 @@ async fn native_subscribe_execution() {
             sources,
             control: Arc::clone(&control),
             now: 2_000_000_000,
+            after: None,
         }));
     assert!(state
         .physical_optimizers()

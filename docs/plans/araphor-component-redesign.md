@@ -65,6 +65,53 @@ from `7b7b407a`, 1,884 from `aa390d9f`, and 808 from `537f9de3`. The record is
 formatting of the replacement crates. Later edits are not included in this
 count. The required 6,000-line reduction is **Not done**.
 
+### Native physical append pages
+
+Implementation and selected host verification: **Done**. The
+logical append SQL rewrite and its Sort are deleted. The native Subscribe
+extension now supplies bounded page execution as well as maintained COUNT.
+A late registered physical optimizer rule carries the two real source-position
+fields through native projection and filter operators. Default DataFusion
+optimizers stay enabled. Native SanityCheckPlan runs after the late rule.
+Public SQL names, types, field metadata, and result values remain native.
+The complete default rule order stays intact. PageLineage runs before the
+existing final sanity check. No duplicate sanity pass or ordinary-plan walk
+is added. A regression compares the full native rule order.
+
+The physical page owner completes output limits, compaction, positions, read
+checks, and reservations. Follow consumes that completed output. The page
+collector keeps its existing bounds; moving that collector gives no deletion
+credit. Session.start_physical supplies one capture worker for finite and page
+execution. The actual native task identity, configuration, function maps, and
+runtime remain intact. One State.finish method updates cursor and wake facts for each
+completed result. Source watches and health handling remain in Query.
+
+The page path has one events or trace_output scan. Native filters carry each
+row's actual position. No separate source filter or matched-position registry
+is added. Original receipts and raw progress remain independent of SQL output.
+An empty optimized scan remains empty. Other SQL shapes keep their existing
+replacement behavior. General maintained SQL, clock epochs, shared maintained
+query ownership, and the complete reduction target remain **Not done**.
+
+The selected checks pass 150 distinct Rust cases: 112 Query, 37 model, and
+the E2E query-follow contract with its eight behavior cases. The final Query
+run passes all 112 cases in 12.46 seconds. An earlier new view fixture needs
+an explicit native VARCHAR cast; the correction requires no production change.
+Strict Query Clippy, scoped formatting, and guide link checks pass. The qualification record is
+`/tmp/araphor-physical-page-qualification1.json`.
+
+The new source proofs cover trace interleaving, resume within one commit,
+parameters, NULLs, colliding aliases, zero-column output, view compaction,
+oversized-row failure, borrowed output, and actual native task context.
+No performance improvement is claimed. Full workspace CI is not run, as
+instructed.
+
+This slice adds 227 nonblank production Rust lines. Collector relocation gives
+no deletion credit. The complete count adds 1,155 from `537f9de3`, removes
+1,074 from `7b7b407a`, and adds 79 from `aa390d9f`. The record is
+`/tmp/araphor-native-rewrite-count15.json`. The 6,000-line target still needs
+4,926 net production deletions. The complete redesign remains **Not done**.
+
 ## Intended end state
 
 ### RisingWave source correction
@@ -91,13 +138,12 @@ this does not execute the original relational query again.
 | [Subscription catalog](../../risingwave/src/frontend/src/catalog/subscription_catalog.rs) and [cursor manager](../../risingwave/src/frontend/src/session/cursor_manager.rs) | A subscriber owns its snapshot-to-change-log position, buffered rows, and lifetime. It consumes maintained output. |
 | [Snapshot notification](../../risingwave/src/frontend/src/scheduler/snapshot.rs) and [FETCH handler](../../risingwave/src/frontend/src/handler/fetch_cursor.rs) | The query owner registers a notification before checking progress, waits on change or cancellation, and returns rows through the normal protocol response. |
 
-The current Araphor `State::evaluate` starts a bounded native query after a
-source or time change. Replacement suppression hashes complete results.
-`page_plan` selects append paging for a small set of source shapes. These
-mechanisms do not retain aggregate or join state between changes. The new
-`Delivery` owner removes duplicate Control lifecycle code, but it does not
-complete the required stream-processing redesign. Its passing tests qualify
-that delivery behavior only.
+At the initial source study, Araphor State::evaluate started a bounded native
+query after a source or time change. Replacement suppression hashed complete
+results. The former page_plan selected append paging for a small set of source
+shapes. Those mechanisms retained no aggregate or join state between changes.
+Delivery removed duplicate Control lifecycle code. Later physical COUNT and
+page changes are recorded above. General stream processing remains **Not done**.
 
 The corrected owner flow is:
 
@@ -588,6 +634,7 @@ subscription extension does not justify a second ordinary-SQL context now.
 | Implementation | Current requirement and reason | Verification state |
 | --- | --- | --- |
 | `SourceProvider` and `SourceData` | Data needs canonical projections and time bounds from the optimized physical tree. The descriptor stores these facts without a planning registry. Native MemorySourceConfig requires rows at plan construction; SourceData instead reads the run's captured TaskContext snapshot. Native DataSourceExec and cooperative MemoryStream supply execution. | All 104 Query cases pass. They include actual tenant isolation, immutable bounds and projection unions, original receipts, NULLs, zero-column counts, borrowed buffers, and native optimizer checks. |
+| Physical page positions | The public append result needs the raw position of each disclosed row. Native SQL projections can discard those fields, and RecordBatchStream has no separate position channel. A late native physical rule carries the real fields through native row operators. The physical output removes them before disclosure. | The page cases check native execution, filters, aliases, zero-column output, raw trace order, exact resume, and borrowed buffer lifetime. |
 | Local table binding | Admission registers empty native MemTables. Before native optimization, Session replaces only declared MemTable scan sources with this run's exact-schema MemTables. The custom LocalTable provider and its SessionConfig map are deleted. Durable SourceProvider scans keep their original authority. | All 98 Query cases pass. They include COUNT over changed and empty input, separate tenants and clocks, quoted names, source-name collisions, exact metadata, and buffer lifetime. |
 | Native Arrow reservation bridge | A borrowed Arrow buffer must retain its capacity charge after its producer closes. Arrow buffer claims hold one reservation; separate input and output consumers must retain their own allocation charges. Native memory pools enforce capacity. The allocation registry holds weak references only. | Six memory tests pass for aliases, nested buffers, separate engine consumers, cancellation, capacity pressure, and cleanup. |
 | Parser and planner boundary | Admit one bounded read statement, native parameters, and the existing resource policy. DataFusion owns syntax, names, types, functions, catalogs, and plans. Policy checks belong at admission; source lookup does not enforce spelling rules. | Native stage tests pass for names, CTE scope, parameters, functions, joins, windows, writes, and redacted errors. |

@@ -686,6 +686,137 @@ fn input_output_budget() {
         .is_ok());
 }
 
+#[tokio::test]
+async fn physical_preserves_context() {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    use datafusion::execution::config::SessionConfig;
+    use datafusion::execution::runtime_env::RuntimeEnv;
+
+    use crate::sources::{ArrowSnapshot, SourceSnapshot};
+
+    struct Marker;
+
+    #[derive(Debug)]
+    struct Probe {
+        schema: SchemaRef,
+        expected: Arc<TaskContext>,
+        captured: Arc<OnceLock<Arc<ArrowSnapshot>>>,
+    }
+
+    impl PartitionStream for Probe {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+
+        fn execute(&self, context: Arc<TaskContext>) -> SendableRecordBatchStream {
+            assert_eq!(context.task_id(), self.expected.task_id());
+            assert_eq!(context.session_id(), self.expected.session_id());
+            assert_eq!(context.session_config().batch_size(), 17);
+            let actual = context.session_config().get_extension::<Marker>().unwrap();
+            let expected = self
+                .expected
+                .session_config()
+                .get_extension::<Marker>()
+                .unwrap();
+            assert!(Arc::ptr_eq(&actual, &expected));
+            assert!(Arc::ptr_eq(
+                &context.runtime_env(),
+                &self.expected.runtime_env()
+            ));
+            assert_eq!(
+                context.scalar_functions().len(),
+                self.expected.scalar_functions().len()
+            );
+            for (name, function) in self.expected.scalar_functions() {
+                assert!(Arc::ptr_eq(&context.scalar_functions()[name], function));
+            }
+            assert_eq!(
+                context.aggregate_functions().len(),
+                self.expected.aggregate_functions().len()
+            );
+            for (name, function) in self.expected.aggregate_functions() {
+                assert!(Arc::ptr_eq(&context.aggregate_functions()[name], function));
+            }
+            assert_eq!(
+                context.window_functions().len(),
+                self.expected.window_functions().len()
+            );
+            for (name, function) in self.expected.window_functions() {
+                assert!(Arc::ptr_eq(&context.window_functions()[name], function));
+            }
+            let snapshot = context
+                .session_config()
+                .get_extension::<SourceSnapshot>()
+                .unwrap();
+            let receipt = snapshot.capture_metadata(&BTreeSet::new()).unwrap();
+            assert!(self.captured.set(receipt).is_ok());
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&self.schema),
+                futures_util::stream::empty::<NativeResult<RecordBatch>>(),
+            ))
+        }
+    }
+
+    let fixture = Fixture::new(Limits::default());
+    let registered = fixture.engine.catalog(BTreeMap::new()).unwrap().task_ctx();
+    let context = Arc::new(TaskContext::new(
+        Some("preserved-task".into()),
+        "preserved-session".into(),
+        SessionConfig::new()
+            .with_batch_size(17)
+            .with_extension(Arc::new(Marker)),
+        HashMap::from([(
+            "context_scalar".into(),
+            Arc::clone(registered.scalar_functions().values().next().unwrap()),
+        )]),
+        HashMap::from([(
+            "context_aggregate".into(),
+            Arc::clone(registered.aggregate_functions().values().next().unwrap()),
+        )]),
+        HashMap::from([(
+            "context_window".into(),
+            Arc::clone(registered.window_functions().values().next().unwrap()),
+        )]),
+        Arc::new(RuntimeEnv::default()),
+    ));
+    let captured = Arc::new(OnceLock::new());
+    let schema = schema();
+    let partition: Arc<dyn PartitionStream> = Arc::new(Probe {
+        schema: Arc::clone(&schema),
+        expected: Arc::clone(&context),
+        captured: Arc::clone(&captured),
+    });
+    let physical: Arc<dyn ExecutionPlan> = Arc::new(
+        StreamingTableExec::try_new(schema, vec![partition], None, [], false, None).unwrap(),
+    );
+    let operation = control();
+    let session = fixture
+        .engine
+        .session(AnalysisSelectionV1::new([1; 16], vec![]), &operation, 1)
+        .unwrap();
+    let permit = Arc::new(fixture.engine.reserve_evaluation([1; 16]).unwrap());
+    let (snapshot, stream, _permit, _control, _memory) = session
+        .start_physical(
+            physical,
+            Arc::clone(&context),
+            &BTreeSet::new(),
+            Read::Snapshot,
+            super::Retention::Output,
+            permit,
+        )
+        .await
+        .unwrap();
+    let batches = stream.try_collect::<Vec<_>>().await.unwrap();
+    assert!(batches.is_empty());
+    assert!(Arc::ptr_eq(captured.get().unwrap(), &snapshot));
+    assert!(context
+        .session_config()
+        .get_extension::<SourceSnapshot>()
+        .is_none());
+}
+
 #[derive(Clone, Debug)]
 struct Gate {
     schema: SchemaRef,

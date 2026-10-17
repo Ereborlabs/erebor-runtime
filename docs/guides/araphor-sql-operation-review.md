@@ -278,7 +278,7 @@ run's local tables and captured execution time
   -> [Session::physical](../../crates/araphor-query/src/execution.rs) calls native SessionState.create_physical_plan
   -> [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) returns immutable native source descriptors
   -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) collects optimized projections and interval unions, then fixes all original source receipts and requested batches
-  -> [Session::start](../../crates/araphor-query/src/execution.rs) binds the captured snapshot to TaskContext and calls native execute_stream with the same physical plan
+  -> [Session::start_physical](../../crates/araphor-query/src/execution.rs) binds the captured snapshot to TaskContext and calls native execute_stream with the same physical plan
   -> [Session::bounded](../../crates/araphor-query/src/execution.rs) checks output rows and bytes before it emits each batch
 
 Physical planning has a separate bounded stage. The extraction allowance
@@ -292,7 +292,7 @@ native Subquery container and checks its inner plan through DataFusion's
 visitor. Native decorrelation and planning implement scalar, EXISTS, and IN
 subqueries. The explicit join check applies before optimization. It does not
 constrain every join that native decorrelation creates.
-[State::page_plan](../../crates/araphor-query/src/follow/append.rs) selects
+[Subscribe::appendable](../../crates/araphor-query/src/planner/subscription.rs) selects
 Replace for expression subqueries before optimization. An earlier row can
 qualify after the subquery's source changes. The
 [subquery regressions](../../crates/araphor-query/src/follow/tests.rs) check
@@ -348,6 +348,87 @@ supply the next obligation deadline. Commit changes and due deadlines wake
 the subscription. A metadata-only health update takes no SQL evaluation
 permit and preserves the last SQL cursor and evaluation time. Notification
 metadata can require decoding the retained obligation context.
+
+### Native physical append pages
+
+[Subscribe::appendable](../../crates/araphor-query/src/planner/subscription.rs) selects a projection with filters and aliases over one durable events or trace_output source
+  -> [State::evaluate](../../crates/araphor-query/src/follow/mod.rs) acquires the evaluation permit before the clock read and physical planning
+  -> [Session::subscribe](../../crates/araphor-query/src/execution.rs) registers the actual permit and run facts in the native task configuration
+  -> [Subscribe::page](../../crates/araphor-query/src/planner/subscription.rs) retains the public native SQL schema
+  -> DataFusion runs its default logical and physical optimizer rules
+  -> the late registered [PageLineage](../../crates/araphor-query/src/planner/subscription.rs) extends the actual native physical child with its real source positions
+  -> native SanityCheckPlan checks the completed physical tree
+  -> [SubscribeExec::execute_committed](../../crates/araphor-query/src/stream/physical.rs) opens the planned page child through shared Session.start_physical
+  -> [Output::page](../../crates/araphor-query/src/stream/physical/page.rs) selects and compacts the disclosed prefix
+  -> [State::finish](../../crates/araphor-query/src/follow/mod.rs) checks the store binding and creates Update from the completed physical output
+
+The public append result requires a raw position for each disclosed row. A
+native SQL projection can discard those fields. RecordBatchStream supplies no
+separate per-row position channel. PageLineage carries the real fields through
+physical execution to preserve that existing result contract.
+
+The logical SQL plan has no added position alias or Sort. The physical source
+adds its real commit_revision and ordinal columns after its existing scan
+columns. Native ProjectionExec keeps its bound expressions and carries those
+positions. Native FilterExec applies its mask to the complete Arrow row. An
+embedded native filter projection retains its original fields and both position
+fields. SourceData capture reads the final descriptor, including those fields.
+Output removes the two physical fields before disclosure. The public schema,
+field metadata, aliases, and values remain the native SQL result.
+
+PageLineage runs after all default rewrite rules and before the existing final
+sanity check. The complete native rule order remains intact. No duplicate sanity
+check is added. Ordinary and COUNT plans need only a root check for this rule.
+No name-based projection or filter rewrite runs after this rule. Public aliases can therefore equal the
+position field names. The final sanity check does not rewrite expressions.
+The events provider keeps its Inexact filter promise. SQL predicates remain native;
+the source adds no separate filter implementation or matched-position registry.
+
+The admitted physical path has one canonical scan and native projection,
+filter, cooperative, or single-partition coalescing operators. Data emits raw
+positions in global revision and ordinal order. These operators preserve that
+row order. An optimizer-eliminated empty scan stays empty. The original source
+inventory still supplies receipts and page progress before SQL filtering.
+This rule does not establish order for joins, unions, or multiple partitions.
+
+The page collector retains the prior logical-byte, row, staging, scratch, and
+actual Arrow allocation checks. Native interleave copies the selected prefix;
+view garbage collection drops undisclosed variable buffers. An output limit
+keeps the last disclosed raw position. At complete SQL EOF, the cursor uses
+the raw scanned-through position. A first row that cannot fit fails without
+a new checkpoint. Empty filtered pages can advance raw progress.
+
+Finite sessions and physical pages share Session.start_physical. This method
+keeps the actual native task identity, configuration, function maps, and runtime.
+Only the captured SourceSnapshot extension changes. Its worker keeps the
+operation permit until the blocking read exits. Cancellation retains
+that rule. Page execution checks the current read before returning Output.
+Follow consumes that completed output and its actual reservation. One shared
+State.finish method updates the cursor and wake state for bounded, maintained,
+and page results. The Query owner retains source watches and health handling.
+The page physical stream is one bounded read; general maintained SQL remains
+**Not done**.
+
+Selected host verification is **Done** for 150 distinct Rust cases: 112 Query,
+37 Analysis model, and the E2E query-follow contract. That E2E test retains eight
+behavior cases. The final Query run passes all 112 cases in 12.46 seconds.
+An earlier new view fixture needs an explicit native VARCHAR cast; the corrected
+fixture passes without a production workaround. Strict Query Clippy and scoped
+formatting pass. The exact source and binary
+record is `/tmp/araphor-physical-page-qualification1.json`.
+
+The new checks include real trace interleaving and resume between a data frame
+and terminal frame in one commit. Other checks cover NULLs, parameters,
+colliding aliases, zero-column output, byte-limited view compaction, an oversized
+first undisclosed row, borrowed buffers, and native task-context preservation.
+Full workspace CI is not run, as instructed. These functional checks do not
+establish a performance improvement.
+
+This slice adds 227 nonblank production Rust lines. Collector relocation gives
+no deletion credit. The complete count adds 1,155 from `537f9de3` and removes
+1,074 from `7b7b407a`: `/tmp/araphor-native-rewrite-count15.json`. The required
+6,000-line reduction still needs 4,926 net deletions. The complete redesign
+remains **Not done**.
 
 The current maintained path supports ordinary global `COUNT` over one durable
 `events` source. The input contains native scan, filter, projection, or alias

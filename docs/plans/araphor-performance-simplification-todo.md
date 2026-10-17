@@ -177,6 +177,21 @@ from `7b7b407a` and adds 928 from `537f9de3`:
 `/tmp/araphor-native-rewrite-count12.json`. The correction excludes three
 external test modules; it gives no implementation deletion credit. Another
 4,699 must be removed for the 6,000-line target. Complete redesign: **Not done**.
+Native physical append pages now replace the logical position rewrite and
+Sort. Native filters carry the real position fields with their rows. The
+physical output owns prefix limits, compaction, positions, and reservations.
+Finite and page execution share the capture worker and retain the actual
+native task context. One State.finish method updates completed cursor state.
+The selected checks pass 112 Query cases, 37 model cases, and the E2E
+query-follow contract. Strict Query Clippy and scoped formatting pass. One
+new fixture needs an explicit native VARCHAR cast; its selected retry passes.
+The record is `/tmp/araphor-physical-page-qualification1.json`. This slice adds
+227 nonblank production Rust lines; moving the collector gives no deletion
+credit. The complete count removes 1,074 from `7b7b407a` and adds 1,155 from
+`537f9de3`: `/tmp/araphor-native-rewrite-count15.json`. Another 4,926 must be
+removed for the 6,000-line target. General maintained SQL, clock epochs,
+shared maintained-query ownership, and the complete redesign remain **Not done**.
+Full workspace CI is not run, as instructed.
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

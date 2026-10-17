@@ -21,6 +21,7 @@ use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryReservation};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::SessionState;
+use datafusion::execution::TaskContext;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -204,11 +205,17 @@ impl Engine {
             })
             .cloned()
             .collect();
+        let mut optimizers = state.physical_optimizers().to_vec();
+        optimizers.insert(
+            optimizers.len() - 1,
+            Arc::new(crate::planner::subscription::PageLineage),
+        );
         let state = SessionStateBuilder::new_from_existing(state)
             .with_table_functions(std::collections::HashMap::new())
             .with_scalar_functions(scalar)
             .with_aggregate_functions(aggregate)
             .with_window_functions(window)
+            .with_physical_optimizer_rules(optimizers)
             .build();
         Ok(Arc::new(Self {
             store,
@@ -762,8 +769,17 @@ impl Session {
         &self,
         plan: &LogicalPlan,
         sources: &BTreeSet<String>,
+        read: Read,
+        permit: Arc<Permit>,
     ) -> Result<Option<crate::stream::OutputStream>> {
         let mut state = self.state()?;
+        let (append, after) = match read {
+            Read::Snapshot => (false, None),
+            Read::Page(after) => (true, after),
+        };
+        if append {
+            state.config_mut().set_extension(Arc::clone(&permit));
+        }
         state
             .config_mut()
             .set_extension(Arc::new(crate::stream::Run {
@@ -772,10 +788,15 @@ impl Session {
                 sources: sources.clone(),
                 control: Arc::clone(&self.control),
                 now: self.now,
+                after,
             }));
-        let logical = match crate::planner::subscription::Subscribe::plan(plan.clone()) {
+        let logical = match if append {
+            crate::planner::subscription::Subscribe::page(plan.clone())
+        } else {
+            crate::planner::subscription::Subscribe::plan(plan.clone())
+        } {
             Ok(plan) => plan,
-            Err(DataFusionError::NotImplemented(_)) => return Ok(None),
+            Err(DataFusionError::NotImplemented(_)) if !append => return Ok(None),
             Err(source) => return Err(crate::Error::Sql { source }),
         };
         let physical = self.physical(&logical, &state).await?;
@@ -789,7 +810,7 @@ impl Session {
             Ok(stream) => Ok(Some(stream)),
             Err(crate::Error::Sql {
                 source: DataFusionError::NotImplemented(_),
-            }) => Ok(None),
+            }) if !append => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -797,6 +818,28 @@ impl Session {
     pub(crate) async fn start(
         &self,
         plan: &LogicalPlan,
+        sources: &BTreeSet<String>,
+        read: Read,
+        retention: Retention,
+        permit: Arc<Permit>,
+    ) -> Result<(
+        Arc<ArrowSnapshot>,
+        SendableRecordBatchStream,
+        Arc<Permit>,
+        Arc<AnalysisReadControl>,
+        MemoryReservation,
+    )> {
+        self.control.check()?;
+        let state = self.state()?;
+        let physical = self.physical(plan, &state).await?;
+        self.start_physical(physical, state.task_ctx(), sources, read, retention, permit)
+            .await
+    }
+
+    pub(crate) async fn start_physical(
+        &self,
+        physical: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
         sources: &BTreeSet<String>,
         read: Read,
         retention: Retention,
@@ -818,8 +861,6 @@ impl Session {
                     .context(SqlSnafu)?,
             ),
         };
-        let mut state = self.state()?;
-        let physical = self.physical(plan, &state).await?;
         let snapshot = SourceSnapshot::new(
             Arc::clone(&self.engine.store),
             self.selection.clone(),
@@ -833,7 +874,17 @@ impl Session {
             self.now,
             Arc::clone(&self.engine.memory),
         );
-        state.config_mut().set_extension(Arc::clone(&snapshot));
+        let mut config = context.session_config().clone();
+        config.set_extension(Arc::clone(&snapshot));
+        let context = Arc::new(TaskContext::new(
+            context.task_id(),
+            context.session_id(),
+            config,
+            context.scalar_functions().clone(),
+            context.aggregate_functions().clone(),
+            context.window_functions().clone(),
+            context.runtime_env(),
+        ));
         let sources = sources.clone();
         let capture = Arc::clone(&snapshot);
         let capture_plan = Arc::clone(&physical);
@@ -870,7 +921,7 @@ impl Session {
                 .reserve_input(self.output_bytes)
                 .context(SqlSnafu)?,
         };
-        let stream = execute_stream(physical, state.task_ctx()).context(SqlSnafu)?;
+        let stream = execute_stream(physical, context).context(SqlSnafu)?;
         Ok((captured, stream, permit, control, reservation))
     }
 }
