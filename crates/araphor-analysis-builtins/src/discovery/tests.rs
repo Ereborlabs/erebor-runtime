@@ -36,9 +36,9 @@ fn declaration_clones_keep_ports() -> TestResult {
 fn checked_input_keeps_json_errors() -> TestResult {
     let package = Discovery::package();
     let mut fixture = fixture()?;
-    let records = &mut fixture.evaluation.inputs[0].data;
-    records.batches = vec![sdk::RecordBatch::try_new(
-        records.batches[0].schema(),
+    let contexts = &mut fixture.evaluation.inputs[1].data;
+    contexts.batches = vec![sdk::RecordBatch::try_new(
+        contexts.batches[0].schema(),
         vec![std::sync::Arc::new(sdk::arrow_array::BinaryArray::from(
             vec![b"{".as_slice()],
         ))],
@@ -62,8 +62,7 @@ fn fixture() -> sdk::Result<sdk::Fixture> {
         .into_iter()
         .map(|cursor| Record {
             id: id(cursor),
-            bytes: format!("exact-frame-{cursor}"),
-            range: 0,
+            bytes: format!("exact-frame-{cursor}").into_bytes().into(),
             temporal: 1,
             effect: key.effect.clone(),
             generation: Some(9_007_199_254_740_999),
@@ -78,11 +77,7 @@ fn fixture() -> sdk::Result<sdk::Fixture> {
         })
         .collect();
     let datasets = vec![
-        Rows::encode(
-            &Discovery::port::<Record>("records"),
-            &records,
-            Discovery::limits(),
-        )?,
+        Record::encode(&records)?,
         Rows::encode(
             &Discovery::port::<Context>("contexts"),
             &contexts,
@@ -217,10 +212,11 @@ fn sdk_conflicting_record() -> TestResult {
         .iter_mut()
         .find(|input| input.data.name == "records")
         .ok_or("records absent")?;
-    let port = Discovery::port::<Record>("records");
-    let mut records: Vec<Record> = Rows::decode(&port, &input.data, Discovery::limits())?;
-    records[2].bytes.push_str("changed");
-    input.data = Rows::encode(&port, &records, Discovery::limits())?;
+    let mut records = Record::decode(&input.data)?;
+    records[2].bytes.to_mut().extend_from_slice(b"changed");
+    let changed = Record::encode(&records)?;
+    drop(records);
+    input.data = changed;
     assert!(
         matches!(Discovery::package().test(&fixture, Discovery::evaluate), Err(sdk::Error::Contract { code: sdk::ErrorCode::Incompatible, field, .. }) if field == "record bytes")
     );
@@ -249,10 +245,110 @@ fn sdk_bounded_derivation() -> TestResult {
             })
         ));
     }
-    let port = Discovery::port::<Record>("records");
-    let schema = &port.schema.field(0).metadata()["araphor.json_schema"];
-    assert!(schema.contains("original_sequence"));
-    assert!(schema.contains("generation"));
+    let port = Record::port();
+    for name in ["original_sequence", "generation"] {
+        let field = port.schema.field_with_name(name)?;
+        assert_eq!(field.data_type(), &sdk::DataType::UInt64);
+        assert!(field.is_nullable());
+    }
+    Ok(())
+}
+
+#[test]
+fn native_record_roundtrip() -> TestResult {
+    let fixture = fixture()?;
+    let data = &fixture.evaluation.inputs[0].data;
+    let bytes = data.batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<sdk::arrow_array::BinaryArray>()
+        .ok_or("frame column")?;
+    let mut records = Record::decode(data)?;
+    assert!(matches!(records[0].bytes, std::borrow::Cow::Borrowed(_)));
+    assert_eq!(records[0].bytes.as_ptr(), bytes.value(0).as_ptr());
+    records[0].source = Some(Lifetime {
+        process: vec![1; 16],
+        entry: vec![2; 16],
+        binding: vec![3; 16],
+        role: 4,
+        state: 5,
+        rule: 6,
+        sequence: u64::MAX,
+    });
+    records[0].effect.exact_file_object = Some(DiscoveryFileObjectV1 {
+        profile_generation_ref_id: u64::MAX,
+        mount_id_unique: 2,
+        inode: 3,
+        inode_generation: 4,
+        mount_namespace_inode: 5,
+        filesystem_device: 6,
+    });
+    records[0].effect.target_task_cookie = Some(u64::MAX);
+    records[0].effect.operation_argument = None;
+    records[0].generation = None;
+    records[0].original_sequence = Some(u64::MAX);
+    records[0].bytes = (&b"\0\xfforiginal-frame"[..]).into();
+    let encoded = Record::encode(&records)?;
+    let decoded = Record::decode(&encoded)?;
+    assert_eq!(
+        serde_json::to_value(&decoded)?,
+        serde_json::to_value(&records)?
+    );
+    let mut empty = encoded.clone();
+    empty.batches.clear();
+    assert!(Record::decode(&empty)?.is_empty());
+    assert_eq!(Record::encode(&[])?.batches[0].num_rows(), 0);
+    let mut invalid = serde_json::to_value(&records)?;
+    invalid[0]["id"]["stream"]["tenant_id"] = serde_json::json!([1, 2]);
+    let batch = serde_arrow::to_record_batch(Record::port().schema.fields(), &invalid)?;
+    let invalid = sdk::Dataset {
+        name: "records".into(),
+        batches: vec![batch],
+    };
+    assert!(matches!(
+        Record::decode(&invalid),
+        Err(sdk::Error::Batch { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn record_pages_keep_proof() -> TestResult {
+    let mut fixture = fixture()?;
+    let expected = Discovery::evaluate(&fixture.evaluation)?;
+    {
+        let data = &mut fixture.evaluation.inputs[0].data;
+        let batch = data.batches.remove(0);
+        data.batches = vec![batch.slice(0, 2), batch.slice(2, 1)];
+    }
+    let actual = Discovery::evaluate(&fixture.evaluation)?;
+    assert_eq!(actual.datasets.len(), expected.datasets.len());
+    for (actual, expected) in actual.datasets.iter().zip(&expected.datasets) {
+        assert_eq!(actual.name, expected.name);
+        assert_eq!(actual.batches, expected.batches);
+    }
+    let mut records = Record::decode(&fixture.evaluation.inputs[0].data)?;
+    records[1].id.cpu_id += 1;
+    let changed = Record::encode(&records)?;
+    drop(records);
+    fixture.evaluation.inputs[0].data = changed;
+    assert!(matches!(
+        Discovery::evaluate(&fixture.evaluation),
+        Err(sdk::Error::Contract {
+            code: sdk::ErrorCode::Invalid,
+            field,
+            ..
+        }) if field == "orphan context"
+    ));
+    fixture.evaluation.inputs[1].data.batches.clear();
+    assert!(matches!(
+        Discovery::evaluate(&fixture.evaluation),
+        Err(sdk::Error::Contract {
+            code: sdk::ErrorCode::Invalid,
+            field,
+            ..
+        }) if field == "record range"
+    ));
     Ok(())
 }
 

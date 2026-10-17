@@ -12,6 +12,7 @@ mod groups;
 mod merge;
 mod model;
 mod ranges;
+mod record;
 mod source;
 #[cfg(test)]
 mod tests;
@@ -47,7 +48,7 @@ impl Discovery {
                 sdk::Model::new(
                     "atoms",
                     vec![
-                        Self::port::<Record>("records"),
+                        Record::port(),
                         Self::port::<Context>("contexts"),
                         Self::port::<DiscoveryUnresolvedV1>("exclusions"),
                         Self::port::<DiscoveryCoverageV1>("coverage"),

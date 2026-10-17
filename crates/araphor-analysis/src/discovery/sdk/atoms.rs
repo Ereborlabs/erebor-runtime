@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use araphor_analysis_builtins::discovery as builtin;
+use snafu::ResultExt as _;
 
 use super::{pages::RecordedPages, Adapter, Result};
 use crate::*;
@@ -55,7 +56,7 @@ impl DiscoveryOwner {
         let records = input
             .records
             .iter()
-            .map(|row| Adapter::observation(input, row))
+            .map(Adapter::observation)
             .collect::<Result<Vec<_>>>()?;
         let contexts = input
             .contexts
@@ -69,7 +70,7 @@ impl DiscoveryOwner {
             input.tenant_id,
             "atoms",
             vec![
-                Adapter::dataset("records", &records)?,
+                builtin::Record::encode(&records).context(AnalysisContractSnafu)?,
                 Adapter::dataset("contexts", &contexts)?,
                 Adapter::dataset("coverage", &input.coverage)?,
                 Adapter::dataset("lifecycle", &input.lifecycle)?,
@@ -95,30 +96,11 @@ impl DiscoveryOwner {
 }
 
 impl Adapter {
-    fn observation(
-        input: &DiscoveryInputManifestV1,
-        record: &DiscoveryRecordV1,
-    ) -> Result<builtin::Record> {
+    fn observation(record: &DiscoveryRecordV1) -> Result<builtin::Record<'_>> {
         let wire = record.decode()?;
-        let range = input
-            .coverage
-            .iter()
-            .position(|range| {
-                range.stream == record.id.stream
-                    && range.cpu_id == record.id.cpu_id
-                    && range.first_cursor <= record.id.durable_cursor
-                    && range.last_cursor >= record.id.durable_cursor
-            })
-            .ok_or_else(|| {
-                DiscoveryInvalidSnafu {
-                    field: "record range",
-                }
-                .build()
-            })?;
         Ok(builtin::Record {
             id: record.id.clone(),
-            bytes: Self::revision(record)?,
-            range: range as u64,
+            bytes: std::borrow::Cow::Borrowed(&record.wire_record),
             temporal: wire.temporal_coverage,
             effect: (&wire).into(),
             generation: wire.profile_generation_ref_id,

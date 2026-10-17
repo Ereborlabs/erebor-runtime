@@ -9,6 +9,8 @@ repository.workspace = true
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 schemars.workspace = true
 serde.workspace = true
+serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-58"] }
+serde_bytes = "=0.11.19"
 serde_json.workspace = true
 snafu.workspace = true
 

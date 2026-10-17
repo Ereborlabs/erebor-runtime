@@ -284,10 +284,11 @@ pub struct Lifetime {
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Record {
+pub struct Record<'a> {
     pub id: DiscoveryRecordIdV1,
-    pub bytes: String,
-    pub range: u64,
+    #[serde(borrow, with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
+    pub bytes: std::borrow::Cow<'a, [u8]>,
     pub temporal: i32,
     pub effect: DiscoveryEffectKeyV1,
     pub generation: Option<u64>,

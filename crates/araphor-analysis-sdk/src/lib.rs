@@ -21,6 +21,7 @@ pub mod native;
 
 pub use arrow_array;
 pub use arrow_array::RecordBatch;
+pub use arrow_schema;
 pub use arrow_schema::{DataType, Field, Schema, TimeUnit};
 pub use bindings::InterfaceDeclarations;
 pub use error::{Error, ErrorCode, Result};

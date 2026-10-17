@@ -49,6 +49,51 @@ is **Not done** against the required architecture. The replacement must
 consume the actual Query input batches for live execution, finite execution,
 and manual refresh. An identity-only query must not invoke the old reader.
 
+## Discovery record input contract
+
+[Record::port](../../crates/araphor-analysis-builtins/src/discovery/record.rs)
+declares native Arrow fields for source identity, cursor, effect, source
+lifetime, and original frame bytes. The static port owns the schema. Each
+package declaration shares its field allocations. serde_arrow uses this
+schema for encoding and decoding. The source identifiers use serde_bytes.
+Their JSON schema remains an array of sixteen bytes.
+
+[DiscoveryOwner::derive_page](../../crates/araphor-analysis/src/discovery/sdk/atoms.rs) prepares a record input
+  -> [Adapter::observation](../../crates/araphor-analysis/src/discovery/sdk/atoms.rs) borrows each original frame and supplies its parsed fields
+  -> [Record::encode](../../crates/araphor-analysis-builtins/src/discovery/record.rs) creates the native Arrow dataset
+  -> [Package::check_evaluation](../../crates/araphor-analysis-sdk/src/validation.rs) checks the declared input contract
+  -> [Record::read](../../crates/araphor-analysis-builtins/src/discovery/record.rs) borrows frame bytes from the checked input batches
+  -> [Discovery::atoms](../../crates/araphor-analysis-builtins/src/discovery/atoms.rs) checks duplicates and resolves actual source coordinates against coverage
+  -> [Atoms::record](../../crates/araphor-analysis-builtins/src/discovery/atoms.rs) updates the domain result
+
+The input batches own the frame buffers until the evaluation ends. Record
+does not retain a host coverage index. The builtin makes one coverage map.
+The old host range search, per-record JSON digest, and redundant record sort
+are deleted. Context and snapshot ports still use their existing JSON codec.
+
+The [record tests](../../crates/araphor-analysis-builtins/src/discovery/tests.rs)
+check borrowed frame addresses, empty input, nullable fields, UInt64 precision,
+malformed identifiers, cross-batch duplicates, conflicts, and source ranges.
+The [native query test](../../crates/araphor-analysis/src/discovery/sdk/atoms/tests.rs)
+reads retained events through a finite Subscription. Native named_struct and
+CASE expressions produce the declared record fields. The existing SDK
+normalizer supplies field metadata and nullability. Complete batch equality
+checks the native projection against the codec. The test retains the source
+receipt and checks subscription completion.
+
+The selected final checks pass 66 SDK cases, 20 builtin cases, and 15 distinct
+Analysis cases, including both source-built native/Wasm parity cases. Strict
+Clippy and scoped formatting pass. Twelve selected cases first fail at the
+filesystem reserve. All twelve pass with the same source after obsolete
+generated binaries are removed. The current source and artifact record is
+`/tmp/araphor-typed-record-qualification1.json`. No full workspace CI or
+benchmark is run.
+
+**Partial:** Discovery still uses its host record adapter, source sweep, replay
+reader, and seal scheduler. The production Query subscription replacement is
+**Not done**. This contract and its query test do not complete that work or the
+production reduction target.
+
 ## Runtime table binding
 
 [AdmittedModel::relation](../../crates/araphor-analysis/src/model.rs) declares

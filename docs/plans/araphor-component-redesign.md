@@ -282,6 +282,56 @@ separate input row codec, source sweep, replay reader, and seal scheduler.
 Their replacement by actual Query subscriptions remains **Not done**. This
 source change does not complete that replacement.
 
+### Native Arrow record input
+
+Implementation and selected verification: **Done** for the record input contract.
+The Discovery records port has native Arrow fields and nested structs. It no
+longer contains a binary JSON row. serde_arrow uses the declared Arrow schema
+to encode and read records. serde_bytes keeps the fixed source identifiers as
+binary values. The frame field contains the original bytes. Guest records
+borrow those bytes from the input batches for the evaluation lifetime.
+
+Record no longer contains a host-assigned coverage index. The builtin resolves
+the source, CPU, and cursor against one coverage map. The host's repeated range
+search is deleted. The redundant sort after BTreeMap iteration is deleted.
+Duplicate checks compare the original frame bytes. The per-record JSON digest
+is deleted from the host projection. Context and snapshot ports still use JSON.
+
+The native_query_record_input test reads retained events through a finite Query
+subscription. Native SQL builds the nested record fields. The existing SDK
+normalizer supplies the declared field metadata and nullability. The test
+checks the complete batches against the record codec, including optional
+source and file fields, binary frames, exact receipts, and UInt64 values.
+The test uses Data and Query directly. It does not install execution packages.
+
+The final selected checks pass 66 SDK cases, 20 builtin cases, and 15 distinct
+Analysis cases. The Analysis checks cover native SQL input, live restart,
+frozen replay, paging, attribution, coverage denial, baseline output, and both
+native/Wasm parity cases. Strict SDK, Builtins, Data, Query, and Analysis Clippy
+passes. Formatting passes the nine changed Rust files. The records are
+`/tmp/araphor-discovery-typed-record-sdk1.json`,
+`/tmp/araphor-discovery-typed-record-analysis1.json`,
+`/tmp/araphor-discovery-typed-record-failed2.json`,
+`/tmp/araphor-discovery-typed-record-native1.json`, and
+`/tmp/araphor-discovery-typed-record-lint2.json`.
+
+An initial build fails with ENOSPC. A later selected run passes one case and
+fails twelve at the unchanged filesystem reserve. After obsolete generated
+binaries are removed, all twelve failed cases pass with the same source.
+The cleanup records are `/tmp/araphor-typed-record-cache-cleanup1.json`,
+`/tmp/araphor-typed-record-cache-cleanup2.json`, and
+`/tmp/araphor-typed-record-cache-cleanup3.json`. Automatic approval review times
+out on the third cleanup. The same cleanup succeeds on the permitted retry.
+No full workspace CI or benchmark is run.
+
+This deliverable adds 131 nonblank production Rust lines. The complete rewrite
+adds 869 lines against `7b7b407a`. The required 6,000-line deletion remains
+**Not done**. The count record is `/tmp/araphor-typed-record-count1.json`.
+Discovery still prepares records in its host adapter and retains its separate
+source sweep, replay reader, and seal scheduler. Their replacement by actual
+Query input subscriptions remains **Not done**. A native query test does not
+complete the production subscription migration.
+
 ### Native function registration and optional operator memory
 
 Implementation and selected verification: **Done**.

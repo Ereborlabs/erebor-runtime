@@ -20,7 +20,7 @@ struct Atoms {
 
 impl Discovery {
     pub(super) fn atoms(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
-        let rows = Rows::input::<Record>(input, "records")?;
+        let rows = Record::read(input)?;
         let mut coverage = Rows::input::<Coverage>(input, "coverage")?;
         let observed = Rows::input::<bool>(input, "observed")?;
         Self::require(observed.len() == 1, "proof kind")?;
@@ -57,16 +57,42 @@ impl Discovery {
                 Self::same(previous == &exclusion.reason, "exclusion reason")?;
             }
         }
-        let mut records: Vec<_> = records.into_values().collect();
-        records.sort_by(|left, right| left.id.cmp(&right.id));
-        for record in records {
+        let ranges: BTreeMap<_, _> = coverage
+            .iter()
+            .enumerate()
+            .map(|(index, range)| {
+                (
+                    (&range.stream, range.cpu_id, range.first_cursor),
+                    (index, range.last_cursor),
+                )
+            })
+            .collect();
+        for record in records.into_values() {
+            let range = ranges
+                .range(
+                    ..=(
+                        &record.id.stream,
+                        record.id.cpu_id,
+                        record.id.durable_cursor,
+                    ),
+                )
+                .next_back()
+                .filter(|((stream, cpu, _), (_, last))| {
+                    *stream == &record.id.stream
+                        && *cpu == record.id.cpu_id
+                        && *last >= record.id.durable_cursor
+                })
+                .map(|(_, (index, _))| *index)
+                .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "record range"))?;
             state.record(
                 record,
+                range,
                 context_map.get(&record.id).copied(),
                 exclusion_map.get(&record.id).copied(),
                 observed[0],
             )?;
         }
+        drop(ranges);
         state.coverage(&mut coverage);
         let coverage = Self::merge_coverage(coverage)?;
         let lifecycle = Self::merge_lifecycle(Rows::input::<Lifecycle>(input, "lifecycle")?)?;
@@ -92,13 +118,14 @@ impl Atoms {
     fn record(
         &mut self,
         record: &Record,
+        range: usize,
         context: Option<&Context>,
         exclusion: Option<&String>,
         observed: bool,
     ) -> sdk::Result<()> {
-        let range = usize::try_from(record.range)
-            .ok()
-            .and_then(|index| self.ranges.get_mut(index))
+        let range = self
+            .ranges
+            .get_mut(range)
             .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "record range"))?;
         Discovery::add(&mut range.0, 1)?;
         range.1 |= record.temporal == 2;

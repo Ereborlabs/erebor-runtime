@@ -16,10 +16,16 @@ pub fn node_id_is_valid(value: &str) -> bool {
 #[serde(deny_unknown_fields)]
 /// Separates retained input by authenticated source and source epoch.
 pub struct EvidenceIntakeIdentityV1 {
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "[u8; 16]")]
     pub tenant_id: [u8; 16],
     pub node_id: String,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "[u8; 16]")]
     pub node_boot_id: [u8; 16],
     pub label_epoch: u64,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "[u8; 16]")]
     pub source_id: [u8; 16],
     pub source_epoch: u64,
 }
