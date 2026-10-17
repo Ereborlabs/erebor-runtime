@@ -789,6 +789,11 @@ impl DiscoveryOwner {
             .map_or(0, |receipt| receipt.coverage_revision);
         let facts = self.provider.revision(source)?;
         let mut notices = self.store.profile_notices(&scope, facts, coverage)?;
+        if !force && notices.is_empty() {
+            return Ok(false);
+        }
+        let execution = self.execution.snapshot(source.tenant_id)?;
+        let installed = Self::analysis_refs(&execution)?;
         let mut changed = false;
         if force && !notices.iter().any(|(id, _)| id == &head.result_id) {
             changed |= self.refresh_profile(
@@ -796,6 +801,8 @@ impl DiscoveryOwner {
                 head.commit_revision,
                 true,
                 now,
+                &execution,
+                &installed,
             )?;
         }
         while !notices.is_empty() {
@@ -805,7 +812,14 @@ impl DiscoveryOwner {
                 };
                 let profile = DiscoveryProfileV1::try_from(body.as_slice())?;
                 require(profile.scope == scope, "profile source scope")?;
-                changed |= self.refresh_profile(profile, *revision, id == &head.result_id, now)?;
+                changed |= self.refresh_profile(
+                    profile,
+                    *revision,
+                    id == &head.result_id,
+                    now,
+                    &execution,
+                    &installed,
+                )?;
             }
             let next = self.store.profile_notices(&scope, facts, coverage)?;
             if next == notices {
@@ -822,14 +836,14 @@ impl DiscoveryOwner {
         revision: u64,
         publish: bool,
         now: u64,
+        execution: &crate::InstalledAnalysis,
+        installed: &[crate::InstalledRefV1],
     ) -> Result<bool> {
         let source = profile.scope.identity.clone();
-        let execution = self.execution.snapshot(source.tenant_id)?;
-        let installed = Self::analysis_refs(&execution)?;
         let Some(status) = self.store.source_status(&source)? else {
             return Ok(false);
         };
-        if self.installed_refs(&profile)?.as_ref() != Some(&installed) {
+        if self.installed_refs(&profile)?.as_deref() != Some(installed) {
             self.store.mark_notice(
                 &profile,
                 revision,
@@ -929,7 +943,7 @@ impl DiscoveryOwner {
         }
         let facts_revision = self.provider.revision(&source)?;
         let Some(snapshot) =
-            self.bound_refresh(&profile, &mut input, &facts, frozen_count, now, &execution)?
+            self.bound_refresh(&profile, &mut input, &facts, frozen_count, now, execution)?
         else {
             self.store.mark_notice(
                 &profile,
@@ -989,7 +1003,7 @@ impl DiscoveryOwner {
             &profile,
             health.consumed_cursor,
             now,
-            &installed,
+            installed,
         )?);
         profile
             .context_refs
@@ -1039,7 +1053,7 @@ impl DiscoveryOwner {
         let prepared = PreparedProfile::new(profile)?;
         execution.authorize(
             source.tenant_id,
-            &Self::package_revisions(&installed),
+            &Self::package_revisions(installed),
             || {
                 if publish {
                     self.store.commit_working_profile(commit, prepared, prior)?;
@@ -1170,7 +1184,6 @@ mod tests {
 
         fn owner(&self, config: DiscoveryConfigV1) -> Result<DiscoveryOwner> {
             DiscoveryOwner::new(
-                self.store.clone(),
                 Arc::new(MissingContext),
                 config,
                 crate::InstalledAnalysis::testing(Some(self.store.clone()), self.source.tenant_id)?,
@@ -1213,7 +1226,6 @@ mod tests {
             directory.path().join("analysis"),
         )?);
         let owner = DiscoveryOwner::new(
-            store.clone(),
             Arc::new(MissingContext),
             Default::default(),
             crate::InstalledAnalysis::testing(Some(store.clone()), source.tenant_id)?,

@@ -36,12 +36,12 @@ pub struct DiscoveryOwner {
 
 impl DiscoveryOwner {
     pub fn new(
-        store: Arc<AnalysisStore>,
         provider: Arc<dyn DiscoveryContextProvider>,
         config: DiscoveryConfigV1,
         mut execution: InstalledAnalysis,
     ) -> Result<Self> {
         model::require(config.valid(), "configuration")?;
+        let store = Arc::clone(execution.owner.query.store());
         store.register_discovery_owner();
         execution.memory = execution.owner.query.memory().scope();
         Ok(Self {

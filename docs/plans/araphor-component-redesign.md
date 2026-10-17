@@ -332,6 +332,71 @@ source sweep, replay reader, and seal scheduler. Their replacement by actual
 Query input subscriptions remains **Not done**. A native query test does not
 complete the production subscription migration.
 
+### Frozen Discovery input subscriptions
+
+Implementation and selected verification: **Done** for frozen record reads.
+DiscoveryOwner::replay_records consumes a finite Query Subscription over the
+events table. Native SQL projects source identity, CPU, cursor, kernel sequence,
+and original frame bytes. The authorized source selection contains the exact
+cursor bounds. Native DataFusion sorts the records. serde_arrow reads the
+projected fields into the existing Discovery record type. The direct raw-page
+reader and its page loop are removed from replay_input.
+DiscoveryOwner derives its store from the Query engine. The separate store
+constructor argument is removed from all fourteen callers.
+
+Replay and manual refresh both use replay_input. These production paths now
+consume record bytes from Query. They do not use a query that only lists source
+identities. Frozen coverage, context facts, package references, missing-record
+checks, input budgets, and final snapshot comparison remain with Discovery.
+A configured result bound or an expired cursor makes frozen input unavailable.
+The replay session uses the configured record allowance and Query memory
+capacity. It does not inherit the client result-page row limit. Its operation
+control uses the configured Query extraction timeout.
+
+refresh_source captures one installed-package snapshot and reference set for
+the complete refresh batch. refresh_profile borrows that snapshot. The former
+snapshot load for each profile is removed. Commit-time authorization remains.
+A refresh without notices returns before it loads a package snapshot.
+
+Finite replacement queries no longer hash their complete Arrow output for
+change detection. Live replacement queries retain the existing fingerprint
+and suppression behavior. Output completion, limits, cancellation, read checks,
+and buffer reservations remain common to both modes. The native ListView test
+proves that finite completion does not require ScalarValue conversion.
+
+The final selected checks pass 23 Discovery lifecycle cases and 62 Query cases.
+The 258-record source case crosses the old page and client result limits. It
+checks exact source and cursor bounds, unknown protobuf bytes, a frozen replay
+after new intake, and an explicit record limit. The lifecycle cases check
+retention loss, frozen facts, package revision changes, manual refresh, source
+notices, capacity, sealing, and stop. Strict Query and Analysis Clippy passes.
+Formatting passes the twelve changed Rust files. The records are
+`/tmp/araphor-discovery-replay-query-analysis2.json`,
+`/tmp/araphor-discovery-replay-query-final1.json`, and
+`/tmp/araphor-discovery-replay-query-lint2.json`. After the constructor change,
+the source-range and retained-notice checks pass. Strict Query, Analysis,
+Control, and E2E library and test Clippy also passes. These records are
+`/tmp/araphor-discovery-replay-query-admission1.json` and
+`/tmp/araphor-discovery-replay-query-callers1.json`.
+
+The first lifecycle run passes 22 cases and reaches the existing notice-page
+timeout in one case. That case passes unchanged in isolation. After snapshot
+reuse is added, the complete lifecycle selection passes. The earlier records
+remain `/tmp/araphor-discovery-replay-query-analysis1.json` and
+`/tmp/araphor-discovery-replay-query-notice2.json`. No timeout or assertion is
+weakened. Obsolete generated binaries are removed before the test links. The
+cleanup records are `/tmp/araphor-replay-query-cache-cleanup1.json` and
+`/tmp/araphor-replay-query-cache-cleanup2.json`. No full workspace CI or
+benchmark is run. The native plugin ABI is unchanged.
+
+This deliverable adds 86 nonblank production Rust lines. The complete rewrite
+adds 955 lines against `7b7b407a`. The required 6,000-line deletion remains
+**Not done**. The count record is `/tmp/araphor-replay-query-count1.json`.
+Live intake still uses its raw-page reader, source sweep, and seal scheduler.
+Recorded manifests still use RecordedPages and host input preparation. The
+complete Discovery subscription replacement and remaining quota defaults are
+**Not done**. This deliverable does not establish a speed result.
+
 ### Native function registration and optional operator memory
 
 Implementation and selected verification: **Done**.

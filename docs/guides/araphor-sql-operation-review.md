@@ -94,6 +94,58 @@ reader, and seal scheduler. The production Query subscription replacement is
 **Not done**. This contract and its query test do not complete that work or the
 production reduction target.
 
+## Frozen Discovery query inputs
+
+[DiscoveryOwner::new](../../crates/araphor-analysis/src/discovery/mod.rs)
+derives the durable store from its Query engine. Callers cannot supply a second
+store. Discovery state and source queries use that same owner.
+
+[DiscoveryOwner::replay](../../crates/araphor-analysis/src/discovery/replay.rs) requests frozen input
+  -> [replay_input](../../crates/araphor-analysis/src/discovery/replay.rs) keeps the recorded coverage and context facts
+  -> [replay_records](../../crates/araphor-analysis/src/discovery/replay.rs) supplies exact source and cursor bounds to a finite Subscription
+  -> [Engine::prepare](../../crates/araphor-query/src/execution/admission.rs) uses native SQL admission and planning
+  -> [SubscribeExec](../../crates/araphor-query/src/stream/physical.rs) runs the native projection and sort
+  -> [SourceData::open](../../crates/araphor-query/src/sources/mod.rs) returns retained event batches
+  -> [replay_records](../../crates/araphor-analysis/src/discovery/replay.rs) reads the projected record fields with serde_arrow
+  -> [replay_input](../../crates/araphor-analysis/src/discovery/replay.rs) rejects missing cursors and checks frozen attribution
+  -> [replay](../../crates/araphor-analysis/src/discovery/replay.rs) checks the exact recomputed snapshot
+
+[refresh_profile](../../crates/araphor-analysis/src/discovery/live.rs) uses the
+same frozen input path before it resolves missing facts. It no longer reads
+raw store pages. [refresh_source](../../crates/araphor-analysis/src/discovery/live.rs)
+owns one installed-package snapshot and reference set for the refresh batch.
+Each profile borrows this snapshot. The commit still checks current authority.
+An empty notice set does not load a new package snapshot.
+
+The finite Query session uses the configured record allowance and Query memory
+capacity. The client result-page row limit does not define a detector input
+window. A partial result or an expired cursor cannot become complete frozen
+input. The operation control uses the Query extraction timeout.
+
+[Output::complete](../../crates/araphor-query/src/stream/physical/output.rs)
+accepts comparison state only for a live replacement query.
+[Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) supplies no
+comparison state for a finite query. Finite completion therefore skips the
+row fingerprint. Both modes retain output limits, cancellation, read checks,
+producer drop, and buffer reservations. The
+[ListView case](../../crates/araphor-query/src/stream/physical/output/tests.rs)
+returns a native Arrow array that ScalarValue cannot represent. It also checks
+that the returned array keeps the original Arc.
+
+The [range case](../../crates/araphor-analysis/src/discovery/replay.rs) checks
+258 records, exact cursor order, source isolation, original unknown protobuf
+bytes, later intake, and an explicit record limit. The complete selected
+Discovery lifecycle run passes 23 cases. The selected Query run passes 62
+cases. Strict Clippy, formatting, and guide links pass. An earlier notice-page
+timeout passes unchanged in isolation and remains in the evidence. The source
+record is `/tmp/araphor-replay-query-qualification1.json`. No full workspace
+CI or benchmark is run. Native plugin ABI qualification is not repeated.
+
+**Partial:** Live intake still reads raw pages and owns its source sweep and
+seal scheduler. Recorded manifest execution still uses RecordedPages and host
+input preparation. These paths still need actual Query input subscriptions.
+Remaining quota defaults and the production reduction target are **Not done**.
+
 ## Runtime table binding
 
 [AdmittedModel::relation](../../crates/araphor-analysis/src/model.rs) declares

@@ -450,7 +450,6 @@ async fn discovery_notice_pages() -> TestResult {
     provider.facts.send_replace(1);
     let facts = provider.facts.clone();
     let owner = Arc::new(DiscoveryOwner::new(
-        fixture.store.clone(),
         provider,
         DiscoveryConfigV1 {
             interval_records: 1,

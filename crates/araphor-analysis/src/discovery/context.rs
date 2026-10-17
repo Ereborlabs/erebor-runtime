@@ -675,7 +675,6 @@ mod tests {
             directory.path().join("analysis"),
         )?);
         let owner = DiscoveryOwner::new(
-            store.clone(),
             Arc::new(Unavailable),
             DiscoveryConfigV1::default(),
             crate::InstalledAnalysis::testing(Some(store.clone()), request.access.tenant_id)?,

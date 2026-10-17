@@ -140,7 +140,6 @@ impl ControlConfig {
                     .discovery
                     .map(|config| -> Result<_> {
                         Ok(araphor_analysis::DiscoveryOwner::new(
-                            data.clone(),
                             Arc::new(store.clone()),
                             config,
                             control.installed_analysis()?,

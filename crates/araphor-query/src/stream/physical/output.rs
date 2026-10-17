@@ -21,7 +21,7 @@ impl Output {
         mut self,
         session: &Session,
         stream: SendableRecordBatchStream,
-        previous: &mut Option<[u8; 32]>,
+        previous: Option<&mut Option<[u8; 32]>>,
     ) -> Result<Self> {
         self._control.check()?;
         let schema = stream.schema();
@@ -63,10 +63,17 @@ impl Output {
             .capacity()
             .saturating_mul(size_of::<RecordBatch>())
             .saturating_add(arrays);
-        let digest = self.fingerprint(&schema, &batches, &memory, headers)?;
-        let unchanged = *previous == Some(digest);
+        let digest = previous
+            .as_ref()
+            .map(|_| self.fingerprint(&schema, &batches, &memory, headers))
+            .transpose()?;
+        let unchanged = previous
+            .as_ref()
+            .is_some_and(|previous| **previous == digest);
         self.charge(&memory, if unchanged { 0 } else { headers })?;
-        *previous = Some(digest);
+        if let Some(previous) = previous {
+            *previous = digest;
+        }
         self.batches = (!unchanged).then_some(batches);
         self._memory = memory;
         Ok(self)

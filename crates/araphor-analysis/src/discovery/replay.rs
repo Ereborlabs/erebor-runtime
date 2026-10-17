@@ -1,5 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Bound;
+use std::sync::Arc;
 
+use araphor_query::follow::{Subscription, SystemClock};
+use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
 
 use super::model::{require, InputByteLimit};
@@ -7,6 +11,68 @@ use super::*;
 use crate::{AnalysisContextVersionV1, ContextSensitivityV1, DiscoveryEncodingSnafu, Result};
 
 impl DiscoveryOwner {
+    fn replay_records(
+        &self,
+        source: &EvidenceIntakeIdentityV1,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<DiscoveryRecordV1>>> {
+        let query = Arc::clone(&self.execution.owner.query);
+        let runtime = Arc::clone(&query);
+        let memory = Arc::clone(&self.execution.memory);
+        let mut selection = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]);
+        selection.cursor_from = Bound::Included(first);
+        selection.cursor_until = Bound::Included(last);
+        let control = Arc::new(AnalysisReadControl::with_timeout(
+            query.limits().extract_timeout,
+        )?);
+        let rows = self.config.interval_records;
+        let update = runtime.wait(async move {
+            let (plan, sources) = query.prepare(
+                "SELECT named_struct('stream', named_struct(
+                    'tenant_id', tenant_id, 'node_id', node_id, 'node_boot_id', node_boot_id,
+                    'label_epoch', label_epoch, 'source_id', source_id, 'source_epoch', source_epoch),
+                    'cpu_id', cpu_id, 'durable_cursor', source_cursor) AS id,
+                    kernel_sequence AS original_kernel_sequence, framed_record AS wire_record
+                 FROM events ORDER BY source_cursor",
+                Vec::new(),
+            ).await?;
+            let mut session = query.session_on(selection, &control, 0, memory)?;
+            session.set_output(rows, query.limits().input_bytes.min(query.limits().output_capacity))?;
+            let mut subscription = Subscription::new(
+                session, Arc::new(plan), sources, b"discovery-replay", None,
+                Arc::new(SystemClock::default()), false,
+            )?;
+            subscription.try_next().await?.ok_or_else(|| araphor_query::Error::Invalid {
+                field: "frozen input subscription",
+                location: snafu::location!(),
+            })
+        });
+        let update = match update {
+            Err(error)
+                if matches!(
+                    araphor_query::Failure::from(&error),
+                    araphor_query::Failure::ResultTooLarge | araphor_query::Failure::CursorExpired
+                ) =>
+            {
+                return Ok(None)
+            }
+            result => result?,
+        };
+        if update.limited || !update.exhausted {
+            return Ok(None);
+        }
+        let mut records = Vec::new();
+        for batch in update.batches.as_deref().unwrap_or_default() {
+            records.extend(
+                serde_arrow::from_record_batch::<Vec<DiscoveryRecordV1>>(batch)
+                    .map_err(|source| arrow_schema::ArrowError::ExternalError(Box::new(source)))
+                    .context(crate::PackageArrowSnafu)?,
+            );
+        }
+        Ok(Some(records))
+    }
+
     pub fn replay(&self, profile: &DiscoveryProfileV1) -> Result<DiscoveryReplayV1> {
         profile.validate()?;
         let unavailable = |reason: &str| DiscoveryReplayV1::Unavailable {
@@ -123,70 +189,65 @@ impl DiscoveryOwner {
                 return Ok(None);
             }
             let mut cursor = range.first_cursor;
-            while cursor <= range.last_cursor {
-                let page = match self.store.read_page(&range.stream, cursor) {
-                    Ok(page) => page,
-                    Err(araphor_data::Error::RetainedRangeExpired { .. }) => return Ok(None),
-                    Err(error) => return Err(error.into()),
-                };
-                if page.first_cursor != cursor || page.records.is_empty() {
+            let Some(records) = self.replay_records(&range.stream, cursor, range.last_cursor)?
+            else {
+                return Ok(None);
+            };
+            for record in records {
+                if record.id.stream != range.stream
+                    || record.id.cpu_id != range.cpu_id
+                    || record.id.durable_cursor != cursor
+                {
                     return Ok(None);
                 }
-                for stored in page.records {
-                    if stored.cursor != cursor {
-                        return Ok(None);
-                    }
-                    if stored.cursor > range.last_cursor {
-                        break;
-                    }
-                    if input.records.len() >= self.config.interval_records {
-                        return Ok(None);
-                    }
-                    let Some(remaining) = budget.0.checked_sub(stored.framed_record.len()) else {
-                        return Ok(None);
-                    };
-                    budget.0 = remaining;
-                    let record =
-                        DiscoveryRecordV1::try_from((&range.stream, range.cpu_id, &stored))?;
-                    let wire = record.decode()?;
-                    if wire.coverage_interval_id.as_ref() != range.coverage_interval_id {
-                        return Ok(None);
-                    }
-                    if !unavailable.contains(&record.id) {
-                        let effect = DiscoveryEffectKeyV1::from(&wire);
-                        let candidates = atoms.get(&(
-                            &record.id.stream,
-                            record.id.cpu_id,
-                            wire.profile_generation_ref_id.unwrap_or_default(),
-                            range.coverage_interval_id,
-                            wire.temporal_coverage,
-                            &effect,
-                        ));
-                        let mut matches = candidates
-                            .into_iter()
-                            .flatten()
-                            .filter(|atom| source_matches(atom, &record, &wire));
-                        let Some(atom) = matches.next() else {
-                            return Ok(None);
-                        };
-                        if matches.next().is_some() {
-                            return Ok(None);
-                        }
-                        let binding = DiscoveryContextBindingV1::from((&record.id, &atom.key));
-                        if !facts.iter().any(|fact| fact_matches(fact, &binding)) {
-                            return Ok(None);
-                        }
-                        if serde_json::to_writer(&mut budget, &binding).is_err() {
-                            return Ok(None);
-                        }
-                        input.contexts.push(binding);
-                    }
-                    input.records.push(record);
-                    let Some(next) = cursor.checked_add(1) else {
-                        return Ok(None);
-                    };
-                    cursor = next;
+                if input.records.len() >= self.config.interval_records {
+                    return Ok(None);
                 }
+                let Some(remaining) = budget.0.checked_sub(record.wire_record.len()) else {
+                    return Ok(None);
+                };
+                budget.0 = remaining;
+                let wire = record.decode()?;
+                if wire.coverage_interval_id.as_ref() != range.coverage_interval_id {
+                    return Ok(None);
+                }
+                if !unavailable.contains(&record.id) {
+                    let effect = DiscoveryEffectKeyV1::from(&wire);
+                    let candidates = atoms.get(&(
+                        &record.id.stream,
+                        record.id.cpu_id,
+                        wire.profile_generation_ref_id.unwrap_or_default(),
+                        range.coverage_interval_id,
+                        wire.temporal_coverage,
+                        &effect,
+                    ));
+                    let mut matches = candidates
+                        .into_iter()
+                        .flatten()
+                        .filter(|atom| source_matches(atom, &record, &wire));
+                    let Some(atom) = matches.next() else {
+                        return Ok(None);
+                    };
+                    if matches.next().is_some() {
+                        return Ok(None);
+                    }
+                    let binding = DiscoveryContextBindingV1::from((&record.id, &atom.key));
+                    if !facts.iter().any(|fact| fact_matches(fact, &binding)) {
+                        return Ok(None);
+                    }
+                    if serde_json::to_writer(&mut budget, &binding).is_err() {
+                        return Ok(None);
+                    }
+                    input.contexts.push(binding);
+                }
+                input.records.push(record);
+                let Some(next) = cursor.checked_add(1) else {
+                    return Ok(None);
+                };
+                cursor = next;
+            }
+            if cursor <= range.last_cursor {
+                return Ok(None);
             }
         }
         if input.records.len() as u64 != profile.snapshot.accepted_records {
@@ -425,7 +486,6 @@ mod tests {
                 )?;
             }
             let owner = DiscoveryOwner::new(
-                store.clone(),
                 provider.clone(),
                 DiscoveryConfigV1 {
                     interval_records: 3,
@@ -449,6 +509,84 @@ mod tests {
                 profile,
             })
         }
+    }
+
+    #[test]
+    fn replay_query_keeps_range() -> TestResult {
+        let mut fixture = ReplayFixture::new()?;
+        fixture.owner.config.interval_records = 512;
+        let source = &fixture.profile.scope.identity;
+        let original = fixture
+            .owner
+            .replay_records(source, 3, 3)?
+            .ok_or("record input unavailable")?;
+        let original = &original[0].wire_record;
+        let mut payload = original[4..original.len() - 4].to_vec();
+        payload.extend_from_slice(&[0xf8, 0x7f, 0x2a]);
+        let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
+        frame.extend_from_slice(&payload);
+        frame.extend_from_slice(&crc32c::crc32c(&frame).to_be_bytes());
+        assert_ne!(
+            Vec::<u8>::try_from(&crate::EvidenceRecord::try_from(frame.as_slice())?)?,
+            frame,
+        );
+        let mut frames = Vec::new();
+        let mut ends = Vec::new();
+        for _ in 4..=260 {
+            frames.extend_from_slice(&frame);
+            ends.push(frames.len());
+        }
+        fixture.store.accept_validated_batch(
+            source.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: 4,
+                last_cursor: 260,
+                intake_utc_ns: 4,
+                framed_records: frames.into(),
+                frame_ends: ends,
+            },
+        )?;
+        let foreign = EvidenceIntakeIdentityV1 {
+            source_id: [55; 16],
+            ..source.clone()
+        };
+        fixture.store.accept_validated_batch(
+            foreign,
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: 1,
+                last_cursor: 1,
+                intake_utc_ns: 4,
+                framed_records: frame.clone().into(),
+                frame_ends: vec![frame.len()],
+            },
+        )?;
+        let records = fixture
+            .owner
+            .replay_records(source, 2, 259)?
+            .ok_or("record input unavailable")?;
+        assert_eq!(records.len(), 258);
+        assert!(records
+            .iter()
+            .all(|record| record.id.stream == *source && record.id.cpu_id == 0));
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.id.durable_cursor)
+                .collect::<Vec<_>>(),
+            (2..=259).collect::<Vec<_>>(),
+        );
+        assert!(records[2..]
+            .iter()
+            .all(|record| record.wire_record == frame));
+        assert_eq!(
+            fixture.owner.replay(&fixture.profile)?,
+            DiscoveryReplayV1::Available(Box::new(fixture.profile.snapshot.clone())),
+        );
+        fixture.owner.config.interval_records = 200;
+        assert!(fixture.owner.replay_records(source, 2, 259)?.is_none());
+        Ok(())
     }
 
     #[test]
@@ -549,7 +687,6 @@ mod tests {
             },
         ] {
             let owner = DiscoveryOwner::new(
-                fixture.store.clone(),
                 fixture.provider.clone(),
                 config,
                 crate::InstalledAnalysis::testing(
@@ -563,7 +700,6 @@ mod tests {
             ));
         }
         let owner = DiscoveryOwner::new(
-            fixture.store.clone(),
             fixture.provider.clone(),
             DiscoveryConfigV1 {
                 input_bytes: bytes,

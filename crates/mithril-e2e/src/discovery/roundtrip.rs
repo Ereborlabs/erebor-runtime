@@ -337,7 +337,6 @@ impl DiscoveryQualificationRunner {
                 calls: AtomicUsize::new(0),
             });
             let owner = araphor_analysis::DiscoveryOwner::new(
-                data.clone(),
                 provider.clone(),
                 profile_config,
                 execution.ok_or("installed discovery handle is absent")?,
@@ -449,7 +448,6 @@ impl DiscoveryQualificationRunner {
                 calls: AtomicUsize::new(0),
             });
             let owner = araphor_analysis::DiscoveryOwner::new(
-                recovered.clone(),
                 provider.clone(),
                 profile_config,
                 araphor_analysis::InstalledAnalysis::testing(

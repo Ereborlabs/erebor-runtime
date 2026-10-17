@@ -42,7 +42,6 @@ fn discovery_notice_cache() -> TestResult {
         },
     )?;
     let owner = crate::DiscoveryOwner::new(
-        store.clone(),
         Arc::new(NoContext),
         crate::DiscoveryConfigV1 {
             interval_records: 1,

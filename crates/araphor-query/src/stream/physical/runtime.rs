@@ -265,7 +265,9 @@ impl Runtime {
                 Arc::clone(&self.context),
             )
             .context(SqlSnafu)?;
-            let output = output.complete(&session, stream, &mut self.content).await?;
+            let output = output
+                .complete(&session, stream, Some(&mut self.content))
+                .await?;
             drop(input);
             output
         } else {
@@ -295,7 +297,11 @@ impl Runtime {
                 _permit: Some(permit),
                 _control: control,
             }
-            .complete(&session, stream, &mut self.content)
+            .complete(
+                &session,
+                stream,
+                self.run.follow.then_some(&mut self.content),
+            )
             .await?
         };
         self.check_store(&output.snapshot.page.extraction.meta)?;
