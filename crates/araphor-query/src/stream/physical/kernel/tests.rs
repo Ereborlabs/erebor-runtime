@@ -15,6 +15,9 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::TaskContext;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use futures_core::Stream;
+use futures_util::{stream, StreamExt as _, TryStreamExt as _};
+use std::pin::Pin;
 use tokio::sync::mpsc;
 
 use super::super::SubscribeExec;
@@ -22,6 +25,41 @@ use super::*;
 use crate::execution::Limits;
 use crate::sources::{JournalExec, SourceData, SourceSnapshot};
 use crate::stream::Change;
+
+type Input = Pin<Box<dyn Stream<Item = Result<Change>> + Send>>;
+type OutputStream = Pin<Box<dyn Stream<Item = Result<Output>> + Send>>;
+
+fn execute(
+    aggregate: &AggregateExec,
+    input: Input,
+    source: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+    engine: Arc<Engine>,
+    control: Arc<AnalysisReadControl>,
+) -> OutputStream {
+    let aggregate = aggregate.clone();
+    Box::pin(
+        stream::once(async move {
+            let kernel = Kernel::new(&aggregate, source, context, engine, &control)?;
+            Ok::<_, crate::Error>((kernel, input, control))
+        })
+        .map_ok(|state| {
+            stream::try_unfold(state, |(mut kernel, mut input, control)| async move {
+                let change = control
+                    .query_async(async { input.next().await.transpose() })
+                    .await?;
+                match change {
+                    Some(change) => Ok(Some((
+                        kernel.apply(change).await?,
+                        (kernel, input, control),
+                    ))),
+                    None => Ok(None),
+                }
+            })
+        })
+        .try_flatten(),
+    )
+}
 
 struct Fixture {
     plan: Arc<dyn ExecutionPlan>,

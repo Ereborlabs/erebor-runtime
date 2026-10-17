@@ -23,13 +23,13 @@ use futures_util::{stream, TryStreamExt as _};
 use snafu::ResultExt as _;
 
 use super::{Output, OutputStream, Run};
-use crate::execution::{Read, Retention, Session};
 use crate::sources::{JournalExec, SourceData};
 use crate::{Result, SqlSnafu};
 
 mod kernel;
 mod output;
 mod page;
+mod runtime;
 
 pub(crate) use output::Fingerprint;
 
@@ -56,6 +56,13 @@ struct Compiled {
     aggregate: Arc<dyn ExecutionPlan>,
     source: Arc<dyn ExecutionPlan>,
 }
+
+type Initial = (
+    Arc<crate::execution::Permit>,
+    u64,
+    tokio::sync::watch::Receiver<u64>,
+    tokio::sync::watch::Receiver<u64>,
+);
 
 impl SubscribeExec {
     pub(crate) fn new(
@@ -96,8 +103,10 @@ impl SubscribeExec {
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(input.schema()),
             Partitioning::UnknownPartitioning(1),
-            EmissionType::Final,
-            Boundedness::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Unbounded {
+                requires_infinite_memory: false,
+            },
         ));
         Ok(Self {
             input,
@@ -180,10 +189,44 @@ impl SubscribeExec {
         }))
     }
 
+    pub(crate) async fn open(run: Arc<Run>) -> Result<OutputStream> {
+        let permit = Arc::new(
+            run.control
+                .query_async(run.engine.acquire_evaluation(run.selection.tenant_id))
+                .await?,
+        );
+        let mut changes = run.engine.store().subscribe_revision();
+        let mut clock_changes = run.clock.changes();
+        changes.borrow_and_update();
+        clock_changes.borrow_and_update();
+        let now = run.clock.now_ns()?;
+        let session = run
+            .engine
+            .session(run.selection.clone(), &run.control, now)?;
+        let mut state = session.state()?;
+        let logical = crate::planner::subscription::Subscribe::runtime(
+            run.plan.as_ref().clone(),
+            run.operation == crate::follow::Operation::Append,
+        );
+        state.config_mut().set_extension(run);
+        let physical = session.physical(&logical, &state).await?;
+        let subscription = physical
+            .as_any()
+            .downcast_ref::<Self>()
+            .ok_or_else(|| DataFusionError::Internal("subscription physical root changed".into()))
+            .context(SqlSnafu)?;
+        subscription.execute_committed(
+            0,
+            state.task_ctx(),
+            Some((permit, now, changes, clock_changes)),
+        )
+    }
+
     pub(crate) fn execute_committed(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        initial: Option<Initial>,
     ) -> Result<OutputStream> {
         if partition != 0 {
             return Err(DataFusionError::Execution(
@@ -197,84 +240,34 @@ impl SubscribeExec {
             .ok_or_else(|| DataFusionError::Execution("subscription run is absent".into()))
             .context(SqlSnafu)?;
         run.control.check()?;
-        let Mode::Count { journal, compiled } = &self.mode else {
-            if !matches!(self.mode, Mode::Page { lowered: true }) {
-                return Err(DataFusionError::Internal(
-                    "page lineage is not planned".into(),
-                ))
-                .context(SqlSnafu);
+        let (initial, changes, clock_changes) = match initial {
+            Some((permit, now, changes, clock_changes)) => {
+                (Some((permit, now)), changes, clock_changes)
             }
-            let permit = context
-                .session_config()
-                .get_extension::<crate::execution::Permit>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution("page evaluation permit is absent".into())
-                })
-                .context(SqlSnafu)?;
-            let input = Arc::clone(&self.input);
-            let schema = self.schema();
-            return Ok(Box::pin(stream::once(async move {
-                let engine = &run.engine;
-                let session = engine.session(run.selection.clone(), &run.control, run.now)?;
-                let (snapshot, mut stream, permit, control, reservation) = session
-                    .start_physical(
-                        input,
-                        context,
-                        &run.sources,
-                        Read::Page(run.after),
-                        Retention::Output,
-                        permit,
-                    )
-                    .await?;
-                Output::page(
-                    engine,
-                    schema,
-                    &mut stream,
-                    control,
-                    reservation,
-                    snapshot,
-                    permit,
-                )
-                .await
-            })));
+            None => {
+                let mut changes = run.engine.store().subscribe_revision();
+                let mut clock_changes = run.clock.changes();
+                changes.borrow_and_update();
+                clock_changes.borrow_and_update();
+                (None, changes, clock_changes)
+            }
         };
-        let compiled = compiled
-            .as_ref()
-            .ok_or_else(|| DataFusionError::NotImplemented("maintained native COUNT plan".into()))
-            .context(SqlSnafu)?;
-        let aggregate = compiled
-            .aggregate
-            .as_any()
-            .downcast_ref::<AggregateExec>()
-            .ok_or_else(|| DataFusionError::Internal("native COUNT descriptor changed".into()))
-            .context(SqlSnafu)?;
-        let journal = journal
-            .as_ref()
-            .and_then(|source| source.as_any().downcast_ref::<JournalExec>())
-            .ok_or_else(|| DataFusionError::NotImplemented("native journal source".into()))
-            .context(SqlSnafu)?;
-        let stream = kernel::execute(
-            aggregate,
-            journal.execute_committed(partition, Arc::clone(&context))?,
-            Arc::clone(&compiled.source),
-            Arc::clone(&context),
-            Arc::clone(&run.engine),
-            Arc::clone(&run.control),
-        );
-        let state = Outputs {
-            stream,
-            plan: Arc::clone(&self.input),
-            aggregate: Arc::clone(&compiled.aggregate),
-            context,
-            session: run
-                .engine
-                .session(run.selection.clone(), &run.control, run.now)?,
-            previous: None,
-        };
+        let state = runtime::Runtime::new(self, context, run, initial, changes, clock_changes)?;
         Ok(Box::pin(stream::try_unfold(
             state,
             |mut state| async move { Ok(state.next().await?.map(|output| (output, state))) },
         )))
+    }
+
+    #[cfg(test)]
+    pub(super) fn maintained(&self) -> bool {
+        matches!(
+            &self.mode,
+            Mode::Count {
+                compiled: Some(_),
+                ..
+            }
+        )
     }
 
     pub(super) fn bind(
@@ -371,11 +364,15 @@ impl ExecutionPlan for SubscribeExec {
         context: Arc<TaskContext>,
     ) -> NativeResult<SendableRecordBatchStream> {
         let stream = self
-            .execute_committed(partition, context)
+            .execute_committed(partition, context, None)
             .map_err(|source| DataFusionError::External(Box::new(source)))?
             .map_ok(
-                |Output {
-                     batches, _memory, ..
+                |super::Event {
+                     output:
+                         Output {
+                             batches, _memory, ..
+                         },
+                     ..
                  }| {
                     stream::iter(batches.into_iter().flatten().map(move |batch| {
                         let _metadata = &_memory;
@@ -389,49 +386,5 @@ impl ExecutionPlan for SubscribeExec {
             self.schema(),
             stream,
         )))
-    }
-}
-
-struct Outputs {
-    stream: OutputStream,
-    plan: Arc<dyn ExecutionPlan>,
-    aggregate: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
-    session: Session,
-    previous: Option<[u8; 32]>,
-}
-
-impl Outputs {
-    async fn next(&mut self) -> Result<Option<Output>> {
-        let Some(mut output) = self.stream.try_next().await? else {
-            return Ok(None);
-        };
-        let batches = output.batches.take().ok_or_else(|| {
-            crate::InvalidSnafu {
-                field: "native aggregate output",
-            }
-            .build()
-        })?;
-        output._control.check()?;
-        let reservation = self
-            .session
-            .engine()
-            .memory()
-            .prepare_output(self.session.engine().limits().output_bytes)
-            .context(SqlSnafu)?;
-        let input = std::mem::replace(&mut output._memory, reservation);
-        let stream = SubscribeExec::bind(
-            &self.plan,
-            &self.aggregate,
-            batches,
-            Arc::clone(&self.context),
-        )
-        .context(SqlSnafu)?;
-        let result = output
-            .complete(&self.session, stream, &mut self.previous)
-            .await
-            .map(Some);
-        drop(input);
-        result
     }
 }

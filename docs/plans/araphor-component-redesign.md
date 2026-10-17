@@ -587,6 +587,48 @@ The complete redesign adds 800 production lines from 7b7b407a. Another 6,800
 net production deletions are required. Complete redesign: **Not done**.
 Full workspace CI and benchmarks are not run, as instructed.
 
+### One physical subscription runtime
+
+Implementation and selected host verification: **Done**. One physical Runtime
+owns source watches, clock changes, expiry, health, evaluation, and completed
+progress. Follow formats cursor updates. Journal capture keeps beforeimages
+and returns one complete change. The separate Follow scheduler, journal wait
+loop, Session subscription methods, and post-plan Outputs adapter are deleted.
+The physical kernel continues to use native COUNT accumulators.
+
+A completed evaluation advances progress even when its result is unchanged.
+A metadata health update preserves the completed cursor and evaluation time.
+Health capture uses the remaining admitted input capacity. Store identity,
+schema, recovery epoch, revision, read checks, permits, and buffer leases remain
+checked across execution. Initial watches precede frozen time and planning.
+Bounded replacement reuses only a child with the proven initial time. Later
+replacements build fresh physical plans because native joins can cache inputs.
+
+Subscribe supplies the native necessary_children_exprs hook. The pinned
+DataFusion 53.1.0 projection rule otherwise stops before visiting its child.
+The hook preserves the subscription output schema and lets native pruning
+select the required scan columns. The new moving COUNT case matches the
+ordinary native scan schema and runs within the unchanged 64 KiB input bound.
+Page subscription properties declare potentially unbounded incremental
+execution. Each source capture and append page remains bounded.
+
+Selected host checks pass 244 distinct Rust cases: 180 Query, 29 Analysis model,
+34 Control client, and the E2E follow contract. Strict Clippy passes for Query,
+Analysis, Control, E2E, and their test targets. Nine new runtime cases cover
+progress, capacity, native clocks, joins, source pruning, pages, and cleanup.
+The two native-hook regressions fail before the fixes and pass after them.
+The E2E bounded-window failure also passes after native pruning is restored.
+Formatting and local document links pass. The exact source records are
+`/tmp/araphor-subscription-runtime-qualification1.json` and
+`/tmp/araphor-subscription-runtime-count1.json`.
+
+This change adds 32 nonblank production Rust lines and 684 test lines.
+The complete redesign adds 832 production lines from 7b7b407a. Another 6,832
+net production deletions are required. General maintained SQL, shared
+maintained query ownership, the complete redesign, and the required reduction
+remain **Not done**. Full workspace CI and benchmarks are not run, as
+instructed. No speed improvement is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

@@ -21,8 +21,12 @@ pub(crate) struct Run {
     pub selection: AnalysisSelectionV1,
     pub sources: AnalysisTableRequests,
     pub control: Arc<AnalysisReadControl>,
-    pub now: u64,
-    pub after: Option<StorePositionV1>,
+    pub plan: Arc<datafusion::logical_expr::LogicalPlan>,
+    pub clock: Arc<dyn crate::follow::Clock>,
+    pub follow: bool,
+    pub operation: crate::follow::Operation,
+    pub window: Option<crate::follow::Window>,
+    pub resume: Option<crate::follow::Cursor>,
 }
 
 pub(super) struct Change {
@@ -35,8 +39,6 @@ pub(super) struct Change {
     pub _memory: MemoryReservation,
 }
 
-pub(super) type Input = Pin<Box<dyn Stream<Item = Result<Change>> + Send>>;
-
 pub(crate) struct Output {
     pub snapshot: Arc<ArrowSnapshot>,
     pub batches: Option<Vec<RecordBatch>>,
@@ -48,4 +50,12 @@ pub(crate) struct Output {
     pub _control: Arc<AnalysisReadControl>,
 }
 
-pub(crate) type OutputStream = Pin<Box<dyn Stream<Item = Result<Output>> + Send>>;
+pub(crate) struct Event {
+    pub output: Output,
+    pub completed: bool,
+    pub evaluated: u64,
+    pub clock_changed: bool,
+    pub exhausted: bool,
+}
+
+pub(crate) type OutputStream = Pin<Box<dyn Stream<Item = Result<Event>> + Send>>;

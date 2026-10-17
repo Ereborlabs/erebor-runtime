@@ -299,7 +299,7 @@ impl SourceSnapshot {
         mode: ReadMode,
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<Captured> {
-        let reservation = if matches!(mode, ReadMode::Changes(_)) {
+        let reservation = if matches!(mode, ReadMode::Changes(_) | ReadMode::Metadata) {
             self.memory.prepare_input(self.limits.input_bytes)?
         } else {
             self.memory.reserve_input(self.limits.input_bytes)?

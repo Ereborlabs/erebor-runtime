@@ -740,37 +740,6 @@ impl Session {
         RecordBatchStreamAdapter::new(schema, stream)
     }
 
-    pub(crate) async fn complete(
-        &self,
-        plan: &LogicalPlan,
-        sources: &AnalysisTableRequests,
-        permit: Arc<Permit>,
-        previous: &mut Option<[u8; 32]>,
-        cursor: Option<&crate::follow::Cursor>,
-    ) -> Result<crate::stream::Output> {
-        let (snapshot, stream, permit, control, reservation) = self
-            .start(plan, sources, Read::Snapshot, Retention::Output, permit)
-            .await?;
-        if let Some(cursor) = cursor {
-            cursor.check_store(&snapshot.page.extraction.meta)?;
-        }
-        crate::stream::Output {
-            snapshot,
-            batches: None,
-            positions: Vec::new(),
-            position: StorePositionV1 {
-                commit_revision: 0,
-                ordinal: 0,
-            },
-            limited: false,
-            _memory: reservation,
-            _permit: Some(permit),
-            _control: control,
-        }
-        .complete(self, stream, previous)
-        .await
-    }
-
     pub(crate) fn state(&self) -> Result<SessionState> {
         let mut state = self.engine.state.clone();
         let clock = chrono::DateTime::from_timestamp(
@@ -821,56 +790,6 @@ impl Session {
                 state.create_physical_plan(&plan).await.context(SqlSnafu)
             })
             .await
-    }
-
-    pub(crate) async fn subscribe(
-        &self,
-        plan: &LogicalPlan,
-        sources: &AnalysisTableRequests,
-        read: Read,
-        permit: Arc<Permit>,
-    ) -> Result<Option<crate::stream::OutputStream>> {
-        let mut state = self.state()?;
-        let (append, after) = match read {
-            Read::Snapshot => (false, None),
-            Read::Page(after) => (true, after),
-        };
-        if append {
-            state.config_mut().set_extension(Arc::clone(&permit));
-        }
-        state
-            .config_mut()
-            .set_extension(Arc::new(crate::stream::Run {
-                engine: Arc::clone(&self.engine),
-                selection: self.selection.clone(),
-                sources: sources.clone(),
-                control: Arc::clone(&self.control),
-                now: self.now,
-                after,
-            }));
-        let logical = match if append {
-            crate::planner::subscription::Subscribe::page(plan.clone())
-        } else {
-            crate::planner::subscription::Subscribe::plan(plan.clone())
-        } {
-            Ok(plan) => plan,
-            Err(DataFusionError::NotImplemented(_)) if !append => return Ok(None),
-            Err(source) => return Err(crate::Error::Sql { source }),
-        };
-        let physical = self.physical(&logical, &state).await?;
-        let subscription = physical
-            .as_any()
-            .downcast_ref::<crate::stream::physical::SubscribeExec>()
-            .ok_or_else(|| crate::Error::Sql {
-                source: DataFusionError::Internal("subscription physical root changed".into()),
-            })?;
-        match subscription.execute_committed(0, state.task_ctx()) {
-            Ok(stream) => Ok(Some(stream)),
-            Err(crate::Error::Sql {
-                source: DataFusionError::NotImplemented(_),
-            }) if !append => Ok(None),
-            Err(error) => Err(error),
-        }
     }
 
     pub(crate) async fn start(

@@ -39,7 +39,7 @@ mod schema;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use journal::JournalExec;
+pub(crate) use journal::{Changes, JournalExec};
 pub use rows::ArrowSnapshot;
 pub(crate) use rows::{Captured, Removal};
 
@@ -488,5 +488,24 @@ impl DataSource for SourceData {
         _projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>> {
         Ok(None)
+    }
+}
+
+impl ArrowSnapshot {
+    pub(crate) fn check_store(
+        previous: &araphor_data::AnalysisStoreMetaV1,
+        current: &araphor_data::AnalysisStoreMetaV1,
+    ) -> crate::Result<()> {
+        if previous.store_uuid != current.store_uuid
+            || previous.schema_version != current.schema_version
+            || previous.recovery_epoch != current.recovery_epoch
+            || previous.commit_revision > current.commit_revision
+        {
+            return crate::InvalidSnafu {
+                field: "cursor store",
+            }
+            .fail();
+        }
+        Ok(())
     }
 }

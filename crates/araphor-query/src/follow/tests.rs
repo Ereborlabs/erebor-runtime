@@ -27,6 +27,7 @@ use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
 use crate::sources::SourceSnapshot;
 
+mod runtime;
 mod trace;
 
 struct TestClock {
@@ -1151,16 +1152,14 @@ async fn native_append_execution() {
             selection: fixture.selection(),
             sources,
             control: Arc::clone(&control),
-            now: 2_000_000_000,
-            after: None,
+            plan: Arc::new(plan.clone()),
+            clock: TestClock::new(2_000_000_000),
+            follow: false,
+            operation: Operation::Append,
+            window: None,
+            resume: None,
         }));
-    state.config_mut().set_extension(Arc::new(
-        fixture
-            .engine
-            .reserve_evaluation(fixture.source.tenant_id)
-            .unwrap(),
-    ));
-    let logical = crate::planner::subscription::Subscribe::page(plan).unwrap();
+    let logical = crate::planner::subscription::Subscribe::runtime(plan, true);
     let physical = state.create_physical_plan(&logical).await.unwrap();
     assert!(physical
         .as_any()
@@ -1334,8 +1333,12 @@ async fn native_subscribe_execution() {
             selection: fixture.selection(),
             sources,
             control: Arc::clone(&control),
-            now: 2_000_000_000,
-            after: None,
+            plan: Arc::new(plan.clone()),
+            clock: TestClock::new(2_000_000_000),
+            follow: true,
+            operation: Operation::Replace,
+            window: None,
+            resume: None,
         }));
     assert!(state
         .physical_optimizers()
@@ -1345,7 +1348,8 @@ async fn native_subscribe_execution() {
         .physical_optimizers()
         .iter()
         .any(|rule| rule.name() == "EnsureCooperative"));
-    let logical = crate::planner::subscription::Subscribe::plan(plan).unwrap();
+    crate::planner::subscription::Subscribe::maintainable(&plan).unwrap();
+    let logical = crate::planner::subscription::Subscribe::runtime(plan, false);
     let physical = state.create_physical_plan(&logical).await.unwrap();
     assert!(physical
         .as_any()
@@ -1402,9 +1406,10 @@ async fn native_subscribe_execution() {
                 .as_any()
                 .downcast_ref::<crate::sources::JournalExec>()
                 .unwrap()
-                .execute_committed(0, context)
+                .open(context)
                 .unwrap();
-            let first = input.next().await.unwrap().unwrap();
+            let permit = Arc::new(engine.reserve_evaluation(identity.tenant_id).unwrap());
+            let first = input.capture(permit, 2_000_000_000).await.unwrap();
             assert!(first.before.is_empty());
             assert_eq!(
                 first.after.iter().map(RecordBatch::num_rows).sum::<usize>(),
@@ -1433,9 +1438,10 @@ async fn native_subscribe_execution() {
                 tokio::task::consume_budget().await;
             }
             assert!(!tokio::task::coop::has_budget_remaining());
-            let mut pending = Box::pin(input.next());
+            let permit = Arc::new(engine.reserve_evaluation(identity.tenant_id).unwrap());
+            let mut pending = Box::pin(input.capture(permit, 2_000_000_000));
             assert!(futures_util::poll!(pending.as_mut()).is_pending());
-            let second = pending.await.unwrap().unwrap();
+            let second = pending.await.unwrap();
             assert!(second.before.is_empty());
             assert_eq!(
                 second

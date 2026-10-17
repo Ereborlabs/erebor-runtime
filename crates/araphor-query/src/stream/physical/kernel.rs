@@ -15,33 +15,32 @@ use datafusion::physical_plan::aggregates::{
 };
 use datafusion::physical_plan::filter::batch_filter;
 use datafusion::physical_plan::ExecutionPlan;
-use futures_util::{stream, StreamExt as _, TryStreamExt as _};
+use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
 
 use crate::execution::Engine;
-use crate::stream::{Change, Input, Output, OutputStream};
+use crate::stream::{Change, Output};
 use crate::{Result, SqlSnafu};
 
-pub(super) fn execute(
-    aggregate: &AggregateExec,
-    input: Input,
-    source: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
-    engine: Arc<Engine>,
-    control: Arc<AnalysisReadControl>,
-) -> OutputStream {
-    let definitions = aggregate.aggr_expr().to_vec();
-    let filters = aggregate.filter_expr().to_vec();
-    let input_schema = aggregate.input_schema();
-    let schema = aggregate.schema();
-    let plan = Arc::clone(aggregate.input());
-    let initialize = stream::once(async move {
+impl Kernel {
+    pub(super) fn new(
+        aggregate: &AggregateExec,
+        source: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
+        engine: Arc<Engine>,
+        control: &AnalysisReadControl,
+    ) -> Result<Self> {
+        let definitions = aggregate.aggr_expr().to_vec();
+        let filters = aggregate.filter_expr().to_vec();
+        let input_schema = aggregate.input_schema();
+        let schema = aggregate.schema();
+        let plan = Arc::clone(aggregate.input());
         control.check()?;
         let expressions =
             aggregate_expressions(&definitions, &AggregateMode::Single, 0).context(SqlSnafu)?;
         let accumulators = create_accumulators(&definitions).context(SqlSnafu)?;
         let bytes = [
-            size_of::<State>(),
+            size_of::<Self>(),
             expressions.capacity() * size_of::<Vec<Arc<dyn PhysicalExpr>>>(),
             filters.capacity() * size_of::<Option<Arc<dyn PhysicalExpr>>>(),
             accumulators.capacity() * size_of::<AccumulatorItem>(),
@@ -61,8 +60,7 @@ pub(super) fn execute(
             .context(SqlSnafu);
         }
         let memory = engine.memory().reserve_input(bytes).context(SqlSnafu)?;
-        Ok(State {
-            input,
+        Ok(Self {
             plan,
             source,
             context,
@@ -73,23 +71,12 @@ pub(super) fn execute(
             accumulators,
             frontier: None,
             engine,
-            control,
             _memory: memory,
         })
-    });
-    Box::pin(
-        initialize
-            .map_ok(|state| {
-                stream::try_unfold(state, |mut state| async move {
-                    Ok(state.next().await?.map(|output| (output, state)))
-                })
-            })
-            .try_flatten(),
-    )
+    }
 }
 
-struct State {
-    input: Input,
+pub(super) struct Kernel {
     plan: Arc<dyn ExecutionPlan>,
     source: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -100,14 +87,12 @@ struct State {
     accumulators: Vec<AccumulatorItem>,
     frontier: Option<StorePositionV1>,
     engine: Arc<Engine>,
-    control: Arc<AnalysisReadControl>,
     _memory: MemoryReservation,
 }
 
-impl State {
-    async fn next(&mut self) -> Result<Option<Output>> {
-        let parent = Arc::clone(&self.control);
-        let Some(Change {
+impl Kernel {
+    pub(super) async fn apply(&mut self, change: Change) -> Result<Output> {
+        let Change {
             before,
             after,
             position,
@@ -115,12 +100,7 @@ impl State {
             control,
             _permit,
             _memory,
-        }) = parent
-            .query_async(async { self.input.next().await.transpose() })
-            .await?
-        else {
-            return Ok(None);
-        };
+        } = change;
         control.check()?;
         if position.ordinal != u32::MAX
             || position.commit_revision != snapshot.page.extraction.meta.commit_revision
@@ -177,7 +157,7 @@ impl State {
             .context(SqlSnafu)?;
         control.check()?;
         self.frontier = Some(position);
-        Ok(Some(Output {
+        Ok(Output {
             snapshot,
             batches: Some(vec![batch]),
             positions: Vec::new(),
@@ -189,7 +169,7 @@ impl State {
             _memory: memory,
             _permit,
             _control: control,
-        }))
+        })
     }
 
     fn update(

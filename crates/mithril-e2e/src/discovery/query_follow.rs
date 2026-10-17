@@ -155,7 +155,7 @@ impl QueryFollowQualification {
                 .map_err(|error| format!("query-follow windows: {error}"))?,
             self.bounded_window(&directory.path().join("bounded"))
                 .await
-                .map_err(|error| format!("query-follow bounded window: {error}"))?,
+                .map_err(|error| format!("query-follow bounded window: {error:?}"))?,
             self.retention(&directory.path().join("retention"))
                 .await
                 .map_err(|error| format!("query-follow retention: {error}"))?,

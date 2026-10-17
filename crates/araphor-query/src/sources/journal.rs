@@ -5,8 +5,8 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use araphor_data::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisStreamIdentityV1, AnalysisTableRequests,
-    AnalysisWitnessV1, StorePositionV1,
+    AnalysisExtractLimits, AnalysisReadControl, AnalysisStoreMetaV1, AnalysisStreamIdentityV1,
+    AnalysisTableRequests, AnalysisWitnessV1, StorePositionV1,
 };
 use datafusion::arrow::array::{ArrayRef, BooleanArray, RecordBatch, UInt32Array, UInt64Array};
 use datafusion::arrow::compute::filter_record_batch;
@@ -20,13 +20,11 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use futures_util::stream;
 use snafu::ResultExt as _;
-use tokio::sync::watch;
 
 use super::{Captured, ReadMode, Removal, SourceData, SourceOrigin, SourceSnapshot};
-use crate::execution::Engine;
-use crate::stream::{Change, Input, Run};
+use crate::execution::{Engine, Permit};
+use crate::stream::{Change, Run};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
 #[derive(Debug)]
@@ -81,17 +79,7 @@ impl JournalExec {
         })
     }
 
-    pub(crate) fn execute_committed(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<Input> {
-        if partition != 0 {
-            return Err(DataFusionError::Execution(
-                "Journal has one partition".into(),
-            ))
-            .context(SqlSnafu);
-        }
+    pub(crate) fn open(&self, context: Arc<TaskContext>) -> Result<Changes> {
         let run = context
             .session_config()
             .get_extension::<Run>()
@@ -104,8 +92,7 @@ impl JournalExec {
             ))
             .context(SqlSnafu);
         }
-        let changes = run.engine.store().subscribe_revision();
-        let state = Changes {
+        Ok(Changes {
             memory: run.engine.memory().reserve_input(0).context(SqlSnafu)?,
             run,
             columns: self.columns.clone(),
@@ -114,13 +101,8 @@ impl JournalExec {
             received: self.received.clone(),
             retained: Vec::new(),
             frontier: None,
-            changes,
-        };
-        Ok(Box::pin(stream::try_unfold(state, |mut state| {
-            tokio::task::coop::cooperative(async move {
-                Ok(state.capture().await?.map(|change| (change, state)))
-            })
-        })))
+            meta: None,
+        })
     }
 }
 
@@ -168,7 +150,7 @@ impl ExecutionPlan for JournalExec {
     }
 }
 
-struct Changes {
+pub(crate) struct Changes {
     run: Arc<Run>,
     columns: Vec<usize>,
     positions: [usize; 2],
@@ -176,7 +158,7 @@ struct Changes {
     received: Option<Interval>,
     retained: Vec<Chunk>,
     frontier: Option<StorePositionV1>,
-    changes: watch::Receiver<u64>,
+    meta: Option<AnalysisStoreMetaV1>,
     memory: MemoryReservation,
 }
 
@@ -192,29 +174,13 @@ struct Key {
 }
 
 impl Changes {
-    async fn capture(&mut self) -> Result<Option<Change>> {
+    pub(crate) async fn capture(&mut self, permit: Arc<Permit>, now: u64) -> Result<Change> {
+        tokio::task::coop::cooperative(self.read(permit, now)).await
+    }
+
+    async fn read(&mut self, permit: Arc<Permit>, now: u64) -> Result<Change> {
         let engine = Arc::clone(&self.run.engine);
         let control = Arc::clone(&self.run.control);
-        if let Some(frontier) = self.frontier {
-            let changed = control
-                .query_async(async {
-                    Ok::<_, crate::Error>(
-                        self.changes
-                            .wait_for(|revision| *revision > frontier.commit_revision)
-                            .await
-                            .is_ok(),
-                    )
-                })
-                .await?;
-            if !changed {
-                return Ok(None);
-            }
-        }
-        let permit = Arc::new(
-            control
-                .query_async(engine.acquire_evaluation(self.run.selection.tenant_id))
-                .await?,
-        );
         let stage = Arc::new(control.within(engine.limits().extract_timeout)?);
         let capture = SourceSnapshot::new(
             Arc::clone(engine.store()),
@@ -227,7 +193,7 @@ impl Changes {
             },
             stage.within(stage.remaining()?)?,
             engine.limits().extract_timeout,
-            self.run.now,
+            now,
             Arc::clone(engine.memory()),
         );
         let requests = Arc::clone(&self.requests);
@@ -244,6 +210,9 @@ impl Changes {
         .await?;
         control.check()?;
         engine.check_read(&captured.receipt).await?;
+        if let Some(previous) = &self.meta {
+            super::ArrowSnapshot::check_store(previous, &captured.receipt.page.extraction.meta)?;
+        }
         let evaluation = Arc::new(control.within(engine.limits().evaluate_timeout)?);
         let (before, after) = self.apply(&engine, &captured, &evaluation)?;
         evaluation.check()?;
@@ -318,7 +287,8 @@ impl Changes {
         evaluation.check()?;
         let memory = engine.memory().reserve_input(metadata).context(SqlSnafu)?;
         self.frontier = Some(position);
-        Ok(Some(Change {
+        self.meta = Some(captured.receipt.page.extraction.meta.clone());
+        Ok(Change {
             before,
             after,
             position,
@@ -326,7 +296,7 @@ impl Changes {
             control: evaluation,
             _permit: Some(permit),
             _memory: memory,
-        }))
+        })
     }
 
     fn apply(

@@ -1,11 +1,9 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use araphor_data::{
-    AnalysisReadControl, AnalysisSelectionV1, AnalysisStoreMetaV1, AnalysisTableRequests,
-    StorePositionV1,
+    AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests, StorePositionV1,
 };
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -15,13 +13,11 @@ use futures_core::Stream;
 use futures_util::{StreamExt as _, TryStreamExt as _};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
-use tokio::sync::watch;
-use tokio::time::Instant;
 
-use crate::execution::{Engine, Permit, Read};
+use crate::execution::{Engine, Permit};
 use crate::sources::ArrowSnapshot;
-use crate::stream::physical::Fingerprint;
-use crate::stream::Output;
+use crate::stream::physical::{Fingerprint, SubscribeExec};
+use crate::stream::{Event, Output, OutputStream, Run};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
 mod clock;
@@ -35,7 +31,7 @@ mod tests;
 pub use clock::{Clock, SystemClock};
 pub use cursor::Cursor;
 pub use delivery::{Action, Consumer, Delivery};
-use window::Window;
+pub(crate) use window::Window;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub enum Operation {
@@ -129,38 +125,29 @@ impl Subscription {
             cursor.check_binding(&binding, operation)?;
         }
         let schema = Arc::clone(plan.schema().inner());
-        let changes = engine.store().subscribe_revision();
-        let clock_changes = clock.changes();
         let permit = engine.reserve_stream(selection.tenant_id)?;
-        let state = State {
+        let run = Arc::new(Run {
             engine: Arc::clone(&engine),
             plan,
             sources,
             selection,
             control: Arc::clone(&control),
             clock,
-            changes,
-            clock_changes,
             follow,
             operation,
             window,
-            source_clock,
+            resume: resume.clone(),
+        });
+        let execution = Arc::clone(&run);
+        let stream =
+            futures_util::stream::once(async move { SubscribeExec::open(execution).await })
+                .try_flatten();
+        let state = State {
+            run,
             binding,
             cursor: resume.clone(),
-            snapshot: None,
-            content: None,
-            expiry: None,
-            evaluated: 0,
-            exhausted: true,
-            dirty: false,
-            clock_dirty: false,
-            changes_open: true,
-            clock_open: true,
-            ended: false,
-            health: None,
-            last_run: None,
-            execution: None,
-            compiled: false,
+            started: false,
+            stream: Box::pin(stream),
             _permit: permit,
         };
         let stream = futures_util::stream::unfold(Some(state), |state| async move {
@@ -169,18 +156,24 @@ impl Subscription {
                 Ok(Some(update)) => Some((Ok(update), Some(state))),
                 Ok(None) => None,
                 Err(mut error) => {
-                    let receipt = if state.snapshot.is_none()
+                    let receipt = if !state.started
                         && state.cursor.is_some()
                         && crate::Failure::from(&error) == crate::Failure::CursorExpired
                     {
                         let capture = async {
-                            let now = state.clock.now_ns()?;
+                            let now = state.run.clock.now_ns()?;
                             let control = AnalysisReadControl::with_timeout(
-                                state.engine.limits().extract_timeout,
+                                state.run.engine.limits().extract_timeout,
                             )?;
                             state
+                                .run
                                 .engine
-                                .metadata(state.selection.clone(), &state.sources, &control, now)
+                                .metadata(
+                                    state.run.selection.clone(),
+                                    &state.run.sources,
+                                    &control,
+                                    now,
+                                )
                                 .await
                         }
                         .await;
@@ -241,246 +234,26 @@ impl Drop for Subscription {
 }
 
 struct State {
-    engine: Arc<Engine>,
-    plan: Arc<LogicalPlan>,
-    sources: AnalysisTableRequests,
-    selection: AnalysisSelectionV1,
-    control: Arc<AnalysisReadControl>,
-    clock: Arc<dyn Clock>,
-    changes: watch::Receiver<u64>,
-    clock_changes: watch::Receiver<u64>,
-    follow: bool,
-    operation: Operation,
-    window: Option<Window>,
-    source_clock: bool,
+    run: Arc<Run>,
     binding: [u8; 32],
     cursor: Option<Cursor>,
-    snapshot: Option<Arc<ArrowSnapshot>>,
-    content: Option<[u8; 32]>,
-    expiry: Option<u64>,
-    evaluated: u64,
-    exhausted: bool,
-    dirty: bool,
-    clock_dirty: bool,
-    changes_open: bool,
-    clock_open: bool,
-    ended: bool,
-    health: Option<Instant>,
-    last_run: Option<Instant>,
-    execution: Option<crate::stream::OutputStream>,
-    compiled: bool,
+    started: bool,
+    stream: OutputStream,
     _permit: Permit,
-}
-
-enum Wake {
-    Store,
-    Clock,
-    Health,
 }
 
 impl State {
     async fn next(&mut self) -> Result<Option<Update>> {
-        if self.ended {
+        let Some(Event {
+            output,
+            completed,
+            evaluated,
+            clock_changed,
+            exhausted,
+        }) = self.stream.try_next().await?
+        else {
             return Ok(None);
-        }
-        if self.snapshot.is_none() {
-            return self.evaluate(false).await.map(Some);
-        }
-        if !self.follow {
-            self.ended = true;
-            return Ok(None);
-        }
-        if self.operation == Operation::Append && !self.exhausted {
-            return self.evaluate(false).await.map(Some);
-        }
-        loop {
-            self.control.check()?;
-            if self.clock_dirty {
-                self.clock_dirty = false;
-                if self.window.is_some() || self.source_clock {
-                    return self.evaluate(true).await.map(Some);
-                }
-                return self.health_update(true).await.map(Some);
-            }
-            if self.dirty {
-                self.dirty = false;
-                if self.changed().await? {
-                    return self.evaluate(false).await.map(Some);
-                }
-                return self.health_update(false).await.map(Some);
-            }
-            match self.wait().await? {
-                Wake::Store => self.dirty = true,
-                Wake::Clock => {
-                    if self.window.is_some() || self.source_clock {
-                        return self.evaluate(true).await.map(Some);
-                    }
-                    return self.health_update(true).await.map(Some);
-                }
-                Wake::Health => return self.health_update(false).await.map(Some),
-            }
-        }
-    }
-
-    async fn wait(&mut self) -> Result<Wake> {
-        let now = self.clock.now_ns()?;
-        if self.expiry.is_some_and(|expiry| expiry <= now) {
-            return Ok(Wake::Clock);
-        }
-        let expiry = self
-            .expiry
-            .map(|expiry| Duration::from_nanos(expiry.saturating_sub(now)));
-        let health = self
-            .health
-            .unwrap_or_else(|| Instant::now() + Duration::from_secs(15));
-        let control = Arc::clone(&self.control);
-        control.query_async(async {
-            loop {
-                tokio::select! {
-                    changed = self.changes.changed(), if self.changes_open => {
-                        if changed.is_err() { self.changes_open = false; continue; }
-                        self.changes.borrow_and_update();
-                        return Ok(Wake::Store);
-                    }
-                    changed = self.clock_changes.changed(), if self.clock_open => {
-                        if changed.is_err() { self.clock_open = false; continue; }
-                        self.clock_changes.borrow_and_update();
-                        return Ok(Wake::Clock);
-                    }
-                    _ = tokio::time::sleep(expiry.unwrap_or(Duration::from_secs(86_400))), if expiry.is_some() => {
-                        return Ok(Wake::Clock);
-                    }
-                    _ = tokio::time::sleep_until(health) => return Ok(Wake::Health),
-                }
-            }
-        }).await
-    }
-
-    async fn changed(&mut self) -> Result<bool> {
-        self.changes.borrow_and_update();
-        let snapshot = self.snapshot.as_ref().ok_or_else(Self::state_error)?;
-        let selection = snapshot.selection.clone();
-        let (meta, revision) = self.dependencies(selection).await?;
-        let cursor = self.cursor.as_ref().ok_or_else(Self::state_error)?;
-        cursor.check_store(&meta)?;
-        self.dirty = self.changes.has_changed().unwrap_or(false)
-            || *self.changes.borrow() > meta.commit_revision;
-        Ok(revision > cursor.read_revision())
-    }
-
-    async fn dependencies(
-        &mut self,
-        selection: AnalysisSelectionV1,
-    ) -> Result<(AnalysisStoreMetaV1, u64)> {
-        let stage = Arc::new(self.control.within(self.engine.limits().extract_timeout)?);
-        let worker = Arc::clone(&stage);
-        let store = Arc::clone(self.engine.store());
-        stage
-            .query_async(async move {
-                tokio::task::spawn_blocking(move || store.dependency_revision(&selection, &worker))
-                    .await
-                    .map_err(|source| crate::Error::Sql {
-                        source: datafusion::common::DataFusionError::External(Box::new(source)),
-                    })?
-                    .map_err(crate::Error::from)
-            })
-            .await
-    }
-
-    async fn evaluate(&mut self, clock_changed: bool) -> Result<Update> {
-        if self.follow && self.operation == Operation::Replace && self.execution.is_none() {
-            if let Some(last) = self.last_run {
-                let due = last + Duration::from_millis(500);
-                self.control
-                    .query_async(async {
-                        tokio::time::sleep_until(due).await;
-                        Ok::<_, crate::Error>(())
-                    })
-                    .await?;
-            }
-        }
-        let permit = Arc::new(
-            self.control
-                .query_async(self.engine.acquire_evaluation(self.selection.tenant_id))
-                .await?,
-        );
-        self.changes.borrow_and_update();
-        self.clock_changes.borrow_and_update();
-        let now = self.clock.now_ns()?;
-        let selection = self.window.map_or_else(
-            || self.selection.clone(),
-            |window| window.selection(&self.selection, now),
-        );
-        if self.snapshot.is_none() {
-            if let Some(cursor) = self.cursor.clone() {
-                let (meta, _) = self.dependencies(selection.clone()).await?;
-                cursor.check_store(&meta)?;
-            }
-        }
-        if self.operation == Operation::Append {
-            self.execution = self
-                .engine
-                .session(selection, &self.control, now)?
-                .subscribe(
-                    &self.plan,
-                    &self.sources,
-                    Read::Page(self.cursor.as_ref().map(Cursor::position)),
-                    permit,
-                )
-                .await?;
-            let result = self.advance(now).await;
-            self.execution = None;
-            return result;
-        }
-        if !self.compiled {
-            self.compiled = true;
-            if self.follow
-                && self.operation == Operation::Replace
-                && Window::clocks(&self.plan)? == 0
-                && !self.source_clock
-            {
-                self.execution = self
-                    .engine
-                    .session(self.selection.clone(), &self.control, now)?
-                    .subscribe(
-                        &self.plan,
-                        &self.sources,
-                        Read::Snapshot,
-                        Arc::clone(&permit),
-                    )
-                    .await?;
-            }
-        }
-        if self.execution.is_some() {
-            drop(permit);
-            return self.advance(now).await;
-        }
-        let output = self
-            .engine
-            .session(selection, &self.control, now)?
-            .complete(
-                &self.plan,
-                &self.sources,
-                permit,
-                &mut self.content,
-                self.cursor.as_ref(),
-            )
-            .await?;
-        self.finish(output, now, clock_changed)
-    }
-
-    async fn advance(&mut self, now: u64) -> Result<Update> {
-        let output = self
-            .execution
-            .as_mut()
-            .ok_or_else(Self::state_error)?
-            .try_next()
-            .await?
-            .ok_or_else(Self::state_error)?;
-        self.finish(output, now, false)
-    }
-
-    fn finish(&mut self, output: Output, now: u64, clock_changed: bool) -> Result<Update> {
+        };
         let Output {
             snapshot,
             batches,
@@ -493,84 +266,34 @@ impl State {
         if let Some(cursor) = &self.cursor {
             cursor.check_store(&snapshot.page.extraction.meta)?;
         }
-        let cursor = Cursor::new(
-            &snapshot.page.extraction.meta,
-            self.operation,
-            self.binding,
-            position,
-            now,
-        );
+        let cursor = if completed {
+            Cursor::new(
+                &snapshot.page.extraction.meta,
+                self.run.operation,
+                self.binding,
+                position,
+                evaluated,
+            )
+        } else {
+            self.cursor.clone().ok_or_else(|| crate::Error::Sql {
+                source: datafusion::common::DataFusionError::Internal(
+                    "subscription cursor is absent".into(),
+                ),
+            })?
+        };
+        self.started = true;
         self.cursor = Some(cursor.clone());
-        self.dirty = self.changes.has_changed().unwrap_or(false)
-            || *self.changes.borrow() > snapshot.page.extraction.meta.commit_revision;
-        self.clock_dirty = self.clock_changes.has_changed().unwrap_or(false);
-        self.expiry = self
-            .window
-            .and_then(|window| window.expiry(snapshot.received_min))
-            .into_iter()
-            .chain(snapshot.next_change)
-            .min();
-        self.snapshot = Some(Arc::clone(&snapshot));
-        self.evaluated = now;
-        self.exhausted =
-            self.operation == Operation::Replace || (snapshot.page.exhausted && !limited);
-        self.last_run = Some(Instant::now());
-        self.health = Some(Instant::now() + Duration::from_secs(15));
-        Ok(Update {
+        Ok(Some(Update {
             snapshot,
             batches,
             cursor,
-            operation: self.operation,
-            exhausted: self.exhausted,
+            operation: self.run.operation,
+            exhausted,
             clock_changed,
             positions,
-            evaluated_utc_ns: now,
-            limited: limited || !self.exhausted,
+            evaluated_utc_ns: evaluated,
+            limited: limited || !exhausted,
             _memory,
-        })
-    }
-
-    async fn health_update(&mut self, clock_changed: bool) -> Result<Update> {
-        let clock_changed = clock_changed || self.clock_changes.has_changed().unwrap_or(false);
-        if (self.window.is_some() || self.source_clock) && clock_changed {
-            return self.evaluate(true).await;
-        }
-        self.clock_changes.borrow_and_update();
-        let now = self.clock.now_ns()?;
-        let selection = self.window.map_or_else(
-            || self.selection.clone(),
-            |window| window.selection(&self.selection, now),
-        );
-        let snapshot = self
-            .engine
-            .metadata(selection, &self.sources, &self.control, now)
-            .await?;
-        self.control
-            .query_async(self.engine.check_read(&snapshot))
-            .await?;
-        self.dirty |= self.changes.has_changed().unwrap_or(false)
-            || *self.changes.borrow() > snapshot.page.extraction.meta.commit_revision;
-        self.snapshot = Some(Arc::clone(&snapshot));
-        self.health = Some(Instant::now() + Duration::from_secs(15));
-        Ok(Update {
-            snapshot,
-            batches: None,
-            cursor: self.cursor.as_ref().ok_or_else(Self::state_error)?.clone(),
-            operation: self.operation,
-            exhausted: self.exhausted,
-            clock_changed,
-            positions: Vec::new(),
-            evaluated_utc_ns: self.evaluated,
-            limited: !self.exhausted,
-            _memory: self.engine.memory().reserve_output(0).context(SqlSnafu)?,
-        })
-    }
-
-    fn state_error() -> crate::Error {
-        crate::Error::Sql {
-            source: datafusion::common::DataFusionError::Internal(
-                "subscription state is incomplete".into(),
-            ),
-        }
+        }))
     }
 }

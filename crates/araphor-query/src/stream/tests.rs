@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisStore};
+use araphor_data::AnalysisStore;
 use datafusion::arrow::array::{
     ArrayRef, RecordBatch, RecordBatchOptions, StringArray, UInt32Array, UInt64Array,
 };
@@ -22,7 +22,6 @@ use crate::planner::Planner;
 use crate::sources::{SourceData, SourceSnapshot};
 
 struct Fixture {
-    engine: Arc<Engine>,
     state: SessionState,
     _directory: tempfile::TempDir,
 }
@@ -44,7 +43,6 @@ impl Fixture {
         }
         let state = engine.catalog(tables).unwrap();
         Self {
-            engine,
             state,
             _directory: directory,
         }
@@ -406,25 +404,9 @@ async fn unsupported_plans_stay_batch() {
         "SELECT count(*) AS total FROM events HAVING count(*) > 0",
     ] {
         let plan = fixture.plan(sql, vec![]).await;
-        assert!(
-            fixture
-                .engine
-                .session(
-                    AnalysisSelectionV1::tenant([1; 16]),
-                    &AnalysisReadControl::with_timeout(Duration::from_secs(30)).unwrap(),
-                    0,
-                )
-                .unwrap()
-                .subscribe(
-                    &plan,
-                    &BTreeMap::from([("events".to_owned(), None)]),
-                    crate::execution::Read::Snapshot,
-                    Arc::new(fixture.engine.reserve_evaluation([1; 16]).unwrap())
-                )
-                .await
-                .unwrap()
-                .is_none(),
-            "{sql}"
-        );
+        let logical = crate::planner::subscription::Subscribe::runtime(plan, false);
+        let physical = fixture.state.create_physical_plan(&logical).await.unwrap();
+        let subscription = physical.as_any().downcast_ref::<SubscribeExec>().unwrap();
+        assert!(!subscription.maintained(), "{sql}");
     }
 }

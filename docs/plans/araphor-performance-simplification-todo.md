@@ -391,6 +391,27 @@ The records are `/tmp/araphor-retained-sql-qualification1.json` and
 `/tmp/araphor-retained-sql-count1.json`. Complete redesign: **Not done**.
 Full workspace CI and benchmarks are not run, as instructed.
 
+### One physical subscription runtime
+
+**Done** for the selected source and host checks. One physical Runtime replaces
+the Follow scheduler, journal wait loop, Session subscription methods, and
+post-plan Outputs adapter. Native projection pruning now visits the Subscribe
+child through its dependency hook. Native scan schemas match ordinary SQL.
+A completed evaluation advances its cursor. A health update preserves the
+cursor and time. Physical execution checks sources and retains the actual
+permits and buffer leases. Later bounded replacements use fresh
+physical plans. Page properties describe potentially live execution.
+
+Selected checks pass 244 cases. Both native-hook regressions fail before the
+fixes and pass after them. The E2E bounded-window failure passes with the same
+64 KiB input limit. Strict scoped Clippy, formatting, and document links pass.
+The change adds 32 nonblank production Rust lines. The complete change adds
+832 from 7b7b407a; another 6,832 net deletions remain. The records are
+`/tmp/araphor-subscription-runtime-qualification1.json` and
+`/tmp/araphor-subscription-runtime-count1.json`. General maintained SQL,
+shared maintained query ownership, and complete redesign: **Not done**.
+Full workspace CI and benchmarks are not run, as instructed.
+
 ## Implementation flow
 
 An owner starts or recovers

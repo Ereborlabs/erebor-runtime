@@ -12,13 +12,13 @@ use crate::sources::SourceProvider;
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Window {
+pub(crate) struct Window {
     width: u64,
     inclusive: bool,
 }
 
 impl Window {
-    pub(super) fn clocks(plan: &LogicalPlan) -> Result<usize> {
+    pub(crate) fn clocks(plan: &LogicalPlan) -> Result<usize> {
         let mut count = 0;
         plan.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expression| {
@@ -35,7 +35,7 @@ impl Window {
         Ok(count)
     }
 
-    pub(super) fn from_plan(plan: &LogicalPlan) -> Result<Option<Self>> {
+    pub(crate) fn from_plan(plan: &LogicalPlan) -> Result<Option<Self>> {
         let clocks = Self::clocks(plan)?;
         if clocks == 0 {
             return Ok(None);
@@ -133,7 +133,7 @@ impl Window {
             if matches!(function.name(), "now" | "current_timestamp"))
     }
 
-    pub(super) fn selection(
+    pub(crate) fn selection(
         &self,
         original: &AnalysisSelectionV1,
         now: u64,
@@ -154,7 +154,7 @@ impl Window {
         selection
     }
 
-    pub(super) fn expiry(&self, received: Option<u64>) -> Option<u64> {
+    pub(crate) fn expiry(&self, received: Option<u64>) -> Option<u64> {
         received.and_then(|received| {
             (received / 1000 * 1000)
                 .checked_add(self.width)?

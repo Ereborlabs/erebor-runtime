@@ -66,16 +66,13 @@ impl Subscribe {
         }
     }
 
-    pub(crate) fn page(input: LogicalPlan) -> Result<LogicalPlan> {
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(Self {
-                input,
-                append: true,
-            }),
-        }))
+    pub(crate) fn runtime(input: LogicalPlan, append: bool) -> LogicalPlan {
+        LogicalPlan::Extension(Extension {
+            node: Arc::new(Self { input, append }),
+        })
     }
 
-    pub(crate) fn plan(input: LogicalPlan) -> Result<LogicalPlan> {
+    pub(crate) fn maintainable(input: &LogicalPlan) -> Result<()> {
         let mut scans = 0;
         input.apply_with_subqueries(|node| {
             match node {
@@ -123,12 +120,7 @@ impl Subscribe {
                 "maintained single evidence source".into(),
             ));
         }
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(Self {
-                input,
-                append: false,
-            }),
-        }))
+        Ok(())
     }
 }
 
@@ -147,6 +139,10 @@ impl UserDefinedLogicalNodeCore for Subscribe {
 
     fn expressions(&self) -> Vec<Expr> {
         Vec::new()
+    }
+
+    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        Some(vec![(0..self.input.schema().fields().len()).collect()])
     }
 
     fn fmt_for_explain(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -209,17 +205,19 @@ impl ExtensionPlanner for SubscriptionPlanner {
         }
         let mut scans = 0;
         let mut journal = None;
-        input.apply(|node| {
-            if let Some(source) = SourceData::from_plan(node.as_ref()) {
-                scans += 1;
-                match JournalExec::new(source) {
-                    Ok(source) => journal = Some(Arc::new(source) as Arc<dyn ExecutionPlan>),
-                    Err(DataFusionError::NotImplemented(_)) => {}
-                    Err(error) => return Err(error),
+        if Subscribe::maintainable(&subscription.input).is_ok() {
+            input.apply(|node| {
+                if let Some(source) = SourceData::from_plan(node.as_ref()) {
+                    scans += 1;
+                    match JournalExec::new(source) {
+                        Ok(source) => journal = Some(Arc::new(source) as Arc<dyn ExecutionPlan>),
+                        Err(DataFusionError::NotImplemented(_)) => {}
+                        Err(error) => return Err(error),
+                    }
                 }
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
         if scans != 1 {
             journal = None;
         }
@@ -284,7 +282,7 @@ mod tests {
             let aggregate = LogicalPlanBuilder::from(scan)
                 .aggregate(Vec::<Expr>::new(), vec![count_all()])?
                 .build()?;
-            assert_eq!(Subscribe::plan(aggregate).is_ok(), durable);
+            assert_eq!(Subscribe::maintainable(&aggregate).is_ok(), durable);
         }
         Ok(())
     }

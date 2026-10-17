@@ -582,14 +582,15 @@ run's local tables and captured execution time
 
 Replacement output and maintained COUNT use one completion owner.
 
-[State::evaluate](../../crates/araphor-query/src/follow/mod.rs) selects replacement execution
-  -> [Session::complete](../../crates/araphor-query/src/execution.rs) starts the native physical stream
-  -> [Cursor::check_store](../../crates/araphor-query/src/follow/cursor.rs) checks the captured receipt before stream polling
+[Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) selects replacement execution
+  -> [Session::start_physical](../../crates/araphor-query/src/execution.rs) starts the native physical stream
+  -> [Runtime::check_store](../../crates/araphor-query/src/stream/physical/runtime.rs) checks the captured receipt before stream polling
   -> [Output::complete](../../crates/araphor-query/src/stream/physical/output.rs) consumes the cooperative native stream through Session::bounded
   -> [Output::fingerprint](../../crates/araphor-query/src/stream/physical/output.rs) hashes the native schema, total row count, and ordered native values after the final read check
-  -> [State::finish](../../crates/araphor-query/src/follow/mod.rs) updates the cursor and source wake facts
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) records the completed frontier and source wake facts
+  -> [State::next](../../crates/araphor-query/src/follow/mod.rs) formats the cursor update
 
-[Outputs::next](../../crates/araphor-query/src/stream/physical.rs) supplies
+[Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) supplies
 the COUNT post-plan stream to that same Output::complete method. The intermediate
 input reservation remains held through post-plan completion. COUNT retains only
 the prior digest. It no longer retains a second batch vector and its metadata
@@ -666,29 +667,32 @@ operators account for registered allocations through their execution pool.
 The buffer claims account for retained allocations. Native plan allocation
 also has no complete size API. This guide makes no complete heap-bound claim.
 
-[Subscription](../../crates/araphor-query/src/follow/mod.rs) retains a raw
-native plan, the original durable source names, authorized selection, clock,
-and cursor binding. Append plans use bounded Data position pages. Replacement
+[Subscription](../../crates/araphor-query/src/follow/mod.rs) checks the request
+and binds the cursor. The physical [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs)
+retains the native plan, original source names, selection, clock, and processing
+frontier. Append plans use bounded Data position pages. Replacement
 plans use the maintained COUNT path below when that path supports the plan.
 Other replacement plans compute the complete captured input for each update.
 Native expressions define supported moving windows. Notification source facts
 supply the next obligation deadline. Commit changes and due deadlines wake
 the subscription. A metadata-only health update takes no SQL evaluation
-permit and preserves the last SQL cursor and evaluation time. Notification
+permit and preserves the last SQL cursor and evaluation time. A completed
+evaluation advances that progress even when its result rows are unchanged.
+Metadata reads reserve the available admitted input capacity. Notification
 metadata can require decoding the retained obligation context.
 
 ### Native physical append pages
 
 [Subscribe::appendable](../../crates/araphor-query/src/planner/subscription.rs) selects a projection with filters and aliases over one durable events or trace_output source
-  -> [State::evaluate](../../crates/araphor-query/src/follow/mod.rs) acquires the evaluation permit before the clock read and physical planning
-  -> [Session::subscribe](../../crates/araphor-query/src/execution.rs) registers the actual permit and run facts in the native task configuration
-  -> [Subscribe::page](../../crates/araphor-query/src/planner/subscription.rs) retains the public native SQL schema
+  -> [SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) acquires the evaluation permit before the clock read and physical planning
+  -> [SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) registers both watches before time is fixed and supplies run facts through native configuration
+  -> [Subscribe::runtime](../../crates/araphor-query/src/planner/subscription.rs) retains the public native SQL schema
   -> DataFusion runs its default logical and physical optimizer rules
   -> the late registered [PageLineage](../../crates/araphor-query/src/planner/subscription.rs) extends the actual native physical child with its real source positions
   -> native SanityCheckPlan checks the completed physical tree
-  -> [SubscribeExec::execute_committed](../../crates/araphor-query/src/stream/physical.rs) opens the planned page child through shared Session.start_physical
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) opens the planned page child through shared Session.start_physical
   -> [Output::page](../../crates/araphor-query/src/stream/physical/page.rs) selects and compacts the disclosed prefix
-  -> [State::finish](../../crates/araphor-query/src/follow/mod.rs) checks the store binding and creates Update from the completed physical output
+  -> [State::next](../../crates/araphor-query/src/follow/mod.rs) checks the store binding and creates Update from the completed physical event
 
 The public append result requires a raw position for each disclosed row. A
 native SQL projection can discard those fields. RecordBatchStream supplies no
@@ -731,11 +735,12 @@ keeps the actual native task identity, configuration, function maps, and runtime
 Only the captured SourceSnapshot extension changes. Its worker keeps the
 operation permit until the blocking read exits. Cancellation retains
 that rule. Page execution checks the current read before returning Output.
-Follow consumes that completed output and its actual reservation. One shared
-State.finish method updates the cursor and wake state for bounded, maintained,
-and page results. The Query owner retains source watches and health handling.
-The page physical stream is one bounded read; general maintained SQL remains
-**Not done**.
+Follow consumes that completed output and its actual reservation. Runtime
+records the source frontier and wake state for bounded, maintained, and page
+results. Follow formats each event as a cursor update.
+Each capture and append page is bounded. When follow is enabled, the physical
+subscription stream can emit more pages and wait for later commits. General
+maintained SQL remains **Not done**.
 
 Selected host verification is **Done** for 150 distinct Rust cases: 112 Query,
 37 Analysis model, and the E2E query-follow contract. That E2E test retains eight
@@ -765,8 +770,8 @@ Native COUNT arguments, null behavior, and aggregate `FILTER` remain native.
 Grouped or distinct counts, other aggregates, and clock expressions do not
 use this path.
 
-[State::evaluate](../../crates/araphor-query/src/follow/mod.rs) requests a subscription session
-  -> [Session::subscribe](../../crates/araphor-query/src/execution.rs) wraps the admitted native SQL plan with [Subscribe](../../crates/araphor-query/src/planner/subscription.rs)
+[SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) starts the subscription
+  -> [Subscribe::runtime](../../crates/araphor-query/src/planner/subscription.rs) wraps the admitted native SQL plan
   -> native SessionState runs its logical optimizer and physical planner
   -> [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) supplies the native execution plan with its immutable projection and time bounds
   -> [SubscriptionPlanner](../../crates/araphor-query/src/planner/subscription.rs) creates JournalExec from the actual native scan
@@ -780,24 +785,31 @@ once for each complete source cut. Native FilterExec and ProjectionExec keep
 their compiled expressions. No second SQL parser or expression compiler runs for a change.
 The former Processor and standalone aggregate helper are deleted.
 
+Subscribe::necessary_children_exprs keeps all output columns of its input and lets
+native projection pruning visit the child. The pinned DataFusion 53.1.0 rule
+stops at an extension without this hook. Native pruning selects the required
+scan columns. The moving COUNT regression compares those columns with an
+ordinary native query and executes within the same 64 KiB input bound.
+
 The native SQL child remains bounded. Its DataSourceExec and SourceData
 supply the finite source schema. Native operators retain compiled expressions.
 Native global AggregateExec finishes at end of input. The unbounded journal
 therefore remains a separate physical child. The journal stores the exact
 native projected schema, canonical indices, and capture request once. Each
-execute_committed call creates its own watch, live beforeimages,
-and reservations from the actual TaskContext. The hidden Source factory and
+execute_committed call creates one Runtime with the actual source and clock
+watches. JournalExec::open creates its live beforeimages and reservations
+from the actual TaskContext. The hidden Source factory and
 its separate stream module are deleted.
 
-[State::advance](../../crates/araphor-query/src/follow/mod.rs) consumes the next completed physical result
-  -> [JournalExec::execute_committed](../../crates/araphor-query/src/sources/journal.rs) reads the initial snapshot or waits for a later committed revision
+[Runtime::next](../../crates/araphor-query/src/stream/physical/runtime.rs) selects the initial read or a relevant committed revision
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) acquires one evaluation permit and fixes time
   -> [AnalysisStore::read_tables](../../crates/araphor-data/src/analysis/extraction.rs) reads raw inserts and retirements through one captured revision
   -> [Changes::capture](../../crates/araphor-query/src/sources/journal.rs) offers one complete Change with before and after batches, the receipt, frontier, evaluation control, permit, and metadata reservation
   -> [SubscribeExec::bind](../../crates/araphor-query/src/stream/physical.rs) supplies one native batch stream for each sign
   -> the private [physical kernel](../../crates/araphor-query/src/stream/physical/kernel.rs) calls native COUNT accumulators
-  -> [State::next](../../crates/araphor-query/src/stream/physical/kernel.rs) finishes the complete frontier before native output plans run
-  -> [Outputs::next](../../crates/araphor-query/src/stream/physical.rs) retains the exact receipt, deadline, and evaluation permit
-  -> [State::advance](../../crates/araphor-query/src/follow/mod.rs) returns Update with the receipt and cursor
+  -> [Kernel::apply](../../crates/araphor-query/src/stream/physical/kernel.rs) finishes the complete frontier before native output plans run
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) retains the exact receipt, deadline, and evaluation permit
+  -> [State::next](../../crates/araphor-query/src/follow/mod.rs) returns Update with the receipt and cursor
 
 The change read uses the existing raw journal and
 [expired_ranges](../../crates/araphor-data/src/analysis/extraction/changes.rs).
@@ -846,7 +858,7 @@ This bound applies to the admitted events source. It is not a complete heap
 size measurement or a bound for other maintained operators.
 
 The native EnsureCooperative and SanityCheckPlan rules remain enabled.
-Each journal stream step uses Tokio's cooperative future wrapper. The existing
+Each journal capture uses Tokio's cooperative future wrapper. The existing
 `native_subscribe_execution` test checks both rules and the real physical
 children. It consumes one complete change, commits a second selected event,
 and exhausts the Tokio task budget before polling that change. The poll yields,
@@ -862,7 +874,7 @@ inserts and deletes require the committed route through SubscribeExec.
 The registered planner delegates ordinary planning to DataFusion.
 
 Physical Output now carries its actual native reservation into Update.
-Follow's advance method does not repeat output size checks or buffer claims.
+Follow's formatting method does not repeat output size checks or buffer claims.
 The native Arrow iterator keeps the output metadata reservation until EOF or
 drop. It releases the completed SQL permit at the original boundary. The
 `native_subscribe_execution` regression checks that separation and borrowed
@@ -871,10 +883,13 @@ and strict Query Clippy pass. The exact source record is
 `/tmp/araphor-output-owner-qualification1.json`. Wider runtime suites and full
 workspace CI are not repeated for this private ownership change.
 
-Each State currently owns one physical execution stream. A shared maintained
-query owner is **Not done**. Other plans still use State::evaluate and physical
-completion of the complete result. Broader maintained operators and clock processing are
-**Not done**. The selected host qualification passes 195 distinct cases. Wider qualification
+Each physical Runtime owns one subscription execution stream. A shared
+maintained query owner is **Not done**. Unsupported maintained plans use native
+bounded replacement execution. The first planned child is reused only with its
+proven initial time and permit. Later replacements use fresh physical plans;
+native joins can retain build data. Direct native fallback also plans a fresh
+child before its first read. Broader maintained operators remain **Not done**.
+The earlier selected host qualification passes 195 distinct cases. Wider qualification
 is **Not done**.
 The complete redesign is **Not done**.
 
@@ -968,6 +983,21 @@ The current source reading route is:
 - [Model tests](../../crates/araphor-analysis/src/model/tests.rs) and [package lifecycle tests](../../crates/araphor-analysis/src/package/tests/lifecycle.rs): checkpoints, parameters, evidence, source bounds, retries, and installed revisions.
 - [Interruption tests](../../crates/araphor-analysis/src/package/tests/interruption.rs): authority change, cancellation, stop before commit, Busy, and preservation of committed state.
 - [Control tests](../../crates/mithril-control/src/client_grpc/tests.rs) and [follow E2E cases](../../crates/mithril-e2e/src/discovery/query_follow.rs): actual protocol frames and native subscription behavior across owners.
+
+### Subscription runtime verification
+
+The single physical Runtime and selected host checks are **Done**. The final
+checks pass 244 distinct cases: 180 Query, 29 Analysis model, 34 Control client,
+and the E2E follow contract. Strict Clippy passes for all four crates and their
+test targets. Both new native-hook regressions fail before the fixes and pass
+after them. The bounded-window E2E failure passes after native source pruning
+is restored. Its 64 KiB input limit is unchanged. Scoped formatting and local
+document links pass. The source record is
+`/tmp/araphor-subscription-runtime-qualification1.json`. The source count adds
+32 production lines for this change and 832 from 7b7b407a. The complete
+redesign, general maintained SQL, shared maintained query ownership, and the
+required 6,000-line reduction remain **Not done**. Full workspace CI and
+benchmarks are not run. No speed improvement is claimed.
 
 ### Shared output verification
 
