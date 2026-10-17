@@ -48,14 +48,6 @@ impl<'a> ModelRun<'a> {
         })
     }
 
-    pub fn admit_model(
-        owner: &Engine,
-        model: &sdk::Model,
-        program: &super::SqlModelV1,
-    ) -> Result<()> {
-        super::AdmittedModel::admit(owner, program, model).map(|_| ())
-    }
-
     pub(crate) fn tenant(&self) -> [u8; 16] {
         self.tenant
     }

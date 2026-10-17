@@ -103,8 +103,11 @@ applies no `__araphor_` prefix ban.
 [AdmittedModel](../../crates/araphor-analysis/src/model.rs) stores raw native
 logical plans for output and checkpoint queries in descriptor order. Each
 reason plan retains checked output and reason indices. InstalledBundle retains
-the exact descriptor, implementation, and admitted-program pairing. Public
-transient calls perform their own admission. Known retained vectors and
+the exact descriptor, implementation, and admitted-program pairing.
+[ModelRun::evaluate_admitted](../../crates/araphor-analysis/src/model/execute.rs)
+executes those retained plans. The raw model admission and evaluation entry
+points are deleted. Tests reuse real admitted exports. Invalid input bindings
+fail admission before execution. Known retained vectors and
 declarations have native memory reservations; native plan allocation has no
 complete upstream size measurement.
 

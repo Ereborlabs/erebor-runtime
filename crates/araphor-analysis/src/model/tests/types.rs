@@ -64,9 +64,10 @@ fn sql_model_portable_precision() -> TestResult {
         outputs: BTreeMap::from([("rows".into(), "SELECT value, time, bytes FROM data".into())]),
         ..Default::default()
     };
-    let output = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_model(
+    let admitted = AdmittedExport::admit(&owner, &package.exports[0], Some(&program))?;
+    let output = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
         &package,
-        &program,
+        &admitted,
         &evaluation,
     )?;
     assert_eq!(output.output.datasets[0].batches[0], data);
@@ -76,18 +77,19 @@ fn sql_model_portable_precision() -> TestResult {
         "rows".into(),
         "SELECT CAST(value AS BIGINT) AS value, time, bytes FROM data".into(),
     );
+    let wrong_admitted = AdmittedExport::admit(&owner, &package.exports[0], Some(&wrong))?;
     assert!(ModelRun::new(&owner, [1; 16], &control()?)?
-        .evaluate_model(&package, &wrong, &evaluation)
+        .evaluate_admitted(&package, &wrong_admitted, &evaluation)
         .is_err());
     let cancelled = control()?;
     cancelled.cancel()?;
     assert!(ModelRun::new(&owner, [1; 16], &cancelled)
-        .and_then(|run| run.evaluate_model(&package, &program, &evaluation))
+        .and_then(|run| run.evaluate_admitted(&package, &admitted, &evaluation))
         .is_err());
     let mut bounded = evaluation;
     bounded.context.limits.max_bytes = 1;
     assert!(ModelRun::new(&owner, [1; 16], &control()?)?
-        .evaluate_model(&package, &program, &bounded)
+        .evaluate_admitted(&package, &admitted, &bounded)
         .is_err());
     Ok(())
 }

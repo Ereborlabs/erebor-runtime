@@ -127,9 +127,9 @@ fn operation_inputs_match() -> TestResult {
         &grant,
         &active,
     )?;
-    let expected = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_model(
+    let expected = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
         &package,
-        &program,
+        &admitted,
         &evaluation(expected_inputs.inputs.clone(), &model),
     )?;
     let expected_bytes = serde_json::to_vec(&crate::AnalysisPackageOwner::encode_output(
@@ -271,14 +271,15 @@ fn operation_source_cleanup() -> TestResult {
         outputs: BTreeMap::from([("result".into(), "SELECT value FROM source".into())]),
         ..Default::default()
     };
+    let admitted = AdmittedExport::admit(&owner, &model, Some(&program))?;
     let output_pressure = owner
         .memory()
         .reserve_output(owner.limits().output_capacity)?;
     assert!(
         ModelRun::prepared(&owner, [1; 16], &control()?, Arc::clone(&retained))?
-            .evaluate_model(
+            .evaluate_admitted(
                 &package,
-                &program,
+                &admitted,
                 &evaluation(retained.inputs.clone(), &model)
             )
             .err()
@@ -382,11 +383,13 @@ fn operation_source_denial() -> TestResult {
         let operation = ModelRun::prepared(&owner, [1; 16], &control()?, Arc::clone(&retained))?;
         let mut program = SqlModelV1::default();
         program.outputs.insert("result".into(), sql.into());
-        let result = operation.evaluate_model(
-            &package,
-            &program,
-            &evaluation(retained.inputs.clone(), &model),
-        );
+        let result = AdmittedExport::admit(&owner, &model, Some(&program)).and_then(|admitted| {
+            operation.evaluate_admitted(
+                &package,
+                &admitted,
+                &evaluation(retained.inputs.clone(), &model),
+            )
+        });
         assert!(result.is_err());
         let error = result.err().ok_or("undeclared source was accepted")?;
         assert_eq!(error.status_code(), StatusCode::InvalidArguments);
@@ -546,10 +549,11 @@ fn aggregate_output_rows_stop_before_reference_tables() -> TestResult {
             .outputs
             .insert(name.into(), "SELECT 1::BIGINT UNSIGNED AS value".into());
     }
+    let admitted = AdmittedExport::admit(&owner, &model, Some(&program))?;
     assert!(matches!(
-        ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_model(
+        ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
             &package,
-            &program,
+            &admitted,
             &evaluation(Vec::new(), &model),
         ),
         Err(crate::Error::ModelLimit {

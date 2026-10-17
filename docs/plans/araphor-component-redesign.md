@@ -565,6 +565,28 @@ net production deletions are required. Complete redesign: **Not done**.
 Full workspace CI and benchmarks are not run, as instructed. No speed
 improvement is claimed.
 
+### Remove raw model evaluation
+
+Implementation and selected host verification: **Done**. The public
+ModelRun::evaluate_model and ModelRun::admit_model entry points are deleted.
+ModelRun::evaluate_admitted executes the retained native logical plans.
+The separate evaluate_program method is deleted. Package execution retains
+its existing admission, authority, input proof, and output lease checks.
+
+The migrated tests use real AdmittedExport values. All existing assertions
+remain. The invalid resolved-input descriptor still fails admission. Supplied
+array results use the valid admitted package; the deleted raw entry point
+cannot bypass input admission. Selected host checks pass 45 model, package
+relation, and retained-package cases. The verification and count records are
+`/tmp/araphor-retained-sql-qualification1.json` and
+`/tmp/araphor-retained-sql-count1.json`.
+Strict Clippy passes for Analysis, Control, E2E, and their test targets.
+
+The change removes 34 nonblank production Rust lines and adds 17 test lines.
+The complete redesign adds 800 production lines from 7b7b407a. Another 6,800
+net production deletions are required. Complete redesign: **Not done**.
+Full workspace CI and benchmarks are not run, as instructed.
+
 ## Intended end state
 
 ### RisingWave source correction

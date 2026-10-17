@@ -92,9 +92,10 @@ fn sql_model_state_provenance() -> TestResult {
         evidence: Some("SELECT 'counts' AS output_dataset, CAST(0 AS BIGINT UNSIGNED) AS output_row, 'events' AS input_dataset, __row_index AS input_row FROM events".into()),
         reasons: vec![SqlReasonV1 { output: "counts".into(), code: "denials.repeated".into(), sql: "SELECT __row_index AS output_row, count FROM output_counts".into() }, SqlReasonV1 { output: "counts".into(), code: "denials.empty".into(), sql: "SELECT __row_index AS output_row FROM output_counts".into() }],
     };
-    let result = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_model(
+    let admitted = AdmittedExport::admit(&owner, &model, Some(&program))?;
+    let result = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
         &package,
-        &program,
+        &admitted,
         &evaluation,
     )?;
     assert_eq!(result.output.evidence.len(), 3);
@@ -122,9 +123,9 @@ fn sql_model_state_provenance() -> TestResult {
     supplied.exports[0].inputs[0].source =
         sdk::InputSource::Query("SELECT missing FROM absent".into());
     assert!(AdmittedExport::admit(&owner, &supplied.exports[0], Some(&program)).is_err());
-    let supplied = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_model(
-        &supplied,
-        &program,
+    let supplied = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
+        &package,
+        &admitted,
         &evaluation,
     )?;
     assert_eq!(
@@ -136,9 +137,10 @@ fn sql_model_state_provenance() -> TestResult {
     reused
         .checkpoint
         .insert("state".into(), "SELECT count FROM output_counts".into());
-    let reused = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_model(
+    let reused_admitted = AdmittedExport::admit(&owner, &model, Some(&reused))?;
+    let reused = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
         &package,
-        &reused,
+        &reused_admitted,
         &evaluation,
     )?;
     assert_eq!(
@@ -152,8 +154,9 @@ fn sql_model_state_provenance() -> TestResult {
         batch(&port("state", "count"), vec![3])?
     );
     drop(reused);
+    let bad_admitted = AdmittedExport::admit(&owner, &model, Some(&bad))?;
     assert!(ModelRun::new(&owner, [1; 16], &control()?)?
-        .evaluate_model(&package, &bad, &evaluation)
+        .evaluate_admitted(&package, &bad_admitted, &evaluation)
         .is_err());
     for sql in [
         "SELECT * FROM read_csv('/etc/passwd')",
@@ -161,7 +164,7 @@ fn sql_model_state_provenance() -> TestResult {
         "SELECT * FROM absent",
     ] {
         bad.outputs.insert("counts".into(), sql.into());
-        assert!(ModelRun::admit_model(&owner, &model, &bad).is_err());
+        assert!(AdmittedExport::admit(&owner, &model, Some(&bad)).is_err());
     }
     Ok(())
 }
@@ -379,7 +382,7 @@ fn admitted_program_order() -> TestResult {
         let mut invalid = program.clone();
         invalid.reasons[0].output = output.into();
         invalid.reasons[0].code = code.into();
-        assert!(ModelRun::admit_model(&owner, &model, &invalid).is_err());
+        assert!(AdmittedExport::admit(&owner, &model, Some(&invalid)).is_err());
     }
     let mut admitted = AdmittedExport::admit(&owner, &model, Some(&program))?;
     let before = admitted.allocated_bytes();

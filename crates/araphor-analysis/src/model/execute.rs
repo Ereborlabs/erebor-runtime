@@ -4,32 +4,12 @@ use araphor_analysis_sdk as sdk;
 use araphor_query::datafusion::logical_expr::LogicalPlan;
 use snafu::ResultExt as _;
 
-use super::{operation::ModelRun, AdmittedExport, AdmittedModel, SqlModelOutputV1, SqlModelV1};
+use super::{operation::ModelRun, AdmittedExport, AdmittedModel, SqlModelOutputV1};
 use crate::Result;
 
 impl ModelRun<'_> {
-    pub fn evaluate_model(
-        self,
-        package: &sdk::Package,
-        program: &SqlModelV1,
-        evaluation: &sdk::Evaluation,
-    ) -> Result<SqlModelOutputV1> {
-        let model = package
-            .exports
-            .iter()
-            .find(|model| model.name == evaluation.export)
-            .ok_or_else(|| {
-                crate::ModelInvalidSnafu {
-                    field: "model export",
-                }
-                .build()
-            })?;
-        let admitted = AdmittedModel::admit(self.owner, program, model)?;
-        self.evaluate_program(package, &admitted, evaluation)
-    }
-
     pub(crate) fn evaluate_admitted(
-        self,
+        mut self,
         package: &sdk::Package,
         admitted: &AdmittedExport,
         evaluation: &sdk::Evaluation,
@@ -40,15 +20,6 @@ impl ModelRun<'_> {
             }
             .build()
         })?;
-        self.evaluate_program(package, admitted, evaluation)
-    }
-
-    fn evaluate_program(
-        mut self,
-        package: &sdk::Package,
-        admitted: &AdmittedModel,
-        evaluation: &sdk::Evaluation,
-    ) -> Result<SqlModelOutputV1> {
         self.check_evaluation(evaluation)?;
         let checked = package
             .check_evaluation(evaluation)
@@ -364,7 +335,7 @@ mod tests {
 
     use super::*;
     use crate::testing::QueryFixture;
-    use crate::{AnalysisReadControl, Limits};
+    use crate::{AnalysisReadControl, Limits, SqlModelV1};
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
@@ -397,10 +368,11 @@ mod tests {
             outputs: BTreeMap::from([("rows".into(), "SELECT 7::BIGINT UNSIGNED AS value".into())]),
             ..Default::default()
         };
+        let admitted = AdmittedExport::admit(&engine, &model, Some(&program))?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-        let output = ModelRun::new(&engine, [1; 16], &control)?.evaluate_model(
+        let output = ModelRun::new(&engine, [1; 16], &control)?.evaluate_admitted(
             &package,
-            &program,
+            &admitted,
             &evaluation(&model, Vec::new()),
         )?;
         let alias = output.output.datasets[0].batches[0].column(0).slice(0, 1);
@@ -448,10 +420,11 @@ mod tests {
             )]),
             ..Default::default()
         };
+        let admitted = AdmittedExport::admit(&engine, &model, Some(&program))?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-        let output = ModelRun::new(&engine, [1; 16], &control)?.evaluate_model(
+        let output = ModelRun::new(&engine, [1; 16], &control)?.evaluate_admitted(
             &package,
-            &program,
+            &admitted,
             &evaluation(&model, Vec::new()),
         )?;
         let batch = &output.output.datasets[0].batches[0];
@@ -521,10 +494,11 @@ mod tests {
             outputs: BTreeMap::from([("rows".into(), "SELECT value FROM input".into())]),
             ..Default::default()
         };
+        let admitted = AdmittedExport::admit(&engine, &model, Some(&program))?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-        let result = ModelRun::new(&engine, [1; 16], &control)?.evaluate_model(
+        let result = ModelRun::new(&engine, [1; 16], &control)?.evaluate_admitted(
             &package,
-            &program,
+            &admitted,
             &evaluation(&model, vec![input]),
         );
         assert!(matches!(
@@ -588,10 +562,11 @@ mod tests {
             )]),
             ..Default::default()
         };
+        let admitted = AdmittedExport::admit(&engine, &model, Some(&program))?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-        let result = ModelRun::new(&engine, [1; 16], &control)?.evaluate_model(
+        let result = ModelRun::new(&engine, [1; 16], &control)?.evaluate_admitted(
             &package,
-            &program,
+            &admitted,
             &evaluation(&model, vec![input]),
         );
         assert!(result.is_err());

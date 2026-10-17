@@ -378,6 +378,19 @@ Selected checks pass 202 cases. Strict scoped Clippy passes. The change removes
 `/tmp/araphor-native-functions-count1.json`. Complete redesign: **Not done**.
 Full workspace CI and benchmarks are not run, as instructed.
 
+### Remove raw model evaluation
+
+**Done** for the selected source and host checks. SQL model execution accepts
+the retained admitted export. The raw model admission and evaluation entry
+points and their separate execution method are deleted. The migrated tests
+retain all assertions and use valid admitted packages. The selected checks
+pass 45 cases. The change removes 34 nonblank production Rust lines. The
+complete change adds 800 from 7b7b407a; another 6,800 net deletions remain.
+Strict Clippy passes for Analysis, Control, E2E, and their test targets.
+The records are `/tmp/araphor-retained-sql-qualification1.json` and
+`/tmp/araphor-retained-sql-count1.json`. Complete redesign: **Not done**.
+Full workspace CI and benchmarks are not run, as instructed.
+
 ## Implementation flow
 
 An owner starts or recovers
