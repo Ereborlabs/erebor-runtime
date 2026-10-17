@@ -5,7 +5,7 @@ use std::time::Duration;
 use snafu::ResultExt as _;
 use wasmtime::component::Component;
 
-use crate::{AnalysisReadControl, Result};
+use crate::{AnalysisReadControl, Result, WasmLimits};
 
 use super::{Code, WasmExecution};
 
@@ -17,7 +17,6 @@ mod worker;
 mod tests;
 
 const WORKER_ARG: &str = "--araphor-component-compiler";
-const MAX_ADDRESS_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_CPU_SECONDS: u64 = 30;
 const MAX_WALL_TIME: Duration = Duration::from_secs(45);
 const POLL_TIME: Duration = Duration::from_millis(5);
@@ -40,7 +39,7 @@ struct CompilerProcessFailure {
 }
 
 impl CompilerChild<'_> {
-    fn command(entry: &str) -> Result<Command> {
+    fn command(entry: &str, address: Option<u64>) -> Result<Command> {
         let executable = std::env::current_exe()
             .map_err(wasmtime::Error::new)
             .context(crate::PackageWasmSnafu {
@@ -58,7 +57,7 @@ impl CompilerChild<'_> {
         } else {
             command.arg(WORKER_ARG);
         }
-        Self::restrict(&mut command)?;
+        Self::restrict(&mut command, address)?;
         Ok(command)
     }
 
@@ -75,18 +74,19 @@ impl CompilerChild<'_> {
 
     #[cfg(unix)]
     #[allow(unsafe_code)]
-    fn restrict(command: &mut Command) -> Result<()> {
+    fn restrict(command: &mut Command, address: Option<u64>) -> Result<()> {
         use rustix::process::{setrlimit, Resource, Rlimit};
         use std::os::unix::process::CommandExt as _;
 
         // Set limits with system calls before exec. Do not allocate in this closure.
         unsafe {
-            command.pre_exec(|| {
+            command.pre_exec(move || {
                 for (resource, maximum) in [
-                    (Resource::As, MAX_ADDRESS_BYTES),
-                    (Resource::Cpu, MAX_CPU_SECONDS),
-                    (Resource::Core, 0),
+                    (Resource::As, address),
+                    (Resource::Cpu, Some(MAX_CPU_SECONDS)),
+                    (Resource::Core, Some(0)),
                 ] {
+                    let Some(maximum) = maximum else { continue };
                     setrlimit(
                         resource,
                         Rlimit {
@@ -107,7 +107,7 @@ impl CompilerChild<'_> {
     }
 
     #[cfg(not(unix))]
-    fn restrict(_command: &mut Command) -> Result<()> {
+    fn restrict(_command: &mut Command, _address: Option<u64>) -> Result<()> {
         Err(Code::Unsupported
             .error("component compiler process limits")
             .into())
@@ -116,14 +116,14 @@ impl CompilerChild<'_> {
     fn capture(
         entry: &str,
         bytes: &[u8],
-        fuel: bool,
+        limits: WasmLimits,
         control: &AnalysisReadControl,
         failed: &mut bool,
         #[cfg(test)] entered: Option<std::sync::mpsc::Sender<u32>>,
     ) -> Result<image::CompilerImage> {
         let control = control.within(MAX_WALL_TIME)?;
         control.check()?;
-        let mut command = Self::command(entry)?;
+        let mut command = Self::command(entry, limits.compiler_bytes)?;
         std::thread::scope(|scope| {
             let child =
                 command
@@ -151,7 +151,7 @@ impl CompilerChild<'_> {
             let sender = std::thread::Builder::new()
                 .name("component-compiler-input".into())
                 .spawn_scoped(scope, move || {
-                    input::CompilerInput::write(fuel, bytes, input)
+                    input::CompilerInput::write(limits.fuel.is_some(), bytes, input)
                 })
                 .map_err(wasmtime::Error::new)
                 .context(crate::PackageWasmSnafu {
@@ -245,7 +245,7 @@ impl WasmExecution {
         CompilerChild::capture(
             TEST_ENTRY,
             bytes,
-            self.limits.fuel.is_some(),
+            self.limits,
             control,
             failed,
             #[cfg(test)]

@@ -121,6 +121,7 @@ fn fixture_modes_keep_quotas() -> TestResult {
         timeout: Some(Duration::from_millis(10)),
         allocation_bytes: Some(1024),
         host_calls: Some(1),
+        ..Default::default()
     };
     let strict = WasmExecution::fixture_code(configured)?;
     assert_eq!(strict.limits, configured);

@@ -134,7 +134,7 @@ impl WasmExecution {
             epoch: Arc::new(execution::EpochTicker::new(engine.clone())),
             engine,
             linker,
-            cache: Mutex::new(cache::CodeCache::new(capacity.clone())),
+            cache: Mutex::new(cache::CodeCache::new(capacity.clone(), limits)),
             compiler: Mutex::new(false),
             running: AtomicUsize::new(0),
             capacity,

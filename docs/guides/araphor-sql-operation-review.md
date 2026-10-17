@@ -699,7 +699,7 @@ Engine construction
 
 An invalid zero capacity fails construction. Drop of a native reservation
 returns its operator charge to the native pool. Query input, output, SDK,
-cache, and compiler quota defaults still require separate changes.
+and the other compiler quota defaults still require separate changes.
 
 [native_registry_contract](../../crates/araphor-query/src/execution/tests.rs)
 compares all registered scalar, aggregate, and window names, aliases, and
@@ -876,6 +876,28 @@ permit and preserves the last SQL cursor and evaluation time. A completed
 evaluation advances that progress even when its result rows are unchanged.
 Metadata reads reserve the available admitted input capacity. Notification
 metadata can require decoding the retained obligation context.
+
+### Optional Wasm code memory
+
+[WasmLimits](../../crates/araphor-analysis/src/limits.rs) has optional
+cache_bytes, cache_entries, and compiler_bytes settings. All three settings
+default to None. The compiler setting counts address-space bytes.
+
+[AnalysisPackageOwner::new_with_limits](../../crates/araphor-analysis/src/package/owner.rs) receives runtime configuration
+  -> [WasmExecution::new](../../crates/araphor-analysis/src/package/wasm.rs) creates CodeCache with the optional quotas
+  -> [CodeCache::reserve](../../crates/araphor-analysis/src/package/wasm/cache.rs) applies explicit byte and entry quotas
+  -> [CompilerChild::restrict](../../crates/araphor-analysis/src/package/wasm/compiler.rs) sets an address-space limit only for Some
+  -> [PreparedComponent](../../crates/araphor-analysis/src/package/wasm.rs) retains the code pin through evaluation and error lifetimes
+
+An explicit quota can evict an unpinned entry. Pinned entries keep their
+charge until release. A temporary shortage returns Busy and uses the existing
+capacity notice. A request that exceeds a configured quota returns Limit.
+Fixture runtimes with explicit cache or compiler quotas have separate caches.
+
+Selected verification passes 33 cases and strict Analysis Clippy. Four ignored
+compiler worker entry points run through their parent tests. Other compiler,
+VM, Query, SDK, and retained-store quotas remain. Polling removal is not complete.
+The source records use the `/tmp/araphor-discovery-wasm-memory-` prefix.
 
 ### Native physical append pages
 

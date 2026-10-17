@@ -104,6 +104,7 @@ fn component_recovers_after_failure() -> TestResult {
         timeout: Some(Duration::from_secs(5)),
         allocation_bytes: Some(32 * 1024 * 1024),
         host_calls: Some(4096),
+        ..Default::default()
     })?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     runtime.admit(COMPONENT, &control)?;

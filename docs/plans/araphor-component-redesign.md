@@ -74,6 +74,32 @@ This deliverable deletes 24 nonblank production Rust lines. Tests and
 formatting are excluded. The complete redesign, other quota defaults,
 reactive execution, and the production reduction target remain **Not done**.
 
+### Optional compiled-code and compiler memory quotas
+
+Implementation and selected verification: **Done**.
+WasmLimits defines cache_bytes, cache_entries, and compiler_bytes as optional
+settings. Each setting defaults to None. CodeCache applies configured byte and
+entry quotas. CompilerChild applies a configured address-space quota before
+exec. With None, the compiler inherits the operating-system address-space limit.
+The fixed 80 MiB cache, 16-entry cache, and 1 GiB address-space caps are deleted.
+PreparedComponent still owns the compiled-code pin through evaluation, output,
+and error lifetimes. Explicit quotas retain eviction, Busy, and release notices.
+
+The focused check passes 33 cases. Four ignored compiler worker entry points
+are called by their parent tests. Strict Analysis Clippy passes. The records
+are `/tmp/araphor-discovery-wasm-memory-build1.json`,
+`/tmp/araphor-discovery-wasm-memory-tests2.json`, and
+`/tmp/araphor-discovery-wasm-memory-clippy1.json`. A stale test artifact was
+stopped and excluded before the recorded test run. No full workspace CI or
+benchmark is run. This deliverable adds 12 nonblank production Rust lines.
+The record is `/tmp/araphor-wasm-memory-staged-count.json`.
+
+Other Wasm quotas remain **Not done**. These include compiler source and image
+sizes, CPU and wall time, compilation work, instances, tables, stack settings,
+and concurrent evaluations. Query, SDK, and retained-store quotas also remain
+**Not done**. Compiler waits, the Wasm epoch ticker, storage lock waits, and
+repeated expired-read interrupts still require reactive replacements.
+
 ### Replacement checks on 2026-10-16
 
 | Check | Result |

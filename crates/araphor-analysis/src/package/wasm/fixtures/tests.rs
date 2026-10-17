@@ -1,19 +1,25 @@
 use std::collections::BTreeSet;
 use std::io::Write as _;
 
-use super::super::cache::{MAX_CACHE_BYTES, MAX_CACHE_ENTRIES, MAX_IMAGE_BYTES};
+use super::super::cache::MAX_IMAGE_BYTES;
 use super::*;
 
 #[test]
 fn fixture_cache_charges_fit() -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>
 {
-    let runtime = WasmExecution::new(WasmLimits::default())?;
+    let byte_limit = 80 * 1024 * 1024;
+    let entry_limit = 16;
+    let runtime = WasmExecution::new(WasmLimits {
+        cache_bytes: Some(byte_limit),
+        cache_entries: Some(entry_limit),
+        ..Default::default()
+    })?;
     let sources = WasmExecution::fixture_sources();
     let mut output = std::io::stdout();
     let mut digests = BTreeSet::new();
     let mut required = 0usize;
     let mut total = 0usize;
-    assert!(sources.len() <= MAX_CACHE_ENTRIES);
+    assert!(sources.len() <= entry_limit);
     for (name, source) in sources {
         let digest = Sha256::digest(source);
         let key: [u8; 32] = digest.into();
@@ -48,16 +54,44 @@ fn fixture_cache_charges_fit() -> std::result::Result<(), Box<dyn std::error::Er
     }
     writeln!(
         output,
-        "component cache totals: required_bytes={required} all_bytes={total} entries={} byte_limit={MAX_CACHE_BYTES} entry_limit={MAX_CACHE_ENTRIES}",
+        "component cache totals: required_bytes={required} all_bytes={total} entries={} byte_limit={byte_limit} entry_limit={entry_limit}",
         digests.len(),
     )?;
     assert_eq!(digests.len(), sources.len());
-    assert!(total <= MAX_CACHE_BYTES, "component cache total: {total}");
+    assert!(total <= byte_limit, "component cache total: {total}");
     for (name, source) in sources {
         assert!(
             runtime.cached(&Sha256::digest(source).into())?.is_some(),
             "component evicted: {name}",
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn fixture_options_stay_separate(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let shared = WasmExecution::fixture_code(WasmLimits::default())?;
+    for limits in [
+        WasmLimits {
+            cache_bytes: Some(1),
+            ..Default::default()
+        },
+        WasmLimits {
+            cache_entries: Some(1),
+            ..Default::default()
+        },
+        WasmLimits {
+            compiler_bytes: Some(1),
+            ..Default::default()
+        },
+    ] {
+        let configured = WasmExecution::fixture_code(limits)?;
+        assert_eq!(configured.limits, limits);
+        assert!(!std::sync::Arc::ptr_eq(&shared.epoch, &configured.epoch));
+        for (_, source) in WasmExecution::fixture_sources() {
+            assert!(configured.cached(&Sha256::digest(source).into())?.is_none());
+        }
     }
     Ok(())
 }

@@ -1,11 +1,13 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::{AnalysisPackageOwner, AnalysisReadControl};
+use crate::{AnalysisPackageOwner, AnalysisReadControl, WasmLimits};
 
-use super::{CompilerChild, MAX_ADDRESS_BYTES, TEST_ENTRY};
+use super::{CompilerChild, TEST_ENTRY};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+const ADDRESS_BYTES: u64 = 1024 * 1024 * 1024;
 
 const BLOCKING_ENTRY: &str = "package::wasm::compiler::tests::araphor_component_compiler_blocking";
 const MEMORY_ENTRY: &str = "package::wasm::compiler::tests::araphor_component_compiler_memory";
@@ -32,11 +34,15 @@ fn araphor_component_compiler_blocking() -> TestResult {
 #[ignore]
 fn araphor_component_compiler_memory() -> TestResult {
     super::WasmExecution::worker_limits()?;
-    super::input::CompilerInput::read(std::io::stdin().lock())?.request()?;
-    let mut allocation = Vec::<u8>::new();
-    assert!(allocation
-        .try_reserve_exact(MAX_ADDRESS_BYTES as usize + 1)
-        .is_err());
+    let input = super::input::CompilerInput::read(std::io::stdin().lock())?;
+    let request = input.request()?;
+    let expected: (Option<u64>, Option<u64>) = minicbor::decode(request.source)?;
+    let limits = rustix::process::getrlimit(rustix::process::Resource::As);
+    assert_eq!((limits.current, limits.maximum), expected);
+    if let Some(maximum) = limits.current.filter(|maximum| *maximum <= ADDRESS_BYTES) {
+        let mut allocation = Vec::<u8>::new();
+        assert!(allocation.try_reserve_exact(maximum as usize + 1).is_err());
+    }
     super::image::CompilerImage::write(
         &Err(super::Code::Limit
             .error("component compiler memory fixture")
@@ -70,16 +76,40 @@ fn compiler_enforces_os_limits() -> TestResult {
     let runtime = super::WasmExecution::new(crate::WasmLimits::default())?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(5))?;
     let mut failed = false;
-    let image = CompilerChild::capture(MEMORY_ENTRY, &[], false, &control, &mut failed, None)?;
+    let inherited = rustix::process::getrlimit(rustix::process::Resource::As);
+    for address in [None, Some(ADDRESS_BYTES)] {
+        let expected = address
+            .map(|maximum| (Some(maximum), Some(maximum)))
+            .unwrap_or((inherited.current, inherited.maximum));
+        let source = minicbor::to_vec(expected)?;
+        let image = CompilerChild::capture(
+            MEMORY_ENTRY,
+            &source,
+            WasmLimits {
+                compiler_bytes: address,
+                ..Default::default()
+            },
+            &control,
+            &mut failed,
+            None,
+        )?;
+        assert!(matches!(
+            image.component(&runtime.engine),
+            Err(crate::Error::PackageWasm {
+                code: super::Code::Limit,
+                ..
+            })
+        ));
+    }
     assert!(matches!(
-        image.component(&runtime.engine),
-        Err(crate::Error::PackageWasm {
-            code: super::Code::Limit,
-            ..
-        })
-    ));
-    assert!(matches!(
-        CompilerChild::capture(CPU_ENTRY, &[], false, &control, &mut failed, None),
+        CompilerChild::capture(
+            CPU_ENTRY,
+            &[],
+            WasmLimits::default(),
+            &control,
+            &mut failed,
+            None
+        ),
         Err(crate::Error::PackageWasm {
             code: super::Code::Limit,
             ..
@@ -103,7 +133,7 @@ fn compiler_reaps_interrupted_children() -> TestResult {
                     CompilerChild::capture(
                         BLOCKING_ENTRY,
                         &[],
-                        false,
+                        WasmLimits::default(),
                         control_worker,
                         failed_worker,
                         Some(entered),
@@ -140,7 +170,7 @@ fn compiler_reaps_interrupted_children() -> TestResult {
         let image = CompilerChild::capture(
             TEST_ENTRY,
             &wat::parse_str("(component)")?,
-            false,
+            WasmLimits::default(),
             &AnalysisReadControl::default(),
             &mut failed,
             None,
@@ -158,7 +188,7 @@ fn installation_rejects_native_images() -> TestResult {
     let image = CompilerChild::capture(
         TEST_ENTRY,
         &wat::parse_str("(component)")?,
-        false,
+        WasmLimits::default(),
         &AnalysisReadControl::default(),
         &mut failed,
         None,
@@ -182,7 +212,7 @@ fn compiler_requires_worker_dispatch() -> TestResult {
     let image = CompilerChild::capture(
         "missing_component_compiler",
         &[],
-        false,
+        WasmLimits::default(),
         &AnalysisReadControl::with_timeout(Duration::from_secs(5))?,
         &mut failed,
         None,

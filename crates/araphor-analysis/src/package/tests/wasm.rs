@@ -151,6 +151,7 @@ async fn wasm_failure_retains_state() -> TestResult {
                     timeout: Some(std::time::Duration::from_secs(5)),
                     allocation_bytes: Some(32 * 1024 * 1024),
                     host_calls: Some(4096),
+                    ..Default::default()
                 },
                 ..Default::default()
             },

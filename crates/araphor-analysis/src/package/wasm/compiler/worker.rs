@@ -34,11 +34,7 @@ impl WasmExecution {
     pub(super) fn worker_limits() -> Result<()> {
         use rustix::process::{getrlimit, Resource};
 
-        for (resource, maximum) in [
-            (Resource::As, super::MAX_ADDRESS_BYTES),
-            (Resource::Cpu, super::MAX_CPU_SECONDS),
-            (Resource::Core, 0),
-        ] {
+        for (resource, maximum) in [(Resource::Cpu, super::MAX_CPU_SECONDS), (Resource::Core, 0)] {
             let limits = getrlimit(resource);
             if limits.current.is_none_or(|value| value > maximum)
                 || limits.maximum.is_none_or(|value| value > maximum)

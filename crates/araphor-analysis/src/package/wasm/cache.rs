@@ -8,15 +8,13 @@ use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use tokio::sync::watch;
 
-use crate::{AnalysisReadControl, Result};
+use crate::{AnalysisReadControl, Result, WasmLimits};
 
 use super::{
     admission::CompileBudget, bindings::AnalysisPackagePre, execution::GuestState, CapacityRelease,
     Code, PreparedComponent,
 };
 
-pub(super) const MAX_CACHE_BYTES: usize = 80 * 1024 * 1024;
-pub(super) const MAX_CACHE_ENTRIES: usize = 16;
 pub(super) const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Default)]
@@ -27,6 +25,8 @@ pub(super) struct CodeCache {
 }
 
 struct CacheBudget {
+    max_bytes: Option<usize>,
+    max_entries: Option<usize>,
     bytes: AtomicUsize,
     entries: AtomicUsize,
     capacity: watch::Sender<()>,
@@ -46,6 +46,8 @@ struct CacheCharge {
 impl Default for CacheBudget {
     fn default() -> Self {
         Self {
+            max_bytes: None,
+            max_entries: None,
             bytes: AtomicUsize::new(0),
             entries: AtomicUsize::new(0),
             capacity: watch::channel(()).0,
@@ -60,7 +62,7 @@ impl CacheCharge {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |entries| {
                 entries
                     .checked_add(1)
-                    .filter(|count| *count <= MAX_CACHE_ENTRIES)
+                    .filter(|count| budget.max_entries.is_none_or(|maximum| *count <= maximum))
             })
             .ok()?;
         if budget
@@ -68,7 +70,7 @@ impl CacheCharge {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current
                     .checked_add(bytes)
-                    .filter(|count| *count <= MAX_CACHE_BYTES)
+                    .filter(|count| budget.max_bytes.is_none_or(|maximum| *count <= maximum))
             })
             .is_err()
         {
@@ -91,10 +93,12 @@ impl Drop for CacheCharge {
 }
 
 impl CodeCache {
-    pub(super) fn new(capacity: watch::Sender<()>) -> Self {
+    pub(super) fn new(capacity: watch::Sender<()>, limits: WasmLimits) -> Self {
         Self {
             entries: VecDeque::new(),
             budget: Arc::new(CacheBudget {
+                max_bytes: limits.cache_bytes,
+                max_entries: limits.cache_entries,
                 bytes: AtomicUsize::new(0),
                 entries: AtomicUsize::new(0),
                 capacity,
@@ -111,7 +115,13 @@ impl CodeCache {
                 entries = entries.saturating_sub(1);
             }
         }
-        entries < MAX_CACHE_ENTRIES && requested <= MAX_CACHE_BYTES.saturating_sub(bytes)
+        entries < self.budget.max_entries.unwrap_or(usize::MAX)
+            && requested
+                <= self
+                    .budget
+                    .max_bytes
+                    .unwrap_or(usize::MAX)
+                    .saturating_sub(bytes)
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -138,8 +148,11 @@ impl CodeCache {
     }
 
     fn reserve(&mut self, bytes: usize) -> Result<CacheCharge> {
-        if bytes > MAX_CACHE_BYTES {
+        if self.budget.max_bytes.is_some_and(|maximum| bytes > maximum) {
             return Err(Code::Limit.error("component cache bytes").into());
+        }
+        if self.budget.max_entries == Some(0) {
+            return Err(Code::Limit.error("component cache entries").into());
         }
         loop {
             if let Some(charge) = CacheCharge::acquire(&self.budget, bytes) {
@@ -271,6 +284,20 @@ impl super::WasmExecution {
 mod tests {
     use super::*;
 
+    const CACHE_BYTES: usize = 80 * 1024 * 1024;
+    const CACHE_ENTRIES: usize = 16;
+
+    fn limited_cache() -> CodeCache {
+        CodeCache::new(
+            watch::channel(()).0,
+            WasmLimits {
+                cache_bytes: Some(CACHE_BYTES),
+                cache_entries: Some(CACHE_ENTRIES),
+                ..Default::default()
+            },
+        )
+    }
+
     #[test]
     fn cache_enforces_each_bound(
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -279,22 +306,32 @@ mod tests {
             araphor_analysis_builtins::components::RUNTIME,
             &AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?,
         )?;
-        let mut cache = CodeCache::default();
-        for index in 0..=MAX_CACHE_ENTRIES {
+        let mut unbounded = CodeCache::default();
+        let mut pins = Vec::new();
+        for index in 0..=CACHE_ENTRIES {
+            let charge = unbounded.reserve(CACHE_BYTES + 1)?;
+            pins.push(unbounded.insert([index as u8; 32], prepared.component().clone(), charge));
+        }
+        assert_eq!(unbounded.entries.len(), CACHE_ENTRIES + 1);
+        assert!(unbounded.available(CACHE_BYTES));
+        assert_eq!(
+            unbounded.budget.bytes.load(Ordering::Acquire),
+            (CACHE_ENTRIES + 1) * (CACHE_BYTES + 1)
+        );
+
+        let mut cache = limited_cache();
+        for index in 0..=CACHE_ENTRIES {
             let charge = cache.reserve(1)?;
             cache.insert([index as u8; 32], prepared.component().clone(), charge);
         }
-        assert_eq!(cache.entries.len(), MAX_CACHE_ENTRIES);
-        assert_eq!(
-            cache.budget.bytes.load(Ordering::Acquire),
-            MAX_CACHE_ENTRIES
-        );
+        assert_eq!(cache.entries.len(), CACHE_ENTRIES);
+        assert_eq!(cache.budget.bytes.load(Ordering::Acquire), CACHE_ENTRIES);
         assert!(cache.get(&[0; 32]).is_none());
-        assert!(cache.get(&[MAX_CACHE_ENTRIES as u8; 32]).is_some());
+        assert!(cache.get(&[CACHE_ENTRIES as u8; 32]).is_some());
 
         let charge = MAX_IMAGE_BYTES + super::super::admission::MAX_SOURCE_BYTES;
-        let capacity = (MAX_CACHE_BYTES / charge).min(MAX_CACHE_ENTRIES);
-        let mut cache = CodeCache::default();
+        let capacity = (CACHE_BYTES / charge).min(CACHE_ENTRIES);
+        let mut cache = limited_cache();
         for index in 0..capacity + 2 {
             let reservation = cache.reserve(charge)?;
             cache.insert(
@@ -324,9 +361,9 @@ mod tests {
             araphor_analysis_builtins::components::RUNTIME,
             &AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?,
         )?;
-        let mut eviction = CodeCache::default();
+        let mut eviction = limited_cache();
         let mut changes = eviction.budget.capacity.subscribe();
-        let charge = eviction.reserve(MAX_CACHE_BYTES)?;
+        let charge = eviction.reserve(CACHE_BYTES)?;
         let pin = eviction.insert([0; 32], prepared.component().clone(), charge);
         assert!(matches!(
             eviction.reserve(1),
@@ -336,15 +373,30 @@ mod tests {
         changes.borrow_and_update();
         drop(pin);
         assert!(changes.has_changed()?);
-        assert_eq!(
-            eviction.budget.bytes.load(Ordering::Acquire),
-            MAX_CACHE_BYTES
-        );
+        assert_eq!(eviction.budget.bytes.load(Ordering::Acquire), CACHE_BYTES);
         assert!(eviction.available(1));
         drop(eviction.reserve(1)?);
 
-        let mut exact = CodeCache::default();
-        let charge = exact.reserve(MAX_CACHE_BYTES - 8)?;
+        let mut empty = CodeCache::new(
+            watch::channel(()).0,
+            WasmLimits {
+                cache_entries: Some(0),
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            empty.reserve(0),
+            Err(crate::Error::Data {
+                source: araphor_data::Error::Package {
+                    code: Code::Limit,
+                    ..
+                }
+            })
+        ));
+        assert!(!empty.available(0));
+
+        let mut exact = limited_cache();
+        let charge = exact.reserve(CACHE_BYTES - 8)?;
         let pin = exact.insert([1; 32], prepared.component().clone(), charge);
         assert!(exact.available(8));
         assert!(!exact.available(9));
@@ -359,8 +411,8 @@ mod tests {
         drop(pin);
         assert!(exact.available(9));
 
-        for (count, bytes) in [(1, MAX_CACHE_BYTES), (MAX_CACHE_ENTRIES, 1)] {
-            let mut cache = CodeCache::default();
+        for (count, bytes) in [(1, CACHE_BYTES), (CACHE_ENTRIES, 1)] {
+            let mut cache = limited_cache();
             let mut handles = Vec::new();
             for index in 0..count {
                 let charge = cache.reserve(bytes)?;

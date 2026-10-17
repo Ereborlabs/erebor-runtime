@@ -5,6 +5,9 @@ use std::time::Duration;
 pub struct WasmLimits {
     pub fuel: Option<u64>,
     pub memory_bytes: Option<usize>,
+    pub cache_bytes: Option<usize>,
+    pub cache_entries: Option<usize>,
+    pub compiler_bytes: Option<u64>,
     pub data_bytes: Option<u64>,
     pub timeout: Option<Duration>,
     pub allocation_bytes: Option<usize>,
@@ -33,6 +36,9 @@ mod tests {
             serde_json::json!({
                 "fuel": null,
                 "memory_bytes": null,
+                "cache_bytes": null,
+                "cache_entries": null,
+                "compiler_bytes": null,
                 "data_bytes": null,
                 "timeout": null,
                 "allocation_bytes": null,
@@ -48,6 +54,9 @@ mod tests {
             wasm: WasmLimits {
                 fuel: Some(100_000_000),
                 memory_bytes: Some(256 * 1024 * 1024),
+                cache_bytes: Some(80 * 1024 * 1024),
+                cache_entries: Some(16),
+                compiler_bytes: Some(1024 * 1024 * 1024),
                 data_bytes: Some(32 * 1024 * 1024),
                 timeout: Some(Duration::from_secs(5)),
                 allocation_bytes: Some(32 * 1024 * 1024),

@@ -40,6 +40,12 @@ impl AnalysisPackageOwner {
 
 impl WasmExecution {
     pub(super) fn fixture_code(limits: WasmLimits) -> Result<Self> {
+        if limits.cache_bytes.is_some()
+            || limits.cache_entries.is_some()
+            || limits.compiler_bytes.is_some()
+        {
+            return Self::new(limits);
+        }
         static FIXTURES: Mutex<[Option<WasmExecution>; 2]> = Mutex::new([None, None]);
         let mut fixtures = FIXTURES
             .lock()
