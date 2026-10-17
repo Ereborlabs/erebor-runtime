@@ -721,3 +721,110 @@ mod notification {
         Ok(())
     }
 }
+
+#[test]
+fn retirement_map_charges_once() -> TestResult {
+    use std::mem::size_of;
+
+    use araphor_data::{
+        AnalysisExtractLimits, AnalysisGapV1, AnalysisStreamIdentityV1, EvidenceIntakeIdentityV1,
+        EvidenceRecord, EvidenceRetentionOwner, StorePositionV1, ValidatedEvidenceBatchV1,
+    };
+
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let identity = EvidenceIntakeIdentityV1 {
+        tenant_id: [1; 16],
+        node_id: "retirement-budget".into(),
+        node_boot_id: [2; 16],
+        label_epoch: 1,
+        source_id: [3; 16],
+        source_epoch: 1,
+    };
+    let frame = Vec::<u8>::try_from(&EvidenceRecord {
+        observed_boottime_ns: 1,
+        ..Default::default()
+    })?;
+    for cursor in 1..=2 {
+        store.accept_validated_batch(
+            identity.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: cursor,
+                last_cursor: cursor,
+                intake_utc_ns: 1,
+                frame_ends: vec![frame.len()],
+                framed_records: frame.clone().into(),
+            },
+        )?;
+        if cursor == 1 {
+            store.backup(&directory.path().join("data/backups/sealed"))?;
+        }
+    }
+    let frontier = StorePositionV1 {
+        commit_revision: store.meta()?.commit_revision,
+        ordinal: u32::MAX,
+    };
+    assert_eq!(
+        EvidenceRetentionOwner::new(store.as_ref())
+            .retain(&identity, u64::MAX)?
+            .removed_records,
+        2
+    );
+    assert!(store
+        .replay_floor(identity.tenant_id)?
+        .is_some_and(|floor| floor <= frontier));
+    let capacity = 64 * 1024;
+    let memory = crate::memory::Memory::new(capacity, 1024);
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let source = SourceSnapshot::new(
+        store,
+        AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]),
+        None,
+        AnalysisExtractLimits {
+            input_bytes: capacity,
+            ..Default::default()
+        },
+        control.within(control.remaining()?)?,
+        Duration::from_secs(30),
+        1,
+        Arc::clone(&memory),
+    );
+    let captured = source.read(
+        &BTreeMap::from([("events".into(), Some(BTreeSet::new()))]),
+        None,
+        super::ReadMode::Changes(frontier),
+        &control,
+    )?;
+    assert!(captured.receipt.page.tables.is_empty());
+    assert!(captured.receipt.page.removals.is_empty());
+    assert_eq!(captured.removals.len(), 1);
+    assert_eq!(captured.source_bytes, 0);
+    let gaps = captured
+        .removals
+        .get(&AnalysisStreamIdentityV1::Evidence(identity.clone()))
+        .ok_or("retirement map is absent")?;
+    assert_eq!(gaps.len(), 2);
+    assert_eq!(
+        gaps.iter()
+            .map(|gap| (gap.first_cursor, gap.last_cursor))
+            .collect::<Vec<_>>(),
+        [(1, 1), (2, 2)]
+    );
+    let removed = size_of::<(AnalysisStreamIdentityV1, Vec<AnalysisGapV1>)>()
+        + identity.node_id.len()
+        + gaps.capacity() * size_of::<AnalysisGapV1>();
+    assert_eq!(captured._memory.size(), removed);
+    let receipt = Arc::clone(&captured.receipt);
+    let metadata = receipt._metadata.size();
+    let available = memory.reserve_input(capacity - metadata - removed)?;
+    assert!(memory.reserve_input(1).is_err());
+    drop(available);
+    drop(captured);
+    let available = memory.reserve_input(capacity - metadata)?;
+    assert!(memory.reserve_input(1).is_err());
+    drop(available);
+    drop(receipt);
+    drop(memory.reserve_input(capacity)?);
+    Ok(())
+}

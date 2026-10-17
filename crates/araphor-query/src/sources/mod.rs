@@ -41,7 +41,7 @@ mod tests;
 
 pub(crate) use journal::{Changes, JournalExec};
 pub use rows::ArrowSnapshot;
-pub(crate) use rows::{Captured, Removal};
+pub(crate) use rows::Captured;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum SourceOrigin {

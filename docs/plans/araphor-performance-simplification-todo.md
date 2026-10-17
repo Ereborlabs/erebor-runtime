@@ -523,6 +523,28 @@ Backend and caller runtime suites, full workspace CI, and benchmarks are not
 repeated for this internal deletion. Complete redesign: **Not done**.
 No speed result is claimed.
 
+### Native retirement map
+
+Implementation and selected host verification: **Done**. The
+[component record](araphor-component-redesign.md#native-retirement-map) and
+[SQL review](../guides/araphor-sql-operation-review.md) describe the source path.
+Captured retains Data's retirement map directly. The separate Removal vector,
+per-gap identity clones, flattening, and sort are deleted. Journal preserves
+the identity, inclusive cursor range, and commit revision cutoff. Each entry,
+identity allocation, and gap vector is charged once under Data's entry budget.
+The added cases check range and revision boundaries, map charges, and independent
+receipt cleanup. Existing assertions remain. All 188 Query cases pass: 187 in
+the first run and the new accounting case after its frontier correction. Only
+that case runs again. Production stays fixed. Strict Query Clippy, scoped
+formatting, whitespace, and added local links pass. The record is
+`/tmp/araphor-removal-map-qualification1.json`. It checks 707 Rust hashes.
+
+The syntax count removes 40 nonblank production Rust lines and adds 187 test
+lines. The complete redesign adds 423 production lines from 7b7b407a; another
+6,423 net deletions remain. The record is `/tmp/araphor-removal-map-count1.json`.
+Backend and caller runtime suites, full workspace CI, and benchmarks are not
+run. Complete redesign: **Not done**. No speed result is claimed.
+
 ## Implementation flow
 
 An owner starts or recovers

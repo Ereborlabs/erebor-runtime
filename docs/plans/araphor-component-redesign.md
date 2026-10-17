@@ -829,6 +829,38 @@ Native and Wasm backend suites, caller runtime suites, full workspace CI, and
 benchmarks are not repeated for this internal deletion. Complete redesign:
 **Not done**. No speed result is claimed.
 
+### Native retirement map
+
+Implementation and selected host verification: **Done**.
+[Captured](../../crates/araphor-query/src/sources/rows.rs) retains the native
+Data retirement map directly. The separate Removal vector, per-gap identity
+clones, flattening, and sort are deleted.
+[Changes::removed](../../crates/araphor-query/src/sources/journal.rs) checks the
+stream identity, inclusive cursor range, and commit revision in that map.
+Later insertions remain live. The input reservation charges each entry,
+identity allocation, and gap vector once. The map remains outside the public
+receipt and releases its reservation with Captured.
+
+The added cases check adjacent and overlapping ranges, revision cutoffs,
+ordinal and cursor boundaries, distinct stream identities, map entry charges,
+and cleanup while the receipt remains retained. Existing assertions remain.
+All 188 Query cases pass. The first run passes 187 cases. The new accounting
+fixture requests a frontier below the replay floor and fails. The corrected
+fixture writes both batches before its frontier and uses the supported backup
+operation to seal the first segment. One retention transaction returns two
+gaps. The case retains every accounting and cleanup assertion and adds a valid
+floor check. Only that case runs again and passes. Production source stays
+fixed. Strict Query Clippy, scoped formatting, whitespace, and added local
+document links pass. The record is `/tmp/araphor-removal-map-qualification1.json`.
+
+The syntax count removes 40 nonblank production Rust lines and adds 187 test
+lines. The complete redesign adds 2,652 lines from 537f9de3 and 423 from
+7b7b407a; another 6,423 net production deletions remain. The count record is
+`/tmp/araphor-removal-map-count1.json`. It checks 707 Rust hashes. Map accounting
+uses Data's existing entry budget; it does not measure allocator node overhead.
+Backend and caller runtime suites, full workspace CI, and benchmarks are not run.
+Complete redesign: **Not done**. No speed result is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

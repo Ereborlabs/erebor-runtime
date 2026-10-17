@@ -541,9 +541,12 @@ return a structured unavailable error.
 
 [AnalysisStore::read_tables](../../crates/araphor-data/src/analysis/extraction.rs)
 returns requested native Arrow tables and the existing read receipt from one
-transaction. Package outputs use that transaction too. Query removes tables,
-package payloads, and raw retirements before it retains the public receipt.
-The public row callback protocol, Query scalar scratch rows, and second Arrow
+transaction. Package outputs use that transaction too. Query moves tables,
+package payloads, and the native retirement map out before it retains the public
+receipt. Captured retains Data's map by stream identity. Its input reservation
+charges each map entry, identity allocation, and gap vector once. The separate
+Removal vector and its identity clones, flattening, and sort are deleted. The
+public row callback protocol, Query scalar scratch rows, and second Arrow
 builder are deleted.
 
 DataFusion does not decode the retained evidence, context, graph, profile,
@@ -933,8 +936,12 @@ context, result, or trace-state changes. No query journal is added to Data.
 
 The physical source retains projected batches and raw identity, cursor, and
 position keys before SQL filters. A retirement removes those contributions.
-The physical kernel retracts their filtered values. Each result receipt keeps
-witnesses for all retained input, including rows removed by SQL filters.
+Journal matches the stream identity and inclusive cursor range in Data's map.
+It removes a key only when its commit revision is at or before the gap revision.
+A later insertion at the same cursor remains live. Map order does not affect
+this check. The physical kernel retracts their filtered values. Each result
+receipt keeps witnesses for all retained input, including rows removed by SQL
+filters.
 The shared physical output fingerprint suppresses an unchanged COUNT result.
 
 The private [Change](../../crates/araphor-query/src/stream/mod.rs) is the

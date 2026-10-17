@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use araphor_data::analysis::PackageResultRefV1;
 use araphor_data::{
-    AnalysisContextRefV1, AnalysisInputTables, AnalysisPositionPageV1, AnalysisReadModeV1,
-    AnalysisSelectionV1, AnalysisStreamIdentityV1, AnalysisTableRead, AnalysisTableRequests,
-    AnalysisWitnessV1, Selection, StorePositionV1,
+    AnalysisContextRefV1, AnalysisGapV1, AnalysisInputTables, AnalysisPositionPageV1,
+    AnalysisReadModeV1, AnalysisSelectionV1, AnalysisStreamIdentityV1, AnalysisTableRead,
+    AnalysisTableRequests, AnalysisWitnessV1, Selection,
 };
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -60,7 +60,7 @@ impl ArrowSnapshot {
 #[derive(Debug)]
 pub(crate) struct Captured {
     pub(crate) receipt: Arc<ArrowSnapshot>,
-    pub(crate) removals: Vec<Removal>,
+    pub(crate) removals: BTreeMap<AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
     _memory: MemoryReservation,
     tables: BTreeMap<SourceOrigin, (SchemaRef, Vec<usize>, Vec<RecordBatch>)>,
     package_coverage: BTreeMap<usize, araphor_analysis_sdk::Coverage>,
@@ -149,14 +149,6 @@ impl Captured {
             .map(|batch| batch.project(&projection).map_err(Into::into))
             .collect()
     }
-}
-
-#[derive(Debug)]
-pub(crate) struct Removal {
-    pub(crate) identity: AnalysisStreamIdentityV1,
-    pub(crate) first: u64,
-    pub(crate) last: u64,
-    pub(crate) position: StorePositionV1,
 }
 
 impl SourceSnapshot {
@@ -434,23 +426,6 @@ impl SourceSnapshot {
                 .and_then(|bytes| bytes.checked_add(added))
                 .ok_or_else(overflow)?;
         }
-        let count = page.removals.values().try_fold(0usize, |count, gaps| {
-            count.checked_add(gaps.len()).ok_or_else(overflow)
-        })?;
-        added = count
-            .checked_mul(std::mem::size_of::<Removal>())
-            .and_then(|bytes| bytes.checked_add(added))
-            .ok_or_else(overflow)?;
-        for (identity, gaps) in &page.removals {
-            let capacity = match identity {
-                AnalysisStreamIdentityV1::Evidence(identity) => identity.node_id.capacity(),
-                AnalysisStreamIdentityV1::Diagnostic(identity) => identity.node_id.capacity(),
-            };
-            added = capacity
-                .checked_mul(gaps.len())
-                .and_then(|bytes| bytes.checked_add(added))
-                .ok_or_else(overflow)?;
-        }
         page.extraction.input_bytes = page
             .extraction
             .input_bytes
@@ -459,7 +434,7 @@ impl SourceSnapshot {
             .ok_or_else(overflow)?;
         let native = std::mem::take(&mut page.tables);
         let packages = std::mem::take(&mut page.packages);
-        let removed = std::mem::take(&mut page.removals);
+        let removals = std::mem::take(&mut page.removals);
         let mut tables = BTreeMap::new();
         let mut source_bytes = 0usize;
         for (name, batches) in native {
@@ -512,27 +487,6 @@ impl SourceSnapshot {
                 ));
             }
         }
-        let mut removals = Vec::with_capacity(count);
-        for (identity, gaps) in removed {
-            for gap in gaps {
-                removals.push(Removal {
-                    identity: identity.clone(),
-                    first: gap.first_cursor,
-                    last: gap.last_cursor,
-                    position: StorePositionV1 {
-                        commit_revision: gap.commit_revision,
-                        ordinal: u32::MAX,
-                    },
-                });
-            }
-        }
-        removals.sort_by(|left, right| {
-            left.position
-                .cmp(&right.position)
-                .then(left.identity.cmp(&right.identity))
-                .then(left.first.cmp(&right.first))
-                .then(left.last.cmp(&right.last))
-        });
         let mut witnesses = std::mem::take(&mut page.extraction.witnesses);
         if self.inputs.is_some() {
             for witness in &mut witnesses {
@@ -577,20 +531,21 @@ impl SourceSnapshot {
                     })
                     .sum::<usize>(),
             );
-        let removed = removals
-            .capacity()
-            .saturating_mul(std::mem::size_of::<Removal>())
-            .saturating_add(
-                removals
-                    .iter()
-                    .map(|removal| match &removal.identity {
-                        AnalysisStreamIdentityV1::Evidence(identity) => identity.node_id.capacity(),
-                        AnalysisStreamIdentityV1::Diagnostic(identity) => {
-                            identity.node_id.capacity()
-                        }
-                    })
-                    .sum::<usize>(),
-            );
+        let removed = removals.iter().fold(0usize, |bytes, (identity, gaps)| {
+            bytes
+                .saturating_add(std::mem::size_of::<(
+                    AnalysisStreamIdentityV1,
+                    Vec<AnalysisGapV1>,
+                )>())
+                .saturating_add(
+                    gaps.capacity()
+                        .saturating_mul(std::mem::size_of::<AnalysisGapV1>()),
+                )
+                .saturating_add(match identity {
+                    AnalysisStreamIdentityV1::Evidence(identity) => identity.node_id.capacity(),
+                    AnalysisStreamIdentityV1::Diagnostic(identity) => identity.node_id.capacity(),
+                })
+        });
         let retained = removed.saturating_add(source_bytes);
         if metadata.saturating_add(retained) > reservation.size() {
             let source = DataFusionError::ResourcesExhausted(

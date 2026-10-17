@@ -5,8 +5,8 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use araphor_data::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisStoreMetaV1, AnalysisStreamIdentityV1,
-    AnalysisTableRequests, AnalysisWitnessV1, StorePositionV1,
+    AnalysisExtractLimits, AnalysisGapV1, AnalysisReadControl, AnalysisStoreMetaV1,
+    AnalysisStreamIdentityV1, AnalysisTableRequests, AnalysisWitnessV1, StorePositionV1,
 };
 use datafusion::arrow::array::{ArrayRef, BooleanArray, RecordBatch, UInt32Array, UInt64Array};
 use datafusion::arrow::compute::filter_record_batch;
@@ -22,7 +22,7 @@ use datafusion::physical_plan::{
 };
 use snafu::ResultExt as _;
 
-use super::{Captured, ReadMode, Removal, SourceData, SourceOrigin, SourceSnapshot};
+use super::{Captured, ReadMode, SourceData, SourceOrigin, SourceSnapshot};
 use crate::execution::{Engine, Permit};
 use crate::stream::{Change, Run};
 use crate::{InvalidSnafu, Result, SqlSnafu};
@@ -533,11 +533,100 @@ impl Changes {
         Ok((before, after))
     }
 
-    fn removed(key: &Key, removals: &[Removal]) -> bool {
-        removals.iter().any(|removal| {
-            key.identity.as_ref() == &removal.identity
-                && (removal.first..=removal.last).contains(&key.cursor)
-                && key.position <= removal.position
+    fn removed(
+        key: &Key,
+        removals: &BTreeMap<AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
+    ) -> bool {
+        removals.get(key.identity.as_ref()).is_some_and(|gaps| {
+            gaps.iter().any(|gap| {
+                (gap.first_cursor..=gap.last_cursor).contains(&key.cursor)
+                    && key.position.commit_revision <= gap.commit_revision
+            })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retirement_keeps_new_rows() {
+        let identity = Arc::new(AnalysisStreamIdentityV1::Evidence(
+            araphor_data::EvidenceIntakeIdentityV1 {
+                tenant_id: [1; 16],
+                node_id: "retirement".into(),
+                node_boot_id: [2; 16],
+                label_epoch: 1,
+                source_id: [3; 16],
+                source_epoch: 1,
+            },
+        ));
+        let removals = BTreeMap::from([(
+            identity.as_ref().clone(),
+            vec![
+                AnalysisGapV1 {
+                    first_cursor: 3,
+                    last_cursor: 5,
+                    commit_revision: 12,
+                },
+                AnalysisGapV1 {
+                    first_cursor: 1,
+                    last_cursor: 3,
+                    commit_revision: 10,
+                },
+                AnalysisGapV1 {
+                    first_cursor: 4,
+                    last_cursor: 6,
+                    commit_revision: 11,
+                },
+                AnalysisGapV1 {
+                    first_cursor: u64::MAX,
+                    last_cursor: u64::MAX,
+                    commit_revision: u64::MAX,
+                },
+            ],
+        )]);
+        for (cursor, revision, ordinal, expected) in [
+            (0, 0, 0, false),
+            (1, 9, 0, true),
+            (3, 10, u32::MAX, true),
+            (4, 12, 0, true),
+            (4, 13, 0, false),
+            (6, 11, u32::MAX, true),
+            (6, 12, 0, false),
+            (7, 10, 0, false),
+            (u64::MAX, u64::MAX, 0, true),
+            (u64::MAX, u64::MAX, u32::MAX, true),
+        ] {
+            let key = Key {
+                identity: Arc::clone(&identity),
+                cursor,
+                position: StorePositionV1 {
+                    commit_revision: revision,
+                    ordinal,
+                },
+            };
+            assert_eq!(Changes::removed(&key, &removals), expected);
+            assert!(!Changes::removed(&key, &BTreeMap::new()));
+        }
+        let foreign = Key {
+            identity: Arc::new(AnalysisStreamIdentityV1::Diagnostic(
+                araphor_data::TraceIdentityV1 {
+                    tenant_id: [1; 16],
+                    node_id: "retirement".into(),
+                    node_boot_id: [2; 16],
+                    request_id: [4; 16],
+                    execution_id: [3; 16],
+                    source_sha256: [5; 32],
+                },
+            )),
+            cursor: 3,
+            position: StorePositionV1 {
+                commit_revision: 10,
+                ordinal: 0,
+            },
+        };
+        assert!(!Changes::removed(&foreign, &removals));
     }
 }
