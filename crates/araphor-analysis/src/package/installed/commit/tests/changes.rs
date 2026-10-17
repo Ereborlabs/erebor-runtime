@@ -124,12 +124,15 @@ fn fence_change(renew: bool) -> TestResult {
                 )
                 .map(|_| ())
                 .or_else(|error| match error {
-                    crate::Error::Data {
+                    crate::Error::Query {
                         source:
-                            araphor_data::Error::Package {
-                                code: Code::Missing,
-                                field: "host-prepared inputs",
-                                ..
+                            araphor_query::Error::Data {
+                                source:
+                                    araphor_data::Error::Package {
+                                        code: Code::Missing,
+                                        field: "host-prepared inputs",
+                                        ..
+                                    },
                             },
                     } => Ok(()),
                     error => Err(error),

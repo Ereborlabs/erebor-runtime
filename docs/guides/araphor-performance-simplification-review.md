@@ -345,10 +345,14 @@ expired ranges, and usage updates remain. [forget_segments](../../crates/araphor
 updates the raw indexes once for the set. A cleanup failure leaves the writer
 unavailable. Recovery completes committed `Deleting` rows before reuse.
 
-[StoredArtifact](../../crates/araphor-data/src/package/storage.rs) uses the
-current Concise Binary Object Representation (CBOR) frame with metadata and raw
-binary fields. Frame validation checks
-version, placeholders, binary count, truncation, and trailing bytes.
+[PackageArtifactV1::encode and from_bytes](../../crates/araphor-data/src/package/bundle.rs)
+use the existing [PackageOci](../../crates/araphor-data/src/package/oci.rs) owner
+for retained artifacts and bundle transport. The SDK OCI codec checks raw
+layers, descriptor sizes, hashes, and canonical identity. The retained OCI
+config duplicates the separate descriptor column; install, decode, and recovery
+require agreement. Fixture payloads remain raw layers. Validation-only callers
+now allocate owned layers and perform canonical reconstruction hashes. No old
+CBOR artifact reader remains, and no speed improvement is claimed.
 [Package charges](../../crates/araphor-data/src/analysis/packages/schema.rs)
 use actual stored artifact bytes. Decimal JSON byte counting, its frame field,
 and `encoded_bytes` are removed. Schema 22 has no older-format reader.
@@ -381,7 +385,7 @@ These are source test routes. This table does not report a passed run.
 | --- | --- |
 | 1, 8 | [Supervisor tests](../../crates/araphor-data/src/package/supervision/tests.rs): `root_group_reuses_bundle`, `idle_reconcile_checks_grant`. [Preparation tests](../../crates/araphor-data/src/package/evaluation/preparation/tests.rs): `unchanged_input_skips_extraction`, `automatic_clock_ticks`. [Snapshot replacement tests](../../crates/araphor-data/src/package/installed/read/tests/retained/reusing.rs) cover current grants, scope changes, and release before loading. [Control trust test](../../crates/mithril-control/src/client_auth/packages/tests.rs): `package_commit_holds_authority`. |
 | 2, 4, 5, 14 | [Notice tests](../../crates/araphor-data/src/graph/tests/notices.rs): `idle_graph_uses_headers`, `graph_notice_checks_once`. [Bundle reuse test](../../crates/araphor-data/src/graph/tests/notices/reuse.rs): `idle_graph_reuses_bundle`. [Built-in tests](../../crates/araphor-analysis-builtins/src/graph/tests.rs): `record_index_keeps_fact_ordinals`, `detector_declarations_stay_independent`. [Native parity](../../crates/araphor-data/src/graph/derive/adapter/tests/native.rs): `native_detectors_match_wasm`. |
-| 3, 9, 17 | [Capacity tests](../../crates/araphor-data/src/analysis/capacity.rs): `analysis_store_segment_usage`, `analysis_store_capacity_bounds`. [Retention tests](../../crates/araphor-data/src/analysis/retention.rs): `retention_bounds_segments`, `analysis_store_retention_guards`, `analysis_store_physical_reuse`. [Quota test](../../crates/araphor-data/src/analysis/packages/tests.rs): `packages_charge_stored_bytes`. [Frame tests](../../crates/araphor-data/src/package/storage/tests.rs): native dependencies and corruption. [Upload fault proof](../../crates/mithril-e2e/src/observability.rs): `observability_owned_upload` keeps native append errors and reopen checks. |
+| 3, 9, 17 | [Capacity tests](../../crates/araphor-data/src/analysis/capacity.rs): `analysis_store_segment_usage`, `analysis_store_capacity_bounds`. [Retention tests](../../crates/araphor-data/src/analysis/retention.rs): `retention_bounds_segments`, `analysis_store_retention_guards`, `analysis_store_physical_reuse`. [Quota test](../../crates/araphor-data/src/analysis/packages/tests.rs): `packages_charge_stored_bytes`. [Artifact OCI tests](../../crates/araphor-data/src/package/oci/tests/artifact.rs): native dependencies, corruption, raw fixture slots, and external dependencies. [Descriptor agreement tests](../../crates/araphor-data/src/analysis/packages/tests.rs): decode error, install rollback, and reopen rejection. [Upload fault proof](../../crates/mithril-e2e/src/observability.rs): `observability_owned_upload` keeps native append errors and reopen checks. |
 | 6, 7, 13 | [Follow tests](../../crates/araphor-data/src/query/follow_tests.rs): `query_follow_dependency_reuse`, `query_follow_autonomous_expiry`. [Client projection](../../crates/araphor-data/src/query/client_tests.rs): `query_event_projection`. [Model provenance](../../crates/araphor-data/src/query/model/operation/tests.rs): `pruned_source_evidence`. [Empty provenance](../../crates/araphor-data/src/analysis/packages/witnesses.rs): `empty_provenance_reads`. |
 | 10, 11 | [Capture tests](../../crates/araphor-observability/src/capture.rs): `observability_recovery_preserves_all_pages_and_never_respawns`, `observability_spool_seeks_forward_and_checks_replay`, `observability_recovery_uploads_only_the_synced_prefix`. |
 | 12, 15 | [Read tests](../../crates/araphor-data/src/analysis/read.rs): `read_monitor_store_reuse`, `read_monitor_stage_cleanup`, cancellation and deadline cases. [Authority tests](../../crates/araphor-data/src/package/installed/control.rs): direct and blocked-runtime cancellation. [SDK tests](../../crates/araphor-analysis-sdk/src/native/tests.rs): `checked_guest_keeps_output_boundary`, `invalid_abi_values_are_errors`. [Contract tests](../../crates/araphor-analysis-sdk/src/tests/boundaries.rs): `checked_output_keeps_contract`. |

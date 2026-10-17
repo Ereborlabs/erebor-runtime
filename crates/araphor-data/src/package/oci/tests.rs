@@ -53,6 +53,11 @@ fn oci_package_identity() -> TestResult {
         },
     });
     let bytes = package.encode()?;
+    assert_eq!(bytes.len(), 13_312);
+    assert_eq!(
+        package.digest()?,
+        "sha256:d3b82af43995be955514922ecb39634d654c8d2bc2c1aa6b84a46c969dbe146f"
+    );
     let content = oci::Content::from_bytes(&bytes)?;
     assert_eq!(content.layers.len(), 5);
     assert_eq!(content.layers[0].media_type, oci::NATIVE_MEDIA_TYPE);
@@ -150,3 +155,5 @@ fn oci_directory_rejects_symlinks() -> TestResult {
     assert!(PackageBundleV1::read(&layout).is_err());
     Ok(())
 }
+
+mod artifact;

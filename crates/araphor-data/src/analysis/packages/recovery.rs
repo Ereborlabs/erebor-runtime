@@ -36,7 +36,10 @@ impl AnalysisStore {
             if package.id != id || package.revision != revision || package.validate().is_err() {
                 return Self::reject_path(root, "the retained package descriptor is invalid");
             }
-            crate::package::storage::StoredArtifact::validate(&artifact)?;
+            let retained = crate::PackageArtifactV1::from_bytes(&artifact)?;
+            if retained.descriptor != package {
+                return Self::reject_path(root, "the retained package artifact descriptor differs");
+            }
             let dependencies: Vec<PackageRevisionRefV1> =
                 serde_json::from_str(&dependencies).context(JsonSnafu { path: root })?;
             let declared: std::collections::BTreeSet<_> = package

@@ -29,7 +29,7 @@ impl AnalysisPackageOwner {
                 return Ok(saved);
             }
         }
-        revision.artifact = araphor_data::StoredArtifact::encode(artifact)?;
+        revision.artifact = artifact.encode()?;
         Ok(revision)
     }
 
@@ -39,7 +39,7 @@ impl AnalysisPackageOwner {
         artifact: &PackageArtifactV1,
     ) -> Result<PackageRevisionV1> {
         let mut revision = Self::revision_metadata(grant, artifact)?;
-        revision.artifact = araphor_data::StoredArtifact::encode(artifact)?;
+        revision.artifact = artifact.encode()?;
         Ok(revision)
     }
 

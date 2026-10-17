@@ -5,7 +5,6 @@ use std::path::{Component, Path};
 use araphor_analysis_sdk::{self as sdk, oci};
 use snafu::ResultExt as _;
 
-use super::storage::StoredArtifact;
 use super::{PackageArtifactV1, PackageBundleV1, PackageFixtureV1, PackageImplementationV1};
 use crate::{AnalysisContractSnafu, IoSnafu, Result};
 
@@ -21,24 +20,7 @@ impl PackageOci {
         let mut layers = Vec::new();
         let mut metadata = Vec::new();
         for artifact in artifacts {
-            artifact
-                .descriptor
-                .validate()
-                .context(AnalysisContractSnafu)?;
-            let (split, _) = StoredArtifact::split(&artifact.implementations, &[]);
-            for implementation in &artifact.implementations {
-                Self::implementation_layers(implementation, &mut layers);
-            }
-            let fixtures = artifact
-                .fixtures
-                .iter()
-                .map(|fixture| Self::fixture(fixture, &mut layers))
-                .collect();
-            metadata.push(PackageArtifactV1 {
-                descriptor: artifact.descriptor.clone(),
-                implementations: split.implementations,
-                fixtures,
-            });
+            metadata.push(Self::metadata(artifact, &mut layers)?);
         }
         oci::Layout::new(
             &PackageBundleV1 {
@@ -51,52 +33,100 @@ impl PackageOci {
         .context(AnalysisContractSnafu)
     }
 
-    fn implementation_layers<'a>(
+    pub(super) fn artifact_layout(artifact: &PackageArtifactV1) -> Result<oci::Layout<'_>> {
+        let mut layers = Vec::new();
+        let metadata = Self::metadata(artifact, &mut layers)?;
+        oci::Layout::new(&metadata, &layers).context(AnalysisContractSnafu)
+    }
+
+    fn metadata<'a>(
+        artifact: &'a PackageArtifactV1,
+        layers: &mut Vec<oci::Layer<'a>>,
+    ) -> Result<PackageArtifactV1> {
+        artifact
+            .descriptor
+            .validate()
+            .context(AnalysisContractSnafu)?;
+        Ok(PackageArtifactV1 {
+            descriptor: artifact.descriptor.clone(),
+            implementations: artifact
+                .implementations
+                .iter()
+                .map(|implementation| Self::implementation(implementation, layers))
+                .collect(),
+            fixtures: artifact
+                .fixtures
+                .iter()
+                .map(|fixture| Self::fixture(fixture, layers))
+                .collect(),
+        })
+    }
+
+    fn implementation<'a>(
         implementation: &'a PackageImplementationV1,
         layers: &mut Vec<oci::Layer<'a>>,
-    ) {
+    ) -> PackageImplementationV1 {
         match implementation {
-            PackageImplementationV1::Sql { .. } => {}
-            PackageImplementationV1::Wasm { artifact, .. } => layers.push(oci::Layer {
-                media_type: oci::WASM_MEDIA_TYPE,
-                bytes: artifact,
-            }),
-            PackageImplementationV1::Python { artifact, .. } => layers.push(oci::Layer {
-                media_type: oci::PYTHON_MEDIA_TYPE,
-                bytes: artifact,
-            }),
-            PackageImplementationV1::Native {
-                artifact,
-                qualification,
-                ..
-            } => {
-                layers.push(oci::Layer {
-                    media_type: oci::NATIVE_MEDIA_TYPE,
-                    bytes: artifact,
-                });
-                if let Some(qualification) = qualification {
-                    for dependency in &qualification.dependencies {
-                        layers.push(oci::Layer {
-                            media_type: oci::NATIVE_DEPENDENCY_MEDIA_TYPE,
-                            bytes: &dependency.artifact,
-                        });
-                    }
+            PackageImplementationV1::Sql { .. } => implementation.clone(),
+            PackageImplementationV1::Wasm { exports, artifact } => PackageImplementationV1::Wasm {
+                exports: exports.clone(),
+                artifact: Self::layer(layers, oci::WASM_MEDIA_TYPE, artifact),
+            },
+            PackageImplementationV1::Python { export, artifact } => {
+                PackageImplementationV1::Python {
+                    export: export.clone(),
+                    artifact: Self::layer(layers, oci::PYTHON_MEDIA_TYPE, artifact),
                 }
             }
+            PackageImplementationV1::Native {
+                export,
+                artifact,
+                qualification,
+            } => PackageImplementationV1::Native {
+                export: export.clone(),
+                artifact: Self::layer(layers, oci::NATIVE_MEDIA_TYPE, artifact),
+                qualification: qualification.as_ref().map(|qualification| {
+                    super::native::Qualification {
+                        exports: qualification.exports.clone(),
+                        target: qualification.target.clone(),
+                        cpu_features: qualification.cpu_features.clone(),
+                        contract_version: qualification.contract_version,
+                        system_libraries: qualification.system_libraries.clone(),
+                        dependencies: qualification
+                            .dependencies
+                            .iter()
+                            .map(|dependency| super::native::Dependency {
+                                name: dependency.name.clone(),
+                                digest: dependency.digest.clone(),
+                                artifact: Self::layer(
+                                    layers,
+                                    oci::NATIVE_DEPENDENCY_MEDIA_TYPE,
+                                    &dependency.artifact,
+                                ),
+                            })
+                            .collect(),
+                    }
+                }),
+            },
         }
+    }
+
+    fn layer<'a>(
+        layers: &mut Vec<oci::Layer<'a>>,
+        media_type: &'static str,
+        bytes: &'a [u8],
+    ) -> Vec<u8> {
+        layers.push(oci::Layer { media_type, bytes });
+        Vec::new()
     }
 
     fn dataset<'a>(
         data: &'a sdk::wire::Dataset,
         layers: &mut Vec<oci::Layer<'a>>,
     ) -> sdk::wire::Dataset {
-        layers.push(oci::Layer {
-            media_type: oci::ARROW_IPC_MEDIA_TYPE,
-            bytes: &data.arrow_ipc,
-        });
         sdk::wire::Dataset {
             name: data.name.clone(),
-            arrow_ipc: Vec::new(),
+            arrow_ipc: Self::layer(layers, oci::ARROW_IPC_MEDIA_TYPE, &data.arrow_ipc),
         }
     }
 
@@ -152,13 +182,7 @@ impl PackageOci {
                     .map(|reason| sdk::wire::ReasonValue {
                         output: reason.output.clone(),
                         code: reason.code.clone(),
-                        details: {
-                            layers.push(oci::Layer {
-                                media_type: oci::ARROW_IPC_MEDIA_TYPE,
-                                bytes: &reason.details,
-                            });
-                            Vec::new()
-                        },
+                        details: Self::layer(layers, oci::ARROW_IPC_MEDIA_TYPE, &reason.details),
                     })
                     .collect(),
                 checkpoint: fixture
@@ -172,8 +196,33 @@ impl PackageOci {
 
     pub(super) fn decode(mut content: oci::Content) -> Result<PackageBundleV1> {
         let mut bundle: PackageBundleV1 = content.package().context(AnalysisContractSnafu)?;
+        Self::fill_artifacts(&mut bundle.artifacts, &mut content)?;
+        if !Self::layout(&bundle)?.matches(&content) {
+            return Err(
+                super::PackageErrorCodeV1::Invalid.error("noncanonical Araphor OCI package")
+            );
+        }
+        bundle.validate()?;
+        Ok(bundle)
+    }
+
+    pub(super) fn decode_artifact(mut content: oci::Content) -> Result<PackageArtifactV1> {
+        let mut artifact = content.package().context(AnalysisContractSnafu)?;
+        Self::fill_artifacts(std::slice::from_mut(&mut artifact), &mut content)?;
+        if !Self::artifact_layout(&artifact)?.matches(&content) {
+            return Err(
+                super::PackageErrorCodeV1::Invalid.error("noncanonical Araphor OCI artifact")
+            );
+        }
+        Ok(artifact)
+    }
+
+    fn fill_artifacts(
+        artifacts: &mut [PackageArtifactV1],
+        content: &mut oci::Content,
+    ) -> Result<()> {
         let mut layers = std::mem::take(&mut content.layers).into_iter();
-        for artifact in &mut bundle.artifacts {
+        for artifact in artifacts {
             for implementation in &mut artifact.implementations {
                 match implementation {
                     PackageImplementationV1::Sql { .. } => {}
@@ -222,13 +271,7 @@ impl PackageOci {
         if layers.next().is_some() {
             return Err(super::PackageErrorCodeV1::Invalid.error("unreferenced OCI layer"));
         }
-        if !Self::layout(&bundle)?.matches(&content) {
-            return Err(
-                super::PackageErrorCodeV1::Invalid.error("noncanonical Araphor OCI package")
-            );
-        }
-        bundle.validate()?;
-        Ok(bundle)
+        Ok(())
     }
 
     fn fill(

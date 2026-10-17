@@ -168,7 +168,7 @@ fn domain_refs_require_closure() -> TestResult {
         });
     dependent.descriptor = serde_json::to_vec(&descriptor)?;
     artifact.descriptor = descriptor;
-    let bytes = crate::package::storage::StoredArtifact::encode(&artifact)?;
+    let bytes = artifact.encode()?;
     dependent.artifact = bytes;
     dependent.dependencies.push(PackageRevisionRefV1 {
         package_id: "first".into(),

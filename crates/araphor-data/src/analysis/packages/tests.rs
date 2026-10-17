@@ -37,7 +37,7 @@ fn package(id: &str, revision: &str) -> crate::Result<PackageRevisionV1> {
         }],
         fixtures: Vec::new(),
     };
-    let artifact = crate::package::storage::StoredArtifact::encode(&source)?;
+    let artifact = source.encode()?;
     Ok(PackageRevisionV1 {
         tenant_id: [1; 16],
         package_id: id.into(),
@@ -325,5 +325,45 @@ fn packages_inactive_admission_notices() -> TestResult {
     assert_eq!(store.meta()?.commit_revision, before);
     drop(store);
     AnalysisStore::open(&root)?;
+    Ok(())
+}
+
+#[test]
+fn oci_descriptor_mismatch() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let original = package("descriptor", "v1")?;
+    let mut changed = original.clone();
+    let mut descriptor: araphor_analysis_sdk::Package =
+        serde_json::from_slice(&changed.descriptor)?;
+    descriptor.exports[0].name = "changed".into();
+    changed.descriptor = serde_json::to_vec(&descriptor)?;
+    assert!(matches!(
+        changed.decode_artifact(),
+        Err(crate::Error::Package {
+            code: crate::PackageErrorCodeV1::Invalid,
+            field: "retained package descriptor",
+            ..
+        })
+    ));
+    let before = store.meta()?;
+    assert!(store
+        .install_package(std::slice::from_ref(&changed), || Ok(()))
+        .is_err());
+    assert_eq!(store.meta()?, before);
+    assert!(store
+        .package_revision([1; 16], "descriptor", "v1")?
+        .is_none());
+    store.install_package(&[original], || Ok(()))?;
+    {
+        let mut writer = store.writer()?;
+        writer.get_mut()?.execute(
+            "UPDATE package_revisions SET descriptor = ? WHERE package_id = ?",
+            duckdb::params![changed.descriptor, "descriptor"],
+        )?;
+    }
+    drop(store);
+    assert!(AnalysisStore::open(&root).is_err());
     Ok(())
 }

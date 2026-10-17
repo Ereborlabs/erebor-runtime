@@ -40,9 +40,8 @@ fn packages_release_unused_dependencies() -> TestResult {
     let store = AnalysisStore::open(&root)?;
     let dependency = package("dependency", "v1")?;
     let mut consumer = package("consumer", "v1")?;
-    let mut descriptor: araphor_analysis_sdk::Package =
-        serde_json::from_slice(&consumer.descriptor)?;
-    descriptor.exports[0]
+    let mut artifact = consumer.decode_artifact()?;
+    artifact.descriptor.exports[0]
         .inputs
         .push(araphor_analysis_sdk::InputPort {
             port: araphor_analysis_sdk::Port::new("input", araphor_analysis_sdk::Schema::empty()),
@@ -55,7 +54,8 @@ fn packages_release_unused_dependencies() -> TestResult {
                 }),
             ),
         });
-    consumer.descriptor = serde_json::to_vec(&descriptor)?;
+    consumer.descriptor = serde_json::to_vec(&artifact.descriptor)?;
+    consumer.artifact = artifact.encode()?;
     consumer.dependencies.push(PackageRevisionRefV1 {
         package_id: "dependency".into(),
         revision: "v1".into(),

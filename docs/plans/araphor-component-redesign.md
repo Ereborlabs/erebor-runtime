@@ -732,6 +732,60 @@ are not qualified here. Full workspace CI and benchmarks are not run, as
 instructed. General maintained SQL, shared maintained query ownership, and the
 required production reduction remain **Not done**. No speed result is claimed.
 
+### Shared package OCI persistence
+
+Implementation and selected host verification: **Done**. Earlier results remain attached to their recorded source.
+
+[PackageArtifactV1::encode and from_bytes](../../crates/araphor-data/src/package/bundle.rs)
+use the existing [PackageOci](../../crates/araphor-data/src/package/oci.rs)
+metadata and raw-layer codec. The separate StoredArtifact CBOR codec is deleted.
+Complete bundle transport and retained artifacts use the same SDK OCI owner.
+The retained artifact contains its descriptor. Install, decode, and recovery
+compare it with the separate descriptor column. Raw executable, native
+dependency, and fixture buffers keep their exact bytes and order. Standalone
+artifact decode permits external references; complete bundle validation checks
+the dependency closure after loading. Existing trust, native qualification,
+immutable revision, transaction, retention, backup, and usage owners remain.
+There is no old artifact-format reader or migration.
+
+The [storage review](../guides/araphor-binary-package-storage-review.md)
+links the current source and focused cases. The fixed bundle fixture retains
+its prechange manifest digest and archive length. Install and recovery now
+allocate owned raw layers and recompute hashes through the shared codec.
+Canonical reconstruction hashes the layers again. This tradeoff does not prove
+lower allocation, lower peak memory, or faster validation.
+
+The syntax-count record reports 133 fewer nonblank production Rust lines and
+206 more test lines. The complete redesign adds 2,761 production lines from
+537f9de3, 532 from 7b7b407a, and 1,685 from aa390d9f. Another 6,532 net
+production deletions are required. Tests, documents, and blank lines are excluded
+from production counts. The record is `/tmp/araphor-package-oci-count1.json`.
+
+The selected checks pass 254 distinct cases: five SDK, 72 Data, 30 Query,
+139 Analysis, six Control, and two E2E cases. All nine native package cases run
+explicitly. Native E2E runs with PATH empty. Strict Clippy passes for the six
+crates and their test targets. Formatting passes for all 16 changed current
+Rust files. All 35 added local document links pass. Unchanged missing links in
+the older performance review are outside this link check.
+
+The first Data selection passes 71 cases and finds a fixture that changes only
+the separate descriptor. The corrected fixture encodes the same descriptor in
+both places; its exact case passes. Analysis passes 129 cases and finds two
+failures. The native loader case passes alone without source changes. The old
+committed binary reproduces the renewal fixture's stale error pattern. Its
+corrected Query error pattern retains all fence assertions; both fence cases
+pass. Clippy then rejects one outer Vec in the new fixture assertion. The array
+correction retains the same bytes, and its exact case and Clippy pass. Production
+source stays fixed through these checks. The records retain the failed attempts.
+
+The qualification record is `/tmp/araphor-package-oci-qualification1.json`.
+It checks 707 Rust hashes and records the test binary and native artifact hashes.
+The checked host is Linux x86_64 with glibc 2.39. Other targets and physical
+Kubernetes are not qualified. Full workspace CI and benchmarks are not run,
+as instructed. The complete redesign, general maintained SQL, shared maintained
+query ownership, and the required production reduction remain **Not done**.
+No speed result is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

@@ -33,9 +33,13 @@ pub struct PackageRevisionV1 {
 impl PackageRevisionV1 {
     pub fn decode_artifact(&self) -> crate::Result<crate::PackageArtifactV1> {
         use snafu::ResultExt as _;
-        let descriptor =
+        let descriptor: araphor_analysis_sdk::Package =
             serde_json::from_slice(&self.descriptor).context(crate::PackageEncodingSnafu)?;
-        crate::package::storage::StoredArtifact::decode(&self.artifact, &descriptor)
+        let artifact = crate::PackageArtifactV1::from_bytes(&self.artifact)?;
+        if artifact.descriptor != descriptor {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("retained package descriptor"));
+        }
+        Ok(artifact)
     }
 }
 

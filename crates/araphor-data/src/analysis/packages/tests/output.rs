@@ -49,7 +49,7 @@ impl Fixture {
         let mut artifact = revision.decode_artifact()?;
         artifact.descriptor.exports[0].outputs[0].schema = schema.clone();
         revision.descriptor = serde_json::to_vec(&artifact.descriptor)?;
-        revision.artifact = crate::StoredArtifact::encode(&artifact)?;
+        revision.artifact = artifact.encode()?;
         store.install_package(&[revision], || Ok(()))?;
         let installed = InstalledContext {
             grant: PackageGrantV1 {

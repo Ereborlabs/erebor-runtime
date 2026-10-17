@@ -732,7 +732,6 @@ fn inherited_witness_expiry_wins() -> TestResult {
     use araphor_data::{
         AnalysisWitnessV1, ClockDependency, InstalledContext, PackageArtifactV1, PackageGrantV1,
         PackageImplementationV1, PackageReadinessV1, PackageRefV1, ResultContext, SqlModelV1,
-        StoredArtifact,
     };
 
     let fixture = Fixture::new()?;
@@ -760,7 +759,7 @@ fn inherited_witness_expiry_wins() -> TestResult {
             package_id: descriptor.id.clone(),
             revision: descriptor.revision.clone(),
             descriptor: serde_json::to_vec(&descriptor)?,
-            artifact: StoredArtifact::encode(&artifact)?,
+            artifact: artifact.encode()?,
             dependencies: Vec::new(),
         }],
         || Ok(()),

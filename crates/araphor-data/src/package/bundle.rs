@@ -134,6 +134,18 @@ impl PackageImplementationV1 {
 }
 
 impl PackageArtifactV1 {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        super::oci::PackageOci::artifact_layout(self)?
+            .encode()
+            .context(crate::AnalysisContractSnafu)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        super::oci::PackageOci::decode_artifact(
+            sdk::oci::Content::from_bytes(bytes).context(crate::AnalysisContractSnafu)?,
+        )
+    }
+
     pub fn descriptor_bytes(&self) -> Result<Vec<u8>> {
         self.descriptor
             .inspect()

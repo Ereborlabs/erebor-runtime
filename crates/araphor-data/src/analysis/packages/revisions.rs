@@ -30,7 +30,7 @@ impl AnalysisStore {
             }
         }
         for package in revisions {
-            crate::package::storage::StoredArtifact::validate(&package.artifact)?;
+            package.decode_artifact()?;
         }
         let mut guard = self.writer()?;
         let transaction = guard

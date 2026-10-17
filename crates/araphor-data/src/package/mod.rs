@@ -6,7 +6,6 @@ pub mod native;
 mod oci;
 mod parameters;
 mod provenance;
-pub(crate) mod storage;
 
 pub use admission::ModelRef;
 pub use bundle::*;
@@ -14,7 +13,6 @@ pub use formats::*;
 pub use model::*;
 pub use native::{Dependency, LibraryRequirement, Qualification};
 pub use parameters::decode_parameters;
-pub use storage::StoredArtifact;
 
 pub fn parameter_values<'a>(
     parameters: Option<&'a serde_json::Value>,

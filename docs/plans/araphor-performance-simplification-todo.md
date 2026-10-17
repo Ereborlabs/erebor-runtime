@@ -464,6 +464,32 @@ another 6,665 net deletions. The records are
 with glibc 2.39. Full workspace CI and benchmarks are not run. Complete redesign:
 **Not done**.
 
+### Shared package OCI persistence
+
+Implementation and selected host verification: **Done**. The [component record](araphor-component-redesign.md#shared-package-oci-persistence)
+and [storage review](../guides/araphor-binary-package-storage-review.md)
+name the source owners and focused cases.
+[PackageArtifactV1::encode and from_bytes](../../crates/araphor-data/src/package/bundle.rs)
+reuse the existing PackageOci metadata and raw-layer codec. The separate
+StoredArtifact CBOR codec is deleted. The retained OCI descriptor must agree
+with the separate descriptor column. Fixture bytes remain raw layers, external
+dependencies retain complete bundle validation, and no old artifact reader
+exists. Install and recovery now allocate owned layers and recompute hashes;
+this change has no speed claim.
+
+The slice removes 133 nonblank production Rust lines and adds 206 test lines.
+The complete redesign adds 532 production lines from 7b7b407a; another 6,532
+net deletions remain. The count record is
+`/tmp/araphor-package-oci-count1.json`.
+The selected checks pass 254 distinct SDK, Data, Query, Analysis, Control, and
+E2E cases. The native package cases run explicitly; native E2E runs with PATH
+empty. Two fixture corrections retain their assertions. One lint correction
+changes only an outer test Vec to an array. Only the affected cases run again.
+Strict Clippy, scoped formatting, and all 35 added local links pass. The record
+is `/tmp/araphor-package-oci-qualification1.json`. It checks 707 Rust hashes.
+The initial disk-full build and failed attempts remain recorded. Full workspace
+CI and benchmarks are not run. Complete redesign: **Not done**.
+
 ## Implementation flow
 
 An owner starts or recovers

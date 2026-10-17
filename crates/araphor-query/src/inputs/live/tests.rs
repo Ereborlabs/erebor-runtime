@@ -5,7 +5,7 @@ use araphor_data::analysis::{PackageCommitV1, PackageKeyV1, PackageRevisionV1};
 use araphor_data::{
     AnalysisSelectionV1, AnalysisStore, ClockDependency, EvidenceIntakeIdentityV1, EvidenceRecord,
     PackageArtifactV1, PackageImplementationV1, PackageReadinessV1, PackageRefV1, SqlModelV1,
-    StoredArtifact, ValidatedEvidenceBatchV1,
+    ValidatedEvidenceBatchV1,
 };
 use prost::Message as _;
 
@@ -136,7 +136,7 @@ impl Fixture {
                 package_id: descriptor.id.clone(),
                 revision: descriptor.revision.clone(),
                 descriptor: serde_json::to_vec(&descriptor)?,
-                artifact: StoredArtifact::encode(&artifact)?,
+                artifact: artifact.encode()?,
                 dependencies: model
                     .dependencies()
                     .map(|(_, output)| (output.package.clone(), output.revision.clone()))
