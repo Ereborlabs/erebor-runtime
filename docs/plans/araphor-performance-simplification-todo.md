@@ -490,6 +490,19 @@ is `/tmp/araphor-package-oci-qualification1.json`. It checks 707 Rust hashes.
 The initial disk-full build and failed attempts remain recorded. Full workspace
 CI and benchmarks are not run. Complete redesign: **Not done**.
 
+### Analysis build inputs
+
+Implementation and selected host verification: **Done**.
+[build.rs](../../crates/araphor-analysis/build.rs) now declares only build.rs as
+its file input. The checked Cargo fingerprint no longer scans package source.
+The emitted native target stays unchanged. Strict Analysis Clippy passes for
+the library and tests. Formatting and whitespace checks pass. Runtime tests,
+full workspace CI, and benchmarks are not repeated. No speed result is claimed.
+The record is `/tmp/araphor-analysis-build-input-qualification1.json`.
+This change adds one nonblank production Rust line. The complete redesign adds
+533 lines from 7b7b407a; another 6,533 net deletions remain. The count record is
+`/tmp/araphor-analysis-build-input-count1.json`. Complete redesign: **Not done**.
+
 ## Implementation flow
 
 An owner starts or recovers

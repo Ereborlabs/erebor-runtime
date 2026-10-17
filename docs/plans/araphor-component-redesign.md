@@ -786,6 +786,22 @@ as instructed. The complete redesign, general maintained SQL, shared maintained
 query ownership, and the required production reduction remain **Not done**.
 No speed result is claimed.
 
+### Analysis build inputs
+
+Implementation and selected host verification: **Done**.
+[build.rs](../../crates/araphor-analysis/build.rs) reads only Cargo's TARGET.
+Its rerun declaration now names build.rs. Cargo no longer scans the complete
+Analysis package for build-script inputs. The checked Cargo fingerprint names
+only build.rs; the emitted native target stays x86_64-unknown-linux-gnu.
+Strict Analysis Clippy passes for the library and tests. Formatting and
+whitespace checks pass. Runtime tests are not repeated for this declaration.
+The record is `/tmp/araphor-analysis-build-input-qualification1.json`.
+
+This change adds one nonblank production Rust line. The complete redesign adds
+533 lines from 7b7b407a; another 6,533 net deletions remain. The count record is
+`/tmp/araphor-analysis-build-input-count1.json`. Full workspace CI and benchmarks
+are not run. No speed result is claimed. Complete redesign: **Not done**.
+
 ## Intended end state
 
 ### RisingWave source correction
