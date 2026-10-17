@@ -1,12 +1,18 @@
+use std::collections::BTreeSet;
+use std::ops::ControlFlow;
+
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::ScalarValue;
+use datafusion::common::{DataFusionError, ScalarValue, TableReference};
 use datafusion::execution::context::SQLOptions;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Expr, LogicalPlan, WindowFrameBound, WindowFrameUnits};
 use datafusion::sql::parser::Statement;
+use datafusion::sql::planner::object_name_to_table_reference;
+use datafusion::sql::sqlparser::ast::{TableFactor, Visit, Visitor};
 use snafu::ResultExt as _;
 
 use crate::execution::Limits;
+use crate::sources::{SourceOrigin, SourceProvider};
 use crate::Result;
 
 pub(crate) mod subscription;
@@ -18,9 +24,72 @@ pub struct Planner<'a> {
     state: &'a SessionState,
 }
 
+struct Relations {
+    tables: BTreeSet<TableReference>,
+    normalize: bool,
+}
+
+impl Visitor for Relations {
+    type Break = DataFusionError;
+
+    fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
+        if let TableFactor::Table {
+            name, args: None, ..
+        } = factor
+        {
+            match object_name_to_table_reference(name.clone(), self.normalize) {
+                Ok(name) => {
+                    self.tables.insert(name);
+                }
+                Err(error) => return ControlFlow::Break(error),
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
 impl<'a> Planner<'a> {
     pub fn new(state: &'a SessionState) -> Self {
         Self { state }
+    }
+
+    pub(crate) async fn sources(&self, statement: &Statement) -> Result<BTreeSet<SourceOrigin>> {
+        let mut relations = Relations {
+            tables: BTreeSet::new(),
+            normalize: self
+                .state
+                .config_options()
+                .sql_parser
+                .enable_ident_normalization,
+        };
+        if let Statement::Statement(statement) = statement {
+            if let ControlFlow::Break(error) = statement.visit(&mut relations) {
+                return Err(error).context(crate::SqlSnafu);
+            }
+        }
+        let mut origins = BTreeSet::new();
+        for name in self
+            .state
+            .resolve_table_references(statement)
+            .context(crate::SqlSnafu)?
+        {
+            // The native resolver also returns table function names.
+            if !relations.tables.contains(&name) {
+                continue;
+            }
+            let schema = self
+                .state
+                .schema_for_ref(name.clone())
+                .context(crate::SqlSnafu)?;
+            let provider = schema.table(name.table()).await.context(crate::SqlSnafu)?;
+            if let Some(source) = provider
+                .as_ref()
+                .and_then(|provider| provider.as_any().downcast_ref::<SourceProvider>())
+            {
+                origins.insert(source.origin.clone());
+            }
+        }
+        Ok(origins)
     }
 
     pub async fn build(

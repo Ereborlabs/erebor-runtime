@@ -48,13 +48,14 @@ pub(crate) enum SourceOrigin {
     Durable(String),
     Port(usize),
     Package(usize),
+    Local(String),
 }
 
 impl SourceOrigin {
     pub(crate) fn durable(&self) -> Option<&str> {
         match self {
             Self::Durable(name) => Some(name),
-            Self::Port(_) | Self::Package(_) => None,
+            Self::Port(_) | Self::Package(_) | Self::Local(_) => None,
         }
     }
 }
@@ -246,12 +247,19 @@ impl SourceSnapshot {
 }
 
 #[derive(Debug)]
-pub(crate) struct SourceProvider {
+pub struct SourceProvider {
     pub(crate) origin: SourceOrigin,
     schema: SchemaRef,
 }
 
 impl SourceProvider {
+    pub fn local(name: &str, schema: SchemaRef) -> Arc<dyn TableProvider> {
+        Arc::new(Self {
+            origin: SourceOrigin::Local(name.to_owned()),
+            schema,
+        })
+    }
+
     pub(crate) fn port(port: usize, schema: SchemaRef) -> Arc<dyn TableProvider> {
         Arc::new(Self {
             origin: SourceOrigin::Port(port),
@@ -344,6 +352,23 @@ impl TableProvider for SourceProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if let SourceOrigin::Local(name) = &self.origin {
+            let tables = session
+                .config()
+                .get_extension::<crate::execution::LocalTables>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("local input tables are absent".into())
+                })?;
+            let (table, _) = tables
+                .get(name)
+                .ok_or_else(|| DataFusionError::Execution("local input table is absent".into()))?;
+            if table.schema() != self.schema {
+                return Err(DataFusionError::Execution(
+                    "local input schema changed".into(),
+                ));
+            }
+            return table.scan(session, projection, filters, limit).await;
+        }
         let indices = projection
             .cloned()
             .unwrap_or_else(|| (0..self.schema.fields().len()).collect());

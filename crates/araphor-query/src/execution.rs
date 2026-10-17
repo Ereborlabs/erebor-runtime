@@ -14,9 +14,8 @@ use datafusion::catalog::memory::{
     MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
 };
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
-use datafusion::common::tree_node::Transformed;
 use datafusion::common::DataFusionError;
-use datafusion::datasource::{provider_as_source, source_as_provider, MemTable};
+use datafusion::datasource::MemTable;
 use datafusion::execution::config::SessionConfig;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion::execution::memory_pool::MemoryReservation;
@@ -369,7 +368,7 @@ impl Engine {
             selection,
             control: Arc::new(control.within(control.remaining()?)?),
             now,
-            tables: BTreeMap::new(),
+            tables: Arc::default(),
             output_rows: self.limits.output_rows,
             output_bytes: self.limits.output_bytes,
         })
@@ -488,6 +487,8 @@ pub enum Read {
     Page(Option<StorePositionV1>),
 }
 
+pub(crate) type LocalTables = BTreeMap<String, (Arc<MemTable>, usize)>;
+
 #[derive(Clone)]
 pub struct Session {
     engine: Arc<Engine>,
@@ -495,7 +496,7 @@ pub struct Session {
     selection: AnalysisSelectionV1,
     control: Arc<AnalysisReadControl>,
     now: u64,
-    tables: BTreeMap<String, (Arc<MemTable>, usize)>,
+    tables: Arc<LocalTables>,
     output_rows: usize,
     output_bytes: usize,
 }
@@ -562,8 +563,7 @@ impl Session {
                 .retain_input(batch, &reservation)
                 .context(SqlSnafu)?;
         }
-        self.tables
-            .insert(name.to_owned(), (Arc::new(table), bytes));
+        Arc::make_mut(&mut self.tables).insert(name.to_owned(), (Arc::new(table), bytes));
         Ok(())
     }
 
@@ -691,6 +691,7 @@ impl Session {
 
     pub(crate) fn state(&self) -> Result<SessionState> {
         let mut state = self.engine.state.clone();
+        state.config_mut().set_extension(Arc::clone(&self.tables));
         let clock = chrono::DateTime::from_timestamp(
             (self.now / 1_000_000_000) as i64,
             (self.now % 1_000_000_000) as u32,
@@ -712,32 +713,7 @@ impl Session {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planning = self.control.within(self.engine.limits.evaluate_timeout)?;
         planning
-            .query_async(async {
-                let plan = plan
-                    .clone()
-                    .transform_up_with_subqueries(|plan| {
-                        let LogicalPlan::TableScan(mut scan) = plan else {
-                            return Ok(Transformed::no(plan));
-                        };
-                        let declared = source_as_provider(&scan.source)?;
-                        if !declared.as_any().is::<MemTable>() {
-                            return Ok(Transformed::no(LogicalPlan::TableScan(scan)));
-                        }
-                        let (table, _) =
-                            self.tables.get(scan.table_name.table()).ok_or_else(|| {
-                                DataFusionError::Execution("local input table is absent".into())
-                            })?;
-                        if table.schema() != declared.schema() {
-                            return datafusion::common::exec_err!("local input schema changed");
-                        }
-                        let table: Arc<dyn TableProvider> = table.clone();
-                        scan.source = provider_as_source(table);
-                        Ok(Transformed::yes(LogicalPlan::TableScan(scan)))
-                    })
-                    .context(SqlSnafu)?
-                    .data;
-                state.create_physical_plan(&plan).await.context(SqlSnafu)
-            })
+            .query_async(async { state.create_physical_plan(plan).await.context(SqlSnafu) })
             .await
     }
 

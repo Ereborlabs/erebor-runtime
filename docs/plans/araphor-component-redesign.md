@@ -112,6 +112,49 @@ The counter verifies 710 Rust source hashes. Its record is
 Discovery still owns a source sweep and seal scheduler. That replacement and
 the remaining compiler and storage polling are **Not done**.
 
+### Model tables use native source binding
+
+Implementation and selected verification: **Done** for model table binding.
+AdmittedModel declares a SourceProvider::local for each supplied relation.
+Session retains the registered native MemTables in one Arc map. Native session
+configuration holds that exact map. SourceProvider::scan checks the binding
+and schema, then calls the native MemTable scan. Native DataFusion plans the
+original logical plan. The separate logical-plan clone and table-scan rewrite
+are removed. A normal MemTable keeps its own rows. A supplied binding with the
+same name does not replace that table.
+
+Query and package input admission use Planner::sources. Input admission runs
+source resolution and native planning in one Engine future per query input.
+It no longer starts a future for each table reference. Native table functions
+are permitted. Generated rows have no retained evidence provenance.
+
+The native relation resolver also returns function names. The small Relations
+visitor uses the native AST to identify plain table references. The native
+resolver still supplies CTE scope and name normalization. This extension is
+required to prevent a function from inheriting an unrelated input table's
+provenance when their names match. A declared table inside an unused CTE
+still remains a dependency. The visitor does not change the statement or plan.
+
+The initial Query check passes 133 cases. The strengthened name-collision
+case then passes separately. The complete model check passes 33 cases before
+the final source-resolution correction. Final affected model checks pass eight cases. Control and E2E test callers
+compile. Their records are `/tmp/araphor-discovery-native-bindings-model2.json`
+and `/tmp/araphor-discovery-native-bindings-callers1.json`. The source records are
+`/tmp/araphor-discovery-native-bindings-query3.json`,
+`/tmp/araphor-discovery-native-bindings-collision2.json`, and
+`/tmp/araphor-discovery-native-bindings-analysis1.json`.
+Strict Query, Analysis, and Control Clippy passes after the final Rust edits;
+its record is `/tmp/araphor-discovery-native-bindings-clippy2.json`.
+No full workspace CI or benchmark is run.
+
+This deliverable adds 47 nonblank production Rust lines. The complete rewrite
+adds 604 production Rust lines against `7b7b407a`. The 6,000-line deletion target
+is **Not done**. The counter verifies 710 Rust source hashes; its record is
+`/tmp/araphor-native-bindings-count1.json`.
+Discovery still needs an actual input subscription. Its input row codec and
+separate execution scheduler remain **Not done**. This source-binding change
+does not complete that replacement.
+
 ### Native function registration and optional operator memory
 
 Implementation and selected verification: **Done**.

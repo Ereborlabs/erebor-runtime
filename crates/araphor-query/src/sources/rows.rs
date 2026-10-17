@@ -124,7 +124,7 @@ impl Captured {
         let Some((stored, captured, batches)) = self.tables.get(origin) else {
             return match origin {
                 SourceOrigin::Durable(_) => Ok(Vec::new()),
-                SourceOrigin::Port(_) | SourceOrigin::Package(_) => Err(
+                SourceOrigin::Port(_) | SourceOrigin::Package(_) | SourceOrigin::Local(_) => Err(
                     DataFusionError::Execution("the materialized port is not bound".into()),
                 ),
             };

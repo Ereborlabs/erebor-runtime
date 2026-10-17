@@ -61,31 +61,13 @@ impl Inputs {
                 let (plan, origins) = match &input.source {
                     sdk::InputSource::Query(sql) => {
                         let statement = engine.limits().parser.parse(sql)?;
-                        let mut origins = BTreeSet::new();
-                        for name in state
-                            .resolve_table_references(&statement)
-                            .context(SqlSnafu)?
-                        {
-                            let catalog = state.clone();
-                            let provider = engine.wait(async move {
-                                let schema =
-                                    catalog.schema_for_ref(name.clone()).context(SqlSnafu)?;
-                                schema.table(name.table()).await.context(SqlSnafu)
-                            })?;
-                            let origin = provider
-                                .as_ref()
-                                .and_then(|provider| {
-                                    provider.as_any().downcast_ref::<SourceProvider>()
-                                })
-                                .ok_or_else(|| {
-                                    InvalidSnafu {
-                                        field: "input source",
-                                    }
-                                    .build()
-                                })?;
-                            origins.insert(origin.origin.clone());
-                        }
-                        (engine.plan(&state, statement, Vec::new())?, origins)
+                        let state = state.clone();
+                        engine.wait(async move {
+                            let planner = crate::planner::Planner::new(&state);
+                            let origins = planner.sources(&statement).await?;
+                            let plan = planner.build(statement, Vec::new()).await?;
+                            Ok((plan, origins))
+                        })?
                     }
                     sdk::InputSource::Table(sdk::TableRef::Named(name)) => {
                         let provider = tables.get(name).cloned().ok_or_else(|| {
@@ -231,7 +213,9 @@ impl Inputs {
                     .map(|origin| {
                         size_of::<SourceOrigin>()
                             + match origin {
-                                SourceOrigin::Durable(name) => name.capacity(),
+                                SourceOrigin::Durable(name) | SourceOrigin::Local(name) => {
+                                    name.capacity()
+                                }
                                 _ => 0,
                             }
                     })

@@ -3,12 +3,11 @@ use std::sync::Arc;
 use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests};
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::LogicalPlan;
-use snafu::ResultExt as _;
 
 use super::Engine;
 use crate::follow::{Clock, Cursor, Subscription};
 use crate::sources::SourceSnapshot;
-use crate::{planner::Planner, Result, SqlSnafu};
+use crate::{planner::Planner, Result};
 
 impl Engine {
     pub async fn prepare(
@@ -18,13 +17,14 @@ impl Engine {
     ) -> Result<(LogicalPlan, AnalysisTableRequests)> {
         let state = self.catalog(SourceSnapshot::providers())?;
         let statement = self.limits.parser.parse(sql)?;
-        let sources = state
-            .resolve_table_references(&statement)
-            .context(SqlSnafu)?
+        let planner = Planner::new(&state);
+        let sources = planner
+            .sources(&statement)
+            .await?
             .into_iter()
-            .map(|source| (source.table().to_owned(), None))
+            .filter_map(|source| source.durable().map(|name| (name.to_owned(), None)))
             .collect();
-        let plan = Planner::new(&state).build(statement, parameters).await?;
+        let plan = planner.build(statement, parameters).await?;
         Ok((plan, sources))
     }
 

@@ -215,7 +215,7 @@ fn value(batches: &[RecordBatch]) -> i64 {
 
 fn local_plan(engine: &Engine) -> (Arc<LogicalPlan>, araphor_data::AnalysisTableRequests) {
     let table: Arc<dyn TableProvider> =
-        Arc::new(MemTable::try_new(schema(), vec![vec![]]).unwrap());
+        crate::sources::SourceProvider::local("local_rows", schema());
     let catalog = engine
         .catalog(BTreeMap::from([("local_rows".into(), table)]))
         .unwrap();
@@ -235,13 +235,17 @@ fn local_plan(engine: &Engine) -> (Arc<LogicalPlan>, araphor_data::AnalysisTable
 #[test]
 fn closed_catalog_keeps_locals() {
     let fixture = Fixture::new(Limits::default());
-    let table: Arc<dyn TableProvider> =
-        Arc::new(MemTable::try_new(schema(), vec![vec![]]).unwrap());
     let state = fixture
         .engine
         .catalog(BTreeMap::from([
-            ("events".into(), Arc::clone(&table)),
-            ("CaseRows".into(), table),
+            (
+                "events".into(),
+                crate::sources::SourceProvider::local("events", schema()),
+            ),
+            (
+                "CaseRows".into(),
+                crate::sources::SourceProvider::local("CaseRows", schema()),
+            ),
         ]))
         .unwrap();
     let mut session = fixture
@@ -600,8 +604,7 @@ fn registration_reuses_input_claims() {
 #[test]
 fn native_counts_rebind() {
     let fixture = Fixture::new(Limits::default());
-    let table: Arc<dyn TableProvider> =
-        Arc::new(MemTable::try_new(schema(), vec![vec![]]).unwrap());
+    let table: Arc<dyn TableProvider> = crate::sources::SourceProvider::local("CaseRows", schema());
     let state = fixture
         .engine
         .catalog(BTreeMap::from([("CaseRows".into(), table)]))
@@ -1539,4 +1542,48 @@ async fn admission_uses_engine_config() {
     assert_eq!(defaults.parameter_bytes, None);
     assert_eq!(defaults.projection_columns, None);
     assert_eq!(defaults.window_bound, None);
+}
+
+#[test]
+fn native_tables_keep_data() {
+    let fixture = Fixture::new(Limits::default());
+    let table: Arc<dyn TableProvider> =
+        Arc::new(MemTable::try_new(schema(), vec![vec![batch(41)]]).unwrap());
+    let empty: Arc<dyn TableProvider> =
+        Arc::new(MemTable::try_new(schema(), vec![vec![]]).unwrap());
+    let state = fixture
+        .engine
+        .catalog(BTreeMap::from([
+            ("literal".into(), table),
+            ("empty".into(), empty),
+        ]))
+        .unwrap();
+    let mut session = fixture
+        .engine
+        .session(AnalysisSelectionV1::new([1; 16], vec![]), &control(), 1)
+        .unwrap();
+    session.register("literal", schema(), &[batch(99)]).unwrap();
+    session.register("empty", schema(), &[batch(99)]).unwrap();
+    let plan = fixture
+        .engine
+        .plan(
+            &state,
+            Parser::default()
+                .parse("SELECT value FROM literal")
+                .unwrap(),
+            vec![],
+        )
+        .unwrap();
+    assert_eq!(value(&session.collect_local(Arc::new(plan)).unwrap()), 41);
+    let plan = fixture
+        .engine
+        .plan(
+            &state,
+            Parser::default()
+                .parse("SELECT count(*) AS total FROM empty")
+                .unwrap(),
+            vec![],
+        )
+        .unwrap();
+    assert_eq!(value(&session.collect_local(Arc::new(plan)).unwrap()), 0);
 }

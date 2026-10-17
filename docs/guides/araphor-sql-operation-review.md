@@ -49,6 +49,25 @@ is **Not done** against the required architecture. The replacement must
 consume the actual Query input batches for live execution, finite execution,
 and manual refresh. An identity-only query must not invoke the old reader.
 
+## Runtime table binding
+
+[AdmittedModel::relation](../../crates/araphor-analysis/src/model.rs) declares
+[SourceProvider::local](../../crates/araphor-query/src/sources/mod.rs).
+[Session::state](../../crates/araphor-query/src/execution.rs) registers the
+current Arc map of native MemTables in session configuration. The provider
+checks the declared schema and calls the native MemTable scan. The original
+logical plan goes directly to native physical planning. No table-scan rewrite
+is required. Session clones share the map; a later registration creates a new
+map when an earlier session still holds the old map.
+
+[Planner::sources](../../crates/araphor-query/src/planner/mod.rs) records
+original retained sources for Query and input admission. It uses native AST
+visitation to separate plain tables from table functions. Native resolution
+still handles CTE scope and identifier case. The native resolver alone returns
+function names as relation names. Without this distinction, a generated input
+can inherit an unrelated input table's provenance. The collision test also
+checks that a table in an unused CTE remains a dependency.
+
 ## Current table and query input flow
 
 The SDK declares each input as `Table(TableRef)` or `Query(String)`.
@@ -133,9 +152,9 @@ ModelRun those same indexed tables. ModelRun does not build those indices
 again. [ModelRun::table](../../crates/araphor-analysis/src/model/input.rs)
 still builds indices for host-prepared inputs, parameters, prior checkpoints,
 and completed model outputs. Canonical Data tables keep their declared fields.
-Local registrations can replace a canonical table name. Provider origins keep
-those local bindings separate from the durable source inventory. Table lookup
-applies no `__araphor_` prefix ban.
+A model can use a canonical Data table name for a supplied relation. Provider
+origins keep that local binding separate from the durable source inventory.
+Table lookup applies no `__araphor_` prefix ban.
 
 [AdmittedModel](../../crates/araphor-analysis/src/model.rs) stores raw native
 logical plans for output and checkpoint queries in descriptor order. Each

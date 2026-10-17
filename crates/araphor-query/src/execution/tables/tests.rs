@@ -5,8 +5,6 @@ use std::time::Duration;
 
 use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisStore};
 use datafusion::arrow::array::Int64Array;
-use datafusion::catalog::TableProvider;
-use datafusion::datasource::MemTable;
 
 use super::*;
 use crate::execution::{Engine, Limits};
@@ -95,10 +93,7 @@ fn builtin_has_no_index() -> TestResult {
         )
         .is_err());
     let schema = Schema::new(vec![Field::new("value", DataType::UInt64, false)]);
-    let table: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
-        Session::indexed_schema(&schema)?,
-        vec![vec![]],
-    )?);
+    let table = crate::sources::SourceProvider::local("events", Session::indexed_schema(&schema)?);
     let native = fixture
         .engine
         .catalog(BTreeMap::from([("events".into(), table)]))?;
@@ -231,8 +226,7 @@ fn empty_index_keeps_schema() -> TestResult {
     assert!(batches.is_empty());
     assert_eq!(memory.size(), 128);
     session.register("empty", Arc::clone(&schema), &batches)?;
-    let table: Arc<dyn TableProvider> =
-        Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![]])?);
+    let table = crate::sources::SourceProvider::local("empty", Arc::clone(&schema));
     let native = fixture
         .engine
         .catalog(BTreeMap::from([("empty".into(), table)]))?;

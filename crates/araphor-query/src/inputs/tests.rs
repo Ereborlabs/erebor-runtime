@@ -1246,3 +1246,127 @@ fn window_keeps_nanosecond_grant() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn native_function_input() -> TestResult {
+    let fixture = Fixture::new()?;
+    let sql = "SELECT * FROM generate_series(1, 3) AS generated(value)";
+    let schema = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Int64, false)]);
+    let mut model = sdk::Model::new("generated", vec![], vec![]);
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs.push(sdk::InputPort {
+        port: sdk::Port::new("generated", schema),
+        source: sdk::InputSource::Query(sql.into()),
+    });
+    let definition = Arc::new(Inputs::admit(&fixture.engine, &model)?);
+    let input = fixture.read(&definition)?;
+    assert_eq!(
+        input.inputs[0]
+            .data
+            .batches
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        3
+    );
+    let values = input.inputs[0]
+        .data
+        .batches
+        .iter()
+        .flat_map(|batch| {
+            (0..batch.num_rows())
+                .map(|row| ScalarValue::try_from_array(batch.column(0), row).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        vec![
+            ScalarValue::Int64(Some(1)),
+            ScalarValue::Int64(Some(2)),
+            ScalarValue::Int64(Some(3))
+        ]
+    );
+    assert!(input.source_revisions().is_empty());
+    assert_eq!(input.witnesses().count(), 0);
+    let engine = Arc::clone(&fixture.engine);
+    let selection = fixture.selection();
+    let update = fixture.engine.wait(async move {
+        use futures_util::TryStreamExt as _;
+        let mut query = engine
+            .subscribe(
+                sql,
+                Vec::new(),
+                selection,
+                Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(30))?),
+                b"generated",
+                None,
+                Arc::new(crate::follow::SystemClock::default()),
+                false,
+            )
+            .await?;
+        let update = query.try_next().await?.ok_or_else(|| {
+            crate::InvalidSnafu {
+                field: "generated result",
+            }
+            .build()
+        })?;
+        assert!(query.try_next().await?.is_none());
+        Ok(update)
+    })?;
+    assert_eq!(
+        update
+            .batches
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        3
+    );
+    assert!(update.snapshot.selection.sources.is_empty());
+    assert!(update.snapshot.witnesses.is_empty());
+    Ok(())
+}
+
+#[test]
+fn function_does_not_inherit_table() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.event(1, NOW)?;
+    let mut model = sdk::Model::new("generated", vec![], vec![]);
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs = vec![
+        sdk::InputPort {
+            port: sdk::Port::new(
+                "generate_series",
+                sdk::Schema::new(vec![sdk::Field::new(
+                    "source_cursor",
+                    sdk::DataType::UInt64,
+                    false,
+                )]),
+            ),
+            source: sdk::InputSource::Table(sdk::TableRef::Named("events".into())),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new(
+                "generated",
+                sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Int64, false)]),
+            ),
+            source: sdk::InputSource::Query(
+                "SELECT * FROM generate_series(1, 3) AS generated(value)".into(),
+            ),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new("guarded", sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Int64, false)])),
+            source: sdk::InputSource::Query("WITH unused AS (SELECT * FROM generate_series) SELECT * FROM generate_series(1, 3) AS generated(value)".into()),
+        },
+    ];
+    let definition = Arc::new(Inputs::admit(&fixture.engine, &model)?);
+    let first = fixture.read(&definition)?;
+    fixture.event(2, NOW)?;
+    let second = fixture.read(&definition)?;
+    assert_ne!(first.inputs[0].revision, second.inputs[0].revision);
+    assert_eq!(first.inputs[1].revision, second.inputs[1].revision);
+    assert_ne!(first.inputs[2].revision, second.inputs[2].revision);
+    Ok(())
+}

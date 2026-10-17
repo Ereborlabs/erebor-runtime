@@ -5,13 +5,13 @@ use araphor_analysis_sdk as sdk;
 use araphor_data::SqlModelV1;
 use araphor_query::datafusion::catalog::TableProvider;
 use araphor_query::datafusion::common::tree_node::TreeNodeRecursion;
-use araphor_query::datafusion::datasource::MemTable;
 use araphor_query::datafusion::execution::memory_pool::MemoryReservation;
 use araphor_query::datafusion::execution::SessionState;
 use araphor_query::datafusion::logical_expr::LogicalPlan;
 use araphor_query::execution::{Engine, Session};
 use araphor_query::inputs::Inputs;
 use araphor_query::memory::Memory;
+use araphor_query::sources::SourceProvider;
 
 use crate::Result;
 
@@ -306,7 +306,7 @@ impl AdmittedModel {
         let schema = Session::indexed_schema(schema)?;
         match relations.entry(name.to_owned()) {
             std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(Arc::new(MemTable::try_new(schema, vec![vec![]])?));
+                entry.insert(SourceProvider::local(name, schema));
                 Ok(())
             }
             std::collections::btree_map::Entry::Occupied(_) => crate::ModelInvalidSnafu {
