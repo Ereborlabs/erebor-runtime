@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock};
 
-use araphor_analysis_sdk::{DataType::*, Field, Schema};
+use araphor_analysis_sdk::{Field, Schema};
 
 use super::Capture;
 
@@ -110,22 +110,7 @@ impl Capture<'_> {
         insert("coverage", Self::coverage_fields());
         insert("context_versions", Self::version_fields());
         insert("context", Self::context_fields());
-        insert(
-            "catalog",
-            vec![
-                Field::new("relation", Utf8, false),
-                Field::new("ordinal", UInt32, false),
-                Field::new("column_name", Utf8, false),
-                Field::new("data_type", Utf8, false),
-                Field::new("units", Utf8, false),
-                Field::new("nullable", Boolean, false),
-                Field::new("null_meaning", Utf8, false),
-                Field::new("join_keys", Utf8, false),
-                Field::new("owner", Utf8, false),
-                Field::new("readiness", Utf8, false),
-                Field::new("description", Utf8, false),
-            ],
-        );
+        insert("catalog", Self::catalog_fields());
         insert("traces", Self::trace_fields());
         insert("trace_output", Self::frame_fields());
         insert("trace_measurements", Self::measurement_fields());

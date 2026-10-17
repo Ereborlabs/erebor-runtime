@@ -93,49 +93,80 @@ impl Table {
             let capacity = 32usize
                 .min(budget.page_rows())
                 .min((budget.remaining_bytes() / width).max(1));
-            let mut charge = size_of::<RecordBatch>()
-                + self.schema.fields().len() * (size_of::<ArrayRef>() + 512);
-            for (index, field) in self.schema.fields().iter().enumerate() {
-                let variable = self.lengths[index]
-                    .checked_mul(capacity)
-                    .ok_or_else(overflow)?;
-                if variable > i32::MAX as usize {
-                    return Err(overflow());
-                }
-                self.variable[index] = variable;
-                let payload = match field.data_type() {
-                    sdk::DataType::Binary | sdk::DataType::Utf8 => variable
-                        .checked_add((capacity + 1) * size_of::<i32>())
-                        .ok_or_else(overflow)?,
-                    sdk::DataType::Boolean => 64,
-                    kind => kind
-                        .primitive_width()
-                        .ok_or_else(|| invalid("the source field has no native builder"))?
-                        .checked_mul(capacity)
-                        .ok_or_else(overflow)?,
-                };
-                charge = charge
-                    .checked_add(payload)
-                    .and_then(|value| value.checked_add(if field.is_nullable() { 64 } else { 0 }))
-                    .ok_or_else(overflow)?;
-            }
-            budget.charge(charge)?;
-            self.builders.clear();
-            for (index, field) in self.schema.fields().iter().enumerate() {
-                self.builders.push(match field.data_type() {
-                    sdk::DataType::Binary => {
-                        Box::new(BinaryBuilder::with_capacity(capacity, self.variable[index]))
-                    }
-                    sdk::DataType::Utf8 => {
-                        Box::new(StringBuilder::with_capacity(capacity, self.variable[index]))
-                    }
-                    kind => make_builder(kind, capacity),
-                });
+            for (total, length) in self.variable.iter_mut().zip(&self.lengths) {
+                *total = length.checked_mul(capacity).ok_or_else(overflow)?;
             }
             self.capacity = capacity;
-            self.used.fill(0);
+            self.reserve(budget)?;
         }
         Ok(true)
+    }
+
+    pub(super) fn measure(&mut self) -> Result<()> {
+        self.capacity = self.capacity.checked_add(1).ok_or_else(overflow)?;
+        for (total, length) in self.variable.iter_mut().zip(&self.lengths) {
+            *total = total.checked_add(*length).ok_or_else(overflow)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn reserve(&mut self, budget: &mut ReadBudget<'_>) -> Result<()> {
+        budget.check()?;
+        let capacity = self.capacity;
+        let bitmap = capacity
+            .div_ceil(512)
+            .checked_mul(64)
+            .ok_or_else(overflow)?;
+        let mut charge =
+            size_of::<RecordBatch>() + self.schema.fields().len() * (size_of::<ArrayRef>() + 512);
+        for (index, field) in self.schema.fields().iter().enumerate() {
+            let variable = self.variable[index];
+            if variable > i32::MAX as usize {
+                return Err(overflow());
+            }
+            let payload = match field.data_type() {
+                sdk::DataType::Binary | sdk::DataType::Utf8 => variable
+                    .checked_add(
+                        capacity
+                            .checked_add(1)
+                            .and_then(|rows| rows.checked_mul(size_of::<i32>()))
+                            .ok_or_else(overflow)?,
+                    )
+                    .ok_or_else(overflow)?,
+                sdk::DataType::Boolean => bitmap,
+                kind => kind
+                    .primitive_width()
+                    .ok_or_else(|| invalid("the source field has no native builder"))?
+                    .checked_mul(capacity)
+                    .ok_or_else(overflow)?,
+            };
+            charge = charge
+                .checked_add(payload)
+                .and_then(|value| value.checked_add(if field.is_nullable() { bitmap } else { 0 }))
+                .ok_or_else(overflow)?;
+        }
+        budget.charge(charge)?;
+        self.builders.clear();
+        for (index, field) in self.schema.fields().iter().enumerate() {
+            self.builders.push(match field.data_type() {
+                sdk::DataType::Binary => {
+                    Box::new(BinaryBuilder::with_capacity(capacity, self.variable[index]))
+                }
+                sdk::DataType::Utf8 => {
+                    Box::new(StringBuilder::with_capacity(capacity, self.variable[index]))
+                }
+                kind => make_builder(kind, capacity),
+            });
+        }
+        self.used.fill(0);
+        Ok(())
+    }
+
+    pub(super) fn display_bytes(value: &impl std::fmt::Display) -> Result<usize> {
+        use std::fmt::Write as _;
+        let mut size = DisplaySize(0);
+        write!(&mut size, "{value}").map_err(|_| overflow())?;
+        Ok(size.0)
     }
 
     pub(super) fn builder<B: ArrayBuilder + 'static>(&mut self, index: usize) -> Result<&mut B> {
@@ -251,6 +282,7 @@ macro_rules! table_row {
         $(#[$attr:meta])*
         $vis:vis fn $append:ident($($args:tt)*);
         schema $schema:ident;
+        $(measure $measure:ident;)?
         $(prefix $prefix:ident {
             $( $common:ident => $common_kind:ident($common_nullable:literal): $common_value:expr ),* $(,)?
         })?
@@ -270,6 +302,14 @@ macro_rules! table_row {
         $(pub(super) fn $prefix() -> Vec<sdk::Field> {
             table_row!(@fields; $( $common => $common_kind($common_nullable), )*)
         })?
+        table_row!(@measure $( $measure )?; ($($args)*);
+            row($capture, $relation, $budget);
+            setup { $($setup)* }
+            fields {
+                $($( $common => $common_kind: $common_value, )*)?
+                $( $name => $kind: $value, )*
+            }
+        );
         $(#[$attr])*
         $vis fn $append($($args)*) -> crate::Result<bool> {
             $($setup)*
@@ -282,6 +322,19 @@ macro_rules! table_row {
             )
         }
     };
+    (@measure $measure:ident; ($($args:tt)*);
+        row($capture:ident, $relation:expr, $budget:ident);
+        setup { $($setup:tt)* }
+        fields { $( $name:ident => $kind:ident: $value:expr ),* $(,)? }
+    ) => {
+        pub(super) fn $measure($($args)*) -> crate::Result<bool> {
+            $($setup)*
+            table_row!(@row measure; $capture, $relation, $budget;
+                $( $name => $kind: $value, )*
+            )
+        }
+    };
+    (@measure; $($rest:tt)*) => {};
     (@fields; $( $name:ident => $kind:ident($nullable:literal) ),* $(,)?) => {
         vec![$(sdk::Field::new(stringify!($name), table_row!(@type $kind), $nullable)),*]
     };
@@ -292,7 +345,10 @@ macro_rules! table_row {
         }
     };
     (@finish $row:expr;) => { $row };
-    ($capture:expr, $relation:expr, $budget:expr; $( $name:ident => $kind:ident : $value:expr ),* $(,)?) => {{
+    ($capture:expr, $relation:expr, $budget:expr; $( $name:ident => $kind:ident : $value:expr ),* $(,)?) => {
+        table_row!(@row append; $capture, $relation, $budget; $( $name => $kind: $value, )*)
+    };
+    (@row $action:ident; $capture:expr, $relation:expr, $budget:expr; $( $name:ident => $kind:ident : $value:expr ),* $(,)?) => {{
         let capture = &mut *$capture;
         (|| -> crate::Result<bool> {
             if capture.read.projected($relation).is_none() { return Ok(true); }
@@ -314,13 +370,22 @@ macro_rules! table_row {
                 table.cell(*index, &table_row!(@type $kind), value.is_none(), length)?;
                 bytes = bytes.checked_add(table_row!(@logical $kind, length)).ok_or_else(super::overflow)?;
             })*
-            if !table.admit(budget, bytes)? { return Ok(false); }
-            $(if let Some((index, value)) = $name {
-                table_row!(@append table, index, $kind, value);
-            })*
-            table.appended(budget, bytes);
-            Ok(true)
+            table_row!(@apply $action; table, budget, bytes; $( $name => $kind, )*)
         })()
+    }};
+    (@apply measure; $table:ident, $budget:ident, $bytes:ident; $( $name:ident => $kind:ident, )*) => {{
+        $budget.check()?;
+        let _ = $bytes;
+        $table.measure()?;
+        Ok(true)
+    }};
+    (@apply append; $table:ident, $budget:ident, $bytes:ident; $( $name:ident => $kind:ident, )*) => {{
+        if !$table.admit($budget, $bytes)? { return Ok(false); }
+        $(if let Some((index, value)) = $name {
+            table_row!(@append $table, index, $kind, value);
+        })*
+        $table.appended($budget, $bytes);
+        Ok(true)
     }};
     (@prepare Binary, $value:expr, $budget:expr) => {{ let value: Option<&[u8]> = $value; value }};
     (@prepare Utf8, $value:expr, $budget:expr) => {{ let value = $value; value }};
@@ -328,10 +393,12 @@ macro_rules! table_row {
     (@prepare $kind:ident, $value:expr, $budget:expr) => { $value };
     (@length Binary, $value:expr) => { $value.as_ref().map_or(0, |value| value.len()) };
     (@length Utf8, $value:expr) => { $value.as_ref().map_or(0, |value| value.len()) };
+    (@length Display, $value:expr) => { $value.as_ref().map_or(Ok(0usize), |value| super::Table::display_bytes(value))? };
     (@length Json, $value:expr) => { $value.as_ref().map_or(0, |value| value.len()) };
     (@length $kind:ident, $value:expr) => { 0usize };
     (@logical Binary, $length:expr) => { 5usize.saturating_add($length) };
     (@logical Utf8, $length:expr) => { 5usize.saturating_add($length) };
+    (@logical Display, $length:expr) => { 5usize.saturating_add($length) };
     (@logical Json, $length:expr) => { 5usize.saturating_add($length) };
     (@logical UInt64, $length:expr) => { 9usize };
     (@logical Int64, $length:expr) => { 9usize };
@@ -339,11 +406,22 @@ macro_rules! table_row {
     (@logical UInt32, $length:expr) => { 5usize };
     (@logical Int32, $length:expr) => { 5usize };
     (@logical Boolean, $length:expr) => { 2usize };
+    (@type Display) => { sdk::DataType::Utf8 };
     (@type Json) => { sdk::DataType::Binary };
     (@type TimestampMicrosecond) => { sdk::DataType::Timestamp(sdk::TimeUnit::Microsecond, None) };
     (@type $kind:ident) => { sdk::DataType::$kind };
     (@append $table:expr, $name:expr, Binary, $value:expr) => { $table.builder::<sdk::arrow_array::builder::BinaryBuilder>($name)?.append_option($value) };
     (@append $table:expr, $name:expr, Utf8, $value:expr) => { $table.builder::<sdk::arrow_array::builder::StringBuilder>($name)?.append_option($value) };
+    (@append $table:expr, $name:expr, Display, $value:expr) => {{
+        use std::fmt::Write as _;
+        let builder = $table.builder::<sdk::arrow_array::builder::StringBuilder>($name)?;
+        if let Some(value) = $value {
+            write!(builder, "{value}").map_err(|_| super::overflow())?;
+            builder.append_value("");
+        } else {
+            builder.append_null();
+        }
+    }};
     (@append $table:expr, $name:expr, Json, $value:expr) => { $table.builder::<sdk::arrow_array::builder::BinaryBuilder>($name)?.append_option($value.as_deref()) };
     (@append $table:expr, $name:expr, UInt64, $value:expr) => { $table.builder::<sdk::arrow_array::builder::UInt64Builder>($name)?.append_option($value) };
     (@append $table:expr, $name:expr, Int64, $value:expr) => { $table.builder::<sdk::arrow_array::builder::Int64Builder>($name)?.append_option($value) };
@@ -354,3 +432,12 @@ macro_rules! table_row {
 }
 
 pub(super) use table_row;
+
+struct DisplaySize(usize);
+
+impl std::fmt::Write for DisplaySize {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        self.0 = self.0.checked_add(value.len()).ok_or(std::fmt::Error)?;
+        Ok(())
+    }
+}

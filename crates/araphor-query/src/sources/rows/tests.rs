@@ -302,6 +302,7 @@ fn catalog_native_preflight() -> TestResult {
         &indices,
         schema,
     )?;
+    assert_eq!(batches.len(), 1);
     let batch = batches.first().ok_or("catalog rows")?;
     assert_eq!(batch.schema(), *schema);
     assert_eq!(
@@ -404,6 +405,7 @@ fn catalog_native_preflight() -> TestResult {
     )?;
     let empty = Arc::new(schema.project(&[])?);
     let batches = captured.project(&super::SourceOrigin::Durable("catalog".into()), &[], &empty)?;
+    assert_eq!(batches.len(), 1);
     assert_eq!(batches[0].num_columns(), 0);
     assert_eq!(
         batches[0].num_rows(),
@@ -415,6 +417,130 @@ fn catalog_native_preflight() -> TestResult {
     drop(batches);
     drop(captured);
     drop(memory.reserve_input(capacity)?);
+    Ok(())
+}
+
+#[test]
+fn catalog_content_contract() -> TestResult {
+    let expected: [[u8; 32]; 8] = [
+        [
+            141, 121, 148, 19, 109, 17, 178, 3, 54, 140, 176, 87, 201, 43, 252, 250, 31, 30, 39,
+            57, 127, 29, 63, 195, 91, 148, 168, 168, 148, 241, 106, 231,
+        ],
+        [
+            118, 12, 125, 97, 149, 64, 175, 65, 28, 249, 177, 146, 238, 122, 77, 160, 24, 62, 170,
+            15, 62, 184, 14, 77, 10, 135, 20, 192, 35, 34, 170, 163,
+        ],
+        [
+            196, 126, 9, 143, 225, 198, 211, 144, 152, 8, 189, 1, 133, 132, 123, 199, 111, 136, 17,
+            70, 200, 39, 110, 243, 104, 93, 65, 233, 60, 190, 134, 98,
+        ],
+        [
+            18, 189, 79, 203, 160, 230, 14, 167, 131, 78, 127, 11, 108, 104, 230, 218, 17, 215,
+            167, 100, 57, 254, 34, 180, 72, 107, 149, 98, 54, 149, 56, 82,
+        ],
+        [
+            33, 190, 57, 8, 21, 202, 134, 139, 171, 45, 227, 226, 16, 177, 111, 19, 147, 255, 173,
+            214, 70, 250, 222, 231, 37, 141, 234, 15, 118, 211, 55, 117,
+        ],
+        [
+            187, 150, 127, 202, 137, 11, 81, 255, 180, 176, 144, 17, 97, 27, 2, 233, 23, 30, 151,
+            77, 90, 94, 169, 94, 65, 125, 123, 49, 143, 154, 119, 234,
+        ],
+        [
+            163, 227, 194, 223, 215, 16, 133, 248, 185, 97, 72, 117, 78, 221, 174, 9, 83, 221, 173,
+            92, 19, 38, 152, 199, 184, 28, 207, 85, 40, 124, 230, 222,
+        ],
+        [
+            82, 160, 160, 223, 52, 84, 164, 45, 51, 222, 83, 62, 31, 197, 89, 206, 251, 139, 251,
+            191, 216, 92, 183, 179, 12, 94, 67, 87, 204, 4, 61, 155,
+        ],
+    ];
+    use std::hash::Hash as _;
+
+    use araphor_data::AnalysisExtractLimits;
+    use datafusion::common::ScalarValue;
+
+    for enabled in 0..8u8 {
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        if enabled & 1 != 0 {
+            store.register_discovery_owner();
+        }
+        if enabled & 2 != 0 {
+            store.enable_graph_owner()?;
+        }
+        if enabled & 4 != 0 {
+            store.enable_notification_owner()?;
+        }
+        let capacity = 2 * 1024 * 1024;
+        let memory = crate::memory::Memory::new(capacity, 1024);
+        let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+        let source = SourceSnapshot::new(
+            store,
+            AnalysisSelectionV1::tenant([1; 16]),
+            None,
+            AnalysisExtractLimits {
+                input_bytes: capacity,
+                ..Default::default()
+            },
+            control.within(control.remaining()?)?,
+            Duration::from_secs(30),
+            1,
+            Arc::clone(&memory),
+        );
+        let schemas = SourceSnapshot::schemas();
+        let schema = schemas.get("catalog").ok_or("catalog schema")?;
+        let indices = (0..schema.fields().len()).collect::<Vec<_>>();
+        let captured = source.read(
+            &BTreeMap::from([("catalog".into(), Some(indices.iter().copied().collect()))]),
+            None,
+            super::ReadMode::Snapshot,
+            &control,
+        )?;
+        let batches = captured.project(
+            &super::SourceOrigin::Durable("catalog".into()),
+            &indices,
+            schema,
+        )?;
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        assert_eq!(batch.schema(), *schema);
+        assert_eq!(
+            batch.num_rows(),
+            schemas
+                .values()
+                .map(|schema| schema.fields().len())
+                .sum::<usize>()
+        );
+        let mut hash = crate::stream::physical::Fingerprint::new();
+        schema.hash(&mut hash);
+        batch.num_rows().hash(&mut hash);
+        for row in 0..batch.num_rows() {
+            for column in batch.columns() {
+                ScalarValue::try_from_array(column, row)?.hash(&mut hash);
+            }
+        }
+        let digest = hash.finish_digest();
+        assert_eq!(
+            digest,
+            expected[usize::from(enabled)],
+            "feature mask {enabled}"
+        );
+        let borrowed = Arc::clone(batch.column(2));
+        drop(batches);
+        drop(captured);
+        assert!(memory.reserve_input(capacity).is_err());
+        assert_eq!(
+            borrowed.len(),
+            schemas
+                .values()
+                .map(|schema| schema.fields().len())
+                .sum::<usize>()
+        );
+        drop(borrowed);
+        drop(memory.reserve_input(capacity)?);
+    }
     Ok(())
 }
 

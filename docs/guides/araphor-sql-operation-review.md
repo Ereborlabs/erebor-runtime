@@ -527,6 +527,40 @@ trace measurement fanout. If trace_output is not requested, measurement
 extraction continues. Projection, JSON preparation, complete-row validation,
 and native builder admission keep their existing code.
 
+The catalog uses Data's existing Capture and Table owners. One catalog field
+declaration supplies native fields, size measurement, and row append. The
+separate Query catalog builder and its byte estimator are deleted.
+
+[Capture::finish](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) completes a Data read with a requested catalog scan
+  -> [Capture::metadata](../../crates/araphor-data/src/analysis/extraction/tables/metadata.rs) uses the canonical schemas and captured availability flags
+  -> [catalog_size](../../crates/araphor-data/src/analysis/extraction/tables/metadata.rs) measures the requested fields without payload allocation
+  -> [Table::reserve](../../crates/araphor-data/src/analysis/extraction/tables/builder.rs) charges native array capacity before it allocates the builders
+  -> [catalog_row](../../crates/araphor-data/src/analysis/extraction/tables/metadata.rs) appends the catalog through the same field declaration
+  -> [Capture::finish](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) returns the completed batch and existing read receipt
+  -> [SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) checks the native schema and claims the returned arrays
+
+[Table::reserve](../../crates/araphor-data/src/analysis/extraction/tables/builder.rs) rejects capacity or cancellation
+  -> [Capture::metadata](../../crates/araphor-data/src/analysis/extraction/tables/metadata.rs) returns the error before catalog append
+  -> [AnalysisStore::read_tables](../../crates/araphor-data/src/analysis/extraction.rs) returns no completed page
+  -> [SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) returns no source batch for execution
+
+The private Display field measures native UTF-8 output before it writes into
+the admitted StringBuilder. An omitted field is not formatted. The catalog
+retains one batch, including the row count of a zero-column scan. This batch
+preserves the existing detector contract when max_batches is one. A catalog
+reference with no physical scan creates no catalog table.
+
+The [builder cases](../../crates/araphor-data/src/analysis/extraction/tables/tests.rs)
+check atomic capacity denial, cancellation, omitted formatting, and exact
+Boolean buffer capacity for 600 rows. The
+[native catalog cases](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs)
+check values, availability, projection, and zero-column rows. The
+[Query source cases](../../crates/araphor-query/src/sources/rows/tests.rs)
+check fixed content hashes for all eight availability states and borrowed
+buffer charges. The [catalog_keeps_batch_limit case](../../crates/araphor-query/src/inputs/tests.rs)
+checks 100 exact ordinal values in one batch, unchanged input identity after
+an unrelated commit, source receipts, and final buffer release.
+
 The [schema_contract and declared_row_admission cases](../../crates/araphor-data/src/analysis/extraction/tables/tests.rs)
 check all nineteen schemas against hashes captured from the public API before
 this change. The hashes include field order, types, nullability, and all
@@ -983,6 +1017,27 @@ The current source reading route is:
 - [Model tests](../../crates/araphor-analysis/src/model/tests.rs) and [package lifecycle tests](../../crates/araphor-analysis/src/package/tests/lifecycle.rs): checkpoints, parameters, evidence, source bounds, retries, and installed revisions.
 - [Interruption tests](../../crates/araphor-analysis/src/package/tests/interruption.rs): authority change, cancellation, stop before commit, Busy, and preservation of committed state.
 - [Control tests](../../crates/mithril-control/src/client_grpc/tests.rs) and [follow E2E cases](../../crates/mithril-e2e/src/discovery/query_follow.rs): actual protocol frames and native subscription behavior across owners.
+
+### Catalog capture verification
+
+The shared catalog capture and selected host checks are **Done**. The checks
+pass 307 distinct cases: 60 Data, 182 Query, 29 Analysis model, 34 Control
+client, and two E2E contracts. The existing Data release-history case stays
+ignored. Fixed hashes cover all eight availability states before and after
+the production change. The detector case retains LIMIT 100 and max_batches
+set to one. Strict Clippy passes for all five crates and their test targets.
+Its first run rejects panic in the new formatting test. Only that function
+changes to a call counter and an assertion. The corrected test passes; all
+production source and other tests stay fixed. Scoped formatting and local
+document links pass. The record is
+`/tmp/araphor-catalog-capture-qualification1.json`.
+
+The slice removes 165 nonblank production Rust lines. The complete redesign
+adds 667 from 7b7b407a and needs another 6,667 net deletions. The count record
+is `/tmp/araphor-catalog-capture-count1.json`. The complete redesign remains
+**Not done**. Full workspace CI, benchmarks, physical Kubernetes qualification,
+and unchanged native/Wasm backend suites are not run. These checks cover Linux
+x86_64 with the checked native artifacts. No speed improvement is claimed.
 
 ### Subscription runtime verification
 

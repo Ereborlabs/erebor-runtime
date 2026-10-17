@@ -193,7 +193,8 @@ Canonical schemas now belong to Data. Schema relocation gives no deletion
 credit. Evidence, context, graph, discovery, notification, and trace decoders
 remain necessary for their retained formats and validation rules. Native
 typed Arrow builders replace scalar conversion. No parser or expression
-evaluator is added. Query builds its own catalog arrays from native schemas.
+evaluator is added. At that recorded source state, Query builds its own catalog
+arrays from native schemas. The current catalog uses Data's shared builder.
 
 The read keeps complete, page, change, and metadata behavior. Metadata mode
 skips raw payloads and package IPC. Package outputs and their provenance use
@@ -457,8 +458,9 @@ source field once in the existing table_row macro. The item form creates the
 native Arrow fields and the actual Capture append method from that declaration.
 The separate schema field lists are deleted. The metadata decoration and the
 shared native schema map remain. Context versions share nine fields with
-context. Graph declarations share six fields. Catalog retains its eleven
-schema-only fields. No row object, provider, or runtime registry is added.
+context. Graph declarations share six fields. At that recorded source state,
+catalog retains its eleven schema-only fields. Its current declaration also
+supplies row values. No row object, provider, or runtime registry is added.
 
 Data decodes a retained record
   -> the Capture declaration supplies ordered field values and native schema fields
@@ -628,6 +630,52 @@ net production deletions are required. General maintained SQL, shared
 maintained query ownership, the complete redesign, and the required reduction
 remain **Not done**. Full workspace CI and benchmarks are not run, as
 instructed. No speed improvement is claimed.
+
+### Shared catalog table capture
+
+Implementation and selected host verification: **Done**. Data's
+[Capture::metadata](../../crates/araphor-data/src/analysis/extraction/tables/metadata.rs)
+creates catalog rows through the existing
+[Table](../../crates/araphor-data/src/analysis/extraction/tables/builder.rs).
+One field declaration supplies native fields, size measurement, and row append.
+Query's separate catalog byte estimator and Arrow builder are deleted.
+
+Data completes a read with a requested catalog scan
+  -> the canonical schemas and captured availability flags supply the catalog values
+  -> the shared field declaration measures only the requested columns
+  -> Table charges array capacity before it allocates native builders
+  -> the shared declaration appends one complete catalog batch
+  -> Query checks native schemas, retains the read receipt, and claims the arrays
+  -> DataFusion consumes those arrays through the existing native source plan
+
+The catalog keeps one batch, including zero-column row counts. The detector
+input with LIMIT 100 still succeeds with max_batches set to one. Omitted
+columns do not format values. Native schema metadata, readiness text, row
+order, source receipts, input limits, and borrowed-buffer charges remain.
+Data still supplies retained-format decoding; DataFusion owns every SQL stage.
+The [review route](../guides/araphor-sql-operation-review.md#current-table-and-query-input-flow)
+links the actual owners and failure paths.
+
+The selected checks pass 307 distinct Rust cases: 60 Data, 182 Query, 29
+Analysis model, 34 Control client, and two E2E contracts. The existing Data
+release-history case remains ignored. Eight fixed catalog content hashes and
+the one-batch detector case pass before and after the production change.
+New cases check atomic reservation, cancellation, omitted formatting, and
+600-row Boolean buffer capacity. Strict Clippy passes for all five crates
+and their test targets. Its first run rejects panic in the new formatting
+test. Only that test function changes to a call counter and an assertion.
+The corrected case and Clippy pass; production and all other tests stay fixed.
+Scoped formatting and local document links pass. The exact records are
+`/tmp/araphor-catalog-capture-qualification1.json` and
+`/tmp/araphor-catalog-capture-count1.json`.
+
+This change removes 165 nonblank production Rust lines and adds 557 test
+lines. The complete redesign adds 667 production lines from 7b7b407a.
+Another 6,667 net production deletions are required. The complete redesign,
+general maintained SQL, shared maintained query ownership, and the required
+reduction remain **Not done**. Full workspace CI and benchmarks are not run,
+as instructed. These host checks cover Linux x86_64 with the checked native
+artifacts. No speed improvement is claimed.
 
 ## Intended end state
 

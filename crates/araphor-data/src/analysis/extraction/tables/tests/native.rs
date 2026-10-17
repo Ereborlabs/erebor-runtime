@@ -733,3 +733,148 @@ fn trace_recipe_measurement_fields() -> TestResult {
     assert!(foreign.extraction.trace_reads().is_empty());
     Ok(())
 }
+
+#[test]
+fn catalog_values_match_schemas() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("data"))?;
+    let selection = AnalysisSelectionV1::tenant([1; 16]);
+    let schemas = AnalysisStore::table_schemas();
+    let canonical = &schemas["catalog"];
+    for enabled in [false, true] {
+        if enabled {
+            store.register_discovery_owner();
+            store.enable_graph_owner()?;
+            store.enable_notification_owner()?;
+        }
+        let page = read(&store, &selection, &["catalog"], 1)?;
+        let batches = &page.tables["catalog"];
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        assert_eq!(batch.schema_ref(), canonical);
+        assert!(batch
+            .columns()
+            .iter()
+            .all(|column| column.null_count() == 0));
+        let mut row = 0;
+        for (relation, schema) in schemas {
+            let readiness = match relation.as_str() {
+                "behaviors"
+                | "findings"
+                | "relationships"
+                | "graph_subjects"
+                | "graph_branches"
+                | "correlation_packages"
+                | "policy_observations"
+                | "graph_manifest"
+                | "notifications" => {
+                    if enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                }
+                _ => "available",
+            };
+            for (ordinal, field) in schema.fields().iter().enumerate() {
+                assert_eq!(
+                    column::<StringArray>(batch, "relation")?.value(row),
+                    relation
+                );
+                assert_eq!(
+                    column::<UInt32Array>(batch, "ordinal")?.value(row),
+                    ordinal as u32
+                );
+                assert_eq!(
+                    column::<StringArray>(batch, "column_name")?.value(row),
+                    field.name()
+                );
+                assert_eq!(
+                    column::<StringArray>(batch, "data_type")?.value(row),
+                    field.data_type().to_string()
+                );
+                assert_eq!(
+                    column::<BooleanArray>(batch, "nullable")?.value(row),
+                    field.is_nullable()
+                );
+                assert_eq!(
+                    column::<StringArray>(batch, "readiness")?.value(row),
+                    readiness
+                );
+                for (name, key, default) in [
+                    ("units", "araphor.units", ""),
+                    ("null_meaning", "araphor.null_meaning", ""),
+                    ("join_keys", "araphor.join_keys", ""),
+                    ("owner", "araphor.owner", "araphor-data.AnalysisStore"),
+                    ("description", "araphor.description", ""),
+                ] {
+                    assert_eq!(
+                        column::<StringArray>(batch, name)?.value(row),
+                        field.metadata().get(key).map_or(default, String::as_str)
+                    );
+                }
+                row += 1;
+            }
+        }
+        assert_eq!(batch.num_rows(), row);
+        assert_eq!(page.extraction.discovery_enabled, enabled);
+        assert_eq!(page.extraction.graph_enabled, enabled);
+        assert_eq!(page.extraction.notification_enabled, enabled);
+    }
+    Ok(())
+}
+
+#[test]
+fn catalog_projection_keeps_rows() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("data"))?;
+    let selection = AnalysisSelectionV1::tenant([1; 16]);
+    let schemas = AnalysisStore::table_schemas();
+    let expected = schemas
+        .values()
+        .map(|schema| schema.fields().len())
+        .sum::<usize>();
+    let ordinal = schemas["catalog"].index_of("ordinal")?;
+    for projected in [
+        None,
+        Some(Default::default()),
+        Some([ordinal].into_iter().collect()),
+    ] {
+        let requests = BTreeMap::from([("catalog".to_owned(), projected.clone())]);
+        let page = store.read_tables(
+            &selection,
+            AnalysisTableRead {
+                requests: &requests,
+                event_ranges: None,
+                inputs: None,
+                mode: AnalysisReadModeV1::Metadata,
+                now: 1,
+            },
+            AnalysisExtractLimits {
+                input_bytes: 16 * 1024,
+                page_rows: 1,
+                page_bytes: 1,
+                ..Default::default()
+            },
+            &AnalysisReadControl::default(),
+        )?;
+        let Some(indices) = projected else {
+            assert!(!page.tables.contains_key("catalog"));
+            assert_eq!(page.extraction.projected_bytes, 0);
+            continue;
+        };
+        let batches = &page.tables["catalog"];
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), expected);
+        assert_eq!(batches[0].num_columns(), indices.len());
+        assert_eq!(
+            page.extraction.projected_bytes,
+            5 * expected * indices.len()
+        );
+        assert_eq!(
+            batches[0].schema(),
+            Arc::new(schemas["catalog"].project(&indices.into_iter().collect::<Vec<_>>())?)
+        );
+    }
+    Ok(())
+}

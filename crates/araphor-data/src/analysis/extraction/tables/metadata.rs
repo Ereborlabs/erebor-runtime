@@ -26,6 +26,11 @@ impl Capture<'_> {
                 });
             }
         }
+        let enabled = (
+            extraction.discovery_enabled,
+            extraction.graph_enabled,
+            extraction.notification_enabled,
+        );
         let sources = std::mem::take(&mut extraction.sources);
         let traversal = extraction
             .graph_traversal()
@@ -110,8 +115,59 @@ impl Capture<'_> {
         {
             table.traversal(max_hops, boundary, &mut budget)?;
         }
+        if self.read.projected("catalog").is_some() {
+            for (relation, schema) in Self::schemas() {
+                for (ordinal, field) in schema.fields().iter().enumerate() {
+                    self.catalog_size(relation, ordinal, field, enabled, &mut budget)?;
+                }
+            }
+            self.tables
+                .get_mut("catalog")
+                .ok_or_else(|| invalid("the catalog builder is absent"))?
+                .reserve(&mut budget)?;
+            for (relation, schema) in Self::schemas() {
+                for (ordinal, field) in schema.fields().iter().enumerate() {
+                    self.catalog_row(relation, ordinal, field, enabled, &mut budget)?;
+                }
+            }
+        }
         extraction.sources = sources;
         Ok(())
+    }
+
+    table_row! {
+        pub(super) fn catalog_row(
+            &mut self,
+            relation: &str,
+            ordinal: usize,
+            field: &sdk::Field,
+            enabled: (bool, bool, bool),
+            budget: &mut ReadBudget<'_>,
+        );
+        schema catalog_fields;
+        measure catalog_size;
+        row(self, "catalog", budget);
+        setup {
+            let metadata = field.metadata();
+        }
+        fields {
+            relation => Utf8(false):Some(relation),
+            ordinal => UInt32(false):Some(u32::try_from(ordinal).map_err(|_|overflow())?),
+            column_name => Utf8(false):Some(field.name()),
+            data_type => Display(false):Some(field.data_type()),
+            units => Utf8(false):Some(metadata.get("araphor.units").map_or("",String::as_str)),
+            nullable => Boolean(false):Some(field.is_nullable()),
+            null_meaning => Utf8(false):Some(metadata.get("araphor.null_meaning").map_or("",String::as_str)),
+            join_keys => Utf8(false):Some(metadata.get("araphor.join_keys").map_or("",String::as_str)),
+            owner => Utf8(false):Some(metadata.get("araphor.owner").map_or("araphor-data.AnalysisStore",String::as_str)),
+            readiness => Utf8(false):Some(match relation {
+                "behaviors"=>if enabled.0 {"enabled"} else {"disabled"},
+                "findings"|"relationships"|"graph_subjects"|"graph_branches"|"correlation_packages"|"policy_observations"|"graph_manifest"=>if enabled.1 {"enabled"} else {"disabled"},
+                "notifications"=>if enabled.2 {"enabled"} else {"disabled"},
+                _=>"available",
+            }),
+            description => Utf8(false):Some(metadata.get("araphor.description").map_or("",String::as_str)),
+        }
     }
 
     table_row! {

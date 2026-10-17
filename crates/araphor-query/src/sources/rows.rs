@@ -15,7 +15,6 @@ use datafusion::logical_expr::interval_arithmetic::Interval;
 
 use super::{ReadMode, SourceOrigin, SourceSnapshot};
 
-mod metadata;
 mod package;
 
 #[cfg(test)]
@@ -368,7 +367,6 @@ impl SourceSnapshot {
                 control,
             )
             .map_err(data_error)?;
-        Self::catalog(requests, &mut page, limits.input_bytes, control).map_err(data_error)?;
         let overflow = || {
             data_error(araphor_data::Error::AnalysisInputTooLarge {
                 resource: "selected input bytes",

@@ -412,6 +412,26 @@ The change adds 32 nonblank production Rust lines. The complete change adds
 shared maintained query ownership, and complete redesign: **Not done**.
 Full workspace CI and benchmarks are not run, as instructed.
 
+### Shared catalog table capture
+
+Implementation and selected host verification: **Done**. Data's existing
+Capture and Table owners now produce catalog Arrow rows. One field declaration
+supplies native fields, projected size measurement, and row append. Query's
+separate byte estimator and catalog builder are deleted. The catalog retains
+one batch, fixed values, zero-column row counts, receipts, and buffer charges.
+
+The checks pass 307 distinct cases: 60 Data, 182 Query, 29 Analysis model,
+34 Control client, and two E2E contracts. One existing Data history case stays
+ignored. Strict Clippy passes for all five crates and their test targets.
+One new test replaces prohibited panic with a call counter and an assertion;
+the corrected test passes. Formatting and local document links pass.
+The slice removes 165 nonblank production Rust lines and adds 557 test lines.
+The complete redesign adds 667 production lines from 7b7b407a; another 6,667
+net deletions remain. The records are
+`/tmp/araphor-catalog-capture-qualification1.json` and
+`/tmp/araphor-catalog-capture-count1.json`. Complete redesign: **Not done**.
+Full workspace CI and benchmarks are not run. No speed improvement is claimed.
+
 ## Implementation flow
 
 An owner starts or recovers

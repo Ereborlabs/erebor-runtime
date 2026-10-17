@@ -971,3 +971,119 @@ fn inherited_witness_expiry_wins() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn catalog_keeps_batch_limit() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.event(1, 1_000)?;
+    let mut declared = model(vec![sdk::InputPort {
+        port: port("columns", vec![("ordinal", sdk::DataType::UInt32)]),
+        source: sdk::InputSource::Query("SELECT ordinal FROM catalog LIMIT 100".into()),
+    }]);
+    declared.limits.max_rows = 100;
+    declared.limits.max_batches = 1;
+    let definition = Arc::new(Inputs::admit(&fixture.engine, &declared)?);
+    assert_eq!(
+        definition
+            .sources
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["catalog"],
+    );
+    let cut = fixture.read(&definition)?;
+    assert_eq!(cut.now, NOW);
+    assert_eq!(cut.inputs.len(), 1);
+    let input = &cut.inputs[0];
+    assert_eq!(input.data.name, "columns");
+    assert_eq!(input.data.batches.len(), 1);
+    assert_eq!(input.data.batches[0].num_rows(), 100);
+    let expected = crate::sources::SourceSnapshot::schemas()
+        .values()
+        .flat_map(|schema| 0..schema.fields().len())
+        .take(100)
+        .map(|ordinal| vec![ScalarValue::UInt32(Some(ordinal as u32))])
+        .collect::<Vec<_>>();
+    assert_eq!(values(input)?, expected);
+    assert_eq!(
+        input.data.batches[0].schema().as_ref(),
+        &declared.inputs[0].port.schema
+    );
+    assert_eq!(input.revision.owner, "araphor-query.Inputs");
+    assert!(!input.revision.id.is_empty());
+    assert!(input.revision.window.is_none());
+    assert!(input
+        .coverage
+        .limits
+        .iter()
+        .any(|limit| limit == "NO_SOURCE_COVERAGE"));
+    let revision = input.revision.clone();
+    let snapshot = cut.snapshot.as_ref().ok_or("catalog source snapshot")?;
+    assert_eq!(snapshot.page.extraction.meta, fixture.store.meta()?);
+    assert!(snapshot.page.extraction.sources.is_empty());
+    assert!(snapshot.witnesses.is_empty());
+    assert_eq!(cut.contexts().count(), 0);
+    assert_eq!(cut.dependencies().count(), 0);
+    let read_revision = snapshot.page.extraction.meta.commit_revision;
+    drop(
+        fixture
+            .engine
+            .reserve_evaluation(fixture.source.tenant_id)?,
+    );
+
+    let borrowed = Arc::clone(input.data.batches[0].column(0));
+    drop(cut);
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity)
+        .is_err());
+    drop(
+        fixture
+            .engine
+            .memory()
+            .reserve_output(fixture.engine.limits().output_capacity)?,
+    );
+    assert_eq!(
+        ScalarValue::try_from_array(&borrowed, 0)?,
+        ScalarValue::UInt32(Some(0))
+    );
+    drop(borrowed);
+    drop(
+        fixture
+            .engine
+            .memory()
+            .reserve_input(fixture.engine.limits().input_capacity)?,
+    );
+
+    fixture.event(2, 2_000)?;
+    let later = fixture.read(&definition)?;
+    assert_eq!(later.inputs[0].revision, revision);
+    assert_eq!(later.inputs[0].data.batches.len(), 1);
+    assert_eq!(later.inputs[0].data.batches[0].num_rows(), 100);
+    assert!(
+        later
+            .snapshot
+            .as_ref()
+            .ok_or("later catalog snapshot")?
+            .page
+            .extraction
+            .meta
+            .commit_revision
+            > read_revision
+    );
+    assert!(later.witnesses().next().is_none());
+    drop(later);
+    drop(
+        fixture
+            .engine
+            .reserve_evaluation(fixture.source.tenant_id)?,
+    );
+    drop(
+        fixture
+            .engine
+            .memory()
+            .reserve_input(fixture.engine.limits().input_capacity)?,
+    );
+    Ok(())
+}

@@ -437,3 +437,186 @@ fn mapping_keeps_native_projection_order() -> TestResult {
     assert_eq!(cursors.values().as_ref(), &[1, 2]);
     Ok(())
 }
+
+#[test]
+fn catalog_preflight_is_atomic() -> TestResult {
+    let (mut output, control) = extraction()?;
+    let columns = columns("catalog", &["relation", "ordinal", "data_type", "nullable"])?;
+    let read = AnalysisTableRead {
+        requests: &columns,
+        event_ranges: None,
+        inputs: None,
+        mode: AnalysisReadModeV1::Metadata,
+        now: 1,
+    };
+    let scope = AnalysisSelectionV1::tenant([1; 16]);
+    let mut capture = Capture::new(&read, &scope);
+    for (relation, schema) in Capture::schemas() {
+        for (ordinal, field) in schema.fields().iter().enumerate() {
+            capture.catalog_size(
+                relation,
+                ordinal,
+                field,
+                (false, false, false),
+                &mut output.sink(&control),
+            )?;
+        }
+    }
+    let original_limit = output.limits.input_bytes;
+    output.limits.input_bytes = output.input_bytes;
+    let table = capture.tables.get_mut("catalog").ok_or("catalog table")?;
+    assert!(matches!(
+        table.reserve(&mut output.sink(&control)),
+        Err(crate::Error::AnalysisInputTooLarge {
+            resource: "selected input bytes",
+            ..
+        })
+    ));
+    assert_eq!(table.total_rows, 0);
+    assert!(table.batches.is_empty());
+    assert_eq!(output.projected_bytes, 0);
+    output.limits.input_bytes = original_limit;
+    let cancelled = AnalysisReadControl::default();
+    cancelled.cancel()?;
+    assert!(matches!(
+        table.reserve(&mut output.sink(&cancelled)),
+        Err(crate::Error::AnalysisReadCancelled { .. })
+    ));
+    assert_eq!(table.total_rows, 0);
+    assert!(table.batches.is_empty());
+    table.reserve(&mut output.sink(&control))?;
+    let mut expected = 0;
+    for (relation, schema) in Capture::schemas() {
+        for (ordinal, field) in schema.fields().iter().enumerate() {
+            capture.catalog_row(
+                relation,
+                ordinal,
+                field,
+                (false, false, false),
+                &mut output.sink(&control),
+            )?;
+            expected += 1;
+        }
+    }
+    let table = capture.tables.get_mut("catalog").ok_or("catalog table")?;
+    table.finish(&mut output.sink(&control))?;
+    assert_eq!(table.batches.len(), 1);
+    assert_eq!(table.batches[0].num_rows(), expected);
+    Ok(())
+}
+
+#[test]
+fn omitted_display_is_unevaluated() -> TestResult {
+    struct RefuseDisplay(std::cell::Cell<bool>);
+    impl std::fmt::Display for RefuseDisplay {
+        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.set(true);
+            Err(std::fmt::Error)
+        }
+    }
+    let (mut output, control) = extraction()?;
+    let columns = columns("catalog", &["ordinal"])?;
+    let read = AnalysisTableRead {
+        requests: &columns,
+        event_ranges: None,
+        inputs: None,
+        mode: AnalysisReadModeV1::Metadata,
+        now: 1,
+    };
+    let scope = AnalysisSelectionV1::tenant([1; 16]);
+    let mut capture = Capture::new(&read, &scope);
+    let mut budget = output.sink(&control);
+    let display = RefuseDisplay(std::cell::Cell::new(false));
+    assert!(table_row!(&mut capture, "catalog", &mut budget;
+        ordinal=>UInt32:Some(0), data_type=>Display:Some(&display)
+    )?);
+    assert!(!display.0.get());
+    Ok(())
+}
+
+#[test]
+fn bulk_boolean_reservation() -> TestResult {
+    use std::mem::size_of;
+
+    use sdk::arrow_array::{builder::BooleanBuilder, Array, ArrayRef, BooleanArray, RecordBatch};
+
+    let (mut output, control) = extraction()?;
+    let schema = Arc::new(sdk::Schema::new(vec![
+        sdk::Field::new("value", sdk::DataType::Boolean, false),
+        sdk::Field::new("optional", sdk::DataType::Boolean, true),
+    ]));
+    let mut table = Table::new(
+        Arc::clone(&schema),
+        &["value", "optional"],
+        &mut output.sink(&control),
+    )?;
+    for row in 0..600usize {
+        table.cell(0, &sdk::DataType::Boolean, false, 0)?;
+        table.cell(1, &sdk::DataType::Boolean, row.is_multiple_of(3), 0)?;
+        table.measure()?;
+    }
+    let bitmap = BooleanBuilder::with_capacity(600).capacity() / 8;
+    assert_eq!(bitmap, 128);
+    let charge = size_of::<RecordBatch>() + 2 * (size_of::<ArrayRef>() + 512) + 3 * bitmap;
+    let before = output.input_bytes;
+    let original_limit = output.limits.input_bytes;
+    output.limits.input_bytes = before + charge - 1;
+    assert!(matches!(
+        table.reserve(&mut output.sink(&control)),
+        Err(crate::Error::AnalysisInputTooLarge {
+            resource: "selected input bytes",
+            ..
+        })
+    ));
+    assert_eq!(output.input_bytes, before);
+    assert_eq!(table.total_rows, 0);
+    assert!(table.batches.is_empty());
+    output.limits.input_bytes += 1;
+    table.reserve(&mut output.sink(&control))?;
+    assert_eq!(output.input_bytes - before, charge);
+    output.limits.input_bytes = original_limit;
+    let before = output.input_bytes;
+    for row in 0..600usize {
+        table.cell(0, &sdk::DataType::Boolean, false, 0)?;
+        table.cell(1, &sdk::DataType::Boolean, row.is_multiple_of(3), 0)?;
+        let mut budget = output.sink(&control);
+        assert!(table.admit(&mut budget, 4)?);
+        table
+            .builder::<BooleanBuilder>(0)?
+            .append_value(row.is_multiple_of(2));
+        table
+            .builder::<BooleanBuilder>(1)?
+            .append_option((!row.is_multiple_of(3)).then_some(row.is_multiple_of(5)));
+        table.appended(&mut budget, 4);
+    }
+    assert_eq!(output.input_bytes, before);
+    assert_eq!(output.projected_bytes, 2400);
+    table.finish(&mut output.sink(&control))?;
+    assert_eq!(table.total_rows, 600);
+    assert_eq!(table.batches.len(), 1);
+    let batch = &table.batches[0];
+    assert_eq!(batch.num_rows(), 600);
+    assert_eq!(batch.schema(), schema);
+    let values = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or("Boolean values")?;
+    let optional = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or("nullable Boolean values")?;
+    assert_eq!(values.null_count(), 0);
+    assert_eq!(optional.null_count(), 200);
+    assert_eq!(values.get_buffer_memory_size(), bitmap);
+    assert_eq!(optional.get_buffer_memory_size(), 2 * bitmap);
+    for row in 0..600usize {
+        assert_eq!(values.value(row), row.is_multiple_of(2));
+        assert_eq!(optional.is_null(row), row.is_multiple_of(3));
+        if !row.is_multiple_of(3) {
+            assert_eq!(optional.value(row), row.is_multiple_of(5));
+        }
+    }
+    Ok(())
+}
