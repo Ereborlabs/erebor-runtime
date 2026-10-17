@@ -32,7 +32,7 @@ use datafusion::physical_plan::{
     execute_stream, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
 use datafusion::{functions, functions_aggregate, functions_window};
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt as _, TryStreamExt};
 use snafu::ResultExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -461,7 +461,7 @@ impl Engine {
         })
     }
 
-    pub(crate) fn wait<T: Send + 'static>(
+    pub fn wait<T: Send + 'static>(
         &self,
         future: impl Future<Output = Result<T>> + Send + 'static,
     ) -> Result<T> {
@@ -601,42 +601,50 @@ impl Session {
         self.collect(plan, sources, Retention::Input)
     }
 
-    /// Execute an admitted local plan. Durable source tables have no binding.
-    pub fn execute_local(&self, plan: Arc<LogicalPlan>) -> Result<Vec<RecordBatch>> {
-        let engine = Arc::clone(&self.engine);
-        let session = self.clone();
-        engine.wait(async move {
-            session.control.check()?;
-            let permit = Arc::new(
-                session
-                    .engine
-                    .reserve_evaluation(session.selection.tenant_id)?,
-            );
-            let reservation = session
-                .memory
-                .prepare_output(session.output_bytes)
-                .context(SqlSnafu)?;
-            let state = session.state()?;
-            let physical = session.physical(&plan, &state).await?;
-            let control = Arc::new(
-                session
-                    .control
-                    .within(session.engine.limits.evaluate_timeout)?,
-            );
-            let stream = execute_stream(physical, state.task_ctx()).context(SqlSnafu)?;
-            session
-                .bounded(
-                    stream,
-                    permit,
-                    control,
-                    reservation,
-                    Retention::Output,
-                    None,
-                )
-                .try_collect()
-                .await
-                .context(SqlSnafu)
-        })
+    pub async fn stream_local(
+        &self,
+        plan: &LogicalPlan,
+        permit: Arc<Permit>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.control.check()?;
+        if !Arc::ptr_eq(permit._global.semaphore(), &self.engine.evaluations)
+            || !Arc::ptr_eq(
+                permit._local.semaphore(),
+                &self.engine.tenant(self.selection.tenant_id)?.evaluations,
+            )
+        {
+            return InvalidSnafu {
+                field: "evaluation permit",
+            }
+            .fail();
+        }
+        let reservation = Arc::new(
+            self.memory
+                .prepare_output(self.output_bytes)
+                .context(SqlSnafu)?,
+        );
+        let unspent = Arc::downgrade(&reservation);
+        let state = self.state()?;
+        let physical = self.physical(plan, &state).await?;
+        let control = Arc::new(self.control.within(self.engine.limits.evaluate_timeout)?);
+        let stream = execute_stream(physical, state.task_ctx()).context(SqlSnafu)?;
+        let schema = stream.schema();
+        let stream = self
+            .bounded(
+                stream,
+                permit,
+                control,
+                reservation,
+                Retention::Output,
+                None,
+            )
+            .map(move |item| {
+                if let Some(reservation) = unspent.upgrade() {
+                    reservation.free();
+                }
+                item
+            });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
     fn collect(

@@ -677,6 +677,61 @@ reduction remain **Not done**. Full workspace CI and benchmarks are not run,
 as instructed. These host checks cover Linux x86_64 with the checked native
 artifacts. No speed improvement is claimed.
 
+### Complete SQL model program
+
+Implementation and selected host verification: **Done**. Each SQL model
+program runs in one existing
+[Engine::wait](../../crates/araphor-query/src/execution.rs) future. Earlier
+qualification records remain attached to their recorded source.
+
+[AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs) selects the exact installed SQL export
+  -> [AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs) moves its bundle Arc, export index, evaluation, retained input set, and child control into the future
+  -> [ModelRun::evaluate](../../crates/araphor-analysis/src/model/execute.rs) awaits current trace-read checks and validates the SDK evaluation
+  -> [ModelRun::new](../../crates/araphor-analysis/src/model/operation.rs) creates the complete Session, shared evaluation permit, and output reservation
+  -> [Session::stream_local](../../crates/araphor-query/src/execution.rs) executes each admitted output, checkpoint, evidence, and reason plan in stage order
+  -> [ModelRun::query](../../crates/araphor-analysis/src/model/execute.rs) reserves conversion growth and normalizes each native batch before the next poll
+  -> [ModelRun::evaluate](../../crates/araphor-analysis/src/model/execute.rs) checks complete output, control, and current trace-read authority
+  -> [SqlModelOutputV1::retain](../../crates/araphor-analysis/src/model.rs) retains the output metadata and buffer claims for the caller
+
+The per-stage synchronous dispatch and raw result vector are deleted. Native
+local streams share the run's permit. Each stream releases unused output
+prepayment before Analysis reserves conversion memory. Normalized output
+batches remain available for row references and output tables. The SQL future
+borrows the descriptor and admitted program from its owned bundle. Native and
+Wasm invocation remain synchronous under their existing guards.
+
+[SqlDatasetOutputV1::query](../../crates/araphor-analysis/src/model/datasets.rs)
+keeps the checked synchronous dataset-only API. The
+[SDK metadata owner](../../crates/araphor-analysis-sdk/src/evaluation.rs) replaces
+the separate input and dataset-result metadata estimators. Its schema headers,
+fields, and metadata-map capacity raise the retained metadata floor. Native
+buffer claims retain their separate allocation charges.
+
+The [review route](../guides/araphor-sql-operation-review.md#execution-and-verification)
+links the current source and regression cases. The complete redesign and the
+required production reduction remain **Not done**. No performance result is
+claimed.
+
+
+The selected checks pass 298 distinct cases: 13 SDK, 186 Query, 94 Analysis,
+two Control, and three E2E cases. The nine native package cases run explicitly.
+The native detector E2E case runs with PATH empty. The model cases cover the
+complete program from both Tokio runtime types, a blocking worker, and outside
+Tokio. The producer case proves conversion failure before another native poll.
+Strict Clippy passes for SDK, Query, Analysis, Control, E2E, and their test targets.
+Formatting and local links pass. Rust source stays fixed during these checks.
+
+This change removes two nonblank production Rust lines. The complete redesign
+adds 2,894 from 537f9de3, 665 from 7b7b407a, and 1,818 from aa390d9f.
+Another 6,665 net production deletions are required. The count excludes tests,
+documents, and blank lines. The records are
+`/tmp/araphor-sql-program-qualification1.json` and
+`/tmp/araphor-sql-program-count1.json`. The checked platform is Linux x86_64,
+x86_64-unknown-linux-gnu, and glibc 2.39. Other targets and physical Kubernetes
+are not qualified here. Full workspace CI and benchmarks are not run, as
+instructed. General maintained SQL, shared maintained query ownership, and the
+required production reduction remain **Not done**. No speed result is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

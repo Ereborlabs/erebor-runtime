@@ -47,15 +47,15 @@ fn oversized_input_precedes_compilation() -> TestResult {
             limits: model.limits,
         },
     };
+    let bundle = crate::package::installed::snapshot::InstalledBundle::new(
+        &owner.query,
+        package,
+        owner.query.memory(),
+    )?;
+    let index = bundle.export_index("runtime-fixture", "1", &evaluation.export)?;
     let control = crate::AnalysisReadControl::default();
     assert!(matches!(
-        owner.evaluate_artifact(
-            [1; 16],
-            artifact,
-            &crate::model::AdmittedExport::compile(&owner.query, artifact, model)?,
-            &evaluation,
-            &control
-        ),
+        owner.evaluate_artifact([1; 16], bundle, index, evaluation.clone(), None, &control),
         Err(crate::Error::ModelLimit {
             resource: "analysis input memory",
             ..

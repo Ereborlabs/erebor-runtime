@@ -87,8 +87,8 @@ impl InstalledAnalysis {
         self.owner
             .authority
             .admit(&context.grant, &bundle.admission())?;
-        let (artifact, model, admitted) =
-            bundle.export(package, &active.revision, &evaluation.export)?;
+        let index = bundle.export_index(package, &active.revision, &evaluation.export)?;
+        let (artifact, model, admitted) = bundle.export_at(index)?;
         let implementation = admitted.implementation(artifact)?;
         if !artifact.prepared(&evaluation.export) {
             return Err(Code::Unsupported.error("host-prepared target").into());
@@ -142,15 +142,21 @@ impl InstalledAnalysis {
             .descriptor
             .validate_evaluation(&effective)
             .context(crate::AnalysisContractSnafu)?;
-        let result = self
-            .owner
-            .evaluate_artifact(tenant, artifact, admitted, &effective, &control);
+        let result = self.owner.evaluate_artifact(
+            tenant,
+            Arc::clone(&bundle),
+            index,
+            effective,
+            None,
+            &control,
+        );
         self.owner.check(&context.grant, Action::Run)?;
         self.owner
             .authority
             .admit(&context.grant, &bundle.admission())?;
         control.check()?;
-        let (output, output_memory) = result?.into_parts();
+        let (output, effective) = result?;
+        let (output, output_memory) = output.into_parts();
         let target = implementation.target().to_owned();
         let identity = bundle.identity(package, &evaluation.export)?;
         let bytes = artifact

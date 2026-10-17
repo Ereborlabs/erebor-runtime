@@ -25,13 +25,29 @@ fn preparation_precedes_evaluation_deadline() -> TestResult {
         }],
         fixtures: Vec::new(),
     };
-    let model = &artifact.descriptor.exports[0];
-    let admitted = crate::model::AdmittedExport::compile(&query, &artifact, model)?;
+    let bundle = crate::package::installed::snapshot::InstalledBundle::new(
+        &query,
+        crate::package::PackageBundleV1 {
+            schema_version: 1,
+            root: crate::package::PackageRefV1 {
+                package_id: artifact.descriptor.id.clone(),
+                revision: artifact.descriptor.revision.clone(),
+            },
+            artifacts: vec![artifact],
+        },
+        query.memory(),
+    )?;
+    let artifact = &bundle.value.artifacts[0];
+    let index = bundle.export_index(
+        &artifact.descriptor.id,
+        &artifact.descriptor.revision,
+        &input.export,
+    )?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let digest = sha2::Sha256::digest(COMPONENT).into();
     assert!(owner.wasm.cached(&digest)?.is_none());
     assert!(matches!(
-        owner.evaluate_artifact([1; 16], &artifact, &admitted, &input, &control),
+        owner.evaluate_artifact([1; 16], bundle, index, input, None, &control),
         Err(Error::Data {
             source: araphor_data::Error::AnalysisReadDeadline { .. }
         })

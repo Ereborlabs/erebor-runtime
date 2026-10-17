@@ -259,7 +259,7 @@ fn closed_catalog_keeps_locals() {
             .plan(&state, Parser::parse(sql).unwrap(), vec![])
             .unwrap();
         assert_eq!(
-            value(&session.execute_local(Arc::new(plan)).unwrap()),
+            value(&session.collect_local(Arc::new(plan)).unwrap()),
             expected
         );
     }
@@ -397,8 +397,8 @@ fn local_skips_store() {
     }
     assert!(!readers.is_empty());
     assert!(fixture.engine.store().reserve_trace_read().is_err());
-    assert_eq!(value(&session.execute_local(plan).unwrap()), 11);
-    let now = session.execute_local(clock).unwrap();
+    assert_eq!(value(&session.collect_local(plan).unwrap()), 11);
+    let now = session.collect_local(clock).unwrap();
     assert!(
         matches!(ScalarValue::try_from_array(now[0].column(0), 0).unwrap(),
         ScalarValue::TimestampNanosecond(Some(value), _) if value == frozen as i64)
@@ -410,7 +410,7 @@ fn local_skips_store() {
             &[],
         )
         .unwrap();
-    assert!(session.execute_local(source).is_err());
+    assert!(session.collect_local(source).is_err());
     let error = session
         .execute(Arc::clone(&constant), &BTreeMap::new())
         .unwrap_err();
@@ -457,7 +457,7 @@ fn local_output_bounds() {
     session
         .set_output(1, fixture.engine.limits().output_bytes)
         .unwrap();
-    let error = session.execute_local(plan).unwrap_err();
+    let error = session.collect_local(plan).unwrap_err();
     assert_eq!(error.status_code(), StatusCode::InvalidArguments);
     assert!(matches!(error, Error::Sql { source }
         if matches!(source.find_root(), datafusion::common::DataFusionError::ResourcesExhausted(_))));
@@ -539,7 +539,7 @@ fn registration_reuses_input_claims() {
     assert_eq!(error.status_code(), StatusCode::Unavailable);
     assert_eq!(crate::Failure::from(&error), crate::Failure::Busy);
     assert_eq!(
-        value(&session.execute_local(Arc::clone(&plan)).unwrap()),
+        value(&session.collect_local(Arc::clone(&plan)).unwrap()),
         11
     );
     let error = session
@@ -548,7 +548,7 @@ fn registration_reuses_input_claims() {
     assert!(matches!(error, Error::Sql {
         source: datafusion::common::DataFusionError::ResourcesExhausted(ref message)
     } if message == "local input bytes"));
-    assert_eq!(value(&session.execute_local(plan).unwrap()), 11);
+    assert_eq!(value(&session.collect_local(plan).unwrap()), 11);
     drop(held);
     drop(session);
     drop(data);
@@ -593,10 +593,10 @@ fn native_counts_rebind() {
         .session(AnalysisSelectionV1::new([2; 16], vec![]), &control(), 2)
         .unwrap();
     second.register("caserows", schema(), &[batch(99)]).unwrap();
-    assert!(second.execute_local(Arc::clone(&plan)).is_err());
+    assert!(second.collect_local(Arc::clone(&plan)).is_err());
     second.register("CaseRows", schema(), &[]).unwrap();
     for (session, expected, clock) in [(&first, 2, 1), (&second, 0, 2)] {
-        let rows = session.execute_local(Arc::clone(&plan)).unwrap();
+        let rows = session.collect_local(Arc::clone(&plan)).unwrap();
         assert_eq!(value(&rows), expected);
         assert_eq!(
             ScalarValue::try_from_array(rows[0].column(1), 0).unwrap(),
@@ -604,8 +604,8 @@ fn native_counts_rebind() {
         );
     }
     first.register("CaseRows", schema(), &[batch(33)]).unwrap();
-    assert_eq!(value(&first.execute_local(Arc::clone(&plan)).unwrap()), 1);
-    assert_eq!(value(&second.execute_local(plan).unwrap()), 0);
+    assert_eq!(value(&first.collect_local(Arc::clone(&plan)).unwrap()), 1);
+    assert_eq!(value(&second.collect_local(plan).unwrap()), 0);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1256,7 +1256,15 @@ async fn local_producer_cancel() {
         .engine
         .session(AnalysisSelectionV1::new([1; 16], vec![]), &control, 1)
         .unwrap();
-    let producer = tokio::task::spawn_blocking(move || session.execute_local(Arc::new(plan)));
+    let permit = Arc::new(fixture.engine.reserve_evaluation([1; 16]).unwrap());
+    let producer = tokio::spawn(async move {
+        session
+            .stream_local(&plan, permit)
+            .await?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|source| Error::Sql { source })
+    });
     tokio::time::timeout(Duration::from_secs(2), gate.entered.notified())
         .await
         .unwrap();
@@ -1277,4 +1285,161 @@ async fn local_producer_cancel() {
         .memory()
         .reserve_output(fixture.engine.limits().output_capacity)
         .is_ok());
+}
+
+#[test]
+fn local_stream_keeps_capacity() {
+    let fixture = Fixture::new(Limits::default());
+    let (plan, _) = local_plan(&fixture.engine);
+    let mut session = fixture
+        .engine
+        .session(AnalysisSelectionV1::tenant([1; 16]), &control(), 1)
+        .unwrap();
+    session
+        .register("local_rows", schema(), &[batch(11)])
+        .unwrap();
+    let engine = Arc::clone(&fixture.engine);
+    let permit = Arc::new(fixture.engine.reserve_evaluation([1; 16]).unwrap());
+    let (stream, batch, permit) = fixture
+        .engine
+        .wait(async move {
+            let mut stream = session.stream_local(&plan, Arc::clone(&permit)).await?;
+            assert!(engine.reserve_evaluation([1; 16]).is_err());
+            let held = engine
+                .memory()
+                .reserve_output(engine.limits().output_capacity - engine.limits().output_bytes)
+                .unwrap();
+            assert!(engine.memory().reserve_output(1).is_err());
+            drop(held);
+            let batch = stream.try_next().await.unwrap().unwrap();
+            assert_eq!(value(std::slice::from_ref(&batch)), 11);
+            let retained = batch.column(0).to_data().buffers()[0].capacity();
+            let held = engine
+                .memory()
+                .reserve_output(engine.limits().output_capacity - retained)
+                .unwrap();
+            assert!(engine.memory().reserve_output(1).is_err());
+            drop(held);
+            drop(session);
+            Ok((stream, batch, permit))
+        })
+        .unwrap();
+    assert!(fixture.engine.reserve_evaluation([1; 16]).is_err());
+    drop(stream);
+    assert!(fixture.engine.reserve_evaluation([1; 16]).is_err());
+    drop(permit);
+    drop(fixture.engine.reserve_evaluation([1; 16]).unwrap());
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_output(fixture.engine.limits().output_capacity)
+        .is_err());
+    drop(batch);
+    drop(
+        fixture
+            .engine
+            .memory()
+            .reserve_output(fixture.engine.limits().output_capacity)
+            .unwrap(),
+    );
+    drop(
+        fixture
+            .engine
+            .memory()
+            .reserve_input(fixture.engine.limits().input_capacity)
+            .unwrap(),
+    );
+}
+
+#[tokio::test]
+async fn local_rejects_foreign_permits() {
+    let fixture = Fixture::new(Limits::default());
+    let foreign = Fixture::new(Limits::default());
+    let (plan, _) = local_plan(&fixture.engine);
+    let session = fixture
+        .engine
+        .session(AnalysisSelectionV1::tenant([1; 16]), &control(), 1)
+        .unwrap();
+    for permit in [
+        foreign.engine.reserve_evaluation([1; 16]).unwrap(),
+        fixture.engine.reserve_evaluation([2; 16]).unwrap(),
+        fixture.engine.reserve_stream([1; 16]).unwrap(),
+    ] {
+        let error = session
+            .stream_local(&plan, Arc::new(permit))
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            error,
+            Error::Invalid {
+                field: "evaluation permit",
+                ..
+            }
+        ));
+    }
+    drop(fixture.engine.reserve_evaluation([1; 16]).unwrap());
+    drop(
+        fixture
+            .engine
+            .memory()
+            .reserve_output(fixture.engine.limits().output_capacity)
+            .unwrap(),
+    );
+}
+
+#[test]
+fn local_empty_releases_prepayment() {
+    let fixture = Fixture::new(Limits::default());
+    let (plan, _) = local_plan(&fixture.engine);
+    let mut session = fixture
+        .engine
+        .session(AnalysisSelectionV1::tenant([1; 16]), &control(), 1)
+        .unwrap();
+    session.register("local_rows", schema(), &[]).unwrap();
+    let engine = Arc::clone(&fixture.engine);
+    let permit = Arc::new(fixture.engine.reserve_evaluation([1; 16]).unwrap());
+    fixture
+        .engine
+        .wait(async move {
+            let mut stream = session.stream_local(&plan, Arc::clone(&permit)).await?;
+            assert!(engine
+                .memory()
+                .reserve_output(engine.limits().output_capacity)
+                .is_err());
+            assert!(stream.try_next().await.unwrap().is_none());
+            drop(
+                engine
+                    .memory()
+                    .reserve_output(engine.limits().output_capacity)
+                    .unwrap(),
+            );
+            assert!(engine.reserve_evaluation([1; 16]).is_err());
+            drop(stream);
+            drop(permit);
+            Ok(())
+        })
+        .unwrap();
+    drop(fixture.engine.reserve_evaluation([1; 16]).unwrap());
+}
+
+impl super::Session {
+    pub(super) fn collect_local(&self, plan: Arc<LogicalPlan>) -> crate::Result<Vec<RecordBatch>> {
+        let engine = Arc::clone(&self.engine);
+        let session = self.clone();
+        engine.wait(async move {
+            session.control.check()?;
+            let permit = Arc::new(
+                session
+                    .engine
+                    .reserve_evaluation(session.selection.tenant_id)?,
+            );
+            session
+                .stream_local(&plan, permit)
+                .await?
+                .try_collect()
+                .await
+                .map_err(|source| crate::Error::Sql { source })
+        })
+    }
 }

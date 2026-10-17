@@ -674,6 +674,20 @@ fn retained_trace_cut_checks_revocation() -> TestResult {
         [vec![ScalarValue::UInt64(Some(1))]]
     );
     cut.check(&fixture.engine, &control)?;
+    fixture
+        .engine
+        .wait(cut.check_async(&fixture.engine, &control))?;
+    let cancelled = AnalysisReadControl::default();
+    let pending = cut.check_async(&fixture.engine, &cancelled);
+    cancelled.cancel()?;
+    for pending in [pending, cut.check_async(&fixture.engine, &cancelled)] {
+        let error = fixture
+            .engine
+            .wait(pending)
+            .err()
+            .ok_or("cancelled input check")?;
+        assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
+    }
     let (mut state, _) = fixture
         .store
         .trace_intent(identity.tenant_id, identity.request_id)?
@@ -685,6 +699,12 @@ fn retained_trace_cut_checks_revocation() -> TestResult {
         .check(&fixture.engine, &control)
         .err()
         .ok_or("revoked input accepted")?;
+    assert_eq!(crate::Failure::from(&error), crate::Failure::Denied);
+    let error = fixture
+        .engine
+        .wait(cut.check_async(&fixture.engine, &control))
+        .err()
+        .ok_or("revoked async input accepted")?;
     assert_eq!(crate::Failure::from(&error), crate::Failure::Denied);
     control.check()?;
     drop(cut);
@@ -1085,5 +1105,20 @@ fn catalog_keeps_batch_limit() -> TestResult {
             .memory()
             .reserve_input(fixture.engine.limits().input_capacity)?,
     );
+    Ok(())
+}
+
+#[test]
+fn quiet_check_skips_runtime() -> TestResult {
+    let fixture = Fixture::new()?;
+    let definition = Arc::new(Inputs::admit(&fixture.engine, &model(Vec::new()))?);
+    let input = fixture.read(&definition)?;
+    assert!(input.snapshot.is_none());
+    let engine = Arc::clone(&fixture.engine);
+    let control = AnalysisReadControl::default();
+    fixture.engine.wait(async move {
+        input.check(&engine, &control)?;
+        input.check_async(&engine, &control).await
+    })?;
     Ok(())
 }

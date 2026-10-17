@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
@@ -5,7 +7,6 @@ use crate::analysis::{PackageActivationV1, PackageCommitV1};
 use crate::{AnalysisReadControl, Result};
 
 use super::{ResultContext, RunPreparation};
-use crate::model::ModelRun;
 use crate::package::installed::snapshot::InstalledBundle;
 use crate::package::owner::{ClockDependency, InstalledContext};
 use crate::package::{AnalysisPackageOwner, PackageActionV1 as Action, PackageErrorCodeV1 as Code};
@@ -15,7 +16,7 @@ impl AnalysisPackageOwner {
         &self,
         active: &PackageActivationV1,
         context: &InstalledContext,
-        bundle: &InstalledBundle,
+        bundle: &Arc<InstalledBundle>,
         request: RunPreparation<'_>,
         action: Action,
         control: &AnalysisReadControl,
@@ -44,8 +45,9 @@ impl AnalysisPackageOwner {
                 }
             }
         }
-        let (artifact, model, admitted) =
-            bundle.export(&active.key.package_id, &active.revision, &active.key.export)?;
+        let index =
+            bundle.export_index(&active.key.package_id, &active.revision, &active.key.export)?;
+        let (artifact, model, admitted) = bundle.export_at(index)?;
         let previous = active
             .result_id
             .as_deref()
@@ -150,13 +152,12 @@ impl AnalysisPackageOwner {
             context: metadata.context.clone(),
             checkpoint,
         };
-        let run = ModelRun::prepared(&self.query, active.key.tenant_id, control, inputs.clone())?;
-        let evaluated = self.execute_model(
-            run,
-            &artifact.descriptor,
-            implementation,
-            admitted,
-            &evaluation,
+        let (evaluated, _) = self.evaluate_artifact(
+            active.key.tenant_id,
+            Arc::clone(bundle),
+            index,
+            evaluation,
+            Some(Arc::clone(&inputs)),
             control,
         )?;
         let mut packet = crate::AnalysisPackageOwner::encode_output(&evaluated.output, model)?;

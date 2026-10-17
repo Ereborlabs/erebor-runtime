@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
@@ -43,11 +45,12 @@ impl AnalysisPackageOwner {
                 .iter()
                 .filter(|fixture| name.is_none_or(|name| name == fixture.name))
             {
-                let (_, model, program) = bundle.export(
+                let index = bundle.export_index(
                     &artifact.descriptor.id,
                     &artifact.descriptor.revision,
                     &fixture.export,
                 )?;
+                let (_, model, _) = bundle.export_at(index)?;
                 let mut inputs = Vec::new();
                 for input in &fixture.inputs {
                     let port = model
@@ -87,13 +90,15 @@ impl AnalysisPackageOwner {
                 control.check()?;
                 self.check(grant, Action::Test)?;
                 self.authority.admit(grant, &admitted)?;
-                let output = self.evaluate_artifact(
+                let (output, mut evaluation) = self.evaluate_artifact(
                     grant.selection.tenant_id,
-                    artifact,
-                    program,
-                    &evaluation,
+                    Arc::clone(&bundle),
+                    index,
+                    evaluation,
+                    None,
                     control,
                 )?;
+                evaluation.context.limits = model.limits;
                 let expected = Self::decode_output(&fixture.expected, model)?;
                 artifact
                     .descriptor

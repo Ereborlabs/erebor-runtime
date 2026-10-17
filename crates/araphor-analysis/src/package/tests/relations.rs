@@ -353,7 +353,7 @@ async fn output_read_shares_capacity() -> TestResult {
     use std::time::Duration;
 
     use crate::analysis::PackageKeyV1;
-    use crate::model::{AdmittedExport, ModelRun};
+    use crate::model::AdmittedExport;
     use crate::{AnalysisReadControl, Limits};
 
     let fixture = Fixture::new_limits(Limits {
@@ -442,7 +442,10 @@ async fn output_read_shares_capacity() -> TestResult {
             .memory()
             .reserve_input(fixture.owner.query.limits().input_capacity)?,
     );
-    let released = ModelRun::new(&fixture.owner.query, [1; 16], &control)?.query_datasets(
+    let released = crate::SqlDatasetOutputV1::query(
+        &fixture.owner.query,
+        [1; 16],
+        &control,
         &[],
         "SELECT 1::BIGINT UNSIGNED AS count",
         sdk::Limits::default(),
@@ -456,7 +459,7 @@ async fn alias_import_budget() -> TestResult {
     use std::time::Duration;
 
     use crate::analysis::PackageKeyV1;
-    use crate::model::{AdmittedExport, ModelRun};
+    use crate::model::AdmittedExport;
     use crate::{AnalysisReadControl, Engine, Limits};
 
     let fixture = Fixture::new_limits(Limits {
@@ -589,7 +592,10 @@ async fn alias_import_budget() -> TestResult {
             None
         };
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-        let released = ModelRun::new(&owner, [1; 16], &control)?.query_datasets(
+        let released = crate::SqlDatasetOutputV1::query(
+            &owner,
+            [1; 16],
+            &control,
             &[],
             "SELECT 1::BIGINT UNSIGNED AS count",
             sdk::Limits::default(),

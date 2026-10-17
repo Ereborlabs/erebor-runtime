@@ -23,7 +23,7 @@ mod input;
 mod operation;
 mod output;
 pub use datasets::SqlDatasetOutputV1;
-pub use operation::ModelRun;
+pub(crate) use operation::ModelRun;
 
 pub struct SqlModelOutputV1 {
     pub output: sdk::Output,

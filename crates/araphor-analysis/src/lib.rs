@@ -26,7 +26,7 @@ pub(crate) use error::{
 pub use error::{Error, Result};
 pub use graph::{GraphAndFindingOwner, GraphContextProvider};
 pub use limits::{AnalysisLimits, WasmLimits};
-pub use model::{ModelRun, SqlDatasetOutputV1, SqlModelOutputV1};
+pub use model::{SqlDatasetOutputV1, SqlModelOutputV1};
 pub use notification::NotificationRouter;
 pub use package::native::NativeLimits;
 pub use package::{AnalysisPackageOwner, InstalledAnalysis, InstalledEvaluation};

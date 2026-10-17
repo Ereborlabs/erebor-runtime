@@ -328,13 +328,9 @@ impl AnalysisPackageOwner {
         mut stop: watch::Receiver<bool>,
     ) -> Result<()> {
         let mut authority = self.authority.changes();
-        let (_, _, admitted) =
+        let (artifact, _, admitted) =
             bundle.export(&active.key.package_id, &active.revision, &active.key.export)?;
         let context: InstalledContext = Self::decode(&active.metadata)?;
-        let artifact = bundle.value.artifact(&super::PackageRefV1 {
-            package_id: active.key.package_id.clone(),
-            revision: active.revision.clone(),
-        })?;
         let model_clock =
             admitted.implementation(artifact)?.target() != "sql" || admitted.model_clock();
         let mut inputs = admitted.inputs.watch(
@@ -599,7 +595,7 @@ impl AnalysisPackageOwner {
     fn evaluate_offer(
         &self,
         active: &PackageActivationV1,
-        bundle: &InstalledBundle,
+        bundle: &Arc<InstalledBundle>,
         inputs: Arc<araphor_query::inputs::InputSet>,
         now: u64,
         control: &AnalysisReadControl,

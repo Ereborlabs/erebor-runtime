@@ -295,18 +295,40 @@ impl InputSet {
 
     pub fn check(&self, engine: &Arc<Engine>, control: &AnalysisReadControl) -> Result<()> {
         control.check()?;
-        if let Some(snapshot) = self
+        if self
             .snapshot
             .as_ref()
-            .filter(|snapshot| !snapshot.page.extraction.trace_reads().is_empty())
+            .is_some_and(|snapshot| !snapshot.page.extraction.trace_reads().is_empty())
         {
-            let snapshot = Arc::clone(snapshot);
-            let runtime = Arc::clone(engine);
-            let control = control.within(control.remaining()?)?;
-            engine.wait(async move { control.query_async(runtime.check_read(&snapshot)).await })?;
+            engine.wait(self.check_async(engine, control))?;
         }
         control.check()?;
         Ok(())
+    }
+
+    pub fn check_async(
+        &self,
+        engine: &Arc<Engine>,
+        control: &AnalysisReadControl,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'static {
+        let snapshot = self
+            .snapshot
+            .as_ref()
+            .filter(|snapshot| !snapshot.page.extraction.trace_reads().is_empty())
+            .cloned();
+        let engine = Arc::clone(engine);
+        let control = control
+            .remaining()
+            .and_then(|remaining| control.within(remaining));
+        async move {
+            let control = control?;
+            control.check()?;
+            if let Some(snapshot) = snapshot {
+                control.query_async(engine.check_read(&snapshot)).await?;
+            }
+            control.check()?;
+            Ok(())
+        }
     }
 
     pub fn dependencies(
@@ -347,52 +369,7 @@ impl InputSet {
         inputs
             .capacity()
             .saturating_mul(size_of::<sdk::Input>())
-            .saturating_add(
-                inputs
-                    .iter()
-                    .map(|input| {
-                        input.data.name.capacity()
-                            + input.revision.owner.capacity()
-                            + input.revision.id.capacity()
-                            + input
-                                .revision
-                                .window
-                                .as_ref()
-                                .map_or(0, |window| window.source.capacity())
-                            + input.coverage.limits.capacity() * size_of::<String>()
-                            + input
-                                .coverage
-                                .limits
-                                .iter()
-                                .map(String::capacity)
-                                .sum::<usize>()
-                            + input.data.batches.capacity() * size_of::<sdk::RecordBatch>()
-                            + input
-                                .data
-                                .batches
-                                .iter()
-                                .map(|batch| {
-                                    batch.num_columns() * size_of::<ArrayRef>()
-                                        + batch
-                                            .columns()
-                                            .iter()
-                                            .map(|array| {
-                                                array
-                                                    .get_array_memory_size()
-                                                    .saturating_sub(array.get_buffer_memory_size())
-                                            })
-                                            .sum::<usize>()
-                                        + batch
-                                            .schema_ref()
-                                            .fields()
-                                            .iter()
-                                            .map(|field| field.size())
-                                            .sum::<usize>()
-                                })
-                                .sum::<usize>()
-                    })
-                    .sum::<usize>(),
-            )
+            .saturating_add(inputs.iter().map(sdk::Input::metadata_bytes).sum::<usize>())
     }
 
     pub fn register(&self, session: &mut Session) -> Result<()> {

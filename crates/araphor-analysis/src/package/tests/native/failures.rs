@@ -42,8 +42,6 @@ fn native_caps_defer_admission() -> TestResult {
             }),
         }];
         let model = &artifact.descriptor.exports[0];
-        let admitted =
-            crate::model::AdmittedExport::compile(&fixture.owner.query, artifact, model)?;
         let evaluation = sdk::Evaluation {
             export: "count".into(),
             inputs: Vec::new(),
@@ -56,12 +54,30 @@ fn native_caps_defer_admission() -> TestResult {
                 limits: model.limits,
             },
         };
+        let bundle = crate::package::installed::snapshot::InstalledBundle::new(
+            &fixture.owner.query,
+            bundle,
+            fixture.owner.query.memory(),
+        )?;
+        let artifact = &bundle.value.artifacts[0];
+        let index = bundle.export_index(
+            &artifact.descriptor.id,
+            &artifact.descriptor.revision,
+            &evaluation.export,
+        )?;
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
         for error in [
             fixture.owner.admit_artifact(artifact, &control).err(),
             fixture
                 .owner
-                .evaluate_artifact([1; 16], artifact, &admitted, &evaluation, &control)
+                .evaluate_artifact(
+                    [1; 16],
+                    std::sync::Arc::clone(&bundle),
+                    index,
+                    evaluation,
+                    None,
+                    &control,
+                )
                 .err(),
         ] {
             assert!(matches!(

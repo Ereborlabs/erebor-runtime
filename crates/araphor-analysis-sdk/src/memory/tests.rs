@@ -292,3 +292,78 @@ fn wire_retains_input_metadata() -> TestResult {
     assert_eq!(retained.inputs[0].coverage, evaluation.inputs[0].coverage);
     Ok(())
 }
+
+#[test]
+fn dataset_metadata_keeps_headers() -> TestResult {
+    use arrow_array::{ArrayRef, NullArray, StructArray, UInt64Array};
+
+    let child = Arc::new(Field::new("missing", DataType::Null, true));
+    let nested: ArrayRef = Arc::new(StructArray::from(vec![(
+        child,
+        Arc::new(NullArray::new(1)) as ArrayRef,
+    )]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("left", DataType::UInt64, false),
+        Field::new("right", DataType::UInt64, false),
+        Field::new("nested", nested.data_type().clone(), false),
+    ]));
+    let dataset = |array: ArrayRef| -> crate::Result<crate::Dataset> {
+        Ok(crate::Dataset {
+            name: "rows".into(),
+            batches: vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::clone(&array), array, Arc::clone(&nested)],
+            )?],
+        })
+    };
+    let allocation: ArrayRef = Arc::new(UInt64Array::from(vec![7; 4096]));
+    let mut aliased = dataset(allocation.slice(2048, 1))?;
+    let compact = dataset(Arc::new(UInt64Array::from(vec![7])))?;
+    assert!(aliased.allocated_bytes() > compact.allocated_bytes() + 4096);
+    assert_eq!(aliased.metadata_bytes(), compact.metadata_bytes());
+    assert!(
+        aliased.metadata_bytes()
+            >= 2 * size_of::<UInt64Array>()
+                + size_of::<StructArray>()
+                + size_of::<NullArray>()
+                + 3 * size_of::<ArrayRef>()
+    );
+    let before = aliased.metadata_bytes();
+    let mut metadata = HashMap::new();
+    metadata.reserve(64);
+    let schema = Arc::new(Schema::new_with_metadata(schema.fields().clone(), metadata));
+    aliased.batches[0] = RecordBatch::try_new(schema, aliased.batches[0].columns().to_vec())?;
+    assert!(aliased.metadata_bytes() >= before + 64 * size_of::<(String, String)>());
+
+    let mut input = Input {
+        data: aliased,
+        revision: Revision {
+            owner: "owner".into(),
+            id: "1".into(),
+            window: Some(SourceWindow {
+                source: Vec::new(),
+                start_utc_ns: 0,
+                end_utc_ns: 1,
+            }),
+        },
+        coverage: Coverage {
+            state: CoverageState::Complete,
+            limits: Vec::new(),
+        },
+    };
+    let before = input.metadata_bytes();
+    let data_metadata = input.data.metadata_bytes();
+    input.revision.owner.reserve_exact(1024);
+    input.revision.id.reserve_exact(1024);
+    input
+        .revision
+        .window
+        .as_mut()
+        .ok_or("input window")?
+        .source
+        .reserve_exact(2048);
+    input.coverage.limits.reserve_exact(64);
+    assert!(input.metadata_bytes() >= before + 4096 + 64 * size_of::<String>());
+    assert_eq!(input.data.metadata_bytes(), data_metadata);
+    Ok(())
+}

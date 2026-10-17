@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use snafu::ResultExt as _;
 
 use crate::analysis::{PackageActivationV1, PackageResultRefV1};
@@ -135,7 +137,7 @@ impl AnalysisPackageOwner {
         active: &PackageActivationV1,
         context: &InstalledContext,
         id: &str,
-        bundle: &InstalledBundle,
+        bundle: &Arc<InstalledBundle>,
         control: &AnalysisReadControl,
     ) -> Result<PackageResultRefV1> {
         control.check()?;

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::analysis::{PackageActivationV1, PackageKeyV1};
 use crate::{AnalysisReadControl, Result};
@@ -103,7 +104,7 @@ impl AnalysisPackageOwner {
     fn install_model(
         &self,
         grant: &PackageGrantV1,
-        bundle: &InstalledBundle,
+        bundle: &Arc<InstalledBundle>,
         prepared: ModelActivation,
         upgrade: bool,
         control: &AnalysisReadControl,
@@ -194,7 +195,7 @@ impl AnalysisPackageOwner {
     fn start_model(
         &self,
         grant: &PackageGrantV1,
-        bundle: &InstalledBundle,
+        bundle: &Arc<InstalledBundle>,
         active: &PackageActivationV1,
         control: &AnalysisReadControl,
     ) -> Result<()> {

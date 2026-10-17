@@ -46,7 +46,7 @@ impl InstalledBundle {
                     .collect()
             })
             .collect::<araphor_data::Result<Vec<Vec<_>>>>()?;
-        let bytes = memory::BundleMemory::retained(&value, &digest, &identities, &Vec::new())?;
+        let bytes = memory::BundleMemory::retained(&value, &digest, &identities)?;
         let mut bundle = Self {
             value,
             digest,
@@ -101,6 +101,15 @@ impl InstalledBundle {
         &araphor_analysis_sdk::Model,
         &AdmittedExport,
     )> {
+        self.export_at(self.export_index(package, revision, export)?)
+    }
+
+    pub(in crate::package) fn export_index(
+        &self,
+        package: &str,
+        revision: &str,
+        export: &str,
+    ) -> Result<(usize, usize)> {
         let index = self
             .value
             .artifacts
@@ -109,17 +118,41 @@ impl InstalledBundle {
                 artifact.descriptor.id == package && artifact.descriptor.revision == revision
             })
             .ok_or_else(|| Code::Missing.error("installed artifact"))?;
-        let artifact = &self.value.artifacts[index];
-        let model = artifact
+        let model = self.value.artifacts[index]
             .descriptor
             .exports
             .iter()
             .position(|model| model.name == export)
             .ok_or_else(|| Code::Missing.error("installed export"))?;
-        let program = self.programs[index][model]
-            .as_ref()
+        self.export_at((index, model))?;
+        Ok((index, model))
+    }
+
+    pub(in crate::package) fn export_at(
+        &self,
+        (index, model): (usize, usize),
+    ) -> Result<(
+        &PackageArtifactV1,
+        &araphor_analysis_sdk::Model,
+        &AdmittedExport,
+    )> {
+        let artifact = self
+            .value
+            .artifacts
+            .get(index)
+            .ok_or_else(|| Code::Missing.error("installed artifact"))?;
+        let model_ref = artifact
+            .descriptor
+            .exports
+            .get(model)
+            .ok_or_else(|| Code::Missing.error("installed export"))?;
+        let program = self
+            .programs
+            .get(index)
+            .and_then(|programs| programs.get(model))
+            .and_then(Option::as_ref)
             .ok_or_else(|| Code::Unsupported.error("model target"))?;
-        Ok((artifact, &artifact.descriptor.exports[model], program))
+        Ok((artifact, model_ref, program))
     }
 
     pub(in crate::package) fn clock(

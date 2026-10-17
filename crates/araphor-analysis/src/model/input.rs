@@ -5,13 +5,13 @@ use snafu::ResultExt as _;
 use super::operation::ModelRun;
 use crate::Result;
 
-impl ModelRun<'_> {
+impl ModelRun {
     pub(super) fn register(
         &mut self,
         model: &sdk::Model,
         evaluation: &sdk::Evaluation,
     ) -> Result<()> {
-        self.session()?.check_input(
+        self.session.check_input(
             evaluation
                 .inputs
                 .iter()
@@ -26,7 +26,7 @@ impl ModelRun<'_> {
                 ),
         )?;
         if let Some(inputs) = self.inputs.clone() {
-            inputs.register(self.session()?)?;
+            inputs.register(&mut self.session)?;
         } else {
             for input in &model.inputs {
                 let port = &input.port;
@@ -71,10 +71,10 @@ impl ModelRun<'_> {
         let schema = Session::indexed_schema(schema)?;
         let reservation = self.memory.reserve_input(0)?;
         let indexed = self
-            .session()?
+            .session
             .index_batches(schema.clone(), batches, &reservation, 0)?;
         drop(reservation);
-        self.session()?.register(name, schema, &indexed)?;
+        self.session.register(name, schema, &indexed)?;
         self.control.check()?;
         Ok(())
     }

@@ -93,9 +93,12 @@ impl Evaluation {
                     .saturating_mul(std::mem::size_of::<Input>()),
             );
         for input in &self.inputs {
-            bytes = bytes.saturating_add(input.data.memory()).saturating_add(
-                crate::memory::Memory::input_metadata(&input.revision, &input.coverage),
-            );
+            bytes = bytes
+                .saturating_add(input.data.allocated_bytes())
+                .saturating_add(crate::memory::Memory::input_metadata(
+                    &input.revision,
+                    &input.coverage,
+                ));
         }
         if let Some(parameters) = &self.parameters {
             bytes = bytes.saturating_add(Dataset::batch_allocation(parameters));
@@ -180,18 +183,40 @@ impl Output {
     }
 }
 
+impl Input {
+    pub fn metadata_bytes(&self) -> usize {
+        self.data
+            .metadata_bytes()
+            .saturating_add(crate::memory::Memory::input_metadata(
+                &self.revision,
+                &self.coverage,
+            ))
+    }
+}
+
 impl Dataset {
+    pub fn metadata_bytes(&self) -> usize {
+        self.allocated_bytes().saturating_sub(
+            self.batches
+                .iter()
+                .flat_map(RecordBatch::columns)
+                .fold(0usize, |bytes, array| {
+                    bytes.saturating_add(array.get_buffer_memory_size())
+                }),
+        )
+    }
+
     fn allocation(datasets: &Vec<Self>) -> usize {
         let mut bytes = datasets
             .capacity()
             .saturating_mul(std::mem::size_of::<Self>());
         for data in datasets {
-            bytes = bytes.saturating_add(data.memory());
+            bytes = bytes.saturating_add(data.allocated_bytes());
         }
         bytes
     }
 
-    fn memory(&self) -> usize {
+    pub fn allocated_bytes(&self) -> usize {
         let mut bytes = self.name.capacity().saturating_add(
             self.batches
                 .capacity()

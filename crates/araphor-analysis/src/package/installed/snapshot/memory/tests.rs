@@ -58,12 +58,17 @@ fn admitted_capacity_is_charged() -> TestResult {
         value.clone(),
         fixture.owner.query.memory(),
     )?;
-    let bytes = BundleMemory::retained(
-        &retained.value,
-        &retained.digest,
-        &retained.identities,
-        &retained.programs,
-    )?;
+    let bytes = BundleMemory::retained(&retained.value, &retained.digest, &retained.identities)?;
+    assert_eq!(retained.programs.len(), 1);
+    assert_eq!(retained.programs[0].len(), 1);
+    let bytes = bytes
+        + retained.programs.capacity() * size_of::<Vec<Option<crate::model::AdmittedExport>>>()
+        + retained.programs[0].capacity() * size_of::<Option<crate::model::AdmittedExport>>()
+        + retained.programs[0][0]
+            .as_ref()
+            .ok_or("admitted export")?
+            .allocated_bytes();
+    assert_eq!(retained._memory.size(), bytes);
     assert!(
         retained.programs[0][0]
             .as_ref()
@@ -114,14 +119,11 @@ fn admission_stops_at_capacity() -> TestResult {
         export: "later".into(),
         program,
     });
-    let bytes = BundleMemory::retained(
-        &value,
-        &value.digest()?,
-        &vec![vec![None, None]],
-        &vec![vec![None, None]],
-    )?
-    .checked_add(first.allocated_bytes())
-    .ok_or("program capacity")?
+    let bytes = BundleMemory::retained(&value, &value.digest()?, &vec![vec![None, None]])?
+        .checked_add(size_of::<Vec<Option<crate::model::AdmittedExport>>>())
+        .and_then(|bytes| bytes.checked_add(2 * size_of::<Option<crate::model::AdmittedExport>>()))
+        .and_then(|bytes| bytes.checked_add(first.allocated_bytes()))
+        .ok_or("program capacity")?
         - 1;
     let query = crate::Engine::new(
         fixture.store.clone(),

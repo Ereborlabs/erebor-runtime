@@ -51,8 +51,8 @@ crate. SDK owns declarations and native/Wasm application binary interfaces.
   -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) materializes each completed port with one dataset-global row index before dependent SQL runs
   -> [Inputs::input](../../crates/araphor-query/src/inputs/receipt.rs) assigns per-port revisions and coverage from the original source scopes and reference origins
   -> [InputSet](../../crates/araphor-query/src/inputs/physical.rs) returns declared input order, retained tables, and complete provenance
-  -> [ModelRun::prepared](../../crates/araphor-analysis/src/model/operation.rs) supplies the retained input set to model execution
-  -> [AnalysisPackageOwner::execute_model](../../crates/araphor-analysis/src/package/execution.rs) selects SQL, native, or Wasm execution
+  -> [AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs) receives the owned evaluation and retained input set for the exact installed export
+  -> [AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs) dispatches SQL to one Engine::wait future or invokes the selected synchronous native or Wasm owner
   -> [AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs) prepares one result contract
   -> [AnalysisStore::commit_package](../../crates/araphor-data/src/analysis/packages/commit.rs) checks the authorized durable transaction
 
@@ -62,6 +62,7 @@ sequenceDiagram
     participant Input as Query Inputs
     participant Store as AnalysisStore
     participant Session as Native Query Session
+    participant Program as SQL model future
     Package->>Input: Read admitted inputs with current grant
     Input->>Session: Plan all children at one frozen time
     Session->>Store: Capture original sources and exact package outputs once
@@ -73,9 +74,16 @@ sequenceDiagram
     end
     Input-->>Package: Ordered Arrow inputs and provenance
     alt SQL implementation
-        Package->>Session: Register retained indexed inputs through ModelRun
-        Session->>Session: Execute local output, checkpoint, evidence, and reason plans
-        Session-->>Package: Validated output and native reservations
+        Package->>Program: Move bundle Arc, export index, evaluation, and input cut
+        Program->>Input: Check current trace-read authority
+        Program->>Session: Register retained indexed inputs
+        loop Output, checkpoint, evidence, and reason order
+            Program->>Session: Start local stream with the shared permit
+            Session-->>Program: Native Arrow batch
+            Program->>Program: Reserve, normalize, and retain the batch
+        end
+        Program->>Input: Check current trace-read authority
+        Program-->>Package: Validated output and evaluation
     else Native or Wasm implementation
         Package->>Package: Invoke selected backend after input preparation
     end
@@ -104,12 +112,31 @@ applies no `__araphor_` prefix ban.
 logical plans for output and checkpoint queries in descriptor order. Each
 reason plan retains checked output and reason indices. InstalledBundle retains
 the exact descriptor, implementation, and admitted-program pairing.
-[ModelRun::evaluate_admitted](../../crates/araphor-analysis/src/model/execute.rs)
-executes those retained plans. The raw model admission and evaluation entry
-points are deleted. Tests reuse real admitted exports. Invalid input bindings
-fail admission before execution. Known retained vectors and
+[ModelRun::evaluate](../../crates/araphor-analysis/src/model/execute.rs)
+executes those retained plans. The package caller moves the evaluation and
+an `Arc<InstalledBundle>` into one SQL future. The future keeps the exact
+export index and borrows its descriptor and admitted plans from that bundle.
+The production route does not clone the descriptor or evaluation for dispatch.
+The raw model admission and evaluation entry points remain deleted. Invalid
+input bindings fail admission before execution. Known retained vectors and
 declarations have native memory reservations; native plan allocation has no
 complete upstream size measurement.
+
+[AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs) selects the SQL implementation for the exact installed export
+  -> [Engine::wait](../../crates/araphor-query/src/execution.rs) executes one owned future on the existing runtime
+  -> [InputSet::check_async](../../crates/araphor-query/src/inputs/physical.rs) checks retained trace-read authority without synchronous runtime entry
+  -> [ModelRun::new](../../crates/araphor-analysis/src/model/operation.rs) constructs the complete Session, control, shared evaluation permit, and output reservation
+  -> [ModelRun::evaluate_output](../../crates/araphor-analysis/src/model/execute.rs) runs outputs, checkpoint, evidence, and reason plans in their admitted order
+  -> [Session::stream_local](../../crates/araphor-query/src/execution.rs) creates each native physical stream with the same evaluation permit
+  -> [ModelRun::query](../../crates/araphor-analysis/src/model/execute.rs) reserves conversion and vector growth before it normalizes and retains each batch
+  -> [ModelRun::evaluate](../../crates/araphor-analysis/src/model/execute.rs) checks the complete SDK output, control, and current trace-read authority
+  -> [SqlModelOutputV1::retain](../../crates/araphor-analysis/src/model.rs) transfers retained metadata and buffer claims to the returned output
+
+Input capture completes before this SQL future starts. The SQL stages do not
+call the synchronous runtime bridge again. ModelRun has no partial public
+construction or preparation API. Output datasets remain materialized for
+`output_*` tables and dataset-global row references. The run does not collect
+a separate raw batch vector before normalization.
 
 [AdmittedExport](../../crates/araphor-analysis/src/model.rs) retains one
 `Arc<Inputs>`. Inputs stores native plans and orders dependent ports before
@@ -136,11 +163,21 @@ deleted. No SourceBatch or LocalTable binding owner remains.
 [Engine::blocking](../../crates/araphor-query/src/execution.rs) keeps one
 cancellation guard until the actual blocking read ends. A completed Data error
 does not cancel the caller. A timeout or dropped read cancels unfinished work.
-[InputSet::check](../../crates/araphor-query/src/inputs/physical.rs) checks current
-trace-read authority before and after backend execution. The input owner checks
+[InputSet::check_async](../../crates/araphor-query/src/inputs/physical.rs) checks
+current trace-read authority before and after SQL model execution. The returned
+future owns its snapshot and child control. SQL awaits that future on the
+existing runtime. [InputSet::check](../../crates/araphor-query/src/inputs/physical.rs)
+keeps the synchronous bridge for native, Wasm, and other synchronous callers.
+Both routes preserve cancellation and typed read denial. The input owner checks
 indexed bytes and aggregate references before it offers an InputSet. Missing
 input errors keep their typed cause through native DataFusion error wrappers.
 Install preserves MissingInput readiness. Inspect marks the retained result stale.
+
+The [retained trace case](../../crates/araphor-query/src/inputs/tests.rs)
+checks both read-check entry points. The case checks cancellation before the
+async future is polled and denial after retained trace access is revoked.
+The caller control remains usable after denial. The `quiet_check_skips_runtime`
+case calls both entry points from Engine's runtime without a trace snapshot.
 
 The [live detector input lifecycle](#live-detector-input-lifecycle) uses this
 finite input execution. Query now owns input change checks, time checks,
@@ -199,8 +236,12 @@ owner, units, null meaning, join keys, readiness, and description. Native
 projections preserve the selected Field metadata. One immutable schema map is
 shared across engines and reads. Capture does not build another schema map.
 The query engine is
-DataFusion 53.1.0. Dataset-only SQL uses the existing validators and ModelRun.
-It creates no synthetic package or evaluation. DuckDB remains the durable
+DataFusion 53.1.0. The synchronous
+[SqlDatasetOutputV1::query](../../crates/araphor-analysis/src/model/datasets.rs)
+entry point validates supplied datasets and admits SQL against those schemas.
+It registers those datasets, then moves a complete private ModelRun into one
+Engine::wait future. The returned dataset keeps its metadata reservation.
+This route creates no synthetic package or evaluation. DuckDB remains the durable
 storage engine. Client transport reads native Arrow values in Control; the
 transport path opens no DuckDB query connection.
 
@@ -660,13 +701,28 @@ both SQL and retained-plan entry points against a complete native snapshot.
 [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) retains
 resolved model inputs in the native input category. All input children share
 one captured source owner and TaskContext. [Session::execute_input](../../crates/araphor-query/src/execution.rs)
-remains the finite single-query input API. [Session::execute_local](../../crates/araphor-query/src/execution.rs)
-executes model-local plans without a durable source binding or store read.
-The `local_skips_store`, `local_output_bounds`, and `local_producer_cancel`
-tests cover that correction. Qualification against the final shared delivery
-source remains **Not done**. ModelRun uses the local route for outputs,
-checkpoints, evidence, reasons, and dataset-only queries. The correction does
-not add a second SQL executor.
+remains the finite single-query input API.
+[Session::stream_local](../../crates/araphor-query/src/execution.rs) executes
+model-local plans without a durable source binding or store read. The caller
+supplies its shared evaluation permit. Session checks the permit's engine and
+tenant before physical planning. Each batch passes native output bounds and
+retains its buffer claims before Analysis receives the batch. The stream frees
+unused output prepayment before Analysis reserves conversion memory. The
+ModelRun output reservation prepays conversion growth and retains metadata. All SQL
+model stages share the same complete run. Stream drop releases the stream's
+permit reference; the run keeps its permit through final output checks.
+Borrowed arrays keep their buffer charges after the run ends.
+
+The [local execution cases](../../crates/araphor-query/src/execution/tests.rs)
+check absent store reads, output limits, cancellation, foreign permits, unused
+prepayment, and capacity recovery. The
+[gated model case](../../crates/araphor-analysis/src/model/tests/stream.rs)
+requires an invalid first conversion to stop before a later native error is
+polled. The case also checks stream drop, permit release, and complete input
+and output capacity recovery. The
+[model program cases](../../crates/araphor-analysis/src/model/tests.rs)
+execute the ordered program outside Tokio, inside both runtime types, and in
+a blocking worker. These cases pass in the current-source qualification below.
 
 [Dataset::normalize_batch](../../crates/araphor-analysis-sdk/src/batch.rs)
 checks declared result names and types at the SDK boundary. Native string
@@ -695,6 +751,20 @@ claim retains its charge through cloned columns, slices, child arrays, and
 validity buffers. The registry holds weak allocation references. A completed
 or cancelled producer releases its evaluation permit independently of those
 borrowed buffers. Known metadata retains separate reservations.
+
+[Dataset::metadata_bytes](../../crates/araphor-analysis-sdk/src/evaluation.rs)
+uses the existing SDK allocation calculation and excludes native buffer bytes.
+The subtraction keeps each batch and column occurrence. Native allocation
+claims separately account for shared buffers. Nested and Null arrays retain
+their object and schema charges. Input::metadata_bytes adds revision, window,
+and coverage allocations through the same SDK owner. Query retains the outer
+input-vector capacity. Dataset-only results retain the Dataset metadata charge.
+The separate Query and Analysis metadata estimators are deleted. The SDK
+schema allowance includes schema headers, field allocations, and metadata-map
+capacity. This allowance raises the retained metadata floor above the former
+manual field sum. The [SDK metadata case](../../crates/araphor-analysis-sdk/src/memory/tests.rs)
+checks sliced aliases, nested Null values, schema-map capacity, and input
+metadata capacity.
 
 These limits do not account for every temporary Arrow allocation. Native
 operators account for registered allocations through their execution pool.
@@ -1014,9 +1084,33 @@ The current source reading route is:
 - [Follow tests](../../crates/araphor-query/src/follow/tests.rs): append positions, `health_keeps_cursor`, `count_consumes_committed_changes`, `moving_window_nanoseconds`, `notification_follow_deadline`, and cursor binding. The COUNT case checks later insert scans, full retained witnesses, retraction after retention, and released reservations.
 - [Delivery tests](../../crates/araphor-query/src/follow/delivery/tests.rs): disclosure phases, conversion lifetime, immediate failure cleanup, renewed output demand, native waits, and authority changes during native waits or read checks.
 - [Model operation tests](../../crates/araphor-analysis/src/model/operation/tests.rs): exact input order, revisions, original provenance, retained capacity, and local source scope.
-- [Model tests](../../crates/araphor-analysis/src/model/tests.rs) and [package lifecycle tests](../../crates/araphor-analysis/src/package/tests/lifecycle.rs): checkpoints, parameters, evidence, source bounds, retries, and installed revisions.
+- [Model tests](../../crates/araphor-analysis/src/model/tests.rs) and [package lifecycle tests](../../crates/araphor-analysis/src/package/tests/lifecycle.rs): checkpoints, parameters, evidence, source bounds, retries, installed revisions, and the complete SQL program through each supported runtime entry.
+- [Model stream test](../../crates/araphor-analysis/src/model/tests/stream.rs): conversion failure before another native poll, stream drop, permit release, and capacity recovery.
+- [SDK metadata test](../../crates/araphor-analysis-sdk/src/memory/tests.rs): sliced buffer aliases, nested Null headers, schema-map capacity, and input metadata allocations.
 - [Interruption tests](../../crates/araphor-analysis/src/package/tests/interruption.rs): authority change, cancellation, stop before commit, Busy, and preservation of committed state.
 - [Control tests](../../crates/mithril-control/src/client_grpc/tests.rs) and [follow E2E cases](../../crates/mithril-e2e/src/discovery/query_follow.rs): actual protocol frames and native subscription behavior across owners.
+
+
+### SQL program verification
+
+Implementation and selected host verification: **Done**. The source state is
+the changed files after a26f15e9. The record contains their hashes, the source
+inventory, exact commands, test binary hashes, and native artifact hashes.
+
+All 298 distinct selected cases pass: 13 SDK, 186 Query, 94 Analysis, two
+Control, and three E2E cases. The Analysis selection includes all nine explicit
+native package cases. The native detector E2E case runs with PATH empty.
+Strict Clippy passes for the five affected crate and test targets. Formatting
+and local links pass. The records are
+`/tmp/araphor-sql-program-qualification1.json` and
+`/tmp/araphor-sql-program-count1.json`.
+
+The source removes two nonblank production lines. The complete redesign still
+adds 665 from 7b7b407a and requires another 6,665 net deletions. These checks
+qualify Linux x86_64 with the GNU target and glibc 2.39. They do not qualify
+other targets, physical Kubernetes, general maintained SQL, or shared
+maintained query ownership. Full workspace CI and benchmarks are not run.
+The complete redesign remains **Not done**. No speed result is claimed.
 
 ### Catalog capture verification
 

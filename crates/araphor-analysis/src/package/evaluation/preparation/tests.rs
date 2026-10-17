@@ -215,11 +215,28 @@ async fn automatic_clock_ticks() -> TestResult {
                         .ok_or("clock input offer")?;
                 assert_eq!(selected, active);
                 assert!(Arc::ptr_eq(inputs.memory(), &memory));
-                let run = crate::model::ModelRun::prepared(
+                let (_, model, _) = package.export(
+                    &selected.key.package_id,
+                    &selected.revision,
+                    &selected.key.export,
+                )?;
+                let requested =
+                    model
+                        .limits
+                        .max_bytes
+                        .saturating_add(if model.checkpoint.is_some() {
+                            model.limits.max_checkpoint_bytes
+                        } else {
+                            0
+                        });
+                let run = crate::model::ModelRun::new(
                     &fixture.owner.query,
                     [1; 16],
                     &stage,
-                    Arc::clone(&inputs),
+                    now,
+                    model.limits,
+                    requested as usize,
+                    Some(Arc::clone(&inputs)),
                 )?;
                 assert!(Arc::ptr_eq(&run.memory, &memory));
                 drop(run);

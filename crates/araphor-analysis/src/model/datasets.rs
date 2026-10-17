@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
+use crate::AnalysisReadControl;
 use araphor_analysis_sdk as sdk;
 use araphor_query::datafusion::execution::memory_pool::MemoryReservation;
+use araphor_query::execution::Engine;
 use snafu::ResultExt as _;
 
 use super::{operation::ModelRun, AdmittedModel};
@@ -12,13 +15,16 @@ pub struct SqlDatasetOutputV1 {
     _metadata: MemoryReservation,
 }
 
-impl ModelRun<'_> {
-    pub fn query_datasets(
-        mut self,
+impl SqlDatasetOutputV1 {
+    pub fn query(
+        owner: &Arc<Engine>,
+        tenant: [u8; 16],
+        control: &AnalysisReadControl,
         inputs: &[sdk::Dataset],
         sql: &str,
         limits: sdk::Limits,
     ) -> Result<SqlDatasetOutputV1> {
+        control.check()?;
         let ports = inputs
             .iter()
             .map(|input| {
@@ -40,8 +46,8 @@ impl ModelRun<'_> {
         for port in &ports {
             AdmittedModel::relation(&mut relations, &port.name, &port.schema)?;
         }
-        let state = self.owner.catalog(relations)?;
-        let plan = AdmittedModel::plan(self.owner, &state, sql)?;
+        let state = owner.catalog(relations)?;
+        let plan = AdmittedModel::plan(owner, &state, sql)?;
         let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos()).map_err(
             |_| {
                 crate::ModelInvalidSnafu {
@@ -50,69 +56,48 @@ impl ModelRun<'_> {
                 .build()
             },
         )?;
-        self.control = self.control.within(self.owner.limits().evaluate_timeout)?;
-        self.start(crate::AnalysisSelectionV1::tenant(self.tenant()), now)?;
-        self.limits = limits;
-        self.byte_limit = usize::try_from(limits.max_bytes)
-            .unwrap_or(usize::MAX)
-            .min(self.owner.limits().output_capacity);
-        self.output_memory = Some(self.memory.reserve_output(0)?);
-        self.session()?
+        let mut run = ModelRun::new(
+            owner,
+            tenant,
+            control,
+            now,
+            limits,
+            usize::try_from(limits.max_bytes).unwrap_or(usize::MAX),
+            None,
+        )?;
+        run.session
             .check_input(inputs.iter().flat_map(|data| &data.batches))?;
         for (port, data) in ports.iter().zip(inputs) {
-            self.table(&port.name, &port.schema, &data.batches)?;
+            run.table(&port.name, &port.schema, &data.batches)?;
         }
-        let batches = self.query(&plan, None)?;
-        let schema = batches
-            .first()
-            .ok_or_else(|| {
-                crate::ModelInvalidSnafu {
-                    field: "model query schema",
-                }
-                .build()
-            })?
-            .schema();
-        let data = sdk::Dataset {
-            name: "query".into(),
-            batches,
-        };
-        data.validate(&sdk::Port::new("query", schema.as_ref().clone()), limits)
-            .context(crate::AnalysisContractSnafu)?;
-        self.control.check()?;
-        let metadata = data.name.capacity()
-            + data.batches.capacity() * std::mem::size_of::<sdk::RecordBatch>()
-            + data
-                .batches
-                .iter()
-                .map(|batch| {
-                    batch.num_columns() * std::mem::size_of::<sdk::arrow_array::ArrayRef>()
-                        + batch
-                            .columns()
-                            .iter()
-                            .map(|array| {
-                                array
-                                    .get_array_memory_size()
-                                    .saturating_sub(array.get_buffer_memory_size())
-                            })
-                            .sum::<usize>()
-                        + batch
-                            .schema_ref()
-                            .fields()
-                            .iter()
-                            .map(|field| field.size())
-                            .sum::<usize>()
+        owner.wait(async move {
+            Ok(async move {
+                let batches = run.query(&plan, None).await?;
+                let schema = batches
+                    .first()
+                    .ok_or_else(|| {
+                        crate::ModelInvalidSnafu {
+                            field: "model query schema",
+                        }
+                        .build()
+                    })?
+                    .schema();
+                let data = sdk::Dataset {
+                    name: "query".into(),
+                    batches,
+                };
+                data.validate(&sdk::Port::new("query", schema.as_ref().clone()), limits)
+                    .context(crate::AnalysisContractSnafu)?;
+                run.control.check()?;
+                let metadata = data.metadata_bytes();
+                let reservation = run.output_memory;
+                reservation.try_resize(metadata)?;
+                Ok::<Self, crate::Error>(Self {
+                    data,
+                    _metadata: reservation,
                 })
-                .sum::<usize>();
-        let reservation = self.output_memory.take().ok_or_else(|| {
-            crate::ModelInvalidSnafu {
-                field: "model output reservation",
             }
-            .build()
-        })?;
-        reservation.try_resize(metadata)?;
-        Ok(SqlDatasetOutputV1 {
-            data,
-            _metadata: reservation,
-        })
+            .await)
+        })?
     }
 }

@@ -30,6 +30,36 @@ fn control() -> araphor_data::Result<AnalysisReadControl> {
     AnalysisReadControl::with_timeout(Duration::from_secs(30))
 }
 
+pub(in crate::model) fn evaluate(
+    owner: &Arc<Engine>,
+    tenant: [u8; 16],
+    control: &AnalysisReadControl,
+    package: &sdk::Package,
+    admitted: &Arc<AdmittedExport>,
+    evaluation: &sdk::Evaluation,
+    inputs: Option<Arc<araphor_query::inputs::InputSet>>,
+) -> crate::Result<SqlModelOutputV1> {
+    let engine = Arc::clone(owner);
+    let control = control.within(control.remaining()?)?;
+    let package = package.clone();
+    let admitted = Arc::clone(admitted);
+    let evaluation = evaluation.clone();
+    owner.wait(async move {
+        let result = ModelRun::evaluate(
+            &engine,
+            tenant,
+            &control,
+            &package,
+            &admitted,
+            &evaluation,
+            inputs,
+        )
+        .await;
+        drop(admitted);
+        Ok(result)
+    })?
+}
+
 #[test]
 fn sql_model_state_provenance() -> TestResult {
     let fixture = QueryFixture::new()?;
@@ -92,11 +122,15 @@ fn sql_model_state_provenance() -> TestResult {
         evidence: Some("SELECT 'counts' AS output_dataset, CAST(0 AS BIGINT UNSIGNED) AS output_row, 'events' AS input_dataset, __row_index AS input_row FROM events".into()),
         reasons: vec![SqlReasonV1 { output: "counts".into(), code: "denials.repeated".into(), sql: "SELECT __row_index AS output_row, count FROM output_counts".into() }, SqlReasonV1 { output: "counts".into(), code: "denials.empty".into(), sql: "SELECT __row_index AS output_row FROM output_counts".into() }],
     };
-    let admitted = AdmittedExport::admit(&owner, &model, Some(&program))?;
-    let result = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
+    let admitted = AdmittedExport::admit(&owner, &model, Some(&program)).map(Arc::new)?;
+    let result = evaluate(
+        &owner,
+        [1; 16],
+        &control()?,
         &package,
         &admitted,
         &evaluation,
+        None,
     )?;
     assert_eq!(result.output.evidence.len(), 3);
     assert_eq!(result.output.reasons.len(), 2);
@@ -123,10 +157,14 @@ fn sql_model_state_provenance() -> TestResult {
     supplied.exports[0].inputs[0].source =
         sdk::InputSource::Query("SELECT missing FROM absent".into());
     assert!(AdmittedExport::admit(&owner, &supplied.exports[0], Some(&program)).is_err());
-    let supplied = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
+    let supplied = evaluate(
+        &owner,
+        [1; 16],
+        &control()?,
         &package,
         &admitted,
         &evaluation,
+        None,
     )?;
     assert_eq!(
         supplied.output.datasets[0].batches[0],
@@ -137,11 +175,15 @@ fn sql_model_state_provenance() -> TestResult {
     reused
         .checkpoint
         .insert("state".into(), "SELECT count FROM output_counts".into());
-    let reused_admitted = AdmittedExport::admit(&owner, &model, Some(&reused))?;
-    let reused = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
+    let reused_admitted = AdmittedExport::admit(&owner, &model, Some(&reused)).map(Arc::new)?;
+    let reused = evaluate(
+        &owner,
+        [1; 16],
+        &control()?,
         &package,
         &reused_admitted,
         &evaluation,
+        None,
     )?;
     assert_eq!(
         reused
@@ -154,10 +196,17 @@ fn sql_model_state_provenance() -> TestResult {
         batch(&port("state", "count"), vec![3])?
     );
     drop(reused);
-    let bad_admitted = AdmittedExport::admit(&owner, &model, Some(&bad))?;
-    assert!(ModelRun::new(&owner, [1; 16], &control()?)?
-        .evaluate_admitted(&package, &bad_admitted, &evaluation)
-        .is_err());
+    let bad_admitted = AdmittedExport::admit(&owner, &model, Some(&bad)).map(Arc::new)?;
+    assert!(evaluate(
+        &owner,
+        [1; 16],
+        &control()?,
+        &package,
+        &bad_admitted,
+        &evaluation,
+        None,
+    )
+    .is_err());
     for sql in [
         "SELECT * FROM read_csv('/etc/passwd')",
         "SELECT * FROM events; DROP TABLE events",
@@ -193,7 +242,7 @@ fn sql_model_source_bounds() -> TestResult {
         ),
     });
     let revision = fixture.store.meta()?.commit_revision;
-    let admitted = AdmittedExport::admit(&owner, &model, None)?;
+    let admitted = AdmittedExport::admit(&owner, &model, None).map(Arc::new)?;
     let read = |selection: AnalysisSelectionV1,
                 now|
      -> crate::Result<Arc<araphor_query::inputs::InputSet>> {
@@ -240,7 +289,10 @@ fn sql_model_source_bounds() -> TestResult {
         .any(|(name, _)| name == "analysis_results"));
     let second = read(selection.clone(), 2_000)?;
     assert_eq!(first.inputs[0].revision, second.inputs[0].revision);
-    let result = ModelRun::new(&owner, fixture.source.tenant_id, &control()?)?.query_datasets(
+    let result = SqlDatasetOutputV1::query(
+        &owner,
+        fixture.source.tenant_id,
+        &control()?,
         std::slice::from_ref(&first.inputs[0].data),
         "SELECT * FROM events WHERE id > 1 ORDER BY id",
         sdk::Limits::default(),
@@ -262,7 +314,10 @@ fn sql_model_source_bounds() -> TestResult {
         &[1, 2],
     );
     drop(result);
-    let denied = ModelRun::new(&owner, fixture.source.tenant_id, &control()?)?.query_datasets(
+    let denied = SqlDatasetOutputV1::query(
+        &owner,
+        fixture.source.tenant_id,
+        &control()?,
         std::slice::from_ref(&first.inputs[0].data),
         "WITH unused AS (SELECT * FROM datafusion.public.catalog) SELECT id FROM events",
         sdk::Limits::default(),
@@ -384,10 +439,14 @@ fn admitted_program_order() -> TestResult {
         invalid.reasons[0].code = code.into();
         assert!(AdmittedExport::admit(&owner, &model, Some(&invalid)).is_err());
     }
-    let mut admitted = AdmittedExport::admit(&owner, &model, Some(&program))?;
+    let mut admitted = AdmittedExport::admit(&owner, &model, Some(&program)).map(Arc::new)?;
     let before = admitted.allocated_bytes();
     let growth = {
-        let plan = admitted.model.as_mut().ok_or("admitted model")?;
+        let plan = Arc::get_mut(&mut admitted)
+            .ok_or("shared admitted model")?
+            .model
+            .as_mut()
+            .ok_or("admitted model")?;
         assert_eq!((plan.reasons[0].0, plan.reasons[0].1), (1, 1));
         assert_eq!((plan.reasons[1].0, plan.reasons[1].1), (0, 0));
         let mut growth = 0;
@@ -419,10 +478,14 @@ fn admitted_program_order() -> TestResult {
         },
         checkpoint: None,
     };
-    let output = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
+    let output = evaluate(
+        &owner,
+        [1; 16],
+        &control()?,
         &package,
         &admitted,
         &evaluation,
+        None,
     )?;
     for (index, expected) in [7, 9].into_iter().enumerate() {
         let data = &output.output.datasets[index];
@@ -463,13 +526,21 @@ fn admitted_program_order() -> TestResult {
     }
     drop(output);
     for (output, reason) in [(usize::MAX, 1), (1, usize::MAX)] {
-        let plan = admitted.model.as_mut().ok_or("admitted model")?;
+        let plan = Arc::get_mut(&mut admitted)
+            .ok_or("shared admitted model")?
+            .model
+            .as_mut()
+            .ok_or("admitted model")?;
         (plan.reasons[0].0, plan.reasons[0].1) = (output, reason);
         assert!(matches!(
-            ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
+            evaluate(
+                &owner,
+                [1; 16],
+                &control()?,
                 &package,
                 &admitted,
                 &evaluation,
+                None,
             ),
             Err(crate::Error::ModelInvalid {
                 field: "model reason declaration",
@@ -482,14 +553,22 @@ fn admitted_program_order() -> TestResult {
                 .reserve_input(owner.limits().input_capacity)?,
         );
     }
-    let plan = admitted.model.as_mut().ok_or("admitted model")?;
+    let plan = Arc::get_mut(&mut admitted)
+        .ok_or("shared admitted model")?
+        .model
+        .as_mut()
+        .ok_or("admitted model")?;
     (plan.reasons[0].0, plan.reasons[0].1) = (1, 1);
     plan.outputs.pop();
     assert!(matches!(
-        ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_admitted(
+        evaluate(
+            &owner,
+            [1; 16],
+            &control()?,
             &package,
             &admitted,
             &evaluation,
+            None,
         ),
         Err(crate::Error::ModelInvalid {
             field: "model admitted output",
@@ -505,4 +584,20 @@ fn admitted_program_order() -> TestResult {
 }
 
 mod clock;
+mod stream;
 mod types;
+
+#[tokio::test(flavor = "current_thread")]
+async fn program_in_current_thread() -> TestResult {
+    admitted_program_order()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn program_in_multithread() -> TestResult {
+    admitted_program_order()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn program_in_blocking_worker() -> TestResult {
+    tokio::task::spawn_blocking(admitted_program_order).await?
+}

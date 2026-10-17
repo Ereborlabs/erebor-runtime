@@ -1,11 +1,13 @@
-use std::borrow::Cow;
+use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
+use araphor_query::inputs::InputSet;
 use snafu::ResultExt as _;
 
-use crate::model::{AdmittedExport, ModelRun};
+use crate::model::ModelRun;
 use crate::{AnalysisReadControl, Result, SqlModelOutputV1};
 
+use super::installed::snapshot::InstalledBundle;
 use super::{
     AnalysisPackageOwner, PackageArtifactV1, PackageErrorCodeV1 as Code, PackageImplementationV1,
 };
@@ -14,63 +16,65 @@ impl AnalysisPackageOwner {
     pub(super) fn evaluate_artifact(
         &self,
         tenant: [u8; 16],
-        artifact: &PackageArtifactV1,
-        admitted: &AdmittedExport,
-        evaluation: &sdk::Evaluation,
+        bundle: Arc<InstalledBundle>,
+        index: (usize, usize),
+        mut evaluation: sdk::Evaluation,
+        inputs: Option<Arc<InputSet>>,
         control: &AnalysisReadControl,
-    ) -> Result<SqlModelOutputV1> {
+    ) -> Result<(SqlModelOutputV1, sdk::Evaluation)> {
+        let (artifact, _, admitted) = bundle.export_at(index)?;
         let implementation = admitted.implementation(artifact)?;
-        let run = ModelRun::new(&self.query, tenant, control)?;
-        self.execute_model(
-            run,
-            &artifact.descriptor,
-            implementation,
-            admitted,
-            evaluation,
-            control,
-        )
-    }
-
-    pub(super) fn execute_model(
-        &self,
-        run: ModelRun<'_>,
-        package: &sdk::Package,
-        implementation: &PackageImplementationV1,
-        admitted: &AdmittedExport,
-        evaluation: &sdk::Evaluation,
-        control: &AnalysisReadControl,
-    ) -> Result<SqlModelOutputV1> {
-        if matches!(implementation, PackageImplementationV1::Sql { .. }) {
-            return run.evaluate_admitted(package, admitted, evaluation);
+        if inputs
+            .as_ref()
+            .and_then(|inputs| inputs.snapshot.as_ref())
+            .is_some_and(|snapshot| snapshot.selection.tenant_id != tenant)
+        {
+            return Err(Code::Denied.error("model input tenant").into());
         }
-        let preflight = self.exchange_preflight(package, evaluation)?;
-        let tenant = run.tenant();
-        let inputs = run.inputs.clone();
-        let memory = std::sync::Arc::clone(&run.memory);
-        drop(run);
-        let bounded = if matches!(implementation, PackageImplementationV1::Wasm { .. }) {
-            let limits = self.component_limits(evaluation.context.limits);
-            if limits == evaluation.context.limits {
-                Cow::Borrowed(evaluation)
-            } else {
-                let mut bounded = evaluation.clone();
-                bounded.context.limits = limits;
-                Cow::Owned(bounded)
-            }
-        } else {
-            Cow::Borrowed(evaluation)
-        };
+        control.check()?;
+        if matches!(implementation, PackageImplementationV1::Sql { .. }) {
+            let owner = Arc::clone(&self.query);
+            let control = control.within(control.remaining()?)?;
+            return self.query.wait(async move {
+                let result: Result<_> = async {
+                    let (artifact, _, admitted) = bundle.export_at(index)?;
+                    let output = ModelRun::evaluate(
+                        &owner,
+                        tenant,
+                        &control,
+                        &artifact.descriptor,
+                        admitted,
+                        &evaluation,
+                        inputs,
+                    )
+                    .await?;
+                    Ok((output, evaluation))
+                }
+                .await;
+                Ok(result)
+            })?;
+        }
+        let package = &artifact.descriptor;
+        let preflight = self.exchange_preflight(package, &evaluation)?;
+        let memory = Arc::clone(
+            inputs
+                .as_ref()
+                .map_or_else(|| self.query.memory(), |inputs| inputs.memory()),
+        );
+        if matches!(implementation, PackageImplementationV1::Wasm { .. }) {
+            evaluation.context.limits = self.component_limits(evaluation.context.limits);
+        }
         let checked = package
-            .check_evaluation(&bounded)
+            .check_evaluation(&evaluation)
             .context(crate::AnalysisContractSnafu)?;
         let model = checked.model();
         let requested =
-            bounded
+            evaluation
                 .context
                 .limits
                 .max_bytes
                 .saturating_add(if model.checkpoint.is_some() {
-                    bounded.context.limits.max_checkpoint_bytes
+                    evaluation.context.limits.max_checkpoint_bytes
                 } else {
                     0
                 });
@@ -79,7 +83,7 @@ impl AnalysisPackageOwner {
         let input_memory = memory.reserve_input(preflight)?;
         let output_memory = memory.reserve_output(capacity)?;
         control.check()?;
-        let retained = bounded.allocated_bytes();
+        let retained = evaluation.allocated_bytes();
         let (output, control) = match implementation {
             PackageImplementationV1::Wasm { artifact, .. } => {
                 let prepared = self.wasm.prepare(artifact, control)?;
@@ -101,7 +105,7 @@ impl AnalysisPackageOwner {
                 }
                 let output = self.wasm.invoke(&prepared, input.into(), &control)?;
                 let decoded = sdk::wire::Output::from(output)
-                    .decode(package, &bounded)
+                    .decode(package, &evaluation)
                     .context(crate::AnalysisContractSnafu)?;
                 control.check()?;
                 (decoded, control)
@@ -113,13 +117,13 @@ impl AnalysisPackageOwner {
             } => {
                 let control = control.within(self.query.limits().evaluate_timeout)?;
                 let limits = sdk::Limits {
-                    max_bytes: bounded.context.limits.max_bytes.min(capacity as u64),
-                    max_checkpoint_bytes: bounded
+                    max_bytes: evaluation.context.limits.max_bytes.min(capacity as u64),
+                    max_checkpoint_bytes: evaluation
                         .context
                         .limits
                         .max_checkpoint_bytes
                         .min(capacity as u64),
-                    ..bounded.context.limits
+                    ..evaluation.context.limits
                 };
                 control.check()?;
                 self.limits.native.validate()?;
@@ -150,7 +154,8 @@ impl AnalysisPackageOwner {
         if let Some(inputs) = &inputs {
             inputs.check(&self.query, &control)?;
         }
-        SqlModelOutputV1::retain(output, &memory, output_memory)
+        let output = SqlModelOutputV1::retain(output, &memory, output_memory)?;
+        Ok((output, evaluation))
     }
 
     pub(super) fn admit_artifact(

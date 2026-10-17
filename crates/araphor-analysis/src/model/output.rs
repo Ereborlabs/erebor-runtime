@@ -6,8 +6,8 @@ use crate::Result;
 use araphor_query::datafusion::logical_expr::LogicalPlan;
 use std::sync::Arc;
 
-impl ModelRun<'_> {
-    pub(super) fn evidence(
+impl ModelRun {
+    pub(super) async fn evidence(
         &mut self,
         query: Option<&Arc<LogicalPlan>>,
     ) -> Result<Vec<sdk::EvidenceLink>> {
@@ -20,7 +20,7 @@ impl ModelRun<'_> {
             sdk::Field::new("input_dataset", sdk::DataType::Utf8, false),
             sdk::Field::new("input_row", sdk::DataType::UInt64, false),
         ]);
-        let batches = self.references(query, &schema)?;
+        let batches = self.references(query, &schema).await?;
         let mut links = Vec::new();
         for batch in batches {
             let outputs = Self::strings(&batch, 0)?;
@@ -55,7 +55,7 @@ impl ModelRun<'_> {
         Ok(links)
     }
 
-    pub(super) fn reasons(
+    pub(super) async fn reasons(
         &mut self,
         model: &sdk::Model,
         queries: &[(usize, usize, Arc<LogicalPlan>)],
@@ -88,7 +88,7 @@ impl ModelRun<'_> {
                     )
                     .collect::<Vec<_>>(),
             );
-            for batch in self.references(query, &schema)? {
+            for batch in self.references(query, &schema).await? {
                 let rows = Self::indices(&batch, 0)?;
                 let details = sdk::RecordBatch::try_new_with_options(
                     std::sync::Arc::new(spec.details.clone()),

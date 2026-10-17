@@ -120,12 +120,20 @@ fn model_output_deadline() -> TestResult {
         outputs: BTreeMap::from([("rows".into(), "SELECT 1::BIGINT UNSIGNED AS count".into())]),
         ..Default::default()
     };
-    let admitted = AdmittedExport::admit(&owner, &package.exports[0], Some(&program))?;
+    let admitted =
+        AdmittedExport::admit(&owner, &package.exports[0], Some(&program)).map(Arc::new)?;
     let caller = control()?;
-    let mut run = ModelRun::new(&owner, [1; 16], &caller)?;
-    run.control = run.control.within(Duration::from_millis(1))?;
+    let bounded = caller.within(Duration::from_millis(1))?;
     std::thread::sleep(Duration::from_millis(2));
-    let result = run.evaluate_admitted(&package, &admitted, &evaluation);
+    let result = evaluate(
+        &owner,
+        [1; 16],
+        &bounded,
+        &package,
+        &admitted,
+        &evaluation,
+        None,
+    );
     assert!(matches!(
         result,
         Err(crate::Error::Data {
@@ -133,10 +141,14 @@ fn model_output_deadline() -> TestResult {
         })
     ));
     caller.check()?;
-    let result = ModelRun::new(&owner, [1; 16], &caller)?.evaluate_admitted(
+    let result = evaluate(
+        &owner,
+        [1; 16],
+        &caller,
         &package,
         &admitted,
         &evaluation,
+        None,
     )?;
     assert_eq!(result.output.datasets[0].batches[0].num_rows(), 1);
     Ok(())

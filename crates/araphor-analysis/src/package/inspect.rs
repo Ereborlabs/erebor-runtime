@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::analysis::{PackageActivationV1, PackageKeyV1, PackageResultV1};
 use crate::{AnalysisReadControl, Result};
 use araphor_analysis_sdk as sdk;
@@ -39,7 +41,7 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         scope: &str,
         package: &str,
-        admitted: Option<&InstalledBundle>,
+        admitted: Option<&Arc<InstalledBundle>>,
         control: &AnalysisReadControl,
     ) -> Result<PackageResponseV1> {
         self.check(grant, Action::Inspect)?;
@@ -200,7 +202,10 @@ impl AnalysisPackageOwner {
         let output = Self::decode_output(&Self::result_output(grant, &stored)?, model)?;
         self.check(grant, Action::Inspect)?;
         control.check()?;
-        let query = crate::ModelRun::new(&self.query, key.tenant_id, control)?.query_datasets(
+        let query = crate::SqlDatasetOutputV1::query(
+            &self.query,
+            key.tenant_id,
+            control,
             &output.datasets,
             sql,
             model.limits,

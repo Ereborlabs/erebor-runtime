@@ -2,17 +2,23 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_query::datafusion::logical_expr::LogicalPlan;
+use araphor_query::execution::Engine;
+use araphor_query::inputs::InputSet;
+use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
 
 use super::{operation::ModelRun, AdmittedExport, AdmittedModel, SqlModelOutputV1};
-use crate::Result;
+use crate::{AnalysisReadControl, Result};
 
-impl ModelRun<'_> {
-    pub(crate) fn evaluate_admitted(
-        mut self,
+impl ModelRun {
+    pub(crate) async fn evaluate(
+        owner: &Arc<Engine>,
+        tenant: [u8; 16],
+        control: &AnalysisReadControl,
         package: &sdk::Package,
         admitted: &AdmittedExport,
         evaluation: &sdk::Evaluation,
+        inputs: Option<Arc<InputSet>>,
     ) -> Result<SqlModelOutputV1> {
         let admitted = admitted.model.as_ref().ok_or_else(|| {
             crate::ModelInvalidSnafu {
@@ -20,7 +26,25 @@ impl ModelRun<'_> {
             }
             .build()
         })?;
-        self.check_evaluation(evaluation)?;
+        if inputs
+            .as_ref()
+            .and_then(|inputs| inputs.snapshot.as_ref())
+            .is_some_and(|snapshot| snapshot.selection.tenant_id != tenant)
+        {
+            return Err(crate::PackageErrorCodeV1::Denied
+                .error("model input tenant")
+                .into());
+        }
+        if let Some(inputs) = &inputs {
+            inputs.check_async(owner, control).await?;
+        }
+        if evaluation.allocated_bytes() > owner.limits().input_bytes {
+            return crate::ModelLimitSnafu {
+                resource: "analysis input memory",
+                limit: owner.limits().input_bytes,
+            }
+            .fail();
+        }
         let checked = package
             .check_evaluation(evaluation)
             .context(crate::AnalysisContractSnafu)?;
@@ -35,63 +59,46 @@ impl ModelRun<'_> {
                 } else {
                     0
                 });
-        self.byte_limit = usize::try_from(requested)
-            .unwrap_or(usize::MAX)
-            .min(self.owner.limits().output_capacity);
-        self.output_memory = Some(self.memory.reserve_output(0)?);
-        self.control = self.control.within(self.owner.limits().evaluate_timeout)?;
         let now = u64::try_from(evaluation.context.time_utc_ns).map_err(|_| {
             crate::ModelInvalidSnafu {
                 field: "model evaluation time",
             }
             .build()
         })?;
-        self.start(crate::AnalysisSelectionV1::tenant(self.tenant()), now)?;
-        self.limits = evaluation.context.limits;
-        self.limits.max_bytes = self.limits.max_bytes.min(self.byte_limit as u64);
-        self.limits.max_checkpoint_bytes =
-            self.limits.max_checkpoint_bytes.min(self.byte_limit as u64);
-        self.register(model, evaluation)?;
-        let output = self.evaluate(model, admitted)?;
+        let mut run = Self::new(
+            owner,
+            tenant,
+            control,
+            now,
+            evaluation.context.limits,
+            usize::try_from(requested).unwrap_or(usize::MAX),
+            inputs,
+        )?;
+        run.register(model, evaluation)?;
+        let output = run.evaluate_output(model, admitted).await?;
         checked
             .validate_output(&output)
             .context(crate::AnalysisContractSnafu)?;
-        if SqlModelOutputV1::owned_bytes(&output, self.bytes) > self.byte_limit {
+        if SqlModelOutputV1::owned_bytes(&output, run.bytes) > run.byte_limit {
             return crate::ModelLimitSnafu {
                 resource: "query output bytes",
-                limit: self.byte_limit,
+                limit: run.byte_limit,
             }
             .fail();
         }
-        self.control.check()?;
-        if let Some(inputs) = &self.inputs {
-            inputs.check(self.owner, &self.control)?;
+        run.control.check()?;
+        if let Some(inputs) = &run.inputs {
+            inputs.check_async(owner, &run.control).await?;
         }
-        let reservation = self.output_memory.take().ok_or_else(|| {
-            crate::ModelInvalidSnafu {
-                field: "model output reservation",
-            }
-            .build()
-        })?;
-        SqlModelOutputV1::retain(output, &self.memory, reservation)
+        SqlModelOutputV1::retain(output, &run.memory, run.output_memory)
     }
 
-    pub(super) fn check_evaluation(&self, evaluation: &sdk::Evaluation) -> Result<()> {
-        if let Some(inputs) = &self.inputs {
-            inputs.check(self.owner, &self.control)?;
-        }
-        if evaluation.allocated_bytes() > self.owner.limits().input_bytes {
-            return crate::ModelLimitSnafu {
-                resource: "analysis input memory",
-                limit: self.owner.limits().input_bytes,
-            }
-            .fail();
-        }
-        Ok(())
-    }
-
-    fn evaluate(&mut self, model: &sdk::Model, admitted: &AdmittedModel) -> Result<sdk::Output> {
-        let datasets = self.datasets(&model.outputs, &admitted.outputs)?;
+    async fn evaluate_output(
+        &mut self,
+        model: &sdk::Model,
+        admitted: &AdmittedModel,
+    ) -> Result<sdk::Output> {
+        let datasets = self.datasets(&model.outputs, &admitted.outputs).await?;
         for (port, data) in model.outputs.iter().zip(&datasets) {
             let name = format!("output_{}", port.name);
             if admitted.reads_output(&name)? {
@@ -100,21 +107,22 @@ impl ModelRun<'_> {
         }
         let output_limit = self.limits.max_bytes;
         self.limits.max_bytes = self.limits.max_checkpoint_bytes;
-        let checkpoint = model
-            .checkpoint
-            .as_ref()
-            .map(|spec| {
-                self.datasets(&spec.datasets, &admitted.checkpoint)
-                    .map(|datasets| sdk::Checkpoint {
+        let checkpoint = if let Some(spec) = &model.checkpoint {
+            self.datasets(&spec.datasets, &admitted.checkpoint)
+                .await
+                .map(|datasets| {
+                    Some(sdk::Checkpoint {
                         version: spec.version,
                         datasets,
                     })
-            })
-            .transpose();
+                })
+        } else {
+            Ok(None)
+        };
         self.limits.max_bytes = output_limit;
         let checkpoint = checkpoint?;
-        let evidence = self.evidence(admitted.evidence.as_ref())?;
-        let reasons = self.reasons(model, &admitted.reasons)?;
+        let evidence = self.evidence(admitted.evidence.as_ref()).await?;
+        let reasons = self.reasons(model, &admitted.reasons).await?;
         Ok(sdk::Output {
             datasets,
             evidence,
@@ -123,7 +131,7 @@ impl ModelRun<'_> {
         })
     }
 
-    fn datasets(
+    async fn datasets(
         &mut self,
         ports: &[sdk::Port],
         queries: &[Arc<LogicalPlan>],
@@ -144,16 +152,15 @@ impl ModelRun<'_> {
             }
             .build()
         };
-        let result = ports
-            .iter()
-            .zip(queries)
-            .map(|(port, query)| {
+        let result = async {
+            let mut result = Vec::with_capacity(ports.len());
+            for (port, query) in ports.iter().zip(queries) {
                 remaining.max_bytes = remaining
                     .max_bytes
                     .checked_sub(port.name.len() as u64)
                     .ok_or_else(limit)?;
                 self.limits = remaining;
-                let batches = self.query(query, Some(&port.schema))?;
+                let batches = self.query(query, Some(&port.schema)).await?;
                 let bytes = batches.iter().fold(0u64, |bytes, batch| {
                     bytes.saturating_add(batch.get_array_memory_size() as u64)
                 });
@@ -166,17 +173,19 @@ impl ModelRun<'_> {
                     .max_batches
                     .checked_sub(self.batches)
                     .ok_or_else(limit)?;
-                Ok(sdk::Dataset {
+                result.push(sdk::Dataset {
                     name: port.name.clone(),
                     batches,
-                })
-            })
-            .collect();
+                });
+            }
+            Ok(result)
+        }
+        .await;
         self.limits = limits;
         result
     }
 
-    pub(super) fn query(
+    pub(super) async fn query(
         &mut self,
         plan: &Arc<LogicalPlan>,
         schema: Option<&sdk::Schema>,
@@ -199,38 +208,39 @@ impl ModelRun<'_> {
             }
             .fail();
         }
-        self.session()?.set_output(rows.max(1), capacity)?;
-        let batches = self.session()?.execute_local(Arc::clone(plan))?;
+        self.session.set_output(rows.max(1), capacity)?;
+        let mut stream = self
+            .session
+            .stream_local(plan, Arc::clone(&self.permit))
+            .await?;
         let mut owned = 0usize;
-        let mut metadata = self
-            .output_memory
-            .as_ref()
-            .ok_or_else(|| {
-                crate::ModelInvalidSnafu {
-                    field: "model output reservation",
-                }
-                .build()
-            })?
-            .size();
-        let mut normalized = Vec::with_capacity(batches.len().max(1));
-        for batch in batches {
+        let mut metadata = self.output_memory.size();
+        let mut normalized: Vec<sdk::RecordBatch> = Vec::new();
+        while let Some(batch) = stream
+            .try_next()
+            .await
+            .map_err(|source| araphor_query::Error::Sql { source })?
+        {
             self.control.check()?;
             let conversion = schema
                 .map_or(Ok(0usize), |schema| {
                     sdk::Dataset::conversion_bytes(&batch, schema)
                 })
                 .context(crate::AnalysisContractSnafu)?;
-            let headers = std::mem::size_of::<sdk::RecordBatch>()
+            let growth = if normalized.len() == normalized.capacity() {
+                normalized.capacity().max(1)
+            } else {
+                0
+            };
+            let headers = growth * std::mem::size_of::<sdk::RecordBatch>()
                 + batch.num_columns() * std::mem::size_of::<sdk::arrow_array::ArrayRef>();
-            self.output_memory
-                .as_ref()
-                .ok_or_else(|| {
-                    crate::ModelInvalidSnafu {
-                        field: "model output reservation",
-                    }
-                    .build()
-                })?
-                .try_grow(conversion + headers)?;
+            self.output_memory.try_grow(conversion + headers)?;
+            normalized.try_reserve_exact(growth).map_err(|_| {
+                crate::ModelInvalidSnafu {
+                    field: "model output allocation",
+                }
+                .build()
+            })?;
             let batch = match schema {
                 Some(schema) => sdk::Dataset::normalize_batch(batch, Arc::new(schema.clone()))
                     .context(crate::AnalysisContractSnafu)?,
@@ -246,17 +256,12 @@ impl ModelRun<'_> {
                 }
                 .fail();
             }
-            let memory = self.output_memory.as_ref().ok_or_else(|| {
-                crate::ModelInvalidSnafu {
-                    field: "model output reservation",
-                }
-                .build()
-            })?;
-            self.memory.retain_output(&batch, memory)?;
+            self.memory.retain_output(&batch, &self.output_memory)?;
             metadata = metadata.saturating_add(headers);
-            memory.try_resize(metadata)?;
+            self.output_memory.try_resize(metadata)?;
             normalized.push(batch);
         }
+        drop(stream);
         if normalized.is_empty() {
             let schema = schema.map_or_else(
                 || Arc::new(plan.schema().as_arrow().clone()),
@@ -290,14 +295,14 @@ impl ModelRun<'_> {
         Ok(normalized)
     }
 
-    pub(super) fn references(
+    pub(super) async fn references(
         &mut self,
         plan: &Arc<LogicalPlan>,
         schema: &sdk::Schema,
     ) -> Result<Vec<sdk::RecordBatch>> {
         let limit = self.limits.max_rows;
         self.limits.max_rows = self.limits.max_bytes / 16;
-        let result = self.query(plan, Some(schema));
+        let result = self.query(plan, Some(schema)).await;
         self.limits.max_rows = limit;
         result
     }
@@ -311,15 +316,7 @@ impl ModelRun<'_> {
             }
             .fail();
         }
-        self.output_memory
-            .as_ref()
-            .ok_or_else(|| {
-                crate::ModelInvalidSnafu {
-                    field: "model output reservation",
-                }
-                .build()
-            })?
-            .try_grow(bytes)?;
+        self.output_memory.try_grow(bytes)?;
         Ok(())
     }
 }
@@ -334,6 +331,7 @@ mod tests {
     use sdk::arrow_array::{StringArray, UInt64Array};
 
     use super::*;
+    use crate::model::tests::evaluate;
     use crate::testing::QueryFixture;
     use crate::{AnalysisReadControl, Limits, SqlModelV1};
 
@@ -368,12 +366,16 @@ mod tests {
             outputs: BTreeMap::from([("rows".into(), "SELECT 7::BIGINT UNSIGNED AS value".into())]),
             ..Default::default()
         };
-        let admitted = AdmittedExport::admit(&engine, &model, Some(&program))?;
+        let admitted = AdmittedExport::admit(&engine, &model, Some(&program)).map(Arc::new)?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-        let output = ModelRun::new(&engine, [1; 16], &control)?.evaluate_admitted(
+        let output = evaluate(
+            &engine,
+            [1; 16],
+            &control,
             &package,
             &admitted,
             &evaluation(&model, Vec::new()),
+            None,
         )?;
         let alias = output.output.datasets[0].batches[0].column(0).slice(0, 1);
         drop(output);
@@ -420,12 +422,16 @@ mod tests {
             )]),
             ..Default::default()
         };
-        let admitted = AdmittedExport::admit(&engine, &model, Some(&program))?;
+        let admitted = AdmittedExport::admit(&engine, &model, Some(&program)).map(Arc::new)?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-        let output = ModelRun::new(&engine, [1; 16], &control)?.evaluate_admitted(
+        let output = evaluate(
+            &engine,
+            [1; 16],
+            &control,
             &package,
             &admitted,
             &evaluation(&model, Vec::new()),
+            None,
         )?;
         let batch = &output.output.datasets[0].batches[0];
         assert_eq!(batch.num_rows(), 0);
@@ -494,12 +500,16 @@ mod tests {
             outputs: BTreeMap::from([("rows".into(), "SELECT value FROM input".into())]),
             ..Default::default()
         };
-        let admitted = AdmittedExport::admit(&engine, &model, Some(&program))?;
+        let admitted = AdmittedExport::admit(&engine, &model, Some(&program)).map(Arc::new)?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-        let result = ModelRun::new(&engine, [1; 16], &control)?.evaluate_admitted(
+        let result = evaluate(
+            &engine,
+            [1; 16],
+            &control,
             &package,
             &admitted,
             &evaluation(&model, vec![input]),
+            None,
         );
         assert!(matches!(
             result,
@@ -562,12 +572,16 @@ mod tests {
             )]),
             ..Default::default()
         };
-        let admitted = AdmittedExport::admit(&engine, &model, Some(&program))?;
+        let admitted = AdmittedExport::admit(&engine, &model, Some(&program)).map(Arc::new)?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-        let result = ModelRun::new(&engine, [1; 16], &control)?.evaluate_admitted(
+        let result = evaluate(
+            &engine,
+            [1; 16],
+            &control,
             &package,
             &admitted,
             &evaluation(&model, vec![input]),
+            None,
         );
         assert!(result.is_err());
         drop(engine.memory().reserve_output(capacity)?);

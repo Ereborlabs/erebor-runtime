@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::{AnalysisReadControl, Result};
 
@@ -12,7 +13,7 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         scope: &str,
         package: &str,
-        admitted: Option<&InstalledBundle>,
+        admitted: Option<&Arc<InstalledBundle>>,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         let mut seen = BTreeSet::new();

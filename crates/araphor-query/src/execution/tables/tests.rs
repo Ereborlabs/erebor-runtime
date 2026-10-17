@@ -237,7 +237,7 @@ fn empty_index_keeps_schema() -> TestResult {
     let plan = fixture
         .engine
         .plan(&native, Parser::parse("SELECT * FROM empty")?, Vec::new())?;
-    let output = session.execute_local(Arc::new(plan))?;
+    let output = session.collect_local(Arc::new(plan))?;
     assert!(output.iter().all(|batch| batch.num_rows() == 0));
     assert_eq!(schema.fields().len(), 2);
     Ok(())

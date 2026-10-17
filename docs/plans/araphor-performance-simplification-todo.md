@@ -432,6 +432,38 @@ net deletions remain. The records are
 `/tmp/araphor-catalog-capture-count1.json`. Complete redesign: **Not done**.
 Full workspace CI and benchmarks are not run. No speed improvement is claimed.
 
+### Complete SQL model program
+
+Implementation and selected host verification: **Done**.
+[Package execution](../../crates/araphor-analysis/src/package/execution.rs)
+moves one owned SQL evaluation and the exact installed bundle into the existing
+Engine runtime. A complete private ModelRun holds one Session, evaluation
+permit, child control, and output reservation. Native streams produce batches
+for immediate bounded normalization. The per-stage synchronous dispatch and
+raw result vector are deleted. Trace-read checks run asynchronously before
+and after the program. Native and Wasm invocation remain synchronous.
+
+The checked public dataset route is
+[SqlDatasetOutputV1::query](../../crates/araphor-analysis/src/model/datasets.rs).
+The existing [SDK allocation owner](../../crates/araphor-analysis-sdk/src/evaluation.rs)
+also supplies input and dataset-result metadata charges. Schema headers and
+metadata-map capacity raise the retained metadata floor. Shared native buffers
+keep their allocation claims. The
+[component record](araphor-component-redesign.md#complete-sql-model-program)
+and [review guide](../guides/araphor-sql-operation-review.md#execution-and-verification)
+name the source owners and required cases. The complete redesign and the
+6,000-line production reduction remain **Not done**. No speed result is claimed.
+
+
+The checks pass 298 distinct cases across SDK, Query, Analysis, Control, and
+E2E. Strict Clippy and scoped formatting pass. The source removes two nonblank
+production lines. The complete redesign still adds 665 from 7b7b407a and needs
+another 6,665 net deletions. The records are
+`/tmp/araphor-sql-program-qualification1.json` and
+`/tmp/araphor-sql-program-count1.json`. The checked platform is Linux x86_64 GNU
+with glibc 2.39. Full workspace CI and benchmarks are not run. Complete redesign:
+**Not done**.
+
 ## Implementation flow
 
 An owner starts or recovers
