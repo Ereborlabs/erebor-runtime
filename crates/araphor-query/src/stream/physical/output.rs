@@ -12,7 +12,7 @@ use futures_util::TryStreamExt as _;
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use crate::execution::{Retention, Session};
+use crate::execution::Session;
 use crate::stream::Output;
 use crate::{Result, SqlSnafu};
 
@@ -30,14 +30,8 @@ impl Output {
             source: DataFusionError::Internal("completed output permit is absent".into()),
         })?;
         let memory = self._memory.new_empty();
-        let mut stream = Box::pin(session.bounded(
-            stream,
-            permit,
-            self._control.clone(),
-            &self._memory,
-            Retention::Output,
-            None,
-        ));
+        let mut stream =
+            Box::pin(session.bounded(stream, permit, self._control.clone(), &self._memory, None));
         let mut batches = Vec::<RecordBatch>::new();
         let mut arrays = 0usize;
         while let Some(batch) = stream.try_next().await.context(SqlSnafu)? {

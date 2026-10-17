@@ -503,6 +503,26 @@ This change adds one nonblank production Rust line. The complete redesign adds
 533 lines from 7b7b407a; another 6,533 net deletions remain. The count record is
 `/tmp/araphor-analysis-build-input-count1.json`. Complete redesign: **Not done**.
 
+### Remove unused input execution
+
+Implementation and selected host verification: **Done**.
+[Session](../../crates/araphor-query/src/execution.rs) drops execute_input,
+Retention, and the private collect and emit wrappers. All production callers
+already selected output retention. Inputs::read remains the detector input
+owner. Its migrated budget case keeps every distinct assertion. The
+[SQL review](../guides/araphor-sql-operation-review.md) links the source route.
+The slice removes 70 nonblank production Rust lines and adds 14 test lines.
+The complete redesign adds 463 lines from 7b7b407a; another 6,463 net deletions
+remain. The count record is `/tmp/araphor-query-output-only-count1.json`.
+All 186 Query cases pass: 110 in the first run and only the 76 filesystem
+reserve failures after inactive compiler cache removal. Source and binary stay
+fixed. The migrated budget case passes in the first run. Strict Query Clippy,
+scoped formatting, whitespace, and added local links pass. The record is
+`/tmp/araphor-query-output-only-qualification1.json`. It checks 707 Rust hashes.
+Backend and caller runtime suites, full workspace CI, and benchmarks are not
+repeated for this internal deletion. Complete redesign: **Not done**.
+No speed result is claimed.
+
 ## Implementation flow
 
 An owner starts or recovers

@@ -700,8 +700,19 @@ both SQL and retained-plan entry points against a complete native snapshot.
 
 [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) retains
 resolved model inputs in the native input category. All input children share
-one captured source owner and TaskContext. [Session::execute_input](../../crates/araphor-query/src/execution.rs)
-remains the finite single-query input API.
+one captured source owner and TaskContext. This production path calls native
+execute_stream and retains input buffers before returning InputSet.
+The unused Session::execute_input API and Retention mode are deleted.
+[Session::execute and stream](../../crates/araphor-query/src/execution.rs)
+share one output path. The physical subscription runtime uses the same output
+bounds and buffer claims. The input_output_budget case now calls Inputs::read.
+It retains the large-input success, small-output denial, borrowed-buffer charge,
+and complete capacity release assertions.
+All 186 Query cases pass for this deletion. Strict Query Clippy, scoped
+formatting, and added local links pass. The record is
+`/tmp/araphor-query-output-only-qualification1.json`. The first run's 76
+filesystem reserve failures pass on the same binary after inactive compiler
+cache removal. Source stays fixed. No performance result is claimed.
 [Session::stream_local](../../crates/araphor-query/src/execution.rs) executes
 model-local plans without a durable source binding or store read. The caller
 supplies its shared evaluation permit. Session checks the permit's engine and

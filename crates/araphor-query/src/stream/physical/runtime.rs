@@ -11,7 +11,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 use super::{kernel::Kernel, Compiled, Mode, SubscribeExec};
-use crate::execution::{Engine, Read, Retention};
+use crate::execution::{Engine, Read};
 use crate::follow::Operation;
 use crate::sources::{ArrowSnapshot, Changes, JournalExec};
 use crate::stream::{Event, Output, Run};
@@ -307,7 +307,6 @@ impl Runtime {
                     Arc::clone(&self.context),
                     &self.run.sources,
                     Read::Page(self.position),
-                    Retention::Output,
                     permit,
                 )
                 .await?;
@@ -355,14 +354,7 @@ impl Runtime {
                 )
             };
             let (snapshot, stream, permit, control, reservation) = session
-                .start_physical(
-                    physical,
-                    context,
-                    &self.run.sources,
-                    Read::Snapshot,
-                    Retention::Output,
-                    permit,
-                )
+                .start_physical(physical, context, &self.run.sources, Read::Snapshot, permit)
                 .await?;
             self.check_store(&snapshot.page.extraction.meta)?;
             Output {

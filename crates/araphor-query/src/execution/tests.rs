@@ -910,12 +910,30 @@ fn input_output_budget() {
             )
             .unwrap(),
     );
-    let mut session = fixture
-        .engine
-        .session(AnalysisSelectionV1::new([1; 16], vec![]), &control(), 1)
+    use araphor_analysis_sdk as sdk;
+
+    let schema = Schema::new(vec![Field::new("payload", DataType::Utf8, false)]);
+    let mut model = sdk::Model::new(
+        "evaluate",
+        Vec::new(),
+        vec![sdk::Port::new("result", schema.clone())],
+    );
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs = vec![sdk::InputPort {
+        port: sdk::Port::new("input", schema),
+        source: sdk::InputSource::Query(format!("SELECT '{text}' AS payload")),
+    }];
+    let definition = Arc::new(crate::inputs::Inputs::admit(&fixture.engine, &model).unwrap());
+    let input = definition
+        .read(
+            Arc::clone(&fixture.engine),
+            AnalysisSelectionV1::tenant([1; 16]),
+            "input-budget".into(),
+            &control(),
+            1,
+        )
         .unwrap();
-    session.set_output(1, 16 * 1024).unwrap();
-    let (receipt, batches) = session.execute_input(Arc::clone(&plan), &sources).unwrap();
+    let batches = &input.inputs[0].data.batches;
     assert_eq!(
         ScalarValue::try_from_array(batches[0].column(0), 0).unwrap(),
         ScalarValue::Utf8(Some(text))
@@ -934,9 +952,7 @@ fn input_output_budget() {
     assert!(matches!(error, Error::Sql { source }
         if matches!(source.find_root(), datafusion::common::DataFusionError::ResourcesExhausted(_))));
     let borrowed = Arc::clone(batches[0].column(0));
-    drop(batches);
-    drop(receipt);
-    drop(session);
+    drop(input);
     drop(client);
     let capacity = fixture.engine.limits().input_capacity;
     assert!(fixture.engine.memory().reserve_input(capacity).is_err());
@@ -1070,7 +1086,6 @@ async fn physical_preserves_context() {
             Arc::clone(&context),
             &BTreeMap::new(),
             Read::Snapshot,
-            super::Retention::Output,
             permit,
         )
         .await

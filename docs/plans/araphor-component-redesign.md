@@ -802,6 +802,33 @@ This change adds one nonblank production Rust line. The complete redesign adds
 `/tmp/araphor-analysis-build-input-count1.json`. Full workspace CI and benchmarks
 are not run. No speed result is claimed. Complete redesign: **Not done**.
 
+### Remove unused input execution
+
+Implementation and selected host verification: **Done**.
+[Session](../../crates/araphor-query/src/execution.rs) no longer owns the unused
+execute_input API, Retention mode, or separate collect and emit wrappers.
+Production callers all selected output retention. Finite output and physical
+subscriptions now use the output reservation and buffer claim directly.
+[Inputs::read](../../crates/araphor-query/src/inputs/physical.rs) remains the
+production detector input owner. It calls native execute_stream and retains
+input buffers. The existing input_output_budget case now calls that owner and
+keeps every distinct value, output-denial, capacity, and alias-lifetime assertion.
+The [SQL review](../guides/araphor-sql-operation-review.md) links these owners.
+
+The slice removes 70 nonblank production Rust lines and adds 14 test lines.
+The complete redesign adds 463 lines from 7b7b407a; another 6,463 net deletions
+remain. The count record is `/tmp/araphor-query-output-only-count1.json`.
+All 186 Query library cases pass. The first run passes 110 cases and stops
+76 cases at the unchanged filesystem reserve check. After removal of two
+inactive generated compiler caches, only those 76 cases run again. All pass
+on the same binary without source changes. The migrated input budget case
+passes in the first run. Strict Query Clippy, scoped formatting, whitespace,
+and added local document links pass. The record is
+`/tmp/araphor-query-output-only-qualification1.json`. It checks 707 Rust hashes.
+Native and Wasm backend suites, caller runtime suites, full workspace CI, and
+benchmarks are not repeated for this internal deletion. Complete redesign:
+**Not done**. No speed result is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

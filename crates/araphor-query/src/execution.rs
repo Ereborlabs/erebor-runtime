@@ -512,12 +512,6 @@ pub struct Session {
     output_bytes: usize,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum Retention {
-    Input,
-    Output,
-}
-
 impl Session {
     pub fn memory(&self) -> &Arc<Memory> {
         &self.memory
@@ -590,15 +584,14 @@ impl Session {
         plan: Arc<LogicalPlan>,
         sources: &AnalysisTableRequests,
     ) -> Result<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
-        self.collect(plan, sources, Retention::Output)
-    }
-
-    pub fn execute_input(
-        &self,
-        plan: Arc<LogicalPlan>,
-        sources: &AnalysisTableRequests,
-    ) -> Result<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
-        self.collect(plan, sources, Retention::Input)
+        let engine = Arc::clone(&self.engine);
+        let session = self.clone();
+        let sources = sources.clone();
+        engine.wait(async move {
+            let (snapshot, stream) = session.stream(&plan, &sources, Read::Snapshot).await?;
+            let batches = stream.try_collect().await.context(SqlSnafu)?;
+            Ok((snapshot, batches))
+        })
     }
 
     pub async fn stream_local(
@@ -630,14 +623,7 @@ impl Session {
         let stream = execute_stream(physical, state.task_ctx()).context(SqlSnafu)?;
         let schema = stream.schema();
         let stream = self
-            .bounded(
-                stream,
-                permit,
-                control,
-                reservation,
-                Retention::Output,
-                None,
-            )
+            .bounded(stream, permit, control, reservation, None)
             .map(move |item| {
                 if let Some(reservation) = unspent.upgrade() {
                     reservation.free();
@@ -647,49 +633,20 @@ impl Session {
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
-    fn collect(
-        &self,
-        plan: Arc<LogicalPlan>,
-        sources: &AnalysisTableRequests,
-        retention: Retention,
-    ) -> Result<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
-        let engine = Arc::clone(&self.engine);
-        let session = self.clone();
-        let sources = sources.clone();
-        engine.wait(async move {
-            let (snapshot, stream) = session
-                .emit(&plan, &sources, Read::Snapshot, retention)
-                .await?;
-            let batches = stream.try_collect().await.context(SqlSnafu)?;
-            Ok((snapshot, batches))
-        })
-    }
-
     pub async fn stream(
         &self,
         plan: &LogicalPlan,
         sources: &AnalysisTableRequests,
         read: Read,
     ) -> Result<(Arc<ArrowSnapshot>, SendableRecordBatchStream)> {
-        self.emit(plan, sources, read, Retention::Output).await
-    }
-
-    async fn emit(
-        &self,
-        plan: &LogicalPlan,
-        sources: &AnalysisTableRequests,
-        read: Read,
-        retention: Retention,
-    ) -> Result<(Arc<ArrowSnapshot>, SendableRecordBatchStream)> {
         let permit = Arc::new(self.engine.reserve_evaluation(self.selection.tenant_id)?);
         let (captured, stream, permit, control, reservation) =
-            self.start(plan, sources, read, retention, permit).await?;
+            self.start(plan, sources, read, permit).await?;
         let stream = Box::pin(self.bounded(
             stream,
             permit,
             control,
             reservation,
-            retention,
             Some(Arc::clone(&captured)),
         ));
         Ok((captured, stream))
@@ -701,7 +658,6 @@ impl Session {
         permit: Arc<Permit>,
         control: Arc<AnalysisReadControl>,
         reservation: R,
-        retention: Retention,
         receipt: Option<Arc<ArrowSnapshot>>,
     ) -> impl RecordBatchStream + Send + 'a
     where
@@ -737,10 +693,7 @@ impl Session {
                     if count > rows || size > bytes {
                         return Err(DataFusionError::ResourcesExhausted("query output".into()));
                     }
-                    match retention {
-                        Retention::Input => memory.retain_input(&batch, reservation.borrow())?,
-                        Retention::Output => memory.retain_output(&batch, reservation.borrow())?,
-                    }
+                    memory.retain_output(&batch, reservation.borrow())?;
                     Ok(Some((batch, (stream, reservation, count, size, permit))))
                 }
             },
@@ -805,7 +758,6 @@ impl Session {
         plan: &LogicalPlan,
         sources: &AnalysisTableRequests,
         read: Read,
-        retention: Retention,
         permit: Arc<Permit>,
     ) -> Result<(
         Arc<ArrowSnapshot>,
@@ -817,7 +769,7 @@ impl Session {
         self.control.check()?;
         let state = self.state()?;
         let physical = self.physical(plan, &state).await?;
-        self.start_physical(physical, state.task_ctx(), sources, read, retention, permit)
+        self.start_physical(physical, state.task_ctx(), sources, read, permit)
             .await
     }
 
@@ -827,7 +779,6 @@ impl Session {
         context: Arc<TaskContext>,
         sources: &AnalysisTableRequests,
         read: Read,
-        retention: Retention,
         permit: Arc<Permit>,
     ) -> Result<(
         Arc<ArrowSnapshot>,
@@ -837,14 +788,10 @@ impl Session {
         MemoryReservation,
     )> {
         self.control.check()?;
-        let reservation = match retention {
-            Retention::Input => None,
-            Retention::Output => Some(
-                self.memory
-                    .prepare_output(self.output_bytes)
-                    .context(SqlSnafu)?,
-            ),
-        };
+        let reservation = self
+            .memory
+            .prepare_output(self.output_bytes)
+            .context(SqlSnafu)?;
         let snapshot = SourceSnapshot::new(
             Arc::clone(&self.engine.store),
             self.selection.clone(),
@@ -881,13 +828,6 @@ impl Session {
             .capture(snapshot, requests, received, mode, Arc::clone(&permit))
             .await?;
         let control = Arc::new(self.control.within(self.engine.limits.evaluate_timeout)?);
-        let reservation = match reservation {
-            Some(reservation) => reservation,
-            None => self
-                .memory
-                .reserve_input(self.output_bytes)
-                .context(SqlSnafu)?,
-        };
         let stream = execute_stream(physical, context).context(SqlSnafu)?;
         Ok((captured, stream, permit, control, reservation))
     }
