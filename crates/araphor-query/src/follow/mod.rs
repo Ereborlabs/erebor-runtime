@@ -28,6 +28,7 @@ mod window;
 #[cfg(test)]
 mod tests;
 
+pub use crate::stream::progress::{Progress, Wake};
 pub use clock::{Clock, SystemClock};
 pub use cursor::Cursor;
 pub use delivery::{Action, Consumer, Delivery};

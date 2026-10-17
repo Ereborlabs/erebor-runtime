@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_query::datafusion::execution::memory_pool::MemoryReservation;
+use araphor_query::memory::Memory;
 use snafu::ResultExt as _;
 
 use crate::{AnalysisReadControl, Result};
@@ -21,7 +22,8 @@ use snapshot::InstalledSnapshot;
 
 #[derive(Clone)]
 pub struct InstalledAnalysis {
-    pub(super) owner: Arc<AnalysisPackageOwner>,
+    pub(crate) memory: Arc<Memory>,
+    pub(crate) owner: Arc<AnalysisPackageOwner>,
     scope: String,
     tenant: Option<[u8; 16]>,
     snapshot: Option<Arc<InstalledSnapshot>>,
@@ -46,6 +48,7 @@ impl InstalledAnalysis {
     pub fn new(owner: Arc<AnalysisPackageOwner>, scope: &str) -> Result<Self> {
         araphor_data::validate_package_name(scope)?;
         Ok(Self {
+            memory: owner.query.memory().scope(),
             owner,
             scope: scope.into(),
             tenant: None,
@@ -93,11 +96,8 @@ impl InstalledAnalysis {
         if !artifact.prepared(&evaluation.export) {
             return Err(Code::Unsupported.error("host-prepared target").into());
         }
-        let input_memory = self
-            .owner
-            .query
-            .memory()
-            .reserve_input(evaluation.allocated_bytes())?;
+        let memory = self.memory.child();
+        let input_memory = memory.reserve_input(evaluation.allocated_bytes())?;
         let mut effective = evaluation.clone();
         if implementation.target() == "wasm" {
             effective.context.limits = self.owner.component_limits(effective.context.limits);
@@ -125,10 +125,7 @@ impl InstalledAnalysis {
                     .flat_map(|data| &data.batches),
             )
         {
-            self.owner
-                .query
-                .memory()
-                .retain_input(batch, &input_memory)?;
+            memory.retain_input(batch, &input_memory)?;
             arrays = arrays.saturating_add(
                 batch
                     .columns()
@@ -148,6 +145,7 @@ impl InstalledAnalysis {
             index,
             effective,
             None,
+            &memory,
             &control,
         );
         self.owner.check(&context.grant, Action::Run)?;

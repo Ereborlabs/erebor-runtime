@@ -84,11 +84,11 @@ fn selected_descriptor_keeps_auxiliary() -> TestResult {
     assert_eq!(references[0].package_id, descriptor.id);
     assert_eq!(references[0].revision, descriptor.revision);
     assert_eq!(references[0].export, "count-input");
-    assert!(snapshot
+    let pressure = snapshot
         .evaluate([1; 16], &descriptor.id, &evaluation, &control)
         .err()
-        .ok_or("output pressure accepted")?
-        .is_busy());
+        .ok_or("output pressure accepted")?;
+    assert!(pressure.is_busy(), "{pressure:?}");
     let revision = direct.revision.clone();
     let context = direct.evaluation.context.clone();
     let parameters = direct.evaluation.parameters.clone();
@@ -98,11 +98,11 @@ fn selected_descriptor_keeps_auxiliary() -> TestResult {
             .decode(schema, sdk::Limits::default())?;
     let batches = direct.output.datasets[0].batches.clone();
     drop(direct);
-    assert!(snapshot
+    let pressure = snapshot
         .evaluate([1; 16], &descriptor.id, &evaluation, &control)
         .err()
-        .ok_or("output pressure accepted")?
-        .is_busy());
+        .ok_or("output pressure accepted")?;
+    assert!(pressure.is_busy(), "{pressure:?}");
     drop(batches);
     let result = snapshot.evaluate([1; 16], &descriptor.id, &evaluation, &control)?;
     assert_eq!(&result.descriptor, descriptor);

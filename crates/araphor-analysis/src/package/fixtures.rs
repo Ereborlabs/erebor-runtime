@@ -30,7 +30,11 @@ impl AnalysisPackageOwner {
             .first()
             .ok_or_else(|| Code::Missing.error("installed package"))?;
         let context: InstalledContext = Self::decode(&active.metadata)?;
-        let bundle = self.load_installed(grant.selection.tenant_id, &context.root)?;
+        let bundle = self.load_installed(
+            grant.selection.tenant_id,
+            &context.root,
+            self.query.memory(),
+        )?;
         let admitted = bundle.admission();
         self.authority.admit(grant, &admitted)?;
         let mut response = self.inspect(grant, scope, package, Some(&bundle), control)?;
@@ -96,6 +100,7 @@ impl AnalysisPackageOwner {
                     index,
                     evaluation,
                     None,
+                    &self.query.memory().scope(),
                     control,
                 )?;
                 evaluation.context.limits = model.limits;

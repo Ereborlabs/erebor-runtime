@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_query::inputs::InputSet;
+use araphor_query::memory::Memory;
 use snafu::ResultExt as _;
 
 use crate::model::ModelRun;
@@ -13,6 +14,7 @@ use super::{
 };
 
 impl AnalysisPackageOwner {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn evaluate_artifact(
         &self,
         tenant: [u8; 16],
@@ -20,6 +22,7 @@ impl AnalysisPackageOwner {
         index: (usize, usize),
         mut evaluation: sdk::Evaluation,
         inputs: Option<Arc<InputSet>>,
+        memory: &Arc<Memory>,
         control: &AnalysisReadControl,
     ) -> Result<(SqlModelOutputV1, sdk::Evaluation)> {
         let (artifact, _, admitted) = bundle.export_at(index)?;
@@ -34,12 +37,14 @@ impl AnalysisPackageOwner {
         control.check()?;
         if matches!(implementation, PackageImplementationV1::Sql { .. }) {
             let owner = Arc::clone(&self.query);
+            let memory = Arc::clone(memory);
             let control = control.within(control.remaining()?)?;
             return self.query.wait(async move {
                 let result: Result<_> = async {
                     let (artifact, _, admitted) = bundle.export_at(index)?;
                     let output = ModelRun::evaluate(
                         &owner,
+                        &memory,
                         tenant,
                         &control,
                         &artifact.descriptor,
@@ -56,11 +61,6 @@ impl AnalysisPackageOwner {
         }
         let package = &artifact.descriptor;
         let preflight = self.exchange_preflight(package, &evaluation)?;
-        let memory = Arc::clone(
-            inputs
-                .as_ref()
-                .map_or_else(|| self.query.memory(), |inputs| inputs.memory()),
-        );
         if matches!(implementation, PackageImplementationV1::Wasm { .. }) {
             evaluation.context.limits = self.component_limits(evaluation.context.limits);
         }
@@ -154,7 +154,7 @@ impl AnalysisPackageOwner {
         if let Some(inputs) = &inputs {
             inputs.check(&self.query, &control)?;
         }
-        let output = SqlModelOutputV1::retain(output, &memory, output_memory)?;
+        let output = SqlModelOutputV1::retain(output, memory, output_memory)?;
         Ok((output, evaluation))
     }
 

@@ -24,7 +24,11 @@ impl AnalysisPackageOwner {
             let bundle = match admitted.filter(|bundle| bundle.value.root == context.root) {
                 Some(bundle) => bundle,
                 None => {
-                    loaded = self.load_installed(installed.key.tenant_id, &context.root)?;
+                    loaded = self.load_installed(
+                        installed.key.tenant_id,
+                        &context.root,
+                        self.query.memory(),
+                    )?;
                     &loaded
                 }
             };

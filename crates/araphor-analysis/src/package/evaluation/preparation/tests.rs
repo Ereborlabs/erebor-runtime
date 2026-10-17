@@ -231,6 +231,7 @@ async fn automatic_clock_events() -> TestResult {
                         });
                 let run = crate::model::ModelRun::new(
                     &fixture.owner.query,
+                    inputs.memory(),
                     [1; 16],
                     &stage,
                     now,

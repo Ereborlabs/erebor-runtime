@@ -32,7 +32,7 @@ pub(crate) use owner::InstalledContext;
 pub struct AnalysisPackageOwner {
     store: Arc<AnalysisStore>,
     pub(crate) query: Arc<Engine>,
-    authority: Arc<dyn PackageAuthorization>,
+    pub(crate) authority: Arc<dyn PackageAuthorization>,
     operations: Arc<tokio::sync::Semaphore>,
     lifecycle: Arc<std::sync::Mutex<()>>,
     wasm: wasm::WasmExecution,

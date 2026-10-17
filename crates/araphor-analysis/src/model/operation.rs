@@ -23,8 +23,10 @@ pub(crate) struct ModelRun {
 }
 
 impl ModelRun {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         owner: &Arc<Engine>,
+        memory: &Arc<Memory>,
         tenant: [u8; 16],
         control: &AnalysisReadControl,
         now: u64,
@@ -40,11 +42,6 @@ impl ModelRun {
             .build()
         })?;
         let control = control.within(owner.limits().evaluate_timeout)?;
-        let memory = Arc::clone(
-            inputs
-                .as_ref()
-                .map_or_else(|| owner.memory(), |inputs| inputs.memory()),
-        );
         let byte_limit = byte_limit.min(owner.limits().output_capacity);
         limits.max_bytes = limits.max_bytes.min(byte_limit as u64);
         limits.max_checkpoint_bytes = limits.max_checkpoint_bytes.min(byte_limit as u64);
@@ -52,14 +49,14 @@ impl ModelRun {
             AnalysisSelectionV1::tenant(tenant),
             &control,
             now,
-            Arc::clone(&memory),
+            Arc::clone(memory),
         )?;
         let output_memory = memory.reserve_output(0)?;
         let permit = Arc::new(owner.reserve_evaluation(tenant)?);
         Ok(Self {
             session,
             inputs,
-            memory,
+            memory: Arc::clone(memory),
             output_memory,
             control,
             permit,

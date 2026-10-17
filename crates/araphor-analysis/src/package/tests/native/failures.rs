@@ -76,6 +76,7 @@ fn native_caps_defer_admission() -> TestResult {
                     index,
                     evaluation,
                     None,
+                    &fixture.owner.query.memory().scope(),
                     &control,
                 )
                 .err(),

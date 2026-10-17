@@ -189,6 +189,15 @@ impl ControlStore {
 }
 
 impl DiscoveryContextProvider for ControlStore {
+    fn changes(&self) -> araphor_data::Result<Option<tokio::sync::watch::Receiver<u64>>> {
+        self.subscribe_revision().map(Some).map_err(|source| {
+            araphor_data::Error::DiscoveryContext {
+                source: Box::new(source),
+                location: snafu::Location::default(),
+            }
+        })
+    }
+
     fn revision(
         &self,
         _source: &araphor_data::EvidenceIntakeIdentityV1,

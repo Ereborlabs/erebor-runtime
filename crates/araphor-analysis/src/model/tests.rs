@@ -44,9 +44,14 @@ pub(in crate::model) fn evaluate(
     let package = package.clone();
     let admitted = Arc::clone(admitted);
     let evaluation = evaluation.clone();
+    let memory = inputs.as_ref().map_or_else(
+        || owner.memory().scope(),
+        |inputs| Arc::clone(inputs.memory()),
+    );
     owner.wait(async move {
         let result = ModelRun::evaluate(
             &engine,
+            &memory,
             tenant,
             &control,
             &package,

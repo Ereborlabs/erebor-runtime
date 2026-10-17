@@ -53,7 +53,7 @@ impl Inputs {
                 .error("live input activation")
                 .into());
         }
-        let mut progress = Progress::new(engine.store(), clock);
+        let mut progress = Progress::new(engine.store(), clock, None);
         let now = progress.begin()?;
         let control = InputOperation::stage(&installed.grant, now, None)?;
         let memory = engine.memory().scope();

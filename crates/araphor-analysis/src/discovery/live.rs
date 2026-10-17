@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
+use araphor_query::follow::{Clock, Progress, SystemClock};
 use prost::Message as _;
 use snafu::ResultExt as _;
 use tokio::sync::watch;
@@ -18,49 +19,101 @@ use crate::{
 use araphor_data::analysis::{PreparedProfile, MAX_RESULT_BYTES, MAX_RESULT_REFS};
 
 impl DiscoveryOwner {
-    pub async fn run(self: Arc<Self>, mut stop: watch::Receiver<bool>) -> Result<()> {
-        let mut changes = self.store.subscribe_revision();
-        let mut timer = tokio::time::interval(Duration::from_secs(1));
+    pub async fn run(self: Arc<Self>, stop: watch::Receiver<bool>) -> Result<()> {
+        self.run_clock(stop, Arc::new(SystemClock::default())).await
+    }
+
+    async fn run_clock(
+        self: Arc<Self>,
+        mut stop: watch::Receiver<bool>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<()> {
+        let packages = Arc::clone(&self.execution.owner);
+        let memory = Arc::clone(&self.execution.memory);
+        let mut authority = packages.authority.changes();
+        let mut progress = Progress::new(&self.store, clock, self.provider.changes()?);
+        let control = AnalysisReadControl::with_timeout(Duration::from_secs(60))?;
+        let mut now = progress.begin()?;
+        let mut after = None;
+        let mut deadline = None;
         loop {
-            if *stop.borrow() {
+            if *stop.borrow() || stop.has_changed().is_err() {
                 return Ok(());
             }
-            changes.borrow_and_update();
+            let epoch = memory.capacity_epoch();
             let owner = Arc::clone(&self);
-            let result = tokio::task::spawn_blocking(move || {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .ok()
-                    .and_then(|time| u64::try_from(time.as_nanos()).ok())
-                    .ok_or_else(|| crate::DiscoveryInvalidSnafu { field: "clock" }.build())?;
-                owner.process(now)
-            })
-            .await
-            .context(AnalysisExecutionSnafu)?;
-            let count = match result {
-                Ok(count) => count,
-                Err(error)
-                    if error.is_busy()
-                        || erebor_runtime_error::ErrorExt::status_code(&error)
-                            == erebor_runtime_error::StatusCode::DeadlineExceeded =>
-                {
-                    0
+            let cursor = after.clone();
+            let mut worker = tokio::task::spawn_blocking(move || {
+                let _operation = owner.operation.lock().map_err(|_| {
+                    (
+                        Box::new(crate::Error::from(
+                            crate::DiscoveryInvalidSnafu {
+                                field: "worker lock",
+                            }
+                            .build(),
+                        )),
+                        None,
+                        None,
+                    )
+                })?;
+                let sources = owner
+                    .sources(cursor.as_ref())
+                    .map_err(|error| (Box::new(error), None, None))?;
+                let next = sources.last().cloned();
+                let mut deadline = None;
+                for source in sources {
+                    let tenant = source.tenant_id;
+                    let mut expiry = None;
+                    let result = owner.process_source(source, now, &mut expiry);
+                    deadline = deadline.into_iter().chain(expiry).min();
+                    result.map_err(|error| (Box::new(error), Some(tenant), deadline))?;
                 }
-                Err(error) => return Err(error),
-            };
-            if count > 0 {
-                tokio::task::yield_now().await;
-                continue;
-            }
-            tokio::select! {
+                Ok::<_, (Box<crate::Error>, Option<[u8; 16]>, Option<u64>)>((next, deadline))
+            });
+            let result = tokio::select! {
+                result = &mut worker => result.context(AnalysisExecutionSnafu)?,
                 changed = stop.changed() => {
+                    let _result = worker.await.context(AnalysisExecutionSnafu)?;
                     if changed.is_err() || *stop.borrow() { return Ok(()); }
+                    continue;
                 }
-                changed = changes.changed() => {
-                    if changed.is_err() { return Ok(()); }
+            };
+            match result {
+                Ok((Some(next), expiry)) => {
+                    after = Some(next);
+                    deadline = deadline.into_iter().chain(expiry).min();
+                    tokio::task::yield_now().await;
+                    continue;
                 }
-                _ = timer.tick() => {}
+                Ok((None, _)) => {
+                    tokio::select! {
+                        result = progress.next(&control, deadline, None) => { result?; }
+                        changed = authority.changed() => {
+                            if changed.is_err() { return Ok(()); }
+                        }
+                        changed = stop.changed() => {
+                            if changed.is_err() || *stop.borrow() { return Ok(()); }
+                        }
+                    }
+                }
+                Err((error, tenant, expiry)) if error.is_busy() => {
+                    deadline = deadline.into_iter().chain(expiry).min();
+                    tokio::select! {
+                        result = packages.wait_capacity(*error, &memory, epoch, tenant) => { result?; }
+                        result = progress.next(&control, deadline, None) => { result?; }
+                        changed = authority.changed() => {
+                            if changed.is_err() { return Ok(()); }
+                        }
+                        changed = stop.changed() => {
+                            if changed.is_err() || *stop.borrow() { return Ok(()); }
+                        }
+                    }
+                }
+                Err((error, _, _)) => return Err(*error),
             }
+            after = None;
+            deadline = None;
+            now = progress.begin()?;
         }
     }
 
@@ -72,16 +125,16 @@ impl DiscoveryOwner {
             }
             .build()
         })?;
-        let sources = self.sources(after.as_ref())?;
-        *after = sources.last().cloned();
+        let mut sources = self.sources(after.as_ref())?;
+        if sources.is_empty() && after.is_some() {
+            sources = self.sources(None)?;
+        }
+        let next = sources.last().cloned();
         let mut count = 0;
         for source in sources {
-            let processed = self.process_source(source.clone(), now)?;
-            if processed == 0 {
-                self.refresh_source(&source, now, false)?;
-            }
-            count += processed;
+            count += self.process_source(source, now, &mut None)?;
         }
+        *after = next;
         Ok(count)
     }
 
@@ -102,9 +155,6 @@ impl DiscoveryOwner {
             }
             sources.extend(self.store.source_page(tenant, None)?);
         }
-        if sources.is_empty() && after.is_some() {
-            return self.sources(None);
-        }
         sources.truncate(self.config.sources_per_pass);
         Ok(sources)
     }
@@ -122,9 +172,12 @@ impl DiscoveryOwner {
             .map_err(Into::into)
     }
 
-    fn process_source(&self, source: EvidenceIntakeIdentityV1, now: u64) -> Result<usize> {
-        let execution = self.execution.snapshot(source.tenant_id)?;
-        let installed = Self::analysis_refs(&execution)?;
+    fn process_source(
+        &self,
+        source: EvidenceIntakeIdentityV1,
+        now: u64,
+        deadline: &mut Option<u64>,
+    ) -> Result<usize> {
         let scope = ProcessorScopeV1 {
             processor_id: DISCOVERY_PROCESSOR.into(),
             method_version: DISCOVERY_SCHEMA_VERSION as u64,
@@ -133,10 +186,6 @@ impl DiscoveryOwner {
         let Some(status) = self.store.source_status(&source)? else {
             return Ok(0);
         };
-        if self.store.processor_health(&scope)?.is_none() {
-            self.store
-                .register_processor(&scope, ProcessorClassV1::Optional, 1)?;
-        }
         let head = self.store.processor_result(&scope)?;
         let previous = head
             .as_ref()
@@ -148,6 +197,20 @@ impl DiscoveryOwner {
                 .is_none_or(|profile| profile.scope == scope),
             "profile source scope",
         )?;
+        *deadline = previous
+            .as_ref()
+            .filter(|profile| !profile.sealed)
+            .and_then(|profile| {
+                profile
+                    .created_utc_ns
+                    .checked_add(self.config.seal_interval_ns)
+            });
+        let execution = self.execution.snapshot(source.tenant_id)?;
+        let installed = Self::analysis_refs(&execution)?;
+        if self.store.processor_health(&scope)?.is_none() {
+            self.store
+                .register_processor(&scope, ProcessorClassV1::Optional, 1)?;
+        }
         let gap_floor = previous.as_ref().map_or(0, |profile| {
             profile
                 .snapshot
@@ -326,6 +389,14 @@ impl DiscoveryOwner {
             || profile.snapshot.atoms.len() >= self.config.atom_limit
             || profile.context_refs.len() >= 256;
         if consumed == expected && gaps.is_empty() && (!profile.sealed || !continuing) {
+            *deadline = continuing
+                .then(|| {
+                    profile
+                        .created_utc_ns
+                        .checked_add(self.config.seal_interval_ns)
+                })
+                .flatten();
+            self.refresh_source(&source, now, false)?;
             return Ok(0);
         }
         let health_context =
@@ -351,7 +422,7 @@ impl DiscoveryOwner {
             }
         }
         require(samples.len() <= MAX_RESULT_REFS, "profile witness count")?;
-        let deadline = now.checked_add(self.config.witness_age_ns).ok_or_else(|| {
+        let witness_expiry = now.checked_add(self.config.witness_age_ns).ok_or_else(|| {
             crate::DiscoveryInvalidSnafu {
                 field: "witness deadline",
             }
@@ -363,7 +434,7 @@ impl DiscoveryOwner {
             .map(|sample| AnalysisWitnessV1 {
                 identity: sample.stream.into(),
                 cursor: sample.durable_cursor,
-                expires_utc_ns: deadline,
+                expires_utc_ns: witness_expiry,
             })
             .collect();
         let commit = AnalysisResultCommitV1 {
@@ -383,6 +454,13 @@ impl DiscoveryOwner {
             witnesses,
             context_refs: profile.context_refs.clone(),
         };
+        *deadline = (!profile.sealed)
+            .then(|| {
+                profile
+                    .created_utc_ns
+                    .checked_add(self.config.seal_interval_ns)
+            })
+            .flatten();
         let prepared = PreparedProfile::new(profile)?;
         execution.authorize(
             source.tenant_id,
@@ -399,7 +477,11 @@ impl DiscoveryOwner {
                 )
             },
         )?;
-        Ok(usize::try_from(consumed - expected).unwrap_or(usize::MAX))
+        let count = usize::try_from(consumed - expected).unwrap_or(usize::MAX);
+        if count == 0 {
+            self.refresh_source(&source, now, false)?;
+        }
+        Ok(count)
     }
 
     fn input_size(input: &DiscoveryInputManifestV1) -> Result<u64> {
@@ -705,9 +787,8 @@ impl DiscoveryOwner {
             .store
             .source_receipt(source)?
             .map_or(0, |receipt| receipt.coverage_revision);
-        let notices =
-            self.store
-                .profile_notices(&scope, self.provider.revision(source)?, coverage)?;
+        let facts = self.provider.revision(source)?;
+        let mut notices = self.store.profile_notices(&scope, facts, coverage)?;
         let mut changed = false;
         if force && !notices.iter().any(|(id, _)| id == &head.result_id) {
             changed |= self.refresh_profile(
@@ -717,13 +798,20 @@ impl DiscoveryOwner {
                 now,
             )?;
         }
-        for (id, revision) in notices {
-            let Some(body) = self.store.read_result(source.tenant_id, &id)? else {
-                continue;
-            };
-            let profile = DiscoveryProfileV1::try_from(body.as_slice())?;
-            require(profile.scope == scope, "profile source scope")?;
-            changed |= self.refresh_profile(profile, revision, id == head.result_id, now)?;
+        while !notices.is_empty() {
+            for (id, revision) in &notices {
+                let Some(body) = self.store.read_result(source.tenant_id, id)? else {
+                    continue;
+                };
+                let profile = DiscoveryProfileV1::try_from(body.as_slice())?;
+                require(profile.scope == scope, "profile source scope")?;
+                changed |= self.refresh_profile(profile, *revision, id == &head.result_id, now)?;
+            }
+            let next = self.store.profile_notices(&scope, facts, coverage)?;
+            if next == notices {
+                break;
+            }
+            notices = next;
         }
         Ok(changed)
     }
@@ -1016,6 +1104,7 @@ impl DiscoveryOwner {
 
 #[cfg(test)]
 mod tests {
+    mod events;
     use super::*;
     use crate::{
         AnalysisCommitStage, EvidenceRetentionOwner, RetentionLimitsV1, ValidatedEvidenceBatchV1,

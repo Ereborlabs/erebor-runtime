@@ -103,7 +103,7 @@ impl InstalledAnalysis {
         bundles.retain(|bundle| roots.contains(&bundle.value.root));
         let mut snapshot = self.clone();
         snapshot.tenant = Some(tenant);
-        snapshot.snapshot = Some(InstalledSnapshot::new(&self.owner.query, pins, bundles)?);
+        snapshot.snapshot = Some(InstalledSnapshot::new(&self.memory, pins, bundles)?);
         Ok(snapshot)
     }
 

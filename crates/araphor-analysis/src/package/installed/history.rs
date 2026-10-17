@@ -80,7 +80,8 @@ impl InstalledAnalysis {
             {
                 bundle.clone()
             } else {
-                self.owner.load_installed(tenant, &reference.root)?
+                self.owner
+                    .load_installed(tenant, &reference.root, &self.memory)?
             };
             self.owner
                 .authority
@@ -136,7 +137,7 @@ impl InstalledAnalysis {
             pins.push(pin);
         }
         let mut historical = current;
-        historical.snapshot = Some(InstalledSnapshot::new(&self.owner.query, pins, bundles)?);
+        historical.snapshot = Some(InstalledSnapshot::new(&self.memory, pins, bundles)?);
         historical.historical = true;
         Ok(historical)
     }

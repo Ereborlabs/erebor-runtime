@@ -158,6 +158,7 @@ impl AnalysisPackageOwner {
             index,
             evaluation,
             Some(Arc::clone(&inputs)),
+            inputs.memory(),
             control,
         )?;
         let mut packet = crate::AnalysisPackageOwner::encode_output(&evaluated.output, model)?;

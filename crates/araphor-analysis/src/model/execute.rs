@@ -4,6 +4,7 @@ use araphor_analysis_sdk as sdk;
 use araphor_query::datafusion::logical_expr::LogicalPlan;
 use araphor_query::execution::Engine;
 use araphor_query::inputs::InputSet;
+use araphor_query::memory::Memory;
 use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
 
@@ -11,8 +12,10 @@ use super::{operation::ModelRun, AdmittedExport, AdmittedModel, SqlModelOutputV1
 use crate::{AnalysisReadControl, Result};
 
 impl ModelRun {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn evaluate(
         owner: &Arc<Engine>,
+        memory: &Arc<Memory>,
         tenant: [u8; 16],
         control: &AnalysisReadControl,
         package: &sdk::Package,
@@ -67,6 +70,7 @@ impl ModelRun {
         })?;
         let mut run = Self::new(
             owner,
+            memory,
             tenant,
             control,
             now,

@@ -191,7 +191,7 @@ impl SubscribeExec {
                 .query_async(run.engine.acquire_evaluation(run.selection.tenant_id))
                 .await?,
         );
-        let mut progress = Progress::new(run.engine.store(), Arc::clone(&run.clock));
+        let mut progress = Progress::new(run.engine.store(), Arc::clone(&run.clock), None);
         let now = progress.begin()?;
         let session = run
             .engine
@@ -233,7 +233,7 @@ impl SubscribeExec {
             Some((permit, now, progress)) => (Some((permit, now)), progress),
             None => (
                 None,
-                Progress::new(run.engine.store(), Arc::clone(&run.clock)),
+                Progress::new(run.engine.store(), Arc::clone(&run.clock), None),
             ),
         };
         let state = runtime::Runtime::new(self, context, run, initial, progress)?;

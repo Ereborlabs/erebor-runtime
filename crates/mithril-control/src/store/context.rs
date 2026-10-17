@@ -649,6 +649,29 @@ mod tests {
     }
 
     #[test]
+    fn discovery_context_notices_without_projection(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path().join("control"))?;
+        let data = AnalysisStore::open(directory.path().join("data"))?;
+        let mut changes = araphor_analysis::DiscoveryContextProvider::changes(&store)?
+            .ok_or("context watch absent")?;
+        assert!(!changes.has_changed()?);
+        assert_eq!(data.meta()?.commit_revision, 0);
+        store.install_trust_generation(TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "a".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        })?;
+        assert!(changes.has_changed()?);
+        assert_eq!(*changes.borrow_and_update(), store.commit_index());
+        assert_eq!(data.meta()?.commit_revision, 0);
+        assert!(!changes.has_changed()?);
+        Ok(())
+    }
+
+    #[test]
     fn control_context_retries_write() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = ControlStore::open(directory.path().join("control"))?;

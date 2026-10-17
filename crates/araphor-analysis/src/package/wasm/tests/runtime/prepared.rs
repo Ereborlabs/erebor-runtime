@@ -47,7 +47,15 @@ fn preparation_precedes_evaluation_deadline() -> TestResult {
     let digest = sha2::Sha256::digest(COMPONENT).into();
     assert!(owner.wasm.cached(&digest)?.is_none());
     assert!(matches!(
-        owner.evaluate_artifact([1; 16], bundle, index, input, None, &control),
+        owner.evaluate_artifact(
+            [1; 16],
+            bundle,
+            index,
+            input,
+            None,
+            &query.memory().scope(),
+            &control
+        ),
         Err(Error::Data {
             source: araphor_data::Error::AnalysisReadDeadline { .. }
         })

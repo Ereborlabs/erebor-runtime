@@ -297,9 +297,11 @@ sequenceDiagram
 ```
 
 The shared [Progress](../../crates/araphor-query/src/stream/progress.rs)
-owner replaces the separate source and clock watch loops in Runtime and
-InputOperation. Its constructor registers both watches. Its begin method fixes
-the capture time. A metadata-only health read acknowledges clock notices and
+owner serves Runtime, InputOperation, and Discovery. Its constructor registers
+Data and explicit clock watches. Discovery also supplies an optional provider
+context watch. Its begin method returns the observed time to the caller.
+Runtime and InputOperation use that time for capture. A metadata-only health
+read acknowledges clock notices and
 keeps pending source notices. It records the last checked source revision, the captured source deadline,
 and the deadlines that have already fired. Notices received during planning or
 capture remain pending. Each recorded source deadline fires once. A later grant or witness deadline
@@ -307,9 +309,10 @@ remains active. A new capture records the next source deadline.
 
 | Owner | Retained state and output |
 | --- | --- |
-| Progress | Source and clock watches, watch admission, last checked source revision, and captured source deadline. Both consumers use this owner. |
+| Progress | Data, clock, and optional context watches; watch admission; last checked source revision; and recorded deadlines. Runtime, InputOperation, and Discovery use this owner. |
 | Runtime | SQL plan, captured Arrow output, source frontier, and client cursor progress. |
 | InputOperation | Complete admitted input graph, exact activation and grant, retained Arc<InputSet>, evaluation time, memory scope, and commit completion. |
+| Discovery | Source-pass cursor, pass-start time, earliest open-profile seal deadline, and installed execution memory scope. Data retains committed profiles and notices. |
 | Analysis and Data | Current authority, selected backend, durable activation, checkpoint, result, and transaction. |
 
 A package offer contains the complete input graph. A generic batch stream or
@@ -429,6 +432,107 @@ The source count is `/tmp/araphor-live-input-count1.json`. This delivery adds
 The separate native execution pool needs a contention review. Full workspace
 CI and benchmarks are not run. Earlier records below retain their original
 source scope.
+
+### Discovery source passes
+
+The intended result is an idle Discovery service that waits for processing
+input. Discovery uses the same Progress owner as SQL follow and live package
+inputs. The source below replaces the one-second Discovery poll.
+Qualification for this working-tree change is **Pending**.
+
+[DiscoveryOwner::run_clock](../../crates/araphor-analysis/src/discovery/live.rs) Discovery starts the service
+  -> [Progress::new](../../crates/araphor-query/src/stream/progress.rs) Progress registers Data, explicit clock, and optional provider context watches
+  -> [Progress::begin](../../crates/araphor-query/src/stream/progress.rs) Progress observes those watches before one complete source pass
+  -> [DiscoveryOwner::sources](../../crates/araphor-analysis/src/discovery/live.rs) Discovery returns each bounded source page until the source pass is complete
+  -> [DiscoveryOwner::process_source](../../crates/araphor-analysis/src/discovery/live.rs) Discovery retains the earliest open-profile seal deadline
+  -> [DiscoveryOwner::refresh_source](../../crates/araphor-analysis/src/discovery/live.rs) Discovery drains context-notice pages, including metadata-only progress
+  -> [Progress::next](../../crates/araphor-query/src/stream/progress.rs) Progress waits for Data, context, clock, or the recorded seal deadline
+
+[DiscoveryOwner::run_clock](../../crates/araphor-analysis/src/discovery/live.rs) Discovery receives Busy from a source page
+  -> [DiscoveryOwner::process_source](../../crates/araphor-analysis/src/discovery/live.rs) Discovery keeps seal deadlines from completed sources and the failed source
+  -> [AnalysisPackageOwner::wait_capacity](../../crates/araphor-analysis/src/package/supervision.rs) Analysis waits for the actual blocked resource with the source pass memory scope
+  -> [DiscoveryOwner::run_clock](../../crates/araphor-analysis/src/discovery/live.rs) Discovery also accepts progress, authority changes, and stop while it waits
+
+[DiscoveryOwner::run_clock](../../crates/araphor-analysis/src/discovery/live.rs) Discovery receives stop during a blocking page
+  -> [DiscoveryOwner::run_clock](../../crates/araphor-analysis/src/discovery/live.rs) Discovery joins that page before the service returns
+
+```mermaid
+sequenceDiagram
+    participant Context as Context provider
+    participant Progress
+    participant Discovery
+    participant Data as AnalysisStore
+    Discovery->>Progress: Register watches and begin pass
+    Context-->>Progress: Context revision notice
+    Discovery->>Data: Process bounded source and notice pages
+    Discovery->>Progress: Wait with earliest seal deadline
+    Progress-->>Discovery: Pending notice or due deadline
+```
+
+Discovery holds one observed time for the complete source pass. It visits the
+next source page even when the current page consumes no records. Discovery
+does not call captured with an end-of-pass Data revision. Data or context
+notices that arrive during the pass remain pending. A later pass can therefore
+check an earlier source again. SQL follow and package input capture retain
+their existing captured-revision protocol.
+
+The [provider contract](../../crates/araphor-analysis/src/discovery/mod.rs)
+returns None only when context changes already produce a Data notice.
+[ControlStore::changes](../../crates/mithril-control/src/store/discovery_context.rs)
+uses the existing Control revision watch. A Control context change can wake
+Discovery without a Data projection commit. A closed supplied watch returns an
+explicit context-progress error. None adds no timer.
+
+[AnalysisStore::profile_notices](../../crates/araphor-data/src/analysis/dependencies.rs)
+returns at most sixteen notices. Acknowledgement through
+[mark_notice](../../crates/araphor-data/src/analysis/progress/notices.rs) can
+change metadata without a Data revision notice. refresh_source reads further
+pages until none remain. An unchanged page ends the attempt instead of a busy
+loop. The seventeen-profile case covers a complete metadata-only drain.
+
+[DiscoveryOwner::new](../../crates/araphor-analysis/src/discovery/mod.rs)
+assigns an operation Memory scope to its installed execution handle.
+[InstalledAnalysis](../../crates/araphor-analysis/src/package/installed.rs),
+[snapshot loading](../../crates/araphor-analysis/src/package/installed/snapshot.rs),
+and [evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs)
+pass that owner group through retained bundles, inputs, backend transfer,
+[SQL ModelRun](../../crates/araphor-analysis/src/model/operation.rs), and
+retained output. Memory.child supplies separate consumer IDs for each finite
+evaluation and keeps the owner's release counter. A prior retained result
+therefore causes temporary Busy pressure for the next evaluation. The existing
+[retained descriptor case](../../crates/araphor-analysis/src/package/installed/read/tests/descriptors.rs)
+keeps both borrowed-buffer assertions. The
+[child scope case](../../crates/araphor-query/src/memory.rs) checks separate
+working sets and shared release notices. The Memory capacity epoch excludes
+releases from the owner group. The service therefore does not treat its own
+completed allocations as external capacity. Existing pools, buffer claims,
+limits, authority checks, and profile transactions remain in use.
+
+Stop joins the current blocking page. This change does not pass a new parent
+cancellation token through every domain helper. An already running page can
+still commit. A deadline error now leaves run as an error instead of selecting
+a periodic retry. The existing
+[Control task](../../crates/mithril-control/src/main.rs) logs the error and
+stops optional Discovery. The policy service remains active.
+
+The [Discovery event tests](../../crates/araphor-analysis/src/discovery/live/tests/events.rs)
+cover idle waits, context revision changes without intake, exact sealing while evaluation capacity is held,
+source-page progress, capacity release, joined stop, and seventeen metadata-only
+notices. The [Progress tests](../../crates/araphor-query/src/follow/tests/progress.rs)
+cover context notices during begin and capture, concurrent watches, closed
+watches, None, cancellation, and consumed deadlines. The
+[Control context test](../../crates/mithril-control/src/store/context.rs)
+checks a context notice without Data projection. All eight new Discovery
+cases pass. After the retained-output correction, all 29 affected ownership
+cases, eight opted-in native package cases, and 12 Query memory cases pass.
+Strict Clippy passes for Query, Analysis, and Control. E2E test callers compile;
+full E2E execution is not repeated. The unchanged Control owner sources retain
+their six-case context check. The source record is
+`/tmp/araphor-discovery-qualification1.json`. This review covers the work after
+410ebec8 and the two native-default commits. The complete count still adds
+638 nonblank production Rust lines from 7b7b407a. The target is not met.
+Other quotas and polling loops remain. General maintained SQL and the complete
+redesign remain **Not done**. No speed or complete cancellation result is claimed.
 
 ## Source access and failure
 
@@ -864,8 +968,9 @@ also has no complete size API. This guide makes no complete heap-bound claim.
 and binds the cursor. The physical [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs)
 retains the native plan, original source names, selection, and processing
 frontier. Its [Progress](../../crates/araphor-query/src/stream/progress.rs)
-owner also serves live package inputs. Progress registers the watches before
-physical planning and records each completed capture revision and deadline.
+owner also serves live package inputs and Discovery. Runtime registers the
+watches before physical planning and records each completed capture revision
+and deadline. Discovery uses the source-pass route described above.
 Append plans use bounded Data position pages. Replacement
 plans use the maintained COUNT path below when that path supports the plan.
 Other replacement plans compute the complete captured input for each update.

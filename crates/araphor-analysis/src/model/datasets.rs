@@ -58,6 +58,7 @@ impl SqlDatasetOutputV1 {
         )?;
         let mut run = ModelRun::new(
             owner,
+            &owner.memory().scope(),
             tenant,
             control,
             now,

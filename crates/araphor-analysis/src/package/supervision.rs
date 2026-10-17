@@ -548,7 +548,7 @@ impl AnalysisPackageOwner {
         }
     }
 
-    async fn wait_capacity(
+    pub(crate) async fn wait_capacity(
         &self,
         error: crate::Error,
         memory: &araphor_query::memory::Memory,

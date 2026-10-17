@@ -108,7 +108,10 @@ async fn inspect_incomplete_input_marks_stale() -> TestResult {
     )?;
     assert!(!fixture.result(&reference.result_id)?.stale);
     let prior_results = fixture.store.package_results(&active.key)?;
-    let _installed = fixture.owner.load_installed([1; 16], &package.root)?;
+    let _installed =
+        fixture
+            .owner
+            .load_installed([1; 16], &package.root, fixture.owner.query.memory())?;
     let available = available_input_bytes(&fixture.owner.query);
     assert!(available > 0);
     let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
@@ -182,7 +185,10 @@ async fn input_authority_rejects_foreign_or_revoked_grants() -> TestResult {
     });
     fixture.install(package.clone(), None).await?;
     let active = fixture.activation("test.model")?;
-    let installed = fixture.owner.load_installed([1; 16], &package.root)?;
+    let installed =
+        fixture
+            .owner
+            .load_installed([1; 16], &package.root, fixture.owner.query.memory())?;
     let available = available_input_bytes(&fixture.owner.query);
     assert!(available > 0);
     let before = fixture.store.package_results(&active.key)?;

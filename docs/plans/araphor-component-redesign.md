@@ -1029,6 +1029,110 @@ query ownership, and the required 6,000-line production reduction remain
 **Not done**. Full workspace CI and benchmarks are not run, as instructed.
 No speed result is claimed.
 
+### Discovery uses shared source progress
+
+Implementation and selected host qualification: **Done**. The source baseline
+is 410ebec8. The two preceding commits replace native function registration
+and disable the fixed operator, cache, and compiler address-space quotas.
+Earlier receipts retain their recorded source scope.
+
+Discovery starts the service without a periodic poll. The intended result is
+an idle service that waits for source, context, clock, or deadline input.
+The complete source pass retains one observed time.
+
+Discovery starts the service
+  -> Progress registers Data, explicit clock, and optional provider context watches
+  -> Progress observes those watches before one complete source pass
+  -> Discovery returns each bounded source page until the source pass is complete
+  -> Discovery retains the earliest open-profile seal deadline
+  -> Discovery drains context-notice pages, including metadata-only progress
+  -> Progress waits for Data, context, clock, or the recorded seal deadline
+
+Discovery receives Busy from a source page
+  -> Discovery keeps seal deadlines from completed sources and the failed source
+  -> Analysis waits for the actual blocked resource with the source pass memory scope
+  -> Discovery also accepts progress, authority changes, and stop while it waits
+
+Discovery receives stop during a blocking page
+  -> Discovery joins that page before the service returns
+
+The [source-pass owner](../../crates/araphor-analysis/src/discovery/live.rs)
+uses the existing [Progress](../../crates/araphor-query/src/stream/progress.rs)
+owner from SQL follow and live package inputs. It registers the watches before
+the pass. It does not call captured with an end-of-pass Data revision.
+Notices received during a page remain pending. A page that consumes no records
+does not end the complete source pass. The service visits later sources and
+keeps the earliest seal deadline. Existing package input offers and their
+actual commit-receipt checks remain separate.
+
+The [context provider](../../crates/araphor-analysis/src/discovery/mod.rs)
+supplies an optional watch. None is valid only when context changes already
+produce a Data notice. [ControlStore](../../crates/mithril-control/src/store/discovery_context.rs)
+supplies its existing revision watch directly. Late Control context therefore
+does not depend on a Data projection commit. Closed supplied watches return
+an explicit error. No context timer or client health demand is added.
+
+Discovery drains all changing notice pages within the pass.
+[profile_notices](../../crates/araphor-data/src/analysis/dependencies.rs)
+returns sixteen notices at most. Metadata acknowledgement can change the next
+page without a Data revision. Discovery requests that next page before it
+waits. An unchanged page ends the attempt. The seventeen-profile test keeps
+the Data revision and all retained profile bytes fixed.
+
+[InstalledAnalysis](../../crates/araphor-analysis/src/package/installed.rs)
+retains its owner Memory scope. Discovery assigns its own operation scope.
+Each finite evaluation uses Memory.child for separate native consumer IDs.
+Children share the owner's release counter. A prior retained result therefore
+produces temporary Busy pressure for the next evaluation. A single evaluation
+still receives a permanent limit error when its own working set cannot fit.
+Bundle and snapshot loading, input buffers, SQL execution, native or Wasm
+transfer, and retained outputs keep the owner group. The capacity epoch
+excludes releases from that group. Existing shared pools and configured limits
+remain. No second capacity owner or polling retry is added.
+
+The [SQL review](../guides/araphor-sql-operation-review.md#discovery-source-passes)
+links the source and current tests. New cases cover idle reads, direct context
+notices, exact sealing, quiet source pages, notice arrival during a pass,
+capacity release, joined stop, and metadata-only notice pages. Progress cases
+cover simultaneous watches, closure errors, and one-shot deadlines. A Control
+case checks a notice while the Data revision remains unchanged. These cases
+pass in the scoped checks below. All eight new Discovery event cases pass.
+The affected recheck passes 29 cases after the child-scope correction.
+All eight opted-in native package cases and 12 Query memory cases pass.
+The earlier owner selection passes 105 cases and fails the retained-result
+Busy assertion. The corrected case passes alone and in the affected recheck.
+The initial focused retry hits the filesystem reserve. Five inactive generated
+build caches are removed before the unchanged test reaches the actual error.
+No test condition or assertion is removed.
+
+The prior complete Query run and corrected native-function case cover the
+unchanged Progress source. The Control context check passes six cases; its
+Control sources are unchanged by the later memory corrections. Strict Clippy
+passes for Query, Analysis, and Control. E2E test callers compile. Full E2E
+execution is not repeated. The qualification record is
+`/tmp/araphor-discovery-qualification1.json`.
+
+This deliverable adds 148 nonblank production Rust lines. The complete
+worktree adds 638 lines from 7b7b407a, 1,791 from aa390d9f, and 2,867 from
+537f9de3. Another 6,638 net production deletions are required for the target.
+The syntax count verifies 710 Rust paths. The count record is
+`/tmp/araphor-discovery-count1.json`.
+
+Reviewed behavior limit: stop joins the current page. No new parent token
+cancels every domain helper or prevents an already running profile commit.
+Existing installed authority checks still apply. DeadlineExceeded now leaves
+run as an error. The existing [Control task](../../crates/mithril-control/src/main.rs)
+logs that error and stops optional Discovery. It does not stop the policy
+service. This slice does not complete broader cancellation work.
+
+General maintained SQL, shared maintained query ownership, the complete
+redesign, and the required net 6,000-line reduction remain **Not done**.
+This change does not establish a complete heap bound, general platform
+qualification, or a speed result. Other quota defaults, the Wasm epoch ticker,
+compiler waits, storage lock waits, repeated expired-read interrupts, and Query
+health reads still need correction. Full workspace CI and benchmarks are not
+run, as instructed. Result for this deliverable: **Done**.
+
 ## Intended end state
 
 ### RisingWave source correction

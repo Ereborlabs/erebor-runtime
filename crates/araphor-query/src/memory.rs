@@ -271,7 +271,14 @@ impl Memory {
     }
 
     pub fn scope(&self) -> Arc<Self> {
-        let released = Arc::default();
+        self.scoped(Arc::default())
+    }
+
+    pub fn child(&self) -> Arc<Self> {
+        self.scoped(Arc::clone(&self.released))
+    }
+
+    fn scoped(&self, released: Arc<AtomicU64>) -> Arc<Self> {
         Arc::new(Self {
             input: Self::consumer("araphor input", &self.input_pool, &released, true),
             output: Self::consumer("araphor output", &self.output_pool, &released, true),
@@ -503,6 +510,29 @@ mod tests {
         first.capacity_changed(before).await?;
         assert_eq!(memory.input_pool.reserved(), 0);
         assert_eq!(memory.output_pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn children_share_wake_group() -> TestResult {
+        let memory = Memory::new(64, 64);
+        let owner = memory.scope();
+        let before = owner.capacity_epoch();
+        let previous = owner.child();
+        let held = previous.reserve_output(64)?;
+        let next = owner.child();
+        assert!(matches!(next.reserve_output(1),
+            Err(DataFusionError::External(error))
+                if matches!(error.downcast_ref::<crate::Error>(),
+                    Some(crate::Error::Capacity { resource: "shared output", .. }))));
+        drop((held, previous, next));
+        assert_eq!(owner.capacity_epoch(), before);
+        let waiting = owner.capacity_changed(before);
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+        drop(memory.reserve_input(1)?);
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiting).await??;
+        drop(owner.child().reserve_output(64)?);
         Ok(())
     }
 

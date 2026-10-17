@@ -8,27 +8,33 @@ use tokio::time::Instant;
 use crate::follow::Clock;
 use crate::Result;
 
-pub(crate) struct Progress {
+pub struct Progress {
     clock: Arc<dyn Clock>,
     changes: watch::Receiver<u64>,
     clock_changes: watch::Receiver<u64>,
+    context: Option<watch::Receiver<u64>>,
     revision: u64,
     expiry: Option<u64>,
     fired: Option<u64>,
     elapsed: bool,
 }
 
-pub(crate) enum Wake {
+pub enum Wake {
     Source,
     Clock,
     Health,
 }
 
 impl Progress {
-    pub(crate) fn new(store: &AnalysisStore, clock: Arc<dyn Clock>) -> Self {
+    pub fn new(
+        store: &AnalysisStore,
+        clock: Arc<dyn Clock>,
+        context: Option<watch::Receiver<u64>>,
+    ) -> Self {
         Self {
             changes: store.subscribe_revision(),
             clock_changes: clock.changes(),
+            context,
             clock,
             revision: 0,
             expiry: None,
@@ -45,8 +51,11 @@ impl Progress {
         self.revision = *self.changes.borrow_and_update();
     }
 
-    pub(crate) fn begin(&mut self) -> Result<u64> {
+    pub fn begin(&mut self) -> Result<u64> {
         self.observe();
+        if let Some(context) = &mut self.context {
+            context.borrow_and_update();
+        }
         self.time()
     }
 
@@ -77,14 +86,19 @@ impl Progress {
     }
 
     pub(crate) fn pending(&self) -> bool {
-        self.changes.has_changed().unwrap_or(false) || *self.changes.borrow() > self.revision
+        self.changes.has_changed().unwrap_or(false)
+            || *self.changes.borrow() > self.revision
+            || self
+                .context
+                .as_ref()
+                .is_some_and(|context| context.has_changed().unwrap_or(false))
     }
 
     pub(crate) fn clock_pending(&self) -> bool {
         self.clock_changes.has_changed().unwrap_or(false)
     }
 
-    pub(crate) async fn next(
+    pub async fn next(
         &mut self,
         control: &AnalysisReadControl,
         deadline: Option<u64>,
@@ -96,6 +110,9 @@ impl Progress {
         }
         if self.pending() {
             self.observe();
+            if let Some(context) = &mut self.context {
+                context.borrow_and_update();
+            }
             return Ok(Wake::Source);
         }
         let deadline = deadline
@@ -123,6 +140,15 @@ impl Progress {
                 changed.map_err(|_| PackageErrorCodeV1::Incomplete.error("clock progress"))?;
                 self.clock_changes.borrow_and_update();
                 Ok(Wake::Clock)
+            }
+            changed = async {
+                match &mut self.context {
+                    Some(context) => context.changed().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                changed.map_err(|_| PackageErrorCodeV1::Incomplete.error("context progress"))?;
+                Ok(Wake::Source)
             }
             _ = tokio::time::sleep(Duration::from_nanos(deadline.unwrap_or(now).saturating_sub(now))), if deadline.is_some() => {
                 self.fired = deadline;

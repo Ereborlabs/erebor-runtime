@@ -183,7 +183,10 @@ async fn package_busy_preserves_result() -> TestResult {
     let fixture = Fixture::new()?;
     let package = source_bundle(&fixture)?;
     fixture.install(package.clone(), None).await?;
-    let installed = fixture.owner.load_installed([1; 16], &package.root)?;
+    let installed =
+        fixture
+            .owner
+            .load_installed([1; 16], &package.root, fixture.owner.query.memory())?;
     let before = fixture.activation("test.model")?;
     fixture.store.commit_context(&AnalysisContextVersionV1 {
         key: AnalysisContextKeyV1 {

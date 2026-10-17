@@ -58,7 +58,11 @@ impl AnalysisPackageOwner {
                 .error("activation scope or parameters")
                 .into());
         }
-        let bundle = self.load_installed(grant.selection.tenant_id, &context.root)?;
+        let bundle = self.load_installed(
+            grant.selection.tenant_id,
+            &context.root,
+            self.query.memory(),
+        )?;
         let admitted = bundle.admission();
         self.authority.admit(grant, &admitted)?;
         let root = super::PackageRefV1 {
@@ -106,7 +110,11 @@ impl AnalysisPackageOwner {
             let selected = if saved.root == bundle.value.root {
                 &bundle
             } else {
-                loaded = self.load_installed(grant.selection.tenant_id, &saved.root)?;
+                loaded = self.load_installed(
+                    grant.selection.tenant_id,
+                    &saved.root,
+                    self.query.memory(),
+                )?;
                 &loaded
             };
             let receipt = self.evaluate_active(&active, &saved, id, selected, control)?;

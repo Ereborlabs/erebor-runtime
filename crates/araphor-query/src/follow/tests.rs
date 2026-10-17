@@ -27,6 +27,7 @@ use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
 use crate::sources::SourceSnapshot;
 
+mod progress;
 mod runtime;
 mod trace;
 

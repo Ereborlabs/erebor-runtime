@@ -37,6 +37,15 @@ The benchmark remains on hold. The user requires relevant builds and tests
 for each iteration. This instruction replaces the general full-workspace CI
 rule for this work.
 
+The latest user instruction requires every quota to be configurable and
+disabled by default. It replaces earlier mandatory resource limits. Source,
+authority, capacity, cancellation, and process completion events trigger work.
+No time-based polling is permitted. Actual window and expiry deadlines can use
+one-shot timers. DataFusion supplies native parsing, logical planning,
+optimization, physical planning, and execution. Add no duplicate implementation
+when DataFusion supplies the behavior. Package execution uses the same Query
+machinery. All Araphor owners must follow this rule.
+
 ### Component redesign
 
 The user accepts the deletion work and requires simpler complete components.
@@ -583,6 +592,34 @@ The complete redesign remains 502 production Rust lines above 7b7b407a.
 General maintained SQL, shared maintained query ownership, the complete
 redesign, and the 6,000-line production target remain **Not done**. Full
 workspace CI and benchmarks are not run. No speed result is claimed.
+
+### Discovery source events and quota defaults
+
+Discovery now uses Query Progress for complete source passes, direct Control
+context notices, exact sealing deadlines, and resource waits. Quiet pages do
+not stop a pass. Context notice pages drain before the service waits. Stop
+joins an active page. Finite installed evaluations have separate memory
+consumers within the owner's release group. A retained result keeps its charge
+and produces temporary Busy pressure for the next evaluation.
+
+The selected checks pass all eight new Discovery event cases, 29 affected
+ownership cases, eight opted-in native cases, and 12 Query memory cases.
+Strict Query, Analysis, and Control Clippy passes. E2E test callers compile.
+The source record is `/tmp/araphor-discovery-qualification1.json`.
+
+Native DataFusion default functions replace the fixed function list. Operator
+memory, compiled-code cache bytes and entries, and compiler address space now
+have optional settings that default to None. Other Query, SDK, compiler, VM,
+and retained-store quotas still need default-disabled configuration. The Wasm
+epoch ticker, compiler waits, storage lock waits, repeated expired-read
+interrupts, and Query health reads still need reactive replacements.
+
+The complete syntax count adds 638 nonblank production Rust lines from
+7b7b407a and 1,791 from aa390d9f. Another 6,638 net production deletions are
+required. The count verifies 710 Rust paths. The record is
+`/tmp/araphor-discovery-count1.json`. General maintained SQL, the complete
+redesign, and the required reduction remain **Not done**. No performance
+result, full workspace CI, or benchmark is claimed.
 
 ## Implementation flow
 

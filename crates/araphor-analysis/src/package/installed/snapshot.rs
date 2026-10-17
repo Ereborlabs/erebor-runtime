@@ -207,23 +207,20 @@ impl AnalysisPackageOwner {
         &self,
         tenant: [u8; 16],
         root: &PackageRefV1,
+        memory: &Memory,
     ) -> Result<Arc<InstalledBundle>> {
-        InstalledBundle::new(
-            &self.query,
-            self.load_bundle(tenant, root, None)?,
-            self.query.memory(),
-        )
+        InstalledBundle::new(&self.query, self.load_bundle(tenant, root, None)?, memory)
     }
 }
 
 impl InstalledSnapshot {
     pub(super) fn new(
-        query: &Engine,
+        memory: &Memory,
         pins: Vec<PackageActivationV1>,
         bundles: Vec<Arc<InstalledBundle>>,
     ) -> Result<Arc<Self>> {
         let bytes = memory::BundleMemory::snapshot(&pins, &bundles)?;
-        let memory = query.memory().reserve_input(bytes)?;
+        let memory = memory.reserve_input(bytes)?;
         Ok(Arc::new(Self {
             pins,
             bundles,
@@ -258,6 +255,6 @@ impl InstalledAnalysis {
         if let Some(snapshot) = &self.snapshot {
             return snapshot.bundle(root);
         }
-        self.owner.load_installed(tenant, root)
+        self.owner.load_installed(tenant, root, &self.memory)
     }
 }
