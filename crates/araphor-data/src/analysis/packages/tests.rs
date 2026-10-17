@@ -8,6 +8,7 @@ mod context;
 mod crash;
 mod evidence;
 mod lifecycle;
+mod output;
 mod representation;
 
 fn package(id: &str, revision: &str) -> crate::Result<PackageRevisionV1> {

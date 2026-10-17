@@ -1,20 +1,19 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_data::SqlModelV1;
-use araphor_query::datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+use araphor_query::datafusion::common::tree_node::TreeNodeRecursion;
 use araphor_query::datafusion::execution::memory_pool::MemoryReservation;
 use araphor_query::datafusion::execution::SessionState;
-use araphor_query::datafusion::logical_expr::{Expr, LogicalPlan, Volatility};
-use araphor_query::datafusion::sql::sqlparser::ast::Ident;
+use araphor_query::datafusion::logical_expr::LogicalPlan;
 use araphor_query::execution::Engine;
+use araphor_query::inputs::Inputs;
 use araphor_query::memory::Memory;
 use araphor_query::parser::Parser;
 
 use crate::Result;
 
-mod arrays;
 mod component;
 mod datasets;
 mod execute;
@@ -22,10 +21,8 @@ mod input;
 mod operation;
 mod output;
 mod schema;
-mod source;
 pub use datasets::SqlDatasetOutputV1;
 pub use operation::ModelRun;
-pub(crate) use source::{ModelInputRequest, ModelInputs};
 
 pub struct SqlModelOutputV1 {
     pub output: sdk::Output,
@@ -33,30 +30,9 @@ pub struct SqlModelOutputV1 {
 }
 
 pub(crate) struct AdmittedExport {
-    inputs: Vec<AdmittedInput>,
+    pub(crate) inputs: Arc<Inputs>,
     model: Option<AdmittedModel>,
     implementation: Option<usize>,
-}
-
-enum AdmittedInput {
-    Query {
-        port: usize,
-        plan: Arc<LogicalPlan>,
-        reads: BTreeSet<String>,
-        inputs: Vec<usize>,
-        clock: bool,
-    },
-    Output {
-        port: usize,
-    },
-}
-
-impl AdmittedInput {
-    fn port(&self) -> usize {
-        match self {
-            Self::Query { port, .. } | Self::Output { port } => *port,
-        }
-    }
 }
 
 impl AdmittedExport {
@@ -65,77 +41,8 @@ impl AdmittedExport {
         model: &sdk::Model,
         program: Option<&SqlModelV1>,
     ) -> Result<Self> {
-        let relations = schema::ModelSchema::sources(model)?;
-        let state = engine.catalog(relations.clone())?;
-        let mut inputs = Vec::new();
-        for (port, input) in model.inputs.iter().enumerate() {
-            let sql = match &input.source {
-                sdk::InputSource::Query(sql) => Some(sql.clone()),
-                sdk::InputSource::Table(sdk::TableRef::Named(name))
-                    if model.input_mode == sdk::InputMode::Resolved =>
-                {
-                    let fields = input
-                        .port
-                        .schema
-                        .fields()
-                        .iter()
-                        .map(|field| Ident::with_quote('"', field.name()).to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    Some(format!(
-                        "SELECT {fields} FROM {}",
-                        Ident::with_quote('"', name)
-                    ))
-                }
-                sdk::InputSource::Table(sdk::TableRef::Output(_))
-                    if model.input_mode == sdk::InputMode::Resolved =>
-                {
-                    inputs.push(AdmittedInput::Output { port });
-                    None
-                }
-                _ => None,
-            };
-            if let Some(sql) = sql {
-                let statement = Parser::parse(&sql)?;
-                let sources = state
-                    .resolve_table_references(&statement)?
-                    .into_iter()
-                    .map(|name| name.table().to_owned())
-                    .collect::<BTreeSet<_>>();
-                let reads = sources
-                    .iter()
-                    .filter(|name| !relations.contains_key(name.as_str()))
-                    .cloned()
-                    .collect::<BTreeSet<_>>();
-                let dependencies = model
-                    .inputs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, input)| {
-                        relations.contains_key(&input.port.name)
-                            && sources.contains(&input.port.name)
-                    })
-                    .map(|(index, _)| index)
-                    .collect();
-                let plan = engine.plan(&state, statement, Vec::new())?;
-                let clock = clock(&plan)? || reads.contains("notifications");
-                inputs.push(AdmittedInput::Query {
-                    port,
-                    plan: Arc::new(plan),
-                    reads,
-                    inputs: dependencies,
-                    clock,
-                });
-            }
-        }
-        inputs.sort_by_key(|input| {
-            matches!(
-                model.inputs[input.port()].source,
-                sdk::InputSource::Query(_)
-            )
-        });
         Ok(Self {
-            inputs,
+            inputs: Arc::new(Inputs::admit(engine, model)?),
             model: program
                 .map(|program| AdmittedModel::admit(engine, program, model))
                 .transpose()?,
@@ -179,9 +86,7 @@ impl AdmittedExport {
         self.implementation
     }
     pub(crate) fn input_clock(&self) -> bool {
-        self.inputs
-            .iter()
-            .any(|input| matches!(input, AdmittedInput::Query { clock: true, .. }))
+        self.inputs.input_clock()
     }
     pub(crate) fn model_clock(&self) -> bool {
         self.model.as_ref().is_some_and(|model| model.clock)
@@ -189,20 +94,7 @@ impl AdmittedExport {
 
     pub(crate) fn allocated_bytes(&self) -> usize {
         use std::mem::size_of;
-        let mut bytes =
-            size_of::<Self>().saturating_add(self.inputs.capacity() * size_of::<AdmittedInput>());
-        for input in &self.inputs {
-            if let AdmittedInput::Query { reads, inputs, .. } = input {
-                bytes = bytes
-                    .saturating_add(
-                        reads
-                            .iter()
-                            .map(|source| source.capacity() + size_of::<String>())
-                            .sum::<usize>(),
-                    )
-                    .saturating_add(inputs.capacity() * size_of::<usize>());
-            }
-        }
+        let mut bytes = size_of::<Self>().saturating_add(self.inputs.allocated_bytes());
         if let Some(model) = &self.model {
             bytes = bytes
                 .saturating_add(model.outputs.capacity() * size_of::<Arc<LogicalPlan>>())
@@ -354,7 +246,7 @@ impl AdmittedModel {
             .chain(evidence.iter())
             .chain(reasons.iter().map(|(_, _, plan)| plan))
         {
-            uses_clock |= clock(plan)?;
+            uses_clock |= Inputs::clocked(plan)?;
         }
         Ok(Self {
             outputs,
@@ -412,22 +304,6 @@ impl AdmittedModel {
         }
         Ok(Arc::new(engine.plan(state, statement, Vec::new())?))
     }
-}
-
-fn clock(plan: &LogicalPlan) -> Result<bool> {
-    let mut clock = false;
-    plan.apply_with_subqueries(|plan| {
-        plan.apply_expressions(|expression| {
-            expression.apply(|expression| {
-                if let Expr::ScalarFunction(function) = expression {
-                    clock |= function.func.signature().volatility != Volatility::Immutable;
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })
-        })?;
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    Ok(clock)
 }
 
 #[cfg(test)]

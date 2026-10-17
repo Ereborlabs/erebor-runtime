@@ -19,6 +19,14 @@ impl Package {
     }
 }
 
+impl Port {
+    pub fn allocated_bytes(&self) -> usize {
+        self.name
+            .capacity()
+            .saturating_add(Memory::schema_heap(&self.schema))
+    }
+}
+
 impl wire::Evaluation {
     pub fn allocated_bytes(&self) -> usize {
         let mut bytes = self
@@ -102,9 +110,7 @@ impl Memory {
     fn ports(ports: &Vec<Port>) -> usize {
         let mut bytes = ports.capacity().saturating_mul(size_of::<Port>());
         for port in ports {
-            bytes = bytes
-                .saturating_add(port.name.capacity())
-                .saturating_add(Self::schema_heap(&port.schema));
+            bytes = bytes.saturating_add(port.allocated_bytes());
         }
         bytes
     }

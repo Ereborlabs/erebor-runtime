@@ -4,10 +4,7 @@ use araphor_analysis_sdk as sdk;
 use araphor_query::datafusion::logical_expr::LogicalPlan;
 use snafu::ResultExt as _;
 
-use super::{
-    operation::ModelRun, schema::ModelSchema, AdmittedExport, AdmittedModel, SqlModelOutputV1,
-    SqlModelV1,
-};
+use super::{operation::ModelRun, AdmittedExport, AdmittedModel, SqlModelOutputV1, SqlModelV1};
 use crate::Result;
 
 impl ModelRun<'_> {
@@ -27,16 +24,12 @@ impl ModelRun<'_> {
                 }
                 .build()
             })?;
-        let admitted = AdmittedExport {
-            inputs: Vec::new(),
-            model: Some(AdmittedModel::admit(self.owner, program, model)?),
-            implementation: None,
-        };
-        self.evaluate_admitted(package, &admitted, evaluation)
+        let admitted = AdmittedModel::admit(self.owner, program, model)?;
+        self.evaluate_program(package, &admitted, evaluation)
     }
 
     pub(crate) fn evaluate_admitted(
-        mut self,
+        self,
         package: &sdk::Package,
         admitted: &AdmittedExport,
         evaluation: &sdk::Evaluation,
@@ -47,6 +40,15 @@ impl ModelRun<'_> {
             }
             .build()
         })?;
+        self.evaluate_program(package, admitted, evaluation)
+    }
+
+    fn evaluate_program(
+        mut self,
+        package: &sdk::Package,
+        admitted: &AdmittedModel,
+        evaluation: &sdk::Evaluation,
+    ) -> Result<SqlModelOutputV1> {
         self.check_evaluation(evaluation)?;
         let checked = package
             .check_evaluation(evaluation)
@@ -91,6 +93,9 @@ impl ModelRun<'_> {
             .fail();
         }
         self.control.check()?;
+        if let Some(inputs) = &self.inputs {
+            inputs.check(self.owner, &self.control)?;
+        }
         let reservation = self.output_memory.take().ok_or_else(|| {
             crate::ModelInvalidSnafu {
                 field: "model output reservation",
@@ -101,6 +106,9 @@ impl ModelRun<'_> {
     }
 
     pub(super) fn check_evaluation(&self, evaluation: &sdk::Evaluation) -> Result<()> {
+        if let Some(inputs) = &self.inputs {
+            inputs.check(self.owner, &self.control)?;
+        }
         if evaluation.allocated_bytes() > self.owner.limits().input_bytes {
             return crate::ModelLimitSnafu {
                 resource: "analysis input memory",
@@ -236,24 +244,11 @@ impl ModelRun<'_> {
         let mut normalized = Vec::with_capacity(batches.len().max(1));
         for batch in batches {
             self.control.check()?;
-            let conversion = schema.map_or(Ok(0usize), |schema| {
-                batch.columns().iter().zip(schema.fields()).try_fold(
-                    0usize,
-                    |bytes, (array, field)| {
-                        bytes
-                            .checked_add(super::arrays::ModelArrays::conversion_bytes(
-                                array,
-                                field.data_type(),
-                            )?)
-                            .ok_or_else(|| {
-                                crate::ModelInvalidSnafu {
-                                    field: "model conversion allocation",
-                                }
-                                .build()
-                            })
-                    },
-                )
-            })?;
+            let conversion = schema
+                .map_or(Ok(0usize), |schema| {
+                    sdk::Dataset::conversion_bytes(&batch, schema)
+                })
+                .context(crate::AnalysisContractSnafu)?;
             let headers = std::mem::size_of::<sdk::RecordBatch>()
                 + batch.num_columns() * std::mem::size_of::<sdk::arrow_array::ArrayRef>();
             self.output_memory
@@ -266,7 +261,8 @@ impl ModelRun<'_> {
                 })?
                 .try_grow(conversion + headers)?;
             let batch = match schema {
-                Some(schema) => ModelSchema::normalize(batch, Arc::new(schema.clone()))?,
+                Some(schema) => sdk::Dataset::normalize_batch(batch, Arc::new(schema.clone()))
+                    .context(crate::AnalysisContractSnafu)?,
                 None => batch,
             };
             owned = owned

@@ -249,13 +249,10 @@ impl Engine {
     ) -> Result<Arc<ArrowSnapshot>> {
         let control = Arc::new(control.within(self.limits.extract_timeout)?);
         control.check()?;
-        let mut pending = PendingRead {
-            control: Arc::clone(&control),
-            active: true,
-        };
         let capture = SourceSnapshot::new(
             Arc::clone(&self.store),
             selection,
+            None,
             AnalysisExtractLimits {
                 scan_bytes: self.limits.scan_bytes,
                 input_bytes: self.limits.input_bytes,
@@ -267,18 +264,10 @@ impl Engine {
             Arc::clone(&self.memory),
         );
         let sources = sources.clone();
-        let result = control
-            .query_async(async move {
-                tokio::task::spawn_blocking(move || capture.capture_metadata(&sources))
-                    .await
-                    .map_err(|source| crate::Error::Sql {
-                        source: DataFusionError::External(Box::new(source)),
-                    })?
-                    .context(SqlSnafu)
-            })
-            .await;
-        pending.active = result.is_err();
-        result
+        Self::blocking(control, move || {
+            capture.capture_metadata(&sources).context(SqlSnafu)
+        })
+        .await
     }
 
     pub async fn check_read(self: &Arc<Self>, snapshot: &Arc<ArrowSnapshot>) -> Result<()> {
@@ -288,33 +277,41 @@ impl Engine {
         let control = Arc::new(AnalysisReadControl::with_timeout(
             self.limits.extract_timeout,
         )?);
-        let mut pending = PendingRead {
-            control: Arc::clone(&control),
-            active: true,
-        };
         let permit = self.store.reserve_trace_read()?;
         let engine = Arc::clone(self);
         let snapshot = Arc::clone(snapshot);
         let stage = Arc::clone(&control);
-        let result = control
-            .query_async(async move {
-                tokio::task::spawn_blocking(move || {
-                    engine.store.check_trace_reads(
-                        snapshot.selection.tenant_id,
-                        snapshot.page.extraction.trace_reads(),
-                        &stage,
-                        permit,
-                    )
-                })
-                .await
-                .map_err(|source| crate::Error::Sql {
+        Self::blocking(control, move || {
+            engine
+                .store
+                .check_trace_reads(
+                    snapshot.selection.tenant_id,
+                    snapshot.page.extraction.trace_reads(),
+                    &stage,
+                    permit,
+                )
+                .map_err(crate::Error::from)
+        })
+        .await
+    }
+
+    pub(crate) async fn blocking<T: Send + 'static>(
+        control: Arc<AnalysisReadControl>,
+        operation: impl FnOnce() -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let mut pending = PendingRead {
+            control: Arc::clone(&control),
+            active: true,
+        };
+        control
+            .query_async(async {
+                let result = tokio::task::spawn_blocking(operation).await;
+                pending.active = false;
+                result.map_err(|source| crate::Error::Sql {
                     source: DataFusionError::External(Box::new(source)),
                 })?
-                .map_err(crate::Error::from)
             })
-            .await;
-        pending.active = result.is_err();
-        result
+            .await
     }
 
     pub fn catalog(&self, schemas: BTreeMap<String, SchemaRef>) -> Result<SessionState> {
@@ -323,6 +320,13 @@ impl Engine {
             let table = MemTable::try_new(schema, vec![vec![]]).context(SqlSnafu)?;
             tables.insert(name, Arc::new(table));
         }
+        self.catalog_tables(tables)
+    }
+
+    pub(crate) fn catalog_tables(
+        &self,
+        tables: BTreeMap<String, Arc<dyn TableProvider>>,
+    ) -> Result<SessionState> {
         let schema = Arc::new(MemorySchemaProvider::new());
         for (name, table) in tables {
             schema.register_table(name, table).context(SqlSnafu)?;
@@ -452,7 +456,7 @@ impl Engine {
         })
     }
 
-    fn wait<T: Send + 'static>(
+    pub(crate) fn wait<T: Send + 'static>(
         &self,
         future: impl Future<Output = Result<T>> + Send + 'static,
     ) -> Result<T> {
@@ -509,6 +513,14 @@ pub(crate) enum Retention {
 }
 
 impl Session {
+    pub(crate) fn selection(&self) -> &AnalysisSelectionV1 {
+        &self.selection
+    }
+
+    pub(crate) fn control(&self) -> &Arc<AnalysisReadControl> {
+        &self.control
+    }
+
     pub fn set_timeout(&mut self, timeout: Duration) -> Result<()> {
         self.control = Arc::new(self.control.within(timeout)?);
         Ok(())
@@ -548,7 +560,7 @@ impl Session {
             });
         }
         let table = MemTable::try_new(schema, vec![batches.to_vec()]).context(SqlSnafu)?;
-        let mut reservation = self.engine.memory.reserve_input(bytes).context(SqlSnafu)?;
+        let mut reservation = self.engine.memory.reserve_input(0).context(SqlSnafu)?;
         for batch in batches {
             self.engine
                 .memory
@@ -713,7 +725,7 @@ impl Session {
         Box::pin(RecordBatchStreamAdapter::new(schema, stream))
     }
 
-    fn state(&self) -> Result<SessionState> {
+    pub(crate) fn state(&self) -> Result<SessionState> {
         let mut state = self.engine.state.clone();
         let clock = chrono::DateTime::from_timestamp(
             (self.now / 1_000_000_000) as i64,
@@ -729,7 +741,7 @@ impl Session {
         Ok(state)
     }
 
-    async fn physical(
+    pub(crate) async fn physical(
         &self,
         plan: &LogicalPlan,
         state: &SessionState,
@@ -864,6 +876,7 @@ impl Session {
         let snapshot = SourceSnapshot::new(
             Arc::clone(&self.engine.store),
             self.selection.clone(),
+            None,
             AnalysisExtractLimits {
                 scan_bytes: self.engine.limits.scan_bytes,
                 input_bytes: self.engine.limits.input_bytes,
@@ -885,33 +898,19 @@ impl Session {
             context.window_functions().clone(),
             context.runtime_env(),
         ));
-        let sources = sources.clone();
-        let capture = Arc::clone(&snapshot);
-        let capture_plan = Arc::clone(&physical);
-        let capture_permit = Arc::clone(&permit);
-        let control = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
-        let mut pending = PendingRead {
-            control: Arc::clone(&control),
-            active: true,
+        let mode = match read {
+            Read::Snapshot => ReadMode::Snapshot,
+            Read::Page(after) => ReadMode::Page(after),
         };
-        let captured = control
-            .query_async(async move {
-                tokio::task::spawn_blocking(move || {
-                    let _permit = capture_permit;
-                    let mode = match read {
-                        Read::Snapshot => ReadMode::Snapshot,
-                        Read::Page(after) => ReadMode::Page(after),
-                    };
-                    capture.capture(&sources, &capture_plan, mode)
-                })
-                .await
-                .map_err(|source| crate::Error::Sql {
-                    source: DataFusionError::External(Box::new(source)),
-                })?
-                .context(SqlSnafu)
-            })
+        let captured = self
+            .capture(
+                snapshot,
+                sources.clone(),
+                vec![Arc::clone(&physical)],
+                mode,
+                Arc::clone(&permit),
+            )
             .await?;
-        pending.active = false;
         let control = Arc::new(self.control.within(self.engine.limits.evaluate_timeout)?);
         let reservation = match reservation {
             Some(reservation) => reservation,
@@ -923,6 +922,22 @@ impl Session {
         };
         let stream = execute_stream(physical, context).context(SqlSnafu)?;
         Ok((captured, stream, permit, control, reservation))
+    }
+
+    pub(crate) async fn capture(
+        &self,
+        snapshot: Arc<SourceSnapshot>,
+        sources: BTreeSet<String>,
+        plans: Vec<Arc<dyn ExecutionPlan>>,
+        mode: ReadMode,
+        permit: Arc<Permit>,
+    ) -> Result<Arc<ArrowSnapshot>> {
+        let control = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
+        Engine::blocking(control, move || {
+            let _permit = permit;
+            snapshot.capture(&sources, &plans, mode).context(SqlSnafu)
+        })
+        .await
     }
 }
 

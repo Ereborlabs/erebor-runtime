@@ -5,7 +5,7 @@ use crate::analysis::{PackageActivationV1, PackageCommitV1};
 use crate::{AnalysisReadControl, Result};
 
 use super::{ResultContext, RunPreparation};
-use crate::model::{ModelInputRequest, ModelInputs, ModelRun};
+use crate::model::ModelRun;
 use crate::package::installed::snapshot::InstalledBundle;
 use crate::package::owner::{ClockDependency, InstalledContext};
 use crate::package::{AnalysisPackageOwner, PackageActionV1 as Action, PackageErrorCodeV1 as Code};
@@ -71,35 +71,34 @@ impl AnalysisPackageOwner {
                 now = prior.context.time_utc_ns as u64;
             }
         }
-        let mut run = ModelRun::new(&self.query, active.key.tenant_id, control)?;
-        let prepared = run.prepare_inputs(
-            ModelInputRequest {
-                activation: active,
-                model,
-                grant: &context.grant,
+        if context.grant.selection.tenant_id != active.key.tenant_id {
+            return Err(Code::Denied.error("model input tenant").into());
+        }
+        self.check(&context.grant, action)?;
+        let prepared = admitted
+            .inputs
+            .read(
+                self.query.clone(),
+                context.grant.selection.clone(),
+                active.key.scope_id.clone(),
+                control,
                 now,
-            },
-            admitted,
-            || Ok(self.check(&context.grant, action)?),
-        );
-        match prepared {
-            Ok(()) => {}
-            Err(crate::Error::Data {
-                source:
-                    araphor_data::Error::Package {
-                        code: Code::Missing | Code::Incomplete,
-                        ..
-                    },
-            }) if action == Action::Inspect => {
+            )
+            .map_err(crate::Error::from);
+        let inputs = match prepared {
+            Ok(inputs) => inputs,
+            Err(error) if action == Action::Inspect && error.missing_input().is_some() => {
                 control.check()?;
                 self.store.mark_package_stale(active)?;
                 return Ok(None);
             }
             Err(error) => return Err(error),
-        }
-        let inputs = run.take_inputs()?;
+        };
+        self.check(&context.grant, action)?;
         control.check()?;
-        let unchanged = prior.as_ref().is_some_and(|prior| prior.matches(&inputs));
+        let unchanged = prior
+            .as_ref()
+            .is_some_and(|prior| prior.matches(&inputs.inputs));
         let current = unchanged
             && !prior.as_ref().is_some_and(|prior| {
                 Self::clock_changed(
@@ -119,7 +118,7 @@ impl AnalysisPackageOwner {
             return Ok(None);
         }
         let implementation = admitted.implementation(artifact)?;
-        let mut metadata = ResultContext::new(request.id, now, model, &inputs);
+        let mut metadata = ResultContext::new(request.id, now, model, &inputs.inputs);
         metadata.target = implementation.target().into();
         metadata.artifact = implementation.identity()?;
         if metadata.target == "wasm" {
@@ -156,6 +155,7 @@ impl AnalysisPackageOwner {
             context: metadata.context.clone(),
             checkpoint,
         };
+        let run = ModelRun::prepared(&self.query, active.key.tenant_id, control, inputs.clone())?;
         let evaluated = self.execute_model(
             run,
             &artifact.descriptor,
@@ -197,10 +197,10 @@ impl AnalysisPackageOwner {
             metadata: AnalysisPackageOwner::encode(&metadata)?,
             datasets: AnalysisPackageOwner::encode(&packet)?,
             checkpoint,
-            dependencies: inputs.dependencies,
-            source_revisions: inputs.source_revisions,
-            witnesses: inputs.witnesses,
-            context_refs: inputs.contexts,
+            dependencies: inputs.dependencies().cloned().collect(),
+            source_revisions: inputs.source_revisions(),
+            witnesses: inputs.witnesses().cloned().collect(),
+            context_refs: inputs.contexts().cloned().collect(),
             created_utc_ns: metadata.context.time_utc_ns as u64,
         }))
     }
@@ -246,40 +246,3 @@ impl AnalysisPackageOwner {
 
 #[cfg(test)]
 mod tests;
-
-impl ResultContext {
-    fn matches(&self, inputs: &ModelInputs) -> bool {
-        self.inputs
-            .iter()
-            .eq(inputs.inputs.iter().map(|input| &input.revision))
-            && self
-                .input_coverage
-                .iter()
-                .eq(inputs.inputs.iter().map(|input| &input.coverage))
-    }
-
-    fn new(id: &str, now: u64, model: &sdk::Model, inputs: &ModelInputs) -> Self {
-        let input_coverage: Vec<_> = inputs
-            .inputs
-            .iter()
-            .map(|input| input.coverage.clone())
-            .collect();
-        Self {
-            target: "sql".into(),
-            artifact: None,
-            context: sdk::EvaluationContext {
-                id: id.into(),
-                time_utc_ns: now as i64,
-                seed: None,
-                limits: model.limits,
-            },
-            inputs: inputs
-                .inputs
-                .iter()
-                .map(|input| input.revision.clone())
-                .collect(),
-            coverage: ModelInputs::coverage(input_coverage.iter()),
-            input_coverage,
-        }
-    }
-}

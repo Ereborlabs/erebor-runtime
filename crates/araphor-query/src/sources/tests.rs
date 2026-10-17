@@ -407,6 +407,7 @@ async fn native_capture_isolated() -> TestResult {
         SourceSnapshot::new(
             Arc::clone(&fixture.store),
             selection,
+            None,
             Default::default(),
             AnalysisReadControl::default(),
             Duration::from_secs(5),
@@ -419,8 +420,16 @@ async fn native_capture_isolated() -> TestResult {
         foreign.tenant_id,
         vec![foreign.clone()],
     ));
-    let first_receipt = first.capture(&sources, &physical, ReadMode::Snapshot)?;
-    let second_receipt = second.capture(&sources, &physical, ReadMode::Snapshot)?;
+    let first_receipt = first.capture(
+        &sources,
+        std::slice::from_ref(&physical),
+        ReadMode::Snapshot,
+    )?;
+    let second_receipt = second.capture(
+        &sources,
+        std::slice::from_ref(&physical),
+        ReadMode::Snapshot,
+    )?;
     assert_eq!(first_receipt.witnesses.len(), 1);
     assert_eq!(first_receipt.witnesses[0].identity, fixture.source);
     assert_eq!(second_receipt.witnesses.len(), 1);
@@ -437,5 +446,117 @@ async fn native_capture_isolated() -> TestResult {
         assert_eq!(first[0].schema(), physical.schema());
         assert_eq!(second[0].schema(), physical.schema());
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_ports_share_cut() -> TestResult {
+    use super::{ReadMode, SourceProvider, SourceSnapshot};
+    use datafusion::arrow::array::{RecordBatchOptions, UInt64Array};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::physical_plan::collect;
+
+    let fixture = Fixture::new()?;
+    fixture.commit(&fixture.source, 1, 10_001)?;
+    let state = fixture.engine.catalog(BTreeMap::new())?;
+    let (logical, sources) = fixture.plan("SELECT source_cursor AS value FROM events")?;
+    let durable = state.create_physical_plan(&logical).await?;
+    let (logical, _) = fixture.plan("SELECT operation FROM events")?;
+    let operation = state.create_physical_plan(&logical).await?;
+    let declared = Arc::new(Schema::new(vec![
+        Field::new("value", DataType::UInt64, false)
+            .with_metadata([("owner".into(), "port".into())].into()),
+        Field::new("__row_index", DataType::UInt64, false),
+    ]));
+    let empty = Arc::new(Schema::empty());
+    let options = &state.config_options().catalog;
+    let catalog = state
+        .catalog_list()
+        .catalog(&options.default_catalog)
+        .unwrap()
+        .schema(&options.default_schema)
+        .unwrap();
+    assert!(catalog.deregister_table("events")?.is_some());
+    for (name, slot, schema) in [
+        ("events", 0, Arc::clone(&declared)),
+        ("empty", 1, Arc::clone(&declared)),
+        ("zero", 2, Arc::clone(&empty)),
+    ] {
+        catalog.register_table(name.into(), SourceProvider::port(slot, schema))?;
+    }
+    let mut plans = Vec::new();
+    for sql in [
+        "SELECT count(*) AS n FROM events",
+        "SELECT value, __row_index FROM events",
+        "SELECT value FROM empty",
+        "SELECT count(*) AS n FROM zero",
+    ] {
+        let logical = crate::planner::Planner::new(&state)
+            .build(Parser::parse(sql)?, vec![])
+            .await?;
+        plans.push(state.create_physical_plan(&logical).await?);
+    }
+    let (requests, bounds) = SourceSnapshot::requests(&plans)?;
+    assert!(requests.is_empty());
+    assert!(bounds.is_none());
+    let mut all = vec![Arc::clone(&durable), operation];
+    all.extend(plans.iter().cloned());
+    let capture = SourceSnapshot::new(
+        Arc::clone(&fixture.store),
+        fixture.selection(),
+        None,
+        Default::default(),
+        fixture.control()?,
+        Duration::from_secs(5),
+        20_000,
+        Arc::clone(fixture.engine.memory()),
+    );
+    let receipt = capture.capture(&sources, &all, ReadMode::Snapshot)?;
+    assert_eq!(receipt.witnesses.len(), 1);
+    fixture.commit(&fixture.source, 2, 10_002)?;
+    let mut runtime = state;
+    runtime.config_mut().set_extension(Arc::clone(&capture));
+    assert!(collect(Arc::clone(&plans[0]), runtime.task_ctx())
+        .await
+        .is_err());
+    let batches = collect(durable, runtime.task_ctx()).await?;
+    assert_eq!(cell(&batches, 0), ScalarValue::UInt64(Some(1)));
+    let materialized = RecordBatch::try_new(
+        Arc::clone(&declared),
+        vec![
+            Arc::clone(batches[0].column(0)),
+            Arc::new(UInt64Array::from(vec![0])),
+        ],
+    )?;
+    assert!(capture
+        .bind_port(0, Arc::clone(&empty), vec![materialized.clone()])
+        .is_err());
+    capture.bind_port(0, Arc::clone(&declared), vec![materialized])?;
+    assert!(capture.bind_port(0, Arc::clone(&declared), vec![]).is_err());
+    let count = collect(Arc::clone(&plans[0]), runtime.task_ctx()).await?;
+    assert_eq!(cell(&count, 0), ScalarValue::Int64(Some(1)));
+    let values = collect(Arc::clone(&plans[1]), runtime.task_ctx()).await?;
+    assert_eq!(values[0].schema(), declared);
+    assert_eq!(cell(&values, 0), ScalarValue::UInt64(Some(1)));
+    assert_eq!(cell(&values, 1), ScalarValue::UInt64(Some(0)));
+    capture.bind_port(1, Arc::clone(&declared), vec![])?;
+    assert!(collect(Arc::clone(&plans[2]), runtime.task_ctx())
+        .await?
+        .is_empty());
+    capture.bind_port(
+        2,
+        Arc::clone(&empty),
+        vec![RecordBatch::try_new_with_options(
+            empty,
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(3)),
+        )?],
+    )?;
+    let count = collect(Arc::clone(&plans[3]), runtime.task_ctx()).await?;
+    assert_eq!(cell(&count, 0), ScalarValue::Int64(Some(3)));
+    assert!(Arc::ptr_eq(
+        &receipt,
+        &capture.capture(&sources, &all, ReadMode::Snapshot)?
+    ));
     Ok(())
 }

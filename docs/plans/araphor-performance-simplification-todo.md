@@ -192,6 +192,49 @@ credit. The complete count removes 1,074 from `7b7b407a` and adds 1,155 from
 removed for the 6,000-line target. General maintained SQL, clock epochs,
 shared maintained-query ownership, and the complete redesign remain **Not done**.
 Full workspace CI is not run, as instructed.
+### Finite resolved inputs
+
+The working tree now uses Query-owned
+[Inputs](../../crates/araphor-query/src/inputs/mod.rs) and
+[InputSet](../../crates/araphor-query/src/inputs/physical.rs) for resolved model
+inputs. Native plans retain original provider origins and execute in dependency
+order. All physical input children share one SourceSnapshot and TaskContext.
+Data reads canonical sources, exact package outputs, and their reference ledger
+in the same transaction. The SDK owns conversion preflight and normalization.
+Each port receives one retained dataset-global row index. SQL ModelRun reuses
+those indexed tables. Analysis's old per-port dispatcher, source readers,
+package-output resolver, and post-capture reference reads are deleted.
+
+Analysis prepare_model reads the admitted Inputs directly. Package lifecycle,
+backend admission and execution, checkpoint selection, authority, and the
+authorized Data compare-and-swap commit remain unchanged. A live InputOperation,
+shared source watch, Busy retry retention, and commit-completion feedback are
+**Not done**. Serve and supervision still decide when automatic work runs.
+
+Selected host verification is **Done**. The earlier 124-case Query run
+precedes the final metadata and read-control changes. The final affected
+execution, input, and memory selection passes all 40 cases.
+
+| Required record | Current result |
+| --- | --- |
+| Finite-input owner checks | 65 SDK, 61 Data, 129 distinct Query, and 57 distinct Analysis cases pass across the corrected checks. Analysis includes eight explicit native cases. One Data release-history case remains ignored. |
+| Affected caller checks | The package E2E contract passes after the cold Wasm preparation deadline fix. Strict Clippy passes for the affected crate and caller test targets. Formatting and local document links pass. |
+| Production source count | This change adds 1,188 nonblank production lines. The complete redesign adds 114 from `7b7b407a`. Another 6,114 must be removed for the required target. |
+| Complete redesign and 6,000-line reduction | Not done. |
+
+The records are `/tmp/araphor-native-input-qualification1.json` and
+`/tmp/araphor-native-rewrite-count18.json`. Query's total combines corrected
+checks. Native qualification covers Linux x86_64 with the GNU target. Cold
+Wasm preparation now uses the caller deadline before the unchanged evaluation
+timeout starts. The deadline regression and package restart check pass.
+Session registration reuses shared Arrow allocation claims; a new allocation
+still fails when the pool is full. Full workspace CI and benchmarks are not run.
+
+The [component record](araphor-component-redesign.md#finite-resolved-input-ownership)
+and [review guide](../guides/araphor-sql-operation-review.md#current-table-and-query-input-flow)
+give the source route and test owners. This change supplies no benchmark or
+speed result.
+
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

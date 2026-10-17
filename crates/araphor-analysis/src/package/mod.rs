@@ -25,8 +25,8 @@ pub(crate) use araphor_data::{
     PackageReadinessV1, PackageReceiptV1, PackageRefV1, PackageRequestV1, PackageResponseV1,
     PackageTestResultV1,
 };
-pub(crate) use evaluation::ResultContext;
 pub use installed::{InstalledAnalysis, InstalledEvaluation};
+#[cfg(test)]
 pub(crate) use owner::InstalledContext;
 
 pub struct AnalysisPackageOwner {

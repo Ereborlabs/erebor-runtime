@@ -18,7 +18,7 @@ impl AnalysisStore {
     ) -> Result<()> {
         let (ids, versions) = self.traversal_versions(snapshot, selection, output, control)?;
         for (id, version) in ids.iter().zip(&versions) {
-            output.reference_result(id, version.revision)?;
+            output.reference_result(id, version.revision, AnalysisReferenceOriginV1::Graph)?;
         }
         self.traversal_work(snapshot, &ids, output, control)?;
         let mut walk = GraphWalk::new(

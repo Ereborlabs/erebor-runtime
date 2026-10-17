@@ -245,7 +245,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(super) fn activation_from(
+    pub(in crate::analysis) fn activation_from(
         reader: &Connection,
         key: &PackageKeyV1,
     ) -> Result<Option<PackageActivationV1>> {
@@ -264,7 +264,7 @@ impl AnalysisStore {
         self.read_snapshot(|reader| Self::package_result_from(reader, tenant, id, &self.root))
     }
 
-    pub(super) fn package_result_from(
+    pub(in crate::analysis) fn package_result_from(
         reader: &Connection,
         tenant: [u8; 16],
         id: &str,

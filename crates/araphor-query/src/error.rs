@@ -6,6 +6,8 @@ use snafu::{Location, Snafu};
 pub enum Error {
     #[snafu(transparent)]
     Data { source: araphor_data::Error },
+    #[snafu(transparent)]
+    Contract { source: araphor_analysis_sdk::Error },
     #[snafu(display("SQL operation failed"))]
     Sql {
         source: datafusion::error::DataFusionError,
@@ -49,9 +51,22 @@ pub enum Failure {
 }
 
 impl Failure {
+    fn contract(error: &araphor_analysis_sdk::Error) -> Self {
+        use araphor_analysis_sdk::ErrorCode;
+        match error.code() {
+            ErrorCode::Invalid => Self::InvalidQuery,
+            ErrorCode::Incompatible => Self::Unsupported,
+            ErrorCode::Unauthorized => Self::Denied,
+            ErrorCode::Incomplete => Self::StorageUnavailable,
+            ErrorCode::Limit => Self::InputTooLarge,
+            ErrorCode::Failed => Self::EvaluationFailed,
+        }
+    }
+
     fn data(error: &araphor_data::Error) -> Self {
         use araphor_data::Error;
         match error {
+            Error::AnalysisContract { source, .. } => Self::contract(source),
             Error::AnalysisInputTooLarge { .. } => Self::InputTooLarge,
             Error::AnalysisReadDenied { .. } => Self::Denied,
             Error::AnalysisUnavailable { .. } => Self::Unsupported,
@@ -77,6 +92,9 @@ impl Failure {
             if let Some(source) = source.downcast_ref::<araphor_data::Error>() {
                 return Self::data(source);
             }
+            if let Some(source) = source.downcast_ref::<araphor_analysis_sdk::Error>() {
+                return Self::contract(source);
+            }
             current = source.source();
         }
         use datafusion::error::DataFusionError;
@@ -98,6 +116,7 @@ impl From<&Error> for Failure {
     fn from(error: &Error) -> Self {
         match error {
             Error::Data { source } => Self::data(source),
+            Error::Contract { source } => Self::contract(source),
             Error::Sql { source } => Self::native(source),
             Error::Invalid { field, .. } if field.starts_with("cursor") => Self::InvalidCheckpoint,
             Error::Invalid { .. } => Self::InvalidQuery,
@@ -115,6 +134,9 @@ impl Error {
             if let Some(error) = source.downcast_ref::<araphor_data::Error>() {
                 return Some(error);
             }
+            if let Some(error) = source.downcast_ref::<araphor_analysis_sdk::Error>() {
+                return Some(error);
+            }
             source = source.source()?;
         }
     }
@@ -125,6 +147,7 @@ impl ErrorExt for Error {
         use datafusion::error::DataFusionError;
         match self {
             Self::Data { source } => source.status_code(),
+            Self::Contract { source } => source.status_code(),
             Self::Invalid { .. } => StatusCode::InvalidArguments,
             Self::Busy { .. } | Self::Capacity { .. } => StatusCode::Unavailable,
             Self::Sql { source } => match Self::domain(source) {
@@ -144,6 +167,7 @@ impl ErrorExt for Error {
     fn retry_hint(&self) -> RetryHint {
         match self {
             Self::Data { source } => source.retry_hint(),
+            Self::Contract { source } => source.retry_hint(),
             Self::Busy { .. } | Self::Capacity { .. } => RetryHint::Retryable,
             Self::Sql { source } => {
                 Self::domain(source).map_or(RetryHint::NonRetryable, ErrorExt::retry_hint)
@@ -159,6 +183,7 @@ impl ErrorExt for Error {
     fn output_msg(&self) -> String {
         match self {
             Self::Data { source } => source.output_msg(),
+            Self::Contract { source } => source.output_msg(),
             _ => self.to_string(),
         }
     }
@@ -201,5 +226,42 @@ mod tests {
         assert_eq!(error.status_code(), status);
         assert_eq!(error.retry_hint(), retry);
         assert_eq!(error.output_msg(), "SQL operation failed");
+    }
+
+    #[test]
+    fn native_keeps_sdk_categories() {
+        use araphor_analysis_sdk::{Error as SdkError, ErrorCode};
+
+        for (code, failure) in [
+            (ErrorCode::Invalid, Failure::InvalidQuery),
+            (ErrorCode::Incompatible, Failure::Unsupported),
+            (ErrorCode::Unauthorized, Failure::Denied),
+            (ErrorCode::Incomplete, Failure::StorageUnavailable),
+            (ErrorCode::Limit, Failure::InputTooLarge),
+            (ErrorCode::Failed, Failure::EvaluationFailed),
+        ] {
+            for wrapper in 0..3 {
+                let contract = SdkError::contract(code, "private contract field");
+                let (status, retry) = (contract.status_code(), contract.retry_hint());
+                let source: Box<dyn std::error::Error + Send + Sync> = match wrapper {
+                    0 => Box::new(contract),
+                    1 => Box::new(Error::Contract { source: contract }),
+                    _ => Box::new(araphor_data::Error::AnalysisContract {
+                        source: contract,
+                        location: snafu::location!(),
+                    }),
+                };
+                let native = DataFusionError::Context(
+                    "native stage".into(),
+                    Box::new(DataFusionError::External(source)),
+                );
+                assert_eq!(Failure::native(&native), failure, "{code:?}/{wrapper}");
+                let error = Error::Sql { source: native };
+                assert_eq!(Failure::from(&error), failure, "{code:?}/{wrapper}");
+                assert_eq!(error.status_code(), status, "{code:?}/{wrapper}");
+                assert_eq!(error.retry_hint(), retry, "{code:?}/{wrapper}");
+                assert_eq!(error.output_msg(), "SQL operation failed");
+            }
+        }
     }
 }

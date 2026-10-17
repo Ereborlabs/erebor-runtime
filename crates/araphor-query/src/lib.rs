@@ -4,6 +4,7 @@
 mod error;
 pub mod execution;
 pub mod follow;
+pub mod inputs;
 pub mod memory;
 pub mod parser;
 pub mod planner;

@@ -100,7 +100,13 @@ fn raw_changes_snapshot() -> TestResult {
     store.accept_validated_batch(source.clone(), batch(1, 1, 10))?;
     let selection = AnalysisSelectionV1::tenant(source.tenant_id);
     let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
-    let (seed, _) = store.extract_rows(&selection, Default::default(), &control, Rows::new(row))?;
+    let (seed, _) = store.extract_rows(
+        &selection,
+        None,
+        Default::default(),
+        &control,
+        Rows::new(row),
+    )?;
     store.accept_validated_batch(source.clone(), batch(11, 10, 10))?;
     store.commit_context(&AnalysisContextVersionV1 {
         key: AnalysisContextKeyV1 {
@@ -163,7 +169,11 @@ fn raw_changes_snapshot() -> TestResult {
         ),
         (2, 10)
     );
-    assert!(first.extraction.context_refs.is_empty());
+    assert!(first
+        .extraction
+        .references
+        .iter()
+        .all(|entry| entry.context().is_none()));
     let (
         next,
         Rows {
@@ -236,7 +246,13 @@ fn raw_changes_retirement() -> TestResult {
     selection.nodes.push(source.node_id.clone());
     selection.received_until = Bound::Included(30);
     let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
-    let (seed, _) = store.extract_rows(&selection, Default::default(), &control, Rows::new(row))?;
+    let (seed, _) = store.extract_rows(
+        &selection,
+        None,
+        Default::default(),
+        &control,
+        Rows::new(row),
+    )?;
     store.accept_validated_batch(next.clone(), batch(2, 1, 20))?;
     let first = StorePositionV1 {
         commit_revision: store.meta()?.commit_revision,
@@ -353,7 +369,13 @@ fn raw_changes_binding() -> TestResult {
     let mut selection = AnalysisSelectionV1::tenant(source.tenant_id);
     selection.binding_ids.push([9; 16]);
     let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
-    let (seed, _) = store.extract_rows(&selection, Default::default(), &control, Rows::new(row))?;
+    let (seed, _) = store.extract_rows(
+        &selection,
+        None,
+        Default::default(),
+        &control,
+        Rows::new(row),
+    )?;
     let mut bytes = Vec::new();
     let mut ends = Vec::new();
     for binding in [Some(9), Some(8), None] {
@@ -424,7 +446,13 @@ fn raw_changes_bounds() -> TestResult {
     store.accept_validated_batch(source.clone(), batch(1, 1, 10))?;
     let selection = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]);
     let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
-    let (seed, _) = store.extract_rows(&selection, Default::default(), &control, Rows::new(row))?;
+    let (seed, _) = store.extract_rows(
+        &selection,
+        None,
+        Default::default(),
+        &control,
+        Rows::new(row),
+    )?;
     store.accept_validated_batch(source, batch(2, 3, 20))?;
     let (
         complete,
@@ -550,6 +578,7 @@ fn trace_changes_retirement() -> TestResult {
     let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
     let (seed, _) = store.extract_rows(
         &selection,
+        None,
         Default::default(),
         &control,
         Rows::new(|input: AnalysisInputV1<'_>| match input {

@@ -4,15 +4,14 @@ use araphor_analysis_sdk as sdk;
 use araphor_query::datafusion::execution::memory_pool::MemoryReservation;
 use araphor_query::execution::{Engine, Session};
 
-use super::{AdmittedExport, AdmittedInput, ModelInputRequest, ModelInputs};
 use crate::{AnalysisReadControl, AnalysisSelectionV1, Result};
+use araphor_query::inputs::InputSet;
 
 pub struct ModelRun<'a> {
     pub(super) owner: &'a Arc<Engine>,
     pub(super) session: Option<Session>,
     tenant: [u8; 16],
-    pub(super) inputs: ModelInputs,
-    pub(super) input_memory: MemoryReservation,
+    pub(crate) inputs: Option<Arc<InputSet>>,
     pub(super) output_memory: Option<MemoryReservation>,
     pub(super) control: AnalysisReadControl,
     pub(super) time_utc_ns: i64,
@@ -34,8 +33,7 @@ impl<'a> ModelRun<'a> {
             owner,
             session: None,
             tenant,
-            inputs: ModelInputs::default(),
-            input_memory: owner.memory().reserve_input(0)?,
+            inputs: None,
             output_memory: None,
             control: control.within(control.remaining()?)?,
             time_utc_ns: 0,
@@ -59,10 +57,24 @@ impl<'a> ModelRun<'a> {
         self.tenant
     }
 
-    pub(crate) fn take_inputs(&mut self) -> Result<ModelInputs> {
-        self.input_memory.try_resize(self.inputs.metadata_bytes())?;
-        self.inputs._metadata = Some(self.input_memory.split(self.input_memory.size()));
-        Ok(std::mem::take(&mut self.inputs))
+    pub(crate) fn prepared(
+        owner: &'a Arc<Engine>,
+        tenant: [u8; 16],
+        control: &AnalysisReadControl,
+        inputs: Arc<InputSet>,
+    ) -> Result<Self> {
+        if inputs
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.selection.tenant_id != tenant)
+        {
+            return Err(crate::PackageErrorCodeV1::Denied
+                .error("model input tenant")
+                .into());
+        }
+        let mut run = Self::new(owner, tenant, control)?;
+        run.inputs = Some(inputs);
+        Ok(run)
     }
 
     pub(super) fn start(&mut self, selection: AnalysisSelectionV1, now: u64) -> Result<()> {
@@ -94,106 +106,6 @@ impl<'a> ModelRun<'a> {
             }
             .build()
         })
-    }
-
-    pub(crate) fn prepare_inputs(
-        &mut self,
-        request: ModelInputRequest<'_>,
-        admitted: &AdmittedExport,
-        mut authorize: impl FnMut() -> Result<()>,
-    ) -> Result<()> {
-        if request.grant.selection.tenant_id != self.tenant
-            || request.activation.key.tenant_id != self.tenant
-        {
-            return Err(crate::PackageErrorCodeV1::Denied
-                .error("model input tenant")
-                .into());
-        }
-        if request.model.input_mode == sdk::InputMode::Provided {
-            return Err(crate::PackageErrorCodeV1::Missing
-                .error("host-prepared inputs")
-                .into());
-        }
-        self.start(request.grant.selection.clone(), request.now)?;
-        let model = request.model;
-        let limits = sdk::Limits {
-            max_bytes: model
-                .limits
-                .max_bytes
-                .min(self.owner.limits().input_bytes as u64),
-            ..model.limits
-        };
-        for input in &admitted.inputs {
-            self.control.check()?;
-            authorize()?;
-            let port = &model.inputs[input.port()];
-            let source = match input {
-                AdmittedInput::Query {
-                    plan,
-                    reads,
-                    inputs,
-                    ..
-                } => {
-                    let mut inherited = inputs
-                        .iter()
-                        .map(|index| {
-                            self.inputs
-                                .inputs
-                                .iter()
-                                .find(|input| input.data.name == model.inputs[*index].port.name)
-                                .cloned()
-                                .ok_or_else(|| {
-                                    crate::PackageErrorCodeV1::Incomplete
-                                        .error("table binding")
-                                        .into()
-                                })
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    inherited.sort_by(|left, right| left.data.name.cmp(&right.data.name));
-                    self.read_input(
-                        &request,
-                        &port.port,
-                        plan,
-                        reads,
-                        &inherited,
-                        &mut authorize,
-                    )?
-                }
-                AdmittedInput::Output { .. } => {
-                    let sdk::InputSource::Table(sdk::TableRef::Output(reference)) = &port.source
-                    else {
-                        return Err(crate::PackageErrorCodeV1::Incomplete
-                            .error("table binding")
-                            .into());
-                    };
-                    self.output_table(&request, reference, &port.port)?
-                }
-            };
-            if matches!(port.source, sdk::InputSource::Table(_))
-                && !matches!(&port.source, sdk::InputSource::Table(sdk::TableRef::Named(name)) if name == &port.port.name)
-            {
-                self.table(&port.port.name, &port.port.schema, &source.data.batches)?;
-            }
-            self.inputs.inputs.push(source);
-            self.inputs.check(limits)?;
-            Self::check_input(
-                self.inputs
-                    .inputs
-                    .iter()
-                    .flat_map(|input| &input.data.batches),
-                self.owner.limits().input_bytes,
-            )?;
-            self.input_memory.try_resize(self.inputs.metadata_bytes())?;
-        }
-        self.inputs.inputs.sort_by_key(|input| {
-            model
-                .inputs
-                .iter()
-                .position(|port| port.port.name == input.data.name)
-        });
-        self.inputs.finish(request.now);
-        self.input_memory.try_resize(self.inputs.metadata_bytes())?;
-        Ok(())
     }
 }
 

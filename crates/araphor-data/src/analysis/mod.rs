@@ -48,8 +48,8 @@ pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
 pub use extraction::{AnalysisExtractLimits, AnalysisProjection, ProjectionSink};
 pub use extraction::{
-    AnalysisExtractionV1, AnalysisInputV1, AnalysisPositionPageV1, AnalysisSelectionV1,
-    AnalysisSourceSnapshotV1, Selection,
+    AnalysisExtractionV1, AnalysisInputV1, AnalysisPositionPageV1, AnalysisReferenceOriginV1,
+    AnalysisReferenceV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1, Selection,
 };
 pub use graph_rows::CanonicalGraph;
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};

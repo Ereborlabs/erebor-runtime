@@ -1,3 +1,4 @@
+mod batch;
 mod bindings;
 mod descriptor;
 mod error;

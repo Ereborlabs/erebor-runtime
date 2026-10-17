@@ -189,43 +189,19 @@ fn sql_model_source_bounds() -> TestResult {
         ),
     });
     let revision = fixture.store.meta()?.commit_revision;
-    let read = |selection: AnalysisSelectionV1, now| -> crate::Result<ModelInputs> {
-        let active = crate::analysis::PackageActivationV1 {
-            key: crate::analysis::PackageKeyV1 {
-                tenant_id: selection.tenant_id,
-                scope_id: "scope".into(),
-                package_id: "fixture".into(),
-                export: model.name.clone(),
-            },
-            revision: "1".into(),
-            generation: 0,
-            checkpoint_revision: 0,
-            result_id: None,
-            grant_id: "fixture".into(),
-            metadata: Vec::new(),
-            active: true,
-        };
-        let grant = crate::package::PackageGrantV1 {
-            principal: "fixture".into(),
-            revision: 1,
+    let admitted = AdmittedExport::admit(&owner, &model, None)?;
+    let read = |selection: AnalysisSelectionV1,
+                now|
+     -> crate::Result<Arc<araphor_query::inputs::InputSet>> {
+        let tenant = selection.tenant_id;
+        let inputs = admitted.inputs.read(
+            Arc::clone(&owner),
             selection,
-            expires_utc_ns: None,
-            authorization_id: None,
-        };
-        let mut operation = ModelRun::new(&owner, grant.selection.tenant_id, &control()?)?;
-        operation.prepare_inputs(
-            ModelInputRequest {
-                activation: &active,
-                model: &model,
-                grant: &grant,
-                now,
-            },
-            &AdmittedExport::admit(&owner, &model, None)?,
-            || Ok(()),
+            "scope".into(),
+            &control()?,
+            now,
         )?;
-        let inputs = operation.take_inputs()?;
-        drop(owner.reserve_evaluation(grant.selection.tenant_id)?);
-        drop(operation);
+        drop(owner.reserve_evaluation(tenant)?);
         assert!(owner
             .memory()
             .reserve_input(owner.limits().input_capacity)
@@ -242,7 +218,7 @@ fn sql_model_source_bounds() -> TestResult {
             .sum::<usize>(),
         3
     );
-    assert_eq!(first.witnesses.len(), 3);
+    assert_eq!(first.witnesses().count(), 3);
     for relation in [
         "events",
         "source_receipts",
@@ -251,11 +227,11 @@ fn sql_model_source_bounds() -> TestResult {
         "recovery_gaps",
     ] {
         assert!(first
-            .source_revisions
+            .source_revisions()
             .contains(&(relation.into(), revision)));
     }
     assert!(!first
-        .source_revisions
+        .source_revisions()
         .iter()
         .any(|(name, _)| name == "analysis_results"));
     let second = read(selection.clone(), 2_000)?;

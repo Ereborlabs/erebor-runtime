@@ -215,12 +215,11 @@ fn local_skips_store() {
             Some(araphor_data::Error::AnalysisBusy { resource: "reader", .. })))
     );
     drop(readers);
-    assert!(matches!(
-        session.execute(Arc::clone(&constant), &BTreeSet::new()),
-        Err(Error::Data {
-            source: araphor_data::Error::AnalysisReadCancelled { .. }
-        })
-    ));
+    let (receipt, rows) = session
+        .execute(Arc::clone(&constant), &BTreeSet::new())
+        .unwrap();
+    assert_eq!(value(&rows), 7);
+    assert_eq!(receipt.page.extraction.meta, meta);
     let session = fixture
         .engine
         .session(
@@ -296,6 +295,63 @@ fn native_plan_reuses_inputs() {
     assert_eq!(value(&rows), 33);
     assert_eq!(value(&first_rows), 11);
     assert_eq!(value(&second_rows), 22);
+}
+
+#[test]
+fn registration_reuses_input_claims() {
+    let data = batch(11);
+    let fixture = Fixture::new(Limits {
+        input_bytes: data.get_array_memory_size(),
+        input_capacity: 4096,
+        ..Default::default()
+    });
+    let (plan, _) = local_plan(&fixture.engine);
+    let mut memory = fixture.engine.memory().reserve_input(0).unwrap();
+    fixture
+        .engine
+        .memory()
+        .retain_input(&data, &mut memory)
+        .unwrap();
+    let allocated = data.column(0).to_data().buffers()[0].capacity();
+    let held = fixture
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity - allocated)
+        .unwrap();
+    assert!(fixture.engine.memory().reserve_input(1).is_err());
+    let mut session = fixture
+        .engine
+        .session(AnalysisSelectionV1::new([1; 16], vec![]), &control(), 1)
+        .unwrap();
+    for _ in 0..2 {
+        session
+            .register("local_rows", schema(), std::slice::from_ref(&data))
+            .unwrap();
+    }
+    let error = session
+        .register("local_rows", schema(), &[batch(22)])
+        .unwrap_err();
+    assert_eq!(error.status_code(), StatusCode::Unavailable);
+    assert_eq!(crate::Failure::from(&error), crate::Failure::Busy);
+    assert_eq!(
+        value(&session.execute_local(Arc::clone(&plan)).unwrap()),
+        11
+    );
+    let error = session
+        .register("other", schema(), std::slice::from_ref(&data))
+        .unwrap_err();
+    assert!(matches!(error, Error::Sql {
+        source: datafusion::common::DataFusionError::ResourcesExhausted(ref message)
+    } if message == "local input bytes"));
+    assert_eq!(value(&session.execute_local(plan).unwrap()), 11);
+    drop(held);
+    drop(session);
+    drop(data);
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(fixture.engine.limits().input_capacity)
+        .is_ok());
 }
 
 #[test]

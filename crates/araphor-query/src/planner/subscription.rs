@@ -49,8 +49,17 @@ impl Subscribe {
                 LogicalPlan::TableScan(scan) => {
                     return Ok(matches!(scan.table_name.table(), "events" | "trace_output")
                         && scan.fetch.is_none()
-                        && source_as_provider(&scan.source)
-                            .is_ok_and(|provider| provider.as_any().is::<SourceProvider>()));
+                        && source_as_provider(&scan.source).is_ok_and(|provider| {
+                            provider
+                                .as_any()
+                                .downcast_ref::<SourceProvider>()
+                                .is_some_and(|source| {
+                                    matches!(
+                                        source.origin.durable(),
+                                        Some("events" | "trace_output")
+                                    )
+                                })
+                        }));
                 }
                 _ => return Ok(false),
             };
@@ -76,7 +85,10 @@ impl Subscribe {
                 | LogicalPlan::Aggregate(_) => {}
                 LogicalPlan::TableScan(scan) => {
                     let provider = source_as_provider(&scan.source)?;
-                    if !provider.as_any().is::<SourceProvider>()
+                    if !provider
+                        .as_any()
+                        .downcast_ref::<SourceProvider>()
+                        .is_some_and(|source| source.origin.durable() == Some("events"))
                         || provider.schema() != SourceSnapshot::schemas()["events"]
                         || scan.fetch.is_some()
                     {
@@ -239,5 +251,41 @@ impl PhysicalOptimizerRule for PageLineage {
 
     fn schema_check(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::datasource::provider_as_source;
+    use datafusion::execution::context::SessionContext;
+    use datafusion::functions_aggregate::count::count_all;
+    use datafusion::logical_expr::{col, LogicalPlanBuilder};
+
+    #[tokio::test]
+    async fn port_lacks_source_capabilities() -> Result<()> {
+        let state = SessionContext::new().state();
+        let schema = Arc::clone(&SourceSnapshot::schemas()["events"]);
+        for (provider, durable) in [
+            (SourceSnapshot::providers()["events"].clone(), true),
+            (SourceProvider::port(0, schema), false),
+        ] {
+            let physical = provider.scan(&state, None, &[], None).await?;
+            assert_eq!(
+                JournalExec::new(SourceData::from_plan(physical.as_ref()).unwrap()).is_ok(),
+                durable
+            );
+            let scan =
+                LogicalPlanBuilder::scan("events", provider_as_source(provider), None)?.build()?;
+            let projection = LogicalPlanBuilder::from(scan.clone())
+                .project(vec![col("operation")])?
+                .build()?;
+            assert_eq!(Subscribe::appendable(&projection)?, durable);
+            let aggregate = LogicalPlanBuilder::from(scan)
+                .aggregate(Vec::<Expr>::new(), vec![count_all()])?
+                .build()?;
+            assert_eq!(Subscribe::plan(aggregate).is_ok(), durable);
+        }
+        Ok(())
     }
 }

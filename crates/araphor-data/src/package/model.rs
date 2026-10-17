@@ -54,6 +54,92 @@ pub struct PackageGrantV1 {
     pub authorization_id: Option<String>,
 }
 
+impl PackageGrantV1 {
+    pub fn permitted_by(&self, selection: &AnalysisSelectionV1) -> Result<()> {
+        if *selection != self.selection
+            && *selection != AnalysisSelectionV1::tenant(self.selection.tenant_id)
+        {
+            return Err(PackageErrorCodeV1::Denied.error("whole package scope"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ClockDependency {
+    None,
+    Inputs,
+    Model,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct InstalledContext {
+    pub grant: PackageGrantV1,
+    pub root: super::PackageRefV1,
+    pub parameters: Option<serde_json::Value>,
+    pub readiness: PackageReadinessV1,
+    pub status_checkpoint: u64,
+    pub prepared: bool,
+    pub clock: ClockDependency,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ResultContext {
+    #[serde(default = "ResultContext::sql_target")]
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<PackageArtifactIdentityV1>,
+    pub context: sdk::EvaluationContext,
+    pub inputs: Vec<sdk::Revision>,
+    pub input_coverage: Vec<sdk::Coverage>,
+    pub coverage: sdk::Coverage,
+}
+
+impl ResultContext {
+    fn sql_target() -> String {
+        "sql".into()
+    }
+
+    pub fn matches(&self, inputs: &[sdk::Input]) -> bool {
+        self.inputs
+            .iter()
+            .eq(inputs.iter().map(|input| &input.revision))
+            && self
+                .input_coverage
+                .iter()
+                .eq(inputs.iter().map(|input| &input.coverage))
+    }
+
+    pub fn new(id: &str, now: u64, model: &sdk::Model, inputs: &[sdk::Input]) -> Self {
+        let input_coverage: Vec<_> = inputs.iter().map(|input| input.coverage.clone()).collect();
+        let (mut state, mut limits) = (sdk::CoverageState::Complete, Vec::new());
+        for coverage in &input_coverage {
+            if coverage.state == sdk::CoverageState::Unknown
+                || (coverage.state == sdk::CoverageState::Gapped
+                    && state == sdk::CoverageState::Complete)
+            {
+                state = coverage.state;
+            }
+            limits.extend(coverage.limits.iter().cloned());
+        }
+        limits.sort();
+        limits.dedup();
+        Self {
+            target: Self::sql_target(),
+            artifact: None,
+            context: sdk::EvaluationContext {
+                id: id.into(),
+                time_utc_ns: now as i64,
+                seed: None,
+                limits: model.limits,
+            },
+            inputs: inputs.iter().map(|input| input.revision.clone()).collect(),
+            input_coverage,
+            coverage: sdk::Coverage { state, limits },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageActionV1 {

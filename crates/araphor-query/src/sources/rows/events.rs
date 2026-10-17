@@ -22,6 +22,14 @@ impl Capture<'_> {
         if !self.sources.contains("events") {
             return Ok(true);
         }
+        if self.inputs.is_some_and(|inputs| {
+            !inputs
+                .ranges
+                .iter()
+                .any(|(first, last)| (*first..=*last).contains(&received_utc_ns))
+        }) {
+            return Ok(true);
+        }
         sink.grow(&mut self.witnesses)?;
         sink.charge(identity.node_id.len())?;
         self.witnesses.push(AnalysisWitnessV1 {

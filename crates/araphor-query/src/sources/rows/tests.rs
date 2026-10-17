@@ -66,6 +66,7 @@ fn witnesses_keep_source_receipt() -> TestResult {
     let snapshot = super::SourceSnapshot::new(
         store,
         selection,
+        None,
         AnalysisExtractLimits {
             input_bytes: 16 * 1024,
             ..Default::default()
@@ -125,8 +126,11 @@ fn witnesses_keep_source_receipt() -> TestResult {
     let expected = previous - old + added;
     assert_eq!(captured.receipt._metadata.size(), expected);
     assert_eq!(captured.receipt.witnesses.len(), 2);
-    assert_eq!(captured.receipt.contexts[0].key, context.key);
-    assert_eq!(captured.receipt.contexts[0].commit_revision, revision);
+    assert_eq!(captured.receipt.contexts().next().unwrap().key, context.key);
+    assert_eq!(
+        captured.receipt.contexts().next().unwrap().commit_revision,
+        revision
+    );
     assert_eq!(captured.receipt.page.extraction.sources.len(), 1);
     let shared = Arc::clone(&captured.receipt);
     assert!(matches!(
@@ -152,7 +156,7 @@ fn witnesses_keep_source_receipt() -> TestResult {
     captured.set_witnesses(Vec::new())?;
     assert_eq!(captured.receipt._metadata.size(), previous - old);
     assert!(captured.receipt.witnesses.is_empty());
-    assert_eq!(captured.receipt.contexts[0].key, context.key);
+    assert_eq!(captured.receipt.contexts().next().unwrap().key, context.key);
     drop(captured);
     assert!(memory.reserve_input(capacity).is_ok());
     Ok(())
@@ -209,9 +213,9 @@ async fn receipt_releases_binary_scratch() -> TestResult {
     assert_eq!(body.value(0), context.body);
     let payload = batch.column(0).to_data().buffers()[1].clone();
     assert!(stream.try_next().await?.is_none());
-    assert_eq!(receipt.contexts.len(), 1);
-    assert_eq!(receipt.contexts[0].key, context.key);
-    assert_eq!(receipt.contexts[0].commit_revision, revision);
+    assert_eq!(receipt.contexts().count(), 1);
+    assert_eq!(receipt.contexts().next().unwrap().key, context.key);
+    assert_eq!(receipt.contexts().next().unwrap().commit_revision, revision);
     let metadata = receipt._metadata.size();
     assert!(
         metadata

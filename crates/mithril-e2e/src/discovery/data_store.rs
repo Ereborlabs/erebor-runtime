@@ -794,6 +794,7 @@ impl DataStoreQualification {
             selection.received_until = Bound::Included(START);
             selected_data.extract_rows(
                 &selection,
+                None,
                 AnalysisExtractLimits::default(),
                 &AnalysisReadControl::default(),
                 SelectedRows {

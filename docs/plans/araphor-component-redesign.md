@@ -501,6 +501,101 @@ The earlier count records remain for source history. Complete redesign:
 **Not done**. General maintained SQL and the append source replacement remain
 **Not done**. These functional checks establish no performance improvement.
 
+### Finite resolved input ownership
+
+The finite source path and selected host verification are **Done**. This change
+replaces Analysis's per-port input admission and
+execution with Query-owned Inputs and InputSet. Package lifecycle, executable
+admission, backend execution, checkpoint selection, authority, and the Data
+commit compare-and-swap checks keep their existing owners.
+
+[AdmittedExport::admit](../../crates/araphor-analysis/src/model.rs) admits the installed export
+  -> [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) retains native plans, original provider origins, and input dependency order
+
+[AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs) checks current authority and reads the admitted Inputs directly
+  -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) plans all physical children at one frozen time
+  -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) combines the prepared source columns and time ranges in one capture
+  -> [AnalysisStore::extract_mode](../../crates/araphor-data/src/analysis/extraction.rs) fixes one Data read transaction for the original source receipts
+  -> [AnalysisStore::extract_packages](../../crates/araphor-data/src/analysis/extraction/package.rs) reads exact package outputs and their references in that same transaction
+  -> [Dataset::normalize_batch](../../crates/araphor-analysis-sdk/src/batch.rs) applies the declared SDK schema after conversion preflight
+  -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) materializes each completed port with one dataset-global row index before dependent SQL runs
+  -> [Inputs::input](../../crates/araphor-query/src/inputs/receipt.rs) assigns per-port revisions and coverage from the original source scopes and reference origins
+  -> [InputSet](../../crates/araphor-query/src/inputs/physical.rs) returns declared input order, retained tables, and complete provenance
+  -> [ModelRun::prepared](../../crates/araphor-analysis/src/model/operation.rs) supplies the retained input set to model execution
+
+SourceOrigin distinguishes durable canonical tables, materialized port slots,
+and exact package-output slots. Typed port providers have unknown native
+statistics before execution. Native optimization cannot treat an unbound port
+as an empty MemTable. A declared table named events remains a materialized port;
+it does not acquire durable source, journal, or append capability.
+
+All physical input children use one SourceSnapshot and the same TaskContext.
+Capture unions canonical column requests and event-time ranges. Original
+references remain separate from surviving scans. An eliminated event scan keeps
+its original receipt scope. Trace reads retain the authorized time range.
+Data reads package outputs with the original authorized selection and checks
+their retained grants. One reference ledger records exact context and result
+refs with their origins. Per-port attribution does not assign every union ref
+to every input.
+
+The SDK owns conversion preflight and batch normalization. InputSet retains
+the normalized datasets and one indexed materialization of each port. SQL
+ModelRun registers those same indexed tables. The old AdmittedInput dispatcher,
+Analysis source readers, separate package-output resolver, and post-capture
+reference reads are deleted. No SourceBatch or LocalTable bridge is added.
+Native memory claims retain the input arrays and metadata through aliases.
+
+The [input tests](../../crates/araphor-query/src/inputs/tests.rs),
+[SDK batch tests](../../crates/araphor-analysis-sdk/src/batch/tests.rs), and
+[Data output tests](../../crates/araphor-data/src/analysis/packages/tests/output.rs)
+define the finite cut, index, provenance, conversion, and same-reader checks.
+An earlier Query run passes 124 cases in 12.57 seconds. That run precedes the
+final metadata and read-control changes. The final affected checks are below.
+
+| Required record | Current result |
+| --- | --- |
+| SDK | 65 cases pass. |
+| Data | 61 cases pass. One release-history case remains ignored. |
+| Query | 129 distinct selected cases pass across the corrected checks. The final execution, input, and memory selection passes all 40 cases in 5.46 seconds. |
+| Analysis | 57 distinct selected cases pass, including eight native cases run explicitly with their ignore flags. The final native cancellation, revocation, and expiry check passes. |
+| Affected callers | The package E2E contract passes in 139.88 seconds on the final source. The earlier query-follow contract passes before the final registration and backend deadline fixes. |
+| Strict Clippy | SDK, Data, Query, Analysis, CLI, Control, and E2E test targets pass with warnings denied in 25.15 seconds. |
+| Source checks | Formatting passes for all 53 changed Rust files. All 679 Rust hashes match the production count. Local document links and whitespace checks pass. |
+
+Earlier Query checks find a cancellation-guard ownership error and two invalid
+test expectations. The corrected checks pass. Two new Analysis cases first
+use invalid fixture state; both pass after fixture corrections. The assertions
+for current authority, missing input, stale results, limits, and cleanup remain.
+The qualification record preserves these failed attempts and their corrections.
+
+The package E2E check first fails during cold Wasm compilation after restart.
+The typed deadline points to the compiler wait. Preparation now uses the caller
+deadline and the existing compiler deadline. The unchanged query evaluation
+timeout starts after preparation. A cold-owner test with a one-nanosecond
+evaluation timeout proves that preparation fills the cache and execution still
+fails at its deadline. Compiler interruption, code pins, guest interruption,
+and native cancellation checks pass. No timeout is increased.
+
+Session registration now uses existing Arrow allocation claims without a
+second full-payload reservation. The new case fills the input pool, registers
+the shared payload, rejects a new allocation, and preserves the old binding.
+The existing logical input-byte limit and complete capacity recovery remain.
+
+The record is `/tmp/araphor-native-input-qualification1.json`. The source count
+is `/tmp/araphor-native-rewrite-count18.json`. This deliverable adds 1,188
+nonblank production Rust lines from `1632f791`. The complete count adds 2,343
+from `537f9de3`, 114 from `7b7b407a`, and 1,267 from `aa390d9f`. Another 6,114
+net production lines must be removed for the required target. Tests, documents,
+blank lines, and code movement give no production deletion credit. Later
+documentation edits do not change the counted Rust source. Full workspace CI
+and benchmarks are not run, as instructed.
+
+A live InputOperation, shared source watch, retained Busy retry, and actual
+commit-completion feedback are **Not done**. Analysis serve and supervision
+still drive automatic work. General maintained SQL and the complete redesign
+remain **Not done**. No benchmark or speed result is claimed. The finite source
+change does not establish the required 6,000-line reduction.
+
 ### Shared subscription owner
 
 The user requires Query to own subscription behavior used by Control and

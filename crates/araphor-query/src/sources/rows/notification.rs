@@ -273,9 +273,15 @@ mod tests {
                 metadata.page.extraction.scanned_bytes,
                 serde_json::to_vec(&value)?.len()
             );
-            assert_eq!(metadata.contexts.len(), 1);
-            assert_eq!(metadata.contexts[0].key.owner_id, NOTIFICATION_STATE_OWNER);
-            assert_eq!(metadata.contexts[0].key.owner_revision, value.revision);
+            assert_eq!(metadata.contexts().count(), 1);
+            assert_eq!(
+                metadata.contexts().next().unwrap().key.owner_id,
+                NOTIFICATION_STATE_OWNER
+            );
+            assert_eq!(
+                metadata.contexts().next().unwrap().key.owner_revision,
+                value.revision
+            );
             drop(permit);
         }
         let mut scoped = selection.clone();
@@ -285,7 +291,7 @@ mod tests {
             .session(scoped, &control, 99)?
             .execute(Arc::clone(&plan), &sources)?;
         assert!(batches.iter().all(|batch| batch.num_rows() == 0));
-        assert!(snapshot.contexts.is_empty());
+        assert!(snapshot.contexts().next().is_none());
         assert_eq!(snapshot.next_change, None);
         value.revision = 2;
         value.human_acknowledgement = Some(NotificationAcknowledgementV1 {

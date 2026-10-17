@@ -4,6 +4,7 @@ use std::ops::Bound;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use araphor_analysis_sdk as sdk;
 use araphor_data::{
     AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, StorePositionV1,
 };
@@ -42,6 +43,32 @@ pub(crate) use rows::{Captured, Removal};
 
 type Requests = (BTreeMap<String, BTreeSet<usize>>, Option<Interval>);
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum SourceOrigin {
+    Durable(String),
+    Port(usize),
+    Package(usize),
+}
+
+impl SourceOrigin {
+    pub(crate) fn durable(&self) -> Option<&str> {
+        match self {
+            Self::Durable(name) => Some(name),
+            Self::Port(_) | Self::Package(_) => None,
+        }
+    }
+}
+
+pub(crate) struct InputCapture {
+    pub(crate) scope: String,
+    pub(crate) bindings: Vec<(usize, sdk::OutputRef, SchemaRef)>,
+    pub(crate) limits: sdk::Limits,
+    pub(crate) requests: BTreeMap<String, BTreeSet<usize>>,
+    pub(crate) ranges: Vec<(u64, u64)>,
+    pub(crate) trace: bool,
+    pub(crate) include_results: bool,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum ReadMode {
     Snapshot,
@@ -53,6 +80,7 @@ pub(crate) enum ReadMode {
 pub(crate) struct SourceSnapshot {
     store: Arc<AnalysisStore>,
     selection: AnalysisSelectionV1,
+    inputs: Option<InputCapture>,
     limits: AnalysisExtractLimits,
     control: AnalysisReadControl,
     extract_timeout: Duration,
@@ -71,13 +99,19 @@ impl std::fmt::Debug for SourceSnapshot {
 }
 
 impl SourceSnapshot {
-    fn requests(plan: &Arc<dyn ExecutionPlan>) -> Result<Requests> {
+    pub(crate) fn requests(plans: &[Arc<dyn ExecutionPlan>]) -> Result<Requests> {
         let mut requests = BTreeMap::<String, BTreeSet<usize>>::new();
         let mut received: Option<Interval> = None;
-        plan.apply(|node| {
-            if let Some(source) = SourceData::from_plan(node.as_ref()) {
+        for plan in plans {
+            plan.apply(|node| {
+                let Some(source) = SourceData::from_plan(node.as_ref()) else {
+                    return Ok(TreeNodeRecursion::Continue);
+                };
+                let Some(name) = source.origin.durable() else {
+                    return Ok(TreeNodeRecursion::Continue);
+                };
                 requests
-                    .entry(source.name.clone())
+                    .entry(name.to_owned())
                     .or_default()
                     .extend(source.indices.iter().copied());
                 if let Some(bounds) = &source.received {
@@ -86,15 +120,17 @@ impl SourceSnapshot {
                         None => bounds.clone(),
                     });
                 }
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
         Ok((requests, received))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         store: Arc<AnalysisStore>,
         selection: AnalysisSelectionV1,
+        inputs: Option<InputCapture>,
         limits: AnalysisExtractLimits,
         control: AnalysisReadControl,
         extract_timeout: Duration,
@@ -104,6 +140,7 @@ impl SourceSnapshot {
         Arc::new(Self {
             store,
             selection,
+            inputs,
             limits,
             control,
             extract_timeout,
@@ -118,7 +155,7 @@ impl SourceSnapshot {
             .iter()
             .map(|(name, schema)| {
                 let provider: Arc<dyn TableProvider> = Arc::new(SourceProvider {
-                    name: name.clone(),
+                    origin: SourceOrigin::Durable(name.clone()),
                     schema: Arc::clone(schema),
                 });
                 (name.clone(), provider)
@@ -129,10 +166,25 @@ impl SourceSnapshot {
     pub(crate) fn capture(
         &self,
         sources: &BTreeSet<String>,
-        plan: &Arc<dyn ExecutionPlan>,
+        plans: &[Arc<dyn ExecutionPlan>],
         mode: ReadMode,
     ) -> Result<Arc<ArrowSnapshot>> {
-        let (requests, received) = Self::requests(plan)?;
+        if let Some(inputs) = &self.inputs {
+            let bounds = inputs
+                .ranges
+                .iter()
+                .copied()
+                .reduce(|(first, last), (next, end)| (first.min(next), last.max(end)));
+            let received = match bounds.filter(|_| !inputs.trace) {
+                Some((first, last)) => Some(Interval::try_new(
+                    ScalarValue::UInt64(Some(first)),
+                    ScalarValue::UInt64(Some(last)),
+                )?),
+                None => None,
+            };
+            return self.capture_read(sources, &inputs.requests, received.as_ref(), mode);
+        }
+        let (requests, received) = Self::requests(plans)?;
         self.capture_read(sources, &requests, received.as_ref(), mode)
     }
 
@@ -172,7 +224,7 @@ impl SourceSnapshot {
         DataFusionError::External(Box::new(error))
     }
 
-    fn prune_selection(
+    pub(crate) fn prune_selection(
         mut selection: AnalysisSelectionV1,
         received: Option<&Interval>,
     ) -> AnalysisSelectionV1 {
@@ -200,11 +252,25 @@ impl SourceSnapshot {
 
 #[derive(Debug)]
 pub(crate) struct SourceProvider {
-    name: String,
+    pub(crate) origin: SourceOrigin,
     schema: SchemaRef,
 }
 
 impl SourceProvider {
+    pub(crate) fn port(port: usize, schema: SchemaRef) -> Arc<dyn TableProvider> {
+        Arc::new(Self {
+            origin: SourceOrigin::Port(port),
+            schema,
+        })
+    }
+
+    pub(crate) fn package(slot: usize, schema: SchemaRef) -> Arc<dyn TableProvider> {
+        Arc::new(Self {
+            origin: SourceOrigin::Package(slot),
+            schema,
+        })
+    }
+
     fn received_bounds(&self, session: &dyn Session, filters: &[Expr]) -> Result<Interval> {
         let unbounded = Interval::make_unbounded(&datafusion::arrow::datatypes::DataType::UInt64)?;
         let Some(predicate) = conjunction(filters.iter().cloned()) else {
@@ -267,7 +333,7 @@ impl TableProvider for SourceProvider {
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
         Ok(vec![
-            if self.name == "events" {
+            if self.origin.durable() == Some("events") {
                 TableProviderFilterPushDown::Inexact
             } else {
                 TableProviderFilterPushDown::Unsupported
@@ -287,10 +353,10 @@ impl TableProvider for SourceProvider {
             .cloned()
             .unwrap_or_else(|| (0..self.schema.fields().len()).collect());
         Ok(DataSourceExec::from_data_source(SourceData {
-            name: self.name.clone(),
+            origin: self.origin.clone(),
             schema: Arc::new(self.schema.project(&indices)?),
             indices,
-            received: if self.name == "events" {
+            received: if self.origin.durable() == Some("events") {
                 Some(self.received_bounds(session, filters)?)
             } else {
                 None
@@ -302,7 +368,7 @@ impl TableProvider for SourceProvider {
 
 #[derive(Clone, Debug)]
 pub(crate) struct SourceData {
-    name: String,
+    pub(crate) origin: SourceOrigin,
     schema: SchemaRef,
     indices: Vec<usize>,
     received: Option<Interval>,
@@ -311,10 +377,10 @@ pub(crate) struct SourceData {
 
 impl SourceData {
     pub(crate) fn positioned(&self) -> Result<Arc<dyn ExecutionPlan>> {
-        if !matches!(self.name.as_str(), "events" | "trace_output") {
+        let Some(name @ ("events" | "trace_output")) = self.origin.durable() else {
             return Err(DataFusionError::NotImplemented("positioned source".into()));
-        }
-        let canonical = &SourceSnapshot::schemas()[&self.name];
+        };
+        let canonical = &SourceSnapshot::schemas()[name];
         if canonical.project(&self.indices)? != *self.schema {
             return Err(DataFusionError::Execution("source schema changed".into()));
         }
@@ -365,7 +431,7 @@ impl DataSource for SourceData {
                     "the source snapshot was not captured before execution".into(),
                 )
             })?
-            .project(&self.name, &self.indices)?;
+            .project(&self.origin, &self.indices, &self.schema)?;
         Ok(Box::pin(cooperative(
             MemoryStream::try_new(batches, Arc::clone(&self.schema), None)?.with_fetch(self.fetch),
         )))
@@ -382,8 +448,8 @@ impl DataSource for SourceData {
     ) -> std::fmt::Result {
         write!(
             formatter,
-            "source={}, projection={:?}",
-            self.name, self.indices
+            "source={:?}, projection={:?}",
+            self.origin, self.indices
         )
     }
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use snafu::ResultExt as _;
 use tokio::sync::watch;
 
@@ -8,26 +8,10 @@ use crate::{AnalysisReadControl, Engine, Result};
 
 use super::{
     AnalysisPackageOwner, PackageActionV1, PackageAuthorization, PackageErrorCodeV1 as Code,
-    PackageGrantV1, PackageReadinessV1, PackageRefV1, PackageRequestV1, PackageResponseV1,
+    PackageGrantV1, PackageRefV1, PackageRequestV1, PackageResponseV1,
 };
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) enum ClockDependency {
-    None,
-    Inputs,
-    Model,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct InstalledContext {
-    pub grant: PackageGrantV1,
-    pub root: PackageRefV1,
-    pub parameters: Option<serde_json::Value>,
-    pub readiness: PackageReadinessV1,
-    pub status_checkpoint: u64,
-    pub prepared: bool,
-    pub clock: ClockDependency,
-}
+pub(crate) use araphor_data::{ClockDependency, InstalledContext};
 
 pub(super) struct PackageTask {
     pub control: Arc<AnalysisReadControl>,

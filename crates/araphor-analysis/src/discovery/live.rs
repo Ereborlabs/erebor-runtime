@@ -1246,6 +1246,7 @@ mod tests {
         selection.contexts = crate::Selection::All;
         let (_, contexts) = fixture.store.extract_rows(
             &selection,
+            None,
             araphor_data::AnalysisExtractLimits::default(),
             &crate::AnalysisReadControl::default(),
             Contexts::default(),

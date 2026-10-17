@@ -1,5 +1,3 @@
-use araphor_analysis_sdk as sdk;
-use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use crate::analysis::{PackageActivationV1, PackageResultRefV1};
@@ -14,23 +12,7 @@ use super::{
 
 mod preparation;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct ResultContext {
-    #[serde(default = "ResultContext::sql_target")]
-    pub target: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub artifact: Option<super::PackageArtifactIdentityV1>,
-    pub context: sdk::EvaluationContext,
-    pub inputs: Vec<sdk::Revision>,
-    pub input_coverage: Vec<sdk::Coverage>,
-    pub coverage: sdk::Coverage,
-}
-
-impl ResultContext {
-    fn sql_target() -> String {
-        "sql".into()
-    }
-}
+pub(crate) use araphor_data::ResultContext;
 
 #[derive(Clone, Copy)]
 pub(super) struct RunPreparation<'a> {

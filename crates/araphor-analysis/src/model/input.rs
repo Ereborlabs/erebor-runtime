@@ -27,17 +27,21 @@ impl ModelRun<'_> {
                 ),
             self.owner.limits().input_bytes,
         )?;
-        for input in &model.inputs {
-            let port = &input.port;
-            self.table(
-                &port.name,
-                &port.schema,
-                &evaluation
-                    .input(&port.name)
-                    .context(crate::AnalysisContractSnafu)?
-                    .data
-                    .batches,
-            )?;
+        if let Some(inputs) = self.inputs.clone() {
+            inputs.register(self.session()?)?;
+        } else {
+            for input in &model.inputs {
+                let port = &input.port;
+                self.table(
+                    &port.name,
+                    &port.schema,
+                    &evaluation
+                        .input(&port.name)
+                        .context(crate::AnalysisContractSnafu)?
+                        .data
+                        .batches,
+                )?;
+            }
         }
         if let Some(parameters) = &evaluation.parameters {
             self.table(

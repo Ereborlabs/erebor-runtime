@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use super::super::SqlModelV1;
+use super::super::{AdmittedExport, SqlModelV1};
 use super::*;
 use crate::analysis::{PackageActivationV1, PackageKeyV1};
 use crate::package::PackageGrantV1;
@@ -73,17 +73,19 @@ fn scope(selection: AnalysisSelectionV1) -> (PackageGrantV1, PackageActivationV1
     )
 }
 
-fn request<'a>(
-    model: &'a sdk::Model,
-    grant: &'a PackageGrantV1,
-    active: &'a PackageActivationV1,
-) -> ModelInputRequest<'a> {
-    ModelInputRequest {
-        activation: active,
-        model,
-        grant,
-        now: 1_000,
-    }
+fn read_inputs(
+    owner: &Arc<Engine>,
+    admitted: &AdmittedExport,
+    grant: &PackageGrantV1,
+    active: &PackageActivationV1,
+) -> crate::Result<Arc<araphor_query::inputs::InputSet>> {
+    Ok(admitted.inputs.read(
+        Arc::clone(owner),
+        grant.selection.clone(),
+        active.key.scope_id.clone(),
+        &control()?,
+        1_000,
+    )?)
 }
 
 fn evaluation(inputs: Vec<sdk::Input>, model: &sdk::Model) -> sdk::Evaluation {
@@ -117,14 +119,12 @@ fn operation_inputs_match() -> TestResult {
         .insert("other".into(), "SELECT value FROM second".into());
     let admitted = AdmittedExport::admit(&owner, &model, Some(&program))?;
     let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
-    let mut baseline = ModelRun::new(&owner, [1; 16], &control()?)?;
-    baseline.prepare_inputs(
-        request(&model, &grant, &active),
+    let expected_inputs = read_inputs(
+        &owner,
         &AdmittedExport::admit(&owner, &model, None)?,
-        || Ok(()),
+        &grant,
+        &active,
     )?;
-    let expected_inputs = baseline.take_inputs()?;
-    drop(baseline);
     let expected = ModelRun::new(&owner, [1; 16], &control()?)?.evaluate_model(
         &package,
         &program,
@@ -135,18 +135,29 @@ fn operation_inputs_match() -> TestResult {
         &model,
     )?)?;
     drop(expected);
-    let mut operation = ModelRun::new(&owner, [1; 16], &control()?)?;
-    operation.prepare_inputs(request(&model, &grant, &active), &admitted, || Ok(()))?;
-    let actual = operation.take_inputs()?;
+    let actual = read_inputs(&owner, &admitted, &grant, &active)?;
+    let operation = ModelRun::prepared(&owner, [1; 16], &control()?, Arc::clone(&actual))?;
     for (expected, actual) in expected_inputs.inputs.iter().zip(&actual.inputs) {
         assert_eq!(expected.revision, actual.revision);
         assert_eq!(expected.coverage, actual.coverage);
         assert_eq!(expected.data.batches, actual.data.batches);
     }
-    assert_eq!(expected_inputs.source_revisions, actual.source_revisions);
-    assert_eq!(expected_inputs.contexts, actual.contexts);
-    assert_eq!(expected_inputs.witnesses, actual.witnesses);
-    assert_eq!(expected_inputs.dependencies, actual.dependencies);
+    assert_eq!(
+        expected_inputs.source_revisions(),
+        actual.source_revisions()
+    );
+    assert_eq!(
+        expected_inputs.contexts().collect::<Vec<_>>(),
+        actual.contexts().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        expected_inputs.witnesses().collect::<Vec<_>>(),
+        actual.witnesses().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        expected_inputs.dependencies().collect::<Vec<_>>(),
+        actual.dependencies().collect::<Vec<_>>()
+    );
     drop(owner.reserve_evaluation([1; 16])?);
     let output = operation.evaluate_admitted(
         &package,
@@ -199,58 +210,36 @@ fn operation_source_cleanup() -> TestResult {
     let model = model(&[("source", 7)]);
     let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
     let admitted = AdmittedExport::admit(&owner, &model, None)?;
-    let mut foreign = grant.clone();
-    foreign.selection.tenant_id = [9; 16];
-    let mut denied = ModelRun::new(&owner, [1; 16], &control()?)?;
-    assert_eq!(
-        denied
-            .prepare_inputs(request(&model, &foreign, &active), &admitted, || Ok(()))
-            .err()
-            .ok_or("foreign tenant accepted")?
-            .package_code(),
-        crate::PackageErrorCodeV1::Denied
-    );
-    drop(denied);
     let permit = owner.reserve_evaluation([1; 16])?;
-    let mut blocked = ModelRun::new(&owner, [1; 16], &control()?)?;
-    assert!(blocked
-        .prepare_inputs(request(&model, &grant, &active), &admitted, || Ok(()))
+    assert!(read_inputs(&owner, &admitted, &grant, &active)
         .err()
         .ok_or("busy execution accepted")?
         .is_busy());
-    drop(blocked);
     drop(permit);
     let mut invalid = model.clone();
     invalid.inputs[0].source = sdk::InputSource::Query(
         "SELECT CAST(relation AS BIGINT) AS value FROM catalog LIMIT 1".into(),
     );
-    let mut rejected = ModelRun::new(&owner, [1; 16], &control()?)?;
-    assert!(rejected
-        .prepare_inputs(
-            request(&invalid, &grant, &active),
-            &AdmittedExport::admit(&owner, &invalid, None)?,
-            || Ok(())
-        )
-        .is_err());
-    drop(rejected);
+    assert!(read_inputs(
+        &owner,
+        &AdmittedExport::admit(&owner, &invalid, None)?,
+        &grant,
+        &active,
+    )
+    .is_err());
     drop(
         owner
             .memory()
             .reserve_input(owner.limits().input_capacity)?,
     );
-    let mut operation = ModelRun::new(&owner, [1; 16], &control()?)?;
-    operation.prepare_inputs(request(&model, &grant, &active), &admitted, || Ok(()))?;
-    let retained = operation.take_inputs()?;
+    let retained = read_inputs(&owner, &admitted, &grant, &active)?;
     let pressure = owner
         .memory()
         .reserve_input(owner.limits().input_capacity - owner.limits().input_bytes)?;
-    let mut blocked = ModelRun::new(&owner, [1; 16], &control()?)?;
-    assert!(blocked
-        .prepare_inputs(request(&model, &grant, &active), &admitted, || Ok(()))
+    assert!(read_inputs(&owner, &admitted, &grant, &active)
         .err()
         .ok_or("input pressure accepted")?
         .is_busy());
-    drop(blocked);
     drop(pressure);
     let package = sdk::Package::new("sql-operation", "1", vec![model.clone()]);
     let program = SqlModelV1 {
@@ -260,15 +249,17 @@ fn operation_source_cleanup() -> TestResult {
     let output_pressure = owner
         .memory()
         .reserve_output(owner.limits().output_capacity)?;
-    assert!(operation
-        .evaluate_model(
-            &package,
-            &program,
-            &evaluation(retained.inputs.clone(), &model)
-        )
-        .err()
-        .ok_or("output pressure accepted")?
-        .is_busy());
+    assert!(
+        ModelRun::prepared(&owner, [1; 16], &control()?, Arc::clone(&retained))?
+            .evaluate_model(
+                &package,
+                &program,
+                &evaluation(retained.inputs.clone(), &model)
+            )
+            .err()
+            .ok_or("output pressure accepted")?
+            .is_busy()
+    );
     drop(output_pressure);
     drop(retained);
     drop(
@@ -310,17 +301,15 @@ fn pruned_source_evidence() -> TestResult {
         ),
     ] {
         model.inputs[0].source = sdk::InputSource::Query(sql.into());
-        let mut operation = ModelRun::new(&owner, [1; 16], &control()?)?;
-        operation.prepare_inputs(
-            request(&model, &grant, &active),
+        let inputs = read_inputs(
+            &owner,
             &AdmittedExport::admit(&owner, &model, None)?,
-            || Ok(()),
+            &grant,
+            &active,
         )?;
-        let inputs = operation.take_inputs()?;
         assert_eq!(
             inputs
-                .witnesses
-                .iter()
+                .witnesses()
                 .map(|witness| witness.cursor)
                 .collect::<Vec<_>>(),
             vec![1, 2]
@@ -335,8 +324,7 @@ fn pruned_source_evidence() -> TestResult {
             expected_rows
         );
         revisions.push(inputs.inputs[0].revision.clone());
-        witnesses.push(inputs.witnesses.clone());
-        drop(operation);
+        witnesses.push(inputs.witnesses().cloned().collect::<Vec<_>>());
         drop(inputs);
     }
     assert_ne!(revisions[0], revisions[1]);
@@ -360,13 +348,13 @@ fn operation_source_denial() -> TestResult {
         "WITH unused AS (SELECT 1::BIGINT UNSIGNED AS value FROM catalog) SELECT value FROM source",
         "WITH unused AS (SELECT value FROM output_result) SELECT value FROM source",
     ] {
-        let mut operation = ModelRun::new(&owner, [1; 16], &control()?)?;
-        operation.prepare_inputs(
-            request(&model, &grant, &active),
+        let retained = read_inputs(
+            &owner,
             &AdmittedExport::admit(&owner, &model, None)?,
-            || Ok(()),
+            &grant,
+            &active,
         )?;
-        let retained = operation.take_inputs()?;
+        let operation = ModelRun::prepared(&owner, [1; 16], &control()?, Arc::clone(&retained))?;
         let mut program = SqlModelV1::default();
         program.outputs.insert("result".into(), sql.into());
         assert!(operation
@@ -426,13 +414,17 @@ fn named_alias_revision() -> TestResult {
         if cursor == 2 {
             fixture.event(2, 200, 7)?;
         }
-        let mut operation = ModelRun::new(&owner, fixture.source.tenant_id, &control()?)?;
-        operation.prepare_inputs(request(&model, &grant, &active), &admitted, || Ok(()))?;
-        let inputs = operation.take_inputs()?;
+        let inputs = read_inputs(&owner, &admitted, &grant, &active)?;
+        let operation = ModelRun::prepared(
+            &owner,
+            fixture.source.tenant_id,
+            &control()?,
+            Arc::clone(&inputs),
+        )?;
         assert_eq!(inputs.inputs[0].data.name, "selected");
         assert_eq!(inputs.inputs[0].data.batches[0].num_rows(), 0);
-        assert!(!inputs.source_revisions.is_empty());
-        assert_eq!(inputs.witnesses.len(), cursor);
+        assert!(!inputs.source_revisions().is_empty());
+        assert_eq!(inputs.witnesses().count(), cursor);
         if let Some(previous) = previous {
             assert_ne!(inputs.inputs[0].revision, previous);
         }
@@ -459,24 +451,28 @@ fn declared_tables_override_canonical_names() -> TestResult {
     let fixture = QueryFixture::new()?;
     let owner = fixture.owner(limits())?;
     let mut model = model(&[]);
+    let schema = sdk::Schema::new(vec![sdk::Field::new(
+        "relation",
+        sdk::DataType::Utf8,
+        false,
+    )]);
     model.inputs.push(sdk::InputPort {
-        port: port("events"),
-        source: sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
-            package: "fixture".into(),
-            revision: "1".into(),
-            export: "evaluate".into(),
-            output: "result".into(),
-        })),
+        port: sdk::Port::new("events", schema.clone()),
+        source: sdk::InputSource::Table(sdk::TableRef::Named("catalog".into())),
     });
     model.inputs.push(sdk::InputPort {
-        port: port("selected"),
-        source: sdk::InputSource::Query("SELECT value FROM events".into()),
+        port: sdk::Port::new("selected", schema),
+        source: sdk::InputSource::Query("SELECT relation FROM events".into()),
     });
     let admitted = AdmittedExport::admit(&owner, &model, None)?;
-    assert!(admitted.inputs.iter().any(|input| matches!(input, AdmittedInput::Query { reads, inputs, .. } if reads.is_empty() && inputs == &[0])));
+    let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
+    let inputs = read_inputs(&owner, &admitted, &grant, &active)?;
+    assert_eq!(inputs.inputs[0].data.batches, inputs.inputs[1].data.batches);
+    assert!(inputs.witnesses().next().is_none());
+    assert!(inputs.source_revisions().is_empty());
     model.inputs[0].port.name = "EVENTS".into();
     assert!(AdmittedExport::admit(&owner, &model, None).is_err());
-    model.inputs[1].source = sdk::InputSource::Query("SELECT value FROM \"EVENTS\"".into());
+    model.inputs[1].source = sdk::InputSource::Query("SELECT relation FROM \"EVENTS\"".into());
     assert!(AdmittedExport::admit(&owner, &model, None).is_ok());
     Ok(())
 }
@@ -493,18 +489,12 @@ fn operation_input_capacity() -> TestResult {
     let admitted = AdmittedExport::admit(&owner, &model, None)?;
     let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
     let pressure = owner.memory().reserve_input(1)?;
-    let mut blocked = ModelRun::new(&owner, [1; 16], &control()?)?;
-    assert!(blocked
-        .prepare_inputs(request(&model, &grant, &active), &admitted, || Ok(()))
+    assert!(read_inputs(&owner, &admitted, &grant, &active)
         .err()
         .ok_or("input pressure accepted")?
         .is_busy());
-    drop(blocked);
     drop(pressure);
-    let mut operation = ModelRun::new(&owner, [1; 16], &control()?)?;
-    operation.prepare_inputs(request(&model, &grant, &active), &admitted, || Ok(()))?;
-    let inputs = operation.take_inputs()?;
-    drop(operation);
+    let inputs = read_inputs(&owner, &admitted, &grant, &active)?;
     drop(inputs);
     drop(
         owner
@@ -595,21 +585,10 @@ fn admitted_input_provenance() -> TestResult {
             .iter()
             .map(|index| model.inputs[*index].clone())
             .collect();
-        let mut admitted = AdmittedExport::admit(&owner, &declared, None)?;
+        let admitted = AdmittedExport::admit(&owner, &declared, None)?;
         let before = admitted.allocated_bytes();
-        let capacity = admitted.inputs.capacity();
-        admitted.inputs.reserve_exact(8);
-        let growth = (admitted.inputs.capacity() - capacity)
-            * std::mem::size_of::<super::super::AdmittedInput>();
-        assert_eq!(admitted.allocated_bytes(), before + growth);
-        let mut calls = 0;
-        let mut operation = ModelRun::new(&owner, fixture.source.tenant_id, &control()?)?;
-        operation.prepare_inputs(request(&declared, &grant, &active), &admitted, || {
-            calls += 1;
-            Ok(())
-        })?;
-        let inputs = operation.take_inputs()?;
-        assert!(calls >= indices.len());
+        let inputs = read_inputs(&owner, &admitted, &grant, &active)?;
+        assert_eq!(admitted.allocated_bytes(), before);
         assert_eq!(
             inputs
                 .inputs
@@ -673,17 +652,16 @@ fn admitted_input_provenance() -> TestResult {
             expected = Some(data);
         }
         let metadata = (
-            inputs.source_revisions.clone(),
-            inputs.dependencies.clone(),
-            inputs.witnesses.clone(),
-            inputs.contexts.clone(),
+            inputs.source_revisions(),
+            inputs.dependencies().cloned().collect::<Vec<_>>(),
+            inputs.witnesses().cloned().collect::<Vec<_>>(),
+            inputs.contexts().cloned().collect::<Vec<_>>(),
         );
         if let Some(expected) = &expected_metadata {
             assert_eq!(expected, &metadata);
         } else {
             expected_metadata = Some(metadata);
         }
-        drop(operation);
         drop(inputs);
         drop(
             owner

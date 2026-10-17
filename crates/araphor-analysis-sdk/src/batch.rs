@@ -1,29 +1,77 @@
-use araphor_analysis_sdk as sdk;
-use araphor_query::datafusion::arrow::array::ByteView;
-use arrow_cast::{can_cast_types, cast_with_options, CastOptions};
-use sdk::arrow_array::cast::AsArray as _;
-use sdk::arrow_array::{
-    make_array, new_null_array, Array, ArrayRef, FixedSizeListArray, ListArray, StructArray,
-};
-use snafu::ResultExt as _;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::Result;
+use arrow_array::cast::AsArray as _;
+use arrow_array::{
+    make_array, new_null_array, Array, ArrayRef, FixedSizeListArray, ListArray, StructArray,
+};
+use arrow_cast::{can_cast_types, cast_with_options, CastOptions};
+use arrow_data::ByteView;
 
-pub(super) struct ModelArrays;
+use crate::{DataType, Dataset, Error, ErrorCode, RecordBatch, Result, Schema, TimeUnit};
 
-impl ModelArrays {
-    pub(super) fn conversion_bytes(array: &ArrayRef, kind: &sdk::DataType) -> Result<usize> {
-        if array.data_type() == kind || *kind == sdk::DataType::Null {
+impl Dataset {
+    /// Return the buffer allocation bound before batch normalization.
+    pub fn conversion_bytes(batch: &RecordBatch, schema: &Schema) -> Result<usize> {
+        batch
+            .columns()
+            .iter()
+            .zip(schema.fields())
+            .try_fold(0usize, |bytes, (array, field)| {
+                bytes
+                    .checked_add(Self::array_bytes(array, field.data_type())?)
+                    .ok_or_else(|| Error::contract(ErrorCode::Invalid, "conversion allocation"))
+            })
+    }
+
+    /// Normalize a native batch to the declared dataset schema.
+    pub fn normalize_batch(batch: RecordBatch, schema: Arc<Schema>) -> Result<RecordBatch> {
+        if batch.num_columns() != schema.fields().len() {
+            return Err(Error::contract(ErrorCode::Invalid, "batch width"));
+        }
+        let actual = batch.schema();
+        let columns = batch
+            .columns()
+            .iter()
+            .zip(actual.fields())
+            .zip(schema.fields())
+            .map(|((array, field), expected)| {
+                if field.name() != expected.name()
+                    || !Self::compatible(field.data_type(), expected.data_type())
+                {
+                    return Err(Error::contract(ErrorCode::Invalid, "batch schema"));
+                }
+                Self::cast_array(array, expected.data_type())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(RecordBatch::try_new(schema, columns)?)
+    }
+
+    fn compatible(actual: &DataType, expected: &DataType) -> bool {
+        use DataType::*;
+        match (actual, expected) {
+            (_, Null) => true,
+            (Binary, FixedSizeBinary(_)) | (Utf8View, Utf8) | (BinaryView, Binary) => true,
+            (Timestamp(TimeUnit::Nanosecond, _), Timestamp(TimeUnit::Nanosecond, _)) => true,
+            (List(left), List(right)) | (FixedSizeList(left, _), FixedSizeList(right, _)) => {
+                Self::compatible(left.data_type(), right.data_type())
+                    && !matches!((actual, expected), (FixedSizeList(_, a), FixedSizeList(_, b)) if a != b)
+            }
+            (Struct(left), Struct(right)) => {
+                left.len() == right.len()
+                    && left.iter().zip(right).all(|(a, b)| {
+                        a.name() == b.name() && Self::compatible(a.data_type(), b.data_type())
+                    })
+            }
+            _ => actual == expected,
+        }
+    }
+
+    fn array_bytes(array: &ArrayRef, kind: &DataType) -> Result<usize> {
+        if array.data_type() == kind || *kind == DataType::Null {
             return Ok(0);
         }
-        let overflow = || {
-            crate::ModelInvalidSnafu {
-                field: "model conversion allocation",
-            }
-            .build()
-        };
+        let overflow = || Error::contract(ErrorCode::Invalid, "conversion allocation");
         let align = |bytes: usize| {
             bytes
                 .checked_add(63)
@@ -31,10 +79,10 @@ impl ModelArrays {
                 .ok_or_else(overflow)
         };
         let variable = match (array.data_type(), kind) {
-            (sdk::DataType::Utf8View, sdk::DataType::Utf8) => Some(
+            (DataType::Utf8View, DataType::Utf8) => Some(
                 array
                     .as_any()
-                    .downcast_ref::<sdk::arrow_array::StringViewArray>()
+                    .downcast_ref::<arrow_array::StringViewArray>()
                     .ok_or_else(overflow)?
                     .views()
                     .iter()
@@ -44,10 +92,10 @@ impl ModelArrays {
                             .ok_or_else(overflow)
                     })?,
             ),
-            (sdk::DataType::BinaryView, sdk::DataType::Binary) => Some(
+            (DataType::BinaryView, DataType::Binary) => Some(
                 array
                     .as_any()
-                    .downcast_ref::<sdk::arrow_array::BinaryViewArray>()
+                    .downcast_ref::<arrow_array::BinaryViewArray>()
                     .ok_or_else(overflow)?
                     .views()
                     .iter()
@@ -74,19 +122,17 @@ impl ModelArrays {
                 .and_then(|bytes| bytes.checked_add(validity))
                 .ok_or_else(overflow);
         }
-        if let (sdk::DataType::Binary, sdk::DataType::FixedSizeBinary(width)) =
-            (array.data_type(), kind)
-        {
+        if let (DataType::Binary, DataType::FixedSizeBinary(width)) = (array.data_type(), kind) {
             let width = usize::try_from(*width).map_err(|_| overflow())?;
             let values = align(array.len().checked_mul(width).ok_or_else(overflow)?)?;
             let validity = align(array.len().div_ceil(8))?;
             return values.checked_add(validity).ok_or_else(overflow);
         }
         let fields = match kind {
-            sdk::DataType::List(field) | sdk::DataType::FixedSizeList(field, _) => {
+            DataType::List(field) | DataType::FixedSizeList(field, _) => {
                 std::slice::from_ref(field)
             }
-            sdk::DataType::Struct(fields) => fields.as_ref(),
+            DataType::Struct(fields) => fields.as_ref(),
             _ => return align(array.get_buffer_memory_size()),
         };
         let data = array.to_data();
@@ -98,7 +144,7 @@ impl ModelArrays {
             .zip(fields)
             .try_fold(0usize, |bytes, (child, field)| {
                 bytes
-                    .checked_add(Self::conversion_bytes(
+                    .checked_add(Self::array_bytes(
                         &make_array(child.clone()),
                         field.data_type(),
                     )?)
@@ -106,27 +152,24 @@ impl ModelArrays {
             })
     }
 
-    pub(super) fn cast(array: &ArrayRef, kind: &sdk::DataType) -> Result<ArrayRef> {
+    fn cast_array(array: &ArrayRef, kind: &DataType) -> Result<ArrayRef> {
         Self::validate_nulls(array.as_ref(), kind, 0..array.len())?;
-        Self::convert(array, kind)
+        Self::convert_array(array, kind)
     }
 
-    fn validate_nulls(array: &dyn Array, kind: &sdk::DataType, rows: Range<usize>) -> Result<()> {
+    fn validate_nulls(array: &dyn Array, kind: &DataType, rows: Range<usize>) -> Result<()> {
         if array.data_type() == kind || rows.is_empty() {
             return Ok(());
         }
         match (array.data_type(), kind) {
-            (_, sdk::DataType::Null) => {
+            (_, DataType::Null) => {
                 if array.logical_nulls().is_none_or(|nulls| {
                     nulls.slice(rows.start, rows.len()).null_count() != rows.len()
                 }) {
-                    return crate::ModelInvalidSnafu {
-                        field: "model array type",
-                    }
-                    .fail();
+                    return Err(Error::contract(ErrorCode::Invalid, "array type"));
                 }
             }
-            (sdk::DataType::List(_), sdk::DataType::List(field)) => {
+            (DataType::List(_), DataType::List(field)) => {
                 let array = array.as_list::<i32>();
                 for row in rows {
                     if array.is_valid(row) {
@@ -139,7 +182,7 @@ impl ModelArrays {
                     }
                 }
             }
-            (sdk::DataType::FixedSizeList(_, _), sdk::DataType::FixedSizeList(field, _)) => {
+            (DataType::FixedSizeList(_, _), DataType::FixedSizeList(field, _)) => {
                 let array = array.as_fixed_size_list();
                 let size = array.value_length() as usize;
                 for row in rows {
@@ -152,7 +195,7 @@ impl ModelArrays {
                     }
                 }
             }
-            (sdk::DataType::Struct(_), sdk::DataType::Struct(fields)) => {
+            (DataType::Struct(_), DataType::Struct(fields)) => {
                 let array = array.as_struct();
                 let nulls = array
                     .nulls()
@@ -176,44 +219,42 @@ impl ModelArrays {
         Ok(())
     }
 
-    fn convert(array: &ArrayRef, kind: &sdk::DataType) -> Result<ArrayRef> {
+    fn convert_array(array: &ArrayRef, kind: &DataType) -> Result<ArrayRef> {
         if array.data_type() == kind {
             return Ok(Arc::clone(array));
         }
-        if *kind == sdk::DataType::Null {
+        if *kind == DataType::Null {
             return Ok(new_null_array(kind, array.len()));
         }
         let native = can_cast_types(array.data_type(), kind);
         let converted = match (array.data_type(), kind) {
-            (sdk::DataType::List(_), sdk::DataType::List(field)) if !native => {
+            (DataType::List(_), DataType::List(field)) if !native => {
                 let array = array.as_list::<i32>();
                 ListArray::try_new(
                     Arc::clone(field),
                     array.offsets().clone(),
-                    Self::convert(array.values(), field.data_type())?,
+                    Self::convert_array(array.values(), field.data_type())?,
                     array.nulls().cloned(),
                 )
                 .map(|array| Arc::new(array) as ArrayRef)
             }
-            (sdk::DataType::FixedSizeList(_, _), sdk::DataType::FixedSizeList(field, size))
-                if !native =>
-            {
+            (DataType::FixedSizeList(_, _), DataType::FixedSizeList(field, size)) if !native => {
                 let array = array.as_fixed_size_list();
                 FixedSizeListArray::try_new(
                     Arc::clone(field),
                     *size,
-                    Self::convert(array.values(), field.data_type())?,
+                    Self::convert_array(array.values(), field.data_type())?,
                     array.nulls().cloned(),
                 )
                 .map(|array| Arc::new(array) as ArrayRef)
             }
-            (sdk::DataType::Struct(_), sdk::DataType::Struct(fields)) if !native => {
+            (DataType::Struct(_), DataType::Struct(fields)) if !native => {
                 let array = array.as_struct();
                 let columns = array
                     .columns()
                     .iter()
                     .zip(fields)
-                    .map(|(column, field)| Self::convert(column, field.data_type()))
+                    .map(|(column, field)| Self::convert_array(column, field.data_type()))
                     .collect::<Result<Vec<_>>>()?;
                 StructArray::try_new(fields.clone(), columns, array.nulls().cloned())
                     .map(|array| Arc::new(array) as ArrayRef)
@@ -227,70 +268,9 @@ impl ModelArrays {
                 },
             ),
         };
-        converted
-            .map_err(sdk::Error::from)
-            .context(crate::AnalysisContractSnafu)
+        Ok(converted?)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use araphor_query::datafusion::arrow::buffer::NullBuffer;
-    use sdk::arrow_array::StringViewArray;
-
-    #[test]
-    fn fixed_binary_cast_reservation() -> Result<()> {
-        use sdk::arrow_array::cast::AsArray as _;
-        use sdk::arrow_array::BinaryArray;
-
-        let value = vec![7; 1024];
-        let values: ArrayRef = Arc::new(BinaryArray::from(vec![
-            Some(value.as_slice()),
-            None,
-            Some(value.as_slice()),
-        ]));
-        let nonnull: ArrayRef = Arc::new(BinaryArray::from(vec![Some(value.as_slice()); 3]));
-        let nulls: ArrayRef = Arc::new(BinaryArray::from(vec![None::<&[u8]>; 3]));
-        for array in [
-            nonnull,
-            Arc::clone(&nulls),
-            values.slice(1, 2),
-            nulls.slice(1, 2),
-        ] {
-            let kind = sdk::DataType::FixedSizeBinary(1024);
-            let bytes = ModelArrays::conversion_bytes(&array, &kind)?;
-            let converted = ModelArrays::cast(&array, &kind)?;
-            assert!(bytes >= converted.get_buffer_memory_size());
-            assert_eq!(converted.len(), array.len());
-            assert_eq!(converted.null_count(), array.null_count());
-            let actual = converted.as_fixed_size_binary();
-            let expected = array.as_binary::<i32>();
-            for row in 0..array.len() {
-                assert_eq!(actual.is_null(row), expected.is_null(row));
-                if array.is_valid(row) {
-                    assert_eq!(actual.value(row), expected.value(row));
-                }
-            }
-        }
-        assert!(ModelArrays::cast(&values, &sdk::DataType::FixedSizeBinary(512)).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn null_view_cast_reservation() -> Result<()> {
-        let original = StringViewArray::from(vec!["x".repeat(1024), "value".into()]);
-        let (views, buffers, _) = original.into_parts();
-        let array: ArrayRef = Arc::new(StringViewArray::new(
-            views,
-            buffers,
-            Some(NullBuffer::from(vec![false, true])),
-        ));
-        let bytes = ModelArrays::conversion_bytes(&array, &sdk::DataType::Utf8)?;
-        let cast = ModelArrays::cast(&array, &sdk::DataType::Utf8)?;
-        assert!(bytes >= cast.get_buffer_memory_size());
-        assert!(cast.is_null(0));
-        assert_eq!(cast.len(), 2);
-        Ok(())
-    }
-}
+mod tests;

@@ -69,7 +69,7 @@ async fn native_fixed_time_bounds() {
                 vec![first, last],
             )
             .await;
-        let (requests, bounds) = SourceSnapshot::requests(&physical).unwrap();
+        let (requests, bounds) = SourceSnapshot::requests(std::slice::from_ref(&physical)).unwrap();
         assert!(requests.contains_key("events"));
         let bounds = bounds.unwrap();
         assert_eq!(bounds.lower(), &ScalarValue::UInt64(Some(1000)));
@@ -92,14 +92,26 @@ async fn native_bounds_keep_scope() {
         ScalarValue::UInt64(Some(3000)),
     ];
     let bounded = fixture.plan(sql, parameters).await;
-    let (_, bounds) = SourceSnapshot::requests(&bounded).unwrap();
+    let (_, bounds) = SourceSnapshot::requests(std::slice::from_ref(&bounded)).unwrap();
     let selected = SourceSnapshot::prune_selection(selection, bounds.as_ref());
     assert_eq!(selected.received_from, Bound::Excluded(1500));
     assert_eq!(selected.received_until, Bound::Excluded(2500));
     let unbounded = fixture.plan("SELECT count(*) FROM events", vec![]).await;
-    assert_eq!(SourceSnapshot::requests(&bounded).unwrap().1, bounds);
+    assert_eq!(
+        SourceSnapshot::requests(std::slice::from_ref(&bounded))
+            .unwrap()
+            .1,
+        bounds
+    );
+    let (_, shared) =
+        SourceSnapshot::requests(&[Arc::clone(&bounded), Arc::clone(&unbounded)]).unwrap();
+    assert_eq!(
+        SourceSnapshot::prune_selection(AnalysisSelectionV1::tenant([1; 16]), shared.as_ref())
+            .time_range(),
+        Some((0, u64::MAX))
+    );
     let physical: Arc<dyn ExecutionPlan> = UnionExec::try_new(vec![bounded, unbounded]).unwrap();
-    let (_, bounds) = SourceSnapshot::requests(&physical).unwrap();
+    let (_, bounds) = SourceSnapshot::requests(std::slice::from_ref(&physical)).unwrap();
     let selection = AnalysisSelectionV1::tenant([1; 16]);
     let selected = SourceSnapshot::prune_selection(selection, bounds.as_ref());
     assert_eq!(selected.received_from, Bound::Unbounded);
@@ -132,7 +144,7 @@ async fn local_source_has_no_bounds() {
             vec![ScalarValue::UInt64(Some(1000))],
         )
         .await;
-    let (requests, bounds) = SourceSnapshot::requests(&physical).unwrap();
+    let (requests, bounds) = SourceSnapshot::requests(std::slice::from_ref(&physical)).unwrap();
     assert!(requests.is_empty());
     assert!(bounds.is_none());
 }
@@ -148,19 +160,29 @@ async fn physical_projection_requests() {
     let operation = canonical.index_of("operation").unwrap();
     let cursor = canonical.index_of("source_cursor").unwrap();
     assert_eq!(
-        SourceSnapshot::requests(&first).unwrap().0["events"],
+        SourceSnapshot::requests(std::slice::from_ref(&first))
+            .unwrap()
+            .0["events"],
         BTreeSet::from([operation])
     );
     assert_eq!(
-        SourceSnapshot::requests(&second).unwrap().0["events"],
+        SourceSnapshot::requests(std::slice::from_ref(&second))
+            .unwrap()
+            .0["events"],
         BTreeSet::from([cursor])
+    );
+    assert_eq!(
+        SourceSnapshot::requests(&[first, second]).unwrap().0["events"],
+        BTreeSet::from([operation, cursor])
     );
     let physical = fixture.plan(
         "SELECT CAST(operation AS BIGINT UNSIGNED) AS value FROM events UNION ALL SELECT source_cursor AS value FROM events",
         vec![],
     ).await;
     assert_eq!(
-        SourceSnapshot::requests(&physical).unwrap().0["events"],
+        SourceSnapshot::requests(std::slice::from_ref(&physical))
+            .unwrap()
+            .0["events"],
         BTreeSet::from([operation, cursor])
     );
 }

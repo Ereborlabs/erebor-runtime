@@ -45,8 +45,12 @@ impl Window {
         plan.apply_with_subqueries(|plan| {
             if let LogicalPlan::TableScan(scan) = plan {
                 if scan.table_name.table() == "events"
-                    && source_as_provider(&scan.source)
-                        .is_ok_and(|provider| provider.as_any().is::<SourceProvider>())
+                    && source_as_provider(&scan.source).is_ok_and(|provider| {
+                        provider
+                            .as_any()
+                            .downcast_ref::<SourceProvider>()
+                            .is_some_and(|source| source.origin.durable() == Some("events"))
+                    })
                 {
                     scans += 1;
                 }

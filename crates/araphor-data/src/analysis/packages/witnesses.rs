@@ -64,7 +64,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(super) fn package_source_revision(
+    pub(in crate::analysis) fn package_source_revision(
         &self,
         reader: &Connection,
         tenant: [u8; 16],
@@ -132,17 +132,8 @@ impl AnalysisStore {
                 let (processor, metadata) = row.context(AnalysisDatabaseSnafu {
                     operation: "decode package evidence manifest",
                 })?;
-                let (source_witnesses, source_contexts) = if processor == "analysis-package" {
-                    let contract: super::PackageCommitV1 = serde_json::from_slice(&metadata)
-                        .context(JsonSnafu {
-                            path: "<package-evidence>",
-                        })?;
-                    (contract.witnesses, contract.context_refs)
-                } else {
-                    crate::AnalysisResultCommitV1::request_refs(&metadata).context(JsonSnafu {
-                        path: "<native-evidence>",
-                    })?
-                };
+                let (source_witnesses, source_contexts) =
+                    Self::decode_evidence(&processor, &metadata)?;
                 for witness in source_witnesses {
                     let prior = witnesses
                         .entry((witness.identity.clone(), witness.cursor))
@@ -162,6 +153,23 @@ impl AnalysisStore {
             }
             Ok((witnesses.into_values().collect(), contexts))
         })
+    }
+
+    pub(in crate::analysis) fn decode_evidence(
+        processor: &str,
+        metadata: &[u8],
+    ) -> Result<PackageEvidence> {
+        if processor == "analysis-package" {
+            let contract: super::PackageCommitV1 =
+                serde_json::from_slice(metadata).context(JsonSnafu {
+                    path: "<package-evidence>",
+                })?;
+            Ok((contract.witnesses, contract.context_refs))
+        } else {
+            crate::AnalysisResultCommitV1::request_refs(metadata).context(JsonSnafu {
+                path: "<native-evidence>",
+            })
+        }
     }
 
     pub(in crate::analysis) fn resolve_witnesses(

@@ -45,6 +45,7 @@ impl AnalysisPackageOwner {
         }
         let preflight = self.exchange_preflight(package, evaluation)?;
         let tenant = run.tenant();
+        let inputs = run.inputs.clone();
         drop(run);
         let bounded = if matches!(implementation, PackageImplementationV1::Wasm { .. }) {
             let limits = self.component_limits(evaluation.context.limits);
@@ -76,12 +77,12 @@ impl AnalysisPackageOwner {
         let _permit = self.query.reserve_evaluation(tenant)?;
         let input_memory = self.query.memory().reserve_input(preflight)?;
         let output_memory = self.query.memory().reserve_output(capacity)?;
-        let control = control.within(self.query.limits().evaluate_timeout)?;
         control.check()?;
         let retained = bounded.allocated_bytes();
-        let output = match implementation {
+        let (output, control) = match implementation {
             PackageImplementationV1::Wasm { artifact, .. } => {
-                let prepared = self.wasm.prepare(artifact, &control)?;
+                let prepared = self.wasm.prepare(artifact, control)?;
+                let control = control.within(self.query.limits().evaluate_timeout)?;
                 let input = checked.encode().context(crate::AnalysisContractSnafu)?;
                 let bytes = retained
                     .checked_add(input.allocated_bytes())
@@ -94,18 +95,22 @@ impl AnalysisPackageOwner {
                     })?;
                 input_memory.try_resize(bytes)?;
                 control.check()?;
+                if let Some(inputs) = &inputs {
+                    inputs.check(&self.query, &control)?;
+                }
                 let output = self.wasm.invoke(&prepared, input.into(), &control)?;
                 let decoded = sdk::wire::Output::from(output)
                     .decode(package, &bounded)
                     .context(crate::AnalysisContractSnafu)?;
                 control.check()?;
-                decoded
+                (decoded, control)
             }
             PackageImplementationV1::Native {
                 artifact,
                 qualification: Some(qualification),
                 ..
             } => {
+                let control = control.within(self.query.limits().evaluate_timeout)?;
                 let limits = sdk::Limits {
                     max_bytes: bounded.context.limits.max_bytes.min(capacity as u64),
                     max_checkpoint_bytes: bounded
@@ -119,7 +124,12 @@ impl AnalysisPackageOwner {
                 self.limits.native.validate()?;
                 let loaded = super::native::NativeLibrary::load(artifact, qualification, &control);
                 control.check()?;
-                loaded?.call(&checked, limits, &control)?
+                let loaded = loaded?;
+                if let Some(inputs) = &inputs {
+                    inputs.check(&self.query, &control)?;
+                }
+                let output = loaded.call(&checked, limits, &control)?;
+                (output, control)
             }
             _ => return Err(Code::Unsupported.error("model target").into()),
         };
@@ -136,6 +146,9 @@ impl AnalysisPackageOwner {
             .fail();
         }
         control.check()?;
+        if let Some(inputs) = &inputs {
+            inputs.check(&self.query, &control)?;
+        }
         SqlModelOutputV1::retain(output, self.query.memory(), output_memory)
     }
 

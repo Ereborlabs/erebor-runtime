@@ -210,15 +210,7 @@ impl AnalysisPackageOwner {
             bundle,
             control,
         ) {
-            let crate::Error::Data {
-                source:
-                    araphor_data::Error::Package {
-                        code: Code::Missing | Code::Incomplete,
-                        field,
-                        ..
-                    },
-            } = error
-            else {
+            let Some(field) = error.missing_input() else {
                 return Err(error);
             };
             let mut context: InstalledContext = Self::decode(&active.metadata)?;

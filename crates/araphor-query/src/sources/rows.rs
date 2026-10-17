@@ -9,12 +9,12 @@ use araphor_data::{
     StorePositionV1, TraceRecipeV1,
 };
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 
-use super::{batch::ArrowBatch, ReadMode, SourceSnapshot};
+use super::{batch::ArrowBatch, ReadMode, SourceOrigin, SourceSnapshot};
 
 mod context;
 mod discovery;
@@ -22,6 +22,7 @@ mod events;
 mod graph;
 mod metadata;
 mod notification;
+mod package;
 mod trace;
 
 #[cfg(test)]
@@ -31,8 +32,6 @@ pub struct ArrowSnapshot {
     pub page: AnalysisPositionPageV1,
     pub selection: AnalysisSelectionV1,
     pub witnesses: Vec<AnalysisWitnessV1>,
-    pub contexts: Vec<AnalysisContextRefV1>,
-    pub results: Vec<PackageResultRefV1>,
     pub mutable_discovery: bool,
     pub received_min: Option<u64>,
     pub next_change: Option<u64>,
@@ -48,12 +47,32 @@ impl std::fmt::Debug for ArrowSnapshot {
     }
 }
 
+impl ArrowSnapshot {
+    pub fn contexts(&self) -> impl Iterator<Item = &AnalysisContextRefV1> {
+        self.page
+            .extraction
+            .references
+            .iter()
+            .filter_map(araphor_data::AnalysisReferenceV1::context)
+    }
+
+    pub fn results(&self) -> impl Iterator<Item = &PackageResultRefV1> {
+        self.page
+            .extraction
+            .references
+            .iter()
+            .filter_map(araphor_data::AnalysisReferenceV1::result)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Captured {
     pub(crate) receipt: Arc<ArrowSnapshot>,
     pub(crate) removals: Vec<Removal>,
-    _removals: MemoryReservation,
-    tables: BTreeMap<String, (Vec<usize>, Vec<RecordBatch>)>,
+    _memory: MemoryReservation,
+    tables: BTreeMap<SourceOrigin, (SchemaRef, Vec<usize>, Vec<RecordBatch>)>,
+    package_coverage: BTreeMap<usize, araphor_analysis_sdk::Coverage>,
+    package_bytes: usize,
 }
 
 impl Captured {
@@ -104,9 +123,19 @@ impl Captured {
         Ok(())
     }
 
-    pub(crate) fn project(&self, name: &str, indices: &[usize]) -> Result<Vec<RecordBatch>> {
-        let Some((captured, batches)) = self.tables.get(name) else {
-            return Ok(Vec::new());
+    pub(crate) fn project(
+        &self,
+        origin: &SourceOrigin,
+        indices: &[usize],
+        schema: &SchemaRef,
+    ) -> Result<Vec<RecordBatch>> {
+        let Some((stored, captured, batches)) = self.tables.get(origin) else {
+            return match origin {
+                SourceOrigin::Durable(_) => Ok(Vec::new()),
+                SourceOrigin::Port(_) | SourceOrigin::Package(_) => Err(
+                    DataFusionError::Execution("the materialized port is not bound".into()),
+                ),
+            };
         };
         let projection = indices
             .iter()
@@ -118,6 +147,11 @@ impl Captured {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        if stored.project(&projection)? != **schema {
+            return Err(DataFusionError::Execution(
+                "the captured source schema differs from the native scan".into(),
+            ));
+        }
         batches
             .iter()
             .map(|batch| batch.project(&projection).map_err(Into::into))
@@ -146,9 +180,66 @@ struct Capture<'a> {
     received_min: Option<u64>,
     next_change: Option<u64>,
     now: u64,
+    inputs: Option<&'a super::InputCapture>,
+    packages: BTreeMap<usize, (SchemaRef, Vec<RecordBatch>, araphor_analysis_sdk::Coverage)>,
 }
 
 impl SourceSnapshot {
+    pub(crate) fn selection(
+        scope: &AnalysisSelectionV1,
+        sources: &BTreeSet<String>,
+    ) -> araphor_data::Result<AnalysisSelectionV1> {
+        Capture::selection(scope, sources)
+    }
+
+    pub(crate) fn bind_port(
+        &self,
+        port: usize,
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+    ) -> Result<()> {
+        self.control.check().map_err(Self::data_error)?;
+        if batches.iter().any(|batch| batch.schema() != schema) {
+            return Err(DataFusionError::Execution(
+                "the materialized port differs from its declared schema".into(),
+            ));
+        }
+        let mut captured = self
+            .captured
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
+        let captured = captured.as_mut().ok_or_else(|| {
+            DataFusionError::Execution("the source snapshot was not captured before binding".into())
+        })?;
+        let origin = SourceOrigin::Port(port);
+        if captured.tables.contains_key(&origin) {
+            return Err(DataFusionError::Execution(
+                "the materialized port is already bound".into(),
+            ));
+        }
+        let bytes = Captured::table_bytes(&schema, &batches);
+        let mut reservation = self.memory.reserve_input(0)?;
+        for batch in &batches {
+            self.memory.retain_input(batch, &mut reservation)?;
+        }
+        self.control.check().map_err(Self::data_error)?;
+        captured._memory.try_grow(bytes).map_err(|source| {
+            DataFusionError::External(Box::new(crate::Error::Capacity {
+                resource: "shared input",
+                source,
+            }))
+        })?;
+        captured.tables.insert(
+            origin,
+            (
+                schema.clone(),
+                (0..schema.fields().len()).collect(),
+                batches,
+            ),
+        );
+        Ok(())
+    }
+
     pub(crate) fn read(
         &self,
         sources: &BTreeSet<String>,
@@ -178,10 +269,17 @@ impl SourceSnapshot {
                 Self::data_error(error)
             }
         };
-        let selection = Self::prune_selection(
+        let mut selection = Self::prune_selection(
             Capture::selection(&self.selection, sources).map_err(Self::data_error)?,
             received,
         );
+        if self
+            .inputs
+            .as_ref()
+            .is_some_and(|inputs| !inputs.include_results)
+        {
+            selection.results.clear();
+        }
         let capture = Capture {
             sources,
             scope: &selection,
@@ -195,7 +293,21 @@ impl SourceSnapshot {
             received_min: None,
             next_change: None,
             now: self.now,
+            inputs: self.inputs.as_ref(),
+            packages: BTreeMap::new(),
         };
+        let package_refs = self.inputs.as_ref().map(|inputs| {
+            inputs
+                .bindings
+                .iter()
+                .map(|(_, reference, _)| reference.clone())
+                .collect::<Vec<_>>()
+        });
+        let packages = self
+            .inputs
+            .as_ref()
+            .zip(package_refs.as_ref())
+            .map(|(inputs, refs)| (&self.selection, inputs.scope.as_str(), refs.as_slice()));
         let (mut page, mut capture) = match mode {
             ReadMode::Page(after) => self
                 .store
@@ -206,14 +318,18 @@ impl SourceSnapshot {
             ReadMode::Snapshot
                 if sources.contains("events")
                     || sources.contains("trace_output")
-                    || sources.contains("trace_measurements") =>
+                    || sources.contains("trace_measurements")
+                    || self
+                        .inputs
+                        .as_ref()
+                        .is_some_and(|inputs| !inputs.bindings.is_empty()) =>
             {
                 self.store
-                    .extract_rows(&selection, limits, control, capture)
+                    .extract_rows(&selection, packages, limits, control, capture)
             }
             ReadMode::Snapshot | ReadMode::Metadata => self
                 .store
-                .metadata_rows(&selection, limits, control, capture),
+                .metadata_rows(&selection, packages, limits, control, capture),
         }
         .map_err(data_error)?;
         capture
@@ -236,6 +352,39 @@ impl SourceSnapshot {
                 self.memory.retain_input(batch, &mut reservation)?;
             }
         }
+        let package_bytes =
+            capture
+                .packages
+                .values()
+                .fold(0usize, |bytes, (schema, batches, coverage)| {
+                    bytes
+                        .saturating_add(Captured::table_bytes(schema, batches))
+                        .saturating_add(Captured::coverage_bytes(coverage))
+                });
+        for (_, batches, _) in capture.packages.values() {
+            for batch in batches {
+                self.memory.retain_input(batch, &mut reservation)?;
+            }
+        }
+        let inherited = std::mem::take(&mut page.extraction.witnesses);
+        capture.witnesses.extend(inherited);
+        if self.inputs.is_some() {
+            for witness in &mut capture.witnesses {
+                if witness.expires_utc_ns == 0 {
+                    witness.expires_utc_ns =
+                        self.now.saturating_add(7 * 24 * 60 * 60 * 1_000_000_000);
+                }
+            }
+        }
+        capture.witnesses.sort_by(|left, right| {
+            left.identity
+                .cmp(&right.identity)
+                .then(left.cursor.cmp(&right.cursor))
+                .then(left.expires_utc_ns.cmp(&right.expires_utc_ns))
+        });
+        capture
+            .witnesses
+            .dedup_by(|left, right| left.identity == right.identity && left.cursor == right.cursor);
         let metadata = std::mem::size_of::<ArrowSnapshot>()
             .saturating_add(
                 page.extraction
@@ -283,7 +432,8 @@ impl SourceSnapshot {
                     })
                     .sum::<usize>(),
             );
-        if metadata.saturating_add(removed) > reservation.size() {
+        let retained = removed.saturating_add(package_bytes);
+        if metadata.saturating_add(retained) > reservation.size() {
             let source = DataFusionError::ResourcesExhausted(
                 "source metadata exceeds the admitted input".into(),
             );
@@ -296,8 +446,8 @@ impl SourceSnapshot {
                 source
             });
         }
-        reservation.try_resize(metadata.saturating_add(removed))?;
-        let removal_memory = reservation.split(removed);
+        reservation.try_resize(metadata.saturating_add(retained))?;
+        let table_memory = reservation.split(retained);
         control.check().map_err(Self::data_error)?;
         let Capture {
             tables,
@@ -306,29 +456,40 @@ impl SourceSnapshot {
             mutable_discovery,
             received_min,
             next_change,
+            packages,
             ..
         } = capture;
-        let contexts = std::mem::take(&mut page.extraction.context_refs);
-        let results = std::mem::take(&mut page.extraction.result_refs);
         let receipt = Arc::new(ArrowSnapshot {
             page,
             selection,
             witnesses,
-            contexts,
-            results,
             mutable_discovery,
             received_min,
             next_change,
             _metadata: reservation,
         });
+        let mut tables = tables
+            .into_iter()
+            .map(|(name, table)| {
+                (
+                    SourceOrigin::Durable(name),
+                    (table.schema, table.indices, table.batches),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut package_coverage = BTreeMap::new();
+        for (slot, (schema, batches, coverage)) in packages {
+            let indices = (0..schema.fields().len()).collect();
+            tables.insert(SourceOrigin::Package(slot), (schema, indices, batches));
+            package_coverage.insert(slot, coverage);
+        }
         Ok(Captured {
             receipt,
             removals,
-            _removals: removal_memory,
-            tables: tables
-                .into_iter()
-                .map(|(name, table)| (name, (table.indices, table.batches)))
-                .collect(),
+            _memory: table_memory,
+            tables,
+            package_coverage,
+            package_bytes,
         })
     }
 }
@@ -537,6 +698,12 @@ impl AnalysisProjection for Capture<'_> {
                 self.trace(input, sink)
             }
             AnalysisInputV1::Result { .. } => Ok(true),
+            AnalysisInputV1::PackageOutput {
+                reference,
+                dataset,
+                coverage,
+                ..
+            } => self.package(reference, dataset, coverage, sink),
         }
     }
 }

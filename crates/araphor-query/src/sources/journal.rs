@@ -24,7 +24,7 @@ use futures_util::stream;
 use snafu::ResultExt as _;
 use tokio::sync::watch;
 
-use super::{Captured, ReadMode, Removal, SourceData, SourceSnapshot};
+use super::{Captured, ReadMode, Removal, SourceData, SourceOrigin, SourceSnapshot};
 use crate::execution::{Engine, PendingRead};
 use crate::stream::{Input, Message, Run};
 use crate::{InvalidSnafu, Result, SqlSnafu};
@@ -40,7 +40,7 @@ pub(crate) struct JournalExec {
 
 impl JournalExec {
     pub(crate) fn new(source: &SourceData) -> NativeResult<Self> {
-        if source.name != "events" || source.fetch.is_some() {
+        if source.origin.durable() != Some("events") || source.fetch.is_some() {
             return Err(DataFusionError::NotImplemented(
                 "committed native evidence scan".into(),
             ));
@@ -236,6 +236,7 @@ impl Changes {
         let capture = SourceSnapshot::new(
             Arc::clone(engine.store()),
             self.run.selection.clone(),
+            None,
             AnalysisExtractLimits {
                 scan_bytes: engine.limits().scan_bytes,
                 input_bytes: engine.limits().input_bytes,
@@ -421,11 +422,25 @@ impl Changes {
         }
         self.retained.retain(|chunk| chunk.batch.num_rows() != 0);
         let mut witnesses = captured.receipt.witnesses.iter();
+        let origin = SourceOrigin::Durable("events".into());
+        let canonical = &SourceSnapshot::schemas()["events"];
+        let positions = Arc::new(
+            canonical
+                .project(&self.positions)
+                .map_err(DataFusionError::from)
+                .context(SqlSnafu)?,
+        );
+        let schema = Arc::new(
+            canonical
+                .project(&self.columns)
+                .map_err(DataFusionError::from)
+                .context(SqlSnafu)?,
+        );
         let batches = captured
-            .project("events", &self.positions)
+            .project(&origin, &self.positions, &positions)
             .context(SqlSnafu)?;
         let inputs = captured
-            .project("events", &self.columns)
+            .project(&origin, &self.columns, &schema)
             .context(SqlSnafu)?;
         let mut after = Vec::new();
         let mut identities = Vec::<Arc<AnalysisStreamIdentityV1>>::new();

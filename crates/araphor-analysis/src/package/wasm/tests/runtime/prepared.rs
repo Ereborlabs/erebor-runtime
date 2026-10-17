@@ -1,6 +1,52 @@
 use std::sync::atomic::Ordering;
 
+use sha2::Digest as _;
+
 use super::*;
+
+#[test]
+fn preparation_precedes_evaluation_deadline() -> TestResult {
+    let fixture = crate::package::tests::Fixture::new()?;
+    let query = crate::Engine::new(
+        Arc::clone(&fixture.store),
+        crate::Limits {
+            evaluate_timeout: Duration::from_nanos(1),
+            ..Default::default()
+        },
+    )?;
+    let owner = crate::AnalysisPackageOwner::new(Arc::clone(&query), fixture.authority.clone())?;
+    let package = package();
+    let input = evaluation(&package, "echo", 42)?;
+    let artifact = crate::package::PackageArtifactV1 {
+        descriptor: package,
+        implementations: vec![crate::package::PackageImplementationV1::Wasm {
+            exports: vec!["evaluate".into()],
+            artifact: COMPONENT.to_vec(),
+        }],
+        fixtures: Vec::new(),
+    };
+    let model = &artifact.descriptor.exports[0];
+    let admitted = crate::model::AdmittedExport::compile(&query, &artifact, model)?;
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let digest = sha2::Sha256::digest(COMPONENT).into();
+    assert!(owner.wasm.cached(&digest)?.is_none());
+    assert!(matches!(
+        owner.evaluate_artifact([1; 16], &artifact, &admitted, &input, &control),
+        Err(Error::Data {
+            source: araphor_data::Error::AnalysisReadDeadline { .. }
+        })
+    ));
+    assert!(owner.wasm.cached(&digest)?.is_some());
+    control.check()?;
+    query.reserve_evaluation([1; 16])?;
+    query
+        .memory()
+        .reserve_input(query.limits().input_capacity)?;
+    query
+        .memory()
+        .reserve_output(query.limits().output_capacity)?;
+    Ok(())
+}
 
 #[test]
 fn prepared_handle_keeps_binding() -> TestResult {

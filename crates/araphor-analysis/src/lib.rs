@@ -20,9 +20,8 @@ mod testing;
 
 pub use discovery::{DiscoveryContextProvider, DiscoveryOwner};
 pub(crate) use error::{
-    AnalysisBusySnafu, AnalysisContractSnafu, AnalysisExecutionSnafu, IoSnafu, ModelEncodingSnafu,
-    ModelInvalidSnafu, ModelLimitSnafu, PackageArrowSnafu, PackageEncodingSnafu,
-    PackageNativeSnafu, PackageWasmSnafu,
+    AnalysisBusySnafu, AnalysisContractSnafu, AnalysisExecutionSnafu, IoSnafu, ModelInvalidSnafu,
+    ModelLimitSnafu, PackageArrowSnafu, PackageEncodingSnafu, PackageNativeSnafu, PackageWasmSnafu,
 };
 pub use error::{Error, Result};
 pub use graph::{GraphAndFindingOwner, GraphContextProvider};
