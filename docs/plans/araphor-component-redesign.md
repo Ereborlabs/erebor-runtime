@@ -450,6 +450,49 @@ and work. It does not establish a large code reduction or a speed improvement.
 The complete redesign remains **Not done**. Full workspace CI and benchmarks
 are not run, as instructed.
 
+### One native source field declaration
+
+Implementation and selected host verification: **Done**. Data declares each
+source field once in the existing table_row macro. The item form creates the
+native Arrow fields and the actual Capture append method from that declaration.
+The separate schema field lists are deleted. The metadata decoration and the
+shared native schema map remain. Context versions share nine fields with
+context. Graph declarations share six fields. Catalog retains its eleven
+schema-only fields. No row object, provider, or runtime registry is added.
+
+Data decodes a retained record
+  -> the Capture declaration supplies ordered field values and native schema fields
+  -> the existing projection gate skips unrequested values and JSON encoding
+  -> complete-row validation and budget admission run before native builders change
+  -> a denied output row stops trace measurement fanout
+  -> measurement-only reads continue when trace_output is not requested
+  -> DataFusion source scans consume the resulting native Arrow batches
+
+The public schema contract is captured before the production change. The
+committed schema_contract case compares all nineteen schemas with those fixed
+hashes. The hashes include field order, types, nullability, and metadata.
+Static comparison also checks 431 expanded fields and 375 value expressions.
+The existing row preparation and append code is unchanged. The declared-row
+case checks projection before JSON and the denied-row follow-on boundary.
+The trace fixture compares measurement-only batches, receipts, and witnesses
+with the full read. All previous assertions remain.
+
+Selected host checks pass 289 distinct cases: 55 Data, 169 Query, 63 Analysis,
+and two E2E contracts. One existing Data release-history case remains ignored.
+Strict Clippy passes for Data, Query, Analysis, Control, E2E, and their test
+targets. Formatting and local document link checks pass. These checks cover
+Linux x86_64 with the checked native artifacts. The records are
+`/tmp/araphor-canonical-tables-qualification1.json` and
+`/tmp/araphor-canonical-tables-count1.json`.
+
+This change removes 237 nonblank production Rust lines and adds 169 test lines.
+The complete redesign adds 872 production lines from 7b7b407a, 3,101 from
+537f9de3, and 2,025 from aa390d9f. Another 6,872 net production deletions are
+required. The count excludes tests, documents, blank lines, and file movement.
+The complete redesign, general maintained SQL, native pool contention review,
+and the required reduction remain **Not done**. Full workspace CI and
+benchmarks are not run, as instructed. No speed improvement is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

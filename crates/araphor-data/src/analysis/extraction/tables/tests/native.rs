@@ -711,6 +711,14 @@ fn trace_recipe_measurement_fields() -> TestResult {
             |witness| matches!(&witness.identity, AnalysisStreamIdentityV1::Diagnostic(saved) if saved == identity)
                 && witness.cursor == 1
         ));
+    let only = read(&store, &selection, &["trace_measurements"], 200)?;
+    assert_eq!(only.tables.len(), 1);
+    assert_eq!(
+        only.tables["trace_measurements"],
+        page.tables["trace_measurements"]
+    );
+    assert_eq!(only.extraction.trace_reads(), &[identity.request_id]);
+    assert_eq!(only.extraction.witnesses, page.extraction.witnesses);
     let foreign = read(
         &store,
         &AnalysisSelectionV1::tenant([9; 16]),

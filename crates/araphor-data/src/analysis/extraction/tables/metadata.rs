@@ -102,25 +102,7 @@ impl Capture<'_> {
             for recipe in [TraceRecipeV1::SyscallErrors, TraceRecipeV1::FailedOpens] {
                 budget.charge(crate::MAX_TRACE_SOURCE_BYTES + 8192)?;
                 let manifest = recipe.manifest()?;
-                table_row!(self,"trace_recipes",&mut budget;
-                    recipe=>Utf8:Some(match recipe {TraceRecipeV1::SyscallErrors=>"syscall_errors",TraceRecipeV1::FailedOpens=>"failed_opens"}),
-                    version=>UInt32:Some(manifest.version),
-                    source=>Binary:Some(&manifest.source.bytes),
-                    source_sha256=>Binary:Some(&manifest.source.sha256),
-                    parameter=>Utf8:Some(&manifest.parameter),
-                    attribution=>Utf8:Some(&manifest.attribution),
-                    sensitivity=>Utf8:Some(&manifest.sensitivity),
-                    hook=>Utf8:Some(&manifest.hook),
-                    measurement_keys=>Json:Some(&manifest.measurement_keys),
-                    unit=>Utf8:Some(&manifest.unit),
-                    cumulative=>Boolean:Some(manifest.cumulative),
-                    atomic_snapshot=>Boolean:Some(manifest.atomic_snapshot),
-                    maximum_probes=>UInt32:Some(u32::from(manifest.maximum_probes)),
-                    maximum_map_keys=>UInt32:Some(manifest.maximum_map_keys),
-                    return_code_semantics=>Utf8:Some(&manifest.return_code_semantics),
-                    capability_status=>Utf8:Some("requires_node_capability"),
-                    example=>Utf8:Some(match recipe {TraceRecipeV1::SyscallErrors=>"SELECT syscall_id, errno, count FROM trace_measurements",TraceRecipeV1::FailedOpens=>"SELECT errno, count FROM trace_measurements"}),
-                )?;
+                self.recipe_row(recipe, &manifest, &mut budget)?;
             }
         }
         if let (Some((max_hops, boundary)), Some(table)) =
@@ -132,58 +114,95 @@ impl Capture<'_> {
         Ok(())
     }
 
-    fn coverage(
-        &mut self,
-        source: &AnalysisSourceSnapshotV1,
-        row_kind: &str,
-        state: &str,
-        gap: Option<&AnalysisGapV1>,
-        interval: Option<&CoverageInterval>,
-        budget: &mut ReadBudget<'_>,
-    ) -> Result<bool> {
-        let receipt = &source.receipt;
-        let identity = &receipt.identity;
-        let opening = interval.and_then(|value| value.opening_counters.as_ref());
-        let closing = interval.and_then(|value| value.closing_counters.as_ref());
-        table_row!(self,"coverage",budget;
-            tenant_id=>Binary:Some(&identity.tenant_id),
-            node_id=>Utf8:Some(&identity.node_id),
-            node_boot_id=>Binary:Some(&identity.node_boot_id),
-            label_epoch=>UInt64:Some(identity.label_epoch),
-            source_id=>Binary:Some(&identity.source_id),
-            source_epoch=>UInt64:Some(identity.source_epoch),
-            cpu_id=>UInt32:Some(receipt.cpu_id),
-            contiguous_cursor=>UInt64:Some(receipt.contiguous_cursor),
-            coverage_revision=>UInt64:Some(receipt.coverage_revision),
-            retained_floor=>UInt64:Some(receipt.retained_floor),
-            kind=>Utf8:Some(row_kind),
-            state=>Utf8:Some(state),
-            first_cursor=>UInt64:gap.map(|value|value.first_cursor),
-            last_cursor=>UInt64:gap.map(|value|value.last_cursor),
-            commit_revision=>UInt64:gap.map(|value|value.commit_revision),
-            interval_id=>Binary:interval.map(|value|value.interval_id.as_slice()),
-            interval_source_epoch=>UInt64:interval.map(|value|value.source_epoch),
-            interval_revision=>UInt64:interval.map(|value|value.revision),
-            first_sequence=>UInt64:interval.map(|value|value.first_sequence),
-            last_sequence=>UInt64:interval.and_then(|value|value.last_sequence),
-            current=>Boolean:interval.map(|value|value.current),
-            gap_reasons=>Utf8:if let Some(interval)=interval {budget.charge(interval.gap_reasons.iter().map(String::len).sum::<usize>()+interval.gap_reasons.len())?;Some(interval.gap_reasons.join(","))} else {None},
-            opening_attempted=>UInt64:opening.map(|value|value.attempted),
-            opening_suppressed=>UInt64:opening.map(|value|value.suppressed),
-            opening_requested=>UInt64:opening.map(|value|value.requested),
-            opening_emitted=>UInt64:opening.map(|value|value.emitted),
-            opening_lost=>UInt64:opening.map(|value|value.lost),
-            opening_classifier_miss_count=>UInt64:opening.map(|value|value.classifier_miss_count),
-            opening_unresolved=>UInt64:opening.map(|value|value.unresolved),
-            opening_next_sequence=>UInt64:opening.map(|value|value.next_sequence),
-            closing_attempted=>UInt64:closing.map(|value|value.attempted),
-            closing_suppressed=>UInt64:closing.map(|value|value.suppressed),
-            closing_requested=>UInt64:closing.map(|value|value.requested),
-            closing_emitted=>UInt64:closing.map(|value|value.emitted),
-            closing_lost=>UInt64:closing.map(|value|value.lost),
-            closing_classifier_miss_count=>UInt64:closing.map(|value|value.classifier_miss_count),
-            closing_unresolved=>UInt64:closing.map(|value|value.unresolved),
-            closing_next_sequence=>UInt64:closing.map(|value|value.next_sequence),
-        )
+    table_row! {
+        fn coverage(
+            &mut self,
+            source: &AnalysisSourceSnapshotV1,
+            row_kind: &str,
+            state: &str,
+            gap: Option<&AnalysisGapV1>,
+            interval: Option<&CoverageInterval>,
+            budget: &mut ReadBudget<'_>,
+        );
+        schema coverage_fields;
+        row(self, "coverage", budget);
+        setup {
+            let receipt = &source.receipt;
+            let identity = &receipt.identity;
+            let opening = interval.and_then(|value| value.opening_counters.as_ref());
+            let closing = interval.and_then(|value| value.closing_counters.as_ref());
+        }
+        fields {
+            tenant_id => Binary(false):Some(&identity.tenant_id),
+            node_id => Utf8(false):Some(&identity.node_id),
+            node_boot_id => Binary(false):Some(&identity.node_boot_id),
+            label_epoch => UInt64(false):Some(identity.label_epoch),
+            source_id => Binary(false):Some(&identity.source_id),
+            source_epoch => UInt64(false):Some(identity.source_epoch),
+            cpu_id => UInt32(false):Some(receipt.cpu_id),
+            contiguous_cursor => UInt64(false):Some(receipt.contiguous_cursor),
+            coverage_revision => UInt64(false):Some(receipt.coverage_revision),
+            retained_floor => UInt64(false):Some(receipt.retained_floor),
+            kind => Utf8(false):Some(row_kind),
+            state => Utf8(false):Some(state),
+            first_cursor => UInt64(true):gap.map(|value|value.first_cursor),
+            last_cursor => UInt64(true):gap.map(|value|value.last_cursor),
+            commit_revision => UInt64(true):gap.map(|value|value.commit_revision),
+            interval_id => Binary(true):interval.map(|value|value.interval_id.as_slice()),
+            interval_source_epoch => UInt64(true):interval.map(|value|value.source_epoch),
+            interval_revision => UInt64(true):interval.map(|value|value.revision),
+            first_sequence => UInt64(true):interval.map(|value|value.first_sequence),
+            last_sequence => UInt64(true):interval.and_then(|value|value.last_sequence),
+            current => Boolean(true):interval.map(|value|value.current),
+            gap_reasons => Utf8(true):if let Some(interval)=interval {budget.charge(interval.gap_reasons.iter().map(String::len).sum::<usize>()+interval.gap_reasons.len())?;Some(interval.gap_reasons.join(","))} else {None},
+            opening_attempted => UInt64(true):opening.map(|value|value.attempted),
+            opening_suppressed => UInt64(true):opening.map(|value|value.suppressed),
+            opening_requested => UInt64(true):opening.map(|value|value.requested),
+            opening_emitted => UInt64(true):opening.map(|value|value.emitted),
+            opening_lost => UInt64(true):opening.map(|value|value.lost),
+            opening_classifier_miss_count => UInt64(true):opening.map(|value|value.classifier_miss_count),
+            opening_unresolved => UInt64(true):opening.map(|value|value.unresolved),
+            opening_next_sequence => UInt64(true):opening.map(|value|value.next_sequence),
+            closing_attempted => UInt64(true):closing.map(|value|value.attempted),
+            closing_suppressed => UInt64(true):closing.map(|value|value.suppressed),
+            closing_requested => UInt64(true):closing.map(|value|value.requested),
+            closing_emitted => UInt64(true):closing.map(|value|value.emitted),
+            closing_lost => UInt64(true):closing.map(|value|value.lost),
+            closing_classifier_miss_count => UInt64(true):closing.map(|value|value.classifier_miss_count),
+            closing_unresolved => UInt64(true):closing.map(|value|value.unresolved),
+            closing_next_sequence => UInt64(true):closing.map(|value|value.next_sequence),
+        }
+    }
+
+    table_row! {
+        fn recipe_row(
+            &mut self,
+            recipe: TraceRecipeV1,
+            manifest: &crate::TraceRecipeManifestV1,
+            budget: &mut ReadBudget<'_>,
+        );
+        schema recipe_fields;
+        row(self, "trace_recipes", budget);
+        setup {
+        }
+        fields {
+            recipe => Utf8(false):Some(match recipe {TraceRecipeV1::SyscallErrors=>"syscall_errors",TraceRecipeV1::FailedOpens=>"failed_opens"}),
+            version => UInt32(false):Some(manifest.version),
+            source => Binary(false):Some(&manifest.source.bytes),
+            source_sha256 => Binary(false):Some(&manifest.source.sha256),
+            parameter => Utf8(false):Some(&manifest.parameter),
+            attribution => Utf8(false):Some(&manifest.attribution),
+            sensitivity => Utf8(false):Some(&manifest.sensitivity),
+            hook => Utf8(false):Some(&manifest.hook),
+            measurement_keys => Json(false):Some(&manifest.measurement_keys),
+            unit => Utf8(false):Some(&manifest.unit),
+            cumulative => Boolean(false):Some(manifest.cumulative),
+            atomic_snapshot => Boolean(false):Some(manifest.atomic_snapshot),
+            maximum_probes => UInt32(false):Some(u32::from(manifest.maximum_probes)),
+            maximum_map_keys => UInt32(false):Some(manifest.maximum_map_keys),
+            return_code_semantics => Utf8(false):Some(&manifest.return_code_semantics),
+            capability_status => Utf8(false):Some("requires_node_capability"),
+            example => Utf8(false):Some(match recipe {TraceRecipeV1::SyscallErrors=>"SELECT syscall_id, errno, count FROM trace_measurements",TraceRecipeV1::FailedOpens=>"SELECT errno, count FROM trace_measurements"}),
+        }
     }
 }

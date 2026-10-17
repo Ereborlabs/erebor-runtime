@@ -10,6 +10,106 @@ mod native;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+#[test]
+fn schema_contract() -> TestResult {
+    use sha2::{Digest, Sha256};
+
+    let mut hashes = BTreeMap::new();
+    for (name, schema) in AnalysisStore::table_schemas() {
+        let mut value = serde_json::to_value(schema.as_ref())?;
+        value.sort_all_objects();
+        let bytes = serde_json::to_vec(&value)?;
+        hashes.insert(name.clone(), format!("{:x}", Sha256::digest(bytes)));
+    }
+    // These hashes come from the public schemas before the field declarations changed.
+    let expected = [
+        (
+            "behaviors",
+            "951aa953789bcc90117265499c8e10ed917646007d38d0a6ecfb8ce379dc17c9",
+        ),
+        (
+            "catalog",
+            "c0327a34b237d15874de33e8b47518cd2b6981e1717d4757ee3bb68ad70cfe0a",
+        ),
+        (
+            "context",
+            "9bedf8f1dbd69eecff2bf1d24b6b19889f10683d763ac8ff40ea34f916367e2d",
+        ),
+        (
+            "context_versions",
+            "f8bd877560d97083e6a1b5684ef8014a9c494f2fcb6842ae36a464a7e45ab2dd",
+        ),
+        (
+            "correlation_packages",
+            "b6244d9d0f578e2b413dca4e790c192d27b212ae930206f89eef30597167e344",
+        ),
+        (
+            "coverage",
+            "3a9401f56d9fb017ad8b7344dc5affacaee3cebdd9fa8016ea05870cb0c1a879",
+        ),
+        (
+            "events",
+            "94d3faecf3ddf86a285c7fa1201ba8aa03800b1d138e4a47823fe50786275815",
+        ),
+        (
+            "findings",
+            "f6ee0fe520df06f0eaf4afc4bbc4decf3f129ee9398a3f3dafc45806379b7a59",
+        ),
+        (
+            "graph_branches",
+            "a38f863f769c36713df2596d5a31cae38cb66341aa743a222a0a3dceae049811",
+        ),
+        (
+            "graph_manifest",
+            "0cbea412d4f3ed7b138fda4c1543a4548f0be7a4d168f85b447446f84da20c89",
+        ),
+        (
+            "graph_subjects",
+            "334ed1146be637e6cc919e3c11949c359099cfb4a1b1ca4b584ea0a1c199d463",
+        ),
+        (
+            "notifications",
+            "06eb20a7b37e359810924a690d60fa19299f611796703fa39aa1483184b6932d",
+        ),
+        (
+            "policy_observations",
+            "9a62677cf9dd189693ae9585476b0de6cab5522e9f51a0496f8663803c53bd41",
+        ),
+        (
+            "relationships",
+            "edac9469333632cafc96d2e7889873bade30ee1650fec92549f6b51243aeaf19",
+        ),
+        (
+            "targets",
+            "da55132a187680344db38a1760db3e1473cf0fa09970ec4ff813d8913e054224",
+        ),
+        (
+            "trace_measurements",
+            "715f549324319e2276d24865d8814b4016aff668bb669b68d19044f0511ce7f7",
+        ),
+        (
+            "trace_output",
+            "807c46e42c7afcabc7304f932e680c1ed01f3523f0cd434471e5b66d3d39b1fe",
+        ),
+        (
+            "trace_recipes",
+            "f06ce8f5f3397cc8a025d9dccdab07c91e23b1b6dd31a143e3bb1bc737fe32b3",
+        ),
+        (
+            "traces",
+            "0b992ee04842a6da96ceff1793fc078ee7aa0db7335e38a27a41c1ecacd73061",
+        ),
+    ];
+    assert_eq!(
+        hashes,
+        expected
+            .into_iter()
+            .map(|(name, hash)| (name.to_owned(), hash.to_owned()))
+            .collect()
+    );
+    Ok(())
+}
+
 fn extraction() -> TestResult<(AnalysisExtractionV1, AnalysisReadControl)> {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("data"))?;
@@ -178,6 +278,71 @@ impl Serialize for RefuseSerialization {
             "the unrequested JSON field was evaluated",
         ))
     }
+}
+
+impl Capture<'_> {
+    table_row! {
+        fn declared_row(
+            &mut self,
+            cursor: u64,
+            accepted: &mut bool,
+            budget: &mut ReadBudget<'_>,
+        );
+        schema declared_fields;
+        row(self, "events", budget);
+        setup {}
+        fields {
+            source_cursor => UInt64(false): Some(cursor),
+            catalog_json => Json(true): Some(&RefuseSerialization),
+        }
+        then {
+            *accepted = true;
+            Ok(true)
+        }
+    }
+}
+
+#[test]
+fn declared_row_admission() -> TestResult {
+    assert_eq!(
+        Capture::declared_fields(),
+        vec![
+            sdk::Field::new("source_cursor", sdk::DataType::UInt64, false),
+            sdk::Field::new("catalog_json", sdk::DataType::Binary, true),
+        ]
+    );
+    let (mut output, control) = extraction()?;
+    output.limits.page_bytes = 17;
+    let columns = columns("events", &["source_cursor"])?;
+    let read = AnalysisTableRead {
+        requests: &columns,
+        event_ranges: None,
+        inputs: None,
+        mode: AnalysisReadModeV1::Page(None),
+        now: 1,
+    };
+    let scope = AnalysisSelectionV1::new([1; 16], Vec::new());
+    let mut capture = Capture::new(&read, &scope);
+    let mut used = 0;
+    let mut budget = ReadBudget {
+        output: &mut output,
+        control: &control,
+        row_bytes: Some(&mut used),
+        emitted: 0,
+    };
+    let mut accepted = false;
+    assert!(capture.declared_row(1, &mut accepted, &mut budget)?);
+    assert!(accepted);
+    accepted = false;
+    budget.emitted = 0;
+    assert!(!capture.declared_row(2, &mut accepted, &mut budget)?);
+    assert!(!accepted);
+    let table = capture.tables.get_mut("events").ok_or("events missing")?;
+    assert_eq!(table.total_rows, 1);
+    table.finish(&mut budget)?;
+    assert_eq!(table.batches[0].num_rows(), 1);
+    assert_eq!(budget.output.projected_bytes, 9);
+    Ok(())
 }
 
 #[test]

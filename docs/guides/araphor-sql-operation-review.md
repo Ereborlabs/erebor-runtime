@@ -496,6 +496,28 @@ replaces field-name lookup for each row. The private
 complete row and page fanout before any builder changes. These owners add no
 SQL parser, planner, expression evaluator, or aggregation implementation.
 
+The item form of [table_row!](../../crates/araphor-data/src/analysis/extraction/tables/builder.rs)
+defines field order, native Arrow type, nullability, and the value expression
+once. The same declaration generates the Capture method and the fields used by
+[the schema owner](../../crates/araphor-data/src/analysis/extraction/tables/schema.rs).
+The existing metadata decoration applies after field construction. Context
+versions share the nine-field context prefix. Graph declarations share six
+common fields. These declarations add no row object or runtime registry.
+Setup retains its position before row preparation. A denied output row stops
+trace measurement fanout. If trace_output is not requested, measurement
+extraction continues. Projection, JSON preparation, complete-row validation,
+and native builder admission keep their existing code.
+
+The [schema_contract and declared_row_admission cases](../../crates/araphor-data/src/analysis/extraction/tables/tests.rs)
+check all nineteen schemas against hashes captured from the public API before
+this change. The hashes include field order, types, nullability, and all
+metadata. The declared-row case checks that an unrequested JSON value is not
+serialized and that a denied page row does not run its follow-on block.
+The [native field cases](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs)
+retain their independent value, NULL, witness, context, and fanout assertions.
+The trace fixture also compares measurement-only batches, receipts, and witnesses
+with the full read.
+
 The event provider uses DataFusion interval analysis for supported physical
 filters. The provider narrows the intake-time read conservatively and leaves
 the SQL filter in the native plan. An unsupported filter keeps the full

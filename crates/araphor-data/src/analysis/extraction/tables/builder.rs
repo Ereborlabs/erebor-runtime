@@ -247,6 +247,51 @@ impl Table {
 }
 
 macro_rules! table_row {
+    (
+        $(#[$attr:meta])*
+        $vis:vis fn $append:ident($($args:tt)*);
+        schema $schema:ident;
+        $(prefix $prefix:ident {
+            $( $common:ident => $common_kind:ident($common_nullable:literal): $common_value:expr ),* $(,)?
+        })?
+        row($capture:ident, $relation:expr, $budget:ident);
+        setup { $($setup:tt)* }
+        fields {
+            $( $name:ident => $kind:ident($nullable:literal): $value:expr ),* $(,)?
+        }
+        $(then { $($tail:tt)* })?
+    ) => {
+        pub(super) fn $schema() -> Vec<sdk::Field> {
+            table_row!(@fields;
+                $($( $common => $common_kind($common_nullable), )*)?
+                $( $name => $kind($nullable), )*
+            )
+        }
+        $(pub(super) fn $prefix() -> Vec<sdk::Field> {
+            table_row!(@fields; $( $common => $common_kind($common_nullable), )*)
+        })?
+        $(#[$attr])*
+        $vis fn $append($($args)*) -> crate::Result<bool> {
+            $($setup)*
+            table_row!(@finish
+                table_row!($capture, $relation, $budget;
+                    $($( $common => $common_kind: $common_value, )*)?
+                    $( $name => $kind: $value, )*
+                );
+                $(then { $($tail)* })?
+            )
+        }
+    };
+    (@fields; $( $name:ident => $kind:ident($nullable:literal) ),* $(,)?) => {
+        vec![$(sdk::Field::new(stringify!($name), table_row!(@type $kind), $nullable)),*]
+    };
+    (@finish $row:expr; then { $($tail:tt)* }) => {
+        {
+            if !$row? { return Ok(false); }
+            $($tail)*
+        }
+    };
+    (@finish $row:expr;) => { $row };
     ($capture:expr, $relation:expr, $budget:expr; $( $name:ident => $kind:ident : $value:expr ),* $(,)?) => {{
         let capture = &mut *$capture;
         (|| -> crate::Result<bool> {

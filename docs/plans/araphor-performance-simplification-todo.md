@@ -338,6 +338,20 @@ The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.
 
+### One native source field declaration
+
+**Done** for the selected source and host checks. One table_row declaration
+creates native Arrow fields and the Capture append method. The separate field
+lists are deleted. Projection, complete-row admission, and metadata remain.
+Nineteen fixed schema hashes and the native value cases preserve the contract.
+The trace fixture also proves measurement-only fanout. The selected checks pass
+289 cases; one existing Data history case is ignored. Strict scoped Clippy
+passes. The change removes 237 nonblank production Rust lines. The complete
+change adds 872 from 7b7b407a; another 6,872 net deletions remain. The records
+are `/tmp/araphor-canonical-tables-qualification1.json` and
+`/tmp/araphor-canonical-tables-count1.json`. Complete redesign: **Not done**.
+Full workspace CI and benchmarks are not run, as instructed.
+
 ## Implementation flow
 
 An owner starts or recovers
