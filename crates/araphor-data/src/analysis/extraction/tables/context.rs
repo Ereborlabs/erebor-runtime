@@ -1,0 +1,120 @@
+use super::*;
+use crate::{
+    AnalysisContextVersionV1, DiscoveryContextKindV1, DiscoveryContextRevisionV1,
+    WorkloadTargetFactV1,
+};
+
+impl Capture<'_> {
+    pub(in crate::analysis::extraction) fn context(
+        &mut self,
+        context: &AnalysisContextVersionV1,
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<bool> {
+        let document = if self.read.columns.contains_key("context")
+            && context.key.owner_id == "discovery-context-v1"
+        {
+            budget.charge(context.body.len().saturating_mul(2))?;
+            Some(DiscoveryContextRevisionV1::try_from(context)?)
+        } else {
+            None
+        };
+        for relation in ["context_versions", "context"] {
+            let doc = document.as_ref().map(|value| &value.document);
+            if !table_row!(self,relation,budget;
+                tenant_id=>Binary:Some(&context.key.tenant_id),
+                owner_id=>Utf8:Some(&context.key.owner_id),
+                entity_key=>Binary:Some(&context.key.entity_key),
+                lifetime_key=>Binary:Some(&context.key.lifetime_key),
+                owner_revision=>UInt64:Some(context.key.owner_revision),
+                valid_from_utc_ns=>UInt64:context.valid_from_utc_ns,
+                valid_until_utc_ns=>UInt64:context.valid_until_utc_ns,
+                sensitivity=>Utf8:Some(<&str>::from(context.sensitivity)),
+                body=>Binary:Some(&context.body),
+                kind=>Utf8:doc.map(|value|match value.kind {
+                    DiscoveryContextKindV1::Runbook=>"RUNBOOK",
+                    DiscoveryContextKindV1::WorkloadOwnership=>"WORKLOAD_OWNERSHIP",
+                    DiscoveryContextKindV1::DeploymentChange=>"DEPLOYMENT_CHANGE",
+                    DiscoveryContextKindV1::ReviewedAssessment=>"REVIEWED_ASSESSMENT",
+                    DiscoveryContextKindV1::ThreatReference=>"THREAT_REFERENCE",
+                }),
+                subject_owner_id=>Utf8:doc.map(|value|value.subject.owner_id.as_str()),
+                subject_entity_key=>Binary:doc.map(|value|value.subject.entity_key.as_slice()),
+                subject_lifetime_key=>Binary:doc.map(|value|value.subject.lifetime_key.as_slice()),
+                subject_revision=>UInt64:doc.map(|value|value.subject.owner_revision),
+                method_id=>Utf8:doc.map(|value|value.method.id.as_str()),
+                method_revision=>UInt64:doc.map(|value|value.method.revision),
+                origin=>Utf8:doc.map(|value|value.origin.as_str()),
+                trust=>Utf8:doc.map(|value|if value.approver.is_some(){"REVIEWED"}else{"UNREVIEWED"}),
+                imported_utc_ns=>UInt64:document.as_ref().map(|value|value.imported_utc_ns),
+                approver=>Utf8:doc.and_then(|value|value.approver.as_deref()),
+                text=>Utf8:doc.map(|value|value.text.as_str()),
+            )? {
+                return Ok(false);
+            }
+        }
+        if self.read.relations.contains("targets")
+            && context.key.owner_id == "mithril-control/target"
+        {
+            budget.charge(context.body.len().saturating_mul(2))?;
+            let fact: WorkloadTargetFactV1 =
+                serde_json::from_slice(&context.body).map_err(|source| {
+                    crate::Error::PackageEncoding {
+                        source,
+                        location: snafu::location!(),
+                    }
+                })?;
+            self.target(context, &fact, budget)
+        } else {
+            Ok(true)
+        }
+    }
+
+    fn target(
+        &mut self,
+        context: &AnalysisContextVersionV1,
+        fact: &WorkloadTargetFactV1,
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<bool> {
+        let kube = fact.kubernetes.as_ref();
+        let boot = kube.and_then(|value| uuid::Uuid::parse_str(&value.node_boot_id).ok());
+        let binding = kube.and_then(|value| uuid::Uuid::parse_str(&value.binding_id).ok());
+        if (!self.scope.nodes.is_empty() && !self.scope.nodes.contains(&fact.node_id))
+            || (!self.scope.binding_ids.is_empty()
+                && binding
+                    .as_ref()
+                    .is_none_or(|binding| !self.scope.binding_ids.contains(binding.as_bytes())))
+        {
+            return Ok(true);
+        }
+        table_row!(self,"targets",budget;
+            tenant_id=>Binary:Some(&context.key.tenant_id),
+            entity_key=>Binary:Some(&context.key.entity_key),
+            lifetime_key=>Binary:Some(&context.key.lifetime_key),
+            owner_revision=>UInt64:Some(context.key.owner_revision),
+            node_id=>Utf8:Some(&fact.node_id),
+            node_boot_id=>Binary:boot.as_ref().map(|value|value.as_bytes().as_slice()),
+            label_epoch=>UInt64:kube.map(|value|value.label_epoch),
+            binding_id=>Binary:binding.as_ref().map(|value|value.as_bytes().as_slice()),
+            workload_binding_generation_digest=>Utf8:Some(&fact.workload_binding_generation_digest),
+            execution_set_id=>Utf8:Some(&fact.execution_set_id),
+            cluster_uid=>Utf8:Some(&fact.cluster_uid),
+            namespace_uid=>Utf8:Some(&fact.namespace_uid),
+            controller_uid=>Utf8:Some(&fact.controller_uid),
+            service_account_uid=>Utf8:Some(&fact.service_account_uid),
+            pod_uid=>Utf8:Some(&fact.pod_uid),
+            container_id=>Utf8:Some(&fact.container_id),
+            container_name=>Utf8:Some(&fact.container_name),
+            container_kind=>Utf8:Some(match fact.container_kind {crate::ContainerKindV1::Init=>"INIT",crate::ContainerKindV1::Sidecar=>"SIDECAR",crate::ContainerKindV1::Application=>"APPLICATION",crate::ContainerKindV1::Ephemeral=>"EPHEMERAL"}),
+            image_digest=>Utf8:Some(&fact.image_digest),
+            pod_labels=>Json:Some(&fact.pod_labels),
+            namespace_name=>Utf8:kube.map(|value|value.namespace_name.as_str()),
+            pod_name=>Utf8:kube.map(|value|value.pod_name.as_str()),
+            profile_id=>Utf8:kube.map(|value|value.profile_id.as_str()),
+            policy_source_revision_id=>Utf8:kube.map(|value|value.policy_source_revision_id.as_str()),
+            protected_scope_id=>Utf8:kube.map(|value|value.protected_scope_id.as_str()),
+            workload_selector_id=>Utf8:kube.map(|value|value.workload_selector_id.as_str()),
+            kubernetes_node_name=>Utf8:kube.map(|value|value.kubernetes_node_name.as_str()),
+            kubernetes_node_uid=>Utf8:kube.map(|value|value.kubernetes_node_uid.as_str()),
+        )
+    }
+}

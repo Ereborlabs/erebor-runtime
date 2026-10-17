@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
@@ -6,32 +7,15 @@ use duckdb::params;
 use super::*;
 use crate::{
     AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1, AnalysisExtractLimits,
-    AnalysisInputV1, AnalysisProjection, AnalysisReadControl, AnalysisReferenceOriginV1,
-    AnalysisReferenceV1, AnalysisSelectionV1, AnalysisWitnessV1, ClockDependency,
-    ContextSensitivityV1, InstalledContext, PackageErrorCodeV1 as Code, PackageGrantV1,
-    PackageReadinessV1, PackageRefV1, ProjectionSink, ResultContext, ValidatedEvidenceBatchV1,
+    AnalysisInputTables, AnalysisReadControl, AnalysisReadModeV1, AnalysisReferenceOriginV1,
+    AnalysisReferenceV1, AnalysisSelectionV1, AnalysisTableRead, AnalysisWitnessV1,
+    ClockDependency, ContextSensitivityV1, InstalledContext, PackageErrorCodeV1 as Code,
+    PackageGrantV1, PackageReadinessV1, PackageRefV1, ResultContext, ValidatedEvidenceBatchV1,
 };
-
-struct Projection<F>(F);
-
-impl<F> AnalysisProjection for Projection<F>
-where
-    F: FnMut(AnalysisInputV1<'_>) -> crate::Result<()>,
-{
-    fn project(
-        &mut self,
-        input: AnalysisInputV1<'_>,
-        sink: &mut ProjectionSink<'_>,
-    ) -> crate::Result<bool> {
-        sink.check()?;
-        (self.0)(input)?;
-        Ok(true)
-    }
-}
 
 struct Fixture {
     _directory: tempfile::TempDir,
-    store: AnalysisStore,
+    store: Arc<AnalysisStore>,
     selection: AnalysisSelectionV1,
     reference: sdk::OutputRef,
     installed: InstalledContext,
@@ -42,7 +26,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("store"))?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("store"))?);
         let identity = crate::analysis::tests::identity();
         let selection = AnalysisSelectionV1::tenant(identity.tenant_id);
         Self::append(&store, 1)?;
@@ -168,23 +152,63 @@ impl Fixture {
         .context(crate::PackageEncodingSnafu)
     }
 
+    fn read(
+        &self,
+        selection: &AnalysisSelectionV1,
+        authorized: &AnalysisSelectionV1,
+        references: &[sdk::OutputRef],
+        mode: AnalysisReadModeV1,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> crate::Result<crate::AnalysisPositionPageV1> {
+        let relations = BTreeSet::from(["events".to_owned()]);
+        let columns = BTreeMap::from([(
+            "events".to_owned(),
+            BTreeSet::from([AnalysisStore::table_schemas()["events"]
+                .index_of("source_cursor")
+                .map_err(sdk::Error::from)
+                .context(crate::AnalysisContractSnafu)?]),
+        )]);
+        let outputs = references
+            .iter()
+            .map(|reference| (reference.clone(), Arc::new(self.schema.clone())))
+            .collect::<Vec<_>>();
+        self.store.read_tables(
+            selection,
+            AnalysisTableRead {
+                relations: &relations,
+                columns: &columns,
+                event_ranges: None,
+                inputs: Some(AnalysisInputTables {
+                    authorized,
+                    scope: "scope",
+                    outputs: &outputs,
+                    limits: sdk::Limits::default(),
+                }),
+                mode,
+                now: 1,
+            },
+            limits,
+            control,
+        )
+    }
+
     fn metadata(
         &self,
         authorized: &AnalysisSelectionV1,
         reference: &sdk::OutputRef,
     ) -> crate::Result<crate::AnalysisPositionPageV1> {
-        self.store
-            .metadata_rows(
-                &self.selection,
-                Some((authorized, "scope", std::slice::from_ref(reference))),
-                Default::default(),
-                &AnalysisReadControl::default(),
-                Projection(|input: AnalysisInputV1<'_>| {
-                    assert!(!matches!(input, AnalysisInputV1::PackageOutput { .. }));
-                    Ok(())
-                }),
-            )
-            .map(|(page, _)| page)
+        let page = self.read(
+            &self.selection,
+            authorized,
+            std::slice::from_ref(reference),
+            AnalysisReadModeV1::Metadata,
+            Default::default(),
+            &AnalysisReadControl::default(),
+        )?;
+        assert!(page.packages.is_empty());
+        assert!(page.tables.values().all(Vec::is_empty));
+        Ok(page)
     }
 }
 
@@ -192,8 +216,6 @@ impl Fixture {
 fn package_output_snapshot() -> TestResult {
     let fixture = Fixture::new()?;
     let before = fixture.store.meta()?;
-    let mut cursors = Vec::new();
-    let mut captured = Vec::new();
     let mut replacement = fixture.result.commit.clone();
     replacement.activation = fixture
         .store
@@ -203,47 +225,43 @@ fn package_output_snapshot() -> TestResult {
     replacement.result_id = "first-2".into();
     replacement.datasets = Fixture::packet(&fixture.schema, 8)?;
     replacement.witnesses[0].cursor = 2;
-    let (page, _) = fixture.store.extract_rows(
+    let control = AnalysisReadControl::default();
+    let writer = Arc::clone(&fixture.store);
+    control.on_read_step(move || {
+        Fixture::append(&writer, 2)?;
+        writer.commit_package(&replacement, || Ok(()))?;
+        Ok(())
+    })?;
+    let page = fixture.read(
         &fixture.selection,
-        Some((
-            &fixture.selection,
-            "scope",
-            std::slice::from_ref(&fixture.reference),
-        )),
+        &fixture.selection,
+        std::slice::from_ref(&fixture.reference),
+        AnalysisReadModeV1::Complete,
         Default::default(),
-        &AnalysisReadControl::default(),
-        Projection(|input: AnalysisInputV1<'_>| {
-            match input {
-                AnalysisInputV1::Event { record, .. } => {
-                    cursors.push(record.cursor);
-                    Fixture::append(&fixture.store, 2)?;
-                    fixture.store.commit_package(&replacement, || Ok(()))?;
-                }
-                AnalysisInputV1::PackageOutput {
-                    reference,
-                    result,
-                    dataset,
-                    coverage,
-                } => {
-                    assert_eq!(reference, &fixture.reference);
-                    assert_eq!(result, &fixture.result);
-                    assert_eq!(coverage.state, sdk::CoverageState::Complete);
-                    let data = dataset
-                        .ok_or_else(|| crate::PackageErrorCodeV1::Invalid.error("dataset"))?
-                        .decode(&fixture.schema, sdk::Limits::default())
-                        .context(crate::AnalysisContractSnafu)?;
-                    let array = data.batches[0]
-                        .column(0)
-                        .as_any()
-                        .downcast_ref::<sdk::arrow_array::UInt64Array>()
-                        .ok_or_else(|| crate::PackageErrorCodeV1::Invalid.error("value"))?;
-                    captured.extend_from_slice(array.values());
-                }
-                _ => {}
-            }
-            Ok(())
-        }),
+        &control,
     )?;
+    let mut cursors = Vec::new();
+    for batch in &page.tables["events"] {
+        let values = batch
+            .column_by_name("source_cursor")
+            .ok_or("source cursor absent")?
+            .as_any()
+            .downcast_ref::<sdk::arrow_array::UInt64Array>()
+            .ok_or("source cursor is not UInt64")?;
+        cursors.extend_from_slice(values.values());
+    }
+    let (schema, batches, coverage) = page.packages.get(&0).ok_or("package table")?;
+    assert_eq!(schema.as_ref(), &fixture.schema);
+    assert_eq!(coverage.state, sdk::CoverageState::Complete);
+    let mut captured = Vec::new();
+    for batch in batches {
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<sdk::arrow_array::UInt64Array>()
+            .ok_or("package value is not UInt64")?;
+        captured.extend_from_slice(values.values());
+    }
     assert_eq!(page.extraction.meta, before);
     assert_eq!(cursors, [1]);
     assert_eq!(captured, [7]);
@@ -259,6 +277,20 @@ fn package_output_snapshot() -> TestResult {
             commit_revision: fixture.result.commit_revision,
         }]
     );
+    assert_eq!(
+        page.extraction
+            .references
+            .iter()
+            .filter_map(AnalysisReferenceV1::context)
+            .cloned()
+            .collect::<Vec<_>>(),
+        fixture.result.commit.context_refs
+    );
+    let mut witnesses = fixture.result.commit.witnesses.clone();
+    let mut raw = witnesses[0].clone();
+    raw.expires_utc_ns = 0;
+    witnesses.insert(0, raw);
+    assert_eq!(page.extraction.witnesses, witnesses);
     let next = fixture.metadata(&fixture.selection, &fixture.reference)?;
     assert!(next.extraction.meta.commit_revision > before.commit_revision);
     assert_eq!(
@@ -352,16 +384,13 @@ fn package_output_historical_scope() -> TestResult {
             ..
         })
     ));
-    let (page, _) = fixture.store.metadata_rows(
+    let page = fixture.read(
         &narrowed,
-        Some((
-            &fixture.selection,
-            "scope",
-            std::slice::from_ref(&fixture.reference),
-        )),
+        &fixture.selection,
+        std::slice::from_ref(&fixture.reference),
+        AnalysisReadModeV1::Metadata,
         Default::default(),
         &AnalysisReadControl::default(),
-        Projection(|_: AnalysisInputV1<'_>| Ok(())),
     )?;
     assert_eq!(
         page.extraction
@@ -385,19 +414,16 @@ fn package_output_preflights_payload() -> TestResult {
     assert!(fixture
         .metadata(&fixture.selection, &fixture.reference)
         .is_ok());
-    let result = fixture.store.extract_rows(
+    let result = fixture.read(
         &fixture.selection,
-        Some((
-            &fixture.selection,
-            "scope",
-            std::slice::from_ref(&fixture.reference),
-        )),
+        &fixture.selection,
+        std::slice::from_ref(&fixture.reference),
+        AnalysisReadModeV1::Complete,
         AnalysisExtractLimits {
             input_bytes: 16 * 1024,
             ..Default::default()
         },
         &AnalysisReadControl::default(),
-        Projection(|_: AnalysisInputV1<'_>| Ok(())),
     );
     assert!(matches!(
         result,
@@ -407,16 +433,13 @@ fn package_output_preflights_payload() -> TestResult {
         })
     ));
     assert!(matches!(
-        fixture.store.extract_rows(
+        fixture.read(
             &fixture.selection,
-            Some((
-                &fixture.selection,
-                "scope",
-                std::slice::from_ref(&fixture.reference)
-            )),
+            &fixture.selection,
+            std::slice::from_ref(&fixture.reference),
+            AnalysisReadModeV1::Complete,
             Default::default(),
-            &AnalysisReadControl::default(),
-            Projection(|_: AnalysisInputV1<'_>| Ok(()))
+            &AnalysisReadControl::default()
         ),
         Err(crate::Error::PackageEncoding { .. })
     ));
@@ -425,32 +448,30 @@ fn package_output_preflights_payload() -> TestResult {
 
 #[test]
 fn package_output_revocation() -> TestResult {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     let fixture = Fixture::new()?;
-    let control = AnalysisReadControl::default();
-    let mut captured = false;
-    let result = fixture.store.extract_rows(
+    let control = Arc::new(AnalysisReadControl::default());
+    let observed = Arc::new(AtomicBool::new(false));
+    let revoked = Arc::clone(&control);
+    let entered = Arc::clone(&observed);
+    control.on_read_step(move || {
+        entered.store(true, Ordering::Release);
+        revoked.cancel()
+    })?;
+    let result = fixture.read(
         &fixture.selection,
-        Some((
-            &fixture.selection,
-            "scope",
-            std::slice::from_ref(&fixture.reference),
-        )),
+        &fixture.selection,
+        std::slice::from_ref(&fixture.reference),
+        AnalysisReadModeV1::Complete,
         Default::default(),
         &control,
-        Projection(|input: AnalysisInputV1<'_>| {
-            match input {
-                AnalysisInputV1::Event { .. } => control.cancel()?,
-                AnalysisInputV1::PackageOutput { .. } => captured = true,
-                _ => {}
-            }
-            Ok(())
-        }),
     );
     assert!(matches!(
         result,
         Err(crate::Error::AnalysisReadCancelled { .. })
     ));
-    assert!(!captured);
+    assert!(observed.load(Ordering::Acquire));
     assert!(fixture
         .metadata(&fixture.selection, &fixture.reference)
         .is_ok());
@@ -488,12 +509,13 @@ fn reference_origins_merge() -> TestResult {
     let mut selection = fixture.selection.clone();
     selection.results = vec!["first-1".into(), "native-proof".into()];
     let requests = vec![fixture.reference.clone(), fixture.reference.clone()];
-    let (page, _) = fixture.store.metadata_rows(
+    let page = fixture.read(
         &selection,
-        Some((&fixture.selection, "scope", &requests)),
+        &fixture.selection,
+        &requests,
+        AnalysisReadModeV1::Metadata,
         Default::default(),
         &AnalysisReadControl::default(),
-        Projection(|_: AnalysisInputV1<'_>| Ok(())),
     )?;
     assert_eq!(page.extraction.references.len(), 3);
     let context_entry = page

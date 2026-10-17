@@ -1,26 +1,28 @@
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 use std::ops::Bound;
 
+use duckdb::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::raw::{RawIdentity, TracePayload, TraceRecord};
 use super::segments::SegmentRange;
 use super::{
-    AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadControl,
-    AnalysisRecordV1, AnalysisSourceReceiptV1, AnalysisStore, AnalysisStoreMetaV1, StorePositionV1,
-    MAX_ANALYSIS_PAGE_BYTES, MAX_ANALYSIS_PAGE_RECORDS,
+    AnalysisContextKeyV1, AnalysisGapV1, AnalysisReadControl, AnalysisSourceReceiptV1,
+    AnalysisStore, AnalysisStoreMetaV1, StorePositionV1, MAX_ANALYSIS_PAGE_BYTES,
+    MAX_ANALYSIS_PAGE_RECORDS,
 };
 use crate::{
     AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, EvidenceIntakeIdentityV1, EvidenceRecord,
-    Result, TraceIdentityV1, TraceIntentV1, TraceOutputReceiptV1, TraceStateV1,
+    Result, TraceIdentityV1,
 };
 
 mod changes;
 mod graph;
 mod package;
+mod tables;
 
 const MAX_EXTRACT_KEYS: usize = 1024;
 const MAX_SCAN_BYTES: usize = 256 * 1024 * 1024;
@@ -431,101 +433,31 @@ impl AnalysisSelectionV1 {
     }
 }
 
-/// Input for trusted row and field projection. This callback is not a client API.
-pub enum AnalysisInputV1<'a> {
-    Event {
-        identity: &'a EvidenceIntakeIdentityV1,
-        cpu_id: u32,
-        received_utc_ns: u64,
-        record: &'a AnalysisRecordV1,
-        decoded: Option<&'a EvidenceRecord>,
-    },
-    RawRemoval {
-        identity: &'a super::AnalysisStreamIdentityV1,
-        first_cursor: u64,
-        last_cursor: u64,
-        position: StorePositionV1,
-    },
-    Context(&'a AnalysisContextVersionV1),
-    Profile {
-        result_id: &'a str,
-        body: &'a [u8],
-        commit_revision: u64,
-        sources: &'a [EvidenceIntakeIdentityV1],
-        discovery_enabled: bool,
-    },
-    Graph {
-        result_id: &'a str,
-        graph: &'a crate::GraphSnapshotV1,
-        subject_count: usize,
-        relationship_count: usize,
-        commit_revision: u64,
-        sensitivity: crate::ContextSensitivityV1,
-        traversal_depths: Option<&'a [(crate::GraphSubjectKeyV1, u32)]>,
-    },
-    Notification {
-        obligation: &'a crate::NotificationObligationV1,
-        finding: Option<&'a crate::FindingV1>,
-        commit_revision: u64,
-    },
-    Trace {
-        state: &'a TraceStateV1,
-        intent: &'a TraceIntentV1,
-        target_index: u32,
-        receipt: &'a TraceOutputReceiptV1,
-    },
-    TraceOutput {
-        identity: &'a TraceIdentityV1,
-        target_index: u32,
-        sequence: u64,
-        position: StorePositionV1,
-        kind: &'static str,
-        bytes: &'a [u8],
-    },
-    Result {
-        result_id: &'a str,
-        body: &'a [u8],
-    },
-    PackageOutput {
-        reference: &'a araphor_analysis_sdk::OutputRef,
-        result: &'a super::PackageResultV1,
-        dataset: Option<&'a araphor_analysis_sdk::wire::Dataset>,
-        coverage: &'a araphor_analysis_sdk::Coverage,
-    },
+pub struct AnalysisTableRead<'a> {
+    pub relations: &'a BTreeSet<String>,
+    pub columns: &'a BTreeMap<String, BTreeSet<usize>>,
+    pub event_ranges: Option<&'a [(u64, u64)]>,
+    pub inputs: Option<AnalysisInputTables<'a>>,
+    pub mode: AnalysisReadModeV1,
+    pub now: u64,
 }
 
-pub trait AnalysisProjection {
-    fn decodes_events(&self) -> bool {
-        false
-    }
-
-    fn graph_subjects(&self) -> bool {
-        true
-    }
-
-    fn graph_relationships(&self) -> bool {
-        true
-    }
-
-    fn graph_headers(&self) -> bool {
-        false
-    }
-
-    fn project(
-        &mut self,
-        input: AnalysisInputV1<'_>,
-        sink: &mut ProjectionSink<'_>,
-    ) -> Result<bool>;
+#[derive(Clone, Copy)]
+pub struct AnalysisInputTables<'a> {
+    pub authorized: &'a AnalysisSelectionV1,
+    pub scope: &'a str,
+    pub outputs: &'a [(araphor_analysis_sdk::OutputRef, SchemaRef)],
+    pub limits: araphor_analysis_sdk::Limits,
 }
 
-pub struct ProjectionSink<'a> {
+pub(super) struct ReadBudget<'a> {
     output: &'a mut AnalysisExtractionV1,
     control: &'a AnalysisReadControl,
     row_bytes: Option<&'a mut usize>,
     emitted: usize,
 }
 
-impl ProjectionSink<'_> {
+impl ReadBudget<'_> {
     pub fn check(&self) -> Result<()> {
         self.control.check()
     }
@@ -664,9 +596,16 @@ pub struct AnalysisPositionPageV1 {
     /// Includes scanned rows that did not pass the projection.
     pub scanned_through: StorePositionV1,
     pub exhausted: bool,
+    pub tables: BTreeMap<String, Vec<RecordBatch>>,
+    pub packages: BTreeMap<usize, (SchemaRef, Vec<RecordBatch>, araphor_analysis_sdk::Coverage)>,
+    pub removals: BTreeMap<super::AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
+    pub mutable_discovery: bool,
+    pub received_min: Option<u64>,
+    pub next_change: Option<u64>,
 }
 
-enum ExtractMode {
+#[derive(Clone, Copy, Debug)]
+pub enum AnalysisReadModeV1 {
     Complete,
     Metadata,
     Page(Option<StorePositionV1>),
@@ -912,11 +851,19 @@ impl AnalysisExtractionV1 {
     pub fn graph_traversal(&self) -> Option<&crate::GraphTraversalReceiptV1> {
         self.graph_traversal.as_ref()
     }
-    pub fn sink<'a>(&'a mut self, control: &'a AnalysisReadControl) -> ProjectionSink<'a> {
-        ProjectionSink {
+    fn sink<'a>(&'a mut self, control: &'a AnalysisReadControl) -> ReadBudget<'a> {
+        self.row_budget(control, None)
+    }
+
+    fn row_budget<'a>(
+        &'a mut self,
+        control: &'a AnalysisReadControl,
+        row_bytes: Option<&'a mut usize>,
+    ) -> ReadBudget<'a> {
+        ReadBudget {
             output: self,
             control,
-            row_bytes: None,
+            row_bytes,
             emitted: 0,
         }
     }
@@ -984,24 +931,6 @@ impl AnalysisExtractionV1 {
                 .build()
             })?;
         Ok(())
-    }
-
-    fn project(
-        &mut self,
-        projection: &mut dyn AnalysisProjection,
-        input: AnalysisInputV1<'_>,
-        control: &AnalysisReadControl,
-        row_bytes: Option<&mut usize>,
-    ) -> Result<bool> {
-        projection.project(
-            input,
-            &mut ProjectionSink {
-                output: self,
-                control,
-                row_bytes,
-                emitted: 0,
-            },
-        )
     }
 }
 
@@ -1414,113 +1343,63 @@ impl AnalysisStore {
         Ok((Cow::Owned(resolved), bytes))
     }
 
-    pub fn extract_rows<P: AnalysisProjection>(
-        &self,
-        selection: &AnalysisSelectionV1,
-        packages: Option<(
-            &AnalysisSelectionV1,
-            &str,
-            &[araphor_analysis_sdk::OutputRef],
-        )>,
-        limits: AnalysisExtractLimits,
-        control: &AnalysisReadControl,
-        mut project: P,
-    ) -> Result<(AnalysisPositionPageV1, P)> {
-        let page = self.extract_mode(
-            selection,
-            packages,
-            ExtractMode::Complete,
-            limits,
-            control,
-            &mut project,
-        )?;
-        Ok((page, project))
+    pub fn table_schemas() -> &'static BTreeMap<String, SchemaRef> {
+        tables::Capture::schemas()
     }
 
-    pub fn position_rows<P: AnalysisProjection>(
+    pub fn read_tables(
         &self,
         selection: &AnalysisSelectionV1,
-        after: Option<StorePositionV1>,
+        read: AnalysisTableRead<'_>,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        mut project: P,
-    ) -> Result<(AnalysisPositionPageV1, P)> {
-        let page = self.extract_mode(
-            selection,
-            None,
-            ExtractMode::Page(after),
-            limits,
-            control,
-            &mut project,
-        )?;
-        Ok((page, project))
-    }
-
-    /// Read raw inserts and retirements through one captured revision.
-    /// This read does not emit changes to context, result, or trace state rows.
-    pub fn change_rows<P: AnalysisProjection>(
-        &self,
-        selection: &AnalysisSelectionV1,
-        after: StorePositionV1,
-        limits: AnalysisExtractLimits,
-        control: &AnalysisReadControl,
-        mut project: P,
-    ) -> Result<(AnalysisPositionPageV1, P)> {
-        if after.ordinal != u32::MAX {
-            return self.reject("the raw change frontier is not a complete commit");
-        }
-        let page = self.extract_mode(
-            selection,
-            None,
-            ExtractMode::Changes(after),
-            limits,
-            control,
-            &mut project,
-        )?;
-        Ok((page, project))
-    }
-
-    pub fn metadata_rows<P: AnalysisProjection>(
-        &self,
-        selection: &AnalysisSelectionV1,
-        packages: Option<(
-            &AnalysisSelectionV1,
-            &str,
-            &[araphor_analysis_sdk::OutputRef],
-        )>,
-        limits: AnalysisExtractLimits,
-        control: &AnalysisReadControl,
-        mut project: P,
-    ) -> Result<(AnalysisPositionPageV1, P)> {
-        let page = self.extract_mode(
-            selection,
-            packages,
-            ExtractMode::Metadata,
-            limits,
-            control,
-            &mut project,
-        )?;
-        Ok((page, project))
-    }
-
-    fn extract_mode(
-        &self,
-        selection: &AnalysisSelectionV1,
-        packages: Option<(
-            &AnalysisSelectionV1,
-            &str,
-            &[araphor_analysis_sdk::OutputRef],
-        )>,
-        mode: ExtractMode,
-        limits: AnalysisExtractLimits,
-        control: &AnalysisReadControl,
-        project: &mut dyn AnalysisProjection,
     ) -> Result<AnalysisPositionPageV1> {
         control.check()?;
+        let packages = read.inputs;
+        let mode = match read.mode {
+            AnalysisReadModeV1::Complete
+                if !read.relations.iter().any(|name| {
+                    matches!(
+                        name.as_str(),
+                        "events" | "trace_output" | "trace_measurements"
+                    )
+                }) && packages.is_none_or(|inputs| inputs.outputs.is_empty()) =>
+            {
+                AnalysisReadModeV1::Metadata
+            }
+            mode => mode,
+        };
+        if matches!(mode, AnalysisReadModeV1::Changes(after) if after.ordinal != u32::MAX) {
+            return self.reject("the raw change frontier is not a complete commit");
+        }
+        if packages.is_some()
+            && matches!(
+                mode,
+                AnalysisReadModeV1::Page(_) | AnalysisReadModeV1::Changes(_)
+            )
+        {
+            return self.reject("a position read cannot include model inputs");
+        }
+        for (name, columns) in read.columns {
+            let Some(schema) = Self::table_schemas().get(name) else {
+                return self.reject("the selected table has no Arrow schema");
+            };
+            if !read.relations.contains(name)
+                || columns.iter().any(|index| *index >= schema.fields().len())
+            {
+                return self.reject("the selected table columns are invalid");
+            }
+        }
+        if read
+            .event_ranges
+            .is_some_and(|ranges| ranges.iter().any(|(first, last)| first > last))
+        {
+            return self.reject("the event input range is invalid");
+        }
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
         }
-        if packages.is_some_and(|(authorized, _, _)| authorized.tenant_id != selection.tenant_id) {
+        if packages.is_some_and(|inputs| inputs.authorized.tenant_id != selection.tenant_id) {
             return Err(crate::PackageErrorCodeV1::Denied.error("dependency tenant"));
         }
         if limits.scan_bytes == 0
@@ -1541,14 +1420,15 @@ impl AnalysisStore {
             let (selection, key_bytes) =
                 self.resolve_selection(snapshot, selection, control, limits.input_bytes)?;
             let selection = selection.as_ref();
+            let mut capture = tables::Capture::new(&read, selection);
             let end = StorePositionV1 {
                 commit_revision: meta.commit_revision,
                 ordinal: u32::MAX,
             };
             let mut after = match mode {
-                ExtractMode::Complete | ExtractMode::Metadata => None,
-                ExtractMode::Page(after) => after,
-                ExtractMode::Changes(after) => Some(after),
+                AnalysisReadModeV1::Complete | AnalysisReadModeV1::Metadata => None,
+                AnalysisReadModeV1::Page(after) => after,
+                AnalysisReadModeV1::Changes(after) => Some(after),
             };
             if after.is_some_and(|position| position > end) {
                 return self.reject("the position read starts beyond the captured revision");
@@ -1575,7 +1455,7 @@ impl AnalysisStore {
             };
             output.charge(size_of::<AnalysisExtractionV1>())?;
             output.charge(key_bytes)?;
-            if matches!(mode, ExtractMode::Page(_) | ExtractMode::Changes(_)) {
+            if matches!(mode, AnalysisReadModeV1::Page(_) | AnalysisReadModeV1::Changes(_)) {
                 if let (Some(position), Some(floor)) = (after, output.replay_floor) {
                     if position < floor {
                         return crate::AnalysisReplayExpiredSnafu { position, floor }.fail();
@@ -1654,7 +1534,7 @@ impl AnalysisStore {
                     continue;
                 }
                 if explicit_traces
-                    && !matches!(mode, ExtractMode::Metadata)
+                    && !matches!(mode, AnalysisReadModeV1::Metadata)
                     && receipt.retained_floor > 0
                 {
                     if let Some(floor) = output.replay_floor {
@@ -1682,21 +1562,11 @@ impl AnalysisStore {
                     output.charge(added)?;
                     output.trace_reads.push(identity.request_id);
                 }
-                if !matches!(mode, ExtractMode::Changes(_)) {
-                    output.project(
-                        project,
-                        AnalysisInputV1::Trace {
-                            state: &state,
-                            intent: &intent,
-                            target_index: index as u32,
-                            receipt: &receipt,
-                        },
-                        control,
-                        None,
-                    )?;
+                if !matches!(mode, AnalysisReadModeV1::Changes(_)) {
+                    capture.trace(&state, &intent, index as u32, &receipt, &mut output.sink(control))?;
                 }
             }
-            let removals = if let ExtractMode::Changes(after) = mode {
+            let removals = if let AnalysisReadModeV1::Changes(after) = mode {
                 self.raw_removals(snapshot, selection, &trace_info, after, control, &mut output)?
             } else {
                 Vec::new()
@@ -1707,16 +1577,16 @@ impl AnalysisStore {
             let mut exhausted = false;
             'scan: loop {
                 control.check()?;
-                if matches!(mode, ExtractMode::Metadata) {
+                if matches!(mode, AnalysisReadModeV1::Metadata) {
                     after = Some(end);
                     exhausted = true;
                     break;
                 }
                 let limit = match mode {
-                    ExtractMode::Complete | ExtractMode::Metadata | ExtractMode::Changes(_) => {
+                    AnalysisReadModeV1::Complete | AnalysisReadModeV1::Metadata | AnalysisReadModeV1::Changes(_) => {
                         usize::MAX
                     }
-                    ExtractMode::Page(_) => limits.page_rows - scanned,
+                    AnalysisReadModeV1::Page(_) => limits.page_rows - scanned,
                 };
                 if limit == 0 {
                     exhausted = self
@@ -1734,7 +1604,7 @@ impl AnalysisStore {
                     exhausted = true;
                     break;
                 };
-                if matches!(mode, ExtractMode::Page(_))
+                if matches!(mode, AnalysisReadModeV1::Page(_))
                     && output.scanned_bytes != 0
                     && output.scanned_bytes.saturating_add(range.scan_bytes) > limits.scan_bytes
                 {
@@ -1746,13 +1616,13 @@ impl AnalysisStore {
                     while let Some(removal) = removals.next_if(|removal| {
                         removal.revision < record.position.commit_revision
                     }) {
-                        output.remove_raw(project, &removal, control)?;
+                        output.remove_raw(&mut capture, &removal, control)?;
                     }
-                    let page_bytes = matches!(mode, ExtractMode::Page(_)).then_some(&mut row_bytes);
+                    let page_bytes = matches!(mode, AnalysisReadModeV1::Page(_)).then_some(&mut row_bytes);
                     let consumed = match &identity {
                         RawIdentity::Evidence(identity) => {
                             let decoded = (!selection.binding_ids.is_empty()
-                                || project.decodes_events())
+                                || read.relations.contains("events"))
                             .then(|| EvidenceRecord::try_from(record.framed_record.as_slice()))
                             .transpose()?;
                             let selected = selection.binding_ids.is_empty()
@@ -1765,20 +1635,10 @@ impl AnalysisStore {
                                         })
                                     });
                             if selected {
-                                output.project(
-                                    project,
-                                    AnalysisInputV1::Event {
-                                        identity,
-                                        cpu_id: cpu.ok_or_else(|| {
-                                            self.state_error("the selected evidence CPU is absent")
-                                        })?,
-                                        received_utc_ns: range.intake,
-                                        record: &record,
-                                        decoded: decoded.as_ref(),
-                                    },
-                                    control,
-                                    page_bytes,
-                                )?
+                                capture.event(identity,
+                                    cpu.ok_or_else(|| self.state_error("the selected evidence CPU is absent"))?,
+                                    range.intake, &record, decoded.as_ref(),
+                                    &mut output.row_budget(control, page_bytes))?
                             } else {
                                 true
                             }
@@ -1812,53 +1672,35 @@ impl AnalysisStore {
                                     ("terminal", bytes)
                                 }
                             };
-                            output.project(
-                                project,
-                                AnalysisInputV1::TraceOutput {
-                                    identity,
-                                    target_index: trace.target_index,
-                                    sequence: record.cursor,
-                                    position: record.position,
-                                    kind,
-                                    bytes,
-                                },
-                                control,
-                                page_bytes,
-                            )?
+                            capture.frame(identity, trace.target_index, record.cursor,
+                                record.position, kind, bytes,
+                                &mut output.row_budget(control, page_bytes))?
                         }
                     };
                     if !consumed {
-                        if matches!(mode, ExtractMode::Changes(_)) {
-                            return AnalysisInputTooLargeSnafu {
-                                resource: "complete change input",
-                            }
-                            .fail();
-                        }
                         break 'scan;
                     }
+                    #[cfg(any(test, feature = "test-fixtures"))]
+                    control.test_read_step()?;
                     scanned += 1;
                     after = Some(record.position);
                 }
             }
-            if matches!(mode, ExtractMode::Changes(_)) {
+            if matches!(mode, AnalysisReadModeV1::Changes(_)) {
                 for removal in removals {
-                    output.remove_raw(project, &removal, control)?;
+                    output.remove_raw(&mut capture, &removal, control)?;
                 }
                 control.check()?;
-                return Ok(AnalysisPositionPageV1 {
-                    extraction: output,
-                    scanned_through: end,
-                    exhausted: true,
-                });
+                return capture.finish(output, end, true, control);
             }
             if let Some(packages) = packages {
                 self.extract_packages(
                     snapshot,
                     packages,
-                    matches!(mode, ExtractMode::Metadata),
+                    matches!(mode, AnalysisReadModeV1::Metadata),
                     control,
                     &mut output,
-                    project,
+                    &mut capture,
                 )?;
             }
             for key in selection.contexts.as_slice() {
@@ -1866,12 +1708,7 @@ impl AnalysisStore {
                 match Self::read_context_from(snapshot, &self.root, key)? {
                     Some((context, revision)) => {
                         output.reference_context(&context.key, revision, AnalysisReferenceOriginV1::Context)?;
-                        output.project(
-                            project,
-                            AnalysisInputV1::Context(&context),
-                            control,
-                            None,
-                        )?;
+                        capture.context(&context, &mut output.sink(control))?;
                     }
                     None => {
                         let key = key.clone();
@@ -1908,21 +1745,11 @@ impl AnalysisStore {
                     })?;
                 let discovery_enabled = output.discovery_enabled;
                 output.reference_result(id, revision, AnalysisReferenceOriginV1::Profile)?;
-                output.project(
-                    project,
-                    AnalysisInputV1::Profile {
-                        result_id: id,
-                        body: &body,
-                        commit_revision: revision,
-                        sources: selection.sources.as_slice(),
-                        discovery_enabled,
-                    },
-                    control,
-                    None,
-                )?;
+                capture.profile(id, &body, revision, selection.sources.as_slice(),
+                    discovery_enabled, &mut output.sink(control))?;
             }
             if let Some(request) = &selection.graph_traversal {
-                self.traverse_graphs(snapshot, selection, request, &mut output, control, project)?;
+                self.traverse_graphs(snapshot, selection, request, &mut output, control, &mut capture)?;
             }
             for id in selection.graphs.as_slice().iter().filter(|_| selection.graph_traversal.is_none()) {
                 control.check()?;
@@ -1935,8 +1762,8 @@ impl AnalysisStore {
                 ).context(AnalysisDatabaseSnafu { operation: "read graph result metadata" })?;
                 let source = selection.sources.as_slice().iter().find(|source| source.key() == key)
                     .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
-                let subjects = project.graph_subjects();
-                let edges = project.graph_relationships();
+                let subjects = read.columns.contains_key("graph_subjects");
+                let edges = read.columns.contains_key("relationships");
                 let header = self.graph_input(snapshot, selection.tenant_id, id, &mut output, control)?;
                 let mut graph = header.snapshot;
                 if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
@@ -1956,12 +1783,8 @@ impl AnalysisStore {
                 }
                 graph.validate()?;
                 output.reference_result(id, revision, AnalysisReferenceOriginV1::Graph)?;
-                output.project(project, AnalysisInputV1::Graph {
-                    result_id: id, graph: &graph, commit_revision: revision, sensitivity,
-                    subject_count: header.subject_count,
-                    relationship_count: header.edge_count,
-                    traversal_depths: None,
-                }, control, None)?;
+                capture.graph(id, &graph, header.subject_count, header.edge_count,
+                    revision, sensitivity, None, &mut output.sink(control))?;
             }
             for key in selection.obligations.as_slice() {
                 control.check()?;
@@ -1998,29 +1821,19 @@ impl AnalysisStore {
                     })
                 }) { continue; }
                 output.reference_context(&context.key, revision, AnalysisReferenceOriginV1::Notification)?;
-                output.project(project, AnalysisInputV1::Notification {
-                    obligation: &obligation, finding: finding.as_ref(), commit_revision: revision,
-                }, control, None)?;
+                capture.notification(&obligation, finding.as_ref(), revision, &mut output.sink(control))?;
             }
             for id in &selection.results {
                 control.check()?;
                 match self.read_result_from(snapshot, selection.tenant_id, id)? {
-                    Some(body) => {
+                    Some(_body) => {
                         let revision: u64 = snapshot.query_row(
                             "SELECT commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
                             params![selection.tenant_id.as_slice(), id],
                             |row| row.get(0),
                         ).context(AnalysisDatabaseSnafu { operation: "read retained result revision" })?;
                         output.reference_result(id, revision, AnalysisReferenceOriginV1::ExplicitResult)?;
-                        output.project(
-                            project,
-                            AnalysisInputV1::Result {
-                                result_id: id,
-                                body: &body,
-                            },
-                            control,
-                            None,
-                        )?;
+
                     }
                     None => {
                         let id = id.clone();
@@ -2039,14 +1852,10 @@ impl AnalysisStore {
                 self.extract_provenance(snapshot, selection.tenant_id, &mut output, control)?;
             }
             control.check()?;
-            Ok(AnalysisPositionPageV1 {
-                extraction: output,
-                scanned_through: after.unwrap_or(StorePositionV1 {
+            capture.finish(output, after.unwrap_or(StorePositionV1 {
                     commit_revision: 0,
                     ordinal: 0,
-                }),
-                exhausted,
-            })
+                }), exhausted, control)
         })
     }
 
@@ -2181,60 +1990,119 @@ impl AnalysisStore {
 mod tests {
     use super::*;
     use crate::{
-        AnalysisResultCommitV1, ContextSensitivityV1, EvidenceRetentionOwner, ProcessorClassV1,
-        ProcessorScopeV1, RetentionLimitsV1, ValidatedEvidenceBatchV1,
+        AnalysisContextVersionV1, AnalysisResultCommitV1, ContextSensitivityV1,
+        EvidenceRetentionOwner, ProcessorClassV1, ProcessorScopeV1, RetentionLimitsV1,
+        ValidatedEvidenceBatchV1,
     };
+    use araphor_analysis_sdk::arrow_array::{Array, BinaryArray, UInt32Array, UInt64Array};
 
-    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+    type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-    struct Bytes<F> {
-        project: F,
-        rows: Vec<Box<[u8]>>,
-        page_bytes: usize,
+    fn read(
+        store: &AnalysisStore,
+        selection: &AnalysisSelectionV1,
+        requested: &[(&str, &[&str])],
+        mode: AnalysisReadModeV1,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<AnalysisPositionPageV1> {
+        let relations = requested
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect();
+        let columns = requested
+            .iter()
+            .map(|(name, fields)| {
+                let schema = &AnalysisStore::table_schemas()[*name];
+                let indices = fields
+                    .iter()
+                    .map(|field| {
+                        schema
+                            .index_of(field)
+                            .map_err(araphor_analysis_sdk::Error::from)
+                            .context(crate::AnalysisContractSnafu)
+                    })
+                    .collect::<Result<BTreeSet<_>>>()?;
+                Ok(((*name).to_owned(), indices))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        store.read_tables(
+            selection,
+            AnalysisTableRead {
+                relations: &relations,
+                columns: &columns,
+                event_ranges: None,
+                inputs: None,
+                mode,
+                now: 0,
+            },
+            limits,
+            control,
+        )
     }
 
-    impl<F> Bytes<F> {
-        fn new(project: F) -> Self {
-            Self {
-                project,
-                rows: Vec::new(),
-                page_bytes: MAX_ANALYSIS_PAGE_BYTES,
-            }
+    fn unsigned(page: &AnalysisPositionPageV1, table: &str, field: &str) -> TestResult<Vec<u64>> {
+        let mut values = Vec::new();
+        for batch in page.tables.get(table).into_iter().flatten() {
+            let array = batch
+                .column_by_name(field)
+                .ok_or("unsigned column absent")?
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or("column is not UInt64")?;
+            assert_eq!(array.null_count(), 0);
+            values.extend_from_slice(array.values());
         }
+        Ok(values)
     }
 
-    impl<F> AnalysisProjection for Bytes<F>
-    where
-        F: FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
-    {
-        fn project(
-            &mut self,
-            input: AnalysisInputV1<'_>,
-            sink: &mut ProjectionSink<'_>,
-        ) -> Result<bool> {
-            let Some(row) = (self.project)(input)? else {
-                return Ok(true);
-            };
-            let row = row.into_boxed_slice();
-            let bytes = row
-                .len()
-                .checked_add(size_of::<Box<[u8]>>())
-                .filter(|bytes| *bytes <= self.page_bytes)
-                .ok_or_else(|| {
-                    AnalysisInputTooLargeSnafu {
-                        resource: "projected row bytes",
-                    }
-                    .build()
-                })?;
-            if !sink.admit(bytes)? {
-                return Ok(false);
+    fn binary(page: &AnalysisPositionPageV1, table: &str, field: &str) -> TestResult<Vec<Vec<u8>>> {
+        let mut values = Vec::new();
+        for batch in page.tables.get(table).into_iter().flatten() {
+            let array = batch
+                .column_by_name(field)
+                .ok_or("binary column absent")?
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or("column is not Binary")?;
+            assert_eq!(array.null_count(), 0);
+            for value in array {
+                values.push(value.ok_or("binary value is null")?.to_vec());
             }
-            sink.charge(row.len())?;
-            sink.grow(&mut self.rows)?;
-            sink.projected(row.len());
-            self.rows.push(row);
-            Ok(true)
         }
+        Ok(values)
+    }
+
+    fn positions(page: &AnalysisPositionPageV1) -> TestResult<Vec<StorePositionV1>> {
+        let mut values = Vec::new();
+        for batch in page.tables.get("events").into_iter().flatten() {
+            let revisions = batch
+                .column_by_name("commit_revision")
+                .ok_or("commit revision absent")?
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or("commit revision is not UInt64")?;
+            let ordinals = batch
+                .column_by_name("ordinal")
+                .ok_or("ordinal absent")?
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .ok_or("ordinal is not UInt32")?;
+            values.extend((0..batch.num_rows()).map(|index| StorePositionV1 {
+                commit_revision: revisions.value(index),
+                ordinal: ordinals.value(index),
+            }));
+        }
+        Ok(values)
+    }
+
+    fn row_count(page: &AnalysisPositionPageV1, table: &str) -> usize {
+        page.tables
+            .get(table)
+            .into_iter()
+            .flatten()
+            .map(RecordBatch::num_rows)
+            .sum()
     }
 
     fn identity(tenant: u8) -> EvidenceIntakeIdentityV1 {
@@ -2473,14 +2341,77 @@ mod tests {
         Ok(())
     }
 
-    fn batch(first: u64, count: usize, received: u64) -> ValidatedEvidenceBatchV1 {
+    fn batch(first: u64, count: usize, received: u64) -> Result<ValidatedEvidenceBatchV1> {
+        records(
+            first,
+            received,
+            (first..first + count as u64).map(|cursor| EvidenceRecord {
+                observed_boottime_ns: cursor,
+                ..Default::default()
+            }),
+        )
+    }
+
+    fn records(
+        first: u64,
+        received: u64,
+        records: impl IntoIterator<Item = EvidenceRecord>,
+    ) -> Result<ValidatedEvidenceBatchV1> {
+        let mut framed = Vec::new();
+        let mut ends = Vec::new();
+        for record in records {
+            framed.extend(Vec::<u8>::try_from(&record)?);
+            ends.push(framed.len());
+        }
+        Ok(ValidatedEvidenceBatchV1 {
+            cpu_id: 0,
+            first_cursor: first,
+            last_cursor: first + ends.len() as u64 - 1,
+            intake_utc_ns: received,
+            framed_records: framed.into(),
+            frame_ends: ends,
+        })
+    }
+
+    fn padded_batch(
+        first: u64,
+        count: usize,
+        received: u64,
+        frame_bytes: usize,
+    ) -> ValidatedEvidenceBatchV1 {
+        use prost::Message as _;
+
+        let mut framed = Vec::new();
+        let mut ends = Vec::new();
+        for cursor in first..first + count as u64 {
+            let record = EvidenceRecord {
+                observed_boottime_ns: cursor,
+                decision_context: Some(crate::EvidenceDecisionContext {
+                    catalog_json: vec![7; frame_bytes - 128],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let mut payload = record.encode_to_vec();
+            let mut padding = vec![0; frame_bytes - 8 - payload.len()];
+            let overhead = prost::encoding::bytes::encoded_len(100, &padding) - padding.len();
+            padding.truncate(padding.len() - overhead);
+            prost::encoding::bytes::encode(100, &padding, &mut payload);
+            assert_eq!(payload.len() + 8, frame_bytes);
+            let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
+            frame.extend(payload);
+            frame.extend_from_slice(&crc32c::crc32c(&frame).to_be_bytes());
+            assert!(EvidenceRecord::try_from(frame.as_slice()).is_ok());
+            framed.extend(frame);
+            ends.push(framed.len());
+        }
         ValidatedEvidenceBatchV1 {
             cpu_id: 0,
             first_cursor: first,
             last_cursor: first + count as u64 - 1,
             intake_utc_ns: received,
-            framed_records: vec![7; count].into(),
-            frame_ends: (1..=count).collect(),
+            framed_records: framed.into(),
+            frame_ends: ends,
         }
     }
 
@@ -2489,9 +2420,9 @@ mod tests {
         use prost::Message as _;
 
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = std::sync::Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
         let identity = identity(1);
-        store.accept_validated_batch(identity.clone(), batch(11, 10, 10))?;
+        store.accept_validated_batch(identity.clone(), batch(11, 10, 10)?)?;
         let report = crate::CoverageReport {
             source_id: identity.source_id.to_vec(),
             source_epoch: identity.source_epoch,
@@ -2507,104 +2438,83 @@ mod tests {
         })?;
         assert!(store.read_page(&identity, 1)?.records.is_empty());
         let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
-        let (
-            _,
-            Bytes {
-                rows: complete_rows,
-                ..
-            },
-        ) = store.extract_rows(
+        let fields = [(
+            "events",
+            &[
+                "source_cursor",
+                "received_utc_ns",
+                "commit_revision",
+                "ordinal",
+            ][..],
+        )];
+        let complete = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event { record, .. } = input else {
-                    return store.reject("unexpected relation");
-                };
-                Ok(Some(vec![record.cursor as u8]))
-            }),
         )?;
-        assert_eq!(complete_rows.len(), 10);
+        assert_eq!(row_count(&complete, "events"), 10);
+        assert!(complete.exhausted);
         let before = store.meta()?;
-        let mut positions = Vec::new();
-        let (
-            first,
-            Bytes {
-                rows: first_rows, ..
-            },
-        ) = store.position_rows(
+        let control = AnalysisReadControl::default();
+        let writer = std::sync::Arc::clone(&store);
+        let source = identity.clone();
+        control.on_read_step(move || {
+            writer.accept_validated_batch(source, batch(1, 10, 20)?)?;
+            Ok(())
+        })?;
+        let first = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Page(None),
             AnalysisExtractLimits::default(),
-            &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event {
-                    record,
-                    received_utc_ns,
-                    ..
-                } = input
-                else {
-                    return store.reject("unexpected relation");
-                };
-                if record.cursor == 11 {
-                    store.accept_validated_batch(identity.clone(), batch(1, 10, 20))?;
-                }
-                assert_eq!(received_utc_ns, 10);
-                positions.push(record.position);
-                Ok(Some(vec![record.cursor as u8]))
-            }),
+            &control,
         )?;
-        assert!(first.exhausted);
         assert_eq!(first.extraction.meta, before);
-        let source = &first.extraction.sources[0];
-        assert_eq!(source.receipt.contiguous_cursor, 0);
-        assert_eq!(source.coverage_report.as_ref(), Some(&report));
-        assert_eq!(source.pending.len(), 1);
+        assert!(first.exhausted);
+        assert_eq!(first.extraction.sources[0].receipt.contiguous_cursor, 0);
+        assert_eq!(
+            first.extraction.sources[0].coverage_report.as_deref(),
+            Some(report.as_slice())
+        );
+        assert_eq!(first.extraction.sources[0].pending.len(), 1);
         assert_eq!(
             (
-                source.pending[0].first_cursor,
-                source.pending[0].last_cursor
+                first.extraction.sources[0].pending[0].first_cursor,
+                first.extraction.sources[0].pending[0].last_cursor
             ),
             (1, 10)
         );
         assert_eq!(
-            first_rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
+            unsigned(&first, "events", "source_cursor")?,
             (11..=20).collect::<Vec<_>>()
         );
-        let (
-            next,
-            Bytes {
-                rows: next_rows, ..
-            },
-        ) = store.position_rows(
+        assert_eq!(unsigned(&first, "events", "received_utc_ns")?, vec![10; 10]);
+        let mut ordered_positions = positions(&first)?;
+        let next = read(
+            &store,
             &selection,
-            Some(first.scanned_through),
+            &fields,
+            AnalysisReadModeV1::Page(Some(first.scanned_through)),
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event {
-                    record,
-                    received_utc_ns,
-                    ..
-                } = input
-                else {
-                    return store.reject("unexpected relation");
-                };
-                assert!(record.position > first.scanned_through);
-                assert_eq!(received_utc_ns, 20);
-                positions.push(record.position);
-                Ok(Some(vec![record.cursor as u8]))
-            }),
         )?;
         assert!(next.exhausted);
         assert_eq!(next.extraction.sources[0].receipt.contiguous_cursor, 20);
         assert!(next.extraction.sources[0].pending.is_empty());
         assert_eq!(
-            next_rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
+            unsigned(&next, "events", "source_cursor")?,
             (1..=10).collect::<Vec<_>>()
         );
-        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(unsigned(&next, "events", "received_utc_ns")?, vec![20; 10]);
+        assert!(positions(&next)?
+            .iter()
+            .all(|position| *position > first.scanned_through));
+        ordered_positions.extend(positions(&next)?);
+        assert!(ordered_positions.windows(2).all(|pair| pair[0] < pair[1]));
         let ordered = store.read_page(&identity, 1)?;
         assert_eq!(
             ordered
@@ -2614,26 +2524,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             (1..=20).collect::<Vec<_>>()
         );
-        assert_eq!(ordered.records[10].position, positions[0]);
-        assert_eq!(ordered.records[0].position, positions[10]);
+        assert_eq!(ordered.records[10].position, ordered_positions[0]);
+        assert_eq!(ordered.records[0].position, ordered_positions[10]);
         let meta = store.meta()?;
-        store.accept_validated_batch(identity.clone(), batch(11, 10, 10))?;
+        store.accept_validated_batch(identity.clone(), batch(11, 10, 10)?)?;
         assert_eq!(store.meta()?, meta);
-        let (
-            retry,
-            Bytes {
-                rows: retry_rows, ..
-            },
-        ) = store.position_rows(
+        let retry = read(
+            &store,
             &selection,
-            Some(next.scanned_through),
+            &fields,
+            AnalysisReadModeV1::Page(Some(next.scanned_through)),
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|_: AnalysisInputV1<'_>| {
-                store.reject("an exact retry produced another query row")
-            }),
         )?;
-        assert!(retry.exhausted && retry_rows.is_empty());
+        assert!(retry.exhausted && row_count(&retry, "events") == 0);
         assert_eq!(retry.scanned_through, next.scanned_through);
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
@@ -2652,69 +2556,52 @@ mod tests {
             tenant_id: [2; 16],
             ..identity.clone()
         };
-        store.accept_validated_batch(identity.clone(), batch(1, 257, 10))?;
-        store.accept_validated_batch(foreign, batch(1, 1, 10))?;
-        store.accept_validated_batch(other.clone(), batch(1, 1, 20))?;
-        let selection =
-            AnalysisSelectionV1::new(identity.tenant_id, vec![other.clone(), identity.clone()]);
-        let mut seen = Vec::new();
-        let (
-            first,
-            Bytes {
-                rows: first_rows, ..
-            },
-        ) = store.position_rows(
+        store.accept_validated_batch(identity.clone(), batch(1, 257, 10)?)?;
+        let first_revision = store.meta()?.commit_revision;
+        store.accept_validated_batch(foreign, batch(1, 1, 10)?)?;
+        store.accept_validated_batch(other.clone(), batch(1, 1, 20)?)?;
+        let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![other, identity.clone()]);
+        let first = read(
+            &store,
             &selection,
-            None,
+            &[("events", &[])],
+            AnalysisReadModeV1::Page(None),
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event {
-                    identity: source,
-                    record,
-                    ..
-                } = input
-                else {
-                    return store.reject("unexpected relation");
-                };
-                assert_eq!(source, &identity);
-                seen.push(record.position);
-                Ok(None)
-            }),
         )?;
         assert!(!first.exhausted);
-        assert_eq!(seen.len(), 256);
-        assert!(first_rows.is_empty());
-        assert_eq!(first.scanned_through, seen[255]);
-        let (
-            next,
-            Bytes {
-                rows: next_rows, ..
-            },
-        ) = store.position_rows(
+        assert_eq!(row_count(&first, "events"), 256);
+        assert!(first.tables["events"]
+            .iter()
+            .all(|batch| batch.num_columns() == 0));
+        assert_eq!(
+            first.scanned_through,
+            StorePositionV1 {
+                commit_revision: first_revision,
+                ordinal: 255
+            }
+        );
+        let next = read(
+            &store,
             &selection,
-            Some(first.scanned_through),
+            &[(
+                "events",
+                &[
+                    "source_epoch",
+                    "source_cursor",
+                    "commit_revision",
+                    "ordinal",
+                ],
+            )],
+            AnalysisReadModeV1::Page(Some(first.scanned_through)),
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event {
-                    identity: source,
-                    record,
-                    ..
-                } = input
-                else {
-                    return store.reject("unexpected relation");
-                };
-                assert_eq!(source.tenant_id, identity.tenant_id);
-                seen.push(record.position);
-                Ok(Some(vec![source.source_epoch as u8]))
-            }),
         )?;
         assert!(next.exhausted);
-        assert_eq!(
-            next_rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
-            vec![1, 2]
-        );
+        assert_eq!(unsigned(&next, "events", "source_epoch")?, vec![1, 2]);
+        assert_eq!(unsigned(&next, "events", "source_cursor")?, vec![257, 1]);
+        let seen = positions(&next)?;
+        assert!(seen[0] > first.scanned_through);
         assert!(seen.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(
             next.scanned_through.commit_revision,
@@ -2730,57 +2617,38 @@ mod tests {
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = identity(1);
         for cursor in [3, 7] {
-            store.accept_validated_batch(identity.clone(), batch(cursor, 1, 1))?;
+            store.accept_validated_batch(identity.clone(), batch(cursor, 1, 1)?)?;
         }
-        store.accept_validated_batch(identity.clone(), batch(1, 10, 2))?;
+        store.accept_validated_batch(identity.clone(), batch(1, 10, 2)?)?;
         let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
-        let mut positions = Vec::new();
-        let (
-            page,
-            Bytes {
-                rows: page_rows, ..
-            },
-        ) = store.position_rows(
+        let fields = [(
+            "events",
+            &["source_cursor", "commit_revision", "ordinal"][..],
+        )];
+        let page = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Page(None),
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event { record, .. } = input else {
-                    return store.reject("unexpected relation");
-                };
-                positions.push(record.position);
-                Ok(Some(vec![record.cursor as u8]))
-            }),
         )?;
         let expected = [3, 7, 1, 2, 4, 5, 6, 8, 9, 10];
         assert!(page.exhausted);
         assert_eq!(page.scanned_through.ordinal, u32::MAX);
-        assert_eq!(
-            page_rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
-            expected
-        );
-        for (index, position) in positions.iter().enumerate() {
-            let (
-                page,
-                Bytes {
-                    rows: page_rows, ..
-                },
-            ) = store.position_rows(
+        assert_eq!(unsigned(&page, "events", "source_cursor")?, expected);
+        for (index, position) in positions(&page)?.into_iter().enumerate() {
+            let next = read(
+                &store,
                 &selection,
-                Some(*position),
+                &fields,
+                AnalysisReadModeV1::Page(Some(position)),
                 AnalysisExtractLimits::default(),
                 &AnalysisReadControl::default(),
-                Bytes::new(|input: AnalysisInputV1<'_>| {
-                    let AnalysisInputV1::Event { record, .. } = input else {
-                        return store.reject("unexpected relation");
-                    };
-                    Ok(Some(vec![record.cursor as u8]))
-                }),
             )?;
-            assert!(page.exhausted);
+            assert!(next.exhausted);
             assert_eq!(
-                page_rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
+                unsigned(&next, "events", "source_cursor")?,
                 expected[index + 1..]
             );
         }
@@ -2799,61 +2667,87 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = identity(1);
-        store.accept_validated_batch(identity.clone(), batch(1, 3, 1))?;
-        let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity]);
-        let mut positions = Vec::new();
-        let (
-            first,
-            Bytes {
-                rows: first_rows, ..
-            },
-        ) = store.position_rows(
+        store.accept_validated_batch(
+            identity.clone(),
+            records(
+                1,
+                1,
+                (1..=3).map(|cursor| EvidenceRecord {
+                    observed_boottime_ns: cursor,
+                    decision_context: Some(crate::EvidenceDecisionContext {
+                        binding_id: vec![if cursor == 2 { 2 } else { 1 }; 16],
+                        catalog_json: vec![cursor as u8; 768],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            )?,
+        )?;
+        let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity]);
+        selection.binding_ids.push([1; 16]);
+        let fields = [(
+            "events",
+            &[
+                "source_cursor",
+                "catalog_json",
+                "commit_revision",
+                "ordinal",
+            ][..],
+        )];
+        let limits = AnalysisExtractLimits {
+            page_bytes: 1024,
+            ..Default::default()
+        };
+        let first = read(
+            &store,
             &selection,
-            None,
-            AnalysisExtractLimits::default(),
+            &fields,
+            AnalysisReadModeV1::Page(None),
+            limits,
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event { record, .. } = input else {
-                    return store.reject("unexpected relation");
-                };
-                positions.push(record.position);
-                Ok((record.cursor != 2).then(|| vec![record.cursor as u8; 600 * 1024]))
-            }),
         )?;
         assert!(!first.exhausted);
-        assert_eq!(first_rows.len(), 1);
-        assert_eq!(first_rows[0][0], 1);
-        assert_eq!(first.scanned_through, positions[1]);
-        let (
-            next,
-            Bytes {
-                rows: next_rows, ..
-            },
-        ) = store.position_rows(
+        assert_eq!(unsigned(&first, "events", "source_cursor")?, vec![1]);
+        assert_eq!(
+            binary(&first, "events", "catalog_json")?,
+            vec![vec![1; 768]]
+        );
+        let first_position = positions(&first)?[0];
+        assert_eq!(
+            first.scanned_through,
+            StorePositionV1 {
+                ordinal: 1,
+                ..first_position
+            }
+        );
+        let next = read(
+            &store,
             &selection,
-            Some(first.scanned_through),
-            AnalysisExtractLimits::default(),
+            &fields,
+            AnalysisReadModeV1::Page(Some(first.scanned_through)),
+            limits,
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event { record, .. } = input else {
-                    return store.reject("unexpected relation");
-                };
-                assert_eq!(record.cursor, 3);
-                Ok(Some(vec![3; 600 * 1024]))
-            }),
         )?;
         assert!(next.exhausted);
-        assert_eq!(next_rows.len(), 1);
-        assert_eq!(next_rows[0][0], 3);
-        assert!(store
-            .position_rows(
+        assert_eq!(unsigned(&next, "events", "source_cursor")?, vec![3]);
+        assert_eq!(binary(&next, "events", "catalog_json")?, vec![vec![3; 768]]);
+        assert!(matches!(
+            read(
+                &store,
                 &selection,
-                None,
-                AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![0; MAX_ANALYSIS_PAGE_BYTES]))),
-            )
-            .is_err());
+                &fields,
+                AnalysisReadModeV1::Page(None),
+                AnalysisExtractLimits {
+                    page_bytes: 767,
+                    ..limits
+                },
+                &AnalysisReadControl::default()
+            ),
+            Err(crate::Error::AnalysisInputTooLarge {
+                resource: "projected row bytes",
+                ..
+            })
+        ));
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
     }
@@ -2864,31 +2758,21 @@ mod tests {
         use std::time::Duration;
 
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = std::sync::Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
         let first = identity(1);
         let rotating = EvidenceIntakeIdentityV1 {
             source_epoch: 2,
             ..first.clone()
         };
-        store.accept_validated_batch(first.clone(), batch(1, 1, 10))?;
-        let large = ValidatedEvidenceBatchV1 {
-            framed_records: vec![7; crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES].into(),
-            frame_ends: vec![crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES],
-            ..batch(1, 1, 10)
-        };
-        for cursor in 1..=3 {
+        store.accept_validated_batch(first.clone(), batch(1, 1, 10)?)?;
+        for cursor in [1, 33, 65] {
             store.accept_validated_batch(
                 rotating.clone(),
-                ValidatedEvidenceBatchV1 {
-                    first_cursor: cursor,
-                    last_cursor: cursor,
-                    ..large.clone()
-                },
+                padded_batch(cursor, 32, 10, 128 * 1024),
             )?;
         }
         let before = store.meta()?;
-        let selection =
-            AnalysisSelectionV1::new(first.tenant_id, vec![first.clone(), rotating.clone()]);
+        let selection = AnalysisSelectionV1::new(first.tenant_id, vec![first, rotating.clone()]);
         let (start, started) = mpsc::channel();
         let (rotate, rotation) = mpsc::channel();
         store.set_commit_hook(
@@ -2899,87 +2783,76 @@ mod tests {
                     .map_err(|_| crate::AnalysisReadCancelledSnafu.build())
             },
         )?;
+        let fields = [("events", &["source_epoch", "source_cursor"][..])];
         std::thread::scope(|scope| -> TestResult {
-            let store = &store;
-            let rotating = &rotating;
+            let writer_store = std::sync::Arc::clone(&store);
             let writer = scope.spawn(move || {
-                started
-                    .recv_timeout(Duration::from_secs(2))
-                    .map_err(|_| store.state_error("the reader did not reach its barrier"))?;
-                store.accept_validated_batch(
-                    rotating.clone(),
-                    ValidatedEvidenceBatchV1 {
-                        first_cursor: 4,
-                        last_cursor: 4,
-                        ..large
-                    },
-                )
+                started.recv_timeout(Duration::from_secs(2)).map_err(|_| {
+                    writer_store.state_error("the reader did not reach its barrier")
+                })?;
+                writer_store.accept_validated_batch(rotating, padded_batch(97, 32, 10, 128 * 1024))
             });
-            let output = store.extract_rows(
+            let control = AnalysisReadControl::default();
+            control.on_read_step(move || {
+                start
+                    .send(())
+                    .map_err(|_| crate::AnalysisReadCancelledSnafu.build())?;
+                rotation
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|_| crate::AnalysisReadCancelledSnafu.build())?;
+                Ok(())
+            })?;
+            let output = read(
+                &store,
                 &selection,
-                None,
+                &fields,
+                AnalysisReadModeV1::Complete,
                 AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(|input: AnalysisInputV1<'_>| {
-                    let AnalysisInputV1::Event {
-                        identity, record, ..
-                    } = input
-                    else {
-                        return store.reject("unexpected relation");
-                    };
-                    if identity == &first {
-                        start
-                            .send(())
-                            .map_err(|_| store.state_error("the writer left its barrier"))?;
-                        rotation.recv_timeout(Duration::from_secs(2)).map_err(|_| {
-                            store.state_error("the writer did not request rotation")
-                        })?;
-                    }
-                    Ok(Some(vec![identity.source_epoch as u8, record.cursor as u8]))
-                }),
+                &control,
             );
             assert_eq!(
                 writer.join().map_err(|_| "writer panicked")??,
                 crate::EvidenceStoreOutcomeV1::Accepted
             );
-            let (
-                output,
-                Bytes {
-                    rows: output_rows, ..
-                },
-            ) = output?;
-            let output = output.extraction;
-            assert_eq!(output.meta, before);
-            assert_eq!(output.sources[1].receipt.contiguous_cursor, 3);
-            let rows: Vec<_> = output_rows.iter().map(|row| row.as_ref()).collect();
-            assert_eq!(rows, [&[1, 1], &[2, 1], &[2, 2], &[2, 3]]);
+            let output = output?;
+            assert_eq!(output.extraction.meta, before);
+            assert_eq!(output.extraction.sources[1].receipt.contiguous_cursor, 96);
+            let cursors = unsigned(&output, "events", "source_cursor")?;
+            assert_eq!(
+                cursors,
+                std::iter::once(1).chain(1..=96).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                unsigned(&output, "events", "source_epoch")?,
+                std::iter::once(1)
+                    .chain(std::iter::repeat_n(2, 96))
+                    .collect::<Vec<_>>()
+            );
             Ok(())
         })?;
-        let (
-            later,
-            Bytes {
-                rows: later_rows, ..
-            },
-        ) = store.extract_rows(
+        let later = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event {
-                    identity, record, ..
-                } = input
-                else {
-                    return store.reject("unexpected relation");
-                };
-                Ok(Some(vec![identity.source_epoch as u8, record.cursor as u8]))
-            }),
         )?;
-        let later = later.extraction;
-        assert_eq!(later.meta.commit_revision, before.commit_revision + 1);
-        assert_eq!(later.sources[1].receipt.contiguous_cursor, 4);
-        let rows: Vec<_> = later_rows.iter().map(|row| row.as_ref()).collect();
-        assert_eq!(rows, [&[1, 1], &[2, 1], &[2, 2], &[2, 3], &[2, 4]]);
+        assert_eq!(
+            later.extraction.meta.commit_revision,
+            before.commit_revision + 1
+        );
+        assert_eq!(later.extraction.sources[1].receipt.contiguous_cursor, 128);
+        assert_eq!(
+            unsigned(&later, "events", "source_cursor")?,
+            std::iter::once(1).chain(1..=128).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            unsigned(&later, "events", "source_epoch")?,
+            std::iter::once(1)
+                .chain(std::iter::repeat_n(2, 128))
+                .collect::<Vec<_>>()
+        );
         assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 3);
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
@@ -2993,7 +2866,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = identity(1);
-        store.accept_validated_batch(identity.clone(), batch(1, 1, 1))?;
+        store.accept_validated_batch(identity.clone(), batch(1, 1, 1)?)?;
         let receipt = store.source_receipt(&identity)?.ok_or("receipt absent")?;
         let reader = store.reader()?;
         for access in 0..3 {
@@ -3057,7 +2930,7 @@ mod tests {
             }
         }
         drop(reader);
-        store.accept_validated_batch(identity.clone(), batch(2, 1, 2))?;
+        store.accept_validated_batch(identity.clone(), batch(2, 1, 2)?)?;
         assert_eq!(store.read_page(&identity, 1)?.records.len(), 2);
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
@@ -3069,49 +2942,33 @@ mod tests {
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = identity(1);
         for (cursor, received) in [(1, 10), (2, 30), (3, 20)] {
-            store.accept_validated_batch(identity.clone(), batch(cursor, 1, received))?;
+            store.accept_validated_batch(identity.clone(), batch(cursor, 1, received)?)?;
         }
         let foreign = EvidenceIntakeIdentityV1 {
             tenant_id: [9; 16],
             ..identity.clone()
         };
-        store.accept_validated_batch(foreign.clone(), batch(1, 1, 20))?;
+        store.accept_validated_batch(foreign.clone(), batch(1, 1, 20)?)?;
         let before = store.meta()?;
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         selection.received_from = Bound::Included(20);
         selection.received_until = Bound::Excluded(30);
-        let (
-            output,
-            Bytes {
-                rows: output_rows, ..
-            },
-        ) = store.extract_rows(
+        let fields = [(
+            "events",
+            &["tenant_id", "source_cursor", "received_utc_ns", "cpu_id"][..],
+        )];
+        let page = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event {
-                    identity: source,
-                    cpu_id,
-                    record,
-                    received_utc_ns,
-                    decoded,
-                } = input
-                else {
-                    return store.reject("unexpected relation");
-                };
-                assert!(decoded.is_none());
-                assert_eq!(source, &identity);
-                assert_eq!(cpu_id, 0);
-                assert_eq!(received_utc_ns, 20);
-                Ok(Some(record.cursor.to_be_bytes().to_vec()))
-            }),
         )?;
-        let output = output.extraction;
-        assert_eq!(output.meta, before);
+        assert_eq!(page.extraction.meta, before);
+        assert!(page.exhausted);
         assert_eq!(
-            output.scanned_bytes,
+            page.extraction.scanned_bytes,
             store
                 .raw
                 .lock()
@@ -3122,9 +2979,25 @@ mod tests {
                 .map(|entry| entry.frame_bytes)
                 .sum::<usize>()
         );
-        assert_eq!(output.projected_bytes, 8);
-        assert_eq!(output_rows[0].as_ref(), &3_u64.to_be_bytes());
-        assert_eq!(output.sources[0].receipt.contiguous_cursor, 3);
+        assert_eq!(unsigned(&page, "events", "source_cursor")?, vec![3]);
+        assert_eq!(unsigned(&page, "events", "received_utc_ns")?, vec![20]);
+        assert_eq!(
+            binary(&page, "events", "tenant_id")?,
+            vec![identity.tenant_id.to_vec()]
+        );
+        let mut cpus = Vec::new();
+        for batch in &page.tables["events"] {
+            let values = batch
+                .column_by_name("cpu_id")
+                .ok_or("CPU column absent")?
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .ok_or("CPU column is not UInt32")?;
+            cpus.extend_from_slice(values.values());
+        }
+        assert_eq!(cpus, vec![0]);
+        assert_eq!(page.extraction.projected_bytes, (5 + 16) + 9 + 9 + 5);
+        assert_eq!(page.extraction.sources[0].receipt.contiguous_cursor, 3);
         assert_eq!(store.meta()?, before);
         for (from, until) in [
             (Bound::Excluded(u64::MAX), Bound::Unbounded),
@@ -3133,70 +3006,68 @@ mod tests {
         ] {
             selection.received_from = from;
             selection.received_until = until;
-            let (
-                empty,
-                Bytes {
-                    rows: empty_rows, ..
-                },
-            ) = store.extract_rows(
+            let empty = read(
+                &store,
                 &selection,
-                None,
+                &fields,
+                AnalysisReadModeV1::Complete,
                 AnalysisExtractLimits::default(),
                 &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| store.reject("empty range decoded input")),
             )?;
-            let empty = empty.extraction;
-            assert!(empty_rows.is_empty());
-            assert_eq!(empty.scanned_bytes, 0);
+            assert_eq!(row_count(&empty, "events"), 0);
+            assert_eq!(empty.extraction.scanned_bytes, 0);
         }
         selection.sources = Selection::Exact(Vec::new());
-        assert!(store
-            .extract_rows(
-                &selection,
-                None,
-                AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(
-                    |_: AnalysisInputV1<'_>| store.reject("empty source scope is not a wildcard")
-                ),
-            )?
-            .1
-            .rows
-            .is_empty());
+        let empty = read(
+            &store,
+            &selection,
+            &fields,
+            AnalysisReadModeV1::Complete,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+        )?;
+        assert_eq!(row_count(&empty, "events"), 0);
         selection.sources = Selection::Exact(vec![foreign]);
-        assert!(store
-            .extract_rows(
-                &selection,
-                None,
-                AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
-            )
-            .is_err());
+        assert!(read(
+            &store,
+            &selection,
+            &fields,
+            AnalysisReadModeV1::Complete,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default()
+        )
+        .is_err());
         selection.sources = Selection::Exact(vec![identity.clone(), identity]);
-        assert!(store
-            .extract_rows(
-                &selection,
-                None,
-                AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
-            )
-            .is_err());
+        assert!(read(
+            &store,
+            &selection,
+            &fields,
+            AnalysisReadModeV1::Complete,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default()
+        )
+        .is_err());
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
     }
 
     #[test]
     fn analysis_tenant_snapshot() -> TestResult {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
         let first = identity(1);
-        store.accept_validated_batch(first.clone(), batch(1, 1, 10))?;
-        store.accept_validated_batch(identity(2), batch(1, 1, 10))?;
-        let mut next = first.clone();
-        next.source_id = [4; 16];
-        next.node_boot_id = [5; 16];
+        store.accept_validated_batch(first.clone(), batch(1, 1, 10)?)?;
+        store.accept_validated_batch(identity(2), batch(1, 1, 10)?)?;
+        let next = EvidenceIntakeIdentityV1 {
+            source_id: [4; 16],
+            node_boot_id: [5; 16],
+            ..first.clone()
+        };
         let context = AnalysisContextVersionV1 {
             key: AnalysisContextKeyV1 {
                 tenant_id: first.tenant_id,
@@ -3211,73 +3082,65 @@ mod tests {
             body: vec![42],
         };
         let selection = AnalysisSelectionV1::tenant(first.tenant_id);
+        let fields = [
+            ("events", &["source_id"][..]),
+            ("context_versions", &["body"][..]),
+        ];
         let before = store.meta()?;
-        let mut calls = 0;
-        let (
-            output,
-            Bytes {
-                rows: output_rows, ..
-            },
-        ) = store.extract_rows(
+        let control = AnalysisReadControl::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        let writer = Arc::clone(&store);
+        let late = next.clone();
+        control.on_read_step(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            writer.accept_validated_batch(late, batch(1, 1, 20)?)?;
+            writer.commit_context(&context)?;
+            Ok(())
+        })?;
+        let page = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
+            AnalysisExtractLimits::default(),
+            &control,
+        )?;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(page.extraction.meta, before);
+        assert_eq!(page.extraction.sources.len(), 1);
+        assert_eq!(
+            binary(&page, "events", "source_id")?,
+            vec![first.source_id.to_vec()]
+        );
+        assert_eq!(row_count(&page, "context_versions"), 0);
+        assert!(page.extraction.missing_contexts.is_empty());
+        let page = read(
+            &store,
+            &selection,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event { identity, .. } = input else {
-                    return store.reject("a late context entered the snapshot");
-                };
-                assert_eq!(identity, &first);
-                calls += 1;
-                store.accept_validated_batch(next.clone(), batch(1, 1, 20))?;
-                store.commit_context(&context)?;
-                Ok(Some(vec![7]))
-            }),
         )?;
-        let output = output.extraction;
-        assert_eq!(calls, 1);
-        assert_eq!(output.meta, before);
-        assert_eq!(output.sources.len(), 1);
-        assert_eq!(output_rows.len(), 1);
-        assert!(output.missing_contexts.is_empty());
-        let (
-            output,
-            Bytes {
-                rows: output_rows, ..
-            },
-        ) = store.extract_rows(
-            &selection,
-            None,
+        assert_eq!(page.extraction.sources.len(), 2);
+        assert_eq!(
+            binary(&page, "events", "source_id")?,
+            vec![first.source_id.to_vec(), next.source_id.to_vec()]
+        );
+        assert_eq!(binary(&page, "context_versions", "body")?, vec![vec![42]]);
+        let empty = read(
+            &store,
+            &AnalysisSelectionV1::new(first.tenant_id, vec![]),
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                Ok(Some(match input {
-                    AnalysisInputV1::Event { identity, .. } => vec![identity.source_id[0]],
-                    AnalysisInputV1::Context(context) => context.body.clone(),
-                    _ => return store.reject("an unselected result entered the snapshot"),
-                }))
-            }),
         )?;
-        let output = output.extraction;
-        assert_eq!(output.sources.len(), 2);
-        assert_eq!(output_rows.len(), 3);
-        assert_eq!(output_rows[0].as_ref(), &[first.source_id[0]]);
-        assert_eq!(output_rows[1].as_ref(), &[next.source_id[0]]);
-        assert_eq!(output_rows[2].as_ref(), &[42]);
-        let empty = AnalysisSelectionV1::new(first.tenant_id, vec![]);
-        assert!(store
-            .extract_rows(
-                &empty,
-                None,
-                AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| {
-                    store.reject("an empty explicit list selected input")
-                }),
-            )?
-            .1
-            .rows
-            .is_empty());
+        assert_eq!(
+            row_count(&empty, "events") + row_count(&empty, "context_versions"),
+            0
+        );
         Ok(())
     }
 
@@ -3286,7 +3149,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let first = identity(1);
-        store.accept_validated_batch(first.clone(), batch(1, 1, 10))?;
+        store.accept_validated_batch(first.clone(), batch(1, 1, 10)?)?;
         let mut selection = AnalysisSelectionV1::tenant(first.tenant_id);
         selection.contexts = Selection::Exact(
             (0..MAX_EXTRACT_KEYS - 1)
@@ -3300,26 +3163,35 @@ mod tests {
                 .collect(),
         );
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
-        let (output, _) = store.extract_rows(
+        let fields = [
+            ("events", &["source_cursor"][..]),
+            ("context_versions", &["body"][..]),
+        ];
+        let page = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Metadata,
             AnalysisExtractLimits::default(),
             &control,
-            Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
         )?;
-        let output = output.extraction;
-        assert_eq!(output.sources.len(), 1);
-        assert_eq!(output.missing_contexts.len(), MAX_EXTRACT_KEYS - 1);
-        let mut next = first.clone();
-        next.source_id = [4; 16];
-        store.accept_validated_batch(next, batch(1, 1, 20))?;
+        assert_eq!(page.extraction.sources.len(), 1);
+        assert_eq!(page.extraction.missing_contexts.len(), MAX_EXTRACT_KEYS - 1);
+        assert_eq!(page.extraction.scanned_bytes, 0);
+        assert!(page.exhausted);
+        let next = EvidenceIntakeIdentityV1 {
+            source_id: [4; 16],
+            ..first.clone()
+        };
+        store.accept_validated_batch(next, batch(1, 1, 20)?)?;
         assert!(matches!(
-            store.extract_rows(
+            read(
+                &store,
                 &selection,
-                None,
+                &fields,
+                AnalysisReadModeV1::Metadata,
                 AnalysisExtractLimits::default(),
-                &control,
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+                &control
             ),
             Err(crate::Error::AnalysisInputTooLarge {
                 resource: "selected input keys",
@@ -3328,27 +3200,29 @@ mod tests {
         ));
         let selection = AnalysisSelectionV1::tenant(first.tenant_id);
         assert!(matches!(
-            store.extract_rows(
+            read(
+                &store,
                 &selection,
-                None,
+                &fields,
+                AnalysisReadModeV1::Complete,
                 AnalysisExtractLimits {
                     input_bytes: size_of::<AnalysisSelectionV1>() - 1,
                     ..Default::default()
                 },
-                &control,
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None))
+                &control
             ),
             Err(crate::Error::AnalysisInputTooLarge { .. })
         ));
         let cancelled = AnalysisReadControl::default();
         cancelled.cancel()?;
         assert!(matches!(
-            store.extract_rows(
+            read(
+                &store,
                 &selection,
-                None,
+                &fields,
+                AnalysisReadModeV1::Complete,
                 AnalysisExtractLimits::default(),
-                &cancelled,
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+                &cancelled
             ),
             Err(crate::Error::AnalysisReadCancelled { .. })
         ));
@@ -3366,10 +3240,15 @@ mod tests {
 
     #[test]
     fn analysis_extract_snapshot() -> TestResult {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
         let identity = identity(1);
-        store.accept_validated_batch(identity.clone(), batch(1, 1, 10))?;
+        store.accept_validated_batch(identity.clone(), batch(1, 1, 10)?)?;
         let scope = ProcessorScopeV1 {
             processor_id: "p".into(),
             method_version: 1,
@@ -3392,102 +3271,105 @@ mod tests {
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         selection.contexts = Selection::Exact(vec![context.key.clone()]);
         selection.results.push("late".into());
+        let key = context.key.clone();
         let before = store.meta()?;
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
-        let mut calls = 0;
-        let (
-            output,
-            Bytes {
-                rows: output_rows, ..
-            },
-        ) = store.extract_rows(
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        let writer = Arc::clone(&store);
+        let source = identity.clone();
+        control.on_read_step(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            writer.accept_validated_batch(source, batch(2, 1, 5)?)?;
+            writer.commit_context(&context)?;
+            writer.commit_result(&AnalysisResultCommitV1 {
+                body: vec![43],
+                created_utc_ns: 20,
+                ..crate::analysis::tests::result(scope, "late".into())
+            })?;
+            Ok(())
+        })?;
+        let fields = [
+            ("events", &["source_cursor"][..]),
+            ("context_versions", &["body"][..]),
+        ];
+        let first = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &control,
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event { record, .. } = input else {
-                    return store.reject("late metadata entered snapshot");
-                };
-                assert_eq!(record.cursor, 1);
-                calls += 1;
-                store.accept_validated_batch(identity.clone(), batch(2, 1, 5))?;
-                store.commit_context(&context)?;
-                store.commit_result(&AnalysisResultCommitV1 {
-                    body: vec![43],
-                    created_utc_ns: 20,
-                    ..crate::analysis::tests::result(scope.clone(), "late".into())
-                })?;
-                Ok(Some(vec![1]))
-            }),
         )?;
-        let output = output.extraction;
-        assert_eq!(calls, 1);
-        assert_eq!(output.meta, before);
-        assert_eq!(output.sources[0].receipt.contiguous_cursor, 1);
-        assert_eq!(output.missing_contexts, vec![context.key]);
-        assert_eq!(output.missing_results, vec!["late"]);
-        assert_eq!(output_rows.len(), 1);
-        assert_eq!(output_rows[0].as_ref(), &[1]);
-        let (
-            output,
-            Bytes {
-                rows: output_rows, ..
-            },
-        ) = store.extract_rows(
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(first.extraction.meta, before);
+        assert_eq!(first.extraction.sources[0].receipt.contiguous_cursor, 1);
+        assert_eq!(first.extraction.missing_contexts, vec![key]);
+        assert_eq!(first.extraction.missing_results, vec!["late"]);
+        assert_eq!(unsigned(&first, "events", "source_cursor")?, vec![1]);
+        assert_eq!(row_count(&first, "context_versions"), 0);
+        assert!(first
+            .extraction
+            .references
+            .iter()
+            .all(|entry| entry.result().is_none()));
+        let result_revision = store.meta()?.commit_revision;
+        let next = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &control,
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                Ok(Some(match input {
-                    AnalysisInputV1::Event { record, .. } => vec![record.cursor as u8],
-                    AnalysisInputV1::Context(context) => context.body.clone(),
-                    AnalysisInputV1::Result { body, .. } => body.to_vec(),
-                    AnalysisInputV1::Trace { .. }
-                    | AnalysisInputV1::PackageOutput { .. }
-                    | AnalysisInputV1::RawRemoval { .. }
-                    | AnalysisInputV1::TraceOutput { .. }
-                    | AnalysisInputV1::Profile { .. }
-                    | AnalysisInputV1::Graph { .. }
-                    | AnalysisInputV1::Notification { .. } => {
-                        return store.reject("unselected input entered an evidence-only snapshot");
-                    }
-                }))
-            }),
         )?;
-        let output = output.extraction;
-        assert!(output.missing_contexts.is_empty() && output.missing_results.is_empty());
-        assert_eq!(output.meta, store.meta()?);
-        assert_eq!(output_rows.len(), 4);
-        assert_eq!(output_rows[0].as_ref(), &[1]);
-        assert_eq!(output_rows[1].as_ref(), &[2]);
-        assert_eq!(output_rows[2].as_ref(), &[42]);
-        assert_eq!(output_rows[3].as_ref(), &[43]);
+        assert!(
+            next.extraction.missing_contexts.is_empty()
+                && next.extraction.missing_results.is_empty()
+        );
+        assert_eq!(next.extraction.meta, store.meta()?);
+        assert_eq!(unsigned(&next, "events", "source_cursor")?, vec![1, 2]);
+        assert_eq!(binary(&next, "context_versions", "body")?, vec![vec![42]]);
+        let reference = next
+            .extraction
+            .references
+            .iter()
+            .find(|entry| entry.result().is_some())
+            .ok_or("result reference absent")?;
+        let result = reference.result().ok_or("result reference absent")?;
+        assert_eq!(result.result_id, "late");
+        assert_eq!(result.commit_revision, result_revision);
+        assert_eq!(
+            reference.origins(),
+            &[AnalysisReferenceOriginV1::ExplicitResult]
+        );
+        assert_eq!(
+            store.read_result(identity.tenant_id, "late")?,
+            Some(vec![43])
+        );
         selection.received_from = Bound::Included(100);
-        let (
-            output,
-            Bytes {
-                rows: output_rows, ..
-            },
-        ) = store.extract_rows(
+        let later = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &control,
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                Ok(Some(match input {
-                    AnalysisInputV1::Context(context) => context.body.clone(),
-                    AnalysisInputV1::Result { body, .. } => body.to_vec(),
-                    _ => return store.reject("old event entered a new window"),
-                }))
-            }),
         )?;
-        let output = output.extraction;
-        assert_eq!(output.scanned_bytes, 0);
-        assert_eq!(output_rows.len(), 2);
-        assert_eq!(output_rows[0].as_ref(), &[42]);
-        assert_eq!(output_rows[1].as_ref(), &[43]);
+        assert_eq!(later.extraction.scanned_bytes, 0);
+        assert_eq!(row_count(&later, "events"), 0);
+        assert_eq!(binary(&later, "context_versions", "body")?, vec![vec![42]]);
+        let reference = later
+            .extraction
+            .references
+            .iter()
+            .find_map(AnalysisReferenceV1::result)
+            .ok_or("result reference absent")?;
+        assert_eq!(reference.result_id, "late");
+        assert_eq!(reference.commit_revision, result_revision);
+        assert!(
+            later.extraction.missing_contexts.is_empty()
+                && later.extraction.missing_results.is_empty()
+        );
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
     }
@@ -3498,29 +3380,20 @@ mod tests {
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = identity(1);
         for cursor in 1..=257 {
-            store.accept_validated_batch(identity.clone(), batch(cursor, 1, 10))?;
+            store.accept_validated_batch(identity.clone(), batch(cursor, 1, 10)?)?;
         }
         let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
-        let (
-            output,
-            Bytes {
-                rows: output_rows, ..
-            },
-        ) = store.extract_rows(
+        let fields = [("events", &["source_cursor"][..])];
+        let page = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| match input {
-                AnalysisInputV1::Event { record, .. } => {
-                    Ok(Some(record.cursor.to_be_bytes().to_vec()))
-                }
-                _ => store.reject("unexpected relation"),
-            }),
         )?;
-        let output = output.extraction;
         assert_eq!(
-            output.scanned_bytes,
+            page.extraction.scanned_bytes,
             store
                 .raw
                 .lock()
@@ -3530,24 +3403,25 @@ mod tests {
                 .map(|entry| entry.frame_bytes)
                 .sum::<usize>()
         );
+        assert!(page.exhausted);
+        assert_eq!(
+            unsigned(&page, "events", "source_cursor")?,
+            (1..=257).collect::<Vec<_>>()
+        );
         assert!(matches!(
-            store.extract_rows(
+            read(
+                &store,
                 &selection,
-                None,
-                AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| { Ok(Some(vec![0; 512 * 1024])) }),
+                &fields,
+                AnalysisReadModeV1::Complete,
+                AnalysisExtractLimits {
+                    input_bytes: page.extraction.projected_bytes,
+                    ..Default::default()
+                },
+                &AnalysisReadControl::default()
             ),
-            Err(crate::Error::AnalysisInputTooLarge {
-                resource: "selected input bytes",
-                ..
-            })
+            Err(crate::Error::AnalysisInputTooLarge { .. })
         ));
-        let rows: Vec<_> = output_rows.iter().collect();
-        assert_eq!(rows.len(), 257);
-        for (index, row) in rows.into_iter().enumerate() {
-            assert_eq!(row.as_ref(), &(index as u64 + 1).to_be_bytes());
-        }
         let mut selection = AnalysisSelectionV1::new(
             identity.tenant_id,
             (1..=MAX_EXTRACT_KEYS)
@@ -3577,7 +3451,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = identity(1);
-        store.accept_validated_batch(identity.clone(), batch(1, 1, 1))?;
+        store.accept_validated_batch(identity.clone(), batch(1, 1, 1)?)?;
         let (path, offset) = {
             let reader = store.reader()?;
             let ranges = store.raw_ranges(reader.get()?, &identity, 1, 1, 1)?;
@@ -3588,45 +3462,50 @@ mod tests {
             )
         };
         let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity]);
+        let fields = [("events", &["source_cursor"][..])];
         let hidden = directory.path().join("hidden.seg");
         std::fs::rename(&path, &hidden)?;
         assert!(matches!(
-            store.extract_rows(
+            read(
+                &store,
                 &selection,
-                None,
+                &fields,
+                AnalysisReadModeV1::Complete,
                 AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+                &AnalysisReadControl::default()
             ),
             Err(crate::Error::Io { .. })
         ));
         std::fs::rename(&hidden, &path)?;
-        let file = std::fs::OpenOptions::new().write(true).open(&path)?;
-        file.write_all_at(&[8], offset)?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)?;
+        let mut original = [0];
+        file.read_exact_at(&mut original, offset)?;
+        file.write_all_at(&[original[0] ^ 0xff], offset)?;
         assert!(matches!(
-            store.extract_rows(
+            read(
+                &store,
                 &selection,
-                None,
+                &fields,
+                AnalysisReadModeV1::Complete,
                 AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+                &AnalysisReadControl::default()
             ),
             Err(crate::Error::AnalysisState { .. })
         ));
-        file.write_all_at(&[7], offset)?;
-        let (
-            _,
-            Bytes {
-                rows: result_rows, ..
-            },
-        ) = store.extract_rows(
+        file.write_all_at(&original, offset)?;
+        let page = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![7]))),
         )?;
-        assert_eq!(result_rows[0].as_ref(), &[7]);
+        assert_eq!(unsigned(&page, "events", "source_cursor")?, vec![1]);
+        assert!(page.exhausted);
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
     }
@@ -3644,29 +3523,26 @@ mod tests {
             Default::default(),
         )?;
         let identity = identity(1);
-        store.accept_validated_batch(identity.clone(), batch(1, 1, 1))?;
+        store.accept_validated_batch(identity.clone(), batch(1, 1, 1)?)?;
         store.backup(&store.root.join("backups/sealed"))?;
-        store.accept_validated_batch(identity.clone(), batch(2, 1, 100))?;
+        store.accept_validated_batch(identity.clone(), batch(2, 1, 100)?)?;
         EvidenceRetentionOwner::new(&store).retain(&identity, 3)?;
         store.record_recovery_floor(&identity, 4)?;
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         selection.received_from = Bound::Included(99);
-        let (
-            output,
-            Bytes {
-                rows: output_rows, ..
-            },
-        ) = store.extract_rows(
+        let fields = [("events", &["source_cursor"][..])];
+        let page = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![2]))),
         )?;
-        let output = output.extraction;
-        assert_eq!(output.input_bytes, owned_bytes(&output, &output_rows));
+        assert!(page.extraction.input_bytes >= owned_bytes(&page));
+        assert_eq!(unsigned(&page, "events", "source_cursor")?, vec![2]);
         assert_eq!(
-            output.scanned_bytes,
+            page.extraction.scanned_bytes,
             store
                 .raw
                 .lock()
@@ -3677,18 +3553,18 @@ mod tests {
                 .map(|entry| entry.frame_bytes)
                 .sum::<usize>()
         );
-        assert_eq!(output.sources[0].expired.len(), 1);
+        assert_eq!(page.extraction.sources[0].expired.len(), 1);
         assert_eq!(
             (
-                output.sources[0].expired[0].first_cursor,
-                output.sources[0].expired[0].last_cursor
+                page.extraction.sources[0].expired[0].first_cursor,
+                page.extraction.sources[0].expired[0].last_cursor
             ),
             (1, 1)
         );
         assert_eq!(
             (
-                output.sources[0].recovery[0].first_cursor,
-                output.sources[0].recovery[0].last_cursor
+                page.extraction.sources[0].recovery[0].first_cursor,
+                page.extraction.sources[0].recovery[0].last_cursor
             ),
             (3, 4)
         );
@@ -3698,51 +3574,35 @@ mod tests {
             .map_err(|_| "raw lock poisoned")?
             .ranges
             .remove(&(identity.key(), 2));
-        assert!(store
-            .extract_rows(
-                &selection,
-                None,
-                AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
-            )
-            .is_err());
+        assert!(read(
+            &store,
+            &selection,
+            &fields,
+            AnalysisReadModeV1::Complete,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default()
+        )
+        .is_err());
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
     }
 
-    fn owned_bytes(output: &AnalysisExtractionV1, rows: &Vec<Box<[u8]>>) -> usize {
-        size_of::<AnalysisExtractionV1>()
-            + output.sources.capacity() * size_of::<AnalysisSourceSnapshotV1>()
-            + output.missing_contexts.capacity() * size_of::<AnalysisContextKeyV1>()
-            + output.missing_results.capacity() * size_of::<String>()
-            + rows.capacity() * size_of::<Box<[u8]>>()
-            + rows.iter().map(|row| row.len()).sum::<usize>()
-            + output
-                .sources
-                .iter()
-                .map(|source| {
-                    source.receipt.identity.node_id.capacity()
-                        + (source.expired.capacity()
-                            + source.recovery.capacity()
-                            + source.pending.capacity())
-                            * size_of::<AnalysisGapV1>()
-                        + source.coverage_report.as_ref().map_or(0, Vec::capacity)
+    fn owned_bytes(page: &AnalysisPositionPageV1) -> usize {
+        page.extraction.allocation_bytes()
+            + page
+                .tables
+                .values()
+                .map(|batches| {
+                    batches.capacity() * size_of::<RecordBatch>()
+                        + batches
+                            .iter()
+                            .map(|batch| {
+                                batch.num_columns()
+                                    * size_of::<araphor_analysis_sdk::arrow_array::ArrayRef>()
+                                    + batch.get_array_memory_size()
+                            })
+                            .sum::<usize>()
                 })
-                .sum::<usize>()
-            + output
-                .missing_contexts
-                .iter()
-                .map(|key| {
-                    key.owner_id.capacity()
-                        + key.entity_key.capacity()
-                        + key.lifetime_key.capacity()
-                })
-                .sum::<usize>()
-            + output
-                .missing_results
-                .iter()
-                .map(String::capacity)
                 .sum::<usize>()
     }
 
@@ -3753,7 +3613,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = identity(1);
-        store.accept_validated_batch(identity.clone(), batch(11, 4, 10))?;
+        store.accept_validated_batch(identity.clone(), batch(11, 4, 10)?)?;
         store.accept_validated_coverage(crate::ValidatedCoverageV1 {
             identity: identity.clone(),
             cpu_id: 0,
@@ -3782,100 +3642,151 @@ mod tests {
                 });
             selection.results.push(format!("missing-{revision}"));
         }
-        let (
-            output,
-            Bytes {
-                rows: output_rows, ..
-            },
-        ) = store.extract_rows(
+        let fields = [
+            ("events", &["source_cursor"][..]),
+            ("context_versions", &["body"][..]),
+        ];
+        let page = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![1]))),
         )?;
-        let output = output.extraction;
-        let required = owned_bytes(&output, &output_rows);
-        assert_eq!(output.input_bytes, required);
-        assert_eq!(output_rows.len(), 4);
-        assert_eq!(output.sources[0].pending.len(), 1);
-        assert_eq!(output.sources[0].recovery.len(), 1);
-        assert_eq!(output.missing_contexts.len(), 4);
-        assert_eq!(output.missing_results.len(), 4);
-        drop(output);
-        for limit in [required, required - 1] {
-            let result = store.extract_rows(
+        assert!(page.extraction.input_bytes >= owned_bytes(&page));
+        assert_eq!(
+            unsigned(&page, "events", "source_cursor")?,
+            vec![11, 12, 13, 14]
+        );
+        assert_eq!(page.extraction.sources[0].pending.len(), 1);
+        assert_eq!(page.extraction.sources[0].recovery.len(), 1);
+        assert_eq!(page.extraction.missing_contexts.len(), 4);
+        assert_eq!(page.extraction.missing_results.len(), 4);
+        let before = store.meta()?;
+        let mut rejected = 0;
+        let mut admitted = MAX_INPUT_BYTES;
+        while rejected + 1 < admitted {
+            let limit = rejected + (admitted - rejected) / 2;
+            match read(
+                &store,
                 &selection,
-                None,
+                &fields,
+                AnalysisReadModeV1::Complete,
                 AnalysisExtractLimits {
                     input_bytes: limit,
                     ..Default::default()
                 },
                 &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![1]))),
-            );
-            if limit == required {
-                let (page, rows) = result?;
-                let output = page.extraction;
-                assert_eq!(output.input_bytes, required);
-                assert_eq!(output.input_bytes, owned_bytes(&output, &rows.rows));
-            } else {
-                assert!(matches!(
-                    result,
-                    Err(crate::Error::AnalysisInputTooLarge {
-                        resource: "selected input bytes",
-                        ..
-                    })
-                ));
+            ) {
+                Ok(page) => {
+                    assert!(page.extraction.input_bytes <= limit);
+                    assert!(page.extraction.input_bytes >= owned_bytes(&page));
+                    assert_eq!(row_count(&page, "events"), 4);
+                    admitted = limit;
+                }
+                Err(crate::Error::AnalysisInputTooLarge { .. }) => rejected = limit,
+                Err(error) => return Err(error.into()),
             }
         }
+        let page = read(
+            &store,
+            &selection,
+            &fields,
+            AnalysisReadModeV1::Complete,
+            AnalysisExtractLimits {
+                input_bytes: admitted,
+                ..Default::default()
+            },
+            &AnalysisReadControl::default(),
+        )?;
+        assert!(page.extraction.input_bytes <= admitted);
+        assert!(page.extraction.input_bytes >= owned_bytes(&page));
+        assert_eq!(
+            unsigned(&page, "events", "source_cursor")?,
+            vec![11, 12, 13, 14]
+        );
+        assert!(matches!(
+            read(
+                &store,
+                &selection,
+                &fields,
+                AnalysisReadModeV1::Complete,
+                AnalysisExtractLimits {
+                    input_bytes: admitted - 1,
+                    ..Default::default()
+                },
+                &AnalysisReadControl::default()
+            ),
+            Err(crate::Error::AnalysisInputTooLarge { .. })
+        ));
+        assert_eq!(store.meta()?, before);
         assert!(store.maintenance.try_write().is_ok());
+        let recovered = read(
+            &store,
+            &selection,
+            &fields,
+            AnalysisReadModeV1::Complete,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+        )?;
+        assert_eq!(
+            unsigned(&recovered, "events", "source_cursor")?,
+            vec![11, 12, 13, 14]
+        );
         Ok(())
     }
 
     #[test]
     fn analysis_extract_limits() -> TestResult {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = identity(1);
-        store.accept_validated_batch(identity.clone(), batch(1, 257, 1))?;
+        store.accept_validated_batch(identity.clone(), batch(1, 257, 1)?)?;
         let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
+        let fields = [("events", &["source_cursor"][..])];
         let before = store.meta()?;
-        let (
-            output,
-            Bytes {
-                rows: output_rows, ..
-            },
-        ) = store.extract_rows(
+        let complete = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![1]))),
         )?;
-        let output = output.extraction;
-        assert_eq!(output_rows.len(), 257);
-        let (first, rows) = store.position_rows(
+        assert_eq!(
+            unsigned(&complete, "events", "source_cursor")?,
+            (1..=257).collect::<Vec<_>>()
+        );
+        assert!(complete.exhausted);
+        let first = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Page(None),
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![1]))),
         )?;
-        assert_eq!(rows.rows.len(), 256);
+        assert_eq!(row_count(&first, "events"), 256);
         assert!(!first.exhausted);
-        let (next, rows) = store.position_rows(
+        let next = read(
+            &store,
             &selection,
-            Some(first.scanned_through),
+            &fields,
+            AnalysisReadModeV1::Page(Some(first.scanned_through)),
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![1]))),
         )?;
-        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(unsigned(&next, "events", "source_cursor")?, vec![257]);
         assert!(next.exhausted);
         assert!(next.scanned_through > first.scanned_through);
         assert_eq!(
-            output.scanned_bytes,
+            complete.extraction.scanned_bytes,
             store
                 .raw
                 .lock()
@@ -3885,31 +3796,36 @@ mod tests {
                 .map(|entry| entry.frame_bytes)
                 .sum::<usize>()
         );
-        let control = AnalysisReadControl::default();
-        let mut calls = 0;
+        let control = Arc::new(AnalysisReadControl::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        let cancel = Arc::clone(&control);
+        control.on_read_step(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            cancel.cancel()
+        })?;
         assert!(matches!(
-            store.extract_rows(
+            read(
+                &store,
                 &selection,
-                None,
+                &fields,
+                AnalysisReadModeV1::Complete,
                 AnalysisExtractLimits::default(),
-                &control,
-                Bytes::new(|_: AnalysisInputV1<'_>| {
-                    calls += 1;
-                    control.cancel()?;
-                    Ok(Some(vec![1]))
-                }),
+                &control
             ),
             Err(crate::Error::AnalysisReadCancelled { .. })
         ));
-        assert_eq!(calls, 1);
-        let (output, _) = store.extract_rows(
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let empty = read(
+            &store,
             &AnalysisSelectionV1::new(identity.tenant_id, vec![]),
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|_: AnalysisInputV1<'_>| store.reject("empty selection")),
         )?;
-        let mut output = output.extraction;
+        assert_eq!(row_count(&empty, "events"), 0);
+        let mut output = empty.extraction;
         output.scan(MAX_SCAN_BYTES)?;
         assert!(matches!(
             output.scan(1),
@@ -3928,51 +3844,45 @@ mod tests {
         ));
         assert!(output.charge(usize::MAX).is_err());
         assert!(output.scan(usize::MAX).is_err());
-        let (first, rows) = store.position_rows(
+        let first = read(
+            &store,
             &selection,
-            None,
-            AnalysisExtractLimits::default(),
+            &fields,
+            AnalysisReadModeV1::Page(None),
+            AnalysisExtractLimits {
+                page_bytes: 9,
+                ..Default::default()
+            },
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| {
-                let AnalysisInputV1::Event { record, .. } = input else {
-                    return store.reject("unexpected relation");
-                };
-                Ok(Some(if record.cursor == 1 {
-                    vec![0; MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>()]
-                } else {
-                    Vec::new()
-                }))
-            }),
         )?;
-        assert_eq!(rows.rows.len(), 1);
-        assert_eq!(
-            rows.rows[0].len() + size_of::<Box<[u8]>>(),
-            MAX_ANALYSIS_PAGE_BYTES
-        );
+        assert_eq!(unsigned(&first, "events", "source_cursor")?, vec![1]);
+        assert_eq!(first.extraction.projected_bytes, 9);
         assert!(!first.exhausted);
-        let (next, rows) = store.position_rows(
+        let next = read(
+            &store,
             &selection,
-            Some(first.scanned_through),
+            &[("events", &[])],
+            AnalysisReadModeV1::Page(Some(first.scanned_through)),
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(Vec::new()))),
         )?;
-        assert_eq!(rows.rows.len(), 256);
-        assert!(rows.rows.iter().all(|row| row.is_empty()));
+        assert_eq!(row_count(&next, "events"), 256);
+        assert!(next.tables["events"]
+            .iter()
+            .all(|batch| batch.num_columns() == 0));
         assert!(next.exhausted);
         assert!(next.scanned_through > first.scanned_through);
         assert!(matches!(
-            store.extract_rows(
+            read(
+                &store,
                 &selection,
-                None,
-                AnalysisExtractLimits::default(),
-                &AnalysisReadControl::default(),
-                Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![
-                    0;
-                    MAX_ANALYSIS_PAGE_BYTES
-                        - size_of::<Box<[u8]>>()
-                        + 1
-                ]))),
+                &fields,
+                AnalysisReadModeV1::Page(None),
+                AnalysisExtractLimits {
+                    page_bytes: 8,
+                    ..Default::default()
+                },
+                &AnalysisReadControl::default()
             ),
             Err(crate::Error::AnalysisInputTooLarge {
                 resource: "projected row bytes",
@@ -4003,35 +3913,29 @@ mod tests {
         for group in 0..18 {
             store.accept_validated_batch(
                 identity.clone(),
-                ValidatedEvidenceBatchV1 {
-                    cpu_id: 0,
-                    first_cursor: group * 32 + 1,
-                    last_cursor: (group + 1) * 32,
-                    intake_utc_ns: if group == 17 { 20 } else { 10 },
-                    framed_records: vec![7; 32 * frame_bytes].into(),
-                    frame_ends: (1..=32).map(|index| index * frame_bytes).collect(),
-                },
+                padded_batch(
+                    group * 32 + 1,
+                    32,
+                    if group == 17 { 20 } else { 10 },
+                    frame_bytes,
+                ),
             )?;
         }
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         selection.received_from = Bound::Included(20);
+        let fields = [("events", &["source_cursor"][..])];
         let started = std::time::Instant::now();
-        let (recent, _) = store.extract_rows(
+        let recent = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| match input {
-                AnalysisInputV1::Event { record, .. } => {
-                    Ok(Some(record.cursor.to_be_bytes().to_vec()))
-                }
-                _ => store.reject("unexpected relation"),
-            }),
         )?;
-        let recent = recent.extraction;
         let recent_us = started.elapsed().as_micros();
         assert_eq!(
-            recent.scanned_bytes,
+            recent.extraction.scanned_bytes,
             store
                 .raw
                 .lock()
@@ -4042,25 +3946,21 @@ mod tests {
                 .map(|entry| entry.frame_bytes)
                 .sum::<usize>()
         );
-        assert_eq!(recent.projected_bytes, 32 * 8);
+        assert_eq!(row_count(&recent, "events"), 32);
+        assert_eq!(recent.extraction.projected_bytes, 32 * 9);
         selection.received_from = Bound::Unbounded;
         let started = std::time::Instant::now();
-        let (sparse, _) = store.extract_rows(
+        let sparse = read(
+            &store,
             &selection,
-            None,
+            &fields,
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| match input {
-                AnalysisInputV1::Event { record, .. } => {
-                    Ok((record.cursor % 32 == 1).then(|| record.cursor.to_be_bytes().to_vec()))
-                }
-                _ => store.reject("unexpected relation"),
-            }),
         )?;
-        let sparse = sparse.extraction;
         let sparse_us = started.elapsed().as_micros();
         assert_eq!(
-            sparse.scanned_bytes,
+            sparse.extraction.scanned_bytes,
             store
                 .raw
                 .lock()
@@ -4070,16 +3970,24 @@ mod tests {
                 .map(|entry| entry.frame_bytes)
                 .sum::<usize>()
         );
-        assert_eq!(sparse.projected_bytes, 18 * 8);
-        let full = store.extract_rows(
+        let cursors = unsigned(&sparse, "events", "source_cursor")?;
+        assert_eq!(cursors, (1..=576).collect::<Vec<_>>());
+        assert_eq!(
+            cursors
+                .iter()
+                .copied()
+                .filter(|cursor| cursor % 32 == 1)
+                .collect::<Vec<_>>(),
+            (0..18).map(|group| group * 32 + 1).collect::<Vec<_>>()
+        );
+        assert_eq!(sparse.extraction.projected_bytes, 576 * 9);
+        let full = read(
+            &store,
             &selection,
-            None,
+            &[("events", &["catalog_json"])],
+            AnalysisReadModeV1::Complete,
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            Bytes::new(|input: AnalysisInputV1<'_>| match input {
-                AnalysisInputV1::Event { record, .. } => Ok(Some(record.framed_record.clone())),
-                _ => store.reject("unexpected relation"),
-            }),
         );
         assert!(
             matches!(
@@ -4090,7 +3998,7 @@ mod tests {
                 })
             ),
             "{:?}",
-            full.as_ref().map(|(page, _)| &page.extraction)
+            full.as_ref().map(|page| &page.extraction)
         );
         assert!(store.maintenance.try_write().is_ok());
         let scope = ProcessorScopeV1 {
@@ -4121,7 +4029,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 6);
         assert_eq!(
             usage.segment_bytes,
-            sparse.scanned_bytes as u64 + 6 * header_bytes
+            sparse.extraction.scanned_bytes as u64 + 6 * header_bytes
         );
         assert_eq!(usage.referenced_bytes, 18 * frame_bytes as u64);
         assert_eq!(
@@ -4143,17 +4051,9 @@ mod tests {
             pin_commit_us,
             usage_us
         );
-        eprintln!(
-            "history_bytes={} recent_scan={} recent_input={} recent_us={} sparse_scan={} sparse_input={} sparse_us={} debug={}",
-            72 * 1024 * 1024,
-            recent.scanned_bytes,
-            recent.input_bytes,
-            recent_us,
-            sparse.scanned_bytes,
-            sparse.input_bytes,
-            sparse_us,
-            cfg!(debug_assertions)
-        );
+        eprintln!("history_bytes={} recent_scan={} recent_input={} recent_us={} sparse_scan={} sparse_input={} sparse_us={} debug={}",
+            72 * 1024 * 1024, recent.extraction.scanned_bytes, recent.extraction.input_bytes, recent_us,
+            sparse.extraction.scanned_bytes, sparse.extraction.input_bytes, sparse_us, cfg!(debug_assertions));
         Ok(())
     }
 }

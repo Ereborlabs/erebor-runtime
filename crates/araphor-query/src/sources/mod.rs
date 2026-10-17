@@ -22,13 +22,14 @@ use datafusion::physical_expr::{analyze, AnalysisContext, EquivalenceProperties,
 use datafusion::physical_plan::coop::cooperative;
 use datafusion::physical_plan::execution_plan::SchedulingType;
 use datafusion::physical_plan::memory::MemoryStream;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
 };
+use futures_util::StreamExt as _;
 
 use crate::memory::Memory;
 
-mod batch;
 #[cfg(test)]
 mod bounds;
 mod journal;
@@ -432,8 +433,17 @@ impl DataSource for SourceData {
                 )
             })?
             .project(&self.origin, &self.indices, &self.schema)?;
-        Ok(Box::pin(cooperative(
+        drop(captured);
+        let stream = cooperative(
             MemoryStream::try_new(batches, Arc::clone(&self.schema), None)?.with_fetch(self.fetch),
+        )
+        .map(move |batch| {
+            let _snapshot = &snapshot;
+            batch
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&self.schema),
+            stream,
         )))
     }
 

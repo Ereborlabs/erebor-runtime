@@ -3,8 +3,8 @@ use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::{
-    AnalysisExtractionV1, AnalysisInputV1, AnalysisProjection, AnalysisReadControl,
-    AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1, AnalysisStore,
+    AnalysisExtractionV1, AnalysisInputTables, AnalysisReadControl, AnalysisReferenceOriginV1,
+    AnalysisReferenceV1, AnalysisStore,
 };
 use crate::analysis::{PackageCommitV1, PackageKeyV1};
 use crate::{
@@ -16,20 +16,25 @@ impl AnalysisStore {
     pub(super) fn extract_packages(
         &self,
         reader: &Connection,
-        packages: (&AnalysisSelectionV1, &str, &[sdk::OutputRef]),
+        packages: AnalysisInputTables<'_>,
         metadata: bool,
         control: &AnalysisReadControl,
         output: &mut AnalysisExtractionV1,
-        project: &mut dyn AnalysisProjection,
+        capture: &mut super::tables::Capture<'_>,
     ) -> Result<()> {
-        let (selection, scope, references) = packages;
+        let AnalysisInputTables {
+            authorized: selection,
+            scope,
+            outputs,
+            ..
+        } = packages;
         if !selection.valid() || scope.is_empty() || scope.len() > 256 {
             return Err(Code::Invalid.error("dependency selection"));
         }
-        if references.len() > 64 {
+        if outputs.len() > 64 {
             return Err(Code::Limit.error("model dependencies"));
         }
-        for reference in references {
+        for (reference, _) in outputs {
             for name in [&reference.package, &reference.export, &reference.output] {
                 crate::validate_package_name(name)?;
             }
@@ -40,14 +45,17 @@ impl AnalysisStore {
                 return Err(Code::Invalid.error("dependency revision"));
             }
         }
-        for (index, reference) in references.iter().enumerate() {
+        for (index, (reference, _)) in outputs.iter().enumerate() {
             control.check()?;
             let same = |other: &sdk::OutputRef| {
                 other.package == reference.package
                     && other.revision == reference.revision
                     && other.export == reference.export
             };
-            if references[..index].iter().any(&same) {
+            if outputs[..index]
+                .iter()
+                .any(|(reference, _)| same(reference))
+            {
                 continue;
             }
             let key = PackageKeyV1 {
@@ -138,10 +146,10 @@ impl AnalysisStore {
                 installed.grant.permitted_by(selection)?;
                 let _: ResultContext =
                     serde_json::from_slice(&body).context(PackageEncodingSnafu)?;
-                for (index, _) in references
+                for (index, _) in outputs
                     .iter()
                     .enumerate()
-                    .filter(|(_, reference)| same(reference))
+                    .filter(|(_, (reference, _))| same(reference))
                 {
                     output.reference_result(
                         id,
@@ -167,15 +175,15 @@ impl AnalysisStore {
                 serde_json::from_slice(&result.commit.metadata).context(PackageEncodingSnafu)?;
             let packet: sdk::wire::Output =
                 serde_json::from_slice(&result.commit.datasets).context(PackageEncodingSnafu)?;
-            for (index, _) in references
+            for (index, _) in outputs
                 .iter()
                 .enumerate()
-                .filter(|(_, reference)| same(reference))
+                .filter(|(_, (reference, _))| same(reference))
             {
                 output.reference_result(id, revision, AnalysisReferenceOriginV1::Package(index))?;
             }
-            for (index, reference) in references.iter().enumerate() {
-                if !same(reference) || references[..index].contains(reference) {
+            for (index, (reference, _)) in outputs.iter().enumerate() {
+                if !same(reference) {
                     continue;
                 }
                 control.check()?;
@@ -189,22 +197,12 @@ impl AnalysisStore {
                 if matches.next().is_some() {
                     return Err(Code::Invalid.error("duplicate dependency dataset"));
                 }
-                if !output.project(
-                    project,
-                    AnalysisInputV1::PackageOutput {
-                        reference,
-                        result: &result,
-                        dataset: Some(dataset),
-                        coverage: &context.coverage,
-                    },
-                    control,
-                    None,
-                )? {
-                    return crate::AnalysisInputTooLargeSnafu {
-                        resource: "selected package output",
-                    }
-                    .fail();
-                }
+                capture.package(
+                    index,
+                    Some(dataset),
+                    &context.coverage,
+                    &mut output.sink(control),
+                )?;
             }
         }
         control.check()

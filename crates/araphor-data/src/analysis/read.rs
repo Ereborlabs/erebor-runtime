@@ -10,6 +10,9 @@ use snafu::ResultExt as _;
 use super::{AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_RECORDS};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
+#[cfg(any(test, feature = "test-fixtures"))]
+type ReadStep = Box<dyn FnOnce() -> Result<()> + Send>;
+
 /// One deadline for a read stage and shared cancellation. The default is one second.
 pub struct AnalysisReadControl {
     deadline: Instant,
@@ -17,6 +20,8 @@ pub struct AnalysisReadControl {
     cancelled_event: Arc<tokio::sync::Notify>,
     interrupt: Arc<Mutex<Option<Arc<duckdb::InterruptHandle>>>>,
     monitor: Arc<ReadMonitor>,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    read_step: Arc<Mutex<Option<ReadStep>>>,
     #[cfg(test)]
     pub(super) wait_signal: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
@@ -35,6 +40,8 @@ impl AnalysisReadControl {
             cancelled_event: Arc::new(tokio::sync::Notify::new()),
             interrupt: Arc::new(Mutex::new(None)),
             monitor,
+            #[cfg(any(test, feature = "test-fixtures"))]
+            read_step: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             wait_signal: Mutex::new(None),
         }
@@ -63,6 +70,8 @@ impl AnalysisReadControl {
             cancelled_event: Arc::clone(&self.cancelled_event),
             interrupt: Arc::clone(&self.interrupt),
             monitor: Arc::clone(&self.monitor),
+            #[cfg(any(test, feature = "test-fixtures"))]
+            read_step: Arc::clone(&self.read_step),
             ..Self::with_timeout(timeout)?
         })
     }
@@ -80,6 +89,25 @@ impl AnalysisReadControl {
         let state = self.interrupt.lock().map_err(|_| Self::lock_error())?;
         if let Some(interrupt) = state.as_ref() {
             interrupt.interrupt();
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn on_read_step(&self, hook: impl FnOnce() -> Result<()> + Send + 'static) -> Result<()> {
+        *self.read_step.lock().map_err(|_| Self::lock_error())? = Some(Box::new(hook));
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub(super) fn test_read_step(&self) -> Result<()> {
+        let hook = self
+            .read_step
+            .lock()
+            .map_err(|_| Self::lock_error())?
+            .take();
+        if let Some(hook) = hook {
+            hook()?;
         }
         Ok(())
     }

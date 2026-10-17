@@ -43,8 +43,10 @@ crate. SDK owns declarations and native/Wasm application binary interfaces.
 [AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs) checks current authority and reads the admitted Inputs directly
   -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) plans all physical children at one frozen time
   -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) combines the prepared source columns and time ranges in one capture
-  -> [AnalysisStore::extract_mode](../../crates/araphor-data/src/analysis/extraction.rs) fixes one Data read transaction for the original source receipts
+  -> [AnalysisStore::read_tables](../../crates/araphor-data/src/analysis/extraction.rs) fixes one Data read transaction for the original source receipts
   -> [AnalysisStore::extract_packages](../../crates/araphor-data/src/analysis/extraction/package.rs) reads exact package outputs and their references in that same transaction
+  -> [Capture::finish](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) returns requested native Arrow tables with the complete read receipt
+  -> [SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) claims those arrays and binds their exact native schemas to the source origins
   -> [Dataset::normalize_batch](../../crates/araphor-analysis-sdk/src/batch.rs) applies the declared SDK schema after conversion preflight
   -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) materializes each completed port with one dataset-global row index before dependent SQL runs
   -> [Inputs::input](../../crates/araphor-query/src/inputs/receipt.rs) assigns per-port revisions and coverage from the original source scopes and reference origins
@@ -188,7 +190,7 @@ Registration uses existing buffer claims. It does not reserve the shared
 payload a second time. The logical local-input limit still applies.
 
 Source declarations and datasets use canonical Arrow 58 schemas and batches.
-The [canonical schemas](../../crates/araphor-query/src/sources/schema.rs)
+The [canonical schemas](../../crates/araphor-data/src/analysis/extraction/tables/schema.rs)
 supply source fields, catalog rows, and result metadata. Field metadata defines
 owner, units, null meaning, join keys, readiness, and description. Native
 projections preserve the selected Field metadata. One immutable schema map is
@@ -261,6 +263,9 @@ optimized physical tree. A retained plan has no tenant snapshot or Arrow rows.
 actual captured SourceSnapshot from TaskContext. Native MemoryStream supplies
 cooperative batch execution and fetch handling. Native MemorySourceConfig
 requires batches at plan construction, so it cannot supply this run binding.
+The returned native stream retains that same snapshot until stream drop.
+DataSourceExec does not retain TaskContext for this lifetime. The snapshot
+therefore keeps source metadata charged while the stream owns batch headers.
 The former SnapshotPartition and both planning mutexes are deleted.
 SourceData keeps native logical projection and residual filters. Its required
 physical projection hook returns None, so native ProjectionExec remains above
@@ -288,10 +293,22 @@ retained input, and graph traversal. Source selection keeps explicit profile,
 notification, node, binding, and time bounds. Disabled source capabilities
 return a structured unavailable error.
 
-Data emits durable inputs only. Query expands a retained profile, context, or
-trace frame into its Arrow tables. The unused Behavior, DiscoveryContext,
-Target, and TraceMeasurement input variants are deleted. Trace measurement
-mapping calls its real table adapter directly.
+[AnalysisStore::read_tables](../../crates/araphor-data/src/analysis/extraction.rs)
+returns requested native Arrow tables and the existing read receipt from one
+transaction. Package outputs use that transaction too. Query removes tables,
+package payloads, and raw retirements before it retains the public receipt.
+The public row callback protocol, Query scalar scratch rows, and second Arrow
+builder are deleted.
+
+DataFusion does not decode the retained evidence, context, graph, profile,
+notification, or trace formats. Data must validate those formats and produce
+Arrow arrays. Its private
+[Capture](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs)
+uses native typed builders for requested fields. One cached projection map
+replaces field-name lookup for each row. The private
+[ReadBudget](../../crates/araphor-data/src/analysis/extraction.rs) checks the
+complete row and page fanout before any builder changes. These owners add no
+SQL parser, planner, expression evaluator, or aggregation implementation.
 
 The event provider uses DataFusion interval analysis for supported physical
 filters. The provider narrows the intake-time read conservatively and leaves
@@ -509,7 +526,7 @@ its separate stream module are deleted.
 
 [State::advance](../../crates/araphor-query/src/follow/mod.rs) consumes the next completed physical result
   -> [JournalExec::execute_committed](../../crates/araphor-query/src/sources/journal.rs) reads the initial snapshot or waits for a later committed revision
-  -> [AnalysisStore::change_rows](../../crates/araphor-data/src/analysis/extraction.rs) reads raw inserts and retirements through one captured revision
+  -> [AnalysisStore::read_tables](../../crates/araphor-data/src/analysis/extraction.rs) reads raw inserts and retirements through one captured revision
   -> [Changes::capture](../../crates/araphor-query/src/sources/journal.rs) offers one complete Change with before and after batches, the receipt, frontier, evaluation control, permit, and metadata reservation
   -> [SubscribeExec::bind](../../crates/araphor-query/src/stream/physical.rs) supplies one native batch stream for each sign
   -> the private [physical kernel](../../crates/araphor-query/src/stream/physical/kernel.rs) calls native COUNT accumulators
@@ -666,7 +683,9 @@ Data transaction.
 The current source reading route is:
 
 - [Planner tests](../../crates/araphor-query/src/planner/tests.rs): native names, CTE scope, parameters, visible row indices, joins, windows, and rejection of writes.
-- [Source tests](../../crates/araphor-query/src/sources/tests.rs): `unused_source_receipts`, `empty_filter_progress`, zero-column counts, native interval pruning, and timestamp precision.
+- [Source tests](../../crates/araphor-query/src/sources/tests.rs): `unused_source_receipts`, `empty_filter_progress`, zero-column counts, native interval pruning, timestamp precision, and `native_stream_keeps_metadata`.
+- [Native table tests](../../crates/araphor-data/src/analysis/extraction/tables/tests.rs): whole-row admission, zero-column counts, page fanout, omitted JSON, native capacity, and projection order.
+- [Native field fixtures](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs) and [profile fixture](../../crates/araphor-data/src/analysis/progress/profile/tests/native.rs): complete native schemas, values, NULLs, source receipts, references, witnesses, and tenant scope through actual Data commits.
 - [Input definition](../../crates/araphor-query/src/inputs/mod.rs), [native execution](../../crates/araphor-query/src/inputs/physical.rs), and [receipt attribution](../../crates/araphor-query/src/inputs/receipt.rs): original provider origins, dependency order, one captured cut, shared indexed ports, and declared input order.
 - [Input tests](../../crates/araphor-query/src/inputs/tests.rs): `dependent_ports_share_indices`, `materialized_name_is_not_durable`, `port_receipts_stay_scoped`, `pruned_source_keeps_witness_scope`, `disjoint_ports_exclude_gap_witness`, `native_clocks_share_time`, and failure cleanup.
 - [Data package extraction](../../crates/araphor-data/src/analysis/extraction/package.rs) and [package-output tests](../../crates/araphor-data/src/analysis/packages/tests/output.rs): same-reader output resolution, historical scope, payload admission, current refs, and reference-origin merging.
@@ -683,6 +702,27 @@ The current source reading route is:
 - [Model tests](../../crates/araphor-analysis/src/model/tests.rs) and [package lifecycle tests](../../crates/araphor-analysis/src/package/tests/lifecycle.rs): checkpoints, parameters, evidence, source bounds, retries, and installed revisions.
 - [Interruption tests](../../crates/araphor-analysis/src/package/tests/interruption.rs): authority change, cancellation, stop before commit, Busy, and preservation of committed state.
 - [Control tests](../../crates/mithril-control/src/client_grpc/tests.rs) and [follow E2E cases](../../crates/mithril-e2e/src/discovery/query_follow.rs): actual protocol frames and native subscription behavior across owners.
+
+### Native table-read verification
+
+The native table read deletes the public Data row callback protocol, Query
+scalar scratch rows, and the separate Arrow builder. The new producer uses
+native typed arrays under one Data transaction. Package IPC is decoded once
+at that durable owner. The public receipt retains no table payload.
+
+Selected host checks pass 133 distinct Query cases, 41 Data cases, 32 Analysis
+cases, and three E2E contracts. The Data release-history case remains ignored.
+The source lifetime regression calls native execute_stream, drops the task
+and snapshot owners, and checks that metadata stays charged through EOF until
+stream drop. It then checks separate borrowed-buffer charges and final capacity
+recovery. The full-column fixtures use real retained Data commits.
+
+The records are `/tmp/araphor-native-tables-qualification1.json` and
+`/tmp/araphor-native-tables-count1.json`. Strict Clippy passes for Data, Query,
+Analysis, Control, E2E, and their test targets. Full workspace CI, benchmarks,
+physical Kubernetes qualification,
+general maintained SQL, and live detector scheduling are not covered here.
+The complete production reduction remains **Not done**.
 
 ### Finite input verification
 

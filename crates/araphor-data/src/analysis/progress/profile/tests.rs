@@ -6,6 +6,8 @@ use crate::{
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+mod native;
+
 fn profile() -> DiscoveryProfileV1 {
     DiscoveryProfileV1 {
         schema_version: DISCOVERY_SCHEMA_VERSION,

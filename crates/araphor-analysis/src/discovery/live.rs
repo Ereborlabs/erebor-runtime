@@ -1202,32 +1202,10 @@ mod tests {
 
     #[test]
     fn discovery_live_transaction() -> TestResult {
-        #[derive(Default)]
-        struct Contexts(Vec<Box<[u8]>>);
+        use std::collections::{BTreeMap, BTreeSet};
 
-        impl araphor_data::AnalysisProjection for Contexts {
-            fn project(
-                &mut self,
-                input: araphor_data::AnalysisInputV1<'_>,
-                sink: &mut araphor_data::ProjectionSink<'_>,
-            ) -> araphor_data::Result<bool> {
-                let araphor_data::AnalysisInputV1::Context(context) = input else {
-                    return Ok(true);
-                };
-                if context.key.owner_id != "discovery-source-v1" {
-                    return Ok(true);
-                }
-                let body = context.body.clone().into_boxed_slice();
-                if !sink.admit(body.len() + size_of::<Box<[u8]>>())? {
-                    return Ok(false);
-                }
-                sink.charge(body.len())?;
-                sink.grow(&mut self.0)?;
-                sink.projected(body.len());
-                self.0.push(body);
-                Ok(true)
-            }
-        }
+        use araphor_analysis_sdk::arrow_array::{BinaryArray, StringArray};
+        use araphor_data::{AnalysisReadModeV1, AnalysisTableRead};
 
         let fixture = DiscoveryFixture::new(Default::default())?;
         fixture.accept(1)?;
@@ -1244,16 +1222,47 @@ mod tests {
         assert!(owner.profile(&fixture.source)?.is_none());
         let mut selection = crate::AnalysisSelectionV1::new(fixture.source.tenant_id, Vec::new());
         selection.contexts = crate::Selection::All;
-        let (_, contexts) = fixture.store.extract_rows(
+        let schema = &araphor_data::AnalysisStore::table_schemas()["context_versions"];
+        let relations = BTreeSet::from(["context_versions".to_owned()]);
+        let columns = BTreeMap::from([(
+            "context_versions".to_owned(),
+            BTreeSet::from([schema.index_of("owner_id")?, schema.index_of("body")?]),
+        )]);
+        let contexts = fixture.store.read_tables(
             &selection,
-            None,
+            AnalysisTableRead {
+                relations: &relations,
+                columns: &columns,
+                event_ranges: None,
+                inputs: None,
+                mode: AnalysisReadModeV1::Complete,
+                now: 0,
+            },
             araphor_data::AnalysisExtractLimits::default(),
             &crate::AnalysisReadControl::default(),
-            Contexts::default(),
         )?;
-        let rows = contexts.0;
+        let mut rows = Vec::new();
+        for batch in &contexts.tables["context_versions"] {
+            let owners = batch
+                .column_by_name("owner_id")
+                .ok_or("context owner absent")?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or("context owner type")?;
+            let bodies = batch
+                .column_by_name("body")
+                .ok_or("context body absent")?
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or("context body type")?;
+            for index in 0..batch.num_rows() {
+                if owners.value(index) == "discovery-source-v1" {
+                    rows.push(bodies.value(index));
+                }
+            }
+        }
         assert_eq!(rows.len(), 1);
-        let health: serde_json::Value = serde_json::from_slice(rows[0].as_ref())?;
+        let health: serde_json::Value = serde_json::from_slice(rows[0])?;
         assert_eq!(health["consumed_cursor"], 0);
         assert_eq!(health["interval_last_cursor"], 1);
         assert_eq!(health["accepted_cursor"], 1);

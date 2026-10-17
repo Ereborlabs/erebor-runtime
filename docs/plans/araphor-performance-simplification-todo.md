@@ -258,6 +258,17 @@ SQL, Query-owned live detector scheduling, and the complete reduction remain
 **Not done**. Full workspace CI and benchmarks are not run, as instructed.
 No performance improvement is claimed.
 
+### Native Arrow table reads
+
+The [native Arrow table read](araphor-component-redesign.md#native-arrow-table-reads)
+deletes the public Data row callback protocol, Query scalar scratch rows, and
+the separate Arrow builder. The selected functional checks pass 209 distinct
+cases. Strict Clippy passes for all five affected crates and their test targets.
+The change removes 417 nonblank
+production lines. The complete count removes 430 from `7b7b407a` and adds 723
+from `aa390d9f`: `/tmp/araphor-native-tables-count1.json`. Another 5,570 net
+production deletions are required. The complete redesign remains **Not done**.
+
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

@@ -2,11 +2,10 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use araphor_data::ProjectionSink;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 
-use super::{ArrowBatch, Capture, Captured, SourceOrigin, SourceSnapshot};
+use super::{Captured, SourceOrigin, SourceSnapshot};
 
 impl Captured {
     pub(super) fn table_bytes(schema: &SchemaRef, batches: &Vec<sdk::RecordBatch>) -> usize {
@@ -71,61 +70,6 @@ impl Captured {
     }
 }
 
-impl Capture<'_> {
-    pub(super) fn package(
-        &mut self,
-        reference: &sdk::OutputRef,
-        dataset: Option<&sdk::wire::Dataset>,
-        coverage: &sdk::Coverage,
-        sink: &mut ProjectionSink<'_>,
-    ) -> araphor_data::Result<bool> {
-        let inputs = self
-            .inputs
-            .ok_or_else(|| ArrowBatch::invalid("the package source has no input scope"))?;
-        let Some(dataset) = dataset else {
-            return Ok(true);
-        };
-        for (slot, binding, schema) in &inputs.bindings {
-            if binding != reference {
-                continue;
-            }
-            if self.packages.contains_key(slot) {
-                return Err(ArrowBatch::invalid("the package source is bound twice"));
-            }
-            let decoded = inputs
-                .bindings
-                .iter()
-                .filter(|(_, binding, expected)| binding == reference && expected == schema)
-                .find_map(|(slot, _, _)| self.packages.get(slot));
-            let batches = match decoded {
-                Some((_, batches, _)) => {
-                    sink.charge(Captured::table_bytes(schema, batches))?;
-                    batches.clone()
-                }
-                None => {
-                    let mut limits = inputs.limits;
-                    limits.max_bytes = limits.max_bytes.min(sink.remaining_bytes() as u64);
-                    let data = dataset.decode(schema, limits).map_err(|source| {
-                        araphor_data::Error::AnalysisContract {
-                            source,
-                            location: snafu::location!(),
-                        }
-                    })?;
-                    for batch in &data.batches {
-                        sink.charge(batch.get_array_memory_size())?;
-                    }
-                    sink.charge(Captured::table_bytes(schema, &data.batches))?;
-                    data.batches
-                }
-            };
-            sink.charge(Captured::coverage_bytes(coverage))?;
-            self.packages
-                .insert(*slot, (Arc::clone(schema), batches, coverage.clone()));
-        }
-        Ok(true)
-    }
-}
-
 impl SourceSnapshot {
     pub(crate) fn package_coverage(&self, slot: usize) -> Result<sdk::Coverage> {
         self.captured
@@ -168,7 +112,7 @@ impl SourceSnapshot {
         captured.package_coverage.clear();
         captured
             ._memory
-            .shrink(std::mem::take(&mut captured.package_bytes));
+            .shrink(std::mem::take(&mut captured.source_bytes));
         Ok(())
     }
 }

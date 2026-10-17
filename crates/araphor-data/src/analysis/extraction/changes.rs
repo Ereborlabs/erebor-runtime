@@ -112,30 +112,19 @@ impl AnalysisStore {
 impl AnalysisExtractionV1 {
     pub(super) fn remove_raw(
         &mut self,
-        project: &mut dyn AnalysisProjection,
+        capture: &mut super::tables::Capture<'_>,
         removed: &RemovedRange,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         control.check()?;
-        if !self.project(
-            project,
-            AnalysisInputV1::RawRemoval {
-                identity: &removed.identity,
+        capture.remove(
+            &removed.identity,
+            AnalysisGapV1 {
                 first_cursor: removed.first,
                 last_cursor: removed.last,
-                position: StorePositionV1 {
-                    commit_revision: removed.revision,
-                    ordinal: u32::MAX,
-                },
+                commit_revision: removed.revision,
             },
-            control,
-            None,
-        )? {
-            return AnalysisInputTooLargeSnafu {
-                resource: "complete change input",
-            }
-            .fail();
-        }
-        Ok(())
+            &mut self.sink(control),
+        )
     }
 }

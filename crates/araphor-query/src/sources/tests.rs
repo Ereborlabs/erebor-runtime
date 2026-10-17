@@ -450,6 +450,84 @@ async fn native_capture_isolated() -> TestResult {
 }
 
 #[tokio::test]
+async fn native_stream_keeps_metadata() -> TestResult {
+    use super::{ReadMode, SourceData, SourceSnapshot};
+    use araphor_data::AnalysisExtractLimits;
+    use datafusion::physical_plan::execute_stream;
+
+    let fixture = Fixture::new_with_limits(Limits {
+        input_bytes: 64 * 1024,
+        input_capacity: 128 * 1024,
+        extract_timeout: Duration::from_secs(5),
+        evaluate_timeout: Duration::from_secs(5),
+        ..Default::default()
+    })?;
+    fixture.commit(&fixture.source, 1, 10_001)?;
+    let (logical, sources) = fixture.plan("SELECT source_cursor FROM events")?;
+    let mut state = fixture.engine.catalog(BTreeMap::new())?;
+    let physical = state.create_physical_plan(&logical).await?;
+    assert!(SourceData::from_plan(physical.as_ref()).is_some());
+    let memory = Arc::clone(fixture.engine.memory());
+    let capacity = fixture.engine.limits().input_capacity;
+    let charged = || -> datafusion::common::Result<usize> {
+        let available = memory.prepare_input(capacity)?;
+        Ok(capacity - available.size())
+    };
+    let snapshot = SourceSnapshot::new(
+        Arc::clone(&fixture.store),
+        fixture.selection(),
+        None,
+        AnalysisExtractLimits {
+            input_bytes: fixture.engine.limits().input_bytes,
+            ..Default::default()
+        },
+        fixture.control()?,
+        Duration::from_secs(5),
+        20_000,
+        Arc::clone(&memory),
+    );
+    let receipt = snapshot.capture(
+        &sources,
+        std::slice::from_ref(&physical),
+        ReadMode::Snapshot,
+    )?;
+    assert_eq!(receipt.witnesses.len(), 1);
+    drop(receipt);
+    let retained = charged()?;
+    assert!(retained > 0);
+    let weak = Arc::downgrade(&snapshot);
+    state.config_mut().set_extension(Arc::clone(&snapshot));
+    let context = state.task_ctx();
+    let mut stream = execute_stream(physical, Arc::clone(&context))?;
+    drop(context);
+    drop(state);
+    drop(snapshot);
+    assert!(weak.upgrade().is_some());
+    assert_eq!(charged()?, retained);
+    let batch = stream.try_next().await?.ok_or("source batch is absent")?;
+    assert_eq!(
+        cell(std::slice::from_ref(&batch), 0),
+        ScalarValue::UInt64(Some(1))
+    );
+    let borrowed = batch.column(0).to_data().buffers()[0].clone();
+    assert!(retained > borrowed.capacity());
+    drop(batch);
+    assert!(stream.try_next().await?.is_none());
+    assert!(weak.upgrade().is_some());
+    assert_eq!(charged()?, retained);
+    drop(stream);
+    assert!(weak.upgrade().is_none());
+    assert_eq!(charged()?, borrowed.capacity());
+    let available = memory.reserve_input(capacity - borrowed.capacity())?;
+    assert!(memory.reserve_input(1).is_err());
+    drop(available);
+    drop(borrowed);
+    assert_eq!(charged()?, 0);
+    drop(memory.reserve_input(capacity)?);
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_ports_share_cut() -> TestResult {
     use super::{ReadMode, SourceProvider, SourceSnapshot};
     use datafusion::arrow::array::{RecordBatchOptions, UInt64Array};

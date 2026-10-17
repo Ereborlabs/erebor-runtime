@@ -170,6 +170,60 @@ General maintained SQL, Query-owned live detector scheduling, and the required
 production reduction remain **Not done**. Full workspace CI and benchmarks
 are not run, as instructed. No performance improvement is claimed.
 
+### Native Arrow table reads
+
+Implementation and selected host verification: **Done**. Strict Clippy passes
+for Data, Query, Analysis, Control, E2E, and their test targets.
+
+The public AnalysisInputV1 and AnalysisProjection protocol is deleted.
+AnalysisStore::read_tables accepts original relations, requested canonical
+column indices, exact event ranges, package bindings, and one read mode.
+AnalysisPositionPageV1 returns Arrow tables with the existing read receipt.
+The separate Query ArrowBatch builder and scalar scratch rows are deleted.
+
+Query plans native provider scans
+  -> SourceSnapshot supplies original relations and requested columns
+  -> Data fixes the authorized selection and read transaction
+  -> validated decoders preflight each complete row before native builders change
+  -> Data completes tables, reference origins, witnesses, and raw retirements
+  -> Query claims the native arrays and separates payload from its retained receipt
+  -> DataFusion physical operators consume the captured batches
+
+Canonical schemas now belong to Data. Schema relocation gives no deletion
+credit. Evidence, context, graph, discovery, notification, and trace decoders
+remain necessary for their retained formats and validation rules. Native
+typed Arrow builders replace scalar conversion. No parser or expression
+evaluator is added. Query builds its own catalog arrays from native schemas.
+
+The read keeps complete, page, change, and metadata behavior. Metadata mode
+skips raw payloads and package IPC. Package outputs and their provenance use
+the same transaction. A private ReadBudget retains scan, input, page, and
+fanout checks. Test-only read observation keeps deterministic write, rotation,
+and cancellation races inside the actual production read path.
+
+SourceData::open retains the existing SourceSnapshot in the returned native
+stream. Native DataSourceExec does not retain TaskContext for that lifetime.
+The snapshot keeps source metadata charged through stream drop. Borrowed
+Arrow buffers keep their separate allocation claims after that drop.
+
+The selected checks pass 209 distinct cases: 133 Query, 41 Data, 32 Analysis,
+and three E2E contracts. One existing Data release-history case is ignored.
+The complete Query run passes 132 cases before the final source lifetime fix.
+The later 49-case source, execution, and memory run passes that fix. The final
+four Query row cases and 41 Data cases pass after test helper corrections.
+The final Data-load and query-follow E2E contracts pass in 19.51 seconds.
+All 32 original selected Data test names remain. Six builder cases and four
+full-column fixtures add native schema, value, NULL, and proof checks.
+
+This change removes 417 nonblank production Rust lines. The complete redesign
+removes 430 from `7b7b407a` and adds 1,799 from `537f9de3`. It adds 723 from
+`aa390d9f`. Another 5,570 net production deletions are required. The records
+are `/tmp/araphor-native-tables-qualification1.json` and
+`/tmp/araphor-native-tables-count1.json`. General maintained SQL, Query-owned
+live detector scheduling, and the required production reduction remain
+**Not done**. Full workspace CI and benchmarks are not run, as instructed.
+These checks do not establish a performance improvement.
+
 ## Intended end state
 
 ### RisingWave source correction
@@ -1194,7 +1248,7 @@ queries read those sources without rebuilding DuckDB physical schemas or
 copying the batches into temporary native tables.
 
 Use the existing InputProjection to accumulate standard Arrow builders and
-batches. Keep row admission in ProjectionSink before the builders change. If
+batches. Keep row admission in Data ReadBudget before the builders change. If
 the first row of a source record does not fit the remaining page, retain the
 cursor before that record. If a later row from that record fails admission,
 return the error and drop the operation's accumulated buffers. Do not return

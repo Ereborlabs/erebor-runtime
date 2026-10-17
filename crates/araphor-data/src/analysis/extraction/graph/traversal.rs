@@ -14,7 +14,7 @@ impl AnalysisStore {
         request: &GraphTraversalV1,
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
-        project: &mut dyn AnalysisProjection,
+        capture: &mut super::super::tables::Capture<'_>,
     ) -> Result<()> {
         let (ids, versions) = self.traversal_versions(snapshot, selection, output, control)?;
         for (id, version) in ids.iter().zip(&versions) {
@@ -53,7 +53,7 @@ impl AnalysisStore {
                 control,
                 !selection.binding_ids.is_empty(),
             )?;
-            if selected.is_empty() && !edges.contains_key(id) && !project.graph_headers() {
+            if selected.is_empty() && !edges.contains_key(id) && !capture.graph_headers() {
                 continue;
             }
             let header =
@@ -94,19 +94,15 @@ impl AnalysisStore {
                     .build()
                 })?;
             output.scan(remaining - budget.0)?;
-            output.project(
-                project,
-                AnalysisInputV1::Graph {
-                    result_id: id,
-                    graph: &graph,
-                    subject_count: graph.graph.subjects.len(),
-                    relationship_count: graph.graph.edges.len(),
-                    commit_revision: version.revision,
-                    sensitivity: version.sensitivity,
-                    traversal_depths: Some(&walk.subjects),
-                },
-                control,
-                None,
+            capture.graph(
+                id,
+                &graph,
+                graph.graph.subjects.len(),
+                graph.graph.edges.len(),
+                version.revision,
+                version.sensitivity,
+                Some(&walk.subjects),
+                &mut output.sink(control),
             )?;
         }
         if !edges.is_empty() {
