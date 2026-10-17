@@ -41,8 +41,45 @@ All subagents are stopped, as requested by the user.
 
 Implementation of these complete requirements: **Not done**. Query, SDK,
 compiler, cache, and retained-store quota defaults need checks. The compiler
-process wait and storage lock wait still poll. The pending Discovery change
-uses source and context events in place of its periodic sweep.
+process wait and storage lock wait still poll. Discovery still has a separate
+source sweep and seal scheduler. This design does not meet the user requirement.
+Every Discovery execution must consume a Query subscription, including finite
+execution and manual refresh. The subscription must supply the actual input
+batches. A query that returns identities to the old input reader is not a
+replacement. This work is **Not done**.
+
+### Native SQL admission and optional quotas
+
+Implementation and selected verification: **Done**.
+Parser has optional bytes and depth settings. Query Limits has optional
+parameter_count, parameter_bytes, projection_columns, and window_bound
+settings. All six settings default to None. Engine passes the same immutable
+Limits value to native session state. Admission, model plans, and input plans
+use that value.
+
+Planner uses native SQLOptions to reject writes, including writes in a
+subquery. It rejects non-query statements before native DDL planning can read
+external metadata. The custom join checker and plan-kind whitelist are
+removed. Native computed, non-equi, and cross joins are permitted. Native
+window behavior applies when no window quota is configured.
+
+Control converts each transport parameter once. It retains type, timestamp,
+decimal, NULL, and finite-real checks. The duplicate parameter preflight and
+fixed count and byte caps are removed. Query applies configured parameter
+quotas to native ScalarValue values.
+
+The selected check passes 79 Query cases and 11 Control wire cases. Strict
+Clippy passes Query, Analysis, and Control library and test callers. The
+records are `/tmp/araphor-discovery-native-admission-tests1.json` and
+`/tmp/araphor-discovery-native-admission-clippy1.json`. These records cover the
+worktree, including the pending removal of Query health polling. E2E test
+callers pass `cargo check`; the record is
+`/tmp/araphor-discovery-native-admission-e2e1.json`. No full workspace CI or benchmark is run, as instructed.
+
+This deliverable deletes 51 nonblank production Rust lines. Tests, documents,
+and blank lines are excluded. The record is
+`/tmp/araphor-sql-admission-staged-count.json`. Other quota defaults and the
+Discovery input subscription replacement remain **Not done**.
 
 ### Native function registration and optional operator memory
 
@@ -1030,6 +1067,11 @@ query ownership, and the required 6,000-line production reduction remain
 No speed result is claimed.
 
 ### Discovery uses shared source progress
+
+Architecture result: **Not done**. The later user correction rejects this
+source sweep and separate seal scheduler. The recorded checks below prove
+the earlier wake behavior only. They do not prove the required Query input
+subscription.
 
 Implementation and selected host qualification: **Done**. The source baseline
 is 410ebec8. The two preceding commits replace native function registration

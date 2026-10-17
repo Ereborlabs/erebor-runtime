@@ -1,10 +1,12 @@
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::ScalarValue;
+use datafusion::execution::context::SQLOptions;
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::{Expr, LogicalPlan, Operator, WindowFrameBound, WindowFrameUnits};
+use datafusion::logical_expr::{Expr, LogicalPlan, WindowFrameBound, WindowFrameUnits};
 use datafusion::sql::parser::Statement;
 use snafu::ResultExt as _;
 
+use crate::execution::Limits;
 use crate::Result;
 
 pub(crate) mod subscription;
@@ -17,9 +19,6 @@ pub struct Planner<'a> {
 }
 
 impl<'a> Planner<'a> {
-    pub const PARAMETER_COUNT: usize = 256;
-    pub const PARAMETER_BYTES: usize = 1024 * 1024;
-
     pub fn new(state: &'a SessionState) -> Self {
         Self { state }
     }
@@ -29,18 +28,24 @@ impl<'a> Planner<'a> {
         statement: Statement,
         parameters: Vec<ScalarValue>,
     ) -> Result<LogicalPlan> {
-        if parameters.len() > Self::PARAMETER_COUNT
-            || ScalarValue::size_of_vec(&parameters) > Self::PARAMETER_BYTES
-            || parameters.iter().any(|value| {
-                matches!(value, ScalarValue::Float32(Some(value)) if !value.is_finite())
-                    || matches!(value, ScalarValue::Float64(Some(value)) if !value.is_finite())
-            })
+        let limits = self
+            .state
+            .config()
+            .get_extension::<Limits>()
+            .unwrap_or_default();
+        if limits
+            .parameter_count
+            .is_some_and(|maximum| parameters.len() > maximum)
+            || limits
+                .parameter_bytes
+                .is_some_and(|maximum| ScalarValue::size_of_vec(&parameters) > maximum)
         {
             return Err(crate::InvalidSnafu {
                 field: "SQL parameters",
             }
             .build());
         }
+        // Reject commands before native DDL planning can read external metadata.
         if !matches!(&statement, Statement::Statement(statement)
             if matches!(statement.as_ref(), datafusion::sql::sqlparser::ast::Statement::Query(_)))
         {
@@ -55,93 +60,59 @@ impl<'a> Planner<'a> {
             .await
             .and_then(|plan| plan.with_param_values(parameters))
             .context(crate::SqlSnafu)?;
-        Self::check(&plan)?;
+        SQLOptions::new()
+            .with_allow_ddl(false)
+            .with_allow_dml(false)
+            .with_allow_statements(false)
+            .verify_plan(&plan)
+            .context(crate::SqlSnafu)?;
+        Self::quotas(&plan, &limits)?;
         Ok(plan)
     }
 
-    fn check(plan: &LogicalPlan) -> Result<()> {
+    fn quotas(plan: &LogicalPlan, limits: &Limits) -> Result<()> {
+        if limits.projection_columns.is_none() && limits.window_bound.is_none() {
+            return Ok(());
+        }
         plan.apply_with_subqueries(|plan| {
-            match plan {
-                LogicalPlan::Projection(projection) if projection.expr.len() > 256 => {
+            if let LogicalPlan::Projection(projection) = plan {
+                if limits.projection_columns.is_some_and(|maximum| projection.expr.len() > maximum) {
                     return datafusion::common::plan_err!("SQL projection is too wide");
                 }
-                LogicalPlan::Join(join) => {
-                    let left = join.left.schema();
-                    let right = join.right.schema();
-                    let key = |first: &Expr, second: &Expr| {
-                        match (first, second) {
-                            (Expr::Column(first), Expr::Column(second)) => {
-                                (left.index_of_column(first).is_ok() && right.index_of_column(second).is_ok())
-                                    || (right.index_of_column(first).is_ok() && left.index_of_column(second).is_ok())
-                            }
-                            _ => false,
-                        }
-                    };
-                    let mut valid = !join.on.is_empty() || join.filter.is_some();
-                    for (first, second) in &join.on {
-                        valid &= key(first, second);
-                    }
-                    if let Some(filter) = &join.filter {
-                        filter.apply(|expression| match expression {
-                            Expr::BinaryExpr(binary) if binary.op == Operator::And => {
-                                Ok(TreeNodeRecursion::Continue)
-                            }
-                            Expr::BinaryExpr(binary)
-                                if binary.op == Operator::Eq && key(&binary.left, &binary.right) =>
-                            {
-                                Ok(TreeNodeRecursion::Jump)
-                            }
-                            _ => {
-                                valid = false;
-                                Ok(TreeNodeRecursion::Stop)
-                            }
-                        })?;
-                    }
-                    if !valid {
-                        return datafusion::common::plan_err!("SQL join keys are invalid");
-                    }
-                }
-                LogicalPlan::Projection(_) | LogicalPlan::Filter(_) | LogicalPlan::TableScan(_)
-                | LogicalPlan::Aggregate(_) | LogicalPlan::Window(_) | LogicalPlan::Subquery(_) | LogicalPlan::SubqueryAlias(_)
-                | LogicalPlan::Sort(_) | LogicalPlan::Limit(_) | LogicalPlan::Distinct(_)
-                | LogicalPlan::Union(_) | LogicalPlan::EmptyRelation(_) => {}
-                _ => return datafusion::common::plan_err!("SQL plan is unavailable"),
             }
+            let Some(maximum) = limits.window_bound else {
+                return Ok(TreeNodeRecursion::Continue);
+            };
             plan.apply_expressions(|expression| expression.apply(|expression| {
                 if let Expr::WindowFunction(window) = expression {
-                    if window.params.order_by.is_empty() {
-                        return datafusion::common::plan_err!("SQL window order is absent");
-                    }
                     if matches!(&window.fun,
                         datafusion::logical_expr::WindowFunctionDefinition::WindowUDF(function)
                             if matches!(function.name(), "lag" | "lead"))
                     {
                         let bounded = match window.params.args.get(1) {
-                            None => true,
+                            None => maximum >= 1,
                             Some(Expr::Literal(value, _)) if value.data_type().is_integer() => {
-                                matches!(
-                                    value.cast_to(&datafusion::arrow::datatypes::DataType::UInt64),
-                                    Ok(ScalarValue::UInt64(Some(value))) if value <= 200
-                                )
+                                matches!(value.cast_to(&datafusion::arrow::datatypes::DataType::UInt64),
+                                    Ok(ScalarValue::UInt64(Some(value))) if value <= maximum as u64)
                             }
                             _ => false,
                         };
                         if !bounded {
-                            return datafusion::common::plan_err!("SQL window offset is unbounded");
+                            return datafusion::common::plan_err!("SQL window offset exceeds its quota");
                         }
                     }
                     if matches!(window.fun, datafusion::logical_expr::WindowFunctionDefinition::AggregateUDF(_)) {
                         let bounded = |bound: &WindowFrameBound| match bound {
                             WindowFrameBound::CurrentRow => true,
                             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(value)))
-                            | WindowFrameBound::Following(ScalarValue::UInt64(Some(value))) => *value <= 200,
+                            | WindowFrameBound::Following(ScalarValue::UInt64(Some(value))) => *value <= maximum as u64,
                             _ => false,
                         };
                         let frame = &window.params.window_frame;
                         if frame.units != WindowFrameUnits::Rows
                             || !bounded(&frame.start_bound) || !bounded(&frame.end_bound)
                         {
-                            return datafusion::common::plan_err!("SQL aggregate window frame is unbounded");
+                            return datafusion::common::plan_err!("SQL window frame exceeds its quota");
                         }
                     }
                 }

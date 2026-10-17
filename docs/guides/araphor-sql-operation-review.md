@@ -20,6 +20,21 @@ control, and reservations. Control converts client results at the protocol
 boundary. Analysis checks declared model outputs. Data remains the durable
 result and progress owner. Current source tests define the required checks.
 
+## Native SQL admission
+
+Read [Parser](../../crates/araphor-query/src/parser/mod.rs),
+[Engine admission](../../crates/araphor-query/src/execution/admission.rs), and
+[Planner](../../crates/araphor-query/src/planner/mod.rs) in that order. Parser
+returns the native statement. Planner uses the native session catalog and
+SQLOptions. Read-only admission applies inside subqueries. A non-query
+statement is rejected before DDL planning can read external metadata.
+
+Parser bytes and depth quotas default to None. The parameter count, parameter
+bytes, projection width, and window bound quotas in Query Limits also default
+to None. The same Limits Arc is registered in native session configuration.
+Native SQL defines join and window behavior when these quotas are disabled.
+Control validates and moves transport values once before native binding.
+
 ## Current table and query input flow
 
 The SDK declares each input as `Table(TableRef)` or `Query(String)`.

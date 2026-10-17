@@ -50,7 +50,7 @@ impl Fixture {
 
     async fn plan(&self, sql: &str, parameters: Vec<ScalarValue>) -> LogicalPlan {
         Planner::new(&self.state)
-            .build(Parser::parse(sql).unwrap(), parameters)
+            .build(Parser::default().parse(sql).unwrap(), parameters)
             .await
             .unwrap()
     }

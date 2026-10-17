@@ -5,7 +5,6 @@ use araphor_data::{
 };
 use araphor_query::{
     follow::{Cursor, Operation},
-    planner::Planner,
     sources::ArrowSnapshot,
 };
 use arrow_array::types::{
@@ -26,49 +25,6 @@ impl TryFrom<Vec<proto::QueryValue>> for Parameters {
     type Error = Status;
 
     fn try_from(values: Vec<proto::QueryValue>) -> Result<Self, Self::Error> {
-        if values.len() > Planner::PARAMETER_COUNT {
-            return Err(Status::invalid_argument(
-                "SQL parameter count exceeds its bound.",
-            ));
-        }
-        let mut bytes = 0_usize;
-        for value in &values {
-            bytes = bytes.saturating_add(size_of::<ScalarValue>());
-            match value.kind.as_ref() {
-                Some(proto::query_value::Kind::Null(true))
-                | Some(proto::query_value::Kind::Boolean(_))
-                | Some(proto::query_value::Kind::Signed(_))
-                | Some(proto::query_value::Kind::Unsigned(_)) => {}
-                Some(proto::query_value::Kind::Real(value)) if value.is_finite() => {}
-                Some(proto::query_value::Kind::Text(value)) => {
-                    bytes = bytes.saturating_add(value.capacity());
-                }
-                Some(proto::query_value::Kind::Binary(value)) => {
-                    bytes = bytes.saturating_add(value.capacity());
-                }
-                Some(proto::query_value::Kind::Timestamp(value)) => {
-                    Self::timestamp(value)?;
-                }
-                Some(proto::query_value::Kind::Decimal(value)) => {
-                    bytes = bytes.saturating_add(value.unscaled.capacity());
-                }
-                Some(proto::query_value::Kind::Date(_))
-                | Some(proto::query_value::Kind::Time(_))
-                | Some(proto::query_value::Kind::Interval(_)) => {}
-                Some(proto::query_value::Kind::Integer128(_))
-                | Some(proto::query_value::Kind::Unsigned128(_)) => {
-                    return Err(Status::unimplemented(
-                        "SQL 128-bit integer parameters have no native Arrow type.",
-                    ))
-                }
-                _ => return Err(Status::invalid_argument("SQL parameter type is invalid.")),
-            }
-            if bytes > Planner::PARAMETER_BYTES {
-                return Err(Status::invalid_argument(
-                    "SQL parameters exceed their byte bound.",
-                ));
-            }
-        }
         let mut parameters = Vec::new();
         parameters
             .try_reserve_exact(values.len())
@@ -79,7 +35,9 @@ impl TryFrom<Vec<proto::QueryValue>> for Parameters {
                 Some(proto::query_value::Kind::Boolean(value)) => ScalarValue::Boolean(Some(value)),
                 Some(proto::query_value::Kind::Signed(value)) => ScalarValue::Int64(Some(value)),
                 Some(proto::query_value::Kind::Unsigned(value)) => ScalarValue::UInt64(Some(value)),
-                Some(proto::query_value::Kind::Real(value)) => ScalarValue::Float64(Some(value)),
+                Some(proto::query_value::Kind::Real(value)) if value.is_finite() => {
+                    ScalarValue::Float64(Some(value))
+                }
                 Some(proto::query_value::Kind::Text(value)) => ScalarValue::Utf8(Some(value)),
                 Some(proto::query_value::Kind::Binary(value)) => ScalarValue::Binary(Some(value)),
                 Some(proto::query_value::Kind::Timestamp(value)) => Self::timestamp(&value)?,
@@ -88,6 +46,12 @@ impl TryFrom<Vec<proto::QueryValue>> for Parameters {
                 Some(proto::query_value::Kind::Time(value)) => Self::time(&value)?,
                 Some(proto::query_value::Kind::Interval(value)) => {
                     ScalarValue::new_interval_mdn(value.months, value.days, value.nanoseconds)
+                }
+                Some(proto::query_value::Kind::Integer128(_))
+                | Some(proto::query_value::Kind::Unsigned128(_)) => {
+                    return Err(Status::unimplemented(
+                        "SQL 128-bit integer parameters have no native Arrow type.",
+                    ))
                 }
                 _ => return Err(Status::invalid_argument("SQL parameter type is invalid.")),
             };
@@ -949,33 +913,20 @@ mod tests {
     }
 
     #[test]
-    fn parameter_bounds_are_exact() -> Result<(), Status> {
+    fn parameters_have_no_hidden_caps() -> Result<(), Status> {
         let values = vec![
             proto::QueryValue {
                 kind: Some(Kind::Null(true))
             };
-            Planner::PARAMETER_COUNT
+            257
         ];
-        assert_eq!(
-            Parameters::try_from(values)?.0.len(),
-            Planner::PARAMETER_COUNT
-        );
-        let values = vec![
-            proto::QueryValue {
-                kind: Some(Kind::Null(true))
-            };
-            Planner::PARAMETER_COUNT + 1
-        ];
-        assert!(Parameters::try_from(values).is_err());
-        let size = Planner::PARAMETER_BYTES - size_of::<ScalarValue>();
-        assert!(Parameters::try_from(vec![proto::QueryValue {
+        assert_eq!(Parameters::try_from(values)?.0.len(), 257);
+        let size = 1024 * 1024 + 1;
+        let parameters = Parameters::try_from(vec![proto::QueryValue {
             kind: Some(Kind::Binary(vec![0; size])),
-        }])
-        .is_ok());
-        assert!(Parameters::try_from(vec![proto::QueryValue {
-            kind: Some(Kind::Binary(vec![0; size + 1])),
-        }])
-        .is_err());
+        }])?
+        .0;
+        assert_eq!(parameters, vec![ScalarValue::Binary(Some(vec![0; size]))]);
         Ok(())
     }
 

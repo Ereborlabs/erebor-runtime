@@ -12,7 +12,6 @@ use snafu::ResultExt as _;
 
 use crate::execution::{Engine, Session};
 use crate::follow::Window;
-use crate::parser::Parser;
 use crate::sources::{SourceOrigin, SourceProvider, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
@@ -61,7 +60,7 @@ impl Inputs {
             for (slot, input) in model.inputs.iter().enumerate() {
                 let (plan, origins) = match &input.source {
                     sdk::InputSource::Query(sql) => {
-                        let statement = Parser::parse(sql)?;
+                        let statement = engine.limits().parser.parse(sql)?;
                         let mut origins = BTreeSet::new();
                         for name in state
                             .resolve_table_references(&statement)

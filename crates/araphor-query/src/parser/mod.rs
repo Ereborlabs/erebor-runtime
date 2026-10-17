@@ -3,21 +3,24 @@ use snafu::ResultExt as _;
 
 use crate::Result;
 
-pub struct Parser;
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Parser {
+    pub bytes: Option<usize>,
+    pub depth: Option<usize>,
+}
 
 impl Parser {
-    pub const SQL_BYTES: usize = 16 * 1024;
-    pub const RECURSION_LIMIT: usize = 64;
     const STACK_BYTES: usize = 8 * 1024 * 1024;
 
-    pub fn parse(sql: &str) -> Result<Statement> {
-        if sql.is_empty() || sql.len() > Self::SQL_BYTES {
+    pub fn parse(&self, sql: &str) -> Result<Statement> {
+        if self.bytes.is_some_and(|maximum| sql.len() > maximum) {
             return Err(crate::InvalidSnafu { field: "SQL size" }.build());
         }
         // Native nested expressions have no stack growth checkpoints.
         stacker::maybe_grow(Self::STACK_BYTES, Self::STACK_BYTES, || {
             let mut statements = DFParserBuilder::new(sql)
-                .with_recursion_limit(Self::RECURSION_LIMIT)
+                .with_recursion_limit(self.depth.unwrap_or(usize::MAX))
                 .build()
                 .and_then(|mut parser| parser.parse_statements())
                 .context(crate::SqlSnafu)?;

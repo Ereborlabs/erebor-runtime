@@ -47,7 +47,7 @@ impl Fixture {
             .get_extension::<SourceSnapshot>()
             .is_none());
         let plan = Planner::new(&self.state)
-            .build(Parser::parse(sql).unwrap(), parameters)
+            .build(Parser::default().parse(sql).unwrap(), parameters)
             .await
             .unwrap();
         self.state.create_physical_plan(&plan).await.unwrap()

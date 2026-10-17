@@ -27,6 +27,11 @@ every distinct input, fault, boundary, and assertion.
 | Storage | One selected-set cleanup validates expiry, synchronizes removal, and commits quota changes. Remove per-segment global scans. |
 | Documentation | One current source route per contract. Remove repeated implementation and verification prose. |
 
+Every Discovery execution must consume actual input batches from a Query
+subscription. This includes finite execution and manual refresh. A shared wake
+helper or an identity query that calls the old input reader does not meet this
+requirement. This replacement is **Not done**.
+
 Package execution must use Query's shared source progress owner. Source
 notices, explicit clock notices, and actual deadlines wake the operation.
 Do not add periodic package polling or round live evaluation time. Preserve

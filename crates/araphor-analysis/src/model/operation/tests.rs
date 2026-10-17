@@ -221,7 +221,7 @@ fn reused_session_narrows_deadline() -> TestResult {
     let state = owner.catalog(BTreeMap::new())?;
     let plan = Arc::new(owner.plan(
         &state,
-        araphor_query::parser::Parser::parse("SELECT 7")?,
+        araphor_query::parser::Parser::default().parse("SELECT 7")?,
         Vec::new(),
     )?);
     let mut session = owner.session(AnalysisSelectionV1::tenant([1; 16]), &control()?, 1_000)?;

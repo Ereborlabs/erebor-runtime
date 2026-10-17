@@ -101,7 +101,7 @@ impl Fixture {
         sql: &str,
     ) -> TestResult<(Arc<LogicalPlan>, araphor_data::AnalysisTableRequests)> {
         let state = self.engine.catalog(SourceSnapshot::providers())?;
-        let statement = Parser::parse(sql)?;
+        let statement = Parser::default().parse(sql)?;
         let sources = state
             .resolve_table_references(&statement)?
             .into_iter()
@@ -615,7 +615,7 @@ async fn native_ports_share_cut() -> TestResult {
         "SELECT count(*) AS n FROM zero",
     ] {
         let logical = crate::planner::Planner::new(&state)
-            .build(Parser::parse(sql)?, vec![])
+            .build(Parser::default().parse(sql)?, vec![])
             .await?;
         plans.push(state.create_physical_plan(&logical).await?);
     }

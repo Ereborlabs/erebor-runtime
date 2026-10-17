@@ -8,7 +8,7 @@ use snafu::ResultExt as _;
 use super::Engine;
 use crate::follow::{Clock, Cursor, Subscription};
 use crate::sources::SourceSnapshot;
-use crate::{parser::Parser, planner::Planner, Result, SqlSnafu};
+use crate::{planner::Planner, Result, SqlSnafu};
 
 impl Engine {
     pub async fn prepare(
@@ -17,7 +17,7 @@ impl Engine {
         parameters: Vec<ScalarValue>,
     ) -> Result<(LogicalPlan, AnalysisTableRequests)> {
         let state = self.catalog(SourceSnapshot::providers())?;
-        let statement = Parser::parse(sql)?;
+        let statement = self.limits.parser.parse(sql)?;
         let sources = state
             .resolve_table_references(&statement)
             .context(SqlSnafu)?

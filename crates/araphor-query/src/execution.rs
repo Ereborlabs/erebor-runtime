@@ -58,6 +58,11 @@ pub struct Limits {
     pub input_capacity: usize,
     pub output_capacity: usize,
     pub execution_capacity: Option<usize>,
+    pub parser: crate::parser::Parser,
+    pub parameter_count: Option<usize>,
+    pub parameter_bytes: Option<usize>,
+    pub projection_columns: Option<usize>,
+    pub window_bound: Option<usize>,
 }
 
 impl Default for Limits {
@@ -76,6 +81,11 @@ impl Default for Limits {
             input_capacity: 128 * 1024 * 1024,
             output_capacity: 16 * 1024 * 1024,
             execution_capacity: None,
+            parser: crate::parser::Parser::default(),
+            parameter_count: None,
+            parameter_bytes: None,
+            projection_columns: None,
+            window_bound: None,
         }
     }
 }
@@ -135,7 +145,7 @@ pub struct Engine {
     store: Arc<AnalysisStore>,
     state: SessionState,
     memory: Arc<Memory>,
-    limits: Limits,
+    limits: Arc<Limits>,
     evaluations: Arc<Semaphore>,
     streams: Arc<Semaphore>,
     tenants: Mutex<BTreeMap<[u8; 16], Weak<TenantCapacity>>>,
@@ -153,6 +163,7 @@ impl Drop for Engine {
 impl Engine {
     pub fn new(store: Arc<AnalysisStore>, limits: Limits) -> Result<Arc<Self>> {
         limits.validate()?;
+        let limits = Arc::new(limits);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("araphor-query")
@@ -172,6 +183,7 @@ impl Engine {
             .with_target_partitions(1)
             .with_batch_size(200);
         config.options_mut().execution.planning_concurrency = 1;
+        config.set_extension(Arc::clone(&limits));
         let mut optimizers = PhysicalOptimizer::new().rules;
         optimizers.insert(
             optimizers.len() - 1,

@@ -187,7 +187,7 @@ impl Fixture {
         parameters: Vec<ScalarValue>,
     ) -> (Arc<LogicalPlan>, araphor_data::AnalysisTableRequests) {
         let state = self.engine.catalog(SourceSnapshot::providers()).unwrap();
-        let statement = Parser::parse(sql).unwrap();
+        let statement = Parser::default().parse(sql).unwrap();
         let sources = state
             .resolve_table_references(&statement)
             .unwrap()
@@ -402,10 +402,12 @@ fn local_cursor_denied() {
         .engine
         .catalog(BTreeMap::from([("events".into(), table)]))
         .unwrap();
-    let statement = Parser::parse("SELECT source_cursor FROM events").unwrap();
+    let statement = Parser::default()
+        .parse("SELECT source_cursor FROM events")
+        .unwrap();
     let plan = fixture.engine.plan(&state, statement, vec![]).unwrap();
     assert!(!crate::planner::subscription::Subscribe::appendable(&plan).unwrap());
-    let statement = Parser::parse(
+    let statement = Parser::default().parse(
         "SELECT operation FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '1 second'",
     )
     .unwrap();
@@ -441,7 +443,7 @@ async fn subqueries_use_replace() {
             let state = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
             let native = Arc::new(
                 state
-                    .statement_to_plan(Parser::parse(sql).unwrap())
+                    .statement_to_plan(Parser::default().parse(sql).unwrap())
                     .await
                     .unwrap(),
             );
@@ -570,19 +572,33 @@ async fn subqueries_keep_policy() {
         )
         .await
         .is_ok());
+    assert!(fixture
+        .engine
+        .prepare(
+            "SELECT source_cursor FROM events WHERE EXISTS (SELECT 1 FROM missing_source)",
+            vec![]
+        )
+        .await
+        .is_err());
     for sql in [
-        "SELECT source_cursor FROM events WHERE EXISTS (SELECT 1 FROM missing_source)",
         "SELECT source_cursor FROM events WHERE EXISTS (SELECT 1 FROM events e JOIN coverage c ON e.source_cursor = e.source_cursor)",
         "SELECT source_cursor FROM events WHERE source_cursor IN (SELECT lag(source_cursor, 201) OVER (ORDER BY source_cursor) FROM events)",
     ] {
-        assert!(fixture.engine.prepare(sql, vec![]).await.is_err(), "{sql}");
+        assert!(fixture.engine.prepare(sql, vec![]).await.is_ok(), "{sql}");
     }
     let wide = (0..257)
         .map(|index| format!("1 AS column_{index}"))
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!("SELECT source_cursor FROM events WHERE EXISTS (SELECT {wide} FROM events)");
-    assert!(fixture.engine.prepare(&sql, vec![]).await.is_err());
+    assert!(fixture.engine.prepare(&sql, vec![]).await.is_ok());
+    let limited = Fixture::new(Limits {
+        projection_columns: Some(256),
+        window_bound: Some(200),
+        ..Limits::default()
+    });
+    assert!(limited.engine.prepare(&sql, vec![]).await.is_err());
+    assert!(limited.engine.prepare("SELECT source_cursor FROM events WHERE source_cursor IN (SELECT lag(source_cursor, 201) OVER (ORDER BY source_cursor) FROM events)", vec![]).await.is_err());
 }
 
 #[tokio::test]
@@ -1966,5 +1982,25 @@ async fn window_matches_native_precision() {
                 }
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn native_join_source_capture() {
+    let fixture = Fixture::new(Limits::default());
+    fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
+    let clock = TestClock::new(2_000_000_000);
+    for (sql, left, right) in [
+        ("SELECT l.source_cursor AS a, r.source_cursor AS b FROM events l JOIN events r ON l.source_cursor + 1 = r.source_cursor ORDER BY a", vec![1, 2], vec![2, 3]),
+        ("SELECT l.source_cursor AS a, r.source_cursor AS b FROM events l CROSS JOIN events r ORDER BY a, b", vec![1,1,1,2,2,2,3,3,3], vec![1,2,3,1,2,3,1,2,3]),
+        ("SELECT l.source_cursor AS a, r.source_cursor AS b FROM events l LEFT JOIN events r ON l.source_cursor < r.source_cursor WHERE r.source_cursor IS NOT NULL ORDER BY a, b", vec![1,1,2], vec![2,3,3]),
+    ] {
+        let mut subscription = fixture.subscribe(sql, clock.clone(), None, false);
+        let update = next(&mut subscription).await;
+        assert_eq!(update.operation, Operation::Replace);
+        assert_eq!(values(&update, 0), left.into_iter().map(|value| ScalarValue::UInt64(Some(value))).collect::<Vec<_>>(), "{sql}");
+        assert_eq!(values(&update, 1), right.into_iter().map(|value| ScalarValue::UInt64(Some(value))).collect::<Vec<_>>(), "{sql}");
+        assert_eq!(update.snapshot.page.scanned_through, araphor_data::StorePositionV1 { commit_revision: update.snapshot.page.extraction.meta.commit_revision, ordinal: u32::MAX });
+        assert!(subscription.next().await.is_none());
     }
 }

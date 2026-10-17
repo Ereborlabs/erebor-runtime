@@ -98,7 +98,10 @@ impl Fixture {
             .with_physical_optimizer_rules(vec![Arc::new(CombinePartialFinalAggregate::new())])
             .build();
         let plan = crate::planner::Planner::new(&state)
-            .build(crate::parser::Parser::parse(sql).unwrap(), Vec::new())
+            .build(
+                crate::parser::Parser::default().parse(sql).unwrap(),
+                Vec::new(),
+            )
             .await
             .unwrap();
         let plan = state.create_physical_plan(&plan).await.unwrap();
@@ -184,7 +187,10 @@ impl Fixture {
         .with_physical_optimizer_rules(vec![Arc::new(CombinePartialFinalAggregate::new())])
         .build();
         let plan = crate::planner::Planner::new(&state)
-            .build(crate::parser::Parser::parse(sql).unwrap(), Vec::new())
+            .build(
+                crate::parser::Parser::default().parse(sql).unwrap(),
+                Vec::new(),
+            )
             .await
             .unwrap();
         let plan = state.create_physical_plan(&plan).await.unwrap();

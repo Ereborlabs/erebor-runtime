@@ -340,7 +340,9 @@ async fn planning_keeps_clock_change() {
             .engine
             .plan(
                 &state,
-                Parser::parse("SELECT COUNT(*) AS total FROM events").unwrap(),
+                Parser::default()
+                    .parse("SELECT COUNT(*) AS total FROM events")
+                    .unwrap(),
                 vec![],
             )
             .unwrap(),

@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 
 use araphor_query::datafusion::arrow::array::RecordBatch;
 use araphor_query::execution::{Engine, Limits, Read};
-use araphor_query::planner::Planner;
 use datafusion_common::ScalarValue;
 use futures_util::TryStreamExt;
 
@@ -51,7 +50,7 @@ impl<'a> TraversalSelection<'a> {
     }
 
     fn chunks(&self) -> Vec<&[&'a GraphEdgeV1]> {
-        let limit = Limits::default().output_rows.min(Planner::PARAMETER_COUNT);
+        let limit = Limits::default().output_rows;
         if self.edges.len() <= limit {
             vec![self.edges.as_slice()]
         } else {

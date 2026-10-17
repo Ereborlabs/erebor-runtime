@@ -208,7 +208,7 @@ async fn receipt_releases_binary_scratch() -> TestResult {
         },
     )?;
     let state = engine.catalog(SourceSnapshot::providers())?;
-    let statement = Parser::parse("SELECT body FROM context_versions")?;
+    let statement = Parser::default().parse("SELECT body FROM context_versions")?;
     let sources: araphor_data::AnalysisTableRequests = state
         .resolve_table_references(&statement)?
         .into_iter()
@@ -628,7 +628,7 @@ mod notification {
         let mut value = obligation();
         retain(&store, &value)?;
         let state = engine.catalog(SourceSnapshot::providers())?;
-        let statement = Parser::parse("SELECT overdue FROM notifications")?;
+        let statement = Parser::default().parse("SELECT overdue FROM notifications")?;
         let sources = state
             .resolve_table_references(&statement)?
             .into_iter()

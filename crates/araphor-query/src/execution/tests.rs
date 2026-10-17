@@ -219,7 +219,9 @@ fn local_plan(engine: &Engine) -> (Arc<LogicalPlan>, araphor_data::AnalysisTable
     let catalog = engine
         .catalog(BTreeMap::from([("local_rows".into(), table)]))
         .unwrap();
-    let statement = Parser::parse("SELECT value FROM local_rows").unwrap();
+    let statement = Parser::default()
+        .parse("SELECT value FROM local_rows")
+        .unwrap();
     let sources = catalog
         .resolve_table_references(&statement)
         .unwrap()
@@ -256,7 +258,7 @@ fn closed_catalog_keeps_locals() {
     ] {
         let plan = fixture
             .engine
-            .plan(&state, Parser::parse(sql).unwrap(), vec![])
+            .plan(&state, Parser::default().parse(sql).unwrap(), vec![])
             .unwrap();
         assert_eq!(
             value(&session.collect_local(Arc::new(plan)).unwrap()),
@@ -273,7 +275,7 @@ fn closed_catalog_keeps_locals() {
     ] {
         let error = fixture
             .engine
-            .plan(&state, Parser::parse(sql).unwrap(), vec![])
+            .plan(&state, Parser::default().parse(sql).unwrap(), vec![])
             .unwrap_err();
         assert_eq!(error.status_code(), StatusCode::InvalidArguments, "{sql}");
         assert_eq!(
@@ -287,7 +289,7 @@ fn closed_catalog_keeps_locals() {
         .engine
         .plan(
             &empty,
-            Parser::parse("SELECT * FROM events").unwrap(),
+            Parser::default().parse("SELECT * FROM events").unwrap(),
             vec![]
         )
         .is_err());
@@ -385,7 +387,9 @@ fn local_skips_store() {
             .engine
             .plan(
                 &state,
-                Parser::parse("SELECT CURRENT_TIMESTAMP AS clock").unwrap(),
+                Parser::default()
+                    .parse("SELECT CURRENT_TIMESTAMP AS clock")
+                    .unwrap(),
                 vec![],
             )
             .unwrap(),
@@ -393,7 +397,11 @@ fn local_skips_store() {
     let constant = Arc::new(
         fixture
             .engine
-            .plan(&state, Parser::parse("SELECT 7 AS value").unwrap(), vec![])
+            .plan(
+                &state,
+                Parser::default().parse("SELECT 7 AS value").unwrap(),
+                vec![],
+            )
             .unwrap(),
     );
     let source = Arc::new(
@@ -401,7 +409,9 @@ fn local_skips_store() {
             .engine
             .plan(
                 &state,
-                Parser::parse("SELECT source_cursor FROM events").unwrap(),
+                Parser::default()
+                    .parse("SELECT source_cursor FROM events")
+                    .unwrap(),
                 vec![],
             )
             .unwrap(),
@@ -601,7 +611,7 @@ fn native_counts_rebind() {
             .engine
             .plan(
                 &state,
-                Parser::parse(
+                Parser::default().parse(
                     "WITH selected AS (SELECT value FROM \"CaseRows\") SELECT count(*) AS total, current_timestamp AS clock FROM selected",
                 )
                 .unwrap(),
@@ -712,9 +722,9 @@ fn native_bindings_fail_closed() {
 fn sessions_freeze_native_clocks() {
     let fixture = Fixture::new(Limits::default());
     let catalog = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
-    let statement =
-        Parser::parse("SELECT current_timestamp AS first_clock, current_timestamp AS second_clock")
-            .unwrap();
+    let statement = Parser::default()
+        .parse("SELECT current_timestamp AS first_clock, current_timestamp AS second_clock")
+        .unwrap();
     let sources = catalog
         .resolve_table_references(&statement)
         .unwrap()
@@ -920,7 +930,7 @@ fn input_output_budget() {
         ..Default::default()
     });
     let state = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
-    let statement = Parser::parse("SELECT $1 AS payload").unwrap();
+    let statement = Parser::default().parse("SELECT $1 AS payload").unwrap();
     let sources = state
         .resolve_table_references(&statement)
         .unwrap()
@@ -1140,7 +1150,7 @@ impl Gate {
         let state = engine
             .catalog(BTreeMap::from([("gate".into(), provider)]))
             .unwrap();
-        let statement = Parser::parse("SELECT value FROM gate").unwrap();
+        let statement = Parser::default().parse("SELECT value FROM gate").unwrap();
         let sources = state
             .resolve_table_references(&statement)
             .unwrap()
@@ -1485,4 +1495,48 @@ impl super::Session {
                 .map_err(|source| crate::Error::Sql { source })
         })
     }
+}
+
+#[tokio::test]
+async fn admission_uses_engine_config() {
+    let limits: Limits = serde_json::from_value(serde_json::json!({
+        "parser": {"bytes": 32, "depth": 64},
+        "parameter_count": 1, "parameter_bytes": 512,
+        "projection_columns": 1, "window_bound": 2
+    }))
+    .unwrap();
+    let fixture = Fixture::new(limits);
+    let native = fixture.engine.catalog(BTreeMap::new()).unwrap();
+    let configured = native.config().get_extension::<Limits>().unwrap();
+    assert!(std::ptr::eq(fixture.engine.limits(), configured.as_ref()));
+    fixture
+        .engine
+        .prepare("SELECT $1", vec![ScalarValue::Int64(Some(1))])
+        .await
+        .unwrap();
+    assert!(matches!(
+        fixture
+            .engine
+            .prepare("SELECT $1, $2", vec![ScalarValue::Int64(Some(1)); 2])
+            .await,
+        Err(Error::Invalid {
+            field: "SQL parameters",
+            ..
+        })
+    ));
+    let sql = format!("SELECT '{}'", "x".repeat(33));
+    assert!(matches!(
+        fixture.engine.prepare(&sql, vec![]).await,
+        Err(Error::Invalid {
+            field: "SQL size",
+            ..
+        })
+    ));
+    assert!(fixture.engine.prepare("SELECT 1, 2", vec![]).await.is_err());
+    let defaults: Limits = serde_json::from_str("{}").unwrap();
+    assert_eq!(defaults.parser, Parser::default());
+    assert_eq!(defaults.parameter_count, None);
+    assert_eq!(defaults.parameter_bytes, None);
+    assert_eq!(defaults.projection_columns, None);
+    assert_eq!(defaults.window_bound, None);
 }

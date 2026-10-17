@@ -90,7 +90,7 @@ fn builtin_has_no_index() -> TestResult {
         .engine
         .plan(
             &native,
-            Parser::parse("SELECT events.__row_index FROM events")?,
+            Parser::default().parse("SELECT events.__row_index FROM events")?,
             Vec::new()
         )
         .is_err());
@@ -102,9 +102,11 @@ fn builtin_has_no_index() -> TestResult {
     let native = fixture
         .engine
         .catalog(BTreeMap::from([("events".into(), table)]))?;
-    let plan = fixture
-        .engine
-        .plan(&native, Parser::parse("SELECT * FROM events")?, Vec::new())?;
+    let plan = fixture.engine.plan(
+        &native,
+        Parser::default().parse("SELECT * FROM events")?,
+        Vec::new(),
+    )?;
     assert_eq!(plan.schema().as_arrow().field(1).name(), "__row_index");
     Ok(())
 }
@@ -234,9 +236,11 @@ fn empty_index_keeps_schema() -> TestResult {
     let native = fixture
         .engine
         .catalog(BTreeMap::from([("empty".into(), table)]))?;
-    let plan = fixture
-        .engine
-        .plan(&native, Parser::parse("SELECT * FROM empty")?, Vec::new())?;
+    let plan = fixture.engine.plan(
+        &native,
+        Parser::default().parse("SELECT * FROM empty")?,
+        Vec::new(),
+    )?;
     let output = session.collect_local(Arc::new(plan))?;
     assert!(output.iter().all(|batch| batch.num_rows() == 0));
     assert_eq!(schema.fields().len(), 2);

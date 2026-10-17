@@ -12,7 +12,6 @@ use araphor_query::datafusion::logical_expr::LogicalPlan;
 use araphor_query::execution::{Engine, Session};
 use araphor_query::inputs::Inputs;
 use araphor_query::memory::Memory;
-use araphor_query::parser::Parser;
 
 use crate::Result;
 
@@ -320,7 +319,7 @@ impl AdmittedModel {
     fn plan(engine: &Engine, state: &SessionState, sql: &str) -> Result<Arc<LogicalPlan>> {
         Ok(Arc::new(engine.plan(
             state,
-            Parser::parse(sql)?,
+            engine.limits().parser.parse(sql)?,
             Vec::new(),
         )?))
     }

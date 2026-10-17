@@ -22,6 +22,10 @@ use crate::planner::Planner;
 use crate::{Error, Result};
 
 fn catalog() -> SessionState {
+    catalog_with(Limits::default())
+}
+
+fn catalog_with(limits: Limits) -> SessionState {
     let operation = Field::new("operation", DataType::Utf8, false).with_metadata(HashMap::from([
         ("araphor.owner".into(), "events".into()),
         ("araphor.description".into(), "Recorded operation".into()),
@@ -56,7 +60,7 @@ fn catalog() -> SessionState {
     );
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(AnalysisStore::open(directory.path().join("data")).unwrap());
-    let engine = Engine::new(store, Limits::default()).unwrap();
+    let engine = Engine::new(store, limits).unwrap();
     engine
         .catalog(BTreeMap::from([
             ("events".into(), Arc::clone(&events)),
@@ -73,39 +77,67 @@ async fn plan(
     parameters: Vec<ScalarValue>,
 ) -> Result<LogicalPlan> {
     Planner::new(state)
-        .build(Parser::parse(sql)?, parameters)
+        .build(Parser::default().parse(sql)?, parameters)
         .await
 }
 
 #[test]
 fn parser_returns_native_statements() {
+    let parser = Parser::default();
     assert!(matches!(
-        Parser::parse("SELECT 1;").unwrap(),
+        parser.parse("SELECT 1;").unwrap(),
         Statement::Statement(_)
     ));
-    assert!(Parser::parse("CREATE TABLE local_table (value BIGINT)").is_ok());
+    assert!(parser
+        .parse("CREATE TABLE local_table (value BIGINT)")
+        .is_ok());
     for sql in ["", ";", "SELECT (", "SELECT 1; SELECT 2"] {
-        assert!(Parser::parse(sql).is_err(), "{sql}");
+        assert!(parser.parse(sql).is_err(), "{sql}");
     }
+    let sql = format!("SELECT '{}'", "x".repeat(16 * 1024 + 1));
+    assert!(parser.parse(&sql).is_ok());
+    let limited = Parser {
+        bytes: Some(sql.len()),
+        ..Parser::default()
+    };
+    assert!(limited.parse(&sql).is_ok());
     assert!(matches!(
-        Parser::parse(&"x".repeat(Parser::SQL_BYTES + 1)),
+        limited.parse(&(sql + " ")),
         Err(Error::Invalid {
             field: "SQL size",
             ..
         })
     ));
-    let depth = Parser::RECURSION_LIMIT + 1;
-    let sql = format!("SELECT {}1{}", "(".repeat(depth), ")".repeat(depth));
-    assert!(Parser::parse(&sql).is_err());
+    let sql = format!("SELECT {}1{}", "(".repeat(65), ")".repeat(65));
+    assert!(parser.parse(&sql).is_ok());
+    assert!(Parser {
+        depth: Some(64),
+        ..Parser::default()
+    }
+    .parse(&sql)
+    .is_err());
+    assert!(Parser {
+        depth: Some(512),
+        ..Parser::default()
+    }
+    .parse(&sql)
+    .is_ok());
+    let default: Parser = serde_json::from_str("{}").unwrap();
+    assert_eq!(default, parser);
+    assert_eq!(
+        serde_json::to_value(default).unwrap(),
+        serde_json::json!({"bytes": null, "depth": null})
+    );
 }
 
 #[tokio::test]
 async fn unused_ctes_record_providers() {
     let catalog = catalog();
-    let statement = Parser::parse(
-        "WITH ignored AS (SELECT state FROM coverage) SELECT operation FROM events WHERE false",
-    )
-    .unwrap();
+    let statement = Parser::default()
+        .parse(
+            "WITH ignored AS (SELECT state FROM coverage) SELECT operation FROM events WHERE false",
+        )
+        .unwrap();
     let sources = catalog.resolve_table_references(&statement).unwrap();
     assert_eq!(
         sources.iter().map(ToString::to_string).collect::<Vec<_>>(),
@@ -157,7 +189,7 @@ async fn native_ctes_scope_catalog() {
         ),
     ] {
         let catalog = catalog();
-        let statement = Parser::parse(sql).unwrap();
+        let statement = Parser::default().parse(sql).unwrap();
         let sources = catalog.resolve_table_references(&statement).unwrap();
         Planner::new(&catalog)
             .build(statement, vec![])
@@ -261,9 +293,9 @@ async fn unused_windows_skip_resolution() {
     .await
     .unwrap();
     assert!(catalog.scalar_functions().contains_key("random"));
-    let statement =
-        Parser::parse("SELECT operation FROM events WINDOW ignored AS (ORDER BY random())")
-            .unwrap();
+    let statement = Parser::default()
+        .parse("SELECT operation FROM events WINDOW ignored AS (ORDER BY random())")
+        .unwrap();
     assert_eq!(
         catalog
             .resolve_table_references(&statement)
@@ -399,7 +431,7 @@ async fn planning_denies_writes_redacts() {
         "EXPLAIN SELECT operation FROM events",
         "COPY (SELECT operation FROM events) TO '/tmp/not-a-query-output'",
     ] {
-        let statement = Parser::parse(sql).unwrap();
+        let statement = Parser::default().parse(sql).unwrap();
         assert!(
             Planner::new(&catalog())
                 .build(statement, vec![])
@@ -425,16 +457,13 @@ async fn planning_denies_writes_redacts() {
 }
 
 #[tokio::test]
-async fn native_joins_require_keys() {
+async fn native_join_planning() {
+    let catalog = catalog();
     for sql in [
         "SELECT e.operation FROM events e JOIN coverage c ON e.source_cursor = c.first_cursor",
         "SELECT e.operation FROM events e JOIN coverage c ON (e.source_cursor) = c.first_cursor",
         "SELECT e.operation FROM events e JOIN coverage c ON source_cursor = c.first_cursor",
         "SELECT e.operation FROM events e LEFT JOIN coverage c ON e.source_cursor = c.first_cursor",
-    ] {
-        plan(&catalog(), sql, vec![]).await.unwrap();
-    }
-    for sql in [
         "SELECT e.operation FROM events e JOIN coverage c ON e.source_cursor = e.source_cursor",
         "SELECT e.operation FROM events e JOIN coverage c ON e.source_cursor + 1 = c.first_cursor",
         "SELECT e.operation FROM events e JOIN coverage c ON e.source_cursor = c.first_cursor AND c.first_cursor = c.first_cursor",
@@ -442,27 +471,18 @@ async fn native_joins_require_keys() {
         "SELECT e.operation FROM events e JOIN coverage c ON e.source_cursor = c.first_cursor JOIN coverage d ON e.source_cursor = c.first_cursor",
         "SELECT e.operation FROM events e CROSS JOIN coverage c",
     ] {
-        assert!(plan(&catalog(), sql, vec![]).await.is_err(), "{sql}");
+        let logical = plan(&catalog, sql, vec![]).await.unwrap();
+        DataFrame::new(catalog.clone(), logical).collect().await.unwrap();
     }
 }
 
 #[tokio::test]
-async fn native_windows_require_bounds() {
+async fn window_quotas_are_optional() {
+    let catalog = catalog();
     for sql in [
         "SELECT lag(source_cursor, 200) OVER (ORDER BY source_cursor) FROM events",
         "SELECT sum(pid) OVER (ORDER BY source_cursor ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM events",
         "SELECT sum(pid) OVER bounded FROM events WINDOW bounded AS (ORDER BY source_cursor ROWS 2 PRECEDING)",
-    ] {
-        plan(&catalog(), sql, vec![]).await.unwrap();
-    }
-    plan(
-        &catalog(),
-        "SELECT lead(source_cursor, $1) OVER (ORDER BY source_cursor) FROM events",
-        vec![ScalarValue::UInt32(Some(2))],
-    )
-    .await
-    .unwrap();
-    for sql in [
         "SELECT lag(source_cursor, 201) OVER (ORDER BY source_cursor) FROM events",
         "SELECT lead(source_cursor, -1) OVER (ORDER BY source_cursor) FROM events",
         "SELECT lag(source_cursor) OVER () FROM events",
@@ -472,33 +492,93 @@ async fn native_windows_require_bounds() {
         "SELECT sum(pid) OVER (ORDER BY source_cursor ROWS 201 PRECEDING) FROM events",
         "SELECT sum(pid) OVER (ORDER BY source_cursor RANGE 2 PRECEDING) FROM events",
     ] {
-        assert!(plan(&catalog(), sql, vec![]).await.is_err(), "{sql}");
+        let logical = plan(&catalog, sql, vec![]).await.unwrap();
+        DataFrame::new(catalog.clone(), logical).collect().await.unwrap();
+    }
+    let limited = catalog_with(Limits {
+        window_bound: Some(200),
+        ..Limits::default()
+    });
+    for sql in [
+        "SELECT lag(source_cursor, 200) OVER (ORDER BY source_cursor) FROM events",
+        "SELECT sum(pid) OVER (ORDER BY source_cursor ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM events",
+        "SELECT sum(pid) OVER bounded FROM events WINDOW bounded AS (ORDER BY source_cursor ROWS 2 PRECEDING)",
+        "SELECT lag(source_cursor) OVER () FROM events",
+    ] {
+        plan(&limited, sql, vec![]).await.unwrap();
+    }
+    plan(
+        &limited,
+        "SELECT lead(source_cursor, $1) OVER (ORDER BY source_cursor) FROM events",
+        vec![ScalarValue::UInt32(Some(2))],
+    )
+    .await
+    .unwrap();
+    for sql in [
+        "SELECT lag(source_cursor, 201) OVER (ORDER BY source_cursor) FROM events",
+        "SELECT lead(source_cursor, -1) OVER (ORDER BY source_cursor) FROM events",
+        "SELECT sum(pid) OVER (ORDER BY source_cursor) FROM events",
+        "SELECT sum(pid) OVER unbounded FROM events WINDOW unbounded AS (ORDER BY source_cursor)",
+        "SELECT sum(pid) OVER (ORDER BY source_cursor ROWS UNBOUNDED PRECEDING) FROM events",
+        "SELECT sum(pid) OVER (ORDER BY source_cursor ROWS 201 PRECEDING) FROM events",
+        "SELECT sum(pid) OVER (ORDER BY source_cursor RANGE 2 PRECEDING) FROM events",
+    ] {
+        assert!(plan(&limited, sql, vec![]).await.is_err(), "{sql}");
     }
 }
 
 #[tokio::test]
 async fn planning_enforces_resource_limits() {
+    let limited = catalog_with(Limits {
+        parameter_count: Some(256),
+        parameter_bytes: Some(1024 * 1024),
+        projection_columns: Some(256),
+        ..Limits::default()
+    });
     for parameters in [
-        vec![ScalarValue::Int64(Some(1)); Planner::PARAMETER_COUNT + 1],
-        vec![ScalarValue::Utf8(Some(
-            "x".repeat(Planner::PARAMETER_BYTES),
-        ))],
-        vec![ScalarValue::Float64(Some(f64::NAN))],
-        vec![ScalarValue::Float64(Some(f64::INFINITY))],
+        vec![ScalarValue::Int64(Some(1)); 257],
+        vec![ScalarValue::Utf8(Some("x".repeat(1024 * 1024)))],
     ] {
         assert!(matches!(
-            plan(&catalog(), "SELECT $1", parameters).await,
+            plan(&limited, "SELECT $1", parameters).await,
             Err(Error::Invalid {
                 field: "SQL parameters",
                 ..
             })
         ));
     }
+    assert!(plan(
+        &catalog(),
+        "SELECT $1",
+        vec![ScalarValue::Int64(Some(1)); 257]
+    )
+    .await
+    .is_ok());
+    assert!(plan(
+        &catalog(),
+        "SELECT $1",
+        vec![ScalarValue::Utf8(Some("x".repeat(1024 * 1024)))]
+    )
+    .await
+    .is_ok());
+    assert!(plan(
+        &catalog(),
+        "SELECT $1, $2",
+        vec![
+            ScalarValue::Float64(Some(f64::NAN)),
+            ScalarValue::Float64(Some(f64::INFINITY))
+        ]
+    )
+    .await
+    .is_ok());
     let sql = (0..257)
         .map(|index| format!("1 AS column_{index}"))
         .collect::<Vec<_>>()
         .join(", ");
     assert!(plan(&catalog(), &format!("SELECT {sql}"), vec![])
+        .await
+        .is_ok());
+    assert!(plan(&limited, &format!("SELECT {sql}"), vec![])
         .await
         .is_err());
     let schema = Arc::new(Schema::new(
@@ -513,7 +593,7 @@ async fn planning_enforces_resource_limits() {
         )
         .unwrap(),
     );
-    let catalog = catalog();
+    let catalog = limited;
     let options = &catalog.config_options().catalog;
     catalog
         .catalog_list()
@@ -534,7 +614,9 @@ async fn planning_enforces_resource_limits() {
     )
     .await
     .is_ok());
-    let statement = Parser::parse("WITH ignored AS (SELECT * FROM wide) SELECT 1").unwrap();
+    let statement = Parser::default()
+        .parse("WITH ignored AS (SELECT * FROM wide) SELECT 1")
+        .unwrap();
     assert_eq!(
         catalog
             .resolve_table_references(&statement)
