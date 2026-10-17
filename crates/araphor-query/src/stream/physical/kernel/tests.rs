@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 
 use super::super::SubscribeExec;
 use super::*;
-use crate::execution::Limits;
+use crate::execution::{Engine, Limits};
 use crate::sources::{JournalExec, SourceData, SourceSnapshot};
 use crate::stream::Change;
 
@@ -40,7 +40,8 @@ fn execute(
     let aggregate = aggregate.clone();
     Box::pin(
         stream::once(async move {
-            let kernel = Kernel::new(&aggregate, source, context, engine, &control)?;
+            let session = engine.session(AnalysisSelectionV1::tenant([1; 16]), &control, 0)?;
+            let kernel = Kernel::new(&aggregate, source, context, Arc::new(session))?;
             Ok::<_, crate::Error>((kernel, input, control))
         })
         .map_ok(|state| {
@@ -239,12 +240,9 @@ impl Fixture {
             })
             .unwrap();
         self.engine
-            .metadata(
-                AnalysisSelectionV1::new([1; 16], vec![]),
-                &BTreeMap::new(),
-                &self.control,
-                1,
-            )
+            .session(AnalysisSelectionV1::new([1; 16], vec![]), &self.control, 1)
+            .unwrap()
+            .metadata(&BTreeMap::new())
             .await
             .unwrap()
     }

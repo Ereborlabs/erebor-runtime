@@ -78,8 +78,7 @@ impl Runtime {
                         aggregate,
                         Arc::clone(&compiled.source),
                         Arc::clone(&context),
-                        Arc::clone(&run.engine),
-                        &run.control,
+                        Arc::clone(&run.session),
                     )?,
                     compiled: Arc::clone(compiled),
                 })
@@ -124,8 +123,9 @@ impl Runtime {
         {
             match self
                 .run
-                .control
-                .query_async(self.progress.next(&self.run.control, None))
+                .session
+                .control()
+                .query_async(self.progress.next(self.run.session.control(), None))
                 .await?
             {
                 Wake::Source => {
@@ -160,11 +160,12 @@ impl Runtime {
         loop {
             let stage = Arc::new(
                 self.run
-                    .control
-                    .within(self.run.engine.limits().extract_timeout)?,
+                    .session
+                    .control()
+                    .within(self.run.session.engine().limits().extract_timeout)?,
             );
             let worker = Arc::clone(&stage);
-            let store = Arc::clone(self.run.engine.store());
+            let store = Arc::clone(self.run.session.engine().store());
             let selection = selection.clone();
             match Engine::blocking(stage, move || {
                 store
@@ -180,10 +181,12 @@ impl Runtime {
                         },
                 }) => {
                     self.run
-                        .control
+                        .session
+                        .control()
                         .query_async(async {
                             self.run
-                                .engine
+                                .session
+                                .engine()
                                 .store()
                                 .wait_capacity()
                                 .await
@@ -202,11 +205,13 @@ impl Runtime {
             None => {
                 let permit = Arc::new(
                     self.run
-                        .control
+                        .session
+                        .control()
                         .query_async(
                             self.run
-                                .engine
-                                .acquire_evaluation(self.run.selection.tenant_id),
+                                .session
+                                .engine()
+                                .acquire_evaluation(self.run.session.selection().tenant_id),
                         )
                         .await?,
                 );
@@ -214,14 +219,14 @@ impl Runtime {
             }
         };
         let selection = self.run.window.map_or_else(
-            || self.run.selection.clone(),
-            |window| window.selection(&self.run.selection, now),
+            || self.run.session.selection().clone(),
+            |window| window.selection(self.run.session.selection(), now),
         );
         if self.snapshot.is_none() && self.run.resume.is_some() {
             let (meta, _) = self.dependencies(selection.clone()).await?;
             self.check_store(&meta)?;
         }
-        let session = self.run.engine.session(selection, &self.run.control, now)?;
+        let session = self.run.session.at(selection, now);
         let output = if self.run.operation == Operation::Append {
             let (snapshot, mut stream, permit, control, reservation) = session
                 .start_physical(
@@ -234,7 +239,7 @@ impl Runtime {
                 .await?;
             self.check_store(&snapshot.page.extraction.meta)?;
             Output::page(
-                &self.run.engine,
+                &session,
                 Arc::clone(&self.schema),
                 &mut stream,
                 control,
@@ -248,11 +253,9 @@ impl Runtime {
             let mut output = maintained.kernel.apply(change).await?;
             let batches = output.batches.take().ok_or_else(Self::state_error)?;
             output._control.check()?;
-            let reservation = self
-                .run
-                .engine
+            let reservation = session
                 .memory()
-                .prepare_output(self.run.engine.limits().output_bytes)
+                .prepare_output(session.output().1)
                 .context(SqlSnafu)?;
             let input = std::mem::replace(&mut output._memory, reservation);
             let stream = SubscribeExec::bind(
@@ -328,18 +331,20 @@ impl Runtime {
         }
         let now = self.progress.time()?;
         let selection = self.run.window.map_or_else(
-            || self.run.selection.clone(),
-            |window| window.selection(&self.run.selection, now),
+            || self.run.session.selection().clone(),
+            |window| window.selection(self.run.session.selection(), now),
         );
         let snapshot = self
             .run
-            .engine
-            .metadata(selection, &self.run.sources, &self.run.control, now)
+            .session
+            .at(selection, now)
+            .metadata(&self.run.sources)
             .await?;
         self.check_store(&snapshot.page.extraction.meta)?;
         self.run
-            .control
-            .query_async(self.run.engine.check_read(&snapshot))
+            .session
+            .control()
+            .query_async(self.run.session.engine().check_read(&snapshot))
             .await?;
         self.snapshot = Some(Arc::clone(&snapshot));
         Ok(Event {
@@ -351,12 +356,12 @@ impl Runtime {
                 limited: false,
                 _memory: self
                     .run
-                    .engine
+                    .session
                     .memory()
                     .reserve_output(0)
                     .context(SqlSnafu)?,
                 _permit: None,
-                _control: Arc::clone(&self.run.control),
+                _control: Arc::clone(self.run.session.control()),
             },
             completed: false,
             evaluated: self.evaluated,

@@ -23,7 +23,7 @@ use datafusion::physical_plan::{
 use snafu::ResultExt as _;
 
 use super::{Captured, ReadMode, SourceData, SourceOrigin, SourceSnapshot};
-use crate::execution::{Engine, Permit};
+use crate::execution::{Engine, Permit, Session};
 use crate::stream::{Change, Run};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
@@ -85,7 +85,7 @@ impl JournalExec {
             .get_extension::<Run>()
             .ok_or_else(|| DataFusionError::Execution("source run is absent".into()))
             .context(SqlSnafu)?;
-        run.control.check()?;
+        run.session.control().check()?;
         if run.sources.len() != 1 || !run.sources.contains_key("events") {
             return Err(DataFusionError::NotImplemented(
                 "maintained original evidence inventory".into(),
@@ -93,7 +93,7 @@ impl JournalExec {
             .context(SqlSnafu);
         }
         Ok(Changes {
-            memory: run.engine.memory().reserve_input(0).context(SqlSnafu)?,
+            memory: run.session.memory().reserve_input(0).context(SqlSnafu)?,
             run,
             columns: self.columns.clone(),
             positions: self.positions,
@@ -179,12 +179,14 @@ impl Changes {
     }
 
     async fn read(&mut self, permit: Arc<Permit>, now: u64) -> Result<Change> {
-        let engine = Arc::clone(&self.run.engine);
-        let control = Arc::clone(&self.run.control);
+        let run = Arc::clone(&self.run);
+        let session = &run.session;
+        let engine = session.engine();
+        let control = Arc::clone(session.control());
         let stage = Arc::new(control.within(engine.limits().extract_timeout)?);
         let capture = SourceSnapshot::new(
             Arc::clone(engine.store()),
-            self.run.selection.clone(),
+            self.run.session.selection().clone(),
             None,
             AnalysisExtractLimits {
                 scan_bytes: engine.limits().scan_bytes,
@@ -194,7 +196,7 @@ impl Changes {
             stage.within(stage.remaining()?)?,
             engine.limits().extract_timeout,
             now,
-            Arc::clone(engine.memory()),
+            Arc::clone(session.memory()),
         );
         let requests = Arc::clone(&self.requests);
         let received = self.received.clone();
@@ -214,7 +216,7 @@ impl Changes {
             super::ArrowSnapshot::check_store(previous, &captured.receipt.page.extraction.meta)?;
         }
         let evaluation = Arc::new(control.within(engine.limits().evaluate_timeout)?);
-        let (before, after) = self.apply(&engine, &captured, &evaluation)?;
+        let (before, after) = self.apply(session, &captured, &evaluation)?;
         evaluation.check()?;
         let headers = |batches: &Vec<RecordBatch>| {
             batches
@@ -266,7 +268,7 @@ impl Changes {
             ))
             .context(SqlSnafu);
         }
-        let witness_memory = engine
+        let witness_memory = session
             .memory()
             .reserve_input(witness_bytes)
             .context(SqlSnafu)?;
@@ -285,7 +287,7 @@ impl Changes {
             ordinal: u32::MAX,
         };
         evaluation.check()?;
-        let memory = engine.memory().reserve_input(metadata).context(SqlSnafu)?;
+        let memory = session.memory().reserve_input(metadata).context(SqlSnafu)?;
         self.frontier = Some(position);
         self.meta = Some(captured.receipt.page.extraction.meta.clone());
         Ok(Change {
@@ -301,10 +303,11 @@ impl Changes {
 
     fn apply(
         &mut self,
-        engine: &Engine,
+        session: &Session,
         captured: &Captured,
         control: &AnalysisReadControl,
     ) -> Result<(Vec<RecordBatch>, Vec<RecordBatch>)> {
+        let engine = session.engine();
         let rows = self
             .retained
             .iter()
@@ -336,7 +339,7 @@ impl Changes {
                 .saturating_mul(2)
                 .saturating_add(rows.saturating_mul(3))
         };
-        let scratch = engine
+        let scratch = session
             .memory()
             .reserve_input(
                 incoming
@@ -512,13 +515,13 @@ impl Changes {
             .context(SqlSnafu);
         }
         for chunk in &self.retained {
-            engine
+            session
                 .memory()
                 .retain_input(&chunk.batch, &scratch)
                 .context(SqlSnafu)?;
         }
         for batch in before.iter().chain(&after) {
-            engine
+            session
                 .memory()
                 .retain_input(batch, &scratch)
                 .context(SqlSnafu)?;

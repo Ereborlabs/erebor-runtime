@@ -2,9 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use araphor_data::{
-    AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests, StorePositionV1,
-};
+use araphor_data::{AnalysisReadControl, AnalysisTableRequests, StorePositionV1};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::memory_pool::MemoryReservation;
@@ -14,7 +12,7 @@ use futures_util::{StreamExt as _, TryStreamExt as _};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use crate::execution::{Engine, Permit};
+use crate::execution::{Permit, Session};
 use crate::sources::ArrowSnapshot;
 use crate::stream::physical::{Fingerprint, SubscribeExec};
 use crate::stream::{Event, Output, OutputStream, Run};
@@ -55,10 +53,9 @@ pub struct Update {
 }
 
 pub struct Subscription {
-    engine: Arc<Engine>,
+    session: Arc<Session>,
     schema: SchemaRef,
     moving: Option<u64>,
-    control: Arc<AnalysisReadControl>,
     resume: Option<Cursor>,
     operation: Operation,
     stream: Pin<Box<dyn Stream<Item = std::result::Result<Update, StreamError>> + Send>>,
@@ -68,18 +65,19 @@ type StreamError = (crate::Error, Option<Arc<ArrowSnapshot>>);
 
 impl Subscription {
     /// `sources` contains all original durable Data sources. Exclude registered local tables.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        engine: Arc<Engine>,
+        session: Session,
         plan: Arc<LogicalPlan>,
         sources: AnalysisTableRequests,
-        selection: AnalysisSelectionV1,
-        control: Arc<AnalysisReadControl>,
         binding: &[u8],
         resume: Option<Cursor>,
         clock: Arc<dyn Clock>,
         follow: bool,
     ) -> Result<Self> {
+        let session = Arc::new(session);
+        let engine = session.engine();
+        let selection = session.selection();
+        let control = session.control();
         control.check()?;
         if !selection.valid() || (!follow && resume.is_some()) {
             return InvalidSnafu {
@@ -121,18 +119,16 @@ impl Subscription {
         } else {
             Operation::Replace
         };
-        let binding = Fingerprint::binding(&plan, &sources, &selection, operation, binding)?;
+        let binding = Fingerprint::binding(&plan, &sources, selection, operation, binding)?;
         if let Some(cursor) = &resume {
             cursor.check_binding(&binding, operation)?;
         }
         let schema = Arc::clone(plan.schema().inner());
         let permit = engine.reserve_stream(selection.tenant_id)?;
         let run = Arc::new(Run {
-            engine: Arc::clone(&engine),
+            session: Arc::clone(&session),
             plan,
             sources,
-            selection,
-            control: Arc::clone(&control),
             clock,
             follow,
             operation,
@@ -164,17 +160,19 @@ impl Subscription {
                         let capture = async {
                             let now = state.run.clock.now_ns()?;
                             let control = AnalysisReadControl::with_timeout(
-                                state.run.engine.limits().extract_timeout,
+                                state.run.session.engine().limits().extract_timeout,
                             )?;
                             state
                                 .run
-                                .engine
-                                .metadata(
-                                    state.run.selection.clone(),
-                                    &state.run.sources,
+                                .session
+                                .engine()
+                                .session_on(
+                                    state.run.session.selection().clone(),
                                     &control,
                                     now,
-                                )
+                                    Arc::clone(state.run.session.memory()),
+                                )?
+                                .metadata(&state.run.sources)
                                 .await
                         }
                         .await;
@@ -194,14 +192,13 @@ impl Subscription {
         })
         .boxed();
         Ok(Self {
-            engine,
+            session,
             schema,
             moving: if follow {
                 window.map(|_| 1_000).or(source_clock.then_some(1))
             } else {
                 None
             },
-            control,
             resume,
             operation,
             stream,
@@ -217,7 +214,7 @@ impl Subscription {
 
     pub fn cancel(&mut self) -> Result<()> {
         self.stream = Box::pin(futures_util::stream::empty());
-        self.control.cancel()?;
+        self.session.control().cancel()?;
         Ok(())
     }
 }
@@ -234,7 +231,7 @@ impl Stream for Subscription {
 
 impl Drop for Subscription {
     fn drop(&mut self) {
-        let _cancelled = self.control.cancel();
+        let _cancelled = self.session.control().cancel();
     }
 }
 

@@ -43,11 +43,9 @@ impl Engine {
         control.check()?;
         let (plan, sources) = self.prepare(sql, parameters).await?;
         Subscription::new(
-            Arc::clone(self),
+            self.session(selection, &control, 0)?,
             Arc::new(plan),
             sources,
-            selection,
-            control,
             binding,
             resume,
             clock,

@@ -28,7 +28,8 @@ async fn owner() -> TestResult<(tempfile::TempDir, Session, Arc<ArrowSnapshot>)>
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let selection = AnalysisSelectionV1::tenant([1; 16]);
     let snapshot = engine
-        .metadata(selection.clone(), &BTreeMap::new(), &control, 1)
+        .session(selection.clone(), &control, 1)?
+        .metadata(&BTreeMap::new())
         .await?;
     let session = engine.session(selection, &control, 1)?;
     Ok((directory, session, snapshot))

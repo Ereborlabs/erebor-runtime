@@ -208,18 +208,24 @@ impl Fixture {
         follow: bool,
     ) -> Subscription {
         let (plan, sources) = self.plan(sql, vec![]);
-        Subscription::new(
-            Arc::clone(&self.engine),
-            plan,
-            sources,
-            self.selection(),
-            Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap()),
-            b"authorized principal",
-            resume,
-            clock,
-            follow,
-        )
-        .unwrap()
+        self.engine
+            .session(
+                self.selection(),
+                &(Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap())),
+                0,
+            )
+            .and_then(|session| {
+                Subscription::new(
+                    session,
+                    plan,
+                    sources,
+                    b"authorized principal",
+                    resume,
+                    clock,
+                    follow,
+                )
+            })
+            .unwrap()
     }
 }
 
@@ -288,17 +294,7 @@ fn lazy_native_shape() {
             crate::planner::subscription::Subscribe::appendable(&plan).unwrap(),
             expected == Operation::Append
         );
-        let subscription = Subscription::new(
-            Arc::clone(&fixture.engine),
-            plan,
-            sources,
-            fixture.selection(),
-            Arc::new(AnalysisReadControl::default()),
-            b"authority",
-            None,
-            clock.clone(),
-            true,
-        )
+        let subscription = fixture.engine.session(fixture.selection(), &(Arc::new(AnalysisReadControl::default())), 0).and_then(|session| Subscription::new(session, plan, sources, b"authority", None, clock.clone(), true))
         .unwrap();
         assert_eq!(clock.reads.load(Ordering::SeqCst), 0);
         drop(subscription);
@@ -328,17 +324,24 @@ fn native_graph_admission() {
     let sql = "SELECT subject_id FROM graph_subjects";
     let create = |sql: &str, follow, resume| {
         let (plan, sources) = fixture.plan(sql, vec![]);
-        Subscription::new(
-            Arc::clone(&fixture.engine),
-            plan,
-            sources,
-            selection.clone(),
-            Arc::new(AnalysisReadControl::default()),
-            b"graph-authority",
-            resume,
-            TestClock::new(0),
-            follow,
-        )
+        fixture
+            .engine
+            .session(
+                selection.clone(),
+                &(Arc::new(AnalysisReadControl::default())),
+                0,
+            )
+            .and_then(|session| {
+                Subscription::new(
+                    session,
+                    plan,
+                    sources,
+                    b"graph-authority",
+                    resume,
+                    TestClock::new(0),
+                    follow,
+                )
+            })
     };
     drop(create(sql, false, None).unwrap());
     for (sql, follow) in [
@@ -413,18 +416,25 @@ fn local_cursor_denied() {
     .unwrap();
     let plan = fixture.engine.plan(&state, statement, vec![]).unwrap();
     assert!(Window::from_plan(&plan).is_err());
-    let subscription = Subscription::new(
-        Arc::clone(&fixture.engine),
-        Arc::new(plan),
-        BTreeMap::new(),
-        fixture.selection(),
-        Arc::new(AnalysisReadControl::default()),
-        b"authority",
-        None,
-        TestClock::new(0),
-        false,
-    )
-    .unwrap();
+    let subscription = fixture
+        .engine
+        .session(
+            fixture.selection(),
+            &(Arc::new(AnalysisReadControl::default())),
+            0,
+        )
+        .and_then(|session| {
+            Subscription::new(
+                session,
+                Arc::new(plan),
+                BTreeMap::new(),
+                b"authority",
+                None,
+                TestClock::new(0),
+                false,
+            )
+        })
+        .unwrap();
     assert_eq!(subscription.moving_resolution_ns(), None);
 }
 
@@ -447,18 +457,21 @@ async fn subqueries_use_replace() {
                     .await
                     .unwrap(),
             );
-            Subscription::new(
-                Arc::clone(&fixture.engine),
-                native,
-                sources.clone(),
-                fixture.selection(),
-                control,
-                b"subquery principal",
-                None,
-                clock.clone(),
-                true,
-            )
-            .unwrap()
+            fixture
+                .engine
+                .session(fixture.selection(), &(control), 0)
+                .and_then(|session| {
+                    Subscription::new(
+                        session,
+                        native,
+                        sources.clone(),
+                        b"subquery principal",
+                        None,
+                        clock.clone(),
+                        true,
+                    )
+                })
+                .unwrap()
         } else {
             fixture
                 .engine
@@ -540,17 +553,7 @@ async fn subqueries_keep_policy() {
     ] {
         let (plan, sources) = fixture.engine.prepare(sql, vec![]).await.unwrap();
         assert_eq!(sources, expected);
-        let subscription = Subscription::new(
-            Arc::clone(&fixture.engine),
-            Arc::new(plan),
-            sources,
-            fixture.selection(),
-            Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap()),
-            b"subquery principal",
-            None,
-            TestClock::new(2_000_000_000),
-            true,
-        )
+        let subscription = fixture.engine.session(fixture.selection(), &(Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap())), 0).and_then(|session| Subscription::new(session, Arc::new(plan), sources, b"subquery principal", None, TestClock::new(2_000_000_000), true))
         .unwrap();
         assert_eq!(subscription.operation, Operation::Replace);
     }
@@ -989,18 +992,25 @@ async fn append_zero_columns() {
         .build()
         .unwrap();
     assert!(plan.schema().fields().is_empty());
-    let mut subscription = Subscription::new(
-        Arc::clone(&fixture.engine),
-        Arc::new(plan),
-        sources,
-        fixture.selection(),
-        Arc::new(AnalysisReadControl::default()),
-        b"zero-column principal",
-        None,
-        TestClock::new(2_000_000_000),
-        true,
-    )
-    .unwrap();
+    let mut subscription = fixture
+        .engine
+        .session(
+            fixture.selection(),
+            &(Arc::new(AnalysisReadControl::default())),
+            0,
+        )
+        .and_then(|session| {
+            Subscription::new(
+                session,
+                Arc::new(plan),
+                sources,
+                b"zero-column principal",
+                None,
+                TestClock::new(2_000_000_000),
+                true,
+            )
+        })
+        .unwrap();
     let first = next(&mut subscription).await;
     assert_eq!(first.operation, Operation::Append);
     assert_eq!(first.positions.as_slice(), &positions[..2]);
@@ -1172,10 +1182,13 @@ async fn native_append_execution() {
     state
         .config_mut()
         .set_extension(Arc::new(crate::stream::Run {
-            engine: Arc::clone(&fixture.engine),
-            selection: fixture.selection(),
+            session: Arc::new(
+                fixture
+                    .engine
+                    .session(fixture.selection(), &control, 0)
+                    .unwrap(),
+            ),
             sources,
-            control: Arc::clone(&control),
             plan: Arc::new(plan.clone()),
             clock: TestClock::new(2_000_000_000),
             follow: false,
@@ -1353,10 +1366,13 @@ async fn native_subscribe_execution() {
     state
         .config_mut()
         .set_extension(Arc::new(crate::stream::Run {
-            engine: Arc::clone(&fixture.engine),
-            selection: fixture.selection(),
+            session: Arc::new(
+                fixture
+                    .engine
+                    .session(fixture.selection(), &control, 0)
+                    .unwrap(),
+            ),
             sources,
-            control: Arc::clone(&control),
             plan: Arc::new(plan.clone()),
             clock: TestClock::new(2_000_000_000),
             follow: true,
@@ -1770,18 +1786,25 @@ async fn notification_follow_deadline() {
     fixture.notification(100);
     let (plan, sources) = fixture.plan("SELECT overdue FROM notifications", vec![]);
     let clock = TestClock::new(99);
-    let mut subscription = Subscription::new(
-        Arc::clone(&fixture.engine),
-        plan,
-        sources,
-        AnalysisSelectionV1::tenant(fixture.source.tenant_id),
-        Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap()),
-        b"notification principal",
-        None,
-        clock.clone(),
-        true,
-    )
-    .unwrap();
+    let mut subscription = fixture
+        .engine
+        .session(
+            AnalysisSelectionV1::tenant(fixture.source.tenant_id),
+            &(Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap())),
+            0,
+        )
+        .and_then(|session| {
+            Subscription::new(
+                session,
+                plan,
+                sources,
+                b"notification principal",
+                None,
+                clock.clone(),
+                true,
+            )
+        })
+        .unwrap();
     let first = next(&mut subscription).await;
     assert_eq!(first.operation, Operation::Replace);
     assert_eq!(values(&first, 0), vec![ScalarValue::Boolean(Some(false))]);
@@ -1809,18 +1832,25 @@ async fn unused_notification_deadline() {
         BTreeMap::from([("notifications".to_owned(), None)])
     );
     let clock = TestClock::new(99);
-    let mut subscription = Subscription::new(
-        Arc::clone(&fixture.engine),
-        plan,
-        sources,
-        AnalysisSelectionV1::tenant(fixture.source.tenant_id),
-        Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap()),
-        b"notification principal",
-        None,
-        clock.clone(),
-        true,
-    )
-    .unwrap();
+    let mut subscription = fixture
+        .engine
+        .session(
+            AnalysisSelectionV1::tenant(fixture.source.tenant_id),
+            &(Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap())),
+            0,
+        )
+        .and_then(|session| {
+            Subscription::new(
+                session,
+                plan,
+                sources,
+                b"notification principal",
+                None,
+                clock.clone(),
+                true,
+            )
+        })
+        .unwrap();
     let first = next(&mut subscription).await;
     assert_eq!(values(&first, 0), vec![ScalarValue::Int64(Some(7))]);
     assert_eq!(first.snapshot.next_change, Some(100));
@@ -1860,17 +1890,20 @@ fn cursor_admission_bindings() {
         vec![ScalarValue::UInt64(Some(2))],
     );
     let attempt = |plan, scope, binding: &[u8], cursor| {
-        Subscription::new(
-            Arc::clone(&fixture.engine),
-            plan,
-            sources.clone(),
-            scope,
-            Arc::new(AnalysisReadControl::default()),
-            binding,
-            Some(cursor),
-            TestClock::new(0),
-            true,
-        )
+        fixture
+            .engine
+            .session(scope, &(Arc::new(AnalysisReadControl::default())), 0)
+            .and_then(|session| {
+                Subscription::new(
+                    session,
+                    plan,
+                    sources.clone(),
+                    binding,
+                    Some(cursor),
+                    TestClock::new(0),
+                    true,
+                )
+            })
     };
     assert!(attempt(other, scope.clone(), b"authority", cursor.clone()).is_err());
     assert!(attempt(
@@ -1917,8 +1950,7 @@ fn clock_requires_time_filter() {
         "SELECT operation FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '1 second' OR operation = 7",
     ] {
         let (plan, sources) = fixture.plan(sql, vec![]);
-        assert!(Subscription::new(Arc::clone(&fixture.engine), plan, sources, fixture.selection(),
-            Arc::new(AnalysisReadControl::default()), b"authority", None, TestClock::new(0), true).is_err());
+        assert!(fixture.engine.session(fixture.selection(), &(Arc::new(AnalysisReadControl::default())), 0).and_then(|session| Subscription::new(session, plan, sources, b"authority", None, TestClock::new(0), true)).is_err());
     }
 }
 

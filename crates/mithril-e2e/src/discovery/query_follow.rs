@@ -1426,17 +1426,23 @@ impl Prepared {
         resume: Option<Cursor>,
         clock: Arc<dyn FollowClock>,
     ) -> araphor_query::Result<Subscription> {
-        Subscription::new(
-            engine,
-            Arc::clone(&self.plan),
-            self.sources.clone(),
-            self.selection.clone(),
-            Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(120))?),
-            b"mithril-e2e.query-follow",
-            resume,
-            clock,
-            true,
-        )
+        (engine)
+            .session(
+                self.selection.clone(),
+                &(Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(120))?)),
+                0,
+            )
+            .and_then(|session| {
+                Subscription::new(
+                    session,
+                    Arc::clone(&self.plan),
+                    self.sources.clone(),
+                    b"mithril-e2e.query-follow",
+                    resume,
+                    clock,
+                    true,
+                )
+            })
     }
 
     fn snapshot(

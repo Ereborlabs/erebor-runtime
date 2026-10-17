@@ -654,7 +654,8 @@ mod notification {
             assert_eq!(snapshot.next_change, next_change);
             let permit = engine.reserve_evaluation([1; 16])?;
             let metadata = engine
-                .metadata(selection.clone(), &sources, &control, now)
+                .session(selection.clone(), &control, now)?
+                .metadata(&sources)
                 .await?;
             assert_eq!(metadata.next_change, next_change);
             assert_eq!(
@@ -687,14 +688,16 @@ mod notification {
         retain(&store, &value)?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(10))?;
         let complete = engine
-            .metadata(selection.clone(), &sources, &control, 99)
+            .session(selection.clone(), &control, 99)?
+            .metadata(&sources)
             .await?;
         assert_eq!(complete.next_change, None);
         value.revision = 3;
         value.finding_revision = 2;
         retain(&store, &value)?;
         let changed = engine
-            .metadata(selection.clone(), &sources, &control, 99)
+            .session(selection.clone(), &control, 99)?
+            .metadata(&sources)
             .await?;
         assert_eq!(changed.next_change, Some(100));
         value.revision = 4;
@@ -703,7 +706,8 @@ mod notification {
         retain(&store, &value)?;
         for (now, expected) in [(u64::MAX - 1, Some(u64::MAX)), (u64::MAX, None)] {
             let metadata = engine
-                .metadata(selection.clone(), &sources, &control, now)
+                .session(selection.clone(), &control, now)?
+                .metadata(&sources)
                 .await?;
             assert_eq!(metadata.next_change, expected);
             let (_, batches) = engine
@@ -715,7 +719,8 @@ mod notification {
             );
         }
         let absent = engine
-            .metadata(selection, &BTreeMap::new(), &control, 99)
+            .session(selection, &control, 99)?
+            .metadata(&BTreeMap::new())
             .await?;
         assert_eq!(absent.next_change, None);
         Ok(())

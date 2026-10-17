@@ -218,36 +218,6 @@ impl Engine {
         &self.store
     }
 
-    pub(crate) async fn metadata(
-        self: &Arc<Self>,
-        selection: AnalysisSelectionV1,
-        sources: &AnalysisTableRequests,
-        control: &AnalysisReadControl,
-        now: u64,
-    ) -> Result<Arc<ArrowSnapshot>> {
-        let control = Arc::new(control.within(self.limits.extract_timeout)?);
-        control.check()?;
-        let capture = SourceSnapshot::new(
-            Arc::clone(&self.store),
-            selection,
-            None,
-            AnalysisExtractLimits {
-                scan_bytes: self.limits.scan_bytes,
-                input_bytes: self.limits.input_bytes,
-                ..Default::default()
-            },
-            control.within(control.remaining()?)?,
-            self.limits.extract_timeout,
-            now,
-            Arc::clone(&self.memory),
-        );
-        let sources = sources.clone();
-        Self::blocking(control, move || {
-            capture.capture_metadata(&sources).context(SqlSnafu)
-        })
-        .await
-    }
-
     pub async fn check_read(self: &Arc<Self>, snapshot: &Arc<ArrowSnapshot>) -> Result<()> {
         if snapshot.page.extraction.trace_reads().is_empty() {
             return Ok(());
@@ -502,6 +472,50 @@ pub struct Session {
 }
 
 impl Session {
+    pub(crate) async fn metadata(
+        &self,
+        sources: &AnalysisTableRequests,
+    ) -> Result<Arc<ArrowSnapshot>> {
+        let control = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
+        control.check()?;
+        let capture = SourceSnapshot::new(
+            Arc::clone(self.engine.store()),
+            self.selection.clone(),
+            None,
+            AnalysisExtractLimits {
+                scan_bytes: self.engine.limits.scan_bytes,
+                input_bytes: self.engine.limits.input_bytes,
+                ..Default::default()
+            },
+            control.within(control.remaining()?)?,
+            self.engine.limits.extract_timeout,
+            self.now,
+            Arc::clone(&self.memory),
+        );
+        let sources = sources.clone();
+        Engine::blocking(control, move || {
+            capture.capture_metadata(&sources).context(SqlSnafu)
+        })
+        .await
+    }
+
+    pub(crate) fn at(&self, selection: AnalysisSelectionV1, now: u64) -> Self {
+        Self {
+            engine: Arc::clone(&self.engine),
+            memory: Arc::clone(&self.memory),
+            selection,
+            control: Arc::clone(&self.control),
+            now,
+            tables: Arc::clone(&self.tables),
+            output_rows: self.output_rows,
+            output_bytes: self.output_bytes,
+        }
+    }
+
+    pub(crate) fn output(&self) -> (usize, usize) {
+        (self.output_rows, self.output_bytes)
+    }
+
     pub fn memory(&self) -> &Arc<Memory> {
         &self.memory
     }

@@ -68,6 +68,58 @@ function names as relation names. Without this distinction, a generated input
 can inherit an unrelated input table's provenance. The collision test also
 checks that a table in an unused CTE remains a dependency.
 
+## Subscription session ownership
+
+[Subscription::new](../../crates/araphor-query/src/follow/mod.rs) accepts the
+caller's [Session](../../crates/araphor-query/src/execution.rs). Session owns
+the authorized selection, control, memory scope, local tables, and output
+settings. The subscription and delivery retain that same session.
+
+[Engine::subscribe](../../crates/araphor-query/src/execution/admission.rs) admits SQL
+  -> [Subscription::new](../../crates/araphor-query/src/follow/mod.rs) retains the session and original source requests
+  -> [SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) supplies the session to native physical planning
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) changes the selected window and execution time on the retained session
+  -> [Journal](../../crates/araphor-query/src/sources/journal.rs), [Kernel](../../crates/araphor-query/src/stream/physical/kernel.rs), and [page output](../../crates/araphor-query/src/stream/physical/page.rs) use that session's memory scope
+  -> [Delivery](../../crates/araphor-query/src/follow/delivery.rs) retains the session for conversion and cancellation
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Subscription
+    participant Session
+    participant DataFusion
+    Caller->>Subscription: Supply session and native plan
+    Subscription->>Session: Select window and execution time
+    Session->>DataFusion: Supply native task configuration
+    DataFusion-->>Subscription: Return Arrow batches
+    Subscription-->>Caller: Return batches and exact receipt
+```
+
+Metadata reads also use the session's memory scope. A cursor-expiry receipt
+uses a fresh control and the same scope. This read does not reuse a cancelled
+control. Local tables remain available during native planning. Session output
+settings apply to append pages and replacement output.
+
+The tests `subscription_keeps_memory_scope` and `subscription_keeps_bindings`
+check these contracts. The first test covers append, maintained COUNT,
+replacement SUM, metadata updates, borrowed output, and full capacity release.
+The second test uses native SQL and a registered local provider. It checks
+local values and an explicit output quota. Discovery still needs a complete
+subscription lifecycle replacement. This change does not implement that work.
+
+The final source passes all 214 distinct Query cases across the recorded
+checks, and the E2E query-follow contract passes. Strict Query and E2E Clippy
+passes. The source records are
+`/tmp/araphor-discovery-subscription-session-query2.json`,
+`/tmp/araphor-discovery-subscription-session-query3.json`,
+`/tmp/araphor-discovery-subscription-session-idle1.json`,
+`/tmp/araphor-discovery-subscription-session-e2e2.json`, and
+`/tmp/araphor-discovery-subscription-session-lint3.json`.
+The first Query run reaches the filesystem reserve. One idle-clock assertion
+then fails and passes unchanged in isolation. These checks do not establish
+one complete passing Query run or a performance result. Full workspace CI and
+benchmarks are not run, as instructed.
+
 ## Current table and query input flow
 
 The SDK declares each input as `Table(TableRef)` or `Query(String)`.

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use araphor_data::{AnalysisReadControl, StorageHealthV1};
+use araphor_data::StorageHealthV1;
 use datafusion::error::DataFusionError;
 use datafusion::execution::memory_pool::MemoryReservation;
 use futures_core::Stream;
@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use tokio::time::{Instant, Sleep};
 
 use super::{Cursor, Subscription, Update};
-use crate::execution::Engine;
+use crate::execution::Session;
 use crate::{Error, Failure, Result};
 
 pub enum Action<'a> {
@@ -65,8 +65,7 @@ type AuthChange = Pin<Box<dyn Future<Output = Option<watch::Receiver<u64>>> + Se
 
 pub struct Delivery<C: Consumer> {
     inner: Option<Subscription>,
-    engine: Arc<Engine>,
-    control: Arc<AnalysisReadControl>,
+    session: Arc<Session>,
     consumer: Option<C>,
     update: Option<Update>,
     last: Option<Update>,
@@ -100,15 +99,14 @@ impl<C: Consumer> Delivery<C> {
         initial: Option<MemoryReservation>,
     ) -> Result<Self> {
         let conversion = inner
-            .engine
+            .session
             .memory()
             .reserve_output(0)
             .map_err(|source| Error::Sql { source })?;
         let changes = Some(Self::changes(consumer.changes()));
         let expiry = Box::pin(tokio::time::sleep_until(consumer.expires()));
         Ok(Self {
-            engine: Arc::clone(&inner.engine),
-            control: Arc::clone(&inner.control),
+            session: Arc::clone(&inner.session),
             cursor: inner.resume.clone(),
             inner: Some(inner),
             consumer: Some(consumer),
@@ -168,7 +166,7 @@ impl<C: Consumer> Delivery<C> {
         self.checking = None;
         self.initial = None;
         self.failure = None;
-        let _cancelled = self.control.cancel();
+        let _cancelled = self.session.control().cancel();
     }
 
     fn finish(&mut self, error: C::Error) -> Poll<Option<std::result::Result<C::Item, C::Error>>> {
@@ -197,7 +195,7 @@ impl<C: Consumer> Delivery<C> {
     }
 
     fn check(&mut self, health: bool) -> bool {
-        let engine = Arc::clone(&self.engine);
+        let engine = Arc::clone(self.session.engine());
         let Some(receipt) = self.update.as_ref().or(self.last.as_ref()) else {
             return false;
         };
@@ -310,7 +308,7 @@ impl<C: Consumer> Delivery<C> {
                     }
                     if this.last.is_none() {
                         if let (Some(snapshot), Some(cursor)) = (receipt, this.cursor.as_ref()) {
-                            let memory = match this.engine.memory().reserve_output(0) {
+                            let memory = match this.session.memory().reserve_output(0) {
                                 Ok(memory) => memory,
                                 Err(error) => {
                                     return this.finish(consumer.code(Failure::native(&error)))
@@ -494,7 +492,7 @@ impl<C: Consumer> Stream for Delivery<C> {
 
 impl<C: Consumer> Drop for Delivery<C> {
     fn drop(&mut self) {
-        let _cancelled = self.control.cancel();
+        let _cancelled = self.session.control().cancel();
     }
 }
 

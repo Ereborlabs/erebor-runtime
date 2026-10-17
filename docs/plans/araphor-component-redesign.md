@@ -155,6 +155,39 @@ Discovery still needs an actual input subscription. Its input row codec and
 separate execution scheduler remain **Not done**. This source-binding change
 does not complete that replacement.
 
+### Subscription retains the invocation session
+
+Implementation and selected verification: **Done**.
+Subscription::new accepts one Session. Subscription, Run, Delivery, and the
+physical aggregate kernel share that immutable session through Arc. The
+separate Run engine, selection, and control fields are deleted. Native
+planning retains the caller's local tables, memory scope, and output settings.
+Window execution changes the selection and time without first cloning the
+old selection. Metadata capture also uses the session's memory scope.
+
+The final source passes 214 distinct Query cases across three checks.
+The first check passes 122 cases and fails 92 after the host reaches the
+store's filesystem reserve. After obsolete compiler caches are removed,
+91 of those 92 cases pass. The remaining idle-clock case reports eight reads
+where seven are expected. That unchanged case passes separately. The records
+are `/tmp/araphor-discovery-subscription-session-query2.json`,
+`/tmp/araphor-discovery-subscription-session-query3.json`, and
+`/tmp/araphor-discovery-subscription-session-idle1.json`.
+
+The E2E query-follow contract passes its eight behavior cases. Strict Query
+and E2E Clippy passes. Formatting and review-guide links pass. The records
+are `/tmp/araphor-discovery-subscription-session-e2e2.json` and
+`/tmp/araphor-discovery-subscription-session-lint3.json`.
+No full workspace CI or benchmark is run. A single complete passing Query
+run on the final source is **Not done**. The idle-clock variation remains
+recorded.
+
+This deliverable adds 12 nonblank production Rust lines. The complete rewrite
+adds 616 lines against `7b7b407a`. The required 6,000-line deletion remains
+**Not done**. The count record is
+`/tmp/araphor-subscription-session-count1.json`. Discovery still has a separate
+source sweep and seal scheduler. Its replacement remains **Not done**.
+
 ### Native function registration and optional operator memory
 
 Implementation and selected verification: **Done**.

@@ -187,15 +187,19 @@ impl SubscribeExec {
 
     pub(crate) async fn open(run: Arc<Run>) -> Result<OutputStream> {
         let permit = Arc::new(
-            run.control
-                .query_async(run.engine.acquire_evaluation(run.selection.tenant_id))
+            run.session
+                .control()
+                .query_async(
+                    run.session
+                        .engine()
+                        .acquire_evaluation(run.session.selection().tenant_id),
+                )
                 .await?,
         );
-        let mut progress = Progress::new(run.engine.store(), Arc::clone(&run.clock), None);
+        let mut progress =
+            Progress::new(run.session.engine().store(), Arc::clone(&run.clock), None);
         let now = progress.begin()?;
-        let session = run
-            .engine
-            .session(run.selection.clone(), &run.control, now)?;
+        let session = run.session.at(run.session.selection().clone(), now);
         let mut state = session.state()?;
         let logical = crate::planner::subscription::Subscribe::runtime(
             run.plan.as_ref().clone(),
@@ -228,12 +232,12 @@ impl SubscribeExec {
             .get_extension::<Run>()
             .ok_or_else(|| DataFusionError::Execution("subscription run is absent".into()))
             .context(SqlSnafu)?;
-        run.control.check()?;
+        run.session.control().check()?;
         let (initial, progress) = match initial {
             Some((permit, now, progress)) => (Some((permit, now)), progress),
             None => (
                 None,
-                Progress::new(run.engine.store(), Arc::clone(&run.clock), None),
+                Progress::new(run.session.engine().store(), Arc::clone(&run.clock), None),
             ),
         };
         let state = runtime::Runtime::new(self, context, run, initial, progress)?;

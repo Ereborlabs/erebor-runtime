@@ -13,6 +13,150 @@ use futures_util::StreamExt as _;
 use super::{next, values, Fixture, Limits, Operation, TestClock};
 
 #[tokio::test]
+async fn subscription_keeps_memory_scope() {
+    for (sql, expected) in [
+        (
+            "SELECT source_cursor FROM events",
+            vec![ScalarValue::UInt64(Some(2))],
+        ),
+        (
+            "SELECT COUNT(*) AS n FROM events",
+            vec![ScalarValue::Int64(Some(2))],
+        ),
+        (
+            "SELECT SUM(source_cursor) AS n FROM events",
+            vec![ScalarValue::UInt64(Some(3))],
+        ),
+    ] {
+        let fixture = Fixture::new(Limits::default());
+        fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
+        let memory = fixture.engine.memory().scope();
+        let epoch = memory.capacity_epoch();
+        let control = AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap();
+        let session = fixture
+            .engine
+            .session_on(fixture.selection(), &control, 0, Arc::clone(&memory))
+            .unwrap();
+        let (plan, sources) = fixture.plan(sql, vec![]);
+        let mut subscription = Subscription::new(
+            session,
+            plan,
+            sources,
+            b"scope",
+            None,
+            TestClock::new(2_000_000_000),
+            true,
+        )
+        .unwrap();
+        drop(next(&mut subscription).await);
+        assert_eq!(memory.capacity_epoch(), epoch, "initial {sql}");
+        fixture.notification(10_000_000_000);
+        let metadata = next(&mut subscription).await;
+        assert!(metadata.batches.is_none());
+        drop(metadata);
+        assert_eq!(memory.capacity_epoch(), epoch, "metadata {sql}");
+        fixture.commit(&fixture.source, 2, 1, 1_500_000_000);
+        let update = next(&mut subscription).await;
+        assert_eq!(values(&update, 0), expected);
+        let borrowed = Arc::clone(update.batches.as_ref().unwrap()[0].column(0));
+        drop(update);
+        drop(subscription);
+        assert!(!borrowed.is_empty());
+        drop(borrowed);
+        assert_eq!(memory.capacity_epoch(), epoch, "complete {sql}");
+        drop(
+            fixture
+                .engine
+                .memory()
+                .reserve_input(fixture.engine.limits().input_capacity)
+                .unwrap(),
+        );
+        drop(
+            fixture
+                .engine
+                .memory()
+                .reserve_output(fixture.engine.limits().output_capacity)
+                .unwrap(),
+        );
+    }
+}
+
+#[tokio::test]
+async fn subscription_keeps_bindings() {
+    use datafusion::arrow::array::{ArrayRef, UInt64Array};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    let fixture = Fixture::new(Limits::default());
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::UInt64,
+        false,
+    )]));
+    let column = Arc::new(UInt64Array::from(vec![7, 9])) as ArrayRef;
+    let batch = datafusion::arrow::array::RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::clone(&column)],
+    )
+    .unwrap();
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap();
+    let mut session = fixture
+        .engine
+        .session(fixture.selection(), &control, 0)
+        .unwrap();
+    session
+        .register("provided", Arc::clone(&schema), &[batch])
+        .unwrap();
+    session
+        .set_output(2, fixture.engine.limits().output_bytes)
+        .unwrap();
+    let mut limited = session.clone();
+    limited
+        .set_output(1, fixture.engine.limits().output_bytes)
+        .unwrap();
+    let provider = crate::sources::SourceProvider::local("provided", Arc::clone(&schema));
+    let state = fixture
+        .engine
+        .catalog(BTreeMap::from([("provided".into(), provider)]))
+        .unwrap();
+    let statement = Parser::default()
+        .parse("SELECT value FROM provided")
+        .unwrap();
+    let plan = Arc::new(fixture.engine.plan(&state, statement, vec![]).unwrap());
+    let mut subscription = Subscription::new(
+        session,
+        Arc::clone(&plan),
+        BTreeMap::new(),
+        b"provided",
+        None,
+        TestClock::new(2_000_000_000),
+        false,
+    )
+    .unwrap();
+    let update = next(&mut subscription).await;
+    assert_eq!(
+        values(&update, 0),
+        vec![ScalarValue::UInt64(Some(7)), ScalarValue::UInt64(Some(9))]
+    );
+    assert!(!update.limited);
+    assert!(update.snapshot.selection.sources.is_empty());
+    assert!(update.snapshot.witnesses.is_empty());
+    assert!(subscription.next().await.is_none());
+    let mut limited = Subscription::new(
+        limited,
+        plan,
+        BTreeMap::new(),
+        b"provided",
+        None,
+        TestClock::new(2_000_000_000),
+        false,
+    )
+    .unwrap();
+    assert!(limited.next().await.unwrap().is_err());
+    assert!(limited.next().await.is_none());
+    assert_eq!(column.len(), 2);
+}
+
+#[tokio::test]
 async fn unchanged_result_advances_cursor() {
     let fixture = Fixture::new(Limits::default());
     fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
@@ -348,18 +492,25 @@ async fn planning_keeps_clock_change() {
             .unwrap(),
     );
     let clock = TestClock::new(2_000_000_000);
-    let mut subscription = Subscription::new(
-        Arc::clone(&fixture.engine),
-        plan,
-        BTreeMap::from([("events".into(), None)]),
-        fixture.selection(),
-        Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap()),
-        b"planning clock principal",
-        None,
-        clock.clone(),
-        true,
-    )
-    .unwrap();
+    let mut subscription = fixture
+        .engine
+        .session(
+            fixture.selection(),
+            &(Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap())),
+            0,
+        )
+        .and_then(|session| {
+            Subscription::new(
+                session,
+                plan,
+                BTreeMap::from([("events".into(), None)]),
+                b"planning clock principal",
+                None,
+                clock.clone(),
+                true,
+            )
+        })
+        .unwrap();
     assert_eq!(clock.reads.load(Ordering::SeqCst), 0);
     let first = tokio::spawn(async move {
         let update = next(&mut subscription).await;
@@ -406,10 +557,13 @@ async fn native_first_clock_time() {
     state
         .config_mut()
         .set_extension(Arc::new(crate::stream::Run {
-            engine: Arc::clone(&fixture.engine),
-            selection: fixture.selection(),
+            session: Arc::new(
+                fixture
+                    .engine
+                    .session(fixture.selection(), &control, 0)
+                    .unwrap(),
+            ),
             sources,
-            control: Arc::clone(&control),
             plan: Arc::clone(&plan),
             clock: clock.clone(),
             follow: false,
@@ -503,10 +657,8 @@ async fn native_page_follow_properties() {
         state
             .config_mut()
             .set_extension(Arc::new(crate::stream::Run {
-                engine: Arc::clone(&fixture.engine),
-                selection: fixture.selection(),
+                session: Arc::new(session.clone()),
                 sources,
-                control: Arc::clone(&control),
                 plan: Arc::clone(&plan),
                 clock,
                 follow,

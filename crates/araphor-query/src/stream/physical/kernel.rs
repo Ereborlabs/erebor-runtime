@@ -18,7 +18,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
 
-use crate::execution::Engine;
+use crate::execution::Session;
 use crate::stream::{Change, Output};
 use crate::{Result, SqlSnafu};
 
@@ -27,15 +27,14 @@ impl Kernel {
         aggregate: &AggregateExec,
         source: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-        engine: Arc<Engine>,
-        control: &AnalysisReadControl,
+        session: Arc<Session>,
     ) -> Result<Self> {
         let definitions = aggregate.aggr_expr().to_vec();
         let filters = aggregate.filter_expr().to_vec();
         let input_schema = aggregate.input_schema();
         let schema = aggregate.schema();
         let plan = Arc::clone(aggregate.input());
-        control.check()?;
+        session.control().check()?;
         let expressions =
             aggregate_expressions(&definitions, &AggregateMode::Single, 0).context(SqlSnafu)?;
         let accumulators = create_accumulators(&definitions).context(SqlSnafu)?;
@@ -53,13 +52,13 @@ impl Kernel {
         )
         .chain(accumulators.iter().map(|accumulator| accumulator.size()))
         .fold(0usize, usize::saturating_add);
-        if bytes > engine.limits().input_bytes {
+        if bytes > session.engine().limits().input_bytes {
             return Err(DataFusionError::ResourcesExhausted(
                 "maintained aggregate state".into(),
             ))
             .context(SqlSnafu);
         }
-        let memory = engine.memory().reserve_input(bytes).context(SqlSnafu)?;
+        let memory = session.memory().reserve_input(bytes).context(SqlSnafu)?;
         Ok(Self {
             plan,
             source,
@@ -70,7 +69,7 @@ impl Kernel {
             filters,
             accumulators,
             frontier: None,
-            engine,
+            session,
             _memory: memory,
         })
     }
@@ -86,7 +85,7 @@ pub(super) struct Kernel {
     filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     accumulators: Vec<AccumulatorItem>,
     frontier: Option<StorePositionV1>,
-    engine: Arc<Engine>,
+    session: Arc<Session>,
     _memory: MemoryReservation,
 }
 
@@ -112,7 +111,7 @@ impl Kernel {
             ))
             .context(SqlSnafu);
         }
-        let memory = self.engine.memory().reserve_input(0).context(SqlSnafu)?;
+        let memory = self.session.memory().reserve_input(0).context(SqlSnafu)?;
         let mut bytes = 0usize;
         for (batches, retract) in [(before, true), (after, false)] {
             if batches.is_empty() {
@@ -130,13 +129,13 @@ impl Kernel {
                 .await?
             {
                 bytes = bytes.saturating_add(batch.get_array_memory_size());
-                if bytes > self.engine.limits().input_bytes {
+                if bytes > self.session.engine().limits().input_bytes {
                     return Err(DataFusionError::ResourcesExhausted(
                         "maintained native input".into(),
                     ))
                     .context(SqlSnafu);
                 }
-                self.engine
+                self.session
                     .memory()
                     .retain_input(&batch, &memory)
                     .context(SqlSnafu)?;
@@ -144,14 +143,14 @@ impl Kernel {
             }
         }
         control
-            .query_async(self.engine.check_read(&snapshot))
+            .query_async(self.session.engine().check_read(&snapshot))
             .await?;
         let columns = finalize_aggregation(&mut self.accumulators, &AggregateMode::Single)
             .context(SqlSnafu)?;
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)
             .map_err(DataFusionError::from)
             .context(SqlSnafu)?;
-        self.engine
+        self.session
             .memory()
             .retain_input(&batch, &memory)
             .context(SqlSnafu)?;

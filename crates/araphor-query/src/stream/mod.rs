@@ -1,14 +1,12 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use araphor_data::{
-    AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests, StorePositionV1,
-};
+use araphor_data::{AnalysisReadControl, AnalysisTableRequests, StorePositionV1};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::execution::memory_pool::MemoryReservation;
 use futures_core::Stream;
 
-use crate::execution::{Engine, Permit};
+use crate::execution::{Permit, Session};
 use crate::sources::ArrowSnapshot;
 use crate::Result;
 
@@ -18,10 +16,8 @@ pub(crate) mod progress;
 mod tests;
 
 pub(crate) struct Run {
-    pub engine: Arc<Engine>,
-    pub selection: AnalysisSelectionV1,
+    pub session: Arc<Session>,
     pub sources: AnalysisTableRequests,
-    pub control: Arc<AnalysisReadControl>,
     pub plan: Arc<datafusion::logical_expr::LogicalPlan>,
     pub clock: Arc<dyn crate::follow::Clock>,
     pub follow: bool,

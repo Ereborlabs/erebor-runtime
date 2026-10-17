@@ -21,7 +21,7 @@ use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
 
 use super::SubscribeExec;
-use crate::execution::{Engine, Permit};
+use crate::execution::{Permit, Session};
 use crate::sources::{ArrowSnapshot, SourceData};
 use crate::stream::Output;
 use crate::{Result, SqlSnafu};
@@ -91,7 +91,7 @@ impl SubscribeExec {
 
 impl Output {
     pub(super) async fn page(
-        engine: &Arc<Engine>,
+        session: &Session,
         schema: SchemaRef,
         stream: &mut SendableRecordBatchStream,
         control: Arc<AnalysisReadControl>,
@@ -99,6 +99,8 @@ impl Output {
         snapshot: Arc<ArrowSnapshot>,
         permit: Arc<Permit>,
     ) -> Result<Self> {
+        let engine = session.engine();
+        let (output_rows, output_bytes) = session.output();
         let width = schema.fields().len();
         let projection = (0..width).collect::<Vec<_>>();
         let mut captured = Vec::new();
@@ -137,9 +139,7 @@ impl Output {
             for row in 0..batch.num_rows() {
                 control.check()?;
                 let bytes = Self::row_bytes(public, row)?;
-                if positions.len() == engine.limits().output_rows
-                    || logical.saturating_add(bytes) > engine.limits().output_bytes
-                {
+                if positions.len() == output_rows || logical.saturating_add(bytes) > output_bytes {
                     if positions.is_empty() {
                         return Err(Self::page_error());
                     }
@@ -165,7 +165,7 @@ impl Output {
                             .map(|batch| batch.num_columns() * size_of::<ArrayRef>())
                             .sum::<usize>(),
                     );
-                if staging > engine.limits().output_bytes {
+                if staging > output_bytes {
                     return Err(Self::page_error());
                 }
             }
@@ -191,7 +191,7 @@ impl Output {
                         .sum::<usize>(),
                 )
                 .saturating_add(scratch_bytes);
-            if staging > engine.limits().output_bytes {
+            if staging > output_bytes {
                 return Err(Self::page_error());
             }
             let scratch = reservation.split(scratch_bytes.min(reservation.size()));
@@ -246,8 +246,8 @@ impl Output {
                 )
                 .map_err(datafusion::common::DataFusionError::from)
                 .context(SqlSnafu)?;
-                if compact.get_array_memory_size() <= engine.limits().output_bytes {
-                    engine
+                if compact.get_array_memory_size() <= output_bytes {
+                    session
                         .memory()
                         .retain_output(&compact, &reservation)
                         .context(SqlSnafu)?;
