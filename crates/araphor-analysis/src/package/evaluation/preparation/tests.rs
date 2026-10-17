@@ -229,7 +229,6 @@ async fn automatic_clock_ticks() -> TestResult {
                     inputs: Some(&inputs),
                     id: "tick",
                     rebuild: false,
-                    automatic: true,
                     now,
                 };
                 let prepared = fixture
@@ -327,7 +326,6 @@ async fn unchanged_model_stays_current() -> TestResult {
                 inputs: None,
                 id: "manual",
                 rebuild: false,
-                automatic: false,
                 now: START + 123,
             },
             &control,

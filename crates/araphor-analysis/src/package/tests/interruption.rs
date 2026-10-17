@@ -232,7 +232,7 @@ async fn package_busy_preserves_result() -> TestResult {
     let task = tokio::spawn(async move { owner.execute(grant, run("held"), stage).await });
     tokio::task::spawn_blocking(move || ready.recv_timeout(Duration::from_secs(5))).await??;
     let busy = fixture.owner.query.reserve_evaluation([1; 16])?;
-    let checks = (|| -> TestResult {
+    let checks = async {
         assert!(fixture
             .store
             .package_current(&before, AnalysisPackageOwner::now(), true, &control)?
@@ -250,10 +250,15 @@ async fn package_busy_preserves_result() -> TestResult {
             "inspect while execution is held: {:?}",
             inspected.as_ref().map(|_| ())
         );
-        let evaluated =
-            fixture
-                .owner
-                .evaluate_active(&before, "automatic", true, &installed, &control);
+        let (_, _, admitted) =
+            installed.export(&before.key.package_id, &before.revision, &before.key.export)?;
+        let mut operation = admitted.inputs.watch(
+            Arc::clone(&fixture.owner.query),
+            before.clone(),
+            Arc::new(araphor_query::follow::SystemClock::default()),
+            admitted.model_clock(),
+        )?;
+        let evaluated = operation.next().await.map_err(crate::Error::from);
         assert!(
             evaluated.as_ref().err().is_some_and(crate::Error::is_busy),
             "evaluate while execution is held: {:?}",
@@ -269,8 +274,9 @@ async fn package_busy_preserves_result() -> TestResult {
         );
         assert_eq!(fixture.store.package_results(&before.key)?, results);
         assert_eq!(fixture.store.meta()?, metadata);
-        Ok(())
-    })();
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    }
+    .await;
     drop(busy);
     release.send(())?;
     tokio::time::timeout(Duration::from_secs(5), task).await???;

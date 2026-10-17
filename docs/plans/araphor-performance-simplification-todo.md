@@ -298,6 +298,14 @@ General maintained SQL and the separate native execution pool review remain
 open. Full workspace CI and benchmarks are not run, as instructed. No
 performance improvement is claimed.
 
+The obsolete Analysis automatic flag, branch, and input deadline calculation
+are deleted. Manual retry and Inspect behavior remain. Selected verification
+is **Done**: 13 Analysis cases and two explicit native checkpoint cases pass.
+This follow-up removes 35 nonblank production Rust lines. The complete count
+still adds 1,132 from 7b7b407a; another 7,132 net deletions are required.
+The records are `/tmp/araphor-obsolete-run-qualification1.json` and
+`/tmp/araphor-obsolete-run-count1.json`. The complete redesign remains **Not done**.
+
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

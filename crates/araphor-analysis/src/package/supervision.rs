@@ -616,7 +616,6 @@ impl AnalysisPackageOwner {
                 inputs: Some(&inputs),
                 id: "automatic",
                 rebuild: false,
-                automatic: true,
                 now,
             },
             Action::Run,

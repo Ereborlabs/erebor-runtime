@@ -19,7 +19,6 @@ pub(super) struct RunPreparation<'a> {
     pub(super) inputs: Option<&'a std::sync::Arc<araphor_query::inputs::InputSet>>,
     pub(super) id: &'a str,
     pub(super) rebuild: bool,
-    pub(super) automatic: bool,
     pub(super) now: u64,
 }
 
@@ -108,7 +107,7 @@ impl AnalysisPackageOwner {
                 loaded = self.load_installed(grant.selection.tenant_id, &saved.root)?;
                 &loaded
             };
-            if let Some(receipt) = self.evaluate_active(&active, id, false, selected, control)? {
+            if let Some(receipt) = self.evaluate_active(&active, id, selected, control)? {
                 receipts.push((active.key.export, active.key.package_id, receipt));
             }
         }
@@ -136,7 +135,6 @@ impl AnalysisPackageOwner {
         &self,
         active: &PackageActivationV1,
         id: &str,
-        automatic: bool,
         bundle: &InstalledBundle,
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageResultRefV1>> {
@@ -148,26 +146,24 @@ impl AnalysisPackageOwner {
         let admission = bundle.admission();
         self.check(&context.grant, Action::Run)?;
         self.authority.admit(&context.grant, &admission)?;
-        if !automatic {
-            let result_id = Self::result_id(active, id)?;
-            if let Some(previous) = self
-                .store
-                .package_result(active.key.tenant_id, &result_id)?
-            {
-                let artifact = bundle.value.artifact(&super::PackageRefV1 {
-                    package_id: active.key.package_id.clone(),
-                    revision: active.revision.clone(),
-                })?;
-                if previous.commit.request != Self::request(active, id, &context, artifact)? {
-                    return Err(Code::Conflict.error("evaluation retry").into());
-                }
-                control.check()?;
-                self.check(&context.grant, Action::Run)?;
-                return Ok(Some(PackageResultRefV1 {
-                    result_id,
-                    commit_revision: previous.commit_revision,
-                }));
+        let result_id = Self::result_id(active, id)?;
+        if let Some(previous) = self
+            .store
+            .package_result(active.key.tenant_id, &result_id)?
+        {
+            let artifact = bundle.value.artifact(&super::PackageRefV1 {
+                package_id: active.key.package_id.clone(),
+                revision: active.revision.clone(),
+            })?;
+            if previous.commit.request != Self::request(active, id, &context, artifact)? {
+                return Err(Code::Conflict.error("evaluation retry").into());
             }
+            control.check()?;
+            self.check(&context.grant, Action::Run)?;
+            return Ok(Some(PackageResultRefV1 {
+                result_id,
+                commit_revision: previous.commit_revision,
+            }));
         }
         let result = self.prepare_at(
             active,
@@ -176,7 +172,6 @@ impl AnalysisPackageOwner {
                 inputs: None,
                 id,
                 rebuild: false,
-                automatic,
                 now: Self::now(),
             },
             control,

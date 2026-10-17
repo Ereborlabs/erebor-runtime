@@ -204,7 +204,6 @@ async fn input_authority_rejects_foreign_or_revoked_grants() -> TestResult {
                     inputs: None,
                     id: "denied-input",
                     rebuild: false,
-                    automatic: false,
                     now: AnalysisPackageOwner::now(),
                 },
                 PackageActionV1::Run,

@@ -346,6 +346,29 @@ maintained SQL and the complete redesign remain **Not done**. The separate
 native execution pool still needs a contention review. Full workspace CI and
 benchmarks are not run, as instructed. No performance improvement is claimed.
 
+### Remove the obsolete automatic execution path
+
+Implementation and selected host verification: **Done**. Analysis no longer
+passes an automatic flag through manual Run, installation, or Inspect. Query
+supplies retained inputs for live execution. Their presence selects the same
+deterministic result ID. Inspect retains its saved-result check and clock
+rounding. Manual Run retains request-ID retry checks. The unused Analysis
+input deadline calculation is deleted.
+
+The affected Analysis selection passes 13 cases in 47.98 seconds. The explicit
+native checkpoint selection passes two cases in 52.29 seconds. The first run
+fails 13 cases at the filesystem reserve check. The same cases pass after
+obsolete Cargo caches are removed. No source limit or assertion changes.
+Strict Analysis Clippy, formatting of the eight changed Rust files, and all
+249 local document links pass.
+The records are `/tmp/araphor-obsolete-run-qualification1.json` and
+`/tmp/araphor-obsolete-run-count1.json`.
+
+This delivery removes 35 nonblank production Rust lines from 741f53e7. The
+complete redesign still adds 1,132 from 7b7b407a. Another 7,132 net production
+deletions are required. The complete redesign remains **Not done**. Full
+workspace CI and benchmarks are not run, as instructed.
+
 ## Intended end state
 
 ### RisingWave source correction

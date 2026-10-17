@@ -156,7 +156,6 @@ impl AnalysisPackageOwner {
                                 active.revision
                             ),
                             rebuild: true,
-                            automatic: false,
                             now: Self::now(),
                         },
                         control,
@@ -207,7 +206,6 @@ impl AnalysisPackageOwner {
         if let Err(error) = self.evaluate_active(
             active,
             &format!("install:{}", active.generation),
-            false,
             bundle,
             control,
         ) {

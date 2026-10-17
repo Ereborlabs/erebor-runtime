@@ -60,7 +60,6 @@ impl AnalysisPackageOwner {
                         inputs: None,
                         id: "inspect",
                         rebuild: false,
-                        automatic: true,
                         now: Self::now(),
                     },
                     PackageActionV1::Inspect,

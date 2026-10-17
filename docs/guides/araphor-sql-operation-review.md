@@ -278,6 +278,15 @@ The check reads no Arrow payload. The saved-result check also avoids input
 capture when the durable result remains current. Manual Inspect and Run keep
 the finite input entry point and their existing authority checks.
 
+[AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs)
+uses the offered InputSet to select the deterministic live result ID. There
+is no automatic flag or Analysis input deadline calculation.
+[AnalysisPackageOwner::evaluate_active](../../crates/araphor-analysis/src/package/evaluation.rs)
+retains the manual request-ID retry check. Inspect alone rounds the read time
+and checks the saved result before input capture. The follow-up selection
+passes 13 Analysis cases and two explicit native checkpoint cases. Its source
+scope is `/tmp/araphor-obsolete-run-qualification1.json`.
+
 [Memory::scope](../../crates/araphor-query/src/memory.rs) creates operation
 consumers on the existing shared pools. Native buffer claims remain shared
 within the same pool family. A scope does not charge the same buffer twice in

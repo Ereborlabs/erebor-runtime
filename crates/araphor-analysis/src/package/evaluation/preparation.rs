@@ -33,7 +33,7 @@ impl AnalysisPackageOwner {
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageCommitV1>> {
         control.check()?;
-        let mut now = if request.automatic && request.inputs.is_none() {
+        let mut now = if action == Action::Inspect {
             Self::clock_tick(request.now)
         } else {
             request.now
@@ -41,13 +41,20 @@ impl AnalysisPackageOwner {
         if action == Action::Run && bundle.value.root != context.root {
             return Err(Code::Conflict.error("activation package root").into());
         }
-        if request.automatic
-            && request.inputs.is_none()
-            && self
-                .inputs_current(active, context.clock, request.now, true, control)?
-                .0
-        {
-            return Ok(None);
+        if action == Action::Inspect {
+            if let Some((metadata, _)) =
+                self.store
+                    .package_current(active, request.now, true, control)?
+            {
+                let saved: ResultContext = Self::decode(&metadata)?;
+                if !Self::clock_changed(
+                    context.clock != ClockDependency::None,
+                    saved.context.time_utc_ns,
+                    request.now,
+                ) {
+                    return Ok(None);
+                }
+            }
         }
         let (artifact, model, admitted) =
             bundle.export(&active.key.package_id, &active.revision, &active.key.export)?;
@@ -114,12 +121,7 @@ impl AnalysisPackageOwner {
         if !current && active.generation != 0 && active.result_id.is_some() {
             self.store.mark_package_stale(active)?;
         }
-        if action == Action::Inspect
-            || (request.automatic
-                && request.inputs.is_none()
-                && current
-                && previous.as_ref().is_some_and(|previous| !previous.stale))
-        {
+        if action == Action::Inspect {
             return Ok(None);
         }
         let implementation = admitted.implementation(artifact)?;
@@ -176,7 +178,7 @@ impl AnalysisPackageOwner {
             .map(|checkpoint| AnalysisPackageOwner::encode(&checkpoint))
             .transpose()?
             .unwrap_or_default();
-        let result_id = if request.automatic {
+        let result_id = if request.inputs.is_some() {
             format!(
                 "package-{}",
                 crate::InputRevision::of(&(
@@ -217,35 +219,6 @@ impl AnalysisPackageOwner {
 
     pub(in crate::package) fn clock_changed(clocked: bool, prior: i64, now: u64) -> bool {
         clocked && Self::clock_tick(prior as u64) != Self::clock_tick(now)
-    }
-
-    pub(in crate::package) fn inputs_current(
-        &self,
-        active: &PackageActivationV1,
-        clock: ClockDependency,
-        now: u64,
-        changed: bool,
-        control: &AnalysisReadControl,
-    ) -> Result<(bool, u64)> {
-        let tick = Self::clock_tick(now).saturating_add(Self::RECONCILE_INTERVAL.as_nanos() as u64);
-        let Some((metadata, deadline)) =
-            self.store.package_current(active, now, changed, control)?
-        else {
-            return Ok((false, tick));
-        };
-        let saved: ResultContext = Self::decode(&metadata)?;
-        Ok((
-            !Self::clock_changed(
-                clock != ClockDependency::None,
-                saved.context.time_utc_ns,
-                now,
-            ),
-            deadline.min(if clock == ClockDependency::None {
-                u64::MAX
-            } else {
-                tick
-            }),
-        ))
     }
 }
 
