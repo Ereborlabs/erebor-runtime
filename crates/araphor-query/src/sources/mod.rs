@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, StorePositionV1,
+    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
+    AnalysisTableRequests, StorePositionV1,
 };
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -42,8 +43,6 @@ pub(crate) use journal::JournalExec;
 pub use rows::ArrowSnapshot;
 pub(crate) use rows::{Captured, Removal};
 
-type Requests = (BTreeMap<String, BTreeSet<usize>>, Option<Interval>);
-
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum SourceOrigin {
     Durable(String),
@@ -64,9 +63,7 @@ pub(crate) struct InputCapture {
     pub(crate) scope: String,
     pub(crate) bindings: Vec<(usize, sdk::OutputRef, SchemaRef)>,
     pub(crate) limits: sdk::Limits,
-    pub(crate) requests: BTreeMap<String, BTreeSet<usize>>,
     pub(crate) ranges: Vec<(u64, u64)>,
-    pub(crate) trace: bool,
     pub(crate) include_results: bool,
 }
 
@@ -100,8 +97,10 @@ impl std::fmt::Debug for SourceSnapshot {
 }
 
 impl SourceSnapshot {
-    pub(crate) fn requests(plans: &[Arc<dyn ExecutionPlan>]) -> Result<Requests> {
-        let mut requests = BTreeMap::<String, BTreeSet<usize>>::new();
+    pub(crate) fn requests(
+        requests: &mut AnalysisTableRequests,
+        plans: &[Arc<dyn ExecutionPlan>],
+    ) -> Result<Option<Interval>> {
         let mut received: Option<Interval> = None;
         for plan in plans {
             plan.apply(|node| {
@@ -112,8 +111,11 @@ impl SourceSnapshot {
                     return Ok(TreeNodeRecursion::Continue);
                 };
                 requests
-                    .entry(name.to_owned())
-                    .or_default()
+                    .get_mut(name)
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("the physical source was not admitted".into())
+                    })?
+                    .get_or_insert_with(BTreeSet::new)
                     .extend(source.indices.iter().copied());
                 if let Some(bounds) = &source.received {
                     received = Some(match received.take() {
@@ -124,7 +126,7 @@ impl SourceSnapshot {
                 Ok(TreeNodeRecursion::Continue)
             })?;
         }
-        Ok((requests, received))
+        Ok(received)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -166,8 +168,8 @@ impl SourceSnapshot {
 
     pub(crate) fn capture(
         &self,
-        sources: &BTreeSet<String>,
-        plans: &[Arc<dyn ExecutionPlan>],
+        requests: &AnalysisTableRequests,
+        mut received: Option<Interval>,
         mode: ReadMode,
     ) -> Result<Arc<ArrowSnapshot>> {
         if let Some(inputs) = &self.inputs {
@@ -176,33 +178,17 @@ impl SourceSnapshot {
                 .iter()
                 .copied()
                 .reduce(|(first, last), (next, end)| (first.min(next), last.max(end)));
-            let received = match bounds.filter(|_| !inputs.trace) {
+            received = match bounds.filter(|_| {
+                !requests.contains_key("trace_output")
+                    && !requests.contains_key("trace_measurements")
+            }) {
                 Some((first, last)) => Some(Interval::try_new(
                     ScalarValue::UInt64(Some(first)),
                     ScalarValue::UInt64(Some(last)),
                 )?),
                 None => None,
             };
-            return self.capture_read(sources, &inputs.requests, received.as_ref(), mode);
         }
-        let (requests, received) = Self::requests(plans)?;
-        self.capture_read(sources, &requests, received.as_ref(), mode)
-    }
-
-    pub(crate) fn capture_metadata(
-        &self,
-        sources: &BTreeSet<String>,
-    ) -> Result<Arc<ArrowSnapshot>> {
-        self.capture_read(sources, &BTreeMap::new(), None, ReadMode::Metadata)
-    }
-
-    fn capture_read(
-        &self,
-        sources: &BTreeSet<String>,
-        requests: &BTreeMap<String, BTreeSet<usize>>,
-        received: Option<&Interval>,
-        mode: ReadMode,
-    ) -> Result<Arc<ArrowSnapshot>> {
         let control = self
             .control
             .within(self.extract_timeout)
@@ -215,10 +201,18 @@ impl SourceSnapshot {
         if let Some(snapshot) = captured.as_ref() {
             return Ok(Arc::clone(&snapshot.receipt));
         }
-        let snapshot = self.read(sources, requests, received, mode, &control)?;
+        let snapshot = self.read(requests, received.as_ref(), mode, &control)?;
         let receipt = Arc::clone(&snapshot.receipt);
         *captured = Some(snapshot);
         Ok(receipt)
+    }
+
+    pub(crate) fn capture_metadata(
+        &self,
+        sources: &AnalysisTableRequests,
+    ) -> Result<Arc<ArrowSnapshot>> {
+        let requests = sources.keys().map(|name| (name.clone(), None)).collect();
+        self.capture(&requests, None, ReadMode::Metadata)
     }
 
     fn data_error(error: araphor_data::Error) -> DataFusionError {

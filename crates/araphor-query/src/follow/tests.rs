@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -180,14 +180,14 @@ impl Fixture {
         &self,
         sql: &str,
         parameters: Vec<ScalarValue>,
-    ) -> (Arc<LogicalPlan>, BTreeSet<String>) {
+    ) -> (Arc<LogicalPlan>, araphor_data::AnalysisTableRequests) {
         let state = self.engine.catalog(BTreeMap::new()).unwrap();
         let statement = Parser::parse(sql).unwrap();
         let sources = state
             .resolve_table_references(&statement)
             .unwrap()
             .into_iter()
-            .map(|reference| reference.table().to_owned())
+            .map(|reference| (reference.table().to_owned(), None))
             .collect();
         (
             Arc::new(self.engine.plan(&state, statement, parameters).unwrap()),
@@ -408,7 +408,7 @@ fn local_cursor_denied() {
     let subscription = Subscription::new(
         Arc::clone(&fixture.engine),
         Arc::new(plan),
-        BTreeSet::new(),
+        BTreeMap::new(),
         fixture.selection(),
         Arc::new(AnalysisReadControl::default()),
         b"authority",
@@ -515,19 +515,19 @@ async fn subqueries_keep_policy() {
     for (sql, expected) in [
         (
             "SELECT (SELECT count(*) FROM events) AS total FROM events",
-            BTreeSet::from(["events".to_owned()]),
+            BTreeMap::from([("events".to_owned(), None)]),
         ),
         (
             "SELECT e.source_cursor FROM events e WHERE EXISTS (SELECT 1 FROM coverage c WHERE c.first_cursor < e.source_cursor)",
-            BTreeSet::from(["coverage".to_owned(), "events".to_owned()]),
+            BTreeMap::from([("coverage".to_owned(), None), ("events".to_owned(), None)]),
         ),
         (
             "SELECT source_cursor FROM events WHERE source_cursor IN (SELECT first_cursor FROM coverage)",
-            BTreeSet::from(["coverage".to_owned(), "events".to_owned()]),
+            BTreeMap::from([("coverage".to_owned(), None), ("events".to_owned(), None)]),
         ),
         (
             "SELECT source_cursor FROM events WHERE source_cursor <= (SELECT 2)",
-            BTreeSet::from(["events".to_owned()]),
+            BTreeMap::from([("events".to_owned(), None)]),
         ),
     ] {
         let (plan, sources) = fixture.engine.prepare(sql, vec![]).await.unwrap();
@@ -555,7 +555,7 @@ async fn subqueries_keep_policy() {
         .await
         .unwrap();
     assert!(plan.get_parameter_names().unwrap().is_empty());
-    assert_eq!(sources, BTreeSet::from(["events".to_owned()]));
+    assert_eq!(sources, BTreeMap::from([("events".to_owned(), None)]));
     for sql in [
         "SELECT source_cursor FROM events WHERE EXISTS (SELECT 1 FROM missing_source)",
         "SELECT source_cursor FROM events WHERE EXISTS (SELECT random() FROM events)",
@@ -1760,7 +1760,10 @@ async fn unused_notification_deadline() {
         "WITH unused AS (SELECT overdue FROM notifications) SELECT 7 AS value",
         vec![],
     );
-    assert_eq!(sources, BTreeSet::from(["notifications".to_owned()]));
+    assert_eq!(
+        sources,
+        BTreeMap::from([("notifications".to_owned(), None)])
+    );
     let clock = TestClock::new(99);
     let mut subscription = Subscription::new(
         Arc::clone(&fixture.engine),

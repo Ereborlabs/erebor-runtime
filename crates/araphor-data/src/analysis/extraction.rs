@@ -433,13 +433,20 @@ impl AnalysisSelectionV1 {
     }
 }
 
+pub type AnalysisTableRequests = BTreeMap<String, Option<BTreeSet<usize>>>;
+
 pub struct AnalysisTableRead<'a> {
-    pub relations: &'a BTreeSet<String>,
-    pub columns: &'a BTreeMap<String, BTreeSet<usize>>,
+    pub requests: &'a AnalysisTableRequests,
     pub event_ranges: Option<&'a [(u64, u64)]>,
     pub inputs: Option<AnalysisInputTables<'a>>,
     pub mode: AnalysisReadModeV1,
     pub now: u64,
+}
+
+impl AnalysisTableRead<'_> {
+    fn projected(&self, name: &str) -> Option<&BTreeSet<usize>> {
+        self.requests.get(name).and_then(Option::as_ref)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1358,7 +1365,7 @@ impl AnalysisStore {
         let packages = read.inputs;
         let mode = match read.mode {
             AnalysisReadModeV1::Complete
-                if !read.relations.iter().any(|name| {
+                if !read.requests.keys().any(|name| {
                     matches!(
                         name.as_str(),
                         "events" | "trace_output" | "trace_measurements"
@@ -1380,13 +1387,14 @@ impl AnalysisStore {
         {
             return self.reject("a position read cannot include model inputs");
         }
-        for (name, columns) in read.columns {
+        for (name, columns) in read.requests {
+            let Some(columns) = columns else {
+                continue;
+            };
             let Some(schema) = Self::table_schemas().get(name) else {
                 return self.reject("the selected table has no Arrow schema");
             };
-            if !read.relations.contains(name)
-                || columns.iter().any(|index| *index >= schema.fields().len())
-            {
+            if columns.iter().any(|index| *index >= schema.fields().len()) {
                 return self.reject("the selected table columns are invalid");
             }
         }
@@ -1622,7 +1630,7 @@ impl AnalysisStore {
                     let consumed = match &identity {
                         RawIdentity::Evidence(identity) => {
                             let decoded = (!selection.binding_ids.is_empty()
-                                || read.relations.contains("events"))
+                                || read.requests.contains_key("events"))
                             .then(|| EvidenceRecord::try_from(record.framed_record.as_slice()))
                             .transpose()?;
                             let selected = selection.binding_ids.is_empty()
@@ -1762,8 +1770,8 @@ impl AnalysisStore {
                 ).context(AnalysisDatabaseSnafu { operation: "read graph result metadata" })?;
                 let source = selection.sources.as_slice().iter().find(|source| source.key() == key)
                     .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
-                let subjects = read.columns.contains_key("graph_subjects");
-                let edges = read.columns.contains_key("relationships");
+                let subjects = read.projected("graph_subjects").is_some();
+                let edges = read.projected("relationships").is_some();
                 let header = self.graph_input(snapshot, selection.tenant_id, id, &mut output, control)?;
                 let mut graph = header.snapshot;
                 if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
@@ -2006,10 +2014,6 @@ mod tests {
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
     ) -> Result<AnalysisPositionPageV1> {
-        let relations = requested
-            .iter()
-            .map(|(name, _)| (*name).to_owned())
-            .collect();
         let columns = requested
             .iter()
             .map(|(name, fields)| {
@@ -2023,14 +2027,13 @@ mod tests {
                             .context(crate::AnalysisContractSnafu)
                     })
                     .collect::<Result<BTreeSet<_>>>()?;
-                Ok(((*name).to_owned(), indices))
+                Ok(((*name).to_owned(), Some(indices)))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         store.read_tables(
             selection,
             AnalysisTableRead {
-                relations: &relations,
-                columns: &columns,
+                requests: &columns,
                 event_ranges: None,
                 inputs: None,
                 mode,

@@ -1223,16 +1223,17 @@ mod tests {
         let mut selection = crate::AnalysisSelectionV1::new(fixture.source.tenant_id, Vec::new());
         selection.contexts = crate::Selection::All;
         let schema = &araphor_data::AnalysisStore::table_schemas()["context_versions"];
-        let relations = BTreeSet::from(["context_versions".to_owned()]);
         let columns = BTreeMap::from([(
             "context_versions".to_owned(),
-            BTreeSet::from([schema.index_of("owner_id")?, schema.index_of("body")?]),
+            Some(BTreeSet::from([
+                schema.index_of("owner_id")?,
+                schema.index_of("body")?,
+            ])),
         )]);
         let contexts = fixture.store.read_tables(
             &selection,
             AnalysisTableRead {
-                relations: &relations,
-                columns: &columns,
+                requests: &columns,
                 event_ranges: None,
                 inputs: None,
                 mode: AnalysisReadModeV1::Complete,

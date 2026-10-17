@@ -49,7 +49,7 @@ pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensiti
 pub use extraction::{
     AnalysisExtractLimits, AnalysisExtractionV1, AnalysisInputTables, AnalysisPositionPageV1,
     AnalysisReadModeV1, AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1,
-    AnalysisSourceSnapshotV1, AnalysisTableRead, Selection,
+    AnalysisSourceSnapshotV1, AnalysisTableRead, AnalysisTableRequests, Selection,
 };
 pub use graph_rows::CanonicalGraph;
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use araphor_analysis_sdk::arrow_array::{
     BinaryArray, BooleanArray, RecordBatch, StringArray, UInt32Array, UInt64Array,
@@ -94,14 +94,15 @@ fn profile_native_fields() -> TestResult {
         vec![profile.scope.identity.clone()],
     );
     selection.select_profiles(Selection::Exact(vec![profile.profile_id.clone()]))?;
-    let relations = BTreeSet::from(["behaviors".to_owned()]);
     let schema = &AnalysisStore::table_schemas()["behaviors"];
-    let columns = BTreeMap::from([("behaviors".to_owned(), (0..schema.fields().len()).collect())]);
+    let columns = BTreeMap::from([(
+        "behaviors".to_owned(),
+        Some((0..schema.fields().len()).collect()),
+    )]);
     let page = store.read_tables(
         &selection,
         AnalysisTableRead {
-            relations: &relations,
-            columns: &columns,
+            requests: &columns,
             event_ranges: None,
             inputs: None,
             mode: AnalysisReadModeV1::Complete,

@@ -755,7 +755,6 @@ impl DataStoreQualification {
             selection.received_from = Bound::Included(START);
             selection.received_until = Bound::Included(START);
             let schema = &AnalysisStore::table_schemas()["events"];
-            let relations = BTreeSet::from(["events".to_owned()]);
             let columns = ["source_cursor", "operation"]
                 .into_iter()
                 .map(|name| {
@@ -767,12 +766,11 @@ impl DataStoreQualification {
                         })
                 })
                 .collect::<araphor_data::Result<BTreeSet<_>>>()?;
-            let columns = BTreeMap::from([("events".to_owned(), columns)]);
+            let columns = BTreeMap::from([("events".to_owned(), Some(columns))]);
             selected_data.read_tables(
                 &selection,
                 AnalysisTableRead {
-                    relations: &relations,
-                    columns: &columns,
+                    requests: &columns,
                     event_ranges: None,
                     inputs: None,
                     mode: AnalysisReadModeV1::Complete,

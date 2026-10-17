@@ -161,13 +161,12 @@ impl Fixture {
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
     ) -> crate::Result<crate::AnalysisPositionPageV1> {
-        let relations = BTreeSet::from(["events".to_owned()]);
         let columns = BTreeMap::from([(
             "events".to_owned(),
-            BTreeSet::from([AnalysisStore::table_schemas()["events"]
+            Some(BTreeSet::from([AnalysisStore::table_schemas()["events"]
                 .index_of("source_cursor")
                 .map_err(sdk::Error::from)
-                .context(crate::AnalysisContractSnafu)?]),
+                .context(crate::AnalysisContractSnafu)?])),
         )]);
         let outputs = references
             .iter()
@@ -176,8 +175,7 @@ impl Fixture {
         self.store.read_tables(
             selection,
             AnalysisTableRead {
-                relations: &relations,
-                columns: &columns,
+                requests: &columns,
                 event_ranges: None,
                 inputs: Some(AnalysisInputTables {
                     authorized,

@@ -85,7 +85,7 @@ impl Capture<'_> {
             )? {
                 return Ok(false);
             }
-            if self.read.columns.contains_key("findings") {
+            if self.read.projected("findings").is_some() {
                 let key = (finding.tenant_id, finding.finding_id.clone());
                 if !self.latest.contains_key(&key) {
                     budget.charge(finding.finding_id.len() + 128)?;

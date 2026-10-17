@@ -11,6 +11,7 @@ pub mod planner;
 pub mod sources;
 mod stream;
 
+pub use araphor_data::AnalysisTableRequests;
 pub use datafusion;
 pub(crate) use error::*;
 pub use error::{Error, Failure, Result};

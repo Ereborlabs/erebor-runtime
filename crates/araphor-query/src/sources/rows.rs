@@ -1,11 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use araphor_data::analysis::PackageResultRefV1;
 use araphor_data::{
     AnalysisContextRefV1, AnalysisInputTables, AnalysisPositionPageV1, AnalysisReadModeV1,
-    AnalysisSelectionV1, AnalysisStreamIdentityV1, AnalysisTableRead, AnalysisWitnessV1, Selection,
-    StorePositionV1,
+    AnalysisSelectionV1, AnalysisStreamIdentityV1, AnalysisTableRead, AnalysisTableRequests,
+    AnalysisWitnessV1, Selection, StorePositionV1,
 };
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -163,10 +163,10 @@ pub(crate) struct Removal {
 impl SourceSnapshot {
     pub(crate) fn selection(
         scope: &AnalysisSelectionV1,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
     ) -> araphor_data::Result<AnalysisSelectionV1> {
         let mut selection = scope.clone();
-        let graph = sources.iter().any(|name| {
+        let graph = sources.keys().any(|name| {
             matches!(
                 name.as_str(),
                 "findings"
@@ -178,19 +178,19 @@ impl SourceSnapshot {
                     | "graph_manifest"
             )
         });
-        let discovery = sources.contains("behaviors");
-        let targets = sources.contains("targets");
+        let discovery = sources.contains_key("behaviors");
+        let targets = sources.contains_key("targets");
         let context =
-            sources.contains("context") || sources.contains("context_versions") || targets;
-        if !sources.contains("events")
-            && !sources.contains("coverage")
-            && !sources.contains("notifications")
+            sources.contains_key("context") || sources.contains_key("context_versions") || targets;
+        if !sources.contains_key("events")
+            && !sources.contains_key("coverage")
+            && !sources.contains_key("notifications")
             && !graph
             && !discovery
         {
             selection.sources = Selection::Exact(Vec::new());
         }
-        if !sources.iter().any(|name| {
+        if !sources.keys().any(|name| {
             matches!(
                 name.as_str(),
                 "traces" | "trace_output" | "trace_measurements"
@@ -204,9 +204,9 @@ impl SourceSnapshot {
         selection.select_targets(
             targets,
             targets
-                && !sources.contains("events")
-                && !sources.contains("context")
-                && !sources.contains("context_versions"),
+                && !sources.contains_key("events")
+                && !sources.contains_key("context")
+                && !sources.contains_key("context_versions"),
         )?;
         let profiles = if selection.profiles().is_empty() {
             Selection::All
@@ -236,7 +236,7 @@ impl SourceSnapshot {
         } else {
             Selection::Exact(selection.notification_keys().to_vec())
         };
-        selection.select_notifications(if sources.contains("notifications") {
+        selection.select_notifications(if sources.contains_key("notifications") {
             notifications
         } else {
             Selection::Exact(Vec::new())
@@ -294,8 +294,7 @@ impl SourceSnapshot {
 
     pub(crate) fn read(
         &self,
-        sources: &BTreeSet<String>,
-        requests: &BTreeMap<String, BTreeSet<usize>>,
+        requests: &AnalysisTableRequests,
         received: Option<&Interval>,
         mode: ReadMode,
         control: &araphor_data::AnalysisReadControl,
@@ -322,7 +321,7 @@ impl SourceSnapshot {
             }
         };
         let mut selection = Self::prune_selection(
-            Self::selection(&self.selection, sources).map_err(Self::data_error)?,
+            Self::selection(&self.selection, requests).map_err(Self::data_error)?,
             received,
         );
         if self
@@ -354,8 +353,7 @@ impl SourceSnapshot {
             .read_tables(
                 &selection,
                 AnalysisTableRead {
-                    relations: sources,
-                    columns: requests,
+                    requests,
                     event_ranges: self.inputs.as_ref().map(|inputs| inputs.ranges.as_slice()),
                     inputs,
                     mode: match mode {
@@ -384,7 +382,7 @@ impl SourceSnapshot {
             let canonical = Self::schemas().get(name).ok_or_else(|| {
                 DataFusionError::Internal("the captured table has no native source schema".into())
             })?;
-            let indices = requests.get(name).ok_or_else(|| {
+            let indices = requests.get(name).and_then(Option::as_ref).ok_or_else(|| {
                 DataFusionError::Internal("the captured table was not requested".into())
             })?;
             let Some(first) = batches.first() else {
@@ -473,6 +471,7 @@ impl SourceSnapshot {
             let schema = Arc::clone(first.schema_ref());
             let indices = requests
                 .get(&name)
+                .and_then(Option::as_ref)
                 .ok_or_else(|| {
                     DataFusionError::Internal("the captured table was not requested".into())
                 })?

@@ -14,7 +14,7 @@ impl Capture<'_> {
         discovery_enabled: bool,
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
-        if !self.read.relations.contains("behaviors") {
+        if !self.read.requests.contains_key("behaviors") {
             return Ok(true);
         }
         budget.charge(body.len().checked_mul(4).ok_or_else(overflow)?)?;

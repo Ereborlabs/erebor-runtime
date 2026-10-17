@@ -59,7 +59,7 @@ impl<'a> Capture<'a> {
     }
 
     pub(super) fn graph_headers(&self) -> bool {
-        self.read.relations.contains("graph_manifest")
+        self.read.requests.contains_key("graph_manifest")
     }
 
     fn table(
@@ -71,8 +71,7 @@ impl<'a> Capture<'a> {
         if !self.tables.contains_key(name) {
             let indices = self
                 .read
-                .columns
-                .get(name)
+                .projected(name)
                 .ok_or_else(|| invalid("the table has no requested columns"))?;
             budget.charge(
                 name.len()

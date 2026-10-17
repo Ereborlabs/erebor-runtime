@@ -13,7 +13,7 @@ impl Capture<'_> {
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
         if let Some(deadline) = obligation.deadline_utc_ns.filter(|deadline| {
-            self.read.relations.contains("notifications")
+            self.read.requests.contains_key("notifications")
                 && *deadline > self.read.now
                 && obligation.overdue(*deadline)
         }) {

@@ -318,6 +318,22 @@ Analysis, and explicit native execution. The qualification record is
 `/tmp/araphor-indexed-table-qualification1.json`. The complete redesign
 remains **Not done**.
 
+Query and Data now use one original-source and physical-projection map.
+The separate Data relation set, per-port request maps, capture request map,
+and trace flag are deleted. The map distinguishes an original source with
+no surviving scan from a real zero-column scan. Per-port evidence scopes and
+event ranges remain. Cursor binding uses the original keys without another
+allocation. Selected verification is **Done**: 287 distinct cases pass across
+Query, Data, Analysis, and two E2E contracts. One existing Data history case
+remains ignored. The Analysis alias-budget fixture also fails on b4d9c033.
+The final single-case check passes with its original input limit and all
+assertions retained. Strict Clippy passes for the affected crates and tests.
+The qualification record is `/tmp/araphor-source-demand-qualification1.json`.
+The count removes one nonblank production Rust line from b4d9c033. The
+complete change adds 1,109 from 7b7b407a; another 7,109 net deletions remain.
+The count is `/tmp/araphor-source-demand-count1.json`. The complete redesign
+remains **Not done**.
+
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

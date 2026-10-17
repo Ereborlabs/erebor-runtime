@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, StorePositionV1};
+use araphor_data::{
+    AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests, StorePositionV1,
+};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::execution::memory_pool::MemoryReservation;
 use futures_core::Stream;
@@ -18,7 +19,7 @@ mod tests;
 pub(crate) struct Run {
     pub engine: Arc<Engine>,
     pub selection: AnalysisSelectionV1,
-    pub sources: BTreeSet<String>,
+    pub sources: AnalysisTableRequests,
     pub control: Arc<AnalysisReadControl>,
     pub now: u64,
     pub after: Option<StorePositionV1>,

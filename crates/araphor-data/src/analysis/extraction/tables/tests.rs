@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::time::Duration;
 
 use sdk::arrow_array::{BinaryArray, UInt64Array};
@@ -16,13 +15,11 @@ fn extraction() -> TestResult<(AnalysisExtractionV1, AnalysisReadControl)> {
     let store = AnalysisStore::open(directory.path().join("data"))?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let selection = AnalysisSelectionV1::new([1; 16], Vec::new());
-    let relations = BTreeSet::new();
     let columns = BTreeMap::new();
     let page = store.read_tables(
         &selection,
         AnalysisTableRead {
-            relations: &relations,
-            columns: &columns,
+            requests: &columns,
             event_ranges: None,
             inputs: None,
             mode: AnalysisReadModeV1::Metadata,
@@ -34,27 +31,27 @@ fn extraction() -> TestResult<(AnalysisExtractionV1, AnalysisReadControl)> {
     Ok((page.extraction, control))
 }
 
-fn columns(relation: &str, names: &[&str]) -> TestResult<BTreeMap<String, BTreeSet<usize>>> {
+fn columns(relation: &str, names: &[&str]) -> TestResult<crate::AnalysisTableRequests> {
     let schema = AnalysisStore::table_schemas()
         .get(relation)
         .ok_or("the native source schema is missing")?;
     Ok(BTreeMap::from([(
         relation.into(),
-        names
-            .iter()
-            .map(|name| schema.index_of(name))
-            .collect::<std::result::Result<_, _>>()?,
+        Some(
+            names
+                .iter()
+                .map(|name| schema.index_of(name))
+                .collect::<std::result::Result<_, _>>()?,
+        ),
     )]))
 }
 
 #[test]
 fn row_preflight_keeps_existing_native_builders() -> TestResult {
     let (mut output, control) = extraction()?;
-    let relations = BTreeSet::from(["events".into()]);
     let columns = columns("events", &["tenant_id", "source_cursor"])?;
     let read = AnalysisTableRead {
-        relations: &relations,
-        columns: &columns,
+        requests: &columns,
         event_ranges: None,
         inputs: None,
         mode: AnalysisReadModeV1::Complete,
@@ -97,11 +94,9 @@ fn row_preflight_keeps_existing_native_builders() -> TestResult {
 #[test]
 fn empty_projection_retains_native_row_count() -> TestResult {
     let (mut output, control) = extraction()?;
-    let relations = BTreeSet::from(["events".into()]);
     let columns = columns("events", &[])?;
     let read = AnalysisTableRead {
-        relations: &relations,
-        columns: &columns,
+        requests: &columns,
         event_ranges: None,
         inputs: None,
         mode: AnalysisReadModeV1::Complete,
@@ -131,11 +126,9 @@ fn page_prefix_and_fanout_do_not_append_denied_rows() -> TestResult {
     for fanout in [false, true] {
         let (mut output, control) = extraction()?;
         output.limits.page_bytes = 17;
-        let relations = BTreeSet::from(["events".into()]);
         let columns = columns("events", &["source_cursor"])?;
         let read = AnalysisTableRead {
-            relations: &relations,
-            columns: &columns,
+            requests: &columns,
             event_ranges: None,
             inputs: None,
             mode: AnalysisReadModeV1::Page(None),
@@ -190,11 +183,9 @@ impl Serialize for RefuseSerialization {
 #[test]
 fn unrequested_json_is_not_serialized() -> TestResult {
     let (mut output, control) = extraction()?;
-    let relations = BTreeSet::from(["context_versions".into()]);
     let columns = columns("context_versions", &["owner_revision"])?;
     let read = AnalysisTableRead {
-        relations: &relations,
-        columns: &columns,
+        requests: &columns,
         event_ranges: None,
         inputs: None,
         mode: AnalysisReadModeV1::Complete,
@@ -213,11 +204,9 @@ fn unrequested_json_is_not_serialized() -> TestResult {
 #[test]
 fn capacity_is_admitted_before_native_buffer_mutation() -> TestResult {
     let (mut output, control) = extraction()?;
-    let relations = BTreeSet::from(["events".into()]);
     let columns = columns("events", &["source_cursor"])?;
     let read = AnalysisTableRead {
-        relations: &relations,
-        columns: &columns,
+        requests: &columns,
         event_ranges: None,
         inputs: None,
         mode: AnalysisReadModeV1::Complete,
@@ -242,11 +231,9 @@ fn capacity_is_admitted_before_native_buffer_mutation() -> TestResult {
 #[test]
 fn mapping_keeps_native_projection_order() -> TestResult {
     let (mut output, control) = extraction()?;
-    let relations = BTreeSet::from(["events".into()]);
     let columns = columns("events", &["source_cursor", "tenant_id"])?;
     let read = AnalysisTableRead {
-        relations: &relations,
-        columns: &columns,
+        requests: &columns,
         event_ranges: None,
         inputs: None,
         mode: AnalysisReadModeV1::Complete,

@@ -1,7 +1,8 @@
-use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 
-use araphor_data::{AnalysisSelectionV1, AnalysisStoreMetaV1, StorePositionV1};
+use araphor_data::{
+    AnalysisSelectionV1, AnalysisStoreMetaV1, AnalysisTableRequests, StorePositionV1,
+};
 use datafusion::logical_expr::LogicalPlan;
 use serde::{Deserialize, Serialize};
 
@@ -117,7 +118,7 @@ impl Cursor {
 impl Fingerprint {
     pub(super) fn binding(
         plan: &LogicalPlan,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
         selection: &AnalysisSelectionV1,
         operation: Operation,
         caller: &[u8],
@@ -125,7 +126,10 @@ impl Fingerprint {
         let mut hash = Self::new();
         Hasher::write(&mut hash, b"araphor-query.follow.v1\0");
         plan.hash(&mut hash);
-        sources.hash(&mut hash);
+        sources.len().hash(&mut hash);
+        for name in sources.keys() {
+            name.hash(&mut hash);
+        }
         operation.hash(&mut hash);
         caller.hash(&mut hash);
         serde_json::to_writer(&mut hash, selection).map_err(|_| {

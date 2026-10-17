@@ -119,7 +119,7 @@ impl SourceSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet, HashMap};
+    use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -150,7 +150,6 @@ mod tests {
             Arc::clone(&memory),
         );
         let captured = source.read(
-            &BTreeSet::new(),
             &BTreeMap::new(),
             None,
             super::super::ReadMode::Snapshot,

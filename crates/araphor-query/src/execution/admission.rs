@@ -1,7 +1,6 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use araphor_data::{AnalysisReadControl, AnalysisSelectionV1};
+use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests};
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::LogicalPlan;
 use snafu::ResultExt as _;
@@ -15,14 +14,14 @@ impl Engine {
         &self,
         sql: &str,
         parameters: Vec<ScalarValue>,
-    ) -> Result<(LogicalPlan, BTreeSet<String>)> {
+    ) -> Result<(LogicalPlan, AnalysisTableRequests)> {
         let state = self.catalog(Default::default())?;
         let statement = Parser::parse(sql)?;
         let sources = state
             .resolve_table_references(&statement)
             .context(SqlSnafu)?
             .into_iter()
-            .map(|source| source.table().to_owned())
+            .map(|source| (source.table().to_owned(), None))
             .collect();
         let plan = Planner::new(&state).build(statement, parameters).await?;
         Ok((plan, sources))

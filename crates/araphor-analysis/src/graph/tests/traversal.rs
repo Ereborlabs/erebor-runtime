@@ -3,8 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use araphor_query::datafusion::arrow::array::{Array, BinaryArray, RecordBatch, UInt32Array};
 use araphor_query::datafusion::common::ScalarValue;
 use araphor_query::execution::Read;
-use araphor_query::parser::Parser;
-use araphor_query::planner::Planner;
 use araphor_query::sources::ArrowSnapshot;
 use futures_util::TryStreamExt;
 
@@ -78,14 +76,7 @@ impl TraversalFixture {
         };
         selection.select_graphs(graphs, Some(request))?;
         let engine = Engine::new(store, limits)?;
-        let state = engine.catalog(BTreeMap::new())?;
-        let statement = Parser::parse(sql)?;
-        let sources = state
-            .resolve_table_references(&statement)?
-            .into_iter()
-            .map(|name| name.table().to_owned())
-            .collect::<BTreeSet<_>>();
-        let plan = Planner::new(&state).build(statement, Vec::new()).await?;
+        let (plan, sources) = engine.prepare(sql, Vec::new()).await?;
         let session = engine.session(selection, &control, 100)?;
         let (snapshot, stream) = session.stream(&plan, &sources, Read::Snapshot).await?;
         let batches = stream.try_collect().await?;

@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -69,16 +68,10 @@ impl Inputs {
         for input in &self.plans {
             physical.push(session.physical(&input.plan, &state).await?);
         }
-        let scopes = self.scopes(session.selection(), &physical)?;
-        let mut requests = BTreeMap::new();
+        let mut requests = self.sources.clone();
+        let scopes = self.scopes(session.selection(), &physical, &mut requests)?;
         let mut ranges = Vec::new();
         for (input, scope) in self.plans.iter().zip(&scopes) {
-            for (name, indices) in &scope.requests {
-                requests
-                    .entry(name.clone())
-                    .or_insert_with(std::collections::BTreeSet::new)
-                    .extend(indices.iter().copied());
-            }
             if input
                 .origins
                 .iter()
@@ -109,10 +102,7 @@ impl Inputs {
                 })
                 .collect(),
             limits,
-            requests,
             ranges,
-            trace: self.sources.contains("trace_output")
-                || self.sources.contains("trace_measurements"),
             include_results: self.packages.len() < self.plans.len(),
         };
         let control = session.control();
@@ -134,8 +124,8 @@ impl Inputs {
         let snapshot = session
             .capture(
                 Arc::clone(&source),
-                self.sources.clone(),
-                physical.clone(),
+                requests,
+                None,
                 ReadMode::Snapshot,
                 Arc::clone(&permit),
             )

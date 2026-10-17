@@ -1,10 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1,
-    AnalysisSourceSnapshotV1, CoverageInterval, CoverageReport,
+    AnalysisSourceSnapshotV1, AnalysisTableRequests, CoverageInterval, CoverageReport,
 };
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::physical_plan::ExecutionPlan;
@@ -19,7 +18,6 @@ use crate::{InvalidSnafu, Result, SqlSnafu};
 pub(super) struct PortScope {
     pub(super) slot: usize,
     pub(super) selection: AnalysisSelectionV1,
-    pub(super) requests: BTreeMap<String, BTreeSet<usize>>,
 }
 
 impl Inputs {
@@ -27,6 +25,7 @@ impl Inputs {
         &self,
         original: &AnalysisSelectionV1,
         physical: &[Arc<dyn ExecutionPlan>],
+        requests: &mut AnalysisTableRequests,
     ) -> Result<Vec<PortScope>> {
         if physical.len() != self.plans.len() {
             return InvalidSnafu {
@@ -41,13 +40,13 @@ impl Inputs {
                 let sources = port
                     .origins
                     .iter()
-                    .filter_map(|origin| origin.durable().map(str::to_owned))
+                    .filter_map(|origin| origin.durable().map(|name| (name.to_owned(), None)))
                     .collect();
                 let selection = SourceSnapshot::selection(original, &sources)?;
-                let (requests, received) =
-                    SourceSnapshot::requests(std::slice::from_ref(physical)).context(SqlSnafu)?;
-                let trace =
-                    sources.contains("trace_output") || sources.contains("trace_measurements");
+                let received = SourceSnapshot::requests(requests, std::slice::from_ref(physical))
+                    .context(SqlSnafu)?;
+                let trace = sources.contains_key("trace_output")
+                    || sources.contains_key("trace_measurements");
                 Ok(PortScope {
                     slot: port.slot,
                     selection: if trace {
@@ -55,7 +54,6 @@ impl Inputs {
                     } else {
                         SourceSnapshot::prune_selection(selection, received.as_ref())
                     },
-                    requests,
                 })
             })
             .collect()

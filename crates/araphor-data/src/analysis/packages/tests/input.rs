@@ -17,13 +17,8 @@ fn capture(
     selection: &AnalysisSelectionV1,
     raw: bool,
 ) -> crate::Result<AnalysisExtractionV1> {
-    let relations = if raw {
-        BTreeSet::from(["events".to_owned()])
-    } else {
-        BTreeSet::new()
-    };
     let columns = if raw {
-        BTreeMap::from([("events".to_owned(), BTreeSet::new())])
+        BTreeMap::from([("events".to_owned(), Some(BTreeSet::new()))])
     } else {
         BTreeMap::new()
     };
@@ -31,8 +26,7 @@ fn capture(
         .read_tables(
             selection,
             AnalysisTableRead {
-                relations: &relations,
-                columns: &columns,
+                requests: &columns,
                 event_ranges: None,
                 inputs: None,
                 mode: if raw {

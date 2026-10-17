@@ -12,7 +12,7 @@ impl Capture<'_> {
         decoded: Option<&EvidenceRecord>,
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
-        if !self.read.relations.contains("events") {
+        if !self.read.requests.contains_key("events") {
             return Ok(true);
         }
         if self.read.event_ranges.is_some_and(|ranges| {
@@ -33,7 +33,7 @@ impl Capture<'_> {
             self.received_min
                 .map_or(received_utc_ns, |value| value.min(received_utc_ns)),
         );
-        if !self.read.columns.contains_key("events") {
+        if self.read.projected("events").is_none() {
             return Ok(true);
         }
         let decoded = decoded.ok_or_else(|| invalid("a selected event has no decoded evidence"))?;

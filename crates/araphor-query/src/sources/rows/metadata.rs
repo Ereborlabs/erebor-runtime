@@ -1,9 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use araphor_data::{AnalysisPositionPageV1, AnalysisReadControl};
+use araphor_data::{AnalysisPositionPageV1, AnalysisReadControl, AnalysisTableRequests};
 use datafusion::arrow::array::{
     builder::{BooleanBuilder, StringBuilder, UInt32Builder},
     ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions, StringArray, UInt32Array,
@@ -15,12 +14,12 @@ use super::SourceSnapshot;
 
 impl SourceSnapshot {
     pub(super) fn catalog(
-        requests: &BTreeMap<String, BTreeSet<usize>>,
+        requests: &AnalysisTableRequests,
         page: &mut AnalysisPositionPageV1,
         limit: usize,
         control: &AnalysisReadControl,
     ) -> araphor_data::Result<()> {
-        let Some(indices) = requests.get("catalog") else {
+        let Some(indices) = requests.get("catalog").and_then(Option::as_ref) else {
             return Ok(());
         };
         let schemas = Self::schemas();

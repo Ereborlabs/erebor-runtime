@@ -405,6 +405,51 @@ production. Its earlier production contents remain in the before count.
 The record is `/tmp/araphor-indexed-table-count1.json`. The complete redesign
 remains **Not done**. Full workspace CI and benchmarks are not run, as instructed.
 
+### One source request map
+
+Implementation and selected host verification: **Done**.
+
+Native admission resolves the original source names
+  -> Query retains one AnalysisTableRequests map with no projected columns
+  -> the optimized physical scans add their canonical column indices to that map
+  -> a physical source outside the original inventory fails before capture
+  -> Data uses the map keys for source observations and its values for Arrow columns
+
+A value of None means an original source has no surviving physical scan.
+Some with an empty column set means a real zero-column scan. Such a scan
+retains its row count. Some with indices selects those canonical columns.
+Unused CTEs retain their source observations. Per-port selections and exact
+event ranges remain separate because they define different evidence scopes.
+
+The separate Data relation set, PortScope request map, and InputCapture
+request map and trace flag are deleted. Input preparation adds each native
+scan directly to the shared map. It no longer merges per-port request maps.
+Cursor binding hashes the ordered original keys without another allocation.
+Projection values do not change that binding.
+
+The affected checks pass 287 distinct cases: 169 Query, 53 Data, 63 Analysis,
+and two E2E contracts. One existing Data release-history case remains ignored.
+The Analysis run passes 62 cases and finds one alias-budget fixture failure.
+That same case also fails on b4d9c033. The corrected fixture keeps the original
+input limit and every assertion. Its wide query requests three catalog string
+columns. The final single-case check passes. No production code changes
+between the 62 passing Analysis cases and that final check.
+
+The graph traversal fixture now calls Engine::prepare instead of repeating
+native parsing and planning. Its affected cases pass. Strict Clippy passes
+for Data, Query, Analysis, Control, E2E, and their test targets. Formatting
+passes for all 46 changed Rust files. The record is
+`/tmp/araphor-source-demand-qualification1.json`. The record retains the
+initial compile failure, the baseline comparison, and the fixture retries.
+
+The source count removes one nonblank production Rust line from b4d9c033.
+The complete change still adds 1,109 from 7b7b407a. Another 7,109 net deletions
+are required. The count checks 701 Rust hashes in
+`/tmp/araphor-source-demand-count1.json`. This change removes duplicate state
+and work. It does not establish a large code reduction or a speed improvement.
+The complete redesign remains **Not done**. Full workspace CI and benchmarks
+are not run, as instructed.
+
 ## Intended end state
 
 ### RisingWave source correction

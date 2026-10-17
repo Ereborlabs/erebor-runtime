@@ -10,7 +10,7 @@ impl Capture<'_> {
         context: &AnalysisContextVersionV1,
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
-        let document = if self.read.columns.contains_key("context")
+        let document = if self.read.projected("context").is_some()
             && context.key.owner_id == "discovery-context-v1"
         {
             budget.charge(context.body.len().saturating_mul(2))?;
@@ -52,7 +52,7 @@ impl Capture<'_> {
                 return Ok(false);
             }
         }
-        if self.read.relations.contains("targets")
+        if self.read.requests.contains_key("targets")
             && context.key.owner_id == "mithril-control/target"
         {
             budget.charge(context.body.len().saturating_mul(2))?;

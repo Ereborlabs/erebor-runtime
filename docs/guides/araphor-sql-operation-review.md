@@ -412,6 +412,30 @@ one explicit native checkpoint case. Its source scope is
 `/tmp/araphor-indexed-table-count1.json`. General maintained SQL, native
 execution pool contention, and the complete redesign remain **Not done**.
 
+[AnalysisTableRequests](../../crates/araphor-data/src/analysis/extraction.rs)
+holds original source names and optimized physical projections in one map.
+None retains an original reference without a payload scan. Some with an empty
+column set retains a real zero-column scan and its rows.
+[SourceSnapshot::requests](../../crates/araphor-query/src/sources/mod.rs)
+adds only admitted source columns through the native physical plan walk.
+[Inputs::scopes](../../crates/araphor-query/src/inputs/receipt.rs) adds each
+child scan to that same map and retains its separate evidence selection.
+The duplicate per-port and capture request maps are deleted. Data reads the
+map keys for provenance and the projected indices for Arrow materialization.
+[The source case](../../crates/araphor-query/src/sources/tests.rs) checks
+all three map states and rejects a physical source outside the inventory.
+[The cursor case](../../crates/araphor-query/src/follow/cursor/tests.rs) checks
+the original ordered-key hash and projection-independent cursor binding.
+The affected checks pass 287 distinct cases: 169 Query, 53 Data, 63 Analysis,
+and two E2E contracts. One existing Data history case remains ignored. The
+Analysis run passes 62 cases before an alias-budget fixture correction. The
+same fixture fails on b4d9c033. Its final single-case check passes with the
+original input limit and all assertions retained. Production code stays fixed
+across those Analysis checks. Strict Clippy and scoped formatting pass.
+The source record is `/tmp/araphor-source-demand-qualification1.json`.
+The count removes one production line from b4d9c033. The full change adds
+1,109 from 7b7b407a. The complete redesign remains **Not done**.
+
 [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) returns a
 native DataSourceExec with an immutable SourceData descriptor. The descriptor
 contains its provider origin, exact projected schema and indices, conservative

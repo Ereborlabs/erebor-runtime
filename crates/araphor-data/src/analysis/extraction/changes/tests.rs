@@ -41,7 +41,6 @@ fn read(
     limits: AnalysisExtractLimits,
     control: &AnalysisReadControl,
 ) -> Result<AnalysisPositionPageV1> {
-    let relations = BTreeSet::from(["events".to_owned(), "trace_output".to_owned()]);
     let columns = [
         (
             "events",
@@ -69,14 +68,13 @@ fn read(
                     .context(crate::AnalysisContractSnafu)
             })
             .collect::<Result<BTreeSet<_>>>()?;
-        Ok((name.to_owned(), indices))
+        Ok((name.to_owned(), Some(indices)))
     })
     .collect::<Result<BTreeMap<_, _>>>()?;
     store.read_tables(
         selection,
         AnalysisTableRead {
-            relations: &relations,
-            columns: &columns,
+            requests: &columns,
             event_ranges: None,
             inputs: None,
             mode,

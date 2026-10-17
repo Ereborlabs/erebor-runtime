@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::*;
 use araphor_data::{Selection, TraceIdentityV1};
 use datafusion::logical_expr::{lit, LogicalPlanBuilder};
@@ -86,9 +88,9 @@ fn invalid_store_cursors() {
 fn native_scope_binding() {
     let plan = plan(11, "value");
     let scope = AnalysisSelectionV1::new([1; 16], vec![]);
-    let sources = BTreeSet::from(["events".to_owned()]);
+    let sources = BTreeMap::from([("events".to_owned(), None)]);
     let bind = |plan: &LogicalPlan,
-                sources: &BTreeSet<String>,
+                sources: &araphor_data::AnalysisTableRequests,
                 scope: &AnalysisSelectionV1,
                 operation: Operation,
                 caller: &[u8]| {
@@ -134,7 +136,7 @@ fn native_scope_binding() {
         ),
         bind(
             &plan,
-            &BTreeSet::from(["coverage".to_owned()]),
+            &BTreeMap::from([("coverage".to_owned(), None)]),
             &scope,
             Operation::Append,
             b"principal A",
@@ -179,4 +181,28 @@ fn native_scope_binding() {
             b"same principal"
         )
     );
+}
+
+#[test]
+fn source_keys_keep_binding() {
+    let plan = plan(11, "value");
+    let scope = AnalysisSelectionV1::new([1; 16], vec![]);
+    let names = BTreeSet::from(["coverage".to_owned(), "events".to_owned()]);
+    let mut legacy = Fingerprint::new();
+    Hasher::write(&mut legacy, b"araphor-query.follow.v1\0");
+    plan.hash(&mut legacy);
+    names.hash(&mut legacy);
+    Operation::Append.hash(&mut legacy);
+    b"principal".as_slice().hash(&mut legacy);
+    serde_json::to_writer(&mut legacy, &scope).unwrap();
+    let legacy = legacy.finish_digest();
+    let mut requests: AnalysisTableRequests = names.into_iter().map(|name| (name, None)).collect();
+    for columns in [None, Some(BTreeSet::new()), Some(BTreeSet::from([1, 3]))] {
+        requests.insert("events".to_owned(), columns);
+        assert_eq!(
+            Fingerprint::binding(&plan, &requests, &scope, Operation::Append, b"principal")
+                .unwrap(),
+            legacy
+        );
+    }
 }

@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -424,7 +424,7 @@ async fn unsupported_plans_stay_batch() {
                 .unwrap()
                 .subscribe(
                     &plan,
-                    &BTreeSet::from(["events".to_owned()]),
+                    &BTreeMap::from([("events".to_owned(), None)]),
                     crate::execution::Read::Snapshot,
                     Arc::new(fixture.engine.reserve_evaluation([1; 16]).unwrap())
                 )

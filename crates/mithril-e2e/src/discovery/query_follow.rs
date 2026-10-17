@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     fs,
     ops::Bound,
     path::{Path, PathBuf},
@@ -1407,7 +1406,7 @@ fn commit(
 
 struct Prepared {
     plan: Arc<LogicalPlan>,
-    sources: BTreeSet<String>,
+    sources: araphor_data::AnalysisTableRequests,
     selection: AnalysisSelectionV1,
 }
 

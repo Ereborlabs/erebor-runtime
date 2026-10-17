@@ -526,7 +526,7 @@ async fn alias_import_budget() -> TestResult {
                     port: sdk::Port::new("later", schema.clone()),
                     source: sdk::InputSource::Query(
                         if wide {
-                            "SELECT COUNT(*)::BIGINT UNSIGNED AS count FROM catalog WHERE LENGTH(description) > 0"
+                            "SELECT COUNT(*)::BIGINT UNSIGNED AS count FROM catalog WHERE LENGTH(description) + LENGTH(join_keys) + LENGTH(owner) > 0"
                         } else {
                             "SELECT COUNT(*)::BIGINT UNSIGNED AS count FROM catalog"
                         }
@@ -576,9 +576,11 @@ async fn alias_import_budget() -> TestResult {
             )
             .map_err(crate::Error::from);
         let actual = if combined && !wide {
-            Some(result?)
+            Some(result.map_err(|error| format!("narrow input failed: limit={limit}, arrays={physical}, ipc={}, error={error:?}", packet.datasets[0].arrow_ipc.len()))?)
         } else {
-            let error = result.as_ref().err().ok_or("input budget denial absent")?;
+            let error = result.as_ref().err().ok_or_else(|| {
+                format!("input budget denial absent: combined={combined}, wide={wide}, limit={limit}, arrays={physical}, ipc={}", packet.datasets[0].arrow_ipc.len())
+            })?;
             assert_eq!(
                 error.package_code(),
                 crate::PackageErrorCodeV1::Limit,

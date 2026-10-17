@@ -250,7 +250,7 @@ macro_rules! table_row {
     ($capture:expr, $relation:expr, $budget:expr; $( $name:ident => $kind:ident : $value:expr ),* $(,)?) => {{
         let capture = &mut *$capture;
         (|| -> crate::Result<bool> {
-            if !capture.read.columns.contains_key($relation) { return Ok(true); }
+            if capture.read.projected($relation).is_none() { return Ok(true); }
             const NAMES: &[&str] = &[$(stringify!($name)),*];
             let mut mapping = {
                 let table = capture.table($relation, NAMES, &mut *$budget)?;

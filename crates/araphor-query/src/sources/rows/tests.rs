@@ -77,8 +77,10 @@ fn witnesses_keep_source_receipt() -> TestResult {
         Arc::clone(&memory),
     );
     let mut captured = snapshot.read(
-        &BTreeSet::from(["events".to_owned(), "context_versions".to_owned()]),
-        &BTreeMap::new(),
+        &BTreeMap::from([
+            ("events".to_owned(), None),
+            ("context_versions".to_owned(), None),
+        ]),
         None,
         super::ReadMode::Snapshot,
         &control,
@@ -207,10 +209,10 @@ async fn receipt_releases_binary_scratch() -> TestResult {
     )?;
     let state = engine.catalog(BTreeMap::new())?;
     let statement = Parser::parse("SELECT body FROM context_versions")?;
-    let sources: BTreeSet<String> = state
+    let sources: araphor_data::AnalysisTableRequests = state
         .resolve_table_references(&statement)?
         .into_iter()
-        .map(|source| source.table().to_owned())
+        .map(|source| (source.table().to_owned(), None))
         .collect();
     let plan = engine.plan(&state, statement, vec![])?;
     let mut selection = AnalysisSelectionV1::new(context.key.tenant_id, vec![]);
@@ -290,15 +292,11 @@ fn catalog_native_preflight() -> TestResult {
     let schemas = super::SourceSnapshot::schemas();
     let schema = schemas.get("catalog").ok_or("catalog schema")?;
     let indices = (0..schema.fields().len()).collect::<Vec<_>>();
-    let relations = BTreeSet::from(["catalog".to_owned()]);
-    let requests = BTreeMap::from([("catalog".to_owned(), indices.iter().copied().collect())]);
-    let captured = source.read(
-        &relations,
-        &requests,
-        None,
-        super::ReadMode::Snapshot,
-        &control,
-    )?;
+    let requests = BTreeMap::from([(
+        "catalog".to_owned(),
+        Some(indices.iter().copied().collect()),
+    )]);
+    let captured = source.read(&requests, None, super::ReadMode::Snapshot, &control)?;
     let batches = captured.project(
         &super::SourceOrigin::Durable("catalog".into()),
         &indices,
@@ -391,13 +389,7 @@ fn catalog_native_preflight() -> TestResult {
         Arc::clone(&memory),
     );
     let error = source
-        .read(
-            &relations,
-            &requests,
-            None,
-            super::ReadMode::Snapshot,
-            &control,
-        )
+        .read(&requests, None, super::ReadMode::Snapshot, &control)
         .err()
         .ok_or("catalog capacity must be checked before allocation")?;
     assert!(
@@ -405,8 +397,7 @@ fn catalog_native_preflight() -> TestResult {
         if matches!(source.downcast_ref::<araphor_data::Error>(), Some(araphor_data::Error::AnalysisInputTooLarge { resource: "selected input bytes", .. })))
     );
     let captured = source.read(
-        &relations,
-        &BTreeMap::from([("catalog".to_owned(), BTreeSet::new())]),
+        &BTreeMap::from([("catalog".to_owned(), Some(BTreeSet::new()))]),
         None,
         super::ReadMode::Snapshot,
         &control,
@@ -428,7 +419,7 @@ fn catalog_native_preflight() -> TestResult {
 }
 
 mod notification {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -514,8 +505,8 @@ mod notification {
         let sources = state
             .resolve_table_references(&statement)?
             .into_iter()
-            .map(|reference| reference.table().to_owned())
-            .collect::<BTreeSet<_>>();
+            .map(|reference| (reference.table().to_owned(), None))
+            .collect::<araphor_data::AnalysisTableRequests>();
         let plan = Arc::new(engine.plan(&state, statement, vec![])?);
         let selection = AnalysisSelectionV1::tenant([1; 16]);
         for (now, overdue, next_change) in
@@ -597,7 +588,7 @@ mod notification {
             );
         }
         let absent = engine
-            .metadata(selection, &BTreeSet::new(), &control, 99)
+            .metadata(selection, &BTreeMap::new(), &control, 99)
             .await?;
         assert_eq!(absent.next_change, None);
         Ok(())

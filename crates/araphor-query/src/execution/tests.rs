@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -171,7 +171,7 @@ async fn subscription_admission_is_shared() {
         .prepare(sql, vec![ScalarValue::Int64(Some(17))])
         .await
         .unwrap();
-    assert_eq!(sources, BTreeSet::from(["events".into()]));
+    assert_eq!(sources, BTreeMap::from([("events".into(), None)]));
     assert_eq!(plan.schema().field(0).name(), "value");
     let control = Arc::new(control());
     let mut subscription = fixture
@@ -211,7 +211,7 @@ fn value(batches: &[RecordBatch]) -> i64 {
         .value(0)
 }
 
-fn local_plan(engine: &Engine) -> (Arc<LogicalPlan>, BTreeSet<String>) {
+fn local_plan(engine: &Engine) -> (Arc<LogicalPlan>, araphor_data::AnalysisTableRequests) {
     let catalog = engine
         .catalog(BTreeMap::from([("local_rows".into(), schema())]))
         .unwrap();
@@ -220,7 +220,7 @@ fn local_plan(engine: &Engine) -> (Arc<LogicalPlan>, BTreeSet<String>) {
         .resolve_table_references(&statement)
         .unwrap()
         .into_iter()
-        .map(|source| source.table().to_owned())
+        .map(|source| (source.table().to_owned(), None))
         .collect();
     let plan = engine.plan(&catalog, statement, vec![]).unwrap();
     (Arc::new(plan), sources)
@@ -291,7 +291,7 @@ fn local_skips_store() {
         .unwrap();
     assert!(session.execute_local(source).is_err());
     let error = session
-        .execute(Arc::clone(&constant), &BTreeSet::new())
+        .execute(Arc::clone(&constant), &BTreeMap::new())
         .unwrap_err();
     assert!(
         matches!(error, Error::Sql { source: datafusion::common::DataFusionError::External(source) }
@@ -300,7 +300,7 @@ fn local_skips_store() {
     );
     drop(readers);
     let (receipt, rows) = session
-        .execute(Arc::clone(&constant), &BTreeSet::new())
+        .execute(Arc::clone(&constant), &BTreeMap::new())
         .unwrap();
     assert_eq!(value(&rows), 7);
     assert_eq!(receipt.page.extraction.meta, meta);
@@ -312,7 +312,7 @@ fn local_skips_store() {
             frozen,
         )
         .unwrap();
-    let (receipt, rows) = session.execute(constant, &BTreeSet::new()).unwrap();
+    let (receipt, rows) = session.execute(constant, &BTreeMap::new()).unwrap();
     assert_eq!(value(&rows), 7);
     assert_eq!(receipt.page.extraction.meta, meta);
 }
@@ -568,7 +568,7 @@ fn sessions_freeze_native_clocks() {
         .resolve_table_references(&statement)
         .unwrap()
         .into_iter()
-        .map(|source| source.table().to_owned())
+        .map(|source| (source.table().to_owned(), None))
         .collect();
     let plan = Arc::new(fixture.engine.plan(&catalog, statement, vec![]).unwrap());
     for now in [1_700_000_000_123_456_789u64, 1_700_000_005_987_654_321] {
@@ -774,7 +774,7 @@ fn input_output_budget() {
         .resolve_table_references(&statement)
         .unwrap()
         .into_iter()
-        .map(|source| source.table().to_owned())
+        .map(|source| (source.table().to_owned(), None))
         .collect();
     let text = "x".repeat(4096);
     let plan = Arc::new(
@@ -890,7 +890,7 @@ async fn physical_preserves_context() {
                 .session_config()
                 .get_extension::<SourceSnapshot>()
                 .unwrap();
-            let receipt = snapshot.capture_metadata(&BTreeSet::new()).unwrap();
+            let receipt = snapshot.capture_metadata(&BTreeMap::new()).unwrap();
             assert!(self.captured.set(receipt).is_ok());
             Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&self.schema),
@@ -941,7 +941,7 @@ async fn physical_preserves_context() {
         .start_physical(
             physical,
             Arc::clone(&context),
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             Read::Snapshot,
             super::Retention::Output,
             permit,
@@ -965,7 +965,7 @@ struct Gate {
 }
 
 impl Gate {
-    async fn plan(&self, engine: &Engine) -> (LogicalPlan, BTreeSet<String>) {
+    async fn plan(&self, engine: &Engine) -> (LogicalPlan, araphor_data::AnalysisTableRequests) {
         let provider: Arc<dyn TableProvider> = Arc::new(self.clone());
         let state = engine.catalog(BTreeMap::new()).unwrap();
         let options = &state.config_options().catalog;
@@ -982,7 +982,7 @@ impl Gate {
             .resolve_table_references(&statement)
             .unwrap()
             .into_iter()
-            .map(|source| source.table().to_owned())
+            .map(|source| (source.table().to_owned(), None))
             .collect();
         (
             Planner::new(&state).build(statement, vec![]).await.unwrap(),

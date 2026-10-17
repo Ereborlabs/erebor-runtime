@@ -5,8 +5,8 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use araphor_data::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisStreamIdentityV1, AnalysisWitnessV1,
-    StorePositionV1,
+    AnalysisExtractLimits, AnalysisReadControl, AnalysisStreamIdentityV1, AnalysisTableRequests,
+    AnalysisWitnessV1, StorePositionV1,
 };
 use datafusion::arrow::array::{ArrayRef, BooleanArray, RecordBatch, UInt32Array, UInt64Array};
 use datafusion::arrow::compute::filter_record_batch;
@@ -33,7 +33,7 @@ use crate::{InvalidSnafu, Result, SqlSnafu};
 pub(crate) struct JournalExec {
     columns: Vec<usize>,
     positions: [usize; 2],
-    requests: Arc<BTreeMap<String, BTreeSet<usize>>>,
+    requests: Arc<AnalysisTableRequests>,
     received: Option<Interval>,
     properties: Arc<PlanProperties>,
 }
@@ -59,7 +59,7 @@ impl JournalExec {
         ];
         let mut requested = columns.iter().copied().collect::<BTreeSet<_>>();
         requested.extend(positions);
-        let requests = Arc::new(BTreeMap::from([("events".to_owned(), requested)]));
+        let requests = Arc::new(BTreeMap::from([("events".to_owned(), Some(requested))]));
         let properties = Arc::new(
             PlanProperties::new(
                 EquivalenceProperties::new(schema),
@@ -98,7 +98,7 @@ impl JournalExec {
             .ok_or_else(|| DataFusionError::Execution("source run is absent".into()))
             .context(SqlSnafu)?;
         run.control.check()?;
-        if run.sources.len() != 1 || !run.sources.contains("events") {
+        if run.sources.len() != 1 || !run.sources.contains_key("events") {
             return Err(DataFusionError::NotImplemented(
                 "maintained original evidence inventory".into(),
             ))
@@ -172,7 +172,7 @@ struct Changes {
     run: Arc<Run>,
     columns: Vec<usize>,
     positions: [usize; 2],
-    requests: Arc<BTreeMap<String, BTreeSet<usize>>>,
+    requests: Arc<AnalysisTableRequests>,
     received: Option<Interval>,
     retained: Vec<Chunk>,
     frontier: Option<StorePositionV1>,
@@ -233,13 +233,12 @@ impl Changes {
         let requests = Arc::clone(&self.requests);
         let received = self.received.clone();
         let mode = self.frontier.map_or(ReadMode::Snapshot, ReadMode::Changes);
-        let run = Arc::clone(&self.run);
         let worker = Arc::clone(&stage);
         let capture_permit = Arc::clone(&permit);
         let mut captured = Engine::blocking(stage, move || {
             let _permit = capture_permit;
             capture
-                .read(&run.sources, &requests, received.as_ref(), mode, &worker)
+                .read(&requests, received.as_ref(), mode, &worker)
                 .context(SqlSnafu)
         })
         .await?;

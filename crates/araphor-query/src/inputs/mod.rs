@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
+use araphor_data::AnalysisTableRequests;
 use datafusion::catalog::TableProvider;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::TableReference;
@@ -26,7 +27,7 @@ pub use physical::InputSet;
 pub struct Inputs {
     ports: Vec<sdk::Port>,
     plans: Vec<PortPlan>,
-    sources: BTreeSet<String>,
+    sources: AnalysisTableRequests,
     packages: Vec<(usize, sdk::OutputRef)>,
     clock: bool,
     limits: sdk::Limits,
@@ -141,16 +142,16 @@ impl Inputs {
             ordered.push(plan);
         }
         let mut clock = false;
-        let mut sources = BTreeSet::new();
+        let mut sources = AnalysisTableRequests::new();
         for port in &ordered {
             clock |= Self::clocked(&port.plan)?;
             sources.extend(
                 port.origins
                     .iter()
-                    .filter_map(|origin| origin.durable().map(str::to_owned)),
+                    .filter_map(|origin| origin.durable().map(|name| (name.to_owned(), None))),
             );
         }
-        clock |= sources.contains("notifications");
+        clock |= sources.contains_key("notifications");
         Ok(Self {
             ports: model
                 .inputs
@@ -236,7 +237,13 @@ impl Inputs {
             .saturating_add(
                 self.sources
                     .iter()
-                    .map(|name| size_of::<String>() + name.capacity())
+                    .map(|(name, columns)| {
+                        size_of::<(String, Option<BTreeSet<usize>>)>()
+                            + name.capacity()
+                            + columns
+                                .as_ref()
+                                .map_or(0, |columns| columns.len() * size_of::<usize>())
+                    })
                     .sum::<usize>(),
             )
             .saturating_add(self.packages.capacity() * size_of::<(usize, sdk::OutputRef)>())

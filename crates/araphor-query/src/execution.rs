@@ -1,11 +1,12 @@
 use std::borrow::Borrow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use araphor_data::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, StorePositionV1,
+    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
+    AnalysisTableRequests, StorePositionV1,
 };
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -24,6 +25,7 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::SessionState;
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -247,7 +249,7 @@ impl Engine {
     pub(crate) async fn metadata(
         self: &Arc<Self>,
         selection: AnalysisSelectionV1,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
         control: &AnalysisReadControl,
         now: u64,
     ) -> Result<Arc<ArrowSnapshot>> {
@@ -610,7 +612,7 @@ impl Session {
     pub fn execute(
         &self,
         plan: Arc<LogicalPlan>,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
     ) -> Result<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
         self.collect(plan, sources, Retention::Output)
     }
@@ -618,7 +620,7 @@ impl Session {
     pub fn execute_input(
         &self,
         plan: Arc<LogicalPlan>,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
     ) -> Result<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
         self.collect(plan, sources, Retention::Input)
     }
@@ -664,7 +666,7 @@ impl Session {
     fn collect(
         &self,
         plan: Arc<LogicalPlan>,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
         retention: Retention,
     ) -> Result<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
         let engine = Arc::clone(&self.engine);
@@ -682,7 +684,7 @@ impl Session {
     pub async fn stream(
         &self,
         plan: &LogicalPlan,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
         read: Read,
     ) -> Result<(Arc<ArrowSnapshot>, SendableRecordBatchStream)> {
         self.emit(plan, sources, read, Retention::Output).await
@@ -691,7 +693,7 @@ impl Session {
     async fn emit(
         &self,
         plan: &LogicalPlan,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
         read: Read,
         retention: Retention,
     ) -> Result<(Arc<ArrowSnapshot>, SendableRecordBatchStream)> {
@@ -765,7 +767,7 @@ impl Session {
     pub(crate) async fn complete(
         &self,
         plan: &LogicalPlan,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
         permit: Arc<Permit>,
         previous: &mut Option<[u8; 32]>,
         cursor: Option<&crate::follow::Cursor>,
@@ -848,7 +850,7 @@ impl Session {
     pub(crate) async fn subscribe(
         &self,
         plan: &LogicalPlan,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
         read: Read,
         permit: Arc<Permit>,
     ) -> Result<Option<crate::stream::OutputStream>> {
@@ -898,7 +900,7 @@ impl Session {
     pub(crate) async fn start(
         &self,
         plan: &LogicalPlan,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
         read: Read,
         retention: Retention,
         permit: Arc<Permit>,
@@ -920,7 +922,7 @@ impl Session {
         &self,
         physical: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-        sources: &BTreeSet<String>,
+        sources: &AnalysisTableRequests,
         read: Read,
         retention: Retention,
         permit: Arc<Permit>,
@@ -969,14 +971,11 @@ impl Session {
             Read::Snapshot => ReadMode::Snapshot,
             Read::Page(after) => ReadMode::Page(after),
         };
+        let mut requests = sources.clone();
+        let received = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical))
+            .context(SqlSnafu)?;
         let captured = self
-            .capture(
-                snapshot,
-                sources.clone(),
-                vec![Arc::clone(&physical)],
-                mode,
-                Arc::clone(&permit),
-            )
+            .capture(snapshot, requests, received, mode, Arc::clone(&permit))
             .await?;
         let control = Arc::new(self.control.within(self.engine.limits.evaluate_timeout)?);
         let reservation = match reservation {
@@ -993,15 +992,17 @@ impl Session {
     pub(crate) async fn capture(
         &self,
         snapshot: Arc<SourceSnapshot>,
-        sources: BTreeSet<String>,
-        plans: Vec<Arc<dyn ExecutionPlan>>,
+        requests: AnalysisTableRequests,
+        received: Option<Interval>,
         mode: ReadMode,
         permit: Arc<Permit>,
     ) -> Result<Arc<ArrowSnapshot>> {
         let control = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
         Engine::blocking(control, move || {
             let _permit = permit;
-            snapshot.capture(&sources, &plans, mode).context(SqlSnafu)
+            snapshot
+                .capture(&requests, received, mode)
+                .context(SqlSnafu)
         })
         .await
     }

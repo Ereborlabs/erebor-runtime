@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use sdk::arrow_array::{
     Array, BinaryArray, BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray,
@@ -17,22 +17,20 @@ fn read(
     names: &[&str],
     now: u64,
 ) -> crate::Result<AnalysisPositionPageV1> {
-    let relations = names
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect::<BTreeSet<_>>();
     let columns = names
         .iter()
         .map(|name| {
             let schema = &AnalysisStore::table_schemas()[*name];
-            ((*name).to_owned(), (0..schema.fields().len()).collect())
+            (
+                (*name).to_owned(),
+                Some((0..schema.fields().len()).collect()),
+            )
         })
-        .collect::<BTreeMap<_, BTreeSet<_>>>();
+        .collect::<crate::AnalysisTableRequests>();
     let page = store.read_tables(
         selection,
         AnalysisTableRead {
-            relations: &relations,
-            columns: &columns,
+            requests: &columns,
             event_ranges: None,
             inputs: None,
             mode: AnalysisReadModeV1::Complete,

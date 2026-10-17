@@ -17,7 +17,7 @@ impl Capture<'_> {
             .bindings
             .get(target_index as usize)
             .ok_or_else(|| invalid("the trace target index is outside its frozen intent"))?;
-        if self.read.relations.contains("trace_measurements") {
+        if self.read.requests.contains_key("trace_measurements") {
             if let Some(recipe) = TraceRecipeV1::identify(&intent.source)? {
                 budget.charge(128)?;
                 self.trace_recipes
@@ -66,8 +66,8 @@ impl Capture<'_> {
         bytes: &[u8],
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
-        if self.read.relations.contains("trace_output")
-            || self.read.relations.contains("trace_measurements")
+        if self.read.requests.contains_key("trace_output")
+            || self.read.requests.contains_key("trace_measurements")
         {
             budget.grow(&mut self.witnesses)?;
             budget.charge(identity.node_id.len())?;
@@ -93,7 +93,7 @@ impl Capture<'_> {
         )? {
             return Ok(false);
         }
-        if kind != "data" || !self.read.columns.contains_key("trace_measurements") {
+        if kind != "data" || self.read.projected("trace_measurements").is_none() {
             return Ok(true);
         }
         let Some(recipe) = self.trace_recipes.get(&identity.execution_id).copied() else {

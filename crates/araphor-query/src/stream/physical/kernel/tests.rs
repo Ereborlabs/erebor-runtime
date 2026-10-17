@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::time::Duration;
 
@@ -197,7 +197,7 @@ impl Fixture {
         self.engine
             .metadata(
                 AnalysisSelectionV1::new([1; 16], vec![]),
-                &BTreeSet::new(),
+                &BTreeMap::new(),
                 &self.control,
                 1,
             )

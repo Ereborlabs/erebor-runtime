@@ -95,13 +95,16 @@ impl Fixture {
         Ok(())
     }
 
-    fn plan(&self, sql: &str) -> TestResult<(Arc<LogicalPlan>, BTreeSet<String>)> {
+    fn plan(
+        &self,
+        sql: &str,
+    ) -> TestResult<(Arc<LogicalPlan>, araphor_data::AnalysisTableRequests)> {
         let state = self.engine.catalog(BTreeMap::new())?;
         let statement = Parser::parse(sql)?;
         let sources = state
             .resolve_table_references(&statement)?
             .into_iter()
-            .map(|reference| reference.table().to_owned())
+            .map(|reference| (reference.table().to_owned(), None))
             .collect();
         Ok((
             Arc::new(self.engine.plan(&state, statement, vec![])?),
@@ -166,7 +169,7 @@ fn unused_source_receipts() -> TestResult {
     fixture.commit(&fixture.source, 1, 10_001)?;
     let (plan, sources) =
         fixture.plan("WITH unused AS (SELECT source_cursor FROM events) SELECT 7 AS value")?;
-    assert_eq!(sources, BTreeSet::from(["events".into()]));
+    assert_eq!(sources, BTreeMap::from([("events".into(), None)]));
     let session = fixture
         .engine
         .session(fixture.selection(), &fixture.control()?, 20_000)?;
@@ -181,6 +184,55 @@ fn unused_source_receipts() -> TestResult {
     assert!(
         second.page.extraction.meta.commit_revision > first.page.extraction.meta.commit_revision
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_source_demands() -> TestResult {
+    use super::{ReadMode, SourceSnapshot};
+    use datafusion::physical_plan::collect;
+
+    let fixture = Fixture::new()?;
+    fixture.commit(&fixture.source, 1, 10_001)?;
+    let mut state = fixture.engine.catalog(BTreeMap::new())?;
+    let mut requests = araphor_data::AnalysisTableRequests::new();
+    let mut plans = Vec::new();
+    for sql in [
+        "SELECT count(*) AS n FROM events",
+        "SELECT first_cursor FROM coverage",
+        "WITH unused AS (SELECT * FROM context_versions) SELECT 7 AS value",
+    ] {
+        let (plan, sources) = fixture.engine.prepare(sql, vec![]).await?;
+        requests.extend(sources);
+        plans.push(state.create_physical_plan(&plan).await?);
+    }
+    let mut absent = araphor_data::AnalysisTableRequests::new();
+    assert!(SourceSnapshot::requests(&mut absent, &plans).is_err());
+    assert!(absent.is_empty());
+    let received = SourceSnapshot::requests(&mut requests, &plans)?;
+    assert_eq!(requests["context_versions"], None);
+    assert_eq!(requests["events"], Some(BTreeSet::new()));
+    assert_eq!(
+        requests["coverage"],
+        Some(BTreeSet::from([
+            SourceSnapshot::schemas()["coverage"].index_of("first_cursor")?
+        ]))
+    );
+    let source = SourceSnapshot::new(
+        Arc::clone(&fixture.store),
+        fixture.selection(),
+        None,
+        Default::default(),
+        fixture.control()?,
+        Duration::from_secs(5),
+        20_000,
+        Arc::clone(fixture.engine.memory()),
+    );
+    let receipt = source.capture(&requests, received, ReadMode::Snapshot)?;
+    assert_eq!(receipt.witnesses.len(), 1);
+    state.config_mut().set_extension(source);
+    let batches = collect(Arc::clone(&plans[0]), state.task_ctx()).await?;
+    assert_eq!(cell(&batches, 0), ScalarValue::Int64(Some(1)));
     Ok(())
 }
 
@@ -420,16 +472,10 @@ async fn native_capture_isolated() -> TestResult {
         foreign.tenant_id,
         vec![foreign.clone()],
     ));
-    let first_receipt = first.capture(
-        &sources,
-        std::slice::from_ref(&physical),
-        ReadMode::Snapshot,
-    )?;
-    let second_receipt = second.capture(
-        &sources,
-        std::slice::from_ref(&physical),
-        ReadMode::Snapshot,
-    )?;
+    let mut requests = sources.clone();
+    let received = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical))?;
+    let first_receipt = first.capture(&requests, received.clone(), ReadMode::Snapshot)?;
+    let second_receipt = second.capture(&requests, received, ReadMode::Snapshot)?;
     assert_eq!(first_receipt.witnesses.len(), 1);
     assert_eq!(first_receipt.witnesses[0].identity, fixture.source);
     assert_eq!(second_receipt.witnesses.len(), 1);
@@ -486,11 +532,9 @@ async fn native_stream_keeps_metadata() -> TestResult {
         20_000,
         Arc::clone(&memory),
     );
-    let receipt = snapshot.capture(
-        &sources,
-        std::slice::from_ref(&physical),
-        ReadMode::Snapshot,
-    )?;
+    let mut requests = sources.clone();
+    let received = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical))?;
+    let receipt = snapshot.capture(&requests, received, ReadMode::Snapshot)?;
     assert_eq!(receipt.witnesses.len(), 1);
     drop(receipt);
     let retained = charged()?;
@@ -574,11 +618,14 @@ async fn native_ports_share_cut() -> TestResult {
             .await?;
         plans.push(state.create_physical_plan(&logical).await?);
     }
-    let (requests, bounds) = SourceSnapshot::requests(&plans)?;
+    let mut requests = araphor_data::AnalysisTableRequests::new();
+    let bounds = SourceSnapshot::requests(&mut requests, &plans)?;
     assert!(requests.is_empty());
     assert!(bounds.is_none());
     let mut all = vec![Arc::clone(&durable), operation];
     all.extend(plans.iter().cloned());
+    let mut requests = sources.clone();
+    let received = SourceSnapshot::requests(&mut requests, &all)?;
     let capture = SourceSnapshot::new(
         Arc::clone(&fixture.store),
         fixture.selection(),
@@ -589,7 +636,7 @@ async fn native_ports_share_cut() -> TestResult {
         20_000,
         Arc::clone(fixture.engine.memory()),
     );
-    let receipt = capture.capture(&sources, &all, ReadMode::Snapshot)?;
+    let receipt = capture.capture(&requests, received.clone(), ReadMode::Snapshot)?;
     assert_eq!(receipt.witnesses.len(), 1);
     fixture.commit(&fixture.source, 2, 10_002)?;
     let mut runtime = state;
@@ -634,7 +681,7 @@ async fn native_ports_share_cut() -> TestResult {
     assert_eq!(cell(&count, 0), ScalarValue::Int64(Some(3)));
     assert!(Arc::ptr_eq(
         &receipt,
-        &capture.capture(&sources, &all, ReadMode::Snapshot)?
+        &capture.capture(&requests, received, ReadMode::Snapshot)?
     ));
     Ok(())
 }

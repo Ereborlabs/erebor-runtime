@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use araphor_data::{
-    AnalysisReadControl, AnalysisSelectionV1, AnalysisStoreMetaV1, StorePositionV1,
+    AnalysisReadControl, AnalysisSelectionV1, AnalysisStoreMetaV1, AnalysisTableRequests,
+    StorePositionV1,
 };
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -75,7 +75,7 @@ impl Subscription {
     pub fn new(
         engine: Arc<Engine>,
         plan: Arc<LogicalPlan>,
-        sources: BTreeSet<String>,
+        sources: AnalysisTableRequests,
         selection: AnalysisSelectionV1,
         control: Arc<AnalysisReadControl>,
         binding: &[u8],
@@ -94,9 +94,9 @@ impl Subscription {
             && (follow
                 || resume.is_some()
                 || !sources
-                    .iter()
+                    .keys()
                     .any(|name| matches!(name.as_str(), "graph_subjects" | "relationships"))
-                || sources.iter().any(|name| {
+                || sources.keys().any(|name| {
                     !matches!(
                         name.as_str(),
                         "graph_subjects" | "relationships" | "catalog"
@@ -110,7 +110,7 @@ impl Subscription {
             });
         }
         let clocks = Window::clocks(&plan)?;
-        let source_clock = sources.contains("notifications");
+        let source_clock = sources.contains_key("notifications");
         let window = if follow {
             Window::from_plan(&plan)?
         } else {
@@ -243,7 +243,7 @@ impl Drop for Subscription {
 struct State {
     engine: Arc<Engine>,
     plan: Arc<LogicalPlan>,
-    sources: BTreeSet<String>,
+    sources: AnalysisTableRequests,
     selection: AnalysisSelectionV1,
     control: Arc<AnalysisReadControl>,
     clock: Arc<dyn Clock>,

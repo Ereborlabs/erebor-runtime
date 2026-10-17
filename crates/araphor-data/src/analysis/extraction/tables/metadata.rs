@@ -19,7 +19,7 @@ impl Capture<'_> {
             ("graph_manifest", extraction.graph_enabled),
             ("notifications", extraction.notification_enabled),
         ] {
-            if self.read.relations.contains(relation) && !available {
+            if self.read.requests.contains_key(relation) && !available {
                 return Err(crate::Error::AnalysisUnavailable {
                     relation,
                     location: snafu::location!(),
@@ -31,7 +31,7 @@ impl Capture<'_> {
             .graph_traversal()
             .map(|receipt| (receipt.max_hops, receipt.hop_boundary));
         let mut budget = extraction.sink(control);
-        if self.read.relations.contains("coverage") {
+        if self.read.requests.contains_key("coverage") {
             for source in &sources {
                 budget.check()?;
                 let report = if let Some(bytes) = &source.coverage_report {
@@ -98,7 +98,7 @@ impl Capture<'_> {
                 }
             }
         }
-        if self.read.columns.contains_key("trace_recipes") {
+        if self.read.projected("trace_recipes").is_some() {
             for recipe in [TraceRecipeV1::SyscallErrors, TraceRecipeV1::FailedOpens] {
                 budget.charge(crate::MAX_TRACE_SOURCE_BYTES + 8192)?;
                 let manifest = recipe.manifest()?;
