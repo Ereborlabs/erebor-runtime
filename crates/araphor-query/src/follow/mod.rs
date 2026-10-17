@@ -1,6 +1,4 @@
 use std::collections::BTreeSet;
-use std::hash::Hash;
-use std::mem::size_of;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -11,7 +9,6 @@ use araphor_data::{
 };
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::ScalarValue;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::logical_expr::LogicalPlan;
 use futures_core::Stream;
@@ -21,8 +18,9 @@ use snafu::ResultExt as _;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use crate::execution::{Engine, Permit, Read, Retention};
+use crate::execution::{Engine, Permit, Read};
 use crate::sources::ArrowSnapshot;
+use crate::stream::physical::Fingerprint;
 use crate::stream::Output;
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
@@ -36,7 +34,6 @@ mod tests;
 
 pub use clock::{Clock, SystemClock};
 pub use cursor::Cursor;
-use cursor::Fingerprint;
 pub use delivery::{Action, Consumer, Delivery};
 use window::Window;
 
@@ -458,85 +455,18 @@ impl State {
             drop(permit);
             return self.advance(now).await;
         }
-        let session = self.engine.session(selection, &self.control, now)?;
-        let (snapshot, mut stream, permit, control, mut reservation) = session
-            .start(
+        let output = self
+            .engine
+            .session(selection, &self.control, now)?
+            .complete(
                 &self.plan,
                 &self.sources,
-                Read::Snapshot,
-                Retention::Output,
                 permit,
+                &mut self.content,
+                self.cursor.as_ref(),
             )
             .await?;
-        if let Some(cursor) = &self.cursor {
-            cursor.check_store(&snapshot.page.extraction.meta)?;
-        }
-        let mut batches = Vec::new();
-        let (mut rows, mut bytes) = (0usize, 0usize);
-        while let Some(batch) = control
-            .query_async(async { stream.try_next().await.context(SqlSnafu) })
-            .await?
-        {
-            if batch.num_rows() == 0 {
-                continue;
-            }
-            rows = rows.saturating_add(batch.num_rows());
-            bytes = bytes.saturating_add(batch.get_array_memory_size());
-            if rows > self.engine.limits().output_rows || bytes > self.engine.limits().output_bytes
-            {
-                return Err(Self::output_error());
-            }
-            self.engine
-                .memory()
-                .retain_output(&batch, &mut reservation)
-                .context(SqlSnafu)?;
-            batches.push(batch);
-        }
-        drop(stream);
-        drop(permit);
-        control
-            .query_async(self.engine.check_read(&snapshot))
-            .await?;
-        let hash = self.content_hash(&batches, &mut reservation)?;
-        let unchanged = self.content == Some(hash);
-        self.content = Some(hash);
-        let batches = (!unchanged).then_some(batches);
-        let retained = batches.as_ref().map_or(0, |batches| {
-            batches
-                .capacity()
-                .saturating_mul(size_of::<RecordBatch>())
-                .saturating_add(
-                    batches
-                        .iter()
-                        .map(|batch| {
-                            batch.num_columns() * size_of::<datafusion::arrow::array::ArrayRef>()
-                        })
-                        .sum::<usize>(),
-                )
-        });
-        reservation
-            .try_resize(retained)
-            .map_err(|source| crate::Error::Capacity {
-                resource: "shared output",
-                source,
-            })?;
-        self.finish(
-            Output {
-                snapshot,
-                batches,
-                positions: Vec::new(),
-                position: StorePositionV1 {
-                    commit_revision: 0,
-                    ordinal: 0,
-                },
-                limited: false,
-                _memory: reservation,
-                _permit: None,
-                _control: control,
-            },
-            now,
-            clock_changed,
-        )
+        self.finish(output, now, clock_changed)
     }
 
     async fn advance(&mut self, now: u64) -> Result<Update> {
@@ -600,52 +530,6 @@ impl State {
         })
     }
 
-    fn content_hash(
-        &self,
-        batches: &[RecordBatch],
-        reservation: &mut MemoryReservation,
-    ) -> Result<[u8; 32]> {
-        let metadata = batches
-            .len()
-            .saturating_mul(size_of::<RecordBatch>())
-            .saturating_add(
-                batches
-                    .iter()
-                    .map(|batch| {
-                        batch.num_columns() * size_of::<datafusion::arrow::array::ArrayRef>()
-                    })
-                    .sum::<usize>(),
-            );
-        let mut hash = Fingerprint::new();
-        self.plan.schema().hash(&mut hash);
-        batches
-            .iter()
-            .map(RecordBatch::num_rows)
-            .sum::<usize>()
-            .hash(&mut hash);
-        for batch in batches {
-            for row in 0..batch.num_rows() {
-                self.control.check()?;
-                reservation
-                    .try_resize(
-                        metadata
-                            .saturating_add(Output::row_bytes(batch, row)?)
-                            .saturating_add(size_of::<ScalarValue>()),
-                    )
-                    .map_err(|source| crate::Error::Capacity {
-                        resource: "shared output",
-                        source,
-                    })?;
-                for column in batch.columns() {
-                    ScalarValue::try_from_array(column, row)
-                        .context(SqlSnafu)?
-                        .hash(&mut hash);
-                }
-            }
-        }
-        Ok(hash.finish_digest())
-    }
-
     async fn health_update(&mut self, clock_changed: bool) -> Result<Update> {
         let clock_changed = clock_changed || self.clock_changes.has_changed().unwrap_or(false);
         if (self.window.is_some() || self.source_clock) && clock_changed {
@@ -680,12 +564,6 @@ impl State {
             limited: !self.exhausted,
             _memory: self.engine.memory().reserve_output(0).context(SqlSnafu)?,
         })
-    }
-
-    fn output_error() -> crate::Error {
-        crate::Error::Sql {
-            source: datafusion::common::DataFusionError::ResourcesExhausted("query output".into()),
-        }
     }
 
     fn state_error() -> crate::Error {

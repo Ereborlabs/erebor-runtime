@@ -367,7 +367,7 @@ impl Changes {
                 .saturating_mul(2)
                 .saturating_add(rows.saturating_mul(3))
         };
-        let mut scratch = engine
+        let scratch = engine
             .memory()
             .reserve_input(
                 incoming
@@ -545,13 +545,13 @@ impl Changes {
         for chunk in &self.retained {
             engine
                 .memory()
-                .retain_input(&chunk.batch, &mut scratch)
+                .retain_input(&chunk.batch, &scratch)
                 .context(SqlSnafu)?;
         }
         for batch in before.iter().chain(&after) {
             engine
                 .memory()
-                .retain_input(batch, &mut scratch)
+                .retain_input(batch, &scratch)
                 .context(SqlSnafu)?;
         }
         self.memory

@@ -306,11 +306,11 @@ fn registration_reuses_input_claims() {
         ..Default::default()
     });
     let (plan, _) = local_plan(&fixture.engine);
-    let mut memory = fixture.engine.memory().reserve_input(0).unwrap();
+    let memory = fixture.engine.memory().reserve_input(0).unwrap();
     fixture
         .engine
         .memory()
-        .retain_input(&data, &mut memory)
+        .retain_input(&data, &memory)
         .unwrap();
     let allocated = data.column(0).to_data().buffers()[0].capacity();
     let held = fixture

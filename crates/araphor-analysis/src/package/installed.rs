@@ -93,7 +93,7 @@ impl InstalledAnalysis {
         if !artifact.prepared(&evaluation.export) {
             return Err(Code::Unsupported.error("host-prepared target").into());
         }
-        let mut input_memory = self
+        let input_memory = self
             .owner
             .query
             .memory()
@@ -128,7 +128,7 @@ impl InstalledAnalysis {
             self.owner
                 .query
                 .memory()
-                .retain_input(batch, &mut input_memory)?;
+                .retain_input(batch, &input_memory)?;
             arrays = arrays.saturating_add(
                 batch
                     .columns()

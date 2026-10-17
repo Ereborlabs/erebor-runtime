@@ -269,6 +269,19 @@ production lines. The complete count removes 430 from `7b7b407a` and adds 723
 from `aa390d9f`: `/tmp/araphor-native-tables-count1.json`. Another 5,570 net
 production deletions are required. The complete redesign remains **Not done**.
 
+### Shared physical output completion
+
+The [shared physical completion](araphor-component-redesign.md#shared-physical-output-completion)
+deletes Follow's duplicate collector and COUNT's retained comparison batches.
+Both paths consume the native stream through the existing bounded Session
+owner. The selected checks pass 173 distinct cases. Strict Clippy and scoped
+formatting pass. The records are
+`/tmp/araphor-output-completion-qualification1.json` and
+`/tmp/araphor-output-completion-count1.json`. This slice removes 40 nonblank
+production lines. The complete count removes 470 from `7b7b407a`; another
+5,530 must be removed. The complete redesign remains **Not done**. Full
+workspace CI and benchmarks are not run, as instructed.
+
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

@@ -224,6 +224,56 @@ live detector scheduling, and the required production reduction remain
 **Not done**. Full workspace CI and benchmarks are not run, as instructed.
 These checks do not establish a performance improvement.
 
+### Shared physical output completion
+
+Implementation and selected host verification: **Done**.
+Replacement output and maintained COUNT now use Output::complete. The duplicate
+Follow collector, output checks, read check, and content hash are deleted.
+Session::bounded retains the existing native row, backing-buffer, cancellation,
+and buffer-claim checks. DataFusion keeps all SQL stages and operators.
+
+State selects replacement execution
+  -> Session starts the native physical stream
+  -> Cursor checks the captured receipt before stream polling
+  -> Output consumes that stream through native cooperative polling and Session::bounded
+  -> Output completes the final read check and hashes the logical result
+  -> State finishes cursor and source progress
+
+COUNT post-plan execution uses that same completion owner. COUNT keeps only
+the prior digest. Its retained comparison batches and metadata reservation
+are deleted. The intermediate input reservation remains held until the native
+post-plan finishes. The shared fingerprint includes native schema metadata,
+total row count, and ordered native values. Batch boundaries and empty batches
+do not affect result identity. The digest changes only after all checks pass.
+
+The existing output prepayment covers native buffer claims, geometric vector
+growth, retained headers, and hash scratch. Empty batches pass the existing
+backing-buffer check before collection skips them. This corrects the former
+replacement collector's empty-batch quota bypass. An endless ready stream
+of empty batches yields through native cooperative polling. Error or drop
+releases its stream, permit, and reservations. Borrowed arrays keep their
+separate buffer charges.
+
+The Query checks pass 139 distinct cases. The first run passes 138 and fails
+one new test that expects a direct error. The native stream preserves that
+error inside its typed source chain. The corrected assertion checks the exact
+native root cause and EvaluationFailed category. All six output cases pass
+after that test correction. All 31 Analysis model cases and both selected
+host-prepared package cases pass. The E2E query-follow contract passes in
+18.68 seconds and retains all eight behavior cases. These checks pass 173
+distinct cases. Strict Clippy passes for Query, Analysis, Control, E2E, and
+their test targets. Formatting passes for all 18 changed Rust files.
+The qualification record is `/tmp/araphor-output-completion-qualification1.json`.
+
+This change removes 40 nonblank production Rust lines. The complete redesign
+removes 470 from `7b7b407a`, adds 1,759 from `537f9de3`, and adds 683 from
+`aa390d9f`. Another 5,530 net production deletions are required. Fingerprint
+relocation gives no deletion credit. The count checks 695 Rust hashes:
+`/tmp/araphor-output-completion-count1.json`. General maintained SQL,
+Query-owned live detector scheduling, and the required production reduction
+remain **Not done**. Full workspace CI and benchmarks are not run, as instructed.
+No performance improvement is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

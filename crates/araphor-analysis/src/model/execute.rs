@@ -275,7 +275,7 @@ impl ModelRun<'_> {
                 }
                 .fail();
             }
-            let memory = self.output_memory.as_mut().ok_or_else(|| {
+            let memory = self.output_memory.as_ref().ok_or_else(|| {
                 crate::ModelInvalidSnafu {
                     field: "model output reservation",
                 }

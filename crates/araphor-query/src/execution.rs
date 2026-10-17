@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex, Weak};
@@ -25,7 +26,9 @@ use datafusion::execution::TaskContext;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{execute_stream, ExecutionPlan, SendableRecordBatchStream};
+use datafusion::physical_plan::{
+    execute_stream, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+};
 use futures_util::TryStreamExt;
 use snafu::ResultExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -513,6 +516,10 @@ pub(crate) enum Retention {
 }
 
 impl Session {
+    pub(crate) fn engine(&self) -> &Arc<Engine> {
+        &self.engine
+    }
+
     pub(crate) fn selection(&self) -> &AnalysisSelectionV1 {
         &self.selection
     }
@@ -560,11 +567,11 @@ impl Session {
             });
         }
         let table = MemTable::try_new(schema, vec![batches.to_vec()]).context(SqlSnafu)?;
-        let mut reservation = self.engine.memory.reserve_input(0).context(SqlSnafu)?;
+        let reservation = self.engine.memory.reserve_input(0).context(SqlSnafu)?;
         for batch in batches {
             self.engine
                 .memory
-                .retain_input(batch, &mut reservation)
+                .retain_input(batch, &reservation)
                 .context(SqlSnafu)?;
         }
         self.tables
@@ -664,33 +671,36 @@ impl Session {
         let permit = Arc::new(self.engine.reserve_evaluation(self.selection.tenant_id)?);
         let (captured, stream, permit, control, reservation) =
             self.start(plan, sources, read, retention, permit).await?;
-        let stream = self.bounded(
+        let stream = Box::pin(self.bounded(
             stream,
             permit,
             control,
             reservation,
             retention,
             Some(Arc::clone(&captured)),
-        );
+        ));
         Ok((captured, stream))
     }
 
-    fn bounded(
+    pub(crate) fn bounded<'a, R>(
         &self,
         stream: SendableRecordBatchStream,
         permit: Arc<Permit>,
         control: Arc<AnalysisReadControl>,
-        reservation: MemoryReservation,
+        reservation: R,
         retention: Retention,
         receipt: Option<Arc<ArrowSnapshot>>,
-    ) -> SendableRecordBatchStream {
+    ) -> impl RecordBatchStream + Send + 'a
+    where
+        R: Borrow<MemoryReservation> + Send + 'a,
+    {
         let schema = stream.schema();
         let memory = Arc::clone(&self.engine.memory);
         let engine = Arc::clone(&self.engine);
         let (rows, bytes) = (self.output_rows, self.output_bytes);
         let stream = futures_util::stream::try_unfold(
             (stream, reservation, 0usize, 0usize, permit),
-            move |(mut stream, mut reservation, count, size, permit)| {
+            move |(mut stream, reservation, count, size, permit)| {
                 let memory = Arc::clone(&memory);
                 let engine = Arc::clone(&engine);
                 let receipt = receipt.clone();
@@ -715,14 +725,45 @@ impl Session {
                         return Err(DataFusionError::ResourcesExhausted("query output".into()));
                     }
                     match retention {
-                        Retention::Input => memory.retain_input(&batch, &mut reservation)?,
-                        Retention::Output => memory.retain_output(&batch, &mut reservation)?,
+                        Retention::Input => memory.retain_input(&batch, reservation.borrow())?,
+                        Retention::Output => memory.retain_output(&batch, reservation.borrow())?,
                     }
                     Ok(Some((batch, (stream, reservation, count, size, permit))))
                 }
             },
         );
-        Box::pin(RecordBatchStreamAdapter::new(schema, stream))
+        RecordBatchStreamAdapter::new(schema, stream)
+    }
+
+    pub(crate) async fn complete(
+        &self,
+        plan: &LogicalPlan,
+        sources: &BTreeSet<String>,
+        permit: Arc<Permit>,
+        previous: &mut Option<[u8; 32]>,
+        cursor: Option<&crate::follow::Cursor>,
+    ) -> Result<crate::stream::Output> {
+        let (snapshot, stream, permit, control, reservation) = self
+            .start(plan, sources, Read::Snapshot, Retention::Output, permit)
+            .await?;
+        if let Some(cursor) = cursor {
+            cursor.check_store(&snapshot.page.extraction.meta)?;
+        }
+        crate::stream::Output {
+            snapshot,
+            batches: None,
+            positions: Vec::new(),
+            position: StorePositionV1 {
+                commit_revision: 0,
+                ordinal: 0,
+            },
+            limited: false,
+            _memory: reservation,
+            _permit: Some(permit),
+            _control: control,
+        }
+        .complete(self, stream, previous)
+        .await
     }
 
     pub(crate) fn state(&self) -> Result<SessionState> {

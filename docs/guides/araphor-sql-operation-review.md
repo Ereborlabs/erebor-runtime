@@ -340,6 +340,31 @@ run's local tables and captured execution time
   -> [Session::start_physical](../../crates/araphor-query/src/execution.rs) binds the captured snapshot to TaskContext and calls native execute_stream with the same physical plan
   -> [Session::bounded](../../crates/araphor-query/src/execution.rs) checks output rows and bytes before it emits each batch
 
+Replacement output and maintained COUNT use one completion owner.
+
+[State::evaluate](../../crates/araphor-query/src/follow/mod.rs) selects replacement execution
+  -> [Session::complete](../../crates/araphor-query/src/execution.rs) starts the native physical stream
+  -> [Cursor::check_store](../../crates/araphor-query/src/follow/cursor.rs) checks the captured receipt before stream polling
+  -> [Output::complete](../../crates/araphor-query/src/stream/physical/output.rs) consumes the cooperative native stream through Session::bounded
+  -> [Output::fingerprint](../../crates/araphor-query/src/stream/physical/output.rs) hashes the native schema, total row count, and ordered native values after the final read check
+  -> [State::finish](../../crates/araphor-query/src/follow/mod.rs) updates the cursor and source wake facts
+
+[Outputs::next](../../crates/araphor-query/src/stream/physical.rs) supplies
+the COUNT post-plan stream to that same Output::complete method. The intermediate
+input reservation remains held through post-plan completion. COUNT retains only
+the prior digest. It no longer retains a second batch vector and its metadata
+reservation to compare results.
+
+The completion owner uses the existing output reservation for buffer claims,
+geometric batch-vector growth, retained headers, and hash scratch. Empty batches
+pass the cumulative backing-buffer check before collection skips them. This
+corrects the former replacement collector's empty-batch quota bypass. Native
+cooperative polling permits cancellation even for an endless empty stream.
+Batch boundaries and empty batches do not change result identity. Schema
+metadata and zero-column row counts remain part of that identity. The prior
+digest changes only after all completion checks pass. Error or drop releases
+the native stream and permit. Borrowed arrays retain their own buffer charges.
+
 Physical planning has a separate bounded stage. The extraction allowance
 starts at the actual store read. Stream consumption has its own evaluation
 stage within the full operation control. The synchronous API uses Engine's
@@ -543,7 +568,7 @@ The physical source retains projected batches and raw identity, cursor, and
 position keys before SQL filters. A retirement removes those contributions.
 The physical kernel retracts their filtered values. Each result receipt keeps
 witnesses for all retained input, including rows removed by SQL filters.
-Native Arrow equality suppresses an unchanged COUNT result.
+The shared physical output fingerprint suppresses an unchanged COUNT result.
 
 The private [Change](../../crates/araphor-query/src/stream/mod.rs) is the
 completed source read. It carries signed batches and the exact receipt that a
@@ -607,8 +632,8 @@ and strict Query Clippy pass. The exact source record is
 workspace CI are not repeated for this private ownership change.
 
 Each State currently owns one physical execution stream. A shared maintained
-query owner is **Not done**. Other plans still use State::evaluate and its hash
-of the complete result. Broader maintained operators and clock processing are
+query owner is **Not done**. Other plans still use State::evaluate and physical
+completion of the complete result. Broader maintained operators and clock processing are
 **Not done**. The selected host qualification passes 195 distinct cases. Wider qualification
 is **Not done**.
 The complete redesign is **Not done**.
@@ -695,6 +720,7 @@ The current source reading route is:
 - [Prepared Wasm tests](../../crates/araphor-analysis/src/package/wasm/tests/runtime/prepared.rs): engine identity, cancellation, code pins, and retained prepared execution after cache removal.
 - [Memory tests](../../crates/araphor-query/src/memory.rs): shared buffers, nested children, borrowed aliases, capacity denial, and producer cancellation.
 - [Native template tests](../../crates/araphor-query/src/stream/tests.rs) and [physical kernel tests](../../crates/araphor-query/src/stream/physical/kernel/tests.rs): native parameters, NULL filters, zero-column row counts, native COUNT updates and retractions, aliases, errors, exact metadata, borrowed arrays, and schema checks.
+- [Output completion tests](../../crates/araphor-query/src/stream/physical/output/tests.rs): `logical_rows_ignore_batches`, `zero_columns_keep_rows`, `later_error_releases_output`, `borrowed_output_keeps_charge`, `empty_prefix_yields_cancel`, and `empty_backing_obeys_limit` prove identity, error classification, cancellation, retained limits, and cleanup.
 - [Raw change tests](../../crates/araphor-data/src/analysis/extraction/changes/tests.rs): existing-journal replay, retirement ranges, complete frontiers, scope, and resource bounds.
 - [Follow tests](../../crates/araphor-query/src/follow/tests.rs): append positions, `health_keeps_cursor`, `count_consumes_committed_changes`, `moving_window_nanoseconds`, `notification_follow_deadline`, and cursor binding. The COUNT case checks later insert scans, full retained witnesses, retraction after retention, and released reservations.
 - [Delivery tests](../../crates/araphor-query/src/follow/delivery/tests.rs): disclosure phases, conversion lifetime, immediate failure cleanup, renewed output demand, native waits, and authority changes during native waits or read checks.
@@ -702,6 +728,25 @@ The current source reading route is:
 - [Model tests](../../crates/araphor-analysis/src/model/tests.rs) and [package lifecycle tests](../../crates/araphor-analysis/src/package/tests/lifecycle.rs): checkpoints, parameters, evidence, source bounds, retries, and installed revisions.
 - [Interruption tests](../../crates/araphor-analysis/src/package/tests/interruption.rs): authority change, cancellation, stop before commit, Busy, and preservation of committed state.
 - [Control tests](../../crates/mithril-control/src/client_grpc/tests.rs) and [follow E2E cases](../../crates/mithril-e2e/src/discovery/query_follow.rs): actual protocol frames and native subscription behavior across owners.
+
+### Shared output verification
+
+The shared physical completion source passes 139 distinct Query cases, 33
+Analysis cases, and the E2E query-follow contract. The first Query run passes
+138 cases and fails one new direct-error assertion. The final six-case output
+check passes with an exact native root-cause and failure-category assertion.
+The E2E contract retains all eight behavior cases. Strict Clippy passes for
+Query, Analysis, Control, E2E, and their test targets. Scoped formatting passes
+for all 18 changed Rust files.
+
+The records are `/tmp/araphor-output-completion-qualification1.json` and
+`/tmp/araphor-output-completion-count1.json`. The slice removes 40 nonblank
+production lines. The complete redesign removes 470 from `7b7b407a`; another
+5,530 must be removed for the required target. These host checks cover Linux
+x86_64 with the GNU target. Full workspace CI, benchmarks, physical Kubernetes
+qualification, and unchanged native/Wasm runtime suites are not repeated.
+General maintained SQL and Query-owned live detector scheduling remain
+**Not done**. The complete redesign remains **Not done**.
 
 ### Native table-read verification
 

@@ -115,7 +115,7 @@ impl SqlModelOutputV1 {
     pub(crate) fn retain(
         output: sdk::Output,
         memory: &Memory,
-        mut reservation: MemoryReservation,
+        reservation: MemoryReservation,
     ) -> Result<Self> {
         let mut arrays = 0usize;
         for data in output
@@ -124,7 +124,7 @@ impl SqlModelOutputV1 {
             .chain(output.checkpoint.iter().flat_map(|state| &state.datasets))
         {
             for batch in &data.batches {
-                memory.retain_output(batch, &mut reservation)?;
+                memory.retain_output(batch, &reservation)?;
                 arrays = arrays.saturating_add(
                     batch
                         .columns()
@@ -135,7 +135,7 @@ impl SqlModelOutputV1 {
             }
         }
         for reason in &output.reasons {
-            memory.retain_output(&reason.details, &mut reservation)?;
+            memory.retain_output(&reason.details, &reservation)?;
             arrays = arrays.saturating_add(
                 reason
                     .details

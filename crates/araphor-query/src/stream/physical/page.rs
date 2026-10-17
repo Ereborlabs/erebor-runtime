@@ -95,7 +95,7 @@ impl Output {
         schema: SchemaRef,
         stream: &mut SendableRecordBatchStream,
         control: Arc<AnalysisReadControl>,
-        mut reservation: MemoryReservation,
+        reservation: MemoryReservation,
         snapshot: Arc<ArrowSnapshot>,
         permit: Arc<Permit>,
     ) -> Result<Self> {
@@ -249,7 +249,7 @@ impl Output {
                 if compact.get_array_memory_size() <= engine.limits().output_bytes {
                     engine
                         .memory()
-                        .retain_output(&compact, &mut reservation)
+                        .retain_output(&compact, &reservation)
                         .context(SqlSnafu)?;
                     batches.push(compact);
                     break;

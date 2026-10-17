@@ -1,13 +1,12 @@
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
-use std::io::{self, Write};
 
 use araphor_data::{AnalysisSelectionV1, AnalysisStoreMetaV1, StorePositionV1};
 use datafusion::logical_expr::LogicalPlan;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 use super::Operation;
+use crate::stream::physical::Fingerprint;
 use crate::{InvalidSnafu, Result};
 
 #[cfg(test)]
@@ -100,7 +99,7 @@ impl Cursor {
         Ok(())
     }
 
-    pub(super) fn check_store(&self, meta: &AnalysisStoreMetaV1) -> Result<()> {
+    pub(crate) fn check_store(&self, meta: &AnalysisStoreMetaV1) -> Result<()> {
         if self.store != *meta.store_uuid.as_bytes()
             || self.schema != meta.schema_version
             || self.epoch != meta.recovery_epoch
@@ -115,16 +114,7 @@ impl Cursor {
     }
 }
 
-pub(super) struct Fingerprint(Sha256);
-
 impl Fingerprint {
-    pub(super) fn new() -> Self {
-        Self(Sha256::new())
-    }
-    pub(super) fn finish_digest(self) -> [u8; 32] {
-        self.0.finalize().into()
-    }
-
     pub(super) fn binding(
         plan: &LogicalPlan,
         sources: &BTreeSet<String>,
@@ -145,27 +135,5 @@ impl Fingerprint {
             .build()
         })?;
         Ok(hash.finish_digest())
-    }
-}
-
-impl Hasher for Fingerprint {
-    fn write(&mut self, bytes: &[u8]) {
-        self.0.update(bytes);
-    }
-    fn finish(&self) -> u64 {
-        let digest = self.0.clone().finalize();
-        let mut bytes = [0; 8];
-        bytes.copy_from_slice(&digest[..8]);
-        u64::from_le_bytes(bytes)
-    }
-}
-
-impl Write for Fingerprint {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.update(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
     }
 }

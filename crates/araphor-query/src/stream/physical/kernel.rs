@@ -132,7 +132,7 @@ impl State {
             ))
             .context(SqlSnafu);
         }
-        let mut memory = self.engine.memory().reserve_input(0).context(SqlSnafu)?;
+        let memory = self.engine.memory().reserve_input(0).context(SqlSnafu)?;
         let mut bytes = 0usize;
         for (batches, retract) in [(before, true), (after, false)] {
             if batches.is_empty() {
@@ -158,7 +158,7 @@ impl State {
                 }
                 self.engine
                     .memory()
-                    .retain_input(&batch, &mut memory)
+                    .retain_input(&batch, &memory)
                     .context(SqlSnafu)?;
                 self.update(&batch, retract, &control)?;
             }
@@ -173,7 +173,7 @@ impl State {
             .context(SqlSnafu)?;
         self.engine
             .memory()
-            .retain_input(&batch, &mut memory)
+            .retain_input(&batch, &memory)
             .context(SqlSnafu)?;
         control.check()?;
         self.frontier = Some(position);

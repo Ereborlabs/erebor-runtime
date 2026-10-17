@@ -270,9 +270,9 @@ impl SourceSnapshot {
             ));
         }
         let bytes = Captured::table_bytes(&schema, &batches);
-        let mut reservation = self.memory.reserve_input(0)?;
+        let reservation = self.memory.reserve_input(0)?;
         for batch in &batches {
-            self.memory.retain_input(batch, &mut reservation)?;
+            self.memory.retain_input(batch, &reservation)?;
         }
         self.control.check().map_err(Self::data_error)?;
         captured._memory.try_grow(bytes).map_err(|source| {
@@ -300,7 +300,7 @@ impl SourceSnapshot {
         mode: ReadMode,
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<Captured> {
-        let mut reservation = if matches!(mode, ReadMode::Changes(_)) {
+        let reservation = if matches!(mode, ReadMode::Changes(_)) {
             self.memory.prepare_input(self.limits.input_bytes)?
         } else {
             self.memory.reserve_input(self.limits.input_bytes)?
@@ -480,7 +480,7 @@ impl SourceSnapshot {
                 .copied()
                 .collect::<Vec<_>>();
             for batch in &batches {
-                self.memory.retain_input(batch, &mut reservation)?;
+                self.memory.retain_input(batch, &reservation)?;
             }
             source_bytes = source_bytes
                 .saturating_add(Captured::table_bytes(&schema, &batches))
@@ -499,7 +499,7 @@ impl SourceSnapshot {
                     )
                 })?;
             for batch in &batches {
-                self.memory.retain_input(batch, &mut reservation)?;
+                self.memory.retain_input(batch, &reservation)?;
             }
             source_bytes = source_bytes
                 .saturating_add(Captured::table_bytes(&schema, &batches))

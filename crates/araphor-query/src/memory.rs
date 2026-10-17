@@ -138,18 +138,14 @@ impl Memory {
         self.reserve_input(bytes.min(available).max(usize::from(bytes != 0)))
     }
 
-    pub fn retain_input(
-        &self,
-        batch: &RecordBatch,
-        reservation: &mut MemoryReservation,
-    ) -> Result<()> {
+    pub fn retain_input(&self, batch: &RecordBatch, reservation: &MemoryReservation) -> Result<()> {
         self.retain(batch, reservation, true)
     }
 
     pub fn retain_output(
         &self,
         batch: &RecordBatch,
-        reservation: &mut MemoryReservation,
+        reservation: &MemoryReservation,
     ) -> Result<()> {
         self.retain(batch, reservation, false)
     }
@@ -180,7 +176,7 @@ impl Memory {
     fn retain(
         &self,
         batch: &RecordBatch,
-        reservation: &mut MemoryReservation,
+        reservation: &MemoryReservation,
         input: bool,
     ) -> Result<()> {
         let (anchor, capacity, resource) = if input {
@@ -290,8 +286,8 @@ mod tests {
             Arc::new(Int64Array::from(vec![1])) as ArrayRef,
         )])
         .unwrap();
-        let mut reservation = memory.reserve_output(0).unwrap();
-        memory.retain_output(&batch, &mut reservation).unwrap();
+        let reservation = memory.reserve_output(0).unwrap();
+        memory.retain_output(&batch, &reservation).unwrap();
         let retained = memory.output_pool.reserved();
         assert!(retained > 0 && retained < 1024);
         let prepared = memory.prepare_output(1024).unwrap();
@@ -345,13 +341,13 @@ mod tests {
         let capacity = column.get_buffer_memory_size();
         let batch = RecordBatch::try_from_iter([("value", column)])?;
         let memory = Memory::new(capacity, capacity);
-        let mut input = memory.reserve_input(capacity)?;
-        memory.retain_input(&batch, &mut input)?;
+        let input = memory.reserve_input(capacity)?;
+        memory.retain_input(&batch, &input)?;
         assert_eq!(input.size(), 0);
         let slice = batch.slice(1, 1);
-        let mut output = memory.reserve_output(capacity)?;
-        memory.retain_output(&slice, &mut output)?;
-        memory.retain_output(&slice.clone(), &mut output)?;
+        let output = memory.reserve_output(capacity)?;
+        memory.retain_output(&slice, &output)?;
+        memory.retain_output(&slice.clone(), &output)?;
         let owners = allocations(&memory);
         assert_eq!(output.size(), 0);
         assert!(memory.reserve_input(1).is_err());
@@ -383,8 +379,8 @@ mod tests {
         let capacity = nested.get_buffer_memory_size() + views.get_buffer_memory_size();
         let batch = RecordBatch::try_from_iter([("nested", nested), ("views", views)])?;
         let memory = Memory::new(capacity, capacity);
-        let mut input = memory.reserve_input(capacity)?;
-        memory.retain_input(&batch, &mut input)?;
+        let input = memory.reserve_input(capacity)?;
+        memory.retain_input(&batch, &input)?;
         let owners = allocations(&memory);
         assert_eq!(input.size(), 0);
         let child = batch.column(0).to_data().child_data()[0].buffers()[0].clone();
@@ -407,13 +403,13 @@ mod tests {
         let column: ArrayRef = Arc::new(Int64Array::from(vec![1]));
         let batch = RecordBatch::try_from_iter([("value", column)])?;
         let memory = Memory::new(0, 0);
-        let mut input = memory.reserve_input(0)?;
+        let input = memory.reserve_input(0)?;
         let buffer = batch.column(0).to_data().buffers()[0].clone();
         let key = BufferKey {
             address: buffer.data_ptr().as_ptr() as usize,
             capacity: buffer.capacity(),
         };
-        assert!(memory.retain_input(&batch, &mut input).is_err());
+        assert!(memory.retain_input(&batch, &input).is_err());
         assert_eq!(input.size(), 0);
         assert!(!memory.registry.buffers.lock().unwrap().contains_key(&key));
         assert!(memory.reserve_input(0).is_ok());
@@ -429,8 +425,8 @@ mod tests {
         let producer_memory = Arc::clone(&memory);
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let producer = tokio::spawn(async move {
-            let mut input = producer_memory.reserve_input(capacity).unwrap();
-            producer_memory.retain_input(&batch, &mut input).unwrap();
+            let input = producer_memory.reserve_input(capacity).unwrap();
+            producer_memory.retain_input(&batch, &input).unwrap();
             sender.send(batch.column(0).clone()).unwrap();
             std::future::pending::<()>().await;
             drop(batch);
@@ -454,12 +450,12 @@ mod tests {
         let first = Memory::new(0, capacity);
         let second = Memory::new(capacity, 0);
         assert!(Arc::ptr_eq(&first.registry, &second.registry));
-        let mut output = first.reserve_output(capacity)?;
-        first.retain_output(&batch, &mut output)?;
+        let output = first.reserve_output(capacity)?;
+        first.retain_output(&batch, &output)?;
         let slice = batch.slice(1, 1);
-        let mut input = second.reserve_input(capacity)?;
-        second.retain_input(&slice, &mut input)?;
-        first.retain_output(&slice, &mut output)?;
+        let input = second.reserve_input(capacity)?;
+        second.retain_input(&slice, &input)?;
+        first.retain_output(&slice, &output)?;
         assert_eq!((input.size(), output.size()), (0, 0));
         let owners = allocations(&first);
         assert!(!owners.is_empty());
@@ -484,13 +480,13 @@ mod tests {
         let batch = RecordBatch::try_from_iter([("value", column)])?;
         let memory = Memory::new(capacity, 0);
         let held = memory.reserve_input(capacity)?;
-        let mut input = memory.reserve_input(0)?;
-        let error = memory.retain_input(&batch, &mut input).unwrap_err();
+        let input = memory.reserve_input(0)?;
+        let error = memory.retain_input(&batch, &input).unwrap_err();
         assert!(matches!(error,
             DataFusionError::External(source) if matches!(source.downcast_ref::<crate::Error>(),
                 Some(crate::Error::Capacity { resource: "shared input", source: DataFusionError::ResourcesExhausted(_) }))));
         drop(held);
-        memory.retain_input(&batch, &mut input)?;
+        memory.retain_input(&batch, &input)?;
         let owners = allocations(&memory);
         drop(batch);
         assert!(memory.reserve_input(capacity).is_ok());

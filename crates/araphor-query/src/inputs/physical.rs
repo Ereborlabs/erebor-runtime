@@ -143,7 +143,7 @@ impl Inputs {
         }
         let execution = control.within(engine.limits().evaluate_timeout)?;
         let context = state.task_ctx();
-        let mut memory = engine
+        let memory = engine
             .memory()
             .prepare_input(input_limit)
             .context(SqlSnafu)?;
@@ -191,7 +191,7 @@ impl Inputs {
                 }
                 engine
                     .memory()
-                    .retain_input(&batch, &mut memory)
+                    .retain_input(&batch, &memory)
                     .context(SqlSnafu)?;
                 batches.push(batch);
             }
@@ -259,7 +259,7 @@ impl Inputs {
                     .map_err(sdk::Error::from)?;
                 engine
                     .memory()
-                    .retain_input(&batch, &mut memory)
+                    .retain_input(&batch, &memory)
                     .context(SqlSnafu)?;
                 indexed.push(batch);
                 offset = end;

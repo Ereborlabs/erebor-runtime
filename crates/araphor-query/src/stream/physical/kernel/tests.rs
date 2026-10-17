@@ -209,16 +209,13 @@ impl Fixture {
         let snapshot = self.snapshot().await;
         let before = before.to_vec();
         let after = after.to_vec();
-        let mut memory = self
+        let memory = self
             .engine
             .memory()
             .reserve_input((before.capacity() + after.capacity()) * size_of::<RecordBatch>())
             .unwrap();
         for batch in before.iter().chain(&after) {
-            self.engine
-                .memory()
-                .retain_input(batch, &mut memory)
-                .unwrap();
+            self.engine.memory().retain_input(batch, &memory).unwrap();
         }
         Change {
             before,

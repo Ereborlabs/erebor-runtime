@@ -1,14 +1,11 @@
 use std::any::Any;
 use std::fmt;
-use std::mem::size_of;
 use std::sync::Arc;
 
-use araphor_data::StorePositionV1;
-use datafusion::arrow::array::{ArrayRef, RecordBatch};
+use datafusion::arrow::array::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{DataFusionError, Result as NativeResult};
 use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::Count;
 use datafusion::physical_expr::EquivalenceProperties;
@@ -26,12 +23,15 @@ use futures_util::{stream, TryStreamExt as _};
 use snafu::ResultExt as _;
 
 use super::{Output, OutputStream, Run};
-use crate::execution::{Read, Retention};
+use crate::execution::{Read, Retention, Session};
 use crate::sources::{JournalExec, SourceData};
 use crate::{Result, SqlSnafu};
 
 mod kernel;
+mod output;
 mod page;
+
+pub(crate) use output::Fingerprint;
 
 #[derive(Debug)]
 pub(crate) struct SubscribeExec {
@@ -266,8 +266,9 @@ impl SubscribeExec {
             plan: Arc::clone(&self.input),
             aggregate: Arc::clone(&compiled.aggregate),
             context,
-            memory: run.engine.memory().reserve_input(0).context(SqlSnafu)?,
-            run,
+            session: run
+                .engine
+                .session(run.selection.clone(), &run.control, run.now)?,
             previous: None,
         };
         Ok(Box::pin(stream::try_unfold(
@@ -396,116 +397,41 @@ struct Outputs {
     plan: Arc<dyn ExecutionPlan>,
     aggregate: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
-    run: Arc<Run>,
-    previous: Option<Vec<RecordBatch>>,
-    memory: MemoryReservation,
+    session: Session,
+    previous: Option<[u8; 32]>,
 }
 
 impl Outputs {
     async fn next(&mut self) -> Result<Option<Output>> {
-        let Some(Output {
-            snapshot,
-            batches,
-            _memory: _input,
-            _permit,
-            _control: control,
-            ..
-        }) = self.stream.try_next().await?
-        else {
+        let Some(mut output) = self.stream.try_next().await? else {
             return Ok(None);
         };
-        let batches = batches.ok_or_else(|| {
+        let batches = output.batches.take().ok_or_else(|| {
             crate::InvalidSnafu {
                 field: "native aggregate output",
             }
             .build()
         })?;
-        control.check()?;
-        let mut reservation = self
-            .run
-            .engine
+        output._control.check()?;
+        let reservation = self
+            .session
+            .engine()
             .memory()
-            .prepare_output(self.run.engine.limits().output_bytes)
+            .prepare_output(self.session.engine().limits().output_bytes)
             .context(SqlSnafu)?;
-        let mut stream = SubscribeExec::bind(
+        let input = std::mem::replace(&mut output._memory, reservation);
+        let stream = SubscribeExec::bind(
             &self.plan,
             &self.aggregate,
             batches,
             Arc::clone(&self.context),
         )
         .context(SqlSnafu)?;
-        let mut batches = Vec::new();
-        let (mut rows, mut bytes) = (0usize, 0usize);
-        while let Some(batch) = control
-            .query_async(async { stream.try_next().await.context(SqlSnafu) })
-            .await?
-        {
-            rows = rows.saturating_add(batch.num_rows());
-            bytes = bytes.saturating_add(batch.get_array_memory_size());
-            if rows > self.run.engine.limits().output_rows
-                || bytes > self.run.engine.limits().output_bytes
-            {
-                return Err(DataFusionError::ResourcesExhausted(
-                    "maintained query output".into(),
-                ))
-                .context(SqlSnafu);
-            }
-            self.run
-                .engine
-                .memory()
-                .retain_output(&batch, &mut reservation)
-                .context(SqlSnafu)?;
-            batches.push(batch);
-        }
-        control
-            .query_async(self.run.engine.check_read(&snapshot))
-            .await?;
-        let unchanged = self.previous.as_ref() == Some(&batches);
-        let metadata = batches.capacity() * size_of::<RecordBatch>()
-            + batches
-                .iter()
-                .map(|batch| batch.num_columns() * size_of::<ArrayRef>())
-                .sum::<usize>();
-        if !unchanged {
-            self.memory
-                .try_grow(metadata)
-                .map_err(|source| crate::Error::Capacity {
-                    resource: "shared input",
-                    source,
-                })?;
-            self.previous = Some(batches.clone());
-            let metadata = self.previous.as_ref().map_or(0, |batches| {
-                batches.capacity() * size_of::<RecordBatch>()
-                    + batches
-                        .iter()
-                        .map(|batch| batch.num_columns() * size_of::<ArrayRef>())
-                        .sum::<usize>()
-            });
-            self.memory
-                .try_resize(metadata)
-                .map_err(|source| crate::Error::Capacity {
-                    resource: "shared input",
-                    source,
-                })?;
-        }
-        reservation
-            .try_resize(if unchanged { 0 } else { metadata })
-            .map_err(|source| crate::Error::Capacity {
-                resource: "shared output",
-                source,
-            })?;
-        Ok(Some(Output {
-            snapshot,
-            batches: (!unchanged).then_some(batches),
-            positions: Vec::new(),
-            position: StorePositionV1 {
-                commit_revision: 0,
-                ordinal: 0,
-            },
-            limited: false,
-            _memory: reservation,
-            _permit,
-            _control: control,
-        }))
+        let result = output
+            .complete(&self.session, stream, &mut self.previous)
+            .await
+            .map(Some);
+        drop(input);
+        result
     }
 }
