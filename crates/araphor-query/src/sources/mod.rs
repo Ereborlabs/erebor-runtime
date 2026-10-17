@@ -101,8 +101,8 @@ impl SourceSnapshot {
     pub(crate) fn requests(
         requests: &mut AnalysisTableRequests,
         plans: &[Arc<dyn ExecutionPlan>],
-    ) -> Result<Option<Interval>> {
-        let mut received: Option<Interval> = None;
+    ) -> Result<BTreeMap<&'static str, Interval>> {
+        let mut ranges = BTreeMap::<&'static str, Interval>::new();
         for plan in plans {
             plan.apply(|node| {
                 let Some(source) = SourceData::from_plan(node.as_ref()) else {
@@ -118,16 +118,25 @@ impl SourceSnapshot {
                     })?
                     .get_or_insert_with(BTreeSet::new)
                     .extend(source.indices.iter().copied());
-                if let Some(bounds) = &source.received {
-                    received = Some(match received.take() {
-                        Some(previous) => previous.union(bounds.clone())?,
-                        None => bounds.clone(),
-                    });
-                }
+                Self::extend_bounds(&mut ranges, &source.bounds)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
         }
-        Ok(received)
+        Ok(ranges)
+    }
+
+    pub(crate) fn extend_bounds(
+        bounds: &mut BTreeMap<&'static str, Interval>,
+        added: &BTreeMap<&'static str, Interval>,
+    ) -> Result<()> {
+        for (&field, interval) in added {
+            let interval = match bounds.remove(field) {
+                Some(previous) => previous.union(interval.clone())?,
+                None => interval.clone(),
+            };
+            bounds.insert(field, interval);
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -170,16 +179,16 @@ impl SourceSnapshot {
     pub(crate) fn capture(
         &self,
         requests: &AnalysisTableRequests,
-        mut received: Option<Interval>,
+        mut bounds: BTreeMap<&'static str, Interval>,
         mode: ReadMode,
     ) -> Result<Arc<ArrowSnapshot>> {
         if let Some(inputs) = &self.inputs {
-            let bounds = inputs
+            let window = inputs
                 .ranges
                 .iter()
                 .copied()
                 .reduce(|(first, last), (next, end)| (first.min(next), last.max(end)));
-            received = match bounds.filter(|_| {
+            let received = match window.filter(|_| {
                 !requests.contains_key("trace_output")
                     && !requests.contains_key("trace_measurements")
             }) {
@@ -189,6 +198,10 @@ impl SourceSnapshot {
                 )?),
                 None => None,
             };
+            bounds.remove("received_utc_ns");
+            if let Some(received) = received {
+                bounds.insert("received_utc_ns", received);
+            }
         }
         let control = self
             .control
@@ -202,7 +215,7 @@ impl SourceSnapshot {
         if let Some(snapshot) = captured.as_ref() {
             return Ok(Arc::clone(&snapshot.receipt));
         }
-        let snapshot = self.read(requests, received.as_ref(), mode, &control)?;
+        let snapshot = self.read(requests, &bounds, mode, &control)?;
         let receipt = Arc::clone(&snapshot.receipt);
         *captured = Some(snapshot);
         Ok(receipt)
@@ -213,7 +226,7 @@ impl SourceSnapshot {
         sources: &AnalysisTableRequests,
     ) -> Result<Arc<ArrowSnapshot>> {
         let requests = sources.keys().map(|name| (name.clone(), None)).collect();
-        self.capture(&requests, None, ReadMode::Metadata)
+        self.capture(&requests, BTreeMap::new(), ReadMode::Metadata)
     }
 
     fn data_error(error: araphor_data::Error) -> DataFusionError {
@@ -222,10 +235,25 @@ impl SourceSnapshot {
 
     pub(crate) fn prune_selection(
         mut selection: AnalysisSelectionV1,
-        received: Option<&Interval>,
+        bounds: &BTreeMap<&'static str, Interval>,
     ) -> AnalysisSelectionV1 {
-        if let Some(interval) = received {
-            if let Some((first, last)) = selection.time_range() {
+        let time = selection.time_range();
+        let cursor = selection.cursor_range();
+        for (field, range, from, until) in [
+            (
+                "received_utc_ns",
+                time,
+                &mut selection.received_from,
+                &mut selection.received_until,
+            ),
+            (
+                "source_cursor",
+                cursor,
+                &mut selection.cursor_from,
+                &mut selection.cursor_until,
+            ),
+        ] {
+            if let (Some(interval), Some((first, last))) = (bounds.get(field), range) {
                 let lower = match interval.lower() {
                     ScalarValue::UInt64(Some(value)) => *value,
                     _ => 0,
@@ -235,10 +263,10 @@ impl SourceSnapshot {
                     _ => u64::MAX,
                 };
                 if lower > first {
-                    selection.received_from = Bound::Included(lower);
+                    *from = Bound::Included(lower);
                 }
                 if upper < last {
-                    selection.received_until = Bound::Included(upper);
+                    *until = Bound::Included(upper);
                 }
             }
         }
@@ -274,25 +302,33 @@ impl SourceProvider {
         })
     }
 
-    fn received_bounds(&self, session: &dyn Session, filters: &[Expr]) -> Result<Interval> {
+    fn bounds(
+        &self,
+        session: &dyn Session,
+        filters: &[Expr],
+    ) -> Result<BTreeMap<&'static str, Interval>> {
         let unbounded = Interval::make_unbounded(&datafusion::arrow::datatypes::DataType::UInt64)?;
+        let mut bounds = BTreeMap::from([
+            ("received_utc_ns", unbounded.clone()),
+            ("source_cursor", unbounded),
+        ]);
         let Some(predicate) = conjunction(filters.iter().cloned()) else {
-            return Ok(unbounded);
+            return Ok(bounds);
         };
         let schema = DFSchema::try_from(self.schema.as_ref().clone())?;
         let predicate = session.create_physical_expr(predicate, &schema)?;
         let initial = AnalysisContext::new(ExprBoundaries::try_new_unbounded(&self.schema)?);
         let Ok(context) = analyze(&predicate, initial, &self.schema) else {
             // DataFusion keeps the residual filter when interval analysis cannot apply.
-            return Ok(unbounded);
+            return Ok(bounds);
         };
-        let mut received = unbounded;
         for boundary in context.boundaries {
             let Some(interval) = boundary.interval else {
                 continue;
             };
-            let bounds = match boundary.column.name() {
-                "received_utc_ns" => Some(interval),
+            let narrowed = match boundary.column.name() {
+                "received_utc_ns" => Some(("received_utc_ns", interval)),
+                "source_cursor" => Some(("source_cursor", interval)),
                 "received_at" => {
                     let convert = |value: &ScalarValue, upper: bool| match value {
                         ScalarValue::TimestampMicrosecond(Some(value), _) => {
@@ -301,21 +337,26 @@ impl SourceProvider {
                         }
                         _ => ScalarValue::UInt64(None),
                     };
-                    Some(Interval::try_new(
-                        convert(interval.lower(), false),
-                        convert(interval.upper(), true),
-                    )?)
+                    Some((
+                        "received_utc_ns",
+                        Interval::try_new(
+                            convert(interval.lower(), false),
+                            convert(interval.upper(), true),
+                        )?,
+                    ))
                 }
                 _ => None,
             };
-            if let Some(bounds) = bounds {
-                received = received.intersect(bounds)?.unwrap_or(Interval::try_new(
+            if let Some((field, interval)) = narrowed {
+                let previous = &bounds[field];
+                let interval = previous.intersect(interval)?.unwrap_or(Interval::try_new(
                     ScalarValue::UInt64(Some(0)),
                     ScalarValue::UInt64(Some(0)),
                 )?);
+                bounds.insert(field, interval);
             }
         }
-        Ok(received)
+        Ok(bounds)
     }
 }
 
@@ -376,10 +417,10 @@ impl TableProvider for SourceProvider {
             origin: self.origin.clone(),
             schema: Arc::new(self.schema.project(&indices)?),
             indices,
-            received: if self.origin.durable() == Some("events") {
-                Some(self.received_bounds(session, filters)?)
+            bounds: if self.origin.durable() == Some("events") {
+                self.bounds(session, filters)?
             } else {
-                None
+                BTreeMap::new()
             },
             fetch: limit,
         }))
@@ -391,7 +432,7 @@ pub(crate) struct SourceData {
     pub(crate) origin: SourceOrigin,
     schema: SchemaRef,
     indices: Vec<usize>,
-    received: Option<Interval>,
+    bounds: BTreeMap<&'static str, Interval>,
     fetch: Option<usize>,
 }
 

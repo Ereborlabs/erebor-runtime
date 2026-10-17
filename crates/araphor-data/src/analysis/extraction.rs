@@ -102,6 +102,8 @@ pub struct AnalysisSelectionV1 {
     pub binding_ids: Vec<[u8; 16]>,
     pub received_from: Bound<u64>,
     pub received_until: Bound<u64>,
+    pub cursor_from: Bound<u64>,
+    pub cursor_until: Bound<u64>,
     pub contexts: Selection<AnalysisContextKeyV1>,
     pub results: Vec<String>,
 }
@@ -122,6 +124,8 @@ impl AnalysisSelectionV1 {
             binding_ids: Vec::new(),
             received_from: Bound::Unbounded,
             received_until: Bound::Unbounded,
+            cursor_from: Bound::Unbounded,
+            cursor_until: Bound::Unbounded,
             contexts: Selection::Exact(Vec::new()),
             results: Vec::new(),
         }
@@ -419,12 +423,20 @@ impl AnalysisSelectionV1 {
     }
 
     pub fn time_range(&self) -> Option<(u64, u64)> {
-        let first = match self.received_from {
+        Self::bounds(self.received_from, self.received_until)
+    }
+
+    pub fn cursor_range(&self) -> Option<(u64, u64)> {
+        Self::bounds(self.cursor_from, self.cursor_until)
+    }
+
+    fn bounds(from: Bound<u64>, until: Bound<u64>) -> Option<(u64, u64)> {
+        let first = match from {
             Bound::Unbounded => 0,
             Bound::Included(value) => value,
             Bound::Excluded(value) => value.checked_add(1)?,
         };
-        let last = match self.received_until {
+        let last = match until {
             Bound::Unbounded => u64::MAX,
             Bound::Included(value) => value,
             Bound::Excluded(value) => value.checked_sub(1)?,
@@ -446,6 +458,31 @@ pub struct AnalysisTableRead<'a> {
 impl AnalysisTableRead<'_> {
     fn projected(&self, name: &str) -> Option<&BTreeSet<usize>> {
         self.requests.get(name).and_then(Option::as_ref)
+    }
+
+    fn needs_event_decode(&self) -> bool {
+        let Some(columns) = self.projected("events") else {
+            return false;
+        };
+        let schema = &AnalysisStore::table_schemas()["events"];
+        columns.iter().any(|index| {
+            !matches!(
+                schema.field(*index).name().as_str(),
+                "tenant_id"
+                    | "node_id"
+                    | "node_boot_id"
+                    | "label_epoch"
+                    | "source_id"
+                    | "source_epoch"
+                    | "cpu_id"
+                    | "source_cursor"
+                    | "commit_revision"
+                    | "ordinal"
+                    | "received_utc_ns"
+                    | "received_at"
+                    | "framed_record"
+            )
+        })
     }
 }
 
@@ -1417,6 +1454,7 @@ impl AnalysisStore {
         {
             return self.reject("the extraction limits must be positive");
         }
+        let decode_events = !selection.binding_ids.is_empty() || read.needs_event_decode();
         let coordinator = self.read_coordinator(control)?;
         let explicit_traces = !selection.traces.is_all() && !selection.traces.as_slice().is_empty();
         let unscoped_notifications = selection.sources.is_all()
@@ -1629,8 +1667,7 @@ impl AnalysisStore {
                     let page_bytes = matches!(mode, AnalysisReadModeV1::Page(_)).then_some(&mut row_bytes);
                     let consumed = match &identity {
                         RawIdentity::Evidence(identity) => {
-                            let decoded = (!selection.binding_ids.is_empty()
-                                || read.requests.contains_key("events"))
+                            let decoded = decode_events
                             .then(|| EvidenceRecord::try_from(record.framed_record.as_slice()))
                             .transpose()?;
                             let selected = selection.binding_ids.is_empty()

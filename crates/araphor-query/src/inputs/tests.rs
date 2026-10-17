@@ -168,6 +168,57 @@ fn values(input: &sdk::Input) -> TestResult<Vec<Vec<ScalarValue>>> {
 }
 
 #[test]
+fn ports_keep_cursor_union() -> TestResult {
+    let fixture = Fixture::new()?;
+    for cursor in 1..=4 {
+        fixture.event(cursor, cursor * 1000)?;
+    }
+    let declared = model(vec![
+        query(
+            "first",
+            "SELECT source_cursor AS value FROM events WHERE source_cursor = 1",
+        ),
+        sdk::InputPort {
+            port: port("frame", vec![("value", sdk::DataType::Binary)]),
+            source: sdk::InputSource::Query(
+                "SELECT framed_record AS value FROM events WHERE source_cursor = 3".into(),
+            ),
+        },
+    ]);
+    let inputs = Arc::new(Inputs::admit(&fixture.engine, &declared)?);
+    let captured = fixture.read(&inputs)?;
+    assert_eq!(
+        values(&captured.inputs[0])?,
+        vec![vec![ScalarValue::UInt64(Some(1))]]
+    );
+    let expected = Vec::<u8>::try_from(&EvidenceRecord {
+        operation: 7,
+        ..Default::default()
+    })?;
+    assert_eq!(
+        values(&captured.inputs[1])?,
+        vec![vec![ScalarValue::Binary(Some(expected))]]
+    );
+    let snapshot = captured.snapshot.as_ref().ok_or("input snapshot absent")?;
+    assert_eq!(snapshot.selection.cursor_range(), Some((1, 3)));
+    assert_eq!(
+        snapshot
+            .witnesses
+            .iter()
+            .map(|witness| witness.cursor)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(
+        snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        4
+    );
+    Ok(())
+}
+
+#[test]
 fn dependent_ports_share_indices() -> TestResult {
     let fixture = Fixture::new()?;
     for cursor in 1..=3 {

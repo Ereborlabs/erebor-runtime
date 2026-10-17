@@ -164,6 +164,129 @@ fn source_scope_and_time() -> TestResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn cursor_scan_keeps_frames() -> TestResult {
+    let fixture = Fixture::new_with_limits(Limits {
+        scan_bytes: 4096,
+        extract_timeout: Duration::from_secs(5),
+        evaluate_timeout: Duration::from_secs(5),
+        ..Default::default()
+    })?;
+    let old = EvidenceRecord {
+        process_lineage_id: vec![1; 128 * 1024].into(),
+        ..Default::default()
+    };
+    fixture.commit_records(&fixture.source, 1, 1000, &[old.clone(), old])?;
+    let record = EvidenceRecord {
+        operation: 7,
+        ..Default::default()
+    };
+    let mut payload = record.encode_to_vec();
+    payload.extend_from_slice(&[0xf8, 0x7f, 0x2a]);
+    let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
+    frame.extend_from_slice(&payload);
+    frame.extend_from_slice(&crc32c::crc32c(&frame).to_be_bytes());
+    assert_eq!(EvidenceRecord::try_from(frame.as_slice())?, record);
+    assert_ne!(Vec::<u8>::try_from(&record)?, frame);
+    fixture.store.accept_validated_batch(
+        fixture.source.clone(),
+        ValidatedEvidenceBatchV1 {
+            cpu_id: 0,
+            first_cursor: 3,
+            last_cursor: 3,
+            intake_utc_ns: 2000,
+            frame_ends: vec![frame.len()],
+            framed_records: frame.clone().into(),
+        },
+    )?;
+    let (plan, sources) = fixture.plan(
+        "SELECT framed_record, source_cursor FROM events WHERE source_cursor >= 3 AND source_cursor <= 3",
+    )?;
+    let session = fixture
+        .engine
+        .session(fixture.selection(), &fixture.control()?, 3000)?;
+    let mut subscription = crate::follow::Subscription::new(
+        session,
+        plan,
+        sources,
+        b"record-source",
+        None,
+        Arc::new(crate::follow::SystemClock::default()),
+        false,
+    )?;
+    let update = subscription
+        .try_next()
+        .await?
+        .ok_or("record update absent")?;
+    let snapshot = &update.snapshot;
+    let batches = update.batches.as_ref().ok_or("record batches absent")?;
+    assert_eq!(cell(batches, 0), ScalarValue::Binary(Some(frame)));
+    assert_eq!(cell(batches, 1), ScalarValue::UInt64(Some(3)));
+    assert_eq!(snapshot.selection.cursor_range(), Some((3, 3)));
+    assert!(snapshot.page.extraction.scanned_bytes < 4096);
+    assert_eq!(snapshot.page.extraction.sources.len(), 1);
+    assert_eq!(
+        snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        3
+    );
+    assert_eq!(snapshot.witnesses.len(), 1);
+    assert_eq!(snapshot.witnesses[0].cursor, 3);
+    let schema = batches[0].schema();
+    assert_eq!(schema.field(0).metadata()["araphor.units"], "bytes");
+    assert!(update.exhausted);
+    assert_eq!(update.positions.len(), 1);
+    assert!(subscription.try_next().await?.is_none());
+    Ok(())
+}
+
+#[test]
+fn raw_projection_skips_decode() -> TestResult {
+    let fixture = Fixture::new()?;
+    // The validated-input test double makes any evidence decode fail.
+    let frame = b"opaque validated input".to_vec();
+    fixture.store.accept_validated_batch(
+        fixture.source.clone(),
+        ValidatedEvidenceBatchV1 {
+            cpu_id: 0,
+            first_cursor: 1,
+            last_cursor: 1,
+            intake_utc_ns: 1000,
+            frame_ends: vec![frame.len()],
+            framed_records: frame.clone().into(),
+        },
+    )?;
+    let control = fixture.control()?;
+    for (sql, expected) in [
+        (
+            "SELECT framed_record FROM events",
+            ScalarValue::Binary(Some(frame)),
+        ),
+        ("SELECT count(*) FROM events", ScalarValue::Int64(Some(1))),
+    ] {
+        let (plan, sources) = fixture.plan(sql)?;
+        let session = fixture
+            .engine
+            .session(fixture.selection(), &control, 2000)?;
+        let (snapshot, batches) = session.execute(plan, &sources)?;
+        assert_eq!(cell(&batches, 0), expected);
+        assert_eq!(snapshot.witnesses.len(), 1);
+    }
+    let (plan, sources) = fixture.plan("SELECT operation FROM events")?;
+    let session = fixture
+        .engine
+        .session(fixture.selection(), &control, 2000)?;
+    assert!(session.execute(plan, &sources).is_err());
+
+    let mut selection = fixture.selection();
+    selection.binding_ids.push([1; 16]);
+    let (plan, sources) = fixture.plan("SELECT framed_record FROM events")?;
+    let session = fixture.engine.session(selection, &control, 2000)?;
+    assert!(session.execute(plan, &sources).is_err());
+    Ok(())
+}
+
 #[test]
 fn unused_source_receipts() -> TestResult {
     let fixture = Fixture::new()?;
@@ -355,23 +478,26 @@ fn scan_bounds_union() -> TestResult {
 }
 
 #[test]
-fn unsupported_filter_capture() -> TestResult {
+fn filter_capture_keeps_cuts() -> TestResult {
     let fixture = Fixture::new()?;
     for (cursor, received) in [(1, 1001), (2, 2001), (3, 3001)] {
         fixture.commit(&fixture.source, cursor, received)?;
     }
-    for (sql, rows) in [
+    for (sql, rows, witnesses) in [
         (
             "SELECT source_cursor FROM events WHERE received_utc_ns >= 3000 OR operation = 7",
+            3,
             3,
         ),
         (
             "SELECT source_cursor FROM events WHERE source_cursor >= 3",
             1,
+            1,
         ),
         (
             "SELECT source_cursor FROM events WHERE ingested_utc_ns >= 3000",
             0,
+            3,
         ),
     ] {
         let (plan, sources) = fixture.plan(sql)?;
@@ -384,7 +510,13 @@ fn unsupported_filter_capture() -> TestResult {
             rows,
             "{sql}"
         );
-        assert_eq!(snapshot.witnesses.len(), 3, "{sql}");
+        assert_eq!(snapshot.witnesses.len(), witnesses, "{sql}");
+        assert_eq!(
+            snapshot.page.extraction.sources[0]
+                .receipt
+                .contiguous_cursor,
+            3
+        );
     }
     let (plan, sources) = fixture.plan("SELECT source_cursor FROM events WHERE received_utc_ns >= 3000 AND CAST(node_id AS BIGINT) > 0")?;
     let session = fixture
@@ -622,7 +754,7 @@ async fn native_ports_share_cut() -> TestResult {
     let mut requests = araphor_data::AnalysisTableRequests::new();
     let bounds = SourceSnapshot::requests(&mut requests, &plans)?;
     assert!(requests.is_empty());
-    assert!(bounds.is_none());
+    assert!(bounds.is_empty());
     let mut all = vec![Arc::clone(&durable), operation];
     all.extend(plans.iter().cloned());
     let mut requests = sources.clone();

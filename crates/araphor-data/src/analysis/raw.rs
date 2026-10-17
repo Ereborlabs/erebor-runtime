@@ -1432,7 +1432,18 @@ impl RawJournal {
                         (u64::from(position.ordinal) + 1).saturating_sub(u64::from(span.ordinal))
                     });
                 let first = span.first + skipped;
-                let last = span.last.min(first.saturating_add(limit as u64 - 1));
+                let (first, last) = if entry.identity.evidence().is_some() {
+                    let Some((lower, upper)) = selection.cursor_range() else {
+                        continue;
+                    };
+                    (first.max(lower), span.last.min(upper))
+                } else {
+                    (first, span.last)
+                };
+                if first > last {
+                    continue;
+                }
+                let last = last.min(first.saturating_add(limit as u64 - 1));
                 return Ok(Some((
                     entry.identity.clone(),
                     entry.commit.kind.cpu(),

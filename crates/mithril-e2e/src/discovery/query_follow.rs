@@ -179,8 +179,8 @@ impl QueryFollowQualification {
                 "native_sql": true,
                 "production_owners": ["AnalysisStore", "Engine", "EvidenceRetentionOwner", "ControlStore", "PolicyDesiredStateOwner"],
                 "cases": cases,
-                "limits": limits_receipt(&Limits::default()),
-                "input_rows_meaning": "Event evidence witnesses captured before SQL filters.",
+                "limits": Limits::default(),
+                "input_rows_meaning": "Event witnesses from the captured source scan.",
                 "input_bytes_meaning": "Data capture charge and separately retained native Arrow allocations.",
                 "received_time_meaning": "Controlled durable intake UTC nanoseconds, not source action time.",
                 "proof_boundary": "Internal production-owner qualification with synthetic evidence and a controlled clock.",
@@ -550,7 +550,7 @@ impl QueryFollowQualification {
         self.cancel(&mut stream, Operation::Replace).await?;
         Ok(json!({"initial": cycle_receipt(&plan, &initial),
             "expired": cycle_receipt(&plan, &expired), "clock_notifications": false,
-            "store_unchanged": true, "deadline_ms": 5000, "heartbeat_ms": 15000}))
+            "store_unchanged": true, "deadline_ms": 5000}))
     }
 
     async fn bounded_window(&self, root: &Path) -> Result<serde_json::Value> {
@@ -699,7 +699,7 @@ impl QueryFollowQualification {
             "input overflow blocked later intake or a bounded query",
         )?;
         Ok(
-            json!({"name": "bounded-window-and-recovery", "result": "PASS", "limits": limits_receipt(&limits),
+            json!({"name": "bounded-window-and-recovery", "result": "PASS", "limits": limits,
             "historical_frame_bytes": history_bytes, "initial": cycle_receipt(&moving, &initial),
             "replacement": cycle_receipt(&moving, &added), "after_error": snapshot_receipt(&recovered),
             "output_before": cycle_receipt(&counts, &output_before), "output_error": output_error,
@@ -1210,7 +1210,7 @@ impl QueryFollowQualification {
         )?;
         self.cancel(&mut recovered, Operation::Append).await?;
         Ok(json!({"name": "lazy-demand-and-drop", "result": "PASS",
-            "limits": limits_receipt(&limits), "owner_released_on_drop": true,
+            "limits": limits, "owner_released_on_drop": true,
             "retention_removed_before_first_poll": retained.removed_records,
             "no_unpolled_evaluation": true,
             "initial": initial_receipt,
@@ -1612,16 +1612,6 @@ fn snapshot_receipt(snapshot: &(Arc<ArrowSnapshot>, Vec<RecordBatch>)) -> serde_
 fn cycle_receipt(plan: &Prepared, cycle: &Cycle) -> serde_json::Value {
     json!({"updates": cycle.results.iter().map(|result| result_receipt(plan, result)).collect::<Vec<_>>(),
         "cursor": cycle.cursor, "clock_changed": cycle.clock_changed})
-}
-
-fn limits_receipt(limits: &Limits) -> serde_json::Value {
-    json!({"scan_bytes": limits.scan_bytes, "input_bytes": limits.input_bytes, "output_rows": limits.output_rows,
-        "output_bytes": limits.output_bytes, "extract_timeout_ms": limits.extract_timeout.as_millis(),
-        "evaluate_timeout_ms": limits.evaluate_timeout.as_millis(), "global_evaluations": limits.global_evaluations,
-        "tenant_evaluations": limits.tenant_evaluations, "global_streams": limits.global_streams,
-        "tenant_streams": limits.tenant_streams, "input_capacity": limits.input_capacity,
-        "output_capacity": limits.output_capacity, "replace_interval_ms": 500,
-        "heartbeat_ms": 15000})
 }
 
 #[cfg(test)]

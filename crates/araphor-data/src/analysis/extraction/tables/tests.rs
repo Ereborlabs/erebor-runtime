@@ -21,7 +21,6 @@ fn schema_contract() -> TestResult {
         let bytes = serde_json::to_vec(&value)?;
         hashes.insert(name.clone(), format!("{:x}", Sha256::digest(bytes)));
     }
-    // These hashes come from the public schemas before the field declarations changed.
     let expected = [
         (
             "behaviors",
@@ -49,7 +48,7 @@ fn schema_contract() -> TestResult {
         ),
         (
             "events",
-            "94d3faecf3ddf86a285c7fa1201ba8aa03800b1d138e4a47823fe50786275815",
+            "0a18c5edf190bfb425009eebb679e4c672eb070308781f1285de9634f502ab39",
         ),
         (
             "findings",

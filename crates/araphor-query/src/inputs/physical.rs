@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -71,7 +72,8 @@ impl Inputs {
             physical.push(session.physical(&input.plan, &state).await?);
         }
         let mut requests = self.sources.clone();
-        let scopes = self.scopes(session.selection(), &physical, &mut requests)?;
+        let mut bounds = BTreeMap::new();
+        let scopes = self.scopes(session.selection(), &physical, &mut requests, &mut bounds)?;
         if self.plans.iter().any(|port| port.window.is_some()) {
             if let Some(Some(columns)) = requests.get_mut("events") {
                 columns.insert(
@@ -137,7 +139,7 @@ impl Inputs {
             .capture(
                 Arc::clone(&source),
                 requests,
-                None,
+                bounds,
                 ReadMode::Snapshot,
                 Arc::clone(&permit),
             )

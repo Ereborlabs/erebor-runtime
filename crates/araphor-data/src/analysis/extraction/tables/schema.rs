@@ -74,7 +74,9 @@ impl Capture<'_> {
                         "microseconds since Unix epoch"
                     } else if field.name().ends_with("_ns") {
                         "nanoseconds"
-                    } else if field.name().ends_with("_bytes") || field.name() == "input_bytes" {
+                    } else if field.name().ends_with("_bytes")
+                        || matches!(field.name().as_str(), "input_bytes" | "framed_record")
+                    {
                         "bytes"
                     } else {
                         ""
@@ -83,6 +85,11 @@ impl Capture<'_> {
                         "No value is recorded for this row."
                     } else {
                         ""
+                    };
+                    let description = if field.name() == "framed_record" {
+                        "Original length-prefixed evidence bytes with CRC32C."
+                    } else {
+                        description
                     };
                     field.with_metadata(HashMap::from([
                         (

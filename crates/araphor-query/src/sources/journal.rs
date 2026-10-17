@@ -32,7 +32,7 @@ pub(crate) struct JournalExec {
     columns: Vec<usize>,
     positions: [usize; 2],
     requests: Arc<AnalysisTableRequests>,
-    received: Option<Interval>,
+    bounds: BTreeMap<&'static str, Interval>,
     properties: Arc<PlanProperties>,
 }
 
@@ -74,7 +74,7 @@ impl JournalExec {
             columns,
             positions,
             requests,
-            received: source.received.clone(),
+            bounds: source.bounds.clone(),
             properties,
         })
     }
@@ -98,7 +98,7 @@ impl JournalExec {
             columns: self.columns.clone(),
             positions: self.positions,
             requests: Arc::clone(&self.requests),
-            received: self.received.clone(),
+            bounds: self.bounds.clone(),
             retained: Vec::new(),
             frontier: None,
             meta: None,
@@ -155,7 +155,7 @@ pub(crate) struct Changes {
     columns: Vec<usize>,
     positions: [usize; 2],
     requests: Arc<AnalysisTableRequests>,
-    received: Option<Interval>,
+    bounds: BTreeMap<&'static str, Interval>,
     retained: Vec<Chunk>,
     frontier: Option<StorePositionV1>,
     meta: Option<AnalysisStoreMetaV1>,
@@ -199,14 +199,14 @@ impl Changes {
             Arc::clone(session.memory()),
         );
         let requests = Arc::clone(&self.requests);
-        let received = self.received.clone();
+        let bounds = self.bounds.clone();
         let mode = self.frontier.map_or(ReadMode::Snapshot, ReadMode::Changes);
         let worker = Arc::clone(&stage);
         let capture_permit = Arc::clone(&permit);
         let mut captured = Engine::blocking(stage, move || {
             let _permit = capture_permit;
             capture
-                .read(&requests, received.as_ref(), mode, &worker)
+                .read(&requests, &bounds, mode, &worker)
                 .context(SqlSnafu)
         })
         .await?;

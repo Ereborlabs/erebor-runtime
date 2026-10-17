@@ -324,7 +324,7 @@ impl SourceSnapshot {
     pub(crate) fn read(
         &self,
         requests: &AnalysisTableRequests,
-        received: Option<&Interval>,
+        bounds: &BTreeMap<&'static str, Interval>,
         mode: ReadMode,
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<Captured> {
@@ -351,7 +351,7 @@ impl SourceSnapshot {
         };
         let mut selection = Self::prune_selection(
             Self::selection(&self.selection, requests).map_err(Self::data_error)?,
-            received,
+            bounds,
         );
         if self
             .inputs

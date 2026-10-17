@@ -227,6 +227,61 @@ adds 642 lines against `7b7b407a`. The required 6,000-line deletion remains
 source sweep, input reader, and seal scheduler. Their replacement by actual
 Query input subscriptions remains **Not done**.
 
+### Original evidence frames in native scans
+
+Implementation and selected verification: **Done** for the source contract.
+The events table has a final Binary field named framed_record. The field
+contains the original length-prefixed evidence frame and CRC32C. Unknown
+protobuf fields remain. The source does not encode the decoded record again.
+
+SourceProvider uses native DataFusion interval analysis for received time and
+source cursor predicates. One interval map replaces the separate time value.
+SourceSnapshot unions bounds from each native scan. Package input ports use
+the same union for one capture and retain their separate scopes. Data clips
+the selected raw spans before reading bytes. Caller bounds remain in effect.
+Cursor bounds default to Unbounded. Source receipts and gaps retain the
+original captured cut. Native residual filters remain in physical execution.
+
+Data decides once per capture whether selected fields need evidence decoding.
+Raw frames, stored coordinates, and zero-column counts skip that work. Parsed
+fields and binding filters retain the existing evidence decoder. A test double
+that cannot decode proves both paths. No new parser or input wrapper is added.
+
+The final selected checks pass 152 Query cases and 16 Data table cases.
+The tests cover a finite
+Subscription with an unknown protobuf field, excluded old segments that
+exceed the scan budget, input-port bound unions, raw page positions, empty
+page progress, residual COUNT filters, unchanged-result receipts, and catalog
+metadata. The records are `/tmp/araphor-discovery-query-record-source-tests9.json`
+and `/tmp/araphor-discovery-query-record-source-data3.json`.
+
+The initial checks expose old expectations that all cursor-filtered rows are
+captured. The page and COUNT cases now use unsupported arithmetic predicates
+to retain their original residual-filter proof. They also check the native
+cursor pruning behavior. Catalog snapshots include the appended frame field.
+The Data schema check confirms that only the events schema changes. No
+assertion is removed to accept a failed result.
+
+Strict Data, Query, Analysis, Control, and E2E Clippy passes. The record is
+`/tmp/araphor-discovery-query-record-source-lint3.json`. The E2E follow contract
+passes all eight behavior cases. Its proof now serializes the actual Limits
+value. The obsolete heartbeat and replacement-delay fields are deleted. A
+final E2E Clippy check passes. The records are
+`/tmp/araphor-discovery-query-record-source-e2e3.json` and
+`/tmp/araphor-discovery-query-record-source-lint5.json`. The first E2E selector
+matches no tests and is not counted as proof. No full workspace CI
+or benchmark is run, as instructed. An obsolete generated Analysis test
+binary is removed before the Data test build. The cleanup record is
+`/tmp/araphor-query-record-source-cache-cleanup1.json`.
+
+This deliverable adds 96 nonblank production Rust lines. The complete rewrite
+adds 738 lines against `7b7b407a`. The required 6,000-line deletion remains
+**Not done**. The counter verifies 710 Rust source hashes. Its record is
+`/tmp/araphor-query-record-source-count1.json`. Discovery still uses its
+separate input row codec, source sweep, replay reader, and seal scheduler.
+Their replacement by actual Query subscriptions remains **Not done**. This
+source change does not complete that replacement.
+
 ### Native function registration and optional operator memory
 
 Implementation and selected verification: **Done**.

@@ -34,7 +34,9 @@ impl Fixture {
         }
     }
 
-    fn requests(plans: &[Arc<dyn ExecutionPlan>]) -> (AnalysisTableRequests, Option<Interval>) {
+    fn requests(
+        plans: &[Arc<dyn ExecutionPlan>],
+    ) -> (AnalysisTableRequests, BTreeMap<&'static str, Interval>) {
         let mut requests = BTreeMap::from([("events".to_owned(), None)]);
         let bounds = SourceSnapshot::requests(&mut requests, plans).unwrap();
         (requests, bounds)
@@ -78,10 +80,10 @@ async fn native_fixed_time_bounds() {
             .await;
         let (requests, bounds) = Fixture::requests(std::slice::from_ref(&physical));
         assert!(requests.contains_key("events"));
-        let bounds = bounds.unwrap();
-        assert_eq!(bounds.lower(), &ScalarValue::UInt64(Some(1000)));
-        assert_eq!(bounds.upper(), &ScalarValue::UInt64(Some(2999)));
-        let selected = SourceSnapshot::prune_selection(selection, Some(&bounds));
+        let interval = &bounds["received_utc_ns"];
+        assert_eq!(interval.lower(), &ScalarValue::UInt64(Some(1000)));
+        assert_eq!(interval.upper(), &ScalarValue::UInt64(Some(2999)));
+        let selected = SourceSnapshot::prune_selection(selection, &bounds);
         assert_eq!(selected.received_from, Bound::Included(1000));
         assert_eq!(selected.received_until, Bound::Included(2999));
     }
@@ -100,23 +102,49 @@ async fn native_bounds_keep_scope() {
     ];
     let bounded = fixture.plan(sql, parameters).await;
     let (_, bounds) = Fixture::requests(std::slice::from_ref(&bounded));
-    let selected = SourceSnapshot::prune_selection(selection, bounds.as_ref());
+    let selected = SourceSnapshot::prune_selection(selection, &bounds);
     assert_eq!(selected.received_from, Bound::Excluded(1500));
     assert_eq!(selected.received_until, Bound::Excluded(2500));
     let unbounded = fixture.plan("SELECT count(*) FROM events", vec![]).await;
     assert_eq!(Fixture::requests(std::slice::from_ref(&bounded)).1, bounds);
     let (_, shared) = Fixture::requests(&[Arc::clone(&bounded), Arc::clone(&unbounded)]);
     assert_eq!(
-        SourceSnapshot::prune_selection(AnalysisSelectionV1::tenant([1; 16]), shared.as_ref())
-            .time_range(),
+        SourceSnapshot::prune_selection(AnalysisSelectionV1::tenant([1; 16]), &shared).time_range(),
         Some((0, u64::MAX))
     );
     let physical: Arc<dyn ExecutionPlan> = UnionExec::try_new(vec![bounded, unbounded]).unwrap();
     let (_, bounds) = Fixture::requests(std::slice::from_ref(&physical));
     let selection = AnalysisSelectionV1::tenant([1; 16]);
-    let selected = SourceSnapshot::prune_selection(selection, bounds.as_ref());
+    let selected = SourceSnapshot::prune_selection(selection, &bounds);
     assert_eq!(selected.received_from, Bound::Unbounded);
     assert_eq!(selected.received_until, Bound::Unbounded);
+}
+
+#[tokio::test]
+async fn cursor_bounds_keep_scope() {
+    let fixture = Fixture::new();
+    let filtered = fixture
+        .plan(
+            "SELECT framed_record FROM events WHERE source_cursor >= $1 AND source_cursor < $2",
+            vec![ScalarValue::UInt64(Some(3)), ScalarValue::UInt64(Some(7))],
+        )
+        .await;
+    let (_, bounds) = Fixture::requests(std::slice::from_ref(&filtered));
+    let mut selection = AnalysisSelectionV1::tenant([1; 16]);
+    selection.cursor_from = Bound::Excluded(3);
+    selection.cursor_until = Bound::Excluded(6);
+    let selected = SourceSnapshot::prune_selection(selection.clone(), &bounds);
+    assert_eq!(selected.cursor_range(), Some((4, 5)));
+    assert_eq!(selected.cursor_from, selection.cursor_from);
+    assert_eq!(selected.cursor_until, selection.cursor_until);
+    assert_eq!(selected.time_range(), selection.time_range());
+
+    let unfiltered = fixture
+        .plan("SELECT framed_record FROM events", vec![])
+        .await;
+    let (_, bounds) = Fixture::requests(&[filtered, unfiltered]);
+    let selected = SourceSnapshot::prune_selection(AnalysisSelectionV1::tenant([1; 16]), &bounds);
+    assert_eq!(selected.cursor_range(), Some((0, u64::MAX)));
 }
 
 #[tokio::test]
@@ -148,7 +176,7 @@ async fn local_source_has_no_bounds() {
     let mut requests = AnalysisTableRequests::new();
     let bounds = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical)).unwrap();
     assert!(requests.is_empty());
-    assert!(bounds.is_none());
+    assert!(bounds.is_empty());
 }
 
 #[tokio::test]

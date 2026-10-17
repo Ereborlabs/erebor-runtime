@@ -40,8 +40,7 @@ impl Capture<'_> {
             if self.read.projected("events").is_none() {
                 return Ok(true);
             }
-            let decoded = decoded.ok_or_else(|| invalid("a selected event has no decoded evidence"))?;
-            let context = decoded.decision_context.as_ref();
+            let context = decoded.and_then(|value| value.decision_context.as_ref());
             let exact = context.and_then(|value| value.exact_file_object.as_ref());
         }
         fields {
@@ -57,26 +56,26 @@ impl Capture<'_> {
             ordinal => UInt32(false): Some(record.position.ordinal),
             received_utc_ns => UInt64(false): Some(received_utc_ns),
             received_at => TimestampMicrosecond(false): Some(i64::try_from(received_utc_ns/1000).map_err(|_|overflow())?),
-            observed_boottime_ns => UInt64(false): Some(decoded.observed_boottime_ns),
-            ingested_utc_ns => Int64(false): Some(decoded.ingested_utc_ns),
-            coverage_interval_id => Binary(false): Some(&decoded.coverage_interval_id),
-            profile_generation_ref_id => UInt64(true): decoded.profile_generation_ref_id,
-            task_cookie => UInt64(false): Some(decoded.task_cookie),
-            process_lineage_id => Binary(false): Some(&decoded.process_lineage_id),
-            authority_domain_id => Binary(false): Some(&decoded.authority_domain_id),
-            execution_set_id => Binary(false): Some(&decoded.execution_set_id),
-            exact_object_id => Binary(false): Some(&decoded.exact_object_id),
-            destination_id => UInt64(false): Some(decoded.destination_id),
-            policy_rule_id => UInt64(false): Some(decoded.policy_rule_id),
-            reason => UInt32(false): Some(decoded.reason),
-            decision => UInt32(false): Some(decoded.decision),
-            effect_family => UInt32(false): Some(decoded.effect_family),
-            operation => UInt32(false): Some(decoded.operation),
-            configured_errno => Int32(false): Some(decoded.configured_errno),
-            kernel_result => Int32(false): Some(decoded.kernel_result),
-            temporal_coverage => Int32(false): Some(decoded.temporal_coverage),
-            target_task_cookie => UInt64(true): decoded.target_task_cookie,
-            operation_argument => UInt32(true): decoded.operation_argument,
+            observed_boottime_ns => UInt64(false): decoded.map(|value| value.observed_boottime_ns),
+            ingested_utc_ns => Int64(false): decoded.map(|value| value.ingested_utc_ns),
+            coverage_interval_id => Binary(false): decoded.map(|value| value.coverage_interval_id.as_ref()),
+            profile_generation_ref_id => UInt64(true): decoded.and_then(|value| value.profile_generation_ref_id),
+            task_cookie => UInt64(false): decoded.map(|value| value.task_cookie),
+            process_lineage_id => Binary(false): decoded.map(|value| value.process_lineage_id.as_ref()),
+            authority_domain_id => Binary(false): decoded.map(|value| value.authority_domain_id.as_ref()),
+            execution_set_id => Binary(false): decoded.map(|value| value.execution_set_id.as_ref()),
+            exact_object_id => Binary(false): decoded.map(|value| value.exact_object_id.as_ref()),
+            destination_id => UInt64(false): decoded.map(|value| value.destination_id),
+            policy_rule_id => UInt64(false): decoded.map(|value| value.policy_rule_id),
+            reason => UInt32(false): decoded.map(|value| value.reason),
+            decision => UInt32(false): decoded.map(|value| value.decision),
+            effect_family => UInt32(false): decoded.map(|value| value.effect_family),
+            operation => UInt32(false): decoded.map(|value| value.operation),
+            configured_errno => Int32(false): decoded.map(|value| value.configured_errno),
+            kernel_result => Int32(false): decoded.map(|value| value.kernel_result),
+            temporal_coverage => Int32(false): decoded.map(|value| value.temporal_coverage),
+            target_task_cookie => UInt64(true): decoded.and_then(|value| value.target_task_cookie),
+            operation_argument => UInt32(true): decoded.and_then(|value| value.operation_argument),
             context_schema_version => UInt32(true): context.map(|value|value.schema_version),
             kernel_sequence => UInt64(true): context.map(|value|value.original_kernel_sequence),
             process_instance_id => Binary(true): context.map(|value|value.process_instance_id.as_slice()),
@@ -96,6 +95,7 @@ impl Capture<'_> {
             inode_generation => UInt64(true): exact.map(|value|value.inode_generation),
             mount_namespace_inode => UInt32(true): exact.map(|value|value.mount_namespace_inode),
             filesystem_device => UInt32(true): exact.map(|value|value.filesystem_device),
+            framed_record => Binary(false): Some(record.framed_record.as_slice()),
         }
     }
 }

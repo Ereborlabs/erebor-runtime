@@ -192,8 +192,15 @@ async fn unchanged_result_advances_cursor() {
             .iter()
             .map(|witness| witness.cursor)
             .collect::<Vec<_>>(),
-        [1, 2]
+        [1]
     );
+    assert_eq!(
+        completed.snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        2
+    );
+    assert_eq!(completed.snapshot.page.extraction.scanned_bytes, 0);
 
     let other = EvidenceIntakeIdentityV1 {
         source_id: [8; 16],

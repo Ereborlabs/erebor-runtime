@@ -151,7 +151,7 @@ mod tests {
         );
         let captured = source.read(
             &BTreeMap::new(),
-            None,
+            &BTreeMap::new(),
             super::super::ReadMode::Snapshot,
             &control,
         )?;

@@ -664,7 +664,7 @@ async fn filtered_page_progress() {
     let fixture = Fixture::new(Limits::default());
     fixture.commit(&fixture.source, 1, 257, 1_000_000_000);
     let mut subscription = fixture.subscribe(
-        "SELECT source_cursor FROM events WHERE source_cursor > 256",
+        "SELECT source_cursor FROM events WHERE source_cursor % 258 > 256",
         TestClock::new(2_000_000_000),
         None,
         true,
@@ -689,6 +689,19 @@ async fn filtered_page_progress() {
         }
     );
     assert!(second.exhausted);
+
+    let mut pruned = fixture.subscribe(
+        "SELECT source_cursor FROM events WHERE source_cursor > 256",
+        TestClock::new(2_000_000_000),
+        None,
+        true,
+    );
+    let selected = next(&mut pruned).await;
+    assert_eq!(values(&selected, 0), vec![ScalarValue::UInt64(Some(257))]);
+    assert_eq!(selected.snapshot.witnesses.len(), 1);
+    assert_eq!(selected.positions, second.positions);
+    assert_eq!(selected.cursor.position(), second.cursor.position());
+    assert!(selected.exhausted);
 }
 
 #[tokio::test]
@@ -1681,7 +1694,7 @@ async fn journal_keeps_residual_filter() {
     fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
     let clock = TestClock::new(2_000_000_000);
     let mut subscription = fixture.subscribe(
-        "SELECT count(*) AS total FROM events WHERE source_cursor > 1",
+        "SELECT count(*) AS total FROM events WHERE source_cursor % 5 > 1",
         clock,
         None,
         true,

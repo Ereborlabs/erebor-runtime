@@ -800,10 +800,10 @@ impl Session {
             Read::Page(after) => ReadMode::Page(after),
         };
         let mut requests = sources.clone();
-        let received = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical))
+        let bounds = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical))
             .context(SqlSnafu)?;
         let captured = self
-            .capture(snapshot, requests, received, mode, Arc::clone(&permit))
+            .capture(snapshot, requests, bounds, mode, Arc::clone(&permit))
             .await?;
         let control = Arc::new(self.control.within(self.engine.limits.evaluate_timeout)?);
         let stream = execute_stream(physical, context).context(SqlSnafu)?;
@@ -814,16 +814,14 @@ impl Session {
         &self,
         snapshot: Arc<SourceSnapshot>,
         requests: AnalysisTableRequests,
-        received: Option<Interval>,
+        bounds: BTreeMap<&'static str, Interval>,
         mode: ReadMode,
         permit: Arc<Permit>,
     ) -> Result<Arc<ArrowSnapshot>> {
         let control = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
         Engine::blocking(control, move || {
             let _permit = permit;
-            snapshot
-                .capture(&requests, received, mode)
-                .context(SqlSnafu)
+            snapshot.capture(&requests, bounds, mode).context(SqlSnafu)
         })
         .await
     }

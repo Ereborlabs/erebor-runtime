@@ -779,8 +779,8 @@ The count removes one production line from b4d9c033. The full change adds
 [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) returns a
 native DataSourceExec with an immutable SourceData descriptor. The descriptor
 contains its provider origin, exact projected schema and indices, conservative
-time interval, and fetch limit. Only durable origins supply canonical source
-requests, time pruning, journal capability, and raw positions. Planning reads
+time and cursor intervals, and fetch limit. Only durable origins supply canonical source
+requests, scan bounds, journal capability, and raw positions. Planning reads
 no SourceSnapshot and changes
 no projection or interval registry. Capture collects those facts from the
 optimized physical tree. A retained plan has no tenant snapshot or Arrow rows.
@@ -796,6 +796,57 @@ The former SnapshotPartition and both planning mutexes are deleted.
 SourceData keeps native logical projection and residual filters. Its required
 physical projection hook returns None, so native ProjectionExec remains above
 the source. This preserves the exact source and journal schema pair.
+
+The `events.framed_record` Binary column contains the original evidence frame.
+The frame has a big-endian length, protobuf payload, and CRC32C. The source
+does not encode a decoded record again. Unknown protobuf fields remain in the
+column. The column is last in the source schema. Native `SELECT *` includes it.
+
+[SourceProvider::bounds](../../crates/araphor-query/src/sources/mod.rs) receives native pushed filters
+  -> DataFusion analyze returns conservative native intervals
+  -> [SourceSnapshot::requests](../../crates/araphor-query/src/sources/mod.rs) unions time and cursor intervals from the physical scans
+  -> [SourceSnapshot::prune_selection](../../crates/araphor-query/src/sources/mod.rs) intersects these intervals with the caller's selection
+  -> [RawJournal::select_position](../../crates/araphor-data/src/analysis/raw.rs) clips evidence spans before reading their frames
+  -> [Capture::event](../../crates/araphor-data/src/analysis/extraction/tables/events.rs) copies the requested original frames into Arrow
+  -> [SourceData::open](../../crates/araphor-query/src/sources/mod.rs) returns those batches to native execution
+
+Cursor filters default to Unbounded. They apply to evidence sources. Native
+residual filters remain in the plan. An unfiltered scan in a shared capture
+keeps the complete cursor range. Package input ports union their scan bounds
+for one capture and retain their separate input scopes. Source receipts and
+gap records still describe the original captured source cut.
+
+[AnalysisTableRead::needs_event_decode](../../crates/araphor-data/src/analysis/extraction.rs)
+checks the requested fields once per capture. Raw frames, stored coordinates,
+and zero-column counts do not require evidence decoding. Parsed fields and
+binding filters still call EvidenceRecord::try_from. The row builder rejects
+a missing value for a required parsed field. The
+[projection case](../../crates/araphor-query/src/sources/tests.rs) uses a
+validated-input test double that cannot decode. Raw and COUNT queries succeed.
+A parsed-field query and a binding-filtered raw query reject that input.
+
+The [frame case](../../crates/araphor-query/src/sources/tests.rs) consumes a
+finite Subscription. It checks exact original bytes with an unknown protobuf
+field. Its scan budget cannot fit the older records. The
+[input case](../../crates/araphor-query/src/inputs/tests.rs) checks two ports
+with disjoint cursor predicates, a binary frame, and the original receipt.
+The [page cases](../../crates/araphor-query/src/follow/tests.rs) retain empty
+page progress and unsupported residual filters. They also check that a native
+cursor predicate skips the first raw page. The
+[unchanged-result case](../../crates/araphor-query/src/follow/tests/runtime.rs)
+checks an advanced source cut without reading an excluded new frame.
+
+Discovery does not yet use these input batches. Its source sweep, input row
+codec, replay reader, and seal scheduler remain separate. Their replacement
+by Query subscriptions is **Not done**.
+
+The source contract passes 152 Query cases and 16 Data table cases. The E2E
+follow contract passes eight behavior cases. Strict affected-crate Clippy and
+formatting pass. The E2E proof serializes the actual Limits value. The old
+heartbeat and replacement-delay fields are deleted. The verification record
+is `/tmp/araphor-query-record-source-qualification1.json`. No full workspace
+CI or benchmark is run. This source contract does not close the production
+reduction target.
 
 The current source change passes all 104 Query cases, 37 model cases, and the
 E2E query-follow contract. Strict Query Clippy and scoped formatting pass.
@@ -1219,7 +1270,7 @@ use this path.
 [SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) starts the subscription
   -> [Subscribe::runtime](../../crates/araphor-query/src/planner/subscription.rs) wraps the admitted native SQL plan
   -> native SessionState runs its logical optimizer and physical planner
-  -> [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) supplies the native execution plan with its immutable projection and time bounds
+  -> [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) supplies the native execution plan with its immutable projection and scan bounds
   -> [SubscriptionPlanner](../../crates/araphor-query/src/planner/subscription.rs) creates JournalExec from the actual native scan
   -> the registered ExtensionPlanner returns [SubscribeExec](../../crates/araphor-query/src/stream/physical.rs) with the native SQL child and the journal child
   -> native physical optimizers process that plan and both children

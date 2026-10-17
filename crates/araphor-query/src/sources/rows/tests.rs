@@ -81,7 +81,7 @@ fn witnesses_keep_source_receipt() -> TestResult {
             ("events".to_owned(), None),
             ("context_versions".to_owned(), None),
         ]),
-        None,
+        &BTreeMap::new(),
         super::ReadMode::Snapshot,
         &control,
     )?;
@@ -296,7 +296,12 @@ fn catalog_native_preflight() -> TestResult {
         "catalog".to_owned(),
         Some(indices.iter().copied().collect()),
     )]);
-    let captured = source.read(&requests, None, super::ReadMode::Snapshot, &control)?;
+    let captured = source.read(
+        &requests,
+        &BTreeMap::new(),
+        super::ReadMode::Snapshot,
+        &control,
+    )?;
     let batches = captured.project(
         &super::SourceOrigin::Durable("catalog".into()),
         &indices,
@@ -390,7 +395,12 @@ fn catalog_native_preflight() -> TestResult {
         Arc::clone(&memory),
     );
     let error = source
-        .read(&requests, None, super::ReadMode::Snapshot, &control)
+        .read(
+            &requests,
+            &BTreeMap::new(),
+            super::ReadMode::Snapshot,
+            &control,
+        )
         .err()
         .ok_or("catalog capacity must be checked before allocation")?;
     assert!(
@@ -399,7 +409,7 @@ fn catalog_native_preflight() -> TestResult {
     );
     let captured = source.read(
         &BTreeMap::from([("catalog".to_owned(), Some(BTreeSet::new()))]),
-        None,
+        &BTreeMap::new(),
         super::ReadMode::Snapshot,
         &control,
     )?;
@@ -424,36 +434,36 @@ fn catalog_native_preflight() -> TestResult {
 fn catalog_content_contract() -> TestResult {
     let expected: [[u8; 32]; 8] = [
         [
-            141, 121, 148, 19, 109, 17, 178, 3, 54, 140, 176, 87, 201, 43, 252, 250, 31, 30, 39,
-            57, 127, 29, 63, 195, 91, 148, 168, 168, 148, 241, 106, 231,
+            233, 2, 240, 200, 37, 198, 202, 3, 135, 166, 39, 47, 137, 102, 216, 161, 220, 163, 255,
+            142, 72, 15, 219, 83, 51, 149, 198, 125, 3, 32, 56, 208,
         ],
         [
-            118, 12, 125, 97, 149, 64, 175, 65, 28, 249, 177, 146, 238, 122, 77, 160, 24, 62, 170,
-            15, 62, 184, 14, 77, 10, 135, 20, 192, 35, 34, 170, 163,
+            194, 44, 62, 142, 105, 159, 193, 50, 50, 46, 86, 248, 189, 245, 58, 19, 195, 202, 255,
+            241, 146, 83, 96, 5, 223, 50, 90, 138, 100, 161, 95, 222,
         ],
         [
-            196, 126, 9, 143, 225, 198, 211, 144, 152, 8, 189, 1, 133, 132, 123, 199, 111, 136, 17,
-            70, 200, 39, 110, 243, 104, 93, 65, 233, 60, 190, 134, 98,
+            115, 217, 142, 97, 119, 20, 70, 82, 159, 124, 50, 56, 21, 142, 197, 158, 97, 32, 42,
+            102, 144, 69, 243, 92, 19, 199, 196, 228, 29, 37, 217, 188,
         ],
         [
-            18, 189, 79, 203, 160, 230, 14, 167, 131, 78, 127, 11, 108, 104, 230, 218, 17, 215,
-            167, 100, 57, 254, 34, 180, 72, 107, 149, 98, 54, 149, 56, 82,
+            195, 113, 214, 115, 7, 152, 164, 79, 234, 212, 115, 79, 71, 126, 172, 54, 222, 120,
+            128, 6, 137, 16, 29, 31, 54, 150, 244, 248, 164, 249, 153, 17,
         ],
         [
-            33, 190, 57, 8, 21, 202, 134, 139, 171, 45, 227, 226, 16, 177, 111, 19, 147, 255, 173,
-            214, 70, 250, 222, 231, 37, 141, 234, 15, 118, 211, 55, 117,
+            114, 233, 173, 119, 55, 184, 71, 10, 87, 124, 214, 173, 31, 135, 228, 172, 97, 32, 143,
+            8, 158, 230, 69, 209, 19, 238, 169, 67, 39, 169, 32, 249,
         ],
         [
-            187, 150, 127, 202, 137, 11, 81, 255, 180, 176, 144, 17, 97, 27, 2, 233, 23, 30, 151,
-            77, 90, 94, 169, 94, 65, 125, 123, 49, 143, 154, 119, 234,
+            141, 229, 156, 26, 202, 183, 112, 154, 180, 227, 214, 218, 106, 185, 28, 84, 89, 187,
+            92, 84, 198, 4, 159, 248, 237, 156, 43, 103, 202, 177, 117, 23,
         ],
         [
-            163, 227, 194, 223, 215, 16, 133, 248, 185, 97, 72, 117, 78, 221, 174, 9, 83, 221, 173,
-            92, 19, 38, 152, 199, 184, 28, 207, 85, 40, 124, 230, 222,
+            82, 177, 31, 105, 128, 156, 32, 224, 129, 93, 125, 101, 165, 213, 236, 30, 138, 238,
+            20, 211, 151, 248, 79, 253, 120, 189, 160, 60, 33, 113, 113, 33,
         ],
         [
-            82, 160, 160, 223, 52, 84, 164, 45, 51, 222, 83, 62, 31, 197, 89, 206, 251, 139, 251,
-            191, 216, 92, 183, 179, 12, 94, 67, 87, 204, 4, 61, 155,
+            88, 168, 122, 197, 126, 14, 117, 67, 242, 96, 120, 63, 64, 73, 238, 196, 145, 211, 9,
+            193, 69, 13, 89, 51, 93, 108, 153, 144, 12, 52, 142, 12,
         ],
     ];
     use std::hash::Hash as _;
@@ -461,6 +471,7 @@ fn catalog_content_contract() -> TestResult {
     use araphor_data::AnalysisExtractLimits;
     use datafusion::common::ScalarValue;
 
+    let mut observed = Vec::new();
     for enabled in 0..8u8 {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
@@ -494,7 +505,7 @@ fn catalog_content_contract() -> TestResult {
         let indices = (0..schema.fields().len()).collect::<Vec<_>>();
         let captured = source.read(
             &BTreeMap::from([("catalog".into(), Some(indices.iter().copied().collect()))]),
-            None,
+            &BTreeMap::new(),
             super::ReadMode::Snapshot,
             &control,
         )?;
@@ -522,11 +533,7 @@ fn catalog_content_contract() -> TestResult {
             }
         }
         let digest = hash.finish_digest();
-        assert_eq!(
-            digest,
-            expected[usize::from(enabled)],
-            "feature mask {enabled}"
-        );
+        observed.push(digest);
         let borrowed = Arc::clone(batch.column(2));
         drop(batches);
         drop(captured);
@@ -541,6 +548,7 @@ fn catalog_content_contract() -> TestResult {
         drop(borrowed);
         drop(memory.reserve_input(capacity)?);
     }
+    assert_eq!(observed, expected);
     Ok(())
 }
 
@@ -797,7 +805,7 @@ fn retirement_map_charges_once() -> TestResult {
     );
     let captured = source.read(
         &BTreeMap::from([("events".into(), Some(BTreeSet::new()))]),
-        None,
+        &BTreeMap::new(),
         super::ReadMode::Changes(frontier),
         &control,
     )?;
