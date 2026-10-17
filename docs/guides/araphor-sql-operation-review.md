@@ -556,6 +556,19 @@ memory pool, and disabled spill storage. Engine supplies selected standard
 scalar, aggregate, and window functions. The engine registers no private
 numeric or time-bucket function. Fixed buckets use native `date_bin`.
 
+Engine::new constructs the admitted functions through native factories before
+one SessionState build. It does not build all default functions or rebuild
+the state to filter them. Native table factories, file formats, expression
+planners, and optimizer order remain. Native registration retains aliases and
+applies configuration updates. No table function is registered.
+[native_registry_contract](../../crates/araphor-query/src/execution/tests.rs)
+compares fixed hashes from the prior implementation. The hashes cover registry
+keys, canonical names, and signatures. Functional cases provide the separate
+SQL behavior checks. Selected host verification passes 202 cases and strict
+scoped Clippy. The source record is
+`/tmp/araphor-native-functions-qualification1.json`. These checks do not prove
+the complete redesign or a speed improvement.
+
 [Session::start](../../crates/araphor-query/src/execution.rs) supplies the
 run's local tables and captured execution time
   -> [Session::physical](../../crates/araphor-query/src/execution.rs) calls native SessionState.create_physical_plan

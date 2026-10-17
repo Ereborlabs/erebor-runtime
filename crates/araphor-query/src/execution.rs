@@ -22,15 +22,16 @@ use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryReservation};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::execution::SessionState;
-use datafusion::execution::TaskContext;
+use datafusion::execution::{SessionState, SessionStateDefaults, TaskContext};
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     execute_stream, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
+use datafusion::{functions, functions_aggregate, functions_window};
 use futures_util::TryStreamExt;
 use snafu::ResultExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -169,59 +170,43 @@ impl Engine {
             .with_target_partitions(1)
             .with_batch_size(200);
         config.options_mut().execution.planning_concurrency = 1;
-        let state = SessionStateBuilder::new()
-            .with_default_features()
-            .with_config(config)
-            .with_runtime_env(native)
-            .with_query_planner(Arc::new(crate::planner::subscription::SubscriptionPlanner))
-            .build();
-        let scalar = state
-            .scalar_functions()
-            .values()
-            .filter(|function| {
-                matches!(
-                    function.name(),
-                    "abs"
-                        | "coalesce"
-                        | "current_timestamp"
-                        | "date_bin"
-                        | "character_length"
-                        | "lower"
-                        | "now"
-                        | "nullif"
-                        | "upper"
-                )
-            })
-            .cloned()
-            .collect();
-        let aggregate = state
-            .aggregate_functions()
-            .values()
-            .filter(|function| matches!(function.name(), "avg" | "count" | "max" | "min" | "sum"))
-            .cloned()
-            .collect();
-        let window = state
-            .window_functions()
-            .values()
-            .filter(|function| {
-                matches!(
-                    function.name(),
-                    "dense_rank" | "lag" | "lead" | "rank" | "row_number"
-                )
-            })
-            .cloned()
-            .collect();
-        let mut optimizers = state.physical_optimizers().to_vec();
+        let mut optimizers = PhysicalOptimizer::new().rules;
         optimizers.insert(
             optimizers.len() - 1,
             Arc::new(crate::planner::subscription::PageLineage),
         );
-        let state = SessionStateBuilder::new_from_existing(state)
-            .with_table_functions(std::collections::HashMap::new())
-            .with_scalar_functions(scalar)
-            .with_aggregate_functions(aggregate)
-            .with_window_functions(window)
+        let state = SessionStateBuilder::new()
+            .with_table_factories(SessionStateDefaults::default_table_factories())
+            .with_file_formats(SessionStateDefaults::default_file_formats())
+            .with_expr_planners(SessionStateDefaults::default_expr_planners())
+            .with_scalar_functions(vec![
+                functions::math::abs(),
+                functions::core::coalesce(),
+                functions::datetime::now(config.options()),
+                functions::datetime::date_bin(),
+                functions::unicode::character_length(),
+                functions::string::lower(),
+                functions::core::nullif(),
+                functions::string::upper(),
+            ])
+            .with_aggregate_functions(vec![
+                functions_aggregate::average::avg_udaf(),
+                functions_aggregate::count::count_udaf(),
+                functions_aggregate::min_max::max_udaf(),
+                functions_aggregate::min_max::min_udaf(),
+                functions_aggregate::sum::sum_udaf(),
+            ])
+            .with_window_functions(vec![
+                functions_window::rank::dense_rank_udwf(),
+                functions_window::lead_lag::lag_udwf(),
+                functions_window::lead_lag::lead_udwf(),
+                functions_window::rank::rank_udwf(),
+                functions_window::row_number::row_number_udwf(),
+            ])
             .with_physical_optimizer_rules(optimizers)
+            .with_config(config)
+            .with_runtime_env(native)
+            .with_query_planner(Arc::new(crate::planner::subscription::SubscriptionPlanner))
             .build();
         Ok(Arc::new(Self {
             store,

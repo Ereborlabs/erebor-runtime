@@ -294,6 +294,60 @@ fn closed_catalog_keeps_locals() {
 }
 
 #[test]
+fn native_registry_contract() {
+    use sha2::{Digest, Sha256};
+
+    let fixture = Fixture::new(Limits::default());
+    let state = fixture.engine.catalog(BTreeMap::new()).unwrap();
+    let scalar = state
+        .scalar_functions()
+        .iter()
+        .map(|(name, function)| {
+            (
+                name,
+                (function.name(), format!("{:?}", function.signature())),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let aggregate = state
+        .aggregate_functions()
+        .iter()
+        .map(|(name, function)| {
+            (
+                name,
+                (function.name(), format!("{:?}", function.signature())),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let window = state
+        .window_functions()
+        .iter()
+        .map(|(name, function)| {
+            (
+                name,
+                (function.name(), format!("{:?}", function.signature())),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let registries = [scalar, aggregate, window];
+    let hashes = registries.map(|registry| {
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&registry).unwrap())
+        )
+    });
+    assert_eq!(
+        hashes,
+        [
+            "f20dedb795faaf1d282da73052fb3382288cd4b01d4ba43ee24c3a214f9d4047",
+            "7170ceb3761402d3378d5185ff9ebaed2509312c090bc409e0152c47eaeb2147",
+            "182ba93cf6a27b1472b6ce4f0c4d85849193cd1db47d04b1886571fe014bad92",
+        ]
+    );
+    assert!(state.table_functions().is_empty());
+}
+
+#[test]
 fn local_skips_store() {
     let fixture = Fixture::new(Limits::default());
     let (plan, _) = local_plan(&fixture.engine);

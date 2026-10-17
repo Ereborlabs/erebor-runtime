@@ -543,6 +543,28 @@ The complete redesign, general maintained SQL, native pool contention review,
 and the required reduction remain **Not done**. Full workspace CI and
 benchmarks are not run, as instructed. No speed improvement is claimed.
 
+### Native function construction
+
+Implementation and selected host verification: **Done**. Engine::new builds
+one native SessionState from the admitted native function factories. The
+build-all, filter, and rebuild sequence is deleted. Native aliases, function
+signatures, configuration updates, table factories, file formats, expression
+planners, and optimizer order remain. No table function is registered.
+
+The fixed registry hashes match the prior implementation's keys, canonical
+names, and signatures. Existing functional cases check SQL behavior. Selected
+host checks pass 202 cases: 171 Query, 29 Analysis model cases, and two E2E
+contracts. Strict Clippy passes for Query, Analysis, Control, E2E, and their
+test targets. The records are
+`/tmp/araphor-native-functions-qualification1.json` and
+`/tmp/araphor-native-functions-count1.json`.
+
+The change removes 15 nonblank production Rust lines and adds 52 test lines.
+The complete redesign adds 834 production lines from 7b7b407a. Another 6,834
+net production deletions are required. Complete redesign: **Not done**.
+Full workspace CI and benchmarks are not run, as instructed. No speed
+improvement is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

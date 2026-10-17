@@ -366,6 +366,18 @@ production Rust lines. The complete change adds 849 from 7b7b407a; another
 `/tmp/araphor-closed-catalog-count1.json`. Complete redesign: **Not done**.
 Full workspace CI and benchmarks are not run, as instructed.
 
+### Native function construction
+
+**Done** for the selected source and host checks. One native SessionState
+build replaces default function construction, filtering, and a second build.
+Native function factories retain the admitted names, aliases, and signatures.
+Selected checks pass 202 cases. Strict scoped Clippy passes. The change removes
+15 nonblank production Rust lines. The complete change adds 834 from
+7b7b407a; another 6,834 net deletions remain. The records are
+`/tmp/araphor-native-functions-qualification1.json` and
+`/tmp/araphor-native-functions-count1.json`. Complete redesign: **Not done**.
+Full workspace CI and benchmarks are not run, as instructed.
+
 ## Implementation flow
 
 An owner starts or recovers
