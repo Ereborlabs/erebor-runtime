@@ -37,19 +37,12 @@ impl Fixture {
             ..Default::default()
         };
         let engine = Engine::new(store, limits).unwrap();
-        let state = engine.catalog(Default::default()).unwrap();
-        let options = &state.config_options().catalog;
-        let schema = state
-            .catalog_list()
-            .catalog(&options.default_catalog)
-            .unwrap()
-            .schema(&options.default_schema)
-            .unwrap();
+        let mut tables = SourceSnapshot::providers();
+        let source = Arc::clone(&tables["events"]);
         for name in ["CaseTable", "__araphor_visible"] {
-            schema
-                .register_table(name.into(), SourceSnapshot::providers()["events"].clone())
-                .unwrap();
+            tables.insert(name.into(), Arc::clone(&source));
         }
+        let state = engine.catalog(tables).unwrap();
         Self {
             engine,
             state,

@@ -344,7 +344,7 @@ native plan for independent snapshot comparisons. E2E retains its result,
 paging, cursor, health, and cleanup assertions.
 
 [Parser::parse](../../crates/araphor-query/src/parser/mod.rs) returns one bounded native DataFusion statement
-  -> [Engine::catalog](../../crates/araphor-query/src/execution.rs) registers canonical and declared local providers in the standard memory catalog
+  -> [Engine::catalog](../../crates/araphor-query/src/execution.rs) registers only the supplied native providers in the standard memory catalog
   -> [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) retains original provider origins from native table-reference resolution
   -> [Planner::build](../../crates/araphor-query/src/planner/mod.rs) calls SessionState.statement_to_plan and binds parameters once
   -> [Planner::check](../../crates/araphor-query/src/planner/mod.rs) checks projection, join, and window resource rules on the native logical plan
@@ -376,11 +376,27 @@ aliases. Native CTE alias counts and HAVING resolution apply.
 
 [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) supplies the
 source catalog from canonical providers and declared Table aliases.
-[AdmittedModel::relations](../../crates/araphor-analysis/src/model.rs) selects
-the local relations for model execution. Output SQL sees model inputs,
+[AdmittedModel::relations](../../crates/araphor-analysis/src/model.rs) creates
+native MemTables for the declared indexed schemas. Output SQL sees model inputs,
 parameters, and prior checkpoint tables. Checkpoint, evidence, and reason SQL
-also see completed output tables. The declared catalog defines local visibility.
-The authorized Data selection defines durable source scope.
+also see completed output tables. Dataset SQL receives only its supplied
+datasets. Native statement_to_plan resolves these exact catalogs. The schema
+overlay, implicit durable providers, second source-membership check, and its
+threaded relation-map argument are deleted. Missing tables in unused CTEs
+still fail before optimization. The authorized Data selection defines durable
+source scope for client and input queries.
+
+[Engine::catalog](../../crates/araphor-query/src/execution.rs) clones native
+SessionState and replaces its catalog list with register_catalog_list. It
+retains the native configuration, runtime, functions, and planner rules.
+Catalog construction no longer rebuilds the native function registries.
+[The closed-catalog case](../../crates/araphor-query/src/execution/tests.rs)
+checks qualified local execution, case-sensitive names, local schema binding,
+and absent durable sources. The [model operation cases](../../crates/araphor-analysis/src/model/operation/tests.rs)
+retain all five source-denial variants and check status, retry hint, and
+package error code. The qualified model produces the same encoded output.
+[The dataset case](../../crates/araphor-analysis/src/model/tests.rs) keeps its
+row-index checks and rejects an undeclared source inside an unused CTE.
 
 [Session::indexed_schema](../../crates/araphor-query/src/execution/tables.rs)
 checks local field names and adds the ordinary `__row_index` column. It retains

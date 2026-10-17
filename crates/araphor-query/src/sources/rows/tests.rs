@@ -9,7 +9,7 @@ use araphor_data::{
 use datafusion::arrow::array::BinaryArray;
 use futures_util::TryStreamExt as _;
 
-use super::ArrowSnapshot;
+use super::{ArrowSnapshot, SourceSnapshot};
 use crate::execution::{Engine, Limits, Read};
 use crate::parser::Parser;
 
@@ -207,7 +207,7 @@ async fn receipt_releases_binary_scratch() -> TestResult {
             ..Default::default()
         },
     )?;
-    let state = engine.catalog(BTreeMap::new())?;
+    let state = engine.catalog(SourceSnapshot::providers())?;
     let statement = Parser::parse("SELECT body FROM context_versions")?;
     let sources: araphor_data::AnalysisTableRequests = state
         .resolve_table_references(&statement)?
@@ -433,6 +433,7 @@ mod notification {
 
     use crate::execution::{Engine, Limits};
     use crate::parser::Parser;
+    use crate::sources::SourceSnapshot;
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
@@ -500,7 +501,7 @@ mod notification {
         let engine = Engine::new(Arc::clone(&store), Limits::default())?;
         let mut value = obligation();
         retain(&store, &value)?;
-        let state = engine.catalog(BTreeMap::new())?;
+        let state = engine.catalog(SourceSnapshot::providers())?;
         let statement = Parser::parse("SELECT overdue FROM notifications")?;
         let sources = state
             .resolve_table_references(&statement)?

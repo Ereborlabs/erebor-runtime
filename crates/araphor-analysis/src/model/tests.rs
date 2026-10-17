@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use araphor_analysis_sdk as sdk;
+use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use sdk::arrow_array::UInt64Array;
 
 use super::*;
@@ -258,6 +259,19 @@ fn sql_model_source_bounds() -> TestResult {
         &[1, 2],
     );
     drop(result);
+    let denied = ModelRun::new(&owner, fixture.source.tenant_id, &control()?)?.query_datasets(
+        std::slice::from_ref(&first.inputs[0].data),
+        "WITH unused AS (SELECT * FROM datafusion.public.catalog) SELECT id FROM events",
+        sdk::Limits::default(),
+    );
+    assert!(denied.is_err());
+    let error = denied
+        .err()
+        .ok_or("undeclared dataset source was accepted")?;
+    assert_eq!(error.status_code(), StatusCode::InvalidArguments);
+    assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
+    assert_eq!(error.package_code(), crate::PackageErrorCodeV1::Invalid);
+    drop(owner.reserve_evaluation(fixture.source.tenant_id)?);
     let mut corrected = selection;
     corrected.received_until = std::ops::Bound::Included(200);
     let third = read(corrected, 2_000)?;

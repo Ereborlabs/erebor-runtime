@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use super::super::SubscribeExec;
 use super::*;
 use crate::execution::Limits;
-use crate::sources::{JournalExec, SourceData};
+use crate::sources::{JournalExec, SourceData, SourceSnapshot};
 use crate::stream::Change;
 
 struct Fixture {
@@ -140,7 +140,7 @@ impl Fixture {
 
     async fn canonical(&self, sql: &str) -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
         let state = SessionStateBuilder::new_from_existing(
-            self.engine.catalog(Default::default()).unwrap(),
+            self.engine.catalog(SourceSnapshot::providers()).unwrap(),
         )
         .with_optimizer_rules(vec![])
         .with_physical_optimizer_rules(vec![Arc::new(CombinePartialFinalAggregate::new())])

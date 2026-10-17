@@ -52,7 +52,7 @@ impl Inputs {
                 tables.insert(input.port.name.clone(), SourceProvider::port(slot, schema));
             }
         }
-        let state = engine.catalog_tables(tables.clone())?;
+        let state = engine.catalog(tables.clone())?;
         let mut plans = Vec::new();
         let mut packages = Vec::new();
         if model.input_mode == sdk::InputMode::Resolved {

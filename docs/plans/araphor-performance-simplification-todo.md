@@ -352,6 +352,20 @@ are `/tmp/araphor-canonical-tables-qualification1.json` and
 `/tmp/araphor-canonical-tables-count1.json`. Complete redesign: **Not done**.
 Full workspace CI and benchmarks are not run, as instructed.
 
+### Native catalogs define model table visibility
+
+**Done** for the selected source and host checks. One explicit native provider
+map replaces schema-overlay catalog construction. Model and dataset catalogs
+contain only their declared native MemTables. The separate source-membership
+walk is deleted. Native planning retains unused-CTE denial and qualified local
+lookup. Client and input source provenance remain. The selected checks pass
+235 cases. Strict scoped Clippy passes. The change removes 23 nonblank
+production Rust lines. The complete change adds 849 from 7b7b407a; another
+6,849 net deletions remain. The records are
+`/tmp/araphor-closed-catalog-qualification1.json` and
+`/tmp/araphor-closed-catalog-count1.json`. Complete redesign: **Not done**.
+Full workspace CI and benchmarks are not run, as instructed.
+
 ## Implementation flow
 
 An owner starts or recovers

@@ -40,8 +40,8 @@ impl ModelRun<'_> {
         for port in &ports {
             AdmittedModel::relation(&mut relations, &port.name, &port.schema)?;
         }
-        let state = self.owner.catalog(relations.clone())?;
-        let plan = AdmittedModel::plan(self.owner, &state, sql, &relations)?;
+        let state = self.owner.catalog(relations)?;
+        let plan = AdmittedModel::plan(self.owner, &state, sql)?;
         let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos()).map_err(
             |_| {
                 crate::ModelInvalidSnafu {

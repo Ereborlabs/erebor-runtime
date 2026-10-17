@@ -13,8 +13,10 @@ use araphor_data::{
     NOTIFICATION_STATE_OWNER,
 };
 use datafusion::arrow::array::{RecordBatch, StringViewArray};
+use datafusion::catalog::TableProvider;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, ScalarValue};
+use datafusion::datasource::MemTable;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use futures_util::StreamExt as _;
 use prost::Message as _;
@@ -23,6 +25,7 @@ use tokio::sync::watch;
 use super::{Clock, Cursor, Fingerprint, Operation, Subscription, Update, Window};
 use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
+use crate::sources::SourceSnapshot;
 
 mod trace;
 
@@ -181,7 +184,7 @@ impl Fixture {
         sql: &str,
         parameters: Vec<ScalarValue>,
     ) -> (Arc<LogicalPlan>, araphor_data::AnalysisTableRequests) {
-        let state = self.engine.catalog(BTreeMap::new()).unwrap();
+        let state = self.engine.catalog(SourceSnapshot::providers()).unwrap();
         let statement = Parser::parse(sql).unwrap();
         let sources = state
             .resolve_table_references(&statement)
@@ -392,9 +395,10 @@ fn local_cursor_denied() {
         .get("events")
         .cloned()
         .unwrap();
+    let table: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(schema, vec![vec![]]).unwrap());
     let state = fixture
         .engine
-        .catalog(BTreeMap::from([("events".into(), schema)]))
+        .catalog(BTreeMap::from([("events".into(), table)]))
         .unwrap();
     let statement = Parser::parse("SELECT source_cursor FROM events").unwrap();
     let plan = fixture.engine.plan(&state, statement, vec![]).unwrap();
@@ -432,7 +436,7 @@ async fn subqueries_use_replace() {
         let clock = TestClock::new(2_000_000_000);
         let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap());
         let mut subscription = if retained {
-            let state = fixture.engine.catalog(BTreeMap::new()).unwrap();
+            let state = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
             let native = Arc::new(
                 state
                     .statement_to_plan(Parser::parse(sql).unwrap())
@@ -870,7 +874,7 @@ async fn append_constants_and_empty() {
     ] {
         let (plan, _) = fixture.plan(sql, vec![]);
         let schema = Arc::clone(plan.schema().inner());
-        let state = fixture.engine.catalog(BTreeMap::new()).unwrap();
+        let state = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
         let physical = state.create_physical_plan(&plan).await.unwrap();
         let mut widths = Vec::new();
         physical
@@ -1139,7 +1143,7 @@ async fn native_append_execution() {
         .await
         .unwrap();
     let schema = Arc::clone(plan.schema().inner());
-    let mut state = fixture.engine.catalog(BTreeMap::new()).unwrap();
+    let mut state = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
     state
         .config_mut()
         .set_extension(Arc::new(crate::stream::Run {
@@ -1295,7 +1299,7 @@ async fn native_subscribe_execution() {
         .prepare("SELECT count(*) AS total FROM events", vec![])
         .await
         .unwrap();
-    let mut state = fixture.engine.catalog(Default::default()).unwrap();
+    let mut state = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
     let defaults = datafusion::physical_optimizer::optimizer::PhysicalOptimizer::new();
     let native = defaults
         .rules

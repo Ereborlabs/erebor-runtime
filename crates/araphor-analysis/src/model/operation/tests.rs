@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
+
 use super::super::{AdmittedExport, SqlModelV1};
 use super::*;
 use crate::analysis::{PackageActivationV1, PackageKeyV1};
@@ -174,6 +176,29 @@ fn operation_inputs_match() -> TestResult {
     assert!(output.output.evidence.is_empty());
     assert!(output.output.reasons.is_empty());
     assert!(output.output.checkpoint.is_none());
+    drop(output);
+    let mut qualified = program;
+    qualified
+        .outputs
+        .insert("result".into(), "SELECT value FROM public.catalog".into());
+    qualified.outputs.insert(
+        "other".into(),
+        "SELECT value FROM datafusion.public.second".into(),
+    );
+    let admitted = AdmittedExport::admit(&owner, &model, Some(&qualified))?;
+    let output = ModelRun::prepared(&owner, [1; 16], &control()?, Arc::clone(&actual))?
+        .evaluate_admitted(
+            &package,
+            &admitted,
+            &evaluation(actual.inputs.clone(), &model),
+        )?;
+    assert_eq!(
+        expected_bytes,
+        serde_json::to_vec(&crate::AnalysisPackageOwner::encode_output(
+            &output.output,
+            &model,
+        )?)?
+    );
     drop(owner.reserve_evaluation([1; 16])?);
     Ok(())
 }
@@ -357,13 +382,16 @@ fn operation_source_denial() -> TestResult {
         let operation = ModelRun::prepared(&owner, [1; 16], &control()?, Arc::clone(&retained))?;
         let mut program = SqlModelV1::default();
         program.outputs.insert("result".into(), sql.into());
-        assert!(operation
-            .evaluate_model(
-                &package,
-                &program,
-                &evaluation(retained.inputs.clone(), &model),
-            )
-            .is_err());
+        let result = operation.evaluate_model(
+            &package,
+            &program,
+            &evaluation(retained.inputs.clone(), &model),
+        );
+        assert!(result.is_err());
+        let error = result.err().ok_or("undeclared source was accepted")?;
+        assert_eq!(error.status_code(), StatusCode::InvalidArguments);
+        assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
+        assert_eq!(error.package_code(), crate::PackageErrorCodeV1::Invalid);
         drop(retained);
         drop(owner.reserve_evaluation([1; 16])?);
     }

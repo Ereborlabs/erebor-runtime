@@ -326,16 +326,7 @@ impl Engine {
         result
     }
 
-    pub fn catalog(&self, schemas: BTreeMap<String, SchemaRef>) -> Result<SessionState> {
-        let mut tables = SourceSnapshot::providers();
-        for (name, schema) in schemas {
-            let table = MemTable::try_new(schema, vec![vec![]]).context(SqlSnafu)?;
-            tables.insert(name, Arc::new(table));
-        }
-        self.catalog_tables(tables)
-    }
-
-    pub(crate) fn catalog_tables(
+    pub fn catalog(
         &self,
         tables: BTreeMap<String, Arc<dyn TableProvider>>,
     ) -> Result<SessionState> {
@@ -352,9 +343,9 @@ impl Engine {
             self.state.config_options().catalog.default_catalog.clone(),
             catalog,
         );
-        Ok(SessionStateBuilder::new_from_existing(self.state.clone())
-            .with_catalog_list(catalogs)
-            .build())
+        let mut state = self.state.clone();
+        state.register_catalog_list(catalogs);
+        Ok(state)
     }
 
     pub fn plan(

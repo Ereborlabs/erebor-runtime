@@ -8,6 +8,7 @@ use datafusion::arrow::array::{ArrayRef, Int64Array, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::{Session as NativeSession, TableProvider};
 use datafusion::common::{Result as NativeResult, ScalarValue};
+use datafusion::datasource::MemTable;
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -20,6 +21,7 @@ use tokio::sync::Notify;
 use super::{Engine, Limits, Read};
 use crate::parser::Parser;
 use crate::planner::Planner;
+use crate::sources::SourceSnapshot;
 use crate::Error;
 
 struct Fixture {
@@ -212,8 +214,10 @@ fn value(batches: &[RecordBatch]) -> i64 {
 }
 
 fn local_plan(engine: &Engine) -> (Arc<LogicalPlan>, araphor_data::AnalysisTableRequests) {
+    let table: Arc<dyn TableProvider> =
+        Arc::new(MemTable::try_new(schema(), vec![vec![]]).unwrap());
     let catalog = engine
-        .catalog(BTreeMap::from([("local_rows".into(), schema())]))
+        .catalog(BTreeMap::from([("local_rows".into(), table)]))
         .unwrap();
     let statement = Parser::parse("SELECT value FROM local_rows").unwrap();
     let sources = catalog
@@ -227,10 +231,73 @@ fn local_plan(engine: &Engine) -> (Arc<LogicalPlan>, araphor_data::AnalysisTable
 }
 
 #[test]
+fn closed_catalog_keeps_locals() {
+    let fixture = Fixture::new(Limits::default());
+    let table: Arc<dyn TableProvider> =
+        Arc::new(MemTable::try_new(schema(), vec![vec![]]).unwrap());
+    let state = fixture
+        .engine
+        .catalog(BTreeMap::from([
+            ("events".into(), Arc::clone(&table)),
+            ("CaseRows".into(), table),
+        ]))
+        .unwrap();
+    let mut session = fixture
+        .engine
+        .session(AnalysisSelectionV1::tenant([1; 16]), &control(), 1)
+        .unwrap();
+    session.register("events", schema(), &[batch(7)]).unwrap();
+    session.register("CaseRows", schema(), &[batch(9)]).unwrap();
+    for (sql, expected) in [
+        ("SELECT value FROM events", 7),
+        ("SELECT value FROM public.events", 7),
+        ("SELECT value FROM datafusion.public.events", 7),
+        ("SELECT value FROM datafusion.public.\"CaseRows\"", 9),
+    ] {
+        let plan = fixture
+            .engine
+            .plan(&state, Parser::parse(sql).unwrap(), vec![])
+            .unwrap();
+        assert_eq!(
+            value(&session.execute_local(Arc::new(plan)).unwrap()),
+            expected
+        );
+    }
+    for sql in [
+        "SELECT * FROM catalog",
+        "SELECT * FROM datafusion.public.catalog",
+        "SELECT value FROM absent.public.events",
+        "SELECT value FROM caserows",
+        "SELECT source_cursor FROM events",
+        "WITH unused AS (SELECT * FROM coverage) SELECT value FROM events",
+    ] {
+        let error = fixture
+            .engine
+            .plan(&state, Parser::parse(sql).unwrap(), vec![])
+            .unwrap_err();
+        assert_eq!(error.status_code(), StatusCode::InvalidArguments, "{sql}");
+        assert_eq!(
+            error.retry_hint(),
+            erebor_runtime_error::RetryHint::NonRetryable,
+            "{sql}"
+        );
+    }
+    let empty = fixture.engine.catalog(BTreeMap::new()).unwrap();
+    assert!(fixture
+        .engine
+        .plan(
+            &empty,
+            Parser::parse("SELECT * FROM events").unwrap(),
+            vec![]
+        )
+        .is_err());
+}
+
+#[test]
 fn local_skips_store() {
     let fixture = Fixture::new(Limits::default());
     let (plan, _) = local_plan(&fixture.engine);
-    let state = fixture.engine.catalog(BTreeMap::new()).unwrap();
+    let state = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
     let clock = Arc::new(
         fixture
             .engine
@@ -441,9 +508,11 @@ fn registration_reuses_input_claims() {
 #[test]
 fn native_counts_rebind() {
     let fixture = Fixture::new(Limits::default());
+    let table: Arc<dyn TableProvider> =
+        Arc::new(MemTable::try_new(schema(), vec![vec![]]).unwrap());
     let state = fixture
         .engine
-        .catalog(BTreeMap::from([("CaseRows".into(), schema())]))
+        .catalog(BTreeMap::from([("CaseRows".into(), table)]))
         .unwrap();
     let plan = Arc::new(
         fixture
@@ -560,7 +629,7 @@ fn native_bindings_fail_closed() {
 #[test]
 fn sessions_freeze_native_clocks() {
     let fixture = Fixture::new(Limits::default());
-    let catalog = fixture.engine.catalog(BTreeMap::new()).unwrap();
+    let catalog = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
     let statement =
         Parser::parse("SELECT current_timestamp AS first_clock, current_timestamp AS second_clock")
             .unwrap();
@@ -768,7 +837,7 @@ fn input_output_budget() {
         output_capacity: 128,
         ..Default::default()
     });
-    let state = fixture.engine.catalog(BTreeMap::new()).unwrap();
+    let state = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
     let statement = Parser::parse("SELECT $1 AS payload").unwrap();
     let sources = state
         .resolve_table_references(&statement)
@@ -900,7 +969,11 @@ async fn physical_preserves_context() {
     }
 
     let fixture = Fixture::new(Limits::default());
-    let registered = fixture.engine.catalog(BTreeMap::new()).unwrap().task_ctx();
+    let registered = fixture
+        .engine
+        .catalog(SourceSnapshot::providers())
+        .unwrap()
+        .task_ctx();
     let context = Arc::new(TaskContext::new(
         Some("preserved-task".into()),
         "preserved-session".into(),
@@ -967,15 +1040,8 @@ struct Gate {
 impl Gate {
     async fn plan(&self, engine: &Engine) -> (LogicalPlan, araphor_data::AnalysisTableRequests) {
         let provider: Arc<dyn TableProvider> = Arc::new(self.clone());
-        let state = engine.catalog(BTreeMap::new()).unwrap();
-        let options = &state.config_options().catalog;
-        state
-            .catalog_list()
-            .catalog(&options.default_catalog)
-            .unwrap()
-            .schema(&options.default_schema)
-            .unwrap()
-            .register_table("gate".into(), provider)
+        let state = engine
+            .catalog(BTreeMap::from([("gate".into(), provider)]))
             .unwrap();
         let statement = Parser::parse("SELECT value FROM gate").unwrap();
         let sources = state

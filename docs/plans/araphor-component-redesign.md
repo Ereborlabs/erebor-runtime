@@ -493,6 +493,56 @@ The complete redesign, general maintained SQL, native pool contention review,
 and the required reduction remain **Not done**. Full workspace CI and
 benchmarks are not run, as instructed. No speed improvement is claimed.
 
+### Native catalogs define model table visibility
+
+Implementation and selected host verification: **Done**. Engine::catalog takes
+only native table providers. The schema-overlay method and catalog_tables
+method are deleted. Each catalog clones native SessionState and replaces its
+catalog list through register_catalog_list. The native function registries are
+not rebuilt during catalog construction. Public query preparation explicitly
+supplies canonical durable providers. Input admission supplies its existing
+durable and declared-port providers.
+
+Analysis admits a SQL model
+  -> AdmittedModel creates native MemTables from declared indexed schemas
+  -> output SQL receives only inputs, parameters, and prior checkpoint tables
+  -> native statement_to_plan resolves the actual supplied providers
+  -> later checkpoint, evidence, and reason SQL also receive completed outputs
+  -> runtime physical planning binds those exact local schemas to current data
+
+Analysis queries supplied datasets
+  -> the native catalog contains only the supplied datasets
+  -> an undeclared table fails native planning, including inside an unused CTE
+  -> no durable source provider is available as a fallback
+
+The manual source-membership walk and its threaded relation-map argument are
+deleted. Original source inventory and provenance resolution remain in client
+and detector-input admission. Collision checks, quoted names, native stage
+visibility, schema validation, resource limits, and buffer leases remain.
+Native planning errors replace the private model-undeclared-input error.
+Invalid-argument status, non-retryable classification, and invalid package
+code remain. The five original denial cases pass with these stronger checks
+before and after the production change.
+
+Selected host checks pass 235 distinct cases: 170 Query, 63 Analysis, and two
+E2E contracts. The added native catalog case checks qualified local execution,
+case-sensitive names, local schemas, and missing durable providers. Existing
+model output bytes match for qualified local names. The dataset case retains
+its row-index assertions and adds unused-CTE source denial. No existing
+assertion is removed. Strict Clippy passes for Query, Analysis, Control, E2E,
+and their test targets. Formatting and local document links pass. These checks
+cover Linux x86_64 with the checked native artifacts. The records are
+`/tmp/araphor-closed-catalog-qualification1.json` and
+`/tmp/araphor-closed-catalog-count1.json`.
+
+This change removes 23 nonblank production Rust lines and adds 101 test lines.
+The complete redesign adds 849 production lines from 7b7b407a, 3,078 from
+537f9de3, and 2,002 from aa390d9f. Another 6,849 net production deletions are
+required. The count excludes tests, documents, blank lines, and file movement.
+The complete redesign, general maintained SQL, native pool contention review,
+and the required reduction remain **Not done**. Full workspace CI and
+benchmarks are not run, as instructed. No speed improvement is claimed.
+
 ## Intended end state
 
 ### RisingWave source correction

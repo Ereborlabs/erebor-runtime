@@ -12,6 +12,7 @@ use datafusion::logical_expr::LogicalPlan;
 use futures_util::TryStreamExt as _;
 use prost::Message as _;
 
+use super::SourceSnapshot;
 use crate::execution::{Engine, Limits, Read};
 use crate::parser::Parser;
 
@@ -99,7 +100,7 @@ impl Fixture {
         &self,
         sql: &str,
     ) -> TestResult<(Arc<LogicalPlan>, araphor_data::AnalysisTableRequests)> {
-        let state = self.engine.catalog(BTreeMap::new())?;
+        let state = self.engine.catalog(SourceSnapshot::providers())?;
         let statement = Parser::parse(sql)?;
         let sources = state
             .resolve_table_references(&statement)?
@@ -194,7 +195,7 @@ async fn native_source_demands() -> TestResult {
 
     let fixture = Fixture::new()?;
     fixture.commit(&fixture.source, 1, 10_001)?;
-    let mut state = fixture.engine.catalog(BTreeMap::new())?;
+    let mut state = fixture.engine.catalog(SourceSnapshot::providers())?;
     let mut requests = araphor_data::AnalysisTableRequests::new();
     let mut plans = Vec::new();
     for sql in [
@@ -449,7 +450,7 @@ async fn native_capture_isolated() -> TestResult {
     };
     fixture.commit(&foreign, 7, 10_002)?;
     let (logical, sources) = fixture.plan("SELECT source_cursor FROM events")?;
-    let state = fixture.engine.catalog(BTreeMap::new())?;
+    let state = fixture.engine.catalog(SourceSnapshot::providers())?;
     let physical = state.create_physical_plan(&logical).await?;
     assert!(state.config().get_extension::<SourceSnapshot>().is_none());
     assert!(collect(Arc::clone(&physical), state.task_ctx())
@@ -510,7 +511,7 @@ async fn native_stream_keeps_metadata() -> TestResult {
     })?;
     fixture.commit(&fixture.source, 1, 10_001)?;
     let (logical, sources) = fixture.plan("SELECT source_cursor FROM events")?;
-    let mut state = fixture.engine.catalog(BTreeMap::new())?;
+    let mut state = fixture.engine.catalog(SourceSnapshot::providers())?;
     let physical = state.create_physical_plan(&logical).await?;
     assert!(SourceData::from_plan(physical.as_ref()).is_some());
     let memory = Arc::clone(fixture.engine.memory());
@@ -580,7 +581,7 @@ async fn native_ports_share_cut() -> TestResult {
 
     let fixture = Fixture::new()?;
     fixture.commit(&fixture.source, 1, 10_001)?;
-    let state = fixture.engine.catalog(BTreeMap::new())?;
+    let state = fixture.engine.catalog(SourceSnapshot::providers())?;
     let (logical, sources) = fixture.plan("SELECT source_cursor AS value FROM events")?;
     let durable = state.create_physical_plan(&logical).await?;
     let (logical, _) = fixture.plan("SELECT operation FROM events")?;

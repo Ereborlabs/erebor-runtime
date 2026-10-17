@@ -26,7 +26,7 @@ impl Fixture {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(AnalysisStore::open(directory.path().join("data")).unwrap());
         let engine = Engine::new(store, Limits::default()).unwrap();
-        let state = engine.catalog(BTreeMap::new()).unwrap();
+        let state = engine.catalog(SourceSnapshot::providers()).unwrap();
         Self {
             _engine: engine,
             state,

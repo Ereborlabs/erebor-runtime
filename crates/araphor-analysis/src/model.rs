@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_data::SqlModelV1;
+use araphor_query::datafusion::catalog::TableProvider;
 use araphor_query::datafusion::common::tree_node::TreeNodeRecursion;
+use araphor_query::datafusion::datasource::MemTable;
 use araphor_query::datafusion::execution::memory_pool::MemoryReservation;
 use araphor_query::datafusion::execution::SessionState;
 use araphor_query::datafusion::logical_expr::LogicalPlan;
@@ -186,7 +188,7 @@ impl AdmittedModel {
     fn admit(engine: &Engine, program: &SqlModelV1, model: &sdk::Model) -> Result<Self> {
         let mut relations = Self::relations(model)?;
         let state = engine.catalog(relations.clone())?;
-        let outputs = Self::outputs(engine, &state, &model.outputs, &program.outputs, &relations)?;
+        let outputs = Self::outputs(engine, &state, &model.outputs, &program.outputs)?;
         for port in &model.outputs {
             Self::relation(
                 &mut relations,
@@ -194,7 +196,7 @@ impl AdmittedModel {
                 &port.schema,
             )?;
         }
-        let state = engine.catalog(relations.clone())?;
+        let state = engine.catalog(relations)?;
         let checkpoint = Self::outputs(
             engine,
             &state,
@@ -203,12 +205,11 @@ impl AdmittedModel {
                 .as_ref()
                 .map_or(&[], |spec| spec.datasets.as_slice()),
             &program.checkpoint,
-            &relations,
         )?;
         let evidence = program
             .evidence
             .as_ref()
-            .map(|sql| Self::plan(engine, &state, sql, &relations))
+            .map(|sql| Self::plan(engine, &state, sql))
             .transpose()?;
         if program.reasons.len() > 128 {
             return crate::ModelInvalidSnafu {
@@ -232,11 +233,7 @@ impl AdmittedModel {
                 }
                 .fail();
             };
-            reasons.push((
-                output,
-                spec,
-                Self::plan(engine, &state, &reason.sql, &relations)?,
-            ));
+            reasons.push((output, spec, Self::plan(engine, &state, &reason.sql)?));
         }
         let mut uses_clock = false;
         for plan in outputs
@@ -261,7 +258,6 @@ impl AdmittedModel {
         state: &SessionState,
         ports: &[sdk::Port],
         queries: &BTreeMap<String, String>,
-        relations: &BTreeMap<String, Arc<sdk::Schema>>,
     ) -> Result<Vec<Arc<LogicalPlan>>> {
         if ports.len() != queries.len() {
             return crate::ModelInvalidSnafu {
@@ -278,12 +274,12 @@ impl AdmittedModel {
                     }
                     .build()
                 })?;
-                Self::plan(engine, state, sql, relations)
+                Self::plan(engine, state, sql)
             })
             .collect()
     }
 
-    fn relations(model: &sdk::Model) -> Result<BTreeMap<String, Arc<sdk::Schema>>> {
+    fn relations(model: &sdk::Model) -> Result<BTreeMap<String, Arc<dyn TableProvider>>> {
         let mut relations = BTreeMap::new();
         for input in &model.inputs {
             Self::relation(&mut relations, &input.port.name, &input.port.schema)?;
@@ -304,14 +300,14 @@ impl AdmittedModel {
     }
 
     fn relation(
-        relations: &mut BTreeMap<String, Arc<sdk::Schema>>,
+        relations: &mut BTreeMap<String, Arc<dyn TableProvider>>,
         name: &str,
         schema: &sdk::Schema,
     ) -> Result<()> {
         let schema = Session::indexed_schema(schema)?;
         match relations.entry(name.to_owned()) {
             std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(schema);
+                entry.insert(Arc::new(MemTable::try_new(schema, vec![vec![]])?));
                 Ok(())
             }
             std::collections::btree_map::Entry::Occupied(_) => crate::ModelInvalidSnafu {
@@ -321,24 +317,12 @@ impl AdmittedModel {
         }
     }
 
-    fn plan(
-        engine: &Engine,
-        state: &SessionState,
-        sql: &str,
-        relations: &BTreeMap<String, Arc<sdk::Schema>>,
-    ) -> Result<Arc<LogicalPlan>> {
-        let statement = Parser::parse(sql)?;
-        if state
-            .resolve_table_references(&statement)?
-            .iter()
-            .any(|name| !relations.contains_key(name.table()))
-        {
-            return crate::ModelInvalidSnafu {
-                field: "model undeclared input",
-            }
-            .fail();
-        }
-        Ok(Arc::new(engine.plan(state, statement, Vec::new())?))
+    fn plan(engine: &Engine, state: &SessionState, sql: &str) -> Result<Arc<LogicalPlan>> {
+        Ok(Arc::new(engine.plan(
+            state,
+            Parser::parse(sql)?,
+            Vec::new(),
+        )?))
     }
 }
 

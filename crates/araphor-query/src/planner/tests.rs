@@ -57,26 +57,14 @@ fn catalog() -> SessionState {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(AnalysisStore::open(directory.path().join("data")).unwrap());
     let engine = Engine::new(store, Limits::default()).unwrap();
-    let state = engine.catalog(BTreeMap::new()).unwrap();
-    let options = &state.config_options().catalog;
-    let schema = state
-        .catalog_list()
-        .catalog(&options.default_catalog)
+    engine
+        .catalog(BTreeMap::from([
+            ("events".into(), Arc::clone(&events)),
+            ("coverage".into(), coverage),
+            ("CaseTable".into(), Arc::clone(&events)),
+            ("__araphor_private".into(), events),
+        ]))
         .unwrap()
-        .schema(&options.default_schema)
-        .unwrap();
-    for name in schema.table_names() {
-        schema.deregister_table(&name).unwrap();
-    }
-    for (name, provider) in [
-        ("events", Arc::clone(&events)),
-        ("coverage", coverage),
-        ("CaseTable", Arc::clone(&events)),
-        ("__araphor_private", events),
-    ] {
-        schema.register_table(name.into(), provider).unwrap();
-    }
-    state
 }
 
 async fn plan(

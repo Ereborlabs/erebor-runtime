@@ -5,10 +5,13 @@ use std::time::Duration;
 
 use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisStore};
 use datafusion::arrow::array::Int64Array;
+use datafusion::catalog::TableProvider;
+use datafusion::datasource::MemTable;
 
 use super::*;
 use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
+use crate::sources::SourceSnapshot;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -82,7 +85,7 @@ fn indexed_schema_keeps_metadata() -> TestResult {
 #[test]
 fn builtin_has_no_index() -> TestResult {
     let fixture = Fixture::new()?;
-    let native = fixture.engine.catalog(BTreeMap::new())?;
+    let native = fixture.engine.catalog(SourceSnapshot::providers())?;
     assert!(fixture
         .engine
         .plan(
@@ -92,10 +95,13 @@ fn builtin_has_no_index() -> TestResult {
         )
         .is_err());
     let schema = Schema::new(vec![Field::new("value", DataType::UInt64, false)]);
-    let native = fixture.engine.catalog(BTreeMap::from([(
-        "events".into(),
+    let table: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
         Session::indexed_schema(&schema)?,
-    )]))?;
+        vec![vec![]],
+    )?);
+    let native = fixture
+        .engine
+        .catalog(BTreeMap::from([("events".into(), table)]))?;
     let plan = fixture
         .engine
         .plan(&native, Parser::parse("SELECT * FROM events")?, Vec::new())?;
@@ -223,9 +229,11 @@ fn empty_index_keeps_schema() -> TestResult {
     assert!(batches.is_empty());
     assert_eq!(memory.size(), 128);
     session.register("empty", Arc::clone(&schema), &batches)?;
+    let table: Arc<dyn TableProvider> =
+        Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![]])?);
     let native = fixture
         .engine
-        .catalog(BTreeMap::from([("empty".into(), Arc::clone(&schema))]))?;
+        .catalog(BTreeMap::from([("empty".into(), table)]))?;
     let plan = fixture
         .engine
         .plan(&native, Parser::parse("SELECT * FROM empty")?, Vec::new())?;
