@@ -51,6 +51,10 @@ fn schema_contract() -> TestResult {
             "3a9401f56d9fb017ad8b7344dc5affacaee3cebdd9fa8016ea05870cb0c1a879",
         ),
         (
+            "discovery_state",
+            "69e5eb64516e1ed6cf3a806c9417311d82c04e09e0bfa1f476c9aea51bc82adf",
+        ),
+        (
             "events",
             "c011ab8b90ca3bbf6d389593163bb7e6bf07395a74a9a11d723a03d934aa50b1",
         ),

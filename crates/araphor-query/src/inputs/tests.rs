@@ -31,8 +31,10 @@ impl Fixture {
         let engine = Engine::new(
             Arc::clone(&store),
             Limits {
+                input_capacity: Some(128 * 1024 * 1024),
+                output_capacity: Some(16 * 1024 * 1024),
                 tenant_evaluations: 1,
-                extract_timeout: Duration::from_secs(10),
+                extract_timeout: Some(Duration::from_secs(10)),
                 evaluate_timeout: Some(Duration::from_secs(10)),
                 ..Default::default()
             },
@@ -521,10 +523,13 @@ fn zero_inputs_need_no_capacity() -> TestResult {
     let _held = fixture
         .engine
         .reserve_evaluation(fixture.source.tenant_id)?;
-    let _memory = fixture
-        .engine
-        .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)?;
+    let _memory = fixture.engine.memory().reserve_input(
+        fixture
+            .engine
+            .limits()
+            .input_capacity
+            .expect("configured input capacity"),
+    )?;
     let cut = fixture.read(&definition)?;
     assert!(cut.inputs.is_empty());
     assert!(cut.snapshot.is_none());
@@ -585,10 +590,13 @@ fn input_failure_releases_capacity() -> TestResult {
             .reserve_evaluation(fixture.source.tenant_id)?,
     );
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)?,
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     control.cancel()?;
@@ -652,10 +660,13 @@ fn raw_witness_limit_precedes_input_return() -> TestResult {
             .reserve_evaluation(fixture.source.tenant_id)?,
     );
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)?,
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
     Ok(())
 }
@@ -760,10 +771,13 @@ fn retained_trace_cut_checks_revocation() -> TestResult {
     control.check()?;
     drop(cut);
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)?,
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
     drop(
         fixture
@@ -1029,10 +1043,13 @@ fn inherited_witness_expiry_wins() -> TestResult {
     assert!(incomplete, "expected typed incomplete input: {error:?}");
     control.check()?;
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)?,
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
     drop(
         fixture
@@ -1106,13 +1123,22 @@ fn catalog_keeps_batch_limit() -> TestResult {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_err());
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_output(fixture.engine.limits().output_capacity)?,
+        fixture.engine.memory().reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity"),
+        )?,
     );
     assert_eq!(
         ScalarValue::try_from_array(&borrowed, 0)?,
@@ -1120,10 +1146,13 @@ fn catalog_keeps_batch_limit() -> TestResult {
     );
     drop(borrowed);
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)?,
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
 
     fixture.event(2, 2_000)?;
@@ -1150,10 +1179,13 @@ fn catalog_keeps_batch_limit() -> TestResult {
             .reserve_evaluation(fixture.source.tenant_id)?,
     );
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)?,
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
     Ok(())
 }

@@ -86,6 +86,15 @@ impl AnalysisStore {
         selection: &AnalysisSelectionV1,
         control: &AnalysisReadControl,
     ) -> Result<(AnalysisStoreMetaV1, u64)> {
+        self.dependency_revision_for(selection, &[], control)
+    }
+
+    pub fn dependency_revision_for(
+        &self,
+        selection: &AnalysisSelectionV1,
+        relations: &[&str],
+        control: &AnalysisReadControl,
+    ) -> Result<(AnalysisStoreMetaV1, u64)> {
         control.check()?;
         if !selection.valid() || !selection.results.is_empty() {
             return self
@@ -101,6 +110,18 @@ impl AnalysisStore {
             let selection = selection.as_ref();
             drop(coordinator);
             let mut revision = self.selected_revision(selection, meta.commit_revision, control)?;
+            if !relations.is_empty() {
+                let mut statement = snapshot.prepare(
+                    "SELECT COALESCE(MAX(last_changed_revision), 0)::UBIGINT
+                     FROM relation_revisions WHERE relation_name = ? AND last_changed_revision <= ?",
+                ).context(AnalysisDatabaseSnafu { operation: "prepare relation dependencies" })?;
+                for relation in relations {
+                    control.check()?;
+                    let changed = statement.query_row(params![relation, meta.commit_revision], |row| row.get::<_, u64>(0))
+                        .context(AnalysisDatabaseSnafu { operation: "read relation dependencies" })?;
+                    revision = revision.max(changed);
+                }
+            }
             let mut sources = snapshot
                 .prepare(
                     "SELECT MAX(commit_revision) FROM (
@@ -347,6 +368,47 @@ mod tests {
         assert_eq!(read(&store, &selection)?, (4, 0));
         let empty = AnalysisSelectionV1::new(first.tenant_id, vec![]);
         assert_eq!(read(&store, &empty)?, (4, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn query_state_dependencies() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("analysis");
+        let store = AnalysisStore::open(&path)?;
+        let source = identity(1, 1);
+        store.accept_validated_batch(source.clone(), batch(1, 10))?;
+        let selection = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]);
+        let relations = ["processor_progress", "processor_gaps", "analysis_results"];
+        let state = |store: &AnalysisStore| -> Result<(u64, u64)> {
+            store
+                .dependency_revision_for(&selection, &relations, &AnalysisReadControl::default())
+                .map(|(meta, revision)| (meta.commit_revision, revision))
+        };
+        assert_eq!(state(&store)?, (1, 1));
+        let scope = ProcessorScopeV1 {
+            identity: source,
+            processor_id: DISCOVERY_PROCESSOR.into(),
+            method_version: u64::from(DISCOVERY_SCHEMA_VERSION),
+        };
+        store.register_processor(&scope, crate::ProcessorClassV1::Required, 1)?;
+        assert_eq!(read(&store, &selection)?, (2, 1));
+        assert_eq!(state(&store)?, (2, 2));
+        let retirement = crate::ProcessorRetirementV1 {
+            scope,
+            change_id: "native-state".into(),
+            reason: "Stop this processor.".into(),
+            expected_cursor: 0,
+            cutoff_cursor: 1,
+        };
+        assert_eq!(store.retire_required(&retirement)?, 3);
+        assert_eq!(read(&store, &selection)?, (3, 1));
+        assert_eq!(state(&store)?, (3, 3));
+        assert_eq!(store.retire_required(&retirement)?, 3);
+        assert_eq!(state(&store)?, (3, 3));
+        drop(store);
+        let reopened = AnalysisStore::open(path)?;
+        assert_eq!(state(&reopened)?, (3, 3));
         Ok(())
     }
 

@@ -15,7 +15,7 @@ use crate::{
 #[test]
 fn profile_native_fields() -> TestResult {
     let baseline: serde_json::Value = serde_json::from_slice(include_bytes!(
-        "../../../../../../araphor-analysis/src/discovery/tests/baseline/atoms.json"
+        "../../../../../../araphor-analysis_back/src/discovery/tests/baseline/atoms.json"
     ))?;
     let mut profile = profile();
     profile.snapshot = serde_json::from_value(baseline["original"]["snapshot"].clone())?;

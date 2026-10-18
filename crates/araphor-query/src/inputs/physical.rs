@@ -129,7 +129,7 @@ impl Inputs {
                 input_bytes: engine.limits().input_bytes,
                 ..Default::default()
             },
-            control.within(control.remaining()?)?,
+            control.within(None)?,
             engine.limits().extract_timeout,
             now,
             Arc::clone(&memory_owner),
@@ -345,9 +345,7 @@ impl InputSet {
             .filter(|snapshot| !snapshot.page.extraction.trace_reads().is_empty())
             .cloned();
         let engine = Arc::clone(engine);
-        let control = control
-            .remaining()
-            .and_then(|remaining| control.within(remaining));
+        let control = control.within(None);
         async move {
             let control = control?;
             control.check()?;
@@ -376,9 +374,16 @@ impl InputSet {
             .snapshot
             .iter()
             .flat_map(|snapshot| {
-                snapshot
-                    .selection
-                    .source_revisions(snapshot.page.extraction.meta.commit_revision)
+                let revision = snapshot.page.extraction.meta.commit_revision;
+                let mut revisions = snapshot.selection.source_revisions(revision);
+                if snapshot.page.tables.contains_key("discovery_state") {
+                    revisions.extend([
+                        ("processor_progress".into(), revision),
+                        ("processor_gaps".into(), revision),
+                        ("analysis_results".into(), revision),
+                    ]);
+                }
+                revisions
             })
             .collect::<Vec<_>>();
         revisions.sort();

@@ -215,6 +215,7 @@ impl SourceSnapshot {
             || targets;
         if !sources.contains_key("events")
             && !sources.contains_key("coverage")
+            && !sources.contains_key("discovery_state")
             && !sources.contains_key("notifications")
             && !graph
             && !discovery

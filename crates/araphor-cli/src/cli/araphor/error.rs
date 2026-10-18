@@ -16,8 +16,8 @@ pub(crate) enum AraphorCommandError {
     },
     #[snafu(display("{source}"))]
     Analysis {
-        #[snafu(source(from(araphor_analysis::Error, Box::new)))]
-        source: Box<araphor_analysis::Error>,
+        #[snafu(source(from(araphor_analysis_back::Error, Box::new)))]
+        source: Box<araphor_analysis_back::Error>,
         #[snafu(implicit)]
         location: Location,
     },

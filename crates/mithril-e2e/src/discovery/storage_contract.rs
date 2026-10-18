@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, fs, path::Path};
 
-use araphor_analysis::{DiscoveryOwner, InstalledAnalysis};
+use araphor_analysis_back::{DiscoveryOwner, InstalledAnalysis};
 use araphor_data::{
     AnalysisStore, DiscoveryInputManifestV1, EvidenceStoreOutcomeV1, ValidatedCoverageV1,
     ValidatedEvidenceBatchV1,

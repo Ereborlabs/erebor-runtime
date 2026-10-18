@@ -325,6 +325,16 @@ impl AnalysisStore {
         class: ProcessorClassV1,
         start_cursor: u64,
     ) -> Result<u64> {
+        self.register_processor_guarded(scope, class, start_cursor, || Ok(()))
+    }
+
+    pub fn register_processor_guarded(
+        &self,
+        scope: &ProcessorScopeV1,
+        class: ProcessorClassV1,
+        start_cursor: u64,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<u64> {
         if !scope.valid() || start_cursor == 0 {
             return self.reject("the processor scope or start cursor is invalid");
         }
@@ -355,6 +365,7 @@ impl AnalysisStore {
             if existing != (class.as_str().to_owned(), start_cursor, false) {
                 return AnalysisConflictSnafu.fail();
             }
+            check()?;
             return Ok(meta.commit_revision);
         }
         let receipt = Self::read_receipt_from(&transaction, &self.root, &scope.identity, &key)?;
@@ -392,6 +403,9 @@ impl AnalysisStore {
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
         #[cfg(test)]
         self.crash_at("register.before");
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(super::AnalysisCommitStage::BeforeResultCommit)?;
+        check()?;
         self.commit_metadata(transaction, "commit processor registration")?;
         #[cfg(test)]
         self.crash_at("register.after");
@@ -400,6 +414,14 @@ impl AnalysisStore {
     }
 
     pub fn resume_optional(&self, scope: &ProcessorScopeV1) -> Result<Option<AnalysisGapV1>> {
+        self.resume_optional_guarded(scope, || Ok(()))
+    }
+
+    pub fn resume_optional_guarded(
+        &self,
+        scope: &ProcessorScopeV1,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Option<AnalysisGapV1>> {
         if !scope.valid() {
             return self.reject("the optional processor scope is invalid");
         }
@@ -452,6 +474,7 @@ impl AnalysisStore {
                 operation: "read optional expired gap",
             })?;
         let Some(last_cursor) = last else {
+            check()?;
             return Ok(None);
         };
         let receipt = Self::read_receipt_from(&transaction, &self.root, &scope.identity, &key)?
@@ -502,6 +525,9 @@ impl AnalysisStore {
         )?;
         #[cfg(test)]
         self.crash_at("resume.before");
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(super::AnalysisCommitStage::BeforeResultCommit)?;
+        check()?;
         self.commit_metadata(transaction, "commit optional processor gap")?;
         #[cfg(test)]
         self.crash_at("resume.after");
@@ -517,7 +543,7 @@ impl AnalysisStore {
         if input.scope.processor_id == crate::GRAPH_PROCESSOR {
             return self.commit_graph(input, true);
         }
-        self.commit_progress(input, None, true, None, None, false)
+        self.commit_progress(input, None, true, None, None, false, &mut || Ok(()))
     }
 
     pub fn commit_graph(
@@ -589,7 +615,15 @@ impl AnalysisStore {
         {
             return self.reject("the graph input manifest, witnesses, or progress differ");
         }
-        self.commit_progress(input, None, advance, None, Some(graph), canonical)
+        self.commit_progress(
+            input,
+            None,
+            advance,
+            None,
+            Some(graph),
+            canonical,
+            &mut || Ok(()),
+        )
     }
 
     #[cfg(test)]
@@ -602,7 +636,15 @@ impl AnalysisStore {
             return self.reject("the working result owner is invalid");
         }
         let profile = crate::DiscoveryProfileV1::try_from(input.body.as_slice())?;
-        self.commit_progress(input, previous, true, Some(&profile), None, false)
+        self.commit_progress(
+            input,
+            previous,
+            true,
+            Some(&profile),
+            None,
+            false,
+            &mut || Ok(()),
+        )
     }
 
     #[cfg(test)]
@@ -616,9 +658,15 @@ impl AnalysisStore {
         if !profile.sealed {
             return self.reject("the historical profile is not sealed");
         }
-        self.commit_progress(input, None, false, Some(&profile), None, false)
+        self.commit_progress(input, None, false, Some(&profile), None, false, &mut || {
+            Ok(())
+        })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "All result variants share one transaction and final commit guard."
+    )]
     fn commit_progress(
         &self,
         input: &AnalysisResultCommitV1,
@@ -627,6 +675,7 @@ impl AnalysisStore {
         profile: Option<&crate::DiscoveryProfileV1>,
         graph: Option<&crate::GraphSnapshotV1>,
         canonical: bool,
+        check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
         if profile.is_some_and(|profile| {
             profile.scope != input.scope
@@ -764,6 +813,7 @@ impl AnalysisStore {
                 && stored == request
                 && retained == input.body
             {
+                check()?;
                 return Ok(AnalysisResultReceiptV1 {
                     commit_revision: revision,
                     consumed_cursor: input.consumed_cursor,
@@ -977,6 +1027,7 @@ impl AnalysisStore {
         self.crash_at("result.before");
         #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(super::AnalysisCommitStage::BeforeResultCommit)?;
+        check()?;
         self.commit_metadata(transaction, "commit analysis result")?;
         #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("result.after");
@@ -1001,6 +1052,130 @@ mod tests {
             tenant_id: [tenant; 16],
             ..crate::analysis::tests::identity()
         }
+    }
+
+    #[test]
+    fn registration_guard_rolls_back() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let scope = ProcessorScopeV1 {
+            processor_id: "guarded-processor".into(),
+            method_version: 1,
+            identity: identity(1),
+        };
+        let before = store.meta()?;
+        let mut notices = store.subscribe_revision();
+        let control = std::sync::Arc::new(crate::AnalysisReadControl::default());
+        control.check()?;
+        let cancelled = std::sync::Arc::clone(&control);
+        store.set_commit_hook(
+            super::super::AnalysisCommitStage::BeforeResultCommit,
+            move || cancelled.cancel(),
+        )?;
+        assert!(matches!(
+            store.register_processor_guarded(&scope, ProcessorClassV1::Required, 1, || {
+                control.check()
+            }),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert_eq!(store.meta()?, before);
+        assert!(store.processor_health(&scope)?.is_none());
+        assert!(!notices.has_changed()?);
+        let revision =
+            store.register_processor_guarded(&scope, ProcessorClassV1::Optional, 1, || Ok(()))?;
+        assert!(revision > before.commit_revision);
+        notices.borrow_and_update();
+        let committed = store.meta()?;
+        assert!(matches!(
+            store.register_processor_guarded(&scope, ProcessorClassV1::Optional, 1, || {
+                control.check()
+            }),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert_eq!(store.meta()?, committed);
+        assert!(!notices.has_changed()?);
+        let health = store.processor_health(&scope)?;
+        drop(store);
+        let reopened = AnalysisStore::open(root)?;
+        assert_eq!(reopened.processor_health(&scope)?, health);
+        assert_eq!(
+            reopened.register_processor(&scope, ProcessorClassV1::Optional, 1)?,
+            revision
+        );
+        assert_eq!(reopened.meta()?, committed);
+        Ok(())
+    }
+
+    #[test]
+    fn resume_guard_rolls_back() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let limits = crate::RetentionLimitsV1 {
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: None,
+        };
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let scope = ProcessorScopeV1 {
+            processor_id: "guarded-processor".into(),
+            method_version: 1,
+            identity: identity(1),
+        };
+        store.accept_validated_batch(
+            scope.identity.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: 1,
+                last_cursor: 1,
+                intake_utc_ns: 1,
+                framed_records: b"frame".to_vec().into(),
+                frame_ends: vec![5],
+            },
+        )?;
+        store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
+        assert_eq!(
+            crate::EvidenceRetentionOwner::new(&store)
+                .step(100)?
+                .removed_records,
+            1
+        );
+        let before = store.meta()?;
+        let health = store.processor_health(&scope)?;
+        let mut notices = store.subscribe_revision();
+        let control = std::sync::Arc::new(crate::AnalysisReadControl::default());
+        control.check()?;
+        let cancelled = std::sync::Arc::clone(&control);
+        store.set_commit_hook(
+            super::super::AnalysisCommitStage::BeforeResultCommit,
+            move || cancelled.cancel(),
+        )?;
+        assert!(matches!(
+            store.resume_optional_guarded(&scope, || control.check()),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert_eq!(store.meta()?, before);
+        assert_eq!(store.processor_health(&scope)?, health);
+        assert!(store.processor_gaps(&scope, 0)?.is_empty());
+        assert!(!notices.has_changed()?);
+        let gap = store
+            .resume_optional_guarded(&scope, || Ok(()))?
+            .ok_or("resume gap absent")?;
+        assert_eq!((gap.first_cursor, gap.last_cursor), (1, 1));
+        assert_eq!(store.processor_gaps(&scope, 0)?, [gap]);
+        notices.borrow_and_update();
+        let committed = store.meta()?;
+        assert!(matches!(
+            store.resume_optional_guarded(&scope, || control.check()),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert_eq!(store.meta()?, committed);
+        assert!(!notices.has_changed()?);
+        drop(store);
+        let reopened = AnalysisStore::open_with_limits(root, limits, Default::default())?;
+        assert_eq!(reopened.processor_gaps(&scope, 0)?, [gap]);
+        assert_eq!(reopened.resume_optional(&scope)?, None);
+        assert_eq!(reopened.meta()?, committed);
+        Ok(())
     }
 
     #[test]

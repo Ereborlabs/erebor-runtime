@@ -16,7 +16,7 @@ pub fn run() {
 #[test]
 #[ignore]
 fn araphor_component_compiler() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    araphor_analysis::AnalysisPackageOwner::run_compiler_worker()?;
+    araphor_analysis_back::AnalysisPackageOwner::run_compiler_worker()?;
     Ok(())
 }
 

@@ -704,10 +704,19 @@ async fn query_keeps_checkpoint() -> TestResult {
 
 #[tokio::test]
 async fn query_conversion_releases_capacity() -> TestResult {
-    let fixture = Fixture::new()?;
+    let fixture = Fixture::with_config(ClientGrpcConfig {
+        query: Limits {
+            output_capacity: Some(16 * 1024 * 1024),
+            ..Default::default()
+        },
+        ..Default::default()
+    })?;
     let engine = &fixture.service.data()?.query;
     let memory = engine.memory().clone();
-    let capacity = engine.limits().output_capacity;
+    let capacity = engine
+        .limits()
+        .output_capacity
+        .ok_or("configured output capacity")?;
     let request = fixture.request(
         proto::QueryRequest {
             sql: "SELECT (1, 2) AS value".into(),
@@ -747,8 +756,8 @@ fn observability_grpc_duration_wait() -> TestResult {
         for revoke in [false, true] {
             let fixture = Fixture::with_config(ClientGrpcConfig {
                 query: Limits {
-                    global_streams: 1,
-                    tenant_streams: 1,
+                    global_streams: Some(1),
+                    tenant_streams: Some(1),
                     ..Limits::default()
                 },
                 ..ClientGrpcConfig::default()
@@ -1274,7 +1283,13 @@ async fn observability_grpc_trace_bookmark() -> TestResult {
 #[tokio::test]
 async fn observability_grpc_trace_stream() -> TestResult {
     let fixture = Fixture::with_retention(
-        ClientGrpcConfig::default(),
+        ClientGrpcConfig {
+            query: Limits {
+                output_capacity: Some(16 * 1024 * 1024),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
         araphor_data::RetentionLimitsV1 {
             raw_max_age_ns: Some(24 * 60 * 60 * 1_000_000_000),
             ..Default::default()
@@ -1282,7 +1297,10 @@ async fn observability_grpc_trace_stream() -> TestResult {
     )?;
     let engine = &fixture.service.data()?.query;
     let memory = engine.memory().clone();
-    let capacity = engine.limits().output_capacity;
+    let capacity = engine
+        .limits()
+        .output_capacity
+        .ok_or("configured output capacity")?;
     let accepted = fixture.seed([1; 16], 6)?;
     fixture.record(&accepted)?;
     let request = proto::WatchTraceRequest {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use araphor_analysis::{GraphAndFindingOwner, NotificationRouter};
+use araphor_analysis_back::{GraphAndFindingOwner, NotificationRouter};
 use araphor_data::{
     AnalysisStore, NotificationAuthorization, NotificationFailureV1, NotificationGrantV1,
     NotificationPolicyV1, NotificationSink, NotificationSinkResultV1,

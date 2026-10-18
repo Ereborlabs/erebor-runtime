@@ -1,6 +1,6 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
-use araphor_analysis::{AnalysisPackageOwner, InstalledAnalysis};
+use araphor_analysis_back::{AnalysisPackageOwner, InstalledAnalysis};
 use araphor_analysis_builtins::discovery as builtin;
 use araphor_analysis_sdk as sdk;
 use araphor_data::PackageAuthorization;

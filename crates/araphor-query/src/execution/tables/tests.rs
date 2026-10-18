@@ -26,7 +26,7 @@ impl Fixture {
             store,
             Limits {
                 input_bytes: 4096,
-                input_capacity: 4096,
+                input_capacity: Some(4096),
                 ..Default::default()
             },
         )?;
@@ -124,10 +124,13 @@ fn prepaid_indices_keep_aliases() -> TestResult {
             )
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let memory = fixture
-        .engine
-        .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)?;
+    let memory = fixture.engine.memory().reserve_input(
+        fixture
+            .engine
+            .limits()
+            .input_capacity
+            .expect("configured input capacity"),
+    )?;
     let schema = Session::indexed_schema(&schema)?;
     let indexed = session.index_batches(Arc::clone(&schema), &batches, &memory, 128)?;
     assert!(memory.size() >= 128);
@@ -152,7 +155,13 @@ fn prepaid_indices_keep_aliases() -> TestResult {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_err());
     assert_eq!(
         alias
@@ -164,10 +173,13 @@ fn prepaid_indices_keep_aliases() -> TestResult {
     );
     drop(alias);
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)?,
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
     Ok(())
 }
@@ -204,10 +216,13 @@ fn claimed_inputs_skip_prepayment() -> TestResult {
     drop(batches);
     drop(memory);
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)?,
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
     Ok(())
 }

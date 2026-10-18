@@ -98,7 +98,7 @@ impl Inputs {
         let includes =
             |origin: &AnalysisReferenceOriginV1, key: Option<&AnalysisContextKeyV1>| match origin {
                 AnalysisReferenceOriginV1::Context => key.is_some_and(context),
-                AnalysisReferenceOriginV1::Profile => has("behaviors"),
+                AnalysisReferenceOriginV1::Profile => has("behaviors") || has("discovery_state"),
                 AnalysisReferenceOriginV1::Graph => [
                     "findings",
                     "relationships",

@@ -61,7 +61,7 @@ fn witnesses_keep_source_receipt() -> TestResult {
     let mut selection = AnalysisSelectionV1::new(source.tenant_id, vec![source]);
     selection.contexts = Selection::Exact(vec![context.key.clone()]);
     let capacity = 32 * 1024;
-    let memory = crate::memory::Memory::new(capacity, 1024);
+    let memory = crate::memory::Memory::new(Some(capacity), Some(1024));
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let snapshot = super::SourceSnapshot::new(
         store,
@@ -72,7 +72,7 @@ fn witnesses_keep_source_receipt() -> TestResult {
             ..Default::default()
         },
         control.within(control.remaining()?)?,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
         1,
         Arc::clone(&memory),
     );
@@ -200,9 +200,9 @@ async fn receipt_releases_binary_scratch() -> TestResult {
         Arc::clone(&store),
         Limits {
             input_bytes: 2 * 1024 * 1024,
-            input_capacity: 2 * 1024 * 1024,
-            output_capacity: 2 * 1024 * 1024,
-            extract_timeout: Duration::from_secs(5),
+            input_capacity: Some(2 * 1024 * 1024),
+            output_capacity: Some(2 * 1024 * 1024),
+            extract_timeout: Some(Duration::from_secs(5)),
             evaluate_timeout: Some(Duration::from_secs(5)),
             ..Default::default()
         },
@@ -250,7 +250,10 @@ async fn receipt_releases_binary_scratch() -> TestResult {
     drop(batch);
     drop(stream);
     drop(session);
-    let capacity = engine.limits().input_capacity;
+    let capacity = engine
+        .limits()
+        .input_capacity
+        .expect("configured input capacity");
     assert!(engine.memory().reserve_input(capacity - metadata).is_err());
     drop(payload);
     let available = engine.memory().reserve_input(capacity - metadata)?;
@@ -259,7 +262,12 @@ async fn receipt_releases_binary_scratch() -> TestResult {
     assert!(engine.memory().reserve_input(capacity).is_err());
     assert!(engine
         .memory()
-        .reserve_output(engine.limits().output_capacity)
+        .reserve_output(
+            engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
     drop(receipt);
     assert!(engine.memory().reserve_input(capacity).is_ok());
@@ -274,7 +282,7 @@ fn catalog_native_preflight() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
     let capacity = 2 * 1024 * 1024;
-    let memory = crate::memory::Memory::new(capacity, 1024);
+    let memory = crate::memory::Memory::new(Some(capacity), Some(1024));
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let source = super::SourceSnapshot::new(
         Arc::clone(&store),
@@ -285,7 +293,7 @@ fn catalog_native_preflight() -> TestResult {
             ..Default::default()
         },
         control.within(control.remaining()?)?,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
         1,
         Arc::clone(&memory),
     );
@@ -390,7 +398,7 @@ fn catalog_native_preflight() -> TestResult {
             ..Default::default()
         },
         control.within(control.remaining()?)?,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
         1,
         Arc::clone(&memory),
     );
@@ -434,36 +442,36 @@ fn catalog_native_preflight() -> TestResult {
 fn catalog_content_contract() -> TestResult {
     let expected: [[u8; 32]; 8] = [
         [
-            233, 2, 240, 200, 37, 198, 202, 3, 135, 166, 39, 47, 137, 102, 216, 161, 220, 163, 255,
-            142, 72, 15, 219, 83, 51, 149, 198, 125, 3, 32, 56, 208,
+            244, 55, 50, 23, 252, 235, 141, 112, 237, 248, 54, 148, 2, 164, 129, 180, 49, 63, 100,
+            72, 9, 145, 150, 206, 85, 243, 81, 45, 166, 185, 84, 116,
         ],
         [
-            194, 44, 62, 142, 105, 159, 193, 50, 50, 46, 86, 248, 189, 245, 58, 19, 195, 202, 255,
-            241, 146, 83, 96, 5, 223, 50, 90, 138, 100, 161, 95, 222,
+            167, 90, 26, 253, 24, 113, 234, 5, 186, 204, 62, 48, 80, 226, 228, 13, 201, 140, 119,
+            250, 237, 74, 10, 35, 130, 17, 38, 145, 81, 250, 177, 42,
         ],
         [
-            115, 217, 142, 97, 119, 20, 70, 82, 159, 124, 50, 56, 21, 142, 197, 158, 97, 32, 42,
-            102, 144, 69, 243, 92, 19, 199, 196, 228, 29, 37, 217, 188,
+            138, 127, 27, 85, 24, 6, 49, 79, 204, 227, 91, 34, 240, 60, 194, 19, 31, 124, 12, 190,
+            214, 128, 160, 104, 83, 11, 34, 18, 228, 93, 129, 46,
         ],
         [
-            195, 113, 214, 115, 7, 152, 164, 79, 234, 212, 115, 79, 71, 126, 172, 54, 222, 120,
-            128, 6, 137, 16, 29, 31, 54, 150, 244, 248, 164, 249, 153, 17,
+            111, 226, 28, 73, 28, 232, 88, 117, 40, 162, 8, 140, 233, 152, 161, 65, 37, 110, 180,
+            139, 111, 15, 190, 154, 212, 114, 164, 192, 7, 200, 240, 34,
         ],
         [
-            114, 233, 173, 119, 55, 184, 71, 10, 87, 124, 214, 173, 31, 135, 228, 172, 97, 32, 143,
-            8, 158, 230, 69, 209, 19, 238, 169, 67, 39, 169, 32, 249,
+            114, 100, 74, 62, 135, 141, 92, 191, 49, 68, 22, 179, 167, 2, 234, 48, 120, 116, 248,
+            166, 139, 222, 86, 7, 45, 182, 50, 157, 199, 46, 169, 200,
         ],
         [
-            141, 229, 156, 26, 202, 183, 112, 154, 180, 227, 214, 218, 106, 185, 28, 84, 89, 187,
-            92, 84, 198, 4, 159, 248, 237, 156, 43, 103, 202, 177, 117, 23,
+            34, 85, 13, 146, 85, 123, 152, 49, 216, 67, 161, 93, 33, 137, 96, 37, 46, 235, 76, 231,
+            194, 59, 109, 83, 95, 210, 175, 234, 251, 21, 219, 8,
         ],
         [
-            82, 177, 31, 105, 128, 156, 32, 224, 129, 93, 125, 101, 165, 213, 236, 30, 138, 238,
-            20, 211, 151, 248, 79, 253, 120, 189, 160, 60, 33, 113, 113, 33,
+            8, 247, 83, 148, 184, 36, 170, 62, 115, 201, 202, 139, 150, 108, 78, 109, 253, 18, 24,
+            204, 241, 161, 16, 224, 117, 152, 63, 182, 179, 176, 164, 210,
         ],
         [
-            88, 168, 122, 197, 126, 14, 117, 67, 242, 96, 120, 63, 64, 73, 238, 196, 145, 211, 9,
-            193, 69, 13, 89, 51, 93, 108, 153, 144, 12, 52, 142, 12,
+            98, 206, 228, 110, 185, 7, 102, 156, 215, 170, 123, 214, 150, 248, 219, 43, 95, 67, 12,
+            236, 218, 11, 248, 27, 100, 143, 182, 10, 71, 172, 119, 218,
         ],
     ];
     use std::hash::Hash as _;
@@ -485,7 +493,7 @@ fn catalog_content_contract() -> TestResult {
             store.enable_notification_owner()?;
         }
         let capacity = 2 * 1024 * 1024;
-        let memory = crate::memory::Memory::new(capacity, 1024);
+        let memory = crate::memory::Memory::new(Some(capacity), Some(1024));
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
         let source = SourceSnapshot::new(
             store,
@@ -496,7 +504,7 @@ fn catalog_content_contract() -> TestResult {
                 ..Default::default()
             },
             control.within(control.remaining()?)?,
-            Duration::from_secs(30),
+            Some(Duration::from_secs(30)),
             1,
             Arc::clone(&memory),
         );
@@ -795,7 +803,7 @@ fn retirement_map_charges_once() -> TestResult {
         .replay_floor(identity.tenant_id)?
         .is_some_and(|floor| floor <= frontier));
     let capacity = 64 * 1024;
-    let memory = crate::memory::Memory::new(capacity, 1024);
+    let memory = crate::memory::Memory::new(Some(capacity), Some(1024));
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let source = SourceSnapshot::new(
         store,
@@ -806,7 +814,7 @@ fn retirement_map_charges_once() -> TestResult {
             ..Default::default()
         },
         control.within(control.remaining()?)?,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
         1,
         Arc::clone(&memory),
     );

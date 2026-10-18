@@ -31,9 +31,19 @@ impl PreparedProfile {
 impl AnalysisStore {
     pub fn commit_working_profile(
         &self,
+        input: AnalysisResultCommitV1,
+        prepared: PreparedProfile,
+        previous: Option<u64>,
+    ) -> Result<AnalysisResultReceiptV1> {
+        self.commit_working_profile_guarded(input, prepared, previous, || Ok(()))
+    }
+
+    pub fn commit_working_profile_guarded(
+        &self,
         mut input: AnalysisResultCommitV1,
         prepared: PreparedProfile,
         previous: Option<u64>,
+        mut check: impl FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
         if input.scope.processor_id != crate::DISCOVERY_PROCESSOR {
             return self.reject("the working result owner is invalid");
@@ -42,7 +52,15 @@ impl AnalysisStore {
             return self.reject("the typed profile commit contains independent body bytes");
         }
         input.body = prepared.body;
-        self.commit_progress(&input, previous, true, Some(&prepared.profile), None, false)
+        self.commit_progress(
+            &input,
+            previous,
+            true,
+            Some(&prepared.profile),
+            None,
+            false,
+            &mut check,
+        )
     }
 
     pub fn commit_sealed_profile(
@@ -62,7 +80,15 @@ impl AnalysisStore {
             return self.reject("the historical profile is not sealed");
         }
         input.body = prepared.body;
-        self.commit_progress(&input, None, false, Some(&prepared.profile), None, false)
+        self.commit_progress(
+            &input,
+            None,
+            false,
+            Some(&prepared.profile),
+            None,
+            false,
+            &mut || Ok(()),
+        )
     }
 }
 

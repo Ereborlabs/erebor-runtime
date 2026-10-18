@@ -20,6 +20,7 @@ use crate::{
 };
 
 mod changes;
+mod discovery;
 mod graph;
 mod package;
 mod tables;
@@ -1444,6 +1445,9 @@ impl AnalysisStore {
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
         }
+        if read.requests.contains_key("discovery_state") && !selection.binding_ids.is_empty() {
+            return Err(crate::PackageErrorCodeV1::Denied.error("complete discovery source scope"));
+        }
         if packages.is_some_and(|inputs| inputs.authorized.tenant_id != selection.tenant_id) {
             return Err(crate::PackageErrorCodeV1::Denied.error("dependency tenant"));
         }
@@ -1543,6 +1547,7 @@ impl AnalysisStore {
                     output.limits.input_bytes,
                 )?;
                 output.charge(added)?;
+                self.extract_discovery_state(snapshot, &receipt, &read, &mut output, &mut capture, control)?;
                 output.sources.push(AnalysisSourceSnapshotV1 {
                     receipt,
                     expired,
@@ -2927,7 +2932,11 @@ mod tests {
                 let (ready, held) = mpsc::channel();
                 let (release, released) = mpsc::channel();
                 let (waiting, blocked) = mpsc::channel();
-                let control = AnalysisReadControl::default();
+                let control = if cancelled {
+                    AnalysisReadControl::default()
+                } else {
+                    AnalysisReadControl::with_timeout(Duration::from_millis(50))?
+                };
                 *control
                     .wait_signal
                     .lock()

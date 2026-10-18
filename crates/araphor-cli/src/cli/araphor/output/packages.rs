@@ -15,7 +15,8 @@ impl Output {
             .output
             .take()
             .map(|output| {
-                araphor_analysis::AnalysisPackageOwner::output_rows(&output).context(AnalysisSnafu)
+                araphor_analysis_back::AnalysisPackageOwner::output_rows(&output)
+                    .context(AnalysisSnafu)
             })
             .transpose()?;
         if matches!(self.mode, OutputMode::Jsonl) {

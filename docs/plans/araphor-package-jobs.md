@@ -25,7 +25,7 @@ The user directs implementation under these criteria on 2026-10-18:
    native logical planning, native optimization, physical planning, and
    execution. A direct call or PRQL source must reach that same SQL route.
 3. Move the existing Discovery owner and packages into the real
-   `araphor-discovery_back` crate. Create `araphor-discovery` from scratch.
+   `araphor-analysis_back` crate. Create `araphor-analysis` from scratch.
    The new crate consumes actual Query subscription output. It must not call
    the backup owner or retain `run_clock`, source sweeps, or the old reader.
    Keep the backup available for explicit legacy use and comparison.
@@ -36,6 +36,17 @@ The user directs implementation under these criteria on 2026-10-18:
    boundary is a processing event; a timer that checks for changes is polling.
 6. Keep new packages in their own crates. Do not move old code to a new crate
    and describe that move as a rewrite or reduction.
+
+The user permits reuse of old Analysis code only when that code meets the
+native pipeline and reactive subscription design. Keep the complete old crate
+in `araphor-analysis_back`. The fresh `araphor-analysis` must not depend on the
+backup or receive a clock. Query subscriptions supply pipeline events and SQL
+window deadlines. Use a native stream collection that supports insertion and
+removal on demand. Do not keep a permanent set of sources or a source sweep.
+The replacement and complete production Rust reduction remain **Not done**.
+
+The [subscription stream result](araphor-component-redesign.md#subscription-streams-and-shared-validation)
+records the fresh owner, compatible reuse, selected checks, and remaining work.
 
 ### Immediate delivery order
 

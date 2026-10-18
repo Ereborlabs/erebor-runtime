@@ -47,14 +47,14 @@ pub struct Limits {
     pub input_bytes: usize,
     pub output_rows: usize,
     pub output_bytes: usize,
-    pub extract_timeout: Duration,
+    pub extract_timeout: Option<Duration>,
     pub evaluate_timeout: Option<Duration>,
     pub global_evaluations: usize,
     pub tenant_evaluations: usize,
-    pub global_streams: usize,
-    pub tenant_streams: usize,
-    pub input_capacity: usize,
-    pub output_capacity: usize,
+    pub global_streams: Option<usize>,
+    pub tenant_streams: Option<usize>,
+    pub input_capacity: Option<usize>,
+    pub output_capacity: Option<usize>,
     pub execution_capacity: Option<usize>,
     pub parser: crate::parser::Parser,
     pub parameter_count: Option<usize>,
@@ -70,14 +70,14 @@ impl Default for Limits {
             input_bytes: 64 * 1024 * 1024,
             output_rows: 200,
             output_bytes: 1024 * 1024,
-            extract_timeout: Duration::from_secs(1),
+            extract_timeout: None,
             evaluate_timeout: None,
             global_evaluations: 2,
             tenant_evaluations: 1,
-            global_streams: 16,
-            tenant_streams: 4,
-            input_capacity: 128 * 1024 * 1024,
-            output_capacity: 16 * 1024 * 1024,
+            global_streams: None,
+            tenant_streams: None,
+            input_capacity: None,
+            output_capacity: None,
             execution_capacity: None,
             parser: crate::parser::Parser::default(),
             parameter_count: None,
@@ -94,16 +94,27 @@ impl Limits {
             || self.input_bytes == 0
             || self.output_bytes == 0
             || self.output_rows == 0
-            || self.extract_timeout.is_zero()
+            || self.extract_timeout == Some(Duration::ZERO)
             || self.evaluate_timeout == Some(Duration::ZERO)
             || self.global_evaluations == 0
             || self.tenant_evaluations == 0
             || self.tenant_evaluations > self.global_evaluations
-            || self.global_streams == 0
-            || self.tenant_streams == 0
-            || self.tenant_streams > self.global_streams
-            || self.input_capacity < self.input_bytes
-            || self.output_capacity < self.output_bytes
+            || self
+                .global_streams
+                .is_some_and(|count| count > Semaphore::MAX_PERMITS)
+            || self
+                .tenant_streams
+                .is_some_and(|count| count > Semaphore::MAX_PERMITS)
+            || self
+                .tenant_streams
+                .zip(self.global_streams)
+                .is_some_and(|(tenant, global)| tenant > global)
+            || self
+                .input_capacity
+                .is_some_and(|capacity| capacity < self.input_bytes)
+            || self
+                .output_capacity
+                .is_some_and(|capacity| capacity < self.output_bytes)
             || self.execution_capacity == Some(0)
         {
             return InvalidSnafu {
@@ -117,13 +128,13 @@ impl Limits {
 
 struct TenantCapacity {
     evaluations: Arc<Semaphore>,
-    streams: Arc<Semaphore>,
+    streams: Option<Arc<Semaphore>>,
 }
 
 pub struct Permit {
     _tenant: Arc<TenantCapacity>,
-    _global: OwnedSemaphorePermit,
-    _local: OwnedSemaphorePermit,
+    _global: Option<OwnedSemaphorePermit>,
+    _local: Option<OwnedSemaphorePermit>,
 }
 
 pub(crate) struct PendingRead {
@@ -145,7 +156,7 @@ pub struct Engine {
     memory: Arc<Memory>,
     limits: Arc<Limits>,
     evaluations: Arc<Semaphore>,
-    streams: Arc<Semaphore>,
+    streams: Option<Arc<Semaphore>>,
     tenants: Mutex<BTreeMap<[u8; 16], Weak<TenantCapacity>>>,
     runtime: Option<tokio::runtime::Runtime>,
 }
@@ -193,7 +204,9 @@ impl Engine {
             state,
             memory: Memory::new(limits.input_capacity, limits.output_capacity),
             evaluations: Arc::new(Semaphore::new(limits.global_evaluations)),
-            streams: Arc::new(Semaphore::new(limits.global_streams)),
+            streams: limits
+                .global_streams
+                .map(|count| Arc::new(Semaphore::new(count))),
             tenants: Mutex::default(),
             limits,
             runtime: Some(runtime),
@@ -224,9 +237,7 @@ impl Engine {
         if snapshot.page.extraction.trace_reads().is_empty() {
             return Ok(());
         }
-        let control = Arc::new(AnalysisReadControl::with_timeout(
-            self.limits.extract_timeout,
-        )?);
+        let control = Arc::new(AnalysisReadControl::default().within(self.limits.extract_timeout)?);
         let permit = self.store.reserve_trace_read()?;
         let engine = Arc::clone(self);
         let snapshot = Arc::clone(snapshot);
@@ -368,7 +379,10 @@ impl Engine {
             .unwrap_or_else(|| {
                 let capacity = Arc::new(TenantCapacity {
                     evaluations: Arc::new(Semaphore::new(self.limits.tenant_evaluations)),
-                    streams: Arc::new(Semaphore::new(self.limits.tenant_streams)),
+                    streams: self
+                        .limits
+                        .tenant_streams
+                        .map(|count| Arc::new(Semaphore::new(count))),
                 });
                 tenants.insert(tenant, Arc::downgrade(&capacity));
                 capacity
@@ -393,17 +407,17 @@ impl Engine {
             .map_err(error)?;
         Ok(Permit {
             _tenant: tenant,
-            _global: global,
-            _local: local,
+            _global: Some(global),
+            _local: Some(local),
         })
     }
 
     fn reserve(&self, tenant: [u8; 16], stream: bool) -> Result<Permit> {
         let tenant = self.tenant(tenant)?;
         let (global, local) = if stream {
-            (&self.streams, &tenant.streams)
+            (self.streams.as_ref(), tenant.streams.as_ref())
         } else {
-            (&self.evaluations, &tenant.evaluations)
+            (Some(&self.evaluations), Some(&tenant.evaluations))
         };
         let error = |_| {
             BusySnafu {
@@ -411,8 +425,14 @@ impl Engine {
             }
             .build()
         };
-        let global = Arc::clone(global).try_acquire_owned().map_err(error)?;
-        let local = Arc::clone(local).try_acquire_owned().map_err(error)?;
+        let global = global
+            .map(|semaphore| Arc::clone(semaphore).try_acquire_owned())
+            .transpose()
+            .map_err(error)?;
+        let local = local
+            .map(|semaphore| Arc::clone(semaphore).try_acquire_owned())
+            .transpose()
+            .map_err(error)?;
         Ok(Permit {
             _tenant: tenant,
             _global: global,
@@ -604,11 +624,15 @@ impl Session {
         permit: Arc<Permit>,
     ) -> Result<SendableRecordBatchStream> {
         self.control.check()?;
-        if !Arc::ptr_eq(permit._global.semaphore(), &self.engine.evaluations)
-            || !Arc::ptr_eq(
-                permit._local.semaphore(),
-                &self.engine.tenant(self.selection.tenant_id)?.evaluations,
-            )
+        let tenant = self.engine.tenant(self.selection.tenant_id)?;
+        if permit
+            ._global
+            .as_ref()
+            .is_none_or(|permit| !Arc::ptr_eq(permit.semaphore(), &self.engine.evaluations))
+            || permit
+                ._local
+                .as_ref()
+                .is_none_or(|permit| !Arc::ptr_eq(permit.semaphore(), &tenant.evaluations))
         {
             return InvalidSnafu {
                 field: "evaluation permit",

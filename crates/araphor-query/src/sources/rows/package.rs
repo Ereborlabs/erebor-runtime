@@ -134,7 +134,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let capacity = 32 * 1024;
-        let memory = crate::memory::Memory::new(capacity, 1024);
+        let memory = crate::memory::Memory::new(Some(capacity), Some(1024));
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
         let source = SourceSnapshot::new(
             store,
@@ -145,7 +145,7 @@ mod tests {
                 ..Default::default()
             },
             control.within(control.remaining()?)?,
-            Duration::from_secs(30),
+            Some(Duration::from_secs(30)),
             1,
             Arc::clone(&memory),
         );

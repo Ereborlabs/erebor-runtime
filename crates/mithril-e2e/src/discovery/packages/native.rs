@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
-use araphor_analysis::{AnalysisPackageOwner, GraphAndFindingOwner, InstalledAnalysis};
+use araphor_analysis_back::{AnalysisPackageOwner, GraphAndFindingOwner, InstalledAnalysis};
 use araphor_analysis_builtins::graph::Detector;
 use araphor_data::{
     native::Qualification, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,

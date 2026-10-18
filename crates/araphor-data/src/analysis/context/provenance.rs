@@ -6,7 +6,8 @@ use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::*;
-use crate::{InstalledRefV1, JsonSnafu, PackageRefV1};
+use crate::package::NativePackageContext;
+use crate::{InstalledRefV1, JsonSnafu, PackageBundleRef, PackageBundleV1, PackageRefV1};
 
 impl AnalysisStore {
     pub(in crate::analysis) fn validate_context_packages(
@@ -14,6 +15,36 @@ impl AnalysisStore {
         root: &Path,
         context: &AnalysisContextVersionV1,
     ) -> Result<()> {
+        let native: Option<NativePackageContext> = PackageBundleRef::provenance(context)?;
+        if let Some(reference) = native {
+            let closure = Self::context_package_closure(
+                reader,
+                root,
+                context.key.tenant_id,
+                &reference.root,
+            )?;
+            let artifacts = closure
+                .keys()
+                .map(|reference| {
+                    Self::package_from(
+                        reader,
+                        context.key.tenant_id,
+                        &reference.package_id,
+                        &reference.revision,
+                    )?
+                    .ok_or_else(|| {
+                        crate::PackageErrorCodeV1::Missing.error("native package context artifact")
+                    })?
+                    .decode_artifact()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let bundle = PackageBundleV1 {
+                schema_version: 1,
+                root: reference.root,
+                artifacts,
+            };
+            return PackageBundleRef::new(&bundle)?.validate_context(context);
+        }
         let Some(references) = InstalledRefV1::context_refs(context)? else {
             return Ok(());
         };

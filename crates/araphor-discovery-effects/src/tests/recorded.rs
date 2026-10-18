@@ -18,6 +18,41 @@ use super::*;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+fn native_statement(sql: &str) -> TestResult<datafusion::sql::parser::Statement> {
+    let mut statements = datafusion::sql::parser::DFParserBuilder::new(sql)
+        .with_recursion_limit(usize::MAX)
+        .build()?
+        .parse_statements()?;
+    assert_eq!(statements.len(), 1);
+    statements
+        .pop_front()
+        .ok_or_else(|| "native statement absent".into())
+}
+
+async fn native_frame(
+    context: &SessionContext,
+    sql: &str,
+) -> TestResult<datafusion::dataframe::DataFrame> {
+    let state = context.state();
+    let statement = native_statement(sql)?;
+    let plan = state.statement_to_plan(statement).await?;
+    Ok(datafusion::dataframe::DataFrame::new(state, plan))
+}
+
+#[test]
+fn templates_use_native_parser() -> TestResult {
+    for sql in [
+        ObservedEffects::MERGE_SQL,
+        ObservedEffects::LIVE_SQL.as_str(),
+    ] {
+        assert!(matches!(
+            native_statement(sql)?,
+            datafusion::sql::parser::Statement::Statement(_)
+        ));
+    }
+    Ok(())
+}
+
 const EVENT_FIELDS: &[&str] = &[
     "tenant_id",
     "node_id",
@@ -62,31 +97,10 @@ const EVENT_FIELDS: &[&str] = &[
     "filesystem_device",
 ];
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct FlatLifecycle {
-    case: Case,
-    state: String,
-    records: Vec<RecordId>,
-    reason: Option<String>,
-}
+use araphor_data::DiscoveryLifecycleRowV1 as FlatLifecycle;
 
-impl From<&Lifecycle> for FlatLifecycle {
-    fn from(value: &Lifecycle) -> Self {
-        let (state, records, reason) = match &value.state {
-            State::Recorded { records } => ("RECORDED", records.clone(), None),
-            State::Declared { reason } => ("DECLARED", Vec::new(), Some(reason.clone())),
-            State::Missing => ("MISSING", Vec::new(), None),
-            State::NotApplicable { reason } => ("NOT_APPLICABLE", Vec::new(), Some(reason.clone())),
-            State::Unsupported { reason } => ("UNSUPPORTED", Vec::new(), Some(reason.clone())),
-        };
-        Self {
-            case: value.case,
-            state: state.into(),
-            records,
-            reason,
-        }
-    }
-}
+mod live;
+mod merge;
 
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

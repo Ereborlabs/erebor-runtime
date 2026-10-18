@@ -140,14 +140,26 @@ fn assert_released(fixture: &Fixture) {
         fixture
             .engine
             .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)
+            .reserve_input(
+                fixture
+                    .engine
+                    .limits()
+                    .input_capacity
+                    .expect("configured input capacity"),
+            )
             .unwrap(),
     );
     drop(
         fixture
             .engine
             .memory()
-            .reserve_output(fixture.engine.limits().output_capacity)
+            .reserve_output(
+                fixture
+                    .engine
+                    .limits()
+                    .output_capacity
+                    .expect("configured output capacity"),
+            )
             .unwrap(),
     );
 }
@@ -210,7 +222,7 @@ fn target_context(
 #[tokio::test]
 async fn targets_keep_snapshot_metadata() {
     let fixture = Fixture::new(Limits {
-        tenant_streams: 1,
+        tenant_streams: Some(1),
         ..Default::default()
     });
     let first_context = target_context(
@@ -380,7 +392,7 @@ async fn targets_keep_snapshot_metadata() {
 async fn compiled_policies_follow_sources() {
     for mixed in [false, true] {
         let fixture = Fixture::new(Limits {
-            tenant_streams: 1,
+            tenant_streams: Some(1),
             ..Default::default()
         });
         let contexts = |snapshot: &str, signature: &str| {
@@ -548,6 +560,150 @@ async fn compiled_policies_follow_sources() {
         drop((subscription, first, second));
         assert_released(&fixture);
     }
+}
+
+#[tokio::test]
+async fn state_follows_processor_head() {
+    let fixture = Fixture::new(Limits {
+        tenant_streams: Some(1),
+        ..Default::default()
+    });
+    fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
+    let sql =
+        "SELECT contiguous_cursor, processor_present, current_result_id, result_commit_revision,
+            consumed_cursor, profile_revision,
+            CASE WHEN snapshot IS NULL THEN NULL ELSE snapshot['accepted_records'] END AS accepted_records
+        FROM discovery_state";
+    let clock = TestClock::new(2_000_000_000);
+    let (mut subscription, control) = subscribe(&fixture, sql, clock.clone()).await;
+    let absent = next(&mut subscription).await;
+    assert_eq!(values(&absent, 0), [ScalarValue::UInt64(Some(1))]);
+    assert_eq!(values(&absent, 1), [ScalarValue::Boolean(Some(false))]);
+    assert_eq!(values(&absent, 2), [ScalarValue::Utf8(None)]);
+    assert_eq!(values(&absent, 6), [ScalarValue::UInt64(None)]);
+    let scope = araphor_data::ProcessorScopeV1 {
+        processor_id: araphor_data::DISCOVERY_PROCESSOR.into(),
+        method_version: araphor_data::DISCOVERY_SCHEMA_VERSION.into(),
+        identity: fixture.source.clone(),
+    };
+    fixture
+        .store
+        .register_processor(&scope, araphor_data::ProcessorClassV1::Optional, 1)
+        .unwrap();
+    let registered = next(&mut subscription).await;
+    assert_eq!(values(&registered, 1), [ScalarValue::Boolean(Some(true))]);
+    assert_eq!(values(&registered, 2), [ScalarValue::Utf8(None)]);
+    assert_eq!(values(&registered, 4), [ScalarValue::UInt64(Some(0))]);
+    let mut profile = araphor_data::DiscoveryProfileV1 {
+        schema_version: araphor_data::DISCOVERY_SCHEMA_VERSION,
+        scope: scope.clone(),
+        profile_id: "native-state".into(),
+        interval_id: "interval".into(),
+        revision: 1,
+        facts_revision: 0,
+        coverage_revision: 0,
+        created_utc_ns: 1,
+        updated_utc_ns: 1,
+        sealed: false,
+        input_bytes: 0,
+        incomplete: false,
+        gaps: Vec::new(),
+        context_refs: Vec::new(),
+        snapshot: araphor_data::BehaviorSnapshotV1 {
+            schema_version: araphor_data::DISCOVERY_SCHEMA_VERSION,
+            tenant_id: fixture.source.tenant_id,
+            source_revision: "native-state".into(),
+            proof_kind: araphor_data::DiscoveryProofKindV1::ObservedRuntime,
+            accepted_records: 0,
+            included_records: 0,
+            unresolved_records: 0,
+            excluded_records: 0,
+            atoms: Vec::new(),
+            coverage: Vec::new(),
+            unresolved: Vec::new(),
+            excluded: Vec::new(),
+            lifecycle: araphor_data::DiscoveryLifecycleCaseV1::ALL
+                .into_iter()
+                .map(|case| araphor_data::DiscoveryLifecycleEntryV1 {
+                    case,
+                    state: araphor_data::DiscoveryLifecycleStateV1::Missing,
+                })
+                .collect(),
+        },
+    };
+    let input = |profile: &araphor_data::DiscoveryProfileV1| araphor_data::AnalysisResultCommitV1 {
+        scope: scope.clone(),
+        expected_cursor: 0,
+        consumed_cursor: 0,
+        coverage_revision: 0,
+        context_revision: 0,
+        result_id: profile.profile_id.clone(),
+        body: Vec::new(),
+        created_utc_ns: profile.updated_utc_ns,
+        witnesses: Vec::new(),
+        context_refs: Vec::new(),
+    };
+    let committed = fixture
+        .store
+        .commit_working_profile(
+            input(&profile),
+            araphor_data::analysis::PreparedProfile::new(profile.clone()).unwrap(),
+            None,
+        )
+        .unwrap();
+    let first = next(&mut subscription).await;
+    profile.revision += 1;
+    profile.updated_utc_ns += 1;
+    let refreshed = fixture
+        .store
+        .commit_working_profile(
+            input(&profile),
+            araphor_data::analysis::PreparedProfile::new(profile).unwrap(),
+            Some(committed.commit_revision),
+        )
+        .unwrap();
+    let second = next(&mut subscription).await;
+    for (update, receipt, revision) in [(&first, committed, 1), (&second, refreshed, 2)] {
+        assert_eq!(update.operation, Operation::Replace);
+        assert_eq!(
+            values(update, 2),
+            [ScalarValue::Utf8(Some("native-state".into()))]
+        );
+        assert_eq!(
+            values(update, 3),
+            [ScalarValue::UInt64(Some(receipt.commit_revision))]
+        );
+        assert_eq!(values(update, 5), [ScalarValue::UInt64(Some(revision))]);
+        assert_eq!(values(update, 6), [ScalarValue::UInt64(Some(0))]);
+        let refs = update.snapshot.results().collect::<Vec<_>>();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].result_id, "native-state");
+        assert_eq!(refs[0].commit_revision, receipt.commit_revision);
+    }
+    assert_eq!(values(&absent, 1), [ScalarValue::Boolean(Some(false))]);
+    {
+        let waiting = subscription.next();
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+        let reads = clock.reads.load(Ordering::SeqCst);
+        clock.now.store(1_000_000_000_000, Ordering::SeqCst);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), waiting.as_mut())
+                .await
+                .is_err()
+        );
+        assert_eq!(clock.reads.load(Ordering::SeqCst), reads);
+        control.cancel().unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(8), waiting)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
+    }
+    assert!(subscription.next().await.is_none());
+    drop((subscription, absent, registered, first, second));
+    assert_released(&fixture);
 }
 
 #[tokio::test]
@@ -817,7 +973,7 @@ async fn window_expires_without_intake() {
 #[tokio::test]
 async fn idle_waits_for_events() {
     let fixture = fixture(Limits {
-        tenant_streams: 1,
+        tenant_streams: Some(1),
         ..Default::default()
     });
     fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
@@ -861,7 +1017,7 @@ async fn idle_waits_for_events() {
 #[tokio::test]
 async fn cancel_joins_source_read() {
     let fixture = fixture(Limits {
-        tenant_streams: 1,
+        tenant_streams: Some(1),
         ..Default::default()
     });
     fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
@@ -907,7 +1063,7 @@ async fn cancel_joins_source_read() {
 #[tokio::test]
 async fn recorded_updates_and_expires() {
     let fixture = fixture(Limits {
-        tenant_streams: 1,
+        tenant_streams: Some(1),
         ..Default::default()
     });
     fixture.commit(&fixture.source, 1, 2, 1_000_000_123);
@@ -987,5 +1143,60 @@ async fn recorded_updates_and_expires() {
     assert_eq!(first.snapshot.witnesses.len(), 2);
     subscription.cancel().unwrap();
     drop((subscription, first, second, expired, empty));
+    assert_released(&fixture);
+}
+
+#[tokio::test]
+async fn subscription_change_precedes_output() {
+    let fixture = fixture(Limits::default());
+    let (changes, receiver) = tokio::sync::watch::channel(0);
+    let (stream, control) = subscribe(
+        &fixture,
+        "SELECT COUNT(*) AS count FROM events",
+        TestClock::new(10),
+    )
+    .await;
+    let mut stream = stream.until_change(receiver);
+    changes.send_replace(1);
+    assert!(matches!(
+        stream.next().await,
+        Some(Err(crate::Error::Data {
+            source: araphor_data::Error::AnalysisReadDenied { .. },
+        }))
+    ));
+    assert!(stream.next().await.is_none());
+    assert!(control.check().is_err());
+    drop(stream);
+    assert_released(&fixture);
+}
+
+#[tokio::test]
+async fn subscription_change_wakes_idle() {
+    let fixture = fixture(Limits::default());
+    fixture.commit(&fixture.source, 1, 1, 1);
+    let (changes, receiver) = tokio::sync::watch::channel(0);
+    let (stream, _) = subscribe(
+        &fixture,
+        "SELECT COUNT(*) AS count FROM events",
+        TestClock::new(10),
+    )
+    .await;
+    let mut stream = stream.until_change(receiver);
+    let first = stream.next().await.unwrap().unwrap();
+    drop(first);
+    {
+        let waiting = stream.next();
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        changes.send_replace(1);
+        assert!(matches!(
+            waiting.await,
+            Some(Err(crate::Error::Data {
+                source: araphor_data::Error::AnalysisReadDenied { .. },
+            }))
+        ));
+    }
+    assert!(stream.next().await.is_none());
+    drop(stream);
     assert_released(&fixture);
 }

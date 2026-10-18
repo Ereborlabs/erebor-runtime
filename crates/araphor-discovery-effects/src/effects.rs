@@ -11,7 +11,7 @@ use datafusion::logical_expr::planner::{
 use datafusion::logical_expr::{
     AggregateUDF, Expr as LogicalExpr, LogicalPlanBuilder, ScalarUDF, TableSource, WindowUDF,
 };
-use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::parser::{DFParserBuilder, Statement};
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast::{
     Expr, FunctionArg, FunctionArgExpr, Statement as SqlStatement, TableFactor,
@@ -97,8 +97,11 @@ impl ObservedEffects {
     pub const CONTEXT_BINDINGS_SQL: &str = include_str!("context_bindings.sql");
     pub const RECORDED_SNAPSHOT_SQL: &str = include_str!("recorded_snapshot.sql");
 
-    fn query(sql: &str) -> Result<SqlStatement> {
-        let mut statements = DFParser::parse_sql(sql)?;
+    pub(crate) fn query(sql: &str) -> Result<SqlStatement> {
+        let mut statements = DFParserBuilder::new(sql)
+            .with_recursion_limit(usize::MAX)
+            .build()?
+            .parse_statements()?;
         let Some(Statement::Statement(statement)) = statements.pop_front() else {
             return Err(DataFusionError::Internal("Discovery SQL is absent".into()));
         };
@@ -142,6 +145,20 @@ impl RelationPlanner for ObservedEffects {
                     "records",
                     "contexts",
                     "ranges",
+                    "exclusions",
+                    "lifecycle",
+                    "metadata",
+                ],
+            ),
+            "merge_snapshot" => (Self::MERGE_SQL, &["left_snapshot", "right_snapshot"]),
+            "live" => (
+                Self::LIVE_BODY.as_str(),
+                &[
+                    "records",
+                    "targets",
+                    "policies",
+                    "reports",
+                    "state",
                     "exclusions",
                     "lifecycle",
                     "metadata",

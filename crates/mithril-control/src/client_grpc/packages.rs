@@ -49,12 +49,12 @@ impl ClientGrpcOwner {
             .map_err(|_| Status::internal("The package response cannot be encoded."))
     }
 
-    fn package_failure(error: araphor_analysis::Error) -> Status {
+    fn package_failure(error: araphor_analysis_back::Error) -> Status {
         let details = match &error {
-            araphor_analysis::Error::Data {
+            araphor_analysis_back::Error::Data {
                 source: araphor_data::Error::Package { code, field, .. },
             } => Some((*code, *field)),
-            araphor_analysis::Error::PackageNative {
+            araphor_analysis_back::Error::PackageNative {
                 code, operation, ..
             } => Some((*code, *operation)),
             _ => None,

@@ -15,14 +15,14 @@ OCI manifest identity remains the local transport and trust-pin identity.
 ## Implementation review flow
 
 [PackageBundleV1](../../crates/araphor-data/src/package/bundle.rs) External package admission validates the complete local OCI bundle
-  -> [AnalysisPackageOwner::install_revision](../../crates/araphor-analysis/src/package/lifecycle/revisions.rs) the package owner builds revision metadata or reuses the same immutable revision
+  -> [AnalysisPackageOwner::install_revision](../../crates/araphor-analysis_back/src/package/lifecycle/revisions.rs) the package owner builds revision metadata or reuses the same immutable revision
   -> [PackageArtifactV1::encode](../../crates/araphor-data/src/package/bundle.rs) the artifact uses the shared PackageOci metadata and raw-layer codec
   -> [PackageOci::artifact_layout](../../crates/araphor-data/src/package/oci.rs) the existing SDK Layout encodes one artifact as an OCI archive
   -> [AnalysisStore::install_package](../../crates/araphor-data/src/analysis/packages/revisions.rs) the store decodes the artifact, checks descriptor agreement, and writes the complete revision in one transaction
   -> [PackageRevisionV1::decode_artifact](../../crates/araphor-data/src/analysis/packages/model.rs) loading parses the separate descriptor and calls the shared artifact decoder
   -> [PackageArtifactV1::from_bytes](../../crates/araphor-data/src/package/bundle.rs) the SDK Content decoder and PackageOci fill the raw payload slots and check canonical identity
   -> [PackageRevisionV1::decode_artifact](../../crates/araphor-data/src/analysis/packages/model.rs) loading requires the two descriptors to agree
-  -> [AnalysisPackageOwner::load_bundle](../../crates/araphor-analysis/src/package/lifecycle/revisions.rs) the package owner loads dependencies and validates the complete bundle before runtime admission
+  -> [AnalysisPackageOwner::load_bundle](../../crates/araphor-analysis_back/src/package/lifecycle/revisions.rs) the package owner loads dependencies and validates the complete bundle before runtime admission
 
 [AnalysisStore::open_leased](../../crates/araphor-data/src/analysis/mod.rs) A database opens
   -> [AnalysisStore::open_leased](../../crates/araphor-data/src/analysis/mod.rs) the store requires its current schema version
@@ -71,7 +71,7 @@ current schema, validate rows and references, retain store identity and commit
 revision, and advance the recovery epoch through the existing owner. A failed
 restore cannot publish a partial store.
 
-The [native loader](../../crates/araphor-analysis/src/package/native/loading.rs) checks
+The [native loader](../../crates/araphor-analysis_back/src/package/native/loading.rs) checks
 code identity, dependency bytes, platform, and ABI. Storage keeps raw executable
 bytes; it does not interpret them. Collection uses the existing revision
 retention path. There is no second blob store.
@@ -84,7 +84,7 @@ retention path. There is no second blob store.
   -> [PackageRequestV1::encode](../../crates/araphor-data/src/package/model/request.rs) the client encodes request metadata and the OCI archive as separate CBOR byte strings
   -> [ClientGrpcOwner](../../crates/mithril-control/src/client_grpc/packages.rs) Control decodes the binary request from the existing gRPC bytes field
   -> [PackageTrustPinV1](../../crates/mithril-control/src/client_auth/packages.rs) Control requires the selected tenant's exact `sha256:` manifest pin and current grant
-  -> [AnalysisPackageOwner::admit_artifact](../../crates/araphor-analysis/src/package/execution.rs) the package owner admits each shared executable once and retains each export's SQL and binding checks
+  -> [AnalysisPackageOwner::admit_artifact](../../crates/araphor-analysis_back/src/package/execution.rs) the package owner admits each shared executable once and retains each export's SQL and binding checks
   -> [AnalysisStore::install_package](../../crates/araphor-data/src/analysis/packages/revisions.rs) the existing store commits the immutable package revision
 
 The SDK owns OCI representation and content checks. Data owns package meaning,
@@ -155,12 +155,12 @@ dependencies. [Bundle OCI tests](../../crates/araphor-data/src/package/oci/tests
 retain a fixed prechange manifest digest and archive length.
 [Descriptor agreement tests](../../crates/araphor-data/src/analysis/packages/tests.rs)
 check the decode error, install rollback, and rejection after reopen.
-[Revision tests](../../crates/araphor-analysis/src/package/lifecycle/revisions.rs)
+[Revision tests](../../crates/araphor-analysis_back/src/package/lifecycle/revisions.rs)
 retain immutable retry, changed-content rejection, reopen, and a 33 MiB artifact.
 [Package quota tests](../../crates/araphor-data/src/analysis/packages/tests.rs)
 retain charges from actual stored descriptor and artifact lengths.
 [Backup tests](../../crates/araphor-data/src/analysis/backup.rs) retain restore
-and malformed-input checks. [Graph recovery tests](../../crates/araphor-analysis/src/graph/tests/storage_recovery.rs)
+and malformed-input checks. [Graph recovery tests](../../crates/araphor-analysis_back/src/graph/tests/storage_recovery.rs)
 retain history, backup, and corruption checks. Native execution needs separate
 artifact-qualified tests; opaque buffer round trips do not prove execution.
 

@@ -25,6 +25,7 @@ members = [
     "crates/araphor-query",
     "crates/araphor-analysis",
     "crates/araphor-discovery-effects",
+    "crates/araphor-analysis_back",
     "crates/araphor-analysis-sdk",
     "crates/araphor-analysis-builtins",
     "crates/araphor-analysis-builtins/components/discovery",
@@ -128,13 +129,19 @@ opt-level = 2
 [profile.dev.package.wasmparser]
 opt-level = 2
 
+[profile.dev.package.datafusion-expr]
+opt-level = 1
+
+[profile.dev.package.datafusion-optimizer]
+opt-level = 1
+
 [profile.test.package.araphor-data]
 opt-level = 1
 
 [profile.test.package.araphor-query]
 opt-level = 1
 
-[profile.test.package.araphor-analysis]
+[profile.test.package.araphor-analysis_back]
 opt-level = 1
 
 [profile.test.package.araphor-analysis-sdk]

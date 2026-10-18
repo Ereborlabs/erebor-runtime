@@ -68,14 +68,26 @@ async fn subscription_keeps_memory_scope() {
             fixture
                 .engine
                 .memory()
-                .reserve_input(fixture.engine.limits().input_capacity)
+                .reserve_input(
+                    fixture
+                        .engine
+                        .limits()
+                        .input_capacity
+                        .expect("configured input capacity"),
+                )
                 .unwrap(),
         );
         drop(
             fixture
                 .engine
                 .memory()
-                .reserve_output(fixture.engine.limits().output_capacity)
+                .reserve_output(
+                    fixture
+                        .engine
+                        .limits()
+                        .output_capacity
+                        .expect("configured output capacity"),
+                )
                 .unwrap(),
         );
     }
@@ -235,7 +247,7 @@ async fn health_uses_remaining_capacity() {
     let metadata_space = 64 * 1024;
     let fixture = Fixture::new(Limits {
         input_bytes: 2 * 1024 * 1024,
-        input_capacity: 2 * 1024 * 1024 + metadata_space,
+        input_capacity: Some(2 * 1024 * 1024 + metadata_space),
         ..Default::default()
     });
     fixture.commit(&fixture.source, 1, 128, 1_000_000_000);
@@ -256,8 +268,16 @@ async fn health_uses_remaining_capacity() {
     drop(first);
 
     let memory = fixture.engine.memory();
-    let input_capacity = fixture.engine.limits().input_capacity;
-    let output_capacity = fixture.engine.limits().output_capacity;
+    let input_capacity = fixture
+        .engine
+        .limits()
+        .input_capacity
+        .expect("configured input capacity");
+    let output_capacity = fixture
+        .engine
+        .limits()
+        .output_capacity
+        .expect("configured output capacity");
     let available = {
         let reservation = memory.prepare_input(input_capacity).unwrap();
         reservation.size()
@@ -620,12 +640,24 @@ async fn native_first_clock_time() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_ok());
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_err());
     assert_eq!(
         borrowed
@@ -639,7 +671,13 @@ async fn native_first_clock_time() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
 }
 

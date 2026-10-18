@@ -134,6 +134,37 @@ impl PackageImplementationV1 {
 }
 
 impl PackageArtifactV1 {
+    /// Return descriptor and dependency metadata. The artifact bytes are empty.
+    pub fn revision_metadata(
+        &self,
+        tenant_id: [u8; 16],
+    ) -> Result<crate::analysis::PackageRevisionV1> {
+        let dependencies = self
+            .descriptor
+            .exports
+            .iter()
+            .flat_map(|model| model.dependencies().map(|(_, dependency)| dependency))
+            .filter(|dependency| dependency.package != self.descriptor.id)
+            .map(|dependency| (dependency.package.clone(), dependency.revision.clone()))
+            .collect::<std::collections::BTreeSet<_>>();
+        Ok(crate::analysis::PackageRevisionV1 {
+            tenant_id,
+            package_id: self.descriptor.id.clone(),
+            revision: self.descriptor.revision.clone(),
+            descriptor: self.descriptor_bytes()?,
+            artifact: Vec::new(),
+            dependencies: dependencies
+                .into_iter()
+                .map(
+                    |(package_id, revision)| crate::analysis::PackageRevisionRefV1 {
+                        package_id,
+                        revision,
+                    },
+                )
+                .collect(),
+        })
+    }
+
     pub fn encode(&self) -> Result<Vec<u8>> {
         super::oci::PackageOci::artifact_layout(self)?
             .encode()
@@ -203,6 +234,21 @@ impl PackageArtifactV1 {
 }
 
 impl PackageBundleV1 {
+    pub fn revisions(&self, tenant: [u8; 16]) -> Result<Vec<crate::analysis::PackageRevisionV1>> {
+        if tenant == [0; 16] {
+            return Err(Code::Invalid.error("package revision tenant"));
+        }
+        self.validate()?;
+        self.artifacts
+            .iter()
+            .map(|artifact| {
+                let mut revision = artifact.revision_metadata(tenant)?;
+                revision.artifact = artifact.encode()?;
+                Ok(revision)
+            })
+            .collect()
+    }
+
     pub fn read(path: &Path) -> Result<Self> {
         super::oci::PackageOci::read(path)
     }

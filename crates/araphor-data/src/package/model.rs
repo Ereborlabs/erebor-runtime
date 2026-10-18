@@ -1,3 +1,5 @@
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use araphor_analysis_sdk as sdk;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -55,6 +57,29 @@ pub struct PackageGrantV1 {
 }
 
 impl PackageGrantV1 {
+    pub fn remaining(&self) -> Result<Option<Duration>> {
+        if self.principal.is_empty()
+            || self.principal.len() > 256
+            || self.revision == 0
+            || !self.selection.valid()
+        {
+            return Err(PackageErrorCodeV1::Denied.error("package grant"));
+        }
+        let Some(expiry) = self.expires_utc_ns else {
+            return Ok(None);
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|time| u64::try_from(time.as_nanos()).ok())
+            .ok_or_else(|| PackageErrorCodeV1::Incomplete.error("system time"))?;
+        let remaining = expiry
+            .checked_sub(now)
+            .filter(|remaining| *remaining > 0)
+            .ok_or_else(|| PackageErrorCodeV1::Denied.error("package grant"))?;
+        Ok(Some(Duration::from_nanos(remaining)))
+    }
+
     pub fn permitted_by(&self, selection: &AnalysisSelectionV1) -> Result<()> {
         if *selection != self.selection
             && *selection != AnalysisSelectionV1::tenant(self.selection.tenant_id)
@@ -163,6 +188,10 @@ pub trait PackageAuthorization: Send + Sync + 'static {
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()>;
     fn changes(&self) -> watch::Receiver<u64>;
+
+    fn changes_for(&self, _grant: &PackageGrantV1) -> watch::Receiver<u64> {
+        self.changes()
+    }
 
     fn commit_many(
         &self,
@@ -328,4 +357,68 @@ pub struct PackageReceiptV1 {
 pub struct PackageTestResultV1 {
     pub fixture: String,
     pub passed: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grant() -> PackageGrantV1 {
+        PackageGrantV1 {
+            principal: "fixture".into(),
+            revision: 1,
+            selection: AnalysisSelectionV1::tenant([1; 16]),
+            expires_utc_ns: None,
+            authorization_id: None,
+        }
+    }
+
+    #[test]
+    fn grant_has_optional_deadline() -> Result<()> {
+        let mut grant = grant();
+        assert_eq!(grant.remaining()?, None);
+        grant.principal = "x".repeat(256);
+        grant.expires_utc_ns = Some(u64::MAX);
+        assert!(grant
+            .remaining()?
+            .is_some_and(|remaining| !remaining.is_zero()));
+        Ok(())
+    }
+
+    #[test]
+    fn grant_rejects_invalid_shapes() {
+        for case in 0..4 {
+            let mut grant = grant();
+            match case {
+                0 => grant.principal.clear(),
+                1 => grant.principal = "x".repeat(257),
+                2 => grant.revision = 0,
+                _ => grant.selection.tenant_id = [0; 16],
+            }
+            assert!(matches!(
+                grant.remaining(),
+                Err(crate::Error::Package {
+                    code: PackageErrorCodeV1::Denied,
+                    field: "package grant",
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn grant_rejects_expired_deadline() {
+        let mut grant = grant();
+        for expired in [0, 1] {
+            grant.expires_utc_ns = Some(expired);
+            assert!(matches!(
+                grant.remaining(),
+                Err(crate::Error::Package {
+                    code: PackageErrorCodeV1::Denied,
+                    field: "package grant",
+                    ..
+                })
+            ));
+        }
+    }
 }

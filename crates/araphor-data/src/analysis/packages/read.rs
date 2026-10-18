@@ -109,7 +109,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(super) fn package_from(
+    pub(in crate::analysis) fn package_from(
         reader: &Connection,
         tenant: [u8; 16],
         package: &str,

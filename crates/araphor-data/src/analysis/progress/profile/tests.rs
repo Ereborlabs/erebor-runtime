@@ -7,6 +7,7 @@ use crate::{
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 mod native;
+mod state;
 
 fn profile() -> DiscoveryProfileV1 {
     DiscoveryProfileV1 {
@@ -72,6 +73,79 @@ fn commit(profile: &DiscoveryProfileV1) -> AnalysisResultCommitV1 {
         witnesses: Vec::new(),
         context_refs: profile.context_refs.clone(),
     }
+}
+
+#[test]
+fn profile_guard_rolls_back() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = AnalysisStore::open(&root)?;
+    let mut profile = profile();
+    store.accept_validated_batch(
+        profile.scope.identity.clone(),
+        ValidatedEvidenceBatchV1 {
+            cpu_id: 0,
+            first_cursor: 1,
+            last_cursor: 1,
+            intake_utc_ns: 1,
+            framed_records: b"frame".to_vec().into(),
+            frame_ends: vec![5],
+        },
+    )?;
+    store.register_processor(&profile.scope, ProcessorClassV1::Optional, 1)?;
+    let mut previous = None;
+    let mut notices = store.subscribe_revision();
+    for revision in 1..=2 {
+        profile.revision = revision;
+        profile.updated_utc_ns = 10 + revision;
+        let before = store.meta()?;
+        let head = store.processor_result(&profile.scope)?;
+        let control = std::sync::Arc::new(crate::AnalysisReadControl::default());
+        control.check()?;
+        let cancelled = std::sync::Arc::clone(&control);
+        store.set_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit, move || {
+            cancelled.cancel()
+        })?;
+        assert!(matches!(
+            store.commit_working_profile_guarded(
+                commit(&profile),
+                PreparedProfile::new(profile.clone())?,
+                previous,
+                || control.check()
+            ),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert_eq!(store.meta()?, before);
+        assert_eq!(store.processor_result(&profile.scope)?, head);
+        assert!(!notices.has_changed()?);
+        let receipt = store.commit_working_profile_guarded(
+            commit(&profile),
+            PreparedProfile::new(profile.clone())?,
+            previous,
+            || Ok(()),
+        )?;
+        previous = Some(receipt.commit_revision);
+        notices.borrow_and_update();
+        let committed = store.meta()?;
+        assert!(matches!(
+            store.commit_working_profile_guarded(
+                commit(&profile),
+                PreparedProfile::new(profile.clone())?,
+                previous,
+                || control.check()
+            ),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert_eq!(store.meta()?, committed);
+        assert!(!notices.has_changed()?);
+    }
+    let head = store.processor_result(&profile.scope)?;
+    drop(store);
+    assert_eq!(
+        AnalysisStore::open(root)?.processor_result(&profile.scope)?,
+        head
+    );
+    Ok(())
 }
 
 #[test]

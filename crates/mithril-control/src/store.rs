@@ -4489,7 +4489,7 @@ mod tests {
         let mut engine = Engine::new(
             data,
             Limits {
-                extract_timeout: Duration::from_secs(10),
+                extract_timeout: Some(Duration::from_secs(10)),
                 ..Default::default()
             },
         )?;
@@ -4678,7 +4678,7 @@ mod tests {
         );
         assert_eq!(pin.control_commit_index, store.commit_index());
         assert_eq!(
-            araphor_analysis::DiscoveryContextProvider::revision(&store, &record.id.stream)?,
+            araphor_analysis_back::DiscoveryContextProvider::revision(&store, &record.id.stream)?,
             store.commit_index()
         );
         assert_eq!(
@@ -4812,7 +4812,7 @@ mod tests {
             ) {
                 assert!(store.discovery_context(&changed).is_err(), "{scenario}");
                 let Err(araphor_data::Error::DiscoveryContext { source, .. }) =
-                    araphor_analysis::DiscoveryContextProvider::context(&store, &changed)
+                    araphor_analysis_back::DiscoveryContextProvider::context(&store, &changed)
                 else {
                     return Err("the context provider lost the Control error source".into());
                 };

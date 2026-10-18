@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use araphor_analysis::DiscoveryOwner;
+use araphor_analysis_back::DiscoveryOwner;
 use araphor_data::{BehaviorSnapshotV1, DiscoveryInputManifestV1};
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +23,7 @@ impl DiscoveryPreviewOwner {
     pub fn simulate_recorded(
         input: &DiscoveryInputManifestV1,
         candidate: &PolicyDocumentV1,
-        execution: &araphor_analysis::InstalledAnalysis,
+        execution: &araphor_analysis_back::InstalledAnalysis,
     ) -> Result<DiscoveryStaticPreviewV1> {
         let derived = DiscoveryOwner::derive_recorded(input, execution)?;
         let compiled = PolicyCompiler.compile(candidate)?;
@@ -85,8 +85,8 @@ mod tests {
         .map_err(Into::into)
     }
 
-    fn execution() -> TestResult<araphor_analysis::InstalledAnalysis> {
-        Ok(araphor_analysis::InstalledAnalysis::testing(
+    fn execution() -> TestResult<araphor_analysis_back::InstalledAnalysis> {
+        Ok(araphor_analysis_back::InstalledAnalysis::testing(
             None,
             input()?.tenant_id,
         )?)

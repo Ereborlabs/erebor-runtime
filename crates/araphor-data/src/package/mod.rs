@@ -13,6 +13,7 @@ pub use formats::*;
 pub use model::*;
 pub use native::{Dependency, LibraryRequirement, Qualification};
 pub use parameters::decode_parameters;
+pub(crate) use provenance::NativePackageContext;
 
 pub fn parameter_values<'a>(
     parameters: Option<&'a serde_json::Value>,

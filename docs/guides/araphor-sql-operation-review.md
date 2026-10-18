@@ -256,6 +256,93 @@ case are not run for this delivery. The new target path adds 21 production
 code lines. The complete redesign adds 896 against `7b7b407a`; the required
 reduction remains **Not done**.
 
+## Fresh Analysis subscription owner
+
+Implementation is partial. The complete replacement is **Not done**. The old
+Analysis crate now has the name `araphor-analysis_back`. The fresh
+`araphor-analysis` has no dependency on that crate and accepts no clock.
+
+[Package::subscribe](../../crates/araphor-analysis/src/package.rs) admits one immutable SQL package call
+  -> [Engine::prepare](../../crates/araphor-query/src/execution/admission.rs) uses the native parser and logical planner
+  -> [Session::subscribe](../../crates/araphor-query/src/execution/admission.rs) creates the existing Query subscription
+  -> [Query execution](../../crates/araphor-query/src/stream/physical/runtime.rs) uses native optimization, physical planning, and execution
+  -> [DiscoveryOwner::derive](../../crates/araphor-analysis/src/discovery/mod.rs) inserts and removes source subscriptions in futures_util::SelectAll
+  -> [Publication::commit](../../crates/araphor-analysis/src/discovery/publication.rs) consumes computed Arrow output and calls the existing atomic profile writer
+
+[Subscription::until_change](../../crates/araphor-query/src/follow/mod.rs) receives an authority notification
+  -> native futures take_until stops input delivery before another ready output
+  -> the Query control cancels native work
+  -> the subscription returns a denied result and releases its resources
+
+Analysis does not read raw pages, join facts, aggregate records, or schedule a
+clock. DataFusion executes the complete SQL package body. Query owns Data
+notifications, cancellation, and deadlines derived from the admitted SQL.
+Cargo builds datafusion-expr and datafusion-optimizer with opt-level 1 in dev
+and test. The unoptimized schema and optimizer callback paths overflow a normal
+test thread during planning. The focused retries use the standard DataFrame
+planning API.
+SelectAll uses the existing FuturesUnordered wake queue. PipelineStream adds
+the pipeline key to each native subscription result. A membership change uses
+the native collection iterator to drop removed streams immediately. A local
+set prevents repeated membership scans during insertion.
+A retired source disappears from the source query. Its stream is removed and
+cancelled. The Data writer also rejects a captured result after retirement.
+The owner discards this stale result conflict and continues to receive stream
+notifications. It does not use a retry timer.
+
+Shared input and output capacities default to None. Native DataFusion
+unbounded pools bypass the shared quota registry. A prepared output does not
+reserve a fixed byte allowance. A configured capacity keeps the existing
+buffer alias charges and capacity release notices. Per-query byte and row
+limits and evaluation concurrency quotas still have finite defaults.
+
+[Package::new](../../crates/araphor-analysis/src/package.rs) retains the exact
+OCI bundle through the existing Data package writer. A native package context
+records the root, digest, export, and output. Context validation checks the
+retained SQL bytes. The context pins the root and its dependency closure.
+Each profile retains the actual context reference. No activation, registry,
+checkpoint, or second store is added.
+
+The existing Data transactions accept a final grant check for package context,
+processor registration, optional resume, and profile publication. A denied
+check rolls back the mutation. Exact retries also require a valid grant.
+Internal Control grants use internal authority notices. External grants retain
+client revocation notices.
+
+[PackageGrantV1::remaining](../../crates/araphor-data/src/package/model.rs)
+owns grant shape and expiry validation. Fresh and backup Analysis use the same
+method. No expiry returns None. An expired grant is rejected before a read
+control is made. Action authority and final transaction checks remain at their
+existing owners.
+
+The native `discovery_state` relation reads receipts, processor progress, gaps,
+and the exact current result under one held Data snapshot. It also exposes
+sources with no processor or result. The relation supplies typed prior state.
+Historical results do not replace the current head. Metadata projections skip
+the profile body. Query tracks the existing processor relation revisions.
+
+Complete Discovery qualification, interior raw-retention gaps, window seals,
+frozen replay cuts, all quota defaults, and removal of the remaining Data lock
+and interrupt polling are **Not done**. Native state dependencies still use
+global relation revisions. Unrelated changes can cause another evaluation.
+No complete no-polling or reduction claim is made.
+
+Read the [fresh owner tests](../../crates/araphor-analysis/src/discovery/tests.rs)
+for source insertion, duplicate suppression, retirement, stale publication,
+stop, scope denial, and resource release. Read the
+[grant tests](../../crates/araphor-data/src/package/model.rs) for the common
+shape and expiry checks. The
+[backup lifecycle tests](../../crates/araphor-analysis_back/src/package/tests/lifecycle.rs)
+retain cancellation and capacity assertions and check that a grant without
+expiry preserves the existing read control.
+
+The [delivery result](../plans/araphor-component-redesign.md#subscription-streams-and-shared-validation)
+records qualification and the complete production count.
+The final selected checks pass 15 cases. Strict Clippy passes all targets in
+the eight affected crates. Formatting and added local document links pass.
+Full workspace CI, benchmarks, and physical Kubernetes qualification are not
+run. The complete replacement remains **Not done**.
+
 ## Native Discovery binding resolution
 
 [ContextSource::record](../../crates/mithril-control/src/store/context.rs) reads a committed compiled artifact or target snapshot
@@ -529,7 +616,7 @@ in a native SessionContext without the Discovery relation planner. It compares
 all Arrow output arrays against the retained algorithm. A changed SQL body
 changes the bundle digest. Invalid metadata still causes a native error.
 
-Read the [installed SQL cases](../../crates/araphor-analysis/src/package/installed/read/tests/prepared.rs)
+Read the [installed SQL cases](../../crates/araphor-analysis_back/src/package/installed/read/tests/prepared.rs)
 for actual installed execution, changed and empty input batches, schema and
 source rejection, and target checks. This proof does not install the new
 producer in the live Discovery owner. Old profile pins and atomic publication
@@ -556,8 +643,8 @@ package declaration shares its field allocations. serde_arrow uses this
 schema for encoding and decoding. The source identifiers use serde_bytes.
 Their JSON schema remains an array of sixteen bytes.
 
-[DiscoveryOwner::derive_page](../../crates/araphor-analysis/src/discovery/sdk/atoms.rs) prepares a record input
-  -> [Adapter::observation](../../crates/araphor-analysis/src/discovery/sdk/atoms.rs) borrows each original frame and supplies its parsed fields
+[DiscoveryOwner::derive_page](../../crates/araphor-analysis_back/src/discovery/sdk/atoms.rs) prepares a record input
+  -> [Adapter::observation](../../crates/araphor-analysis_back/src/discovery/sdk/atoms.rs) borrows each original frame and supplies its parsed fields
   -> [Record::encode](../../crates/araphor-analysis-builtins/src/discovery/record.rs) creates the native Arrow dataset
   -> [Package::check_evaluation](../../crates/araphor-analysis-sdk/src/validation.rs) checks the declared input contract
   -> [Record::read](../../crates/araphor-analysis-builtins/src/discovery/record.rs) borrows frame bytes from the checked input batches
@@ -572,7 +659,7 @@ are deleted. Context and snapshot ports still use their existing JSON codec.
 The [record tests](../../crates/araphor-analysis-builtins/src/discovery/tests.rs)
 check borrowed frame addresses, empty input, nullable fields, UInt64 precision,
 malformed identifiers, cross-batch duplicates, conflicts, and source ranges.
-The [native query test](../../crates/araphor-analysis/src/discovery/sdk/atoms/tests.rs)
+The [native query test](../../crates/araphor-analysis_back/src/discovery/sdk/atoms/tests.rs)
 reads retained events through a finite Subscription. Native named_struct and
 CASE expressions produce the declared record fields. The existing SDK
 normalizer supplies field metadata and nullability. Complete batch equality
@@ -594,23 +681,23 @@ production reduction target.
 
 ## Frozen Discovery query inputs
 
-[DiscoveryOwner::new](../../crates/araphor-analysis/src/discovery/mod.rs)
+[DiscoveryOwner::new](../../crates/araphor-analysis_back/src/discovery/mod.rs)
 derives the durable store from its Query engine. Callers cannot supply a second
 store. Discovery state and source queries use that same owner.
 
-[DiscoveryOwner::replay](../../crates/araphor-analysis/src/discovery/replay.rs) requests frozen input
-  -> [replay_input](../../crates/araphor-analysis/src/discovery/replay.rs) keeps the recorded coverage and context facts
-  -> [replay_records](../../crates/araphor-analysis/src/discovery/replay.rs) supplies exact source and cursor bounds to a finite Subscription
+[DiscoveryOwner::replay](../../crates/araphor-analysis_back/src/discovery/replay.rs) requests frozen input
+  -> [replay_input](../../crates/araphor-analysis_back/src/discovery/replay.rs) keeps the recorded coverage and context facts
+  -> [replay_records](../../crates/araphor-analysis_back/src/discovery/replay.rs) supplies exact source and cursor bounds to a finite Subscription
   -> [Engine::prepare](../../crates/araphor-query/src/execution/admission.rs) uses native SQL admission and planning
   -> [SubscribeExec](../../crates/araphor-query/src/stream/physical.rs) runs the native projection and sort
   -> [SourceData::open](../../crates/araphor-query/src/sources/mod.rs) returns retained event batches
-  -> [replay_records](../../crates/araphor-analysis/src/discovery/replay.rs) reads the projected record fields with serde_arrow
-  -> [replay_input](../../crates/araphor-analysis/src/discovery/replay.rs) rejects missing cursors and checks frozen attribution
-  -> [replay](../../crates/araphor-analysis/src/discovery/replay.rs) checks the exact recomputed snapshot
+  -> [replay_records](../../crates/araphor-analysis_back/src/discovery/replay.rs) reads the projected record fields with serde_arrow
+  -> [replay_input](../../crates/araphor-analysis_back/src/discovery/replay.rs) rejects missing cursors and checks frozen attribution
+  -> [replay](../../crates/araphor-analysis_back/src/discovery/replay.rs) checks the exact recomputed snapshot
 
-[refresh_profile](../../crates/araphor-analysis/src/discovery/live.rs) uses the
+[refresh_profile](../../crates/araphor-analysis_back/src/discovery/live.rs) uses the
 same frozen input path before it resolves missing facts. It no longer reads
-raw store pages. [refresh_source](../../crates/araphor-analysis/src/discovery/live.rs)
+raw store pages. [refresh_source](../../crates/araphor-analysis_back/src/discovery/live.rs)
 owns one installed-package snapshot and reference set for the refresh batch.
 Each profile borrows this snapshot. The commit still checks current authority.
 An empty notice set does not load a new package snapshot.
@@ -630,7 +717,7 @@ producer drop, and buffer reservations. The
 returns a native Arrow array that ScalarValue cannot represent. It also checks
 that the returned array keeps the original Arc.
 
-The [range case](../../crates/araphor-analysis/src/discovery/replay.rs) checks
+The [range case](../../crates/araphor-analysis_back/src/discovery/replay.rs) checks
 258 records, exact cursor order, source isolation, original unknown protobuf
 bytes, later intake, and an explicit record limit. The complete selected
 Discovery lifecycle run passes 23 cases. The selected Query run passes 62
@@ -646,7 +733,7 @@ Remaining quota defaults and the production reduction target are **Not done**.
 
 ## Runtime table binding
 
-[AdmittedModel::relation](../../crates/araphor-analysis/src/model.rs) declares
+[AdmittedModel::relation](../../crates/araphor-analysis_back/src/model.rs) declares
 [SourceProvider::local](../../crates/araphor-query/src/sources/mod.rs).
 [Session::state](../../crates/araphor-query/src/execution.rs) registers the
 current Arc map of native MemTables in session configuration. The provider
@@ -727,15 +814,15 @@ write SQL when it needs a join or union.
 | --- | --- | --- |
 | [Data](../../crates/araphor-data/src/lib.rs) | Durable records, package formats, transactions, retention, source revisions, and read control. | SDK, shared built-in contracts, and DuckDB. No Query or Analysis dependency. |
 | [Query](../../crates/araphor-query/src/lib.rs) | Native parsing, planning, catalogs, source capture, Arrow execution, reservations, follow, and subscription delivery. | Data, SDK, DataFusion, and Arrow. |
-| [Analysis](../../crates/araphor-analysis/src/lib.rs) | Package lifecycle, admitted model programs, ModelRun, native/Wasm execution, and domain execution. | Query, Data, SDK, and existing execution backends. |
+| [Analysis](../../crates/araphor-analysis_back/src/lib.rs) | Package lifecycle, admitted model programs, ModelRun, native/Wasm execution, and domain execution. | Query, Data, SDK, and existing execution backends. |
 
 Control imports these owners directly. The dependency graph has no facade
 crate. SDK owns declarations and native/Wasm application binary interfaces.
 
-[AdmittedExport::admit](../../crates/araphor-analysis/src/model.rs) admits the installed export
+[AdmittedExport::admit](../../crates/araphor-analysis_back/src/model.rs) admits the installed export
   -> [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) retains native plans, original provider origins, and input dependency order
 
-[AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs) checks current authority and reads the admitted Inputs directly
+[AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis_back/src/package/evaluation/preparation.rs) checks current authority and reads the admitted Inputs directly
   -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) plans all physical children at one frozen time
   -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) combines the prepared source columns and time ranges in one capture
   -> [AnalysisStore::read_tables](../../crates/araphor-data/src/analysis/extraction.rs) fixes one Data read transaction for the original source receipts
@@ -746,9 +833,9 @@ crate. SDK owns declarations and native/Wasm application binary interfaces.
   -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) materializes each completed port with one dataset-global row index before dependent SQL runs
   -> [Inputs::input](../../crates/araphor-query/src/inputs/receipt.rs) assigns per-port revisions and coverage from the original source scopes and reference origins
   -> [InputSet](../../crates/araphor-query/src/inputs/physical.rs) returns declared input order, retained tables, and complete provenance
-  -> [AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs) receives the owned evaluation and retained input set for the exact installed export
-  -> [AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs) dispatches SQL to one Engine::wait future or invokes the selected synchronous native or Wasm owner
-  -> [AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs) prepares one result contract
+  -> [AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis_back/src/package/execution.rs) receives the owned evaluation and retained input set for the exact installed export
+  -> [AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis_back/src/package/execution.rs) dispatches SQL to one Engine::wait future or invokes the selected synchronous native or Wasm owner
+  -> [AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis_back/src/package/evaluation/preparation.rs) prepares one result contract
   -> [AnalysisStore::commit_package](../../crates/araphor-data/src/analysis/packages/commit.rs) checks the authorized durable transaction
 
 ```mermaid
@@ -796,18 +883,18 @@ dataset-global `__row_index` across each completed port's batches. The column
 is an ordinary visible table field. Native `SELECT *` includes the field.
 [InputSet::register](../../crates/araphor-query/src/inputs/physical.rs) gives SQL
 ModelRun those same indexed tables. ModelRun does not build those indices
-again. [ModelRun::table](../../crates/araphor-analysis/src/model/input.rs)
+again. [ModelRun::table](../../crates/araphor-analysis_back/src/model/input.rs)
 still builds indices for host-prepared inputs, parameters, prior checkpoints,
 and completed model outputs. Canonical Data tables keep their declared fields.
 A model can use a canonical Data table name for a supplied relation. Provider
 origins keep that local binding separate from the durable source inventory.
 Table lookup applies no `__araphor_` prefix ban.
 
-[AdmittedModel](../../crates/araphor-analysis/src/model.rs) stores raw native
+[AdmittedModel](../../crates/araphor-analysis_back/src/model.rs) stores raw native
 logical plans for output and checkpoint queries in descriptor order. Each
 reason plan retains checked output and reason indices. InstalledBundle retains
 the exact descriptor, implementation, and admitted-program pairing.
-[ModelRun::evaluate](../../crates/araphor-analysis/src/model/execute.rs)
+[ModelRun::evaluate](../../crates/araphor-analysis_back/src/model/execute.rs)
 executes those retained plans. The package caller moves the evaluation and
 an `Arc<InstalledBundle>` into one SQL future. The future keeps the exact
 export index and borrows its descriptor and admitted plans from that bundle.
@@ -817,15 +904,15 @@ input bindings fail admission before execution. Known retained vectors and
 declarations have native memory reservations; native plan allocation has no
 complete upstream size measurement.
 
-[AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs) selects the SQL implementation for the exact installed export
+[AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis_back/src/package/execution.rs) selects the SQL implementation for the exact installed export
   -> [Engine::wait](../../crates/araphor-query/src/execution.rs) executes one owned future on the existing runtime
   -> [InputSet::check_async](../../crates/araphor-query/src/inputs/physical.rs) checks retained trace-read authority without synchronous runtime entry
-  -> [ModelRun::new](../../crates/araphor-analysis/src/model/operation.rs) constructs the complete Session, control, shared evaluation permit, and output reservation
-  -> [ModelRun::evaluate_output](../../crates/araphor-analysis/src/model/execute.rs) runs outputs, checkpoint, evidence, and reason plans in their admitted order
+  -> [ModelRun::new](../../crates/araphor-analysis_back/src/model/operation.rs) constructs the complete Session, control, shared evaluation permit, and output reservation
+  -> [ModelRun::evaluate_output](../../crates/araphor-analysis_back/src/model/execute.rs) runs outputs, checkpoint, evidence, and reason plans in their admitted order
   -> [Session::stream_local](../../crates/araphor-query/src/execution.rs) creates each native physical stream with the same evaluation permit
-  -> [ModelRun::query](../../crates/araphor-analysis/src/model/execute.rs) reserves conversion and vector growth before it normalizes and retains each batch
-  -> [ModelRun::evaluate](../../crates/araphor-analysis/src/model/execute.rs) checks the complete SDK output, control, and current trace-read authority
-  -> [SqlModelOutputV1::retain](../../crates/araphor-analysis/src/model.rs) transfers retained metadata and buffer claims to the returned output
+  -> [ModelRun::query](../../crates/araphor-analysis_back/src/model/execute.rs) reserves conversion and vector growth before it normalizes and retains each batch
+  -> [ModelRun::evaluate](../../crates/araphor-analysis_back/src/model/execute.rs) checks the complete SDK output, control, and current trace-read authority
+  -> [SqlModelOutputV1::retain](../../crates/araphor-analysis_back/src/model.rs) transfers retained metadata and buffer claims to the returned output
 
 Input capture completes before this SQL future starts. The SQL stages do not
 call the synchronous runtime bridge again. ModelRun has no partial public
@@ -833,7 +920,7 @@ construction or preparation API. Output datasets remain materialized for
 `output_*` tables and dataset-global row references. The run does not collect
 a separate raw batch vector before normalization.
 
-[AdmittedExport](../../crates/araphor-analysis/src/model.rs) retains one
+[AdmittedExport](../../crates/araphor-analysis_back/src/model.rs) retains one
 `Arc<Inputs>`. Inputs stores native plans and orders dependent ports before
 their readers. Native `SessionState::resolve_table_references` supplies the
 original table references, including unused common table expressions (CTEs).
@@ -881,7 +968,7 @@ lifecycle, backend admission, checkpoint selection, current authority, and
 the authorized Data compare-and-swap transaction.
 
 Native execution calls the actual
-[NativeLibrary](../../crates/araphor-analysis/src/package/native/loading.rs)
+[NativeLibrary](../../crates/araphor-analysis_back/src/package/native/loading.rs)
 owner. The stateless NativeExecution wrapper is deleted. The loader checks the
 qualification against its pinned files. Execution does not repeat artifact
 inspection and system-library reads before loading. Native admission remains
@@ -891,7 +978,7 @@ through output copying and producer release callbacks. The caller checks
 cancellation after loading; the library checks it before and after the call.
 
 The Wasm branch also calls its actual
-[invoke owner](../../crates/araphor-analysis/src/package/wasm/execution.rs)
+[invoke owner](../../crates/araphor-analysis_back/src/package/wasm/execution.rs)
 directly. The duplicate prepared-input and optional-input wrappers are deleted.
 Package execution retains the checked evaluation and encoded input reservation
 through invocation and output decoding. Invoke owns the VM permit, engine
@@ -902,19 +989,19 @@ Wasm preparation uses the caller deadline and the compiler's existing
 45-second maximum. The configured Query evaluation timeout starts after
 preparation. Encode, invoke, decode, and output validation use that evaluation
 control. Native loading keeps its existing evaluation control. The
-[deadline case](../../crates/araphor-analysis/src/package/wasm/tests/runtime/prepared.rs)
+[deadline case](../../crates/araphor-analysis_back/src/package/wasm/tests/runtime/prepared.rs)
 proves that cold preparation completes before a one-nanosecond evaluation
 deadline rejects execution.
 
-[CompilerChild::capture](../../crates/araphor-analysis/src/package/wasm/compiler.rs) starts compilation
-  -> [CompilerChild::capture](../../crates/araphor-analysis/src/package/wasm/compiler.rs) starts one scoped I/O thread for synchronous callers
-  -> [CompilerChild::run](../../crates/araphor-analysis/src/package/wasm/compiler.rs) waits for Tokio process completion and both pipes in one runtime
-  -> [CompilerInput::write](../../crates/araphor-analysis/src/package/wasm/compiler/input.rs) sends the CBOR header and borrowed source bytes
-  -> [CompilerImage::read](../../crates/araphor-analysis/src/package/wasm/compiler/image.rs) receives the reply
+[CompilerChild::capture](../../crates/araphor-analysis_back/src/package/wasm/compiler.rs) starts compilation
+  -> [CompilerChild::capture](../../crates/araphor-analysis_back/src/package/wasm/compiler.rs) starts one scoped I/O thread for synchronous callers
+  -> [CompilerChild::run](../../crates/araphor-analysis_back/src/package/wasm/compiler.rs) waits for Tokio process completion and both pipes in one runtime
+  -> [CompilerInput::write](../../crates/araphor-analysis_back/src/package/wasm/compiler/input.rs) sends the CBOR header and borrowed source bytes
+  -> [CompilerImage::read](../../crates/araphor-analysis_back/src/package/wasm/compiler/image.rs) receives the reply
 
 [AnalysisReadControl::query_async](../../crates/araphor-data/src/analysis/read.rs) reports cancellation or deadline expiry
-  -> [CompilerChild::capture](../../crates/araphor-analysis/src/package/wasm/compiler.rs) kills and reaps the child before returning
-  -> [WasmExecution::compiled](../../crates/araphor-analysis/src/package/wasm/cache.rs) keeps the compiler unavailable when reaping fails
+  -> [CompilerChild::capture](../../crates/araphor-analysis_back/src/package/wasm/compiler.rs) kills and reaps the child before returning
+  -> [WasmExecution::compiled](../../crates/araphor-analysis_back/src/package/wasm/cache.rs) keeps the compiler unavailable when reaping fails
 
 The scoped thread permits synchronous calls from an async application. The
 compiler has no process-status loop or sleep interval. A caught I/O-task panic
@@ -922,9 +1009,9 @@ uses the same kill and reap path. Tokio kill_on_drop also protects child drop.
 The request bytes and reply integrity checks do not change. The compiler's
 existing CPU, wall-time, source, and reply quotas remain.
 
-The [compiler lifecycle cases](../../crates/araphor-analysis/src/package/wasm/compiler/tests.rs)
+The [compiler lifecycle cases](../../crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs)
 check cancellation, expiry, reaping, later compilation, OS limits, and calls
-from an async application. The [request codec cases](../../crates/araphor-analysis/src/package/wasm/compiler/input/tests.rs)
+from an async application. The [request codec cases](../../crates/araphor-analysis_back/src/package/wasm/compiler/input/tests.rs)
 compare async output with native CBOR encoding at each byte-length boundary.
 The cases also check source overflow and a closed pipe. These changes do not
 replace the separate Discovery source sweep.
@@ -955,7 +1042,7 @@ projections preserve the selected Field metadata. One immutable schema map is
 shared across engines and reads. Capture does not build another schema map.
 The query engine is
 DataFusion 53.1.0. The synchronous
-[SqlDatasetOutputV1::query](../../crates/araphor-analysis/src/model/datasets.rs)
+[SqlDatasetOutputV1::query](../../crates/araphor-analysis_back/src/model/datasets.rs)
 entry point validates supplied datasets and admits SQL against those schemas.
 It registers those datasets, then moves a complete private ModelRun into one
 Engine::wait future. The returned dataset keeps its metadata reservation.
@@ -965,19 +1052,19 @@ transport path opens no DuckDB query connection.
 
 ## Live detector input lifecycle
 
-[AnalysisPackageOwner::supervise](../../crates/araphor-analysis/src/package/supervision.rs) registers current installed activations
+[AnalysisPackageOwner::supervise](../../crates/araphor-analysis_back/src/package/supervision.rs) registers current installed activations
   -> [Inputs::watch](../../crates/araphor-query/src/inputs/live.rs) creates one InputOperation for the exact activation and grant
   -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) checks the current activation and saved result before input capture
   -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) executes the admitted native input plans at one frozen time
   -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) offers one retained Arc<InputSet> with its evaluation time
-  -> [AnalysisPackageOwner::evaluate_offer](../../crates/araphor-analysis/src/package/supervision.rs) checks authority and invokes the selected backend
-  -> [AnalysisPackageOwner::authorize_commit](../../crates/araphor-analysis/src/package/owner.rs) checks current authority for the result transaction
+  -> [AnalysisPackageOwner::evaluate_offer](../../crates/araphor-analysis_back/src/package/supervision.rs) checks authority and invokes the selected backend
+  -> [AnalysisPackageOwner::authorize_commit](../../crates/araphor-analysis_back/src/package/owner.rs) checks current authority for the result transaction
   -> [AnalysisStore::commit_package](../../crates/araphor-data/src/analysis/packages/commit.rs) checks the activation, checkpoint, source revisions, and exact references in one transaction
   -> [AnalysisStore::package_completed](../../crates/araphor-data/src/analysis/packages/input.rs) verifies the actual result head and stored activation precondition
   -> [InputOperation::complete](../../crates/araphor-query/src/inputs/live.rs) checks the offered revisions, coverage, and evaluation time before it advances the local activation
 
-[AnalysisPackageOwner::serve_activation](../../crates/araphor-analysis/src/package/supervision.rs) receives a typed Busy failure
-  -> [AnalysisPackageOwner::wait_inputs](../../crates/araphor-analysis/src/package/supervision.rs) waits for the actual blocked resource or an input change
+[AnalysisPackageOwner::serve_activation](../../crates/araphor-analysis_back/src/package/supervision.rs) receives a typed Busy failure
+  -> [AnalysisPackageOwner::wait_inputs](../../crates/araphor-analysis_back/src/package/supervision.rs) waits for the actual blocked resource or an input change
   -> [InputOperation::retry](../../crates/araphor-query/src/inputs/live.rs) retains the offered input cut
   -> [AnalysisStore::package_input_current](../../crates/araphor-data/src/analysis/packages/input.rs) checks that cut against current metadata and retained evidence
   -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) offers the same Arc when the cut is valid, or captures a new cut when it is invalid
@@ -988,9 +1075,9 @@ transport path opens no DuckDB query connection.
   -> [Progress::next](../../crates/araphor-query/src/stream/progress.rs) waits for a source notice, an explicit clock notice, or a due deadline
   -> Runtime returns a SQL update, or InputOperation checks and offers the complete package input
 
-[AnalysisPackageOwner::serve_activation](../../crates/araphor-analysis/src/package/supervision.rs) receives stop, authority change, or grant expiry
+[AnalysisPackageOwner::serve_activation](../../crates/araphor-analysis_back/src/package/supervision.rs) receives stop, authority change, or grant expiry
   -> [AnalysisReadControl::cancel](../../crates/araphor-data/src/analysis/read.rs) cancels the shared operation token
-  -> [AnalysisPackageOwner::serve_activation](../../crates/araphor-analysis/src/package/supervision.rs) waits for the actual blocking worker before it releases the task
+  -> [AnalysisPackageOwner::serve_activation](../../crates/araphor-analysis_back/src/package/supervision.rs) waits for the actual blocking worker before it releases the task
 
 ```mermaid
 sequenceDiagram
@@ -1051,10 +1138,10 @@ suppress another backend offer when the model does not read time. The client
 subscription can request its existing health deadline. Package execution
 supplies no health deadline.
 
-Manual [prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs)
+Manual [prepare_model](../../crates/araphor-analysis_back/src/package/evaluation/preparation.rs)
 also uses the exact supplied time. Inspect compares a time-dependent result
 with that saved time. It does not round either value to a clock bucket.
-The [inspect_uses_exact_time](../../crates/araphor-analysis/src/package/evaluation/preparation/tests.rs)
+The [inspect_uses_exact_time](../../crates/araphor-analysis_back/src/package/evaluation/preparation/tests.rs)
 case verifies an unchanged instant and a one-nanosecond change. All five
 selected preparation and Wasm lifecycle cases pass. Strict Clippy passes all
 targets in Query, Analysis, and Control. The source record is
@@ -1091,10 +1178,10 @@ The check reads no Arrow payload. The saved-result check also avoids input
 capture when the durable result remains current. Manual Inspect and Run keep
 the finite input entry point and their existing authority checks.
 
-[AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs)
+[AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis_back/src/package/evaluation/preparation.rs)
 uses the offered InputSet to select the deterministic live result ID. There
 is no automatic flag or Analysis input deadline calculation.
-[AnalysisPackageOwner::evaluate_active](../../crates/araphor-analysis/src/package/evaluation.rs)
+[AnalysisPackageOwner::evaluate_active](../../crates/araphor-analysis_back/src/package/evaluation.rs)
 retains the manual request-ID retry check. Inspect alone rounds the read time
 and checks the saved result before input capture. The follow-up selection
 passes 13 Analysis cases and two explicit native checkpoint cases. Its source
@@ -1167,21 +1254,21 @@ input. Discovery uses the same Progress owner as SQL follow and live package
 inputs. The source below replaces the one-second Discovery poll.
 Qualification for this working-tree change is **Pending**.
 
-[DiscoveryOwner::run_clock](../../crates/araphor-analysis/src/discovery/live.rs) Discovery starts the service
+[DiscoveryOwner::run_clock](../../crates/araphor-analysis_back/src/discovery/live.rs) Discovery starts the service
   -> [Progress::new](../../crates/araphor-query/src/stream/progress.rs) Progress registers Data, explicit clock, and optional provider context watches
   -> [Progress::begin](../../crates/araphor-query/src/stream/progress.rs) Progress observes those watches before one complete source pass
-  -> [DiscoveryOwner::sources](../../crates/araphor-analysis/src/discovery/live.rs) Discovery returns each bounded source page until the source pass is complete
-  -> [DiscoveryOwner::process_source](../../crates/araphor-analysis/src/discovery/live.rs) Discovery retains the earliest open-profile seal deadline
-  -> [DiscoveryOwner::refresh_source](../../crates/araphor-analysis/src/discovery/live.rs) Discovery drains context-notice pages, including metadata-only progress
+  -> [DiscoveryOwner::sources](../../crates/araphor-analysis_back/src/discovery/live.rs) Discovery returns each bounded source page until the source pass is complete
+  -> [DiscoveryOwner::process_source](../../crates/araphor-analysis_back/src/discovery/live.rs) Discovery retains the earliest open-profile seal deadline
+  -> [DiscoveryOwner::refresh_source](../../crates/araphor-analysis_back/src/discovery/live.rs) Discovery drains context-notice pages, including metadata-only progress
   -> [Progress::next](../../crates/araphor-query/src/stream/progress.rs) Progress waits for Data, context, clock, or the recorded seal deadline
 
-[DiscoveryOwner::run_clock](../../crates/araphor-analysis/src/discovery/live.rs) Discovery receives Busy from a source page
-  -> [DiscoveryOwner::process_source](../../crates/araphor-analysis/src/discovery/live.rs) Discovery keeps seal deadlines from completed sources and the failed source
-  -> [AnalysisPackageOwner::wait_capacity](../../crates/araphor-analysis/src/package/supervision.rs) Analysis waits for the actual blocked resource with the source pass memory scope
-  -> [DiscoveryOwner::run_clock](../../crates/araphor-analysis/src/discovery/live.rs) Discovery also accepts progress, authority changes, and stop while it waits
+[DiscoveryOwner::run_clock](../../crates/araphor-analysis_back/src/discovery/live.rs) Discovery receives Busy from a source page
+  -> [DiscoveryOwner::process_source](../../crates/araphor-analysis_back/src/discovery/live.rs) Discovery keeps seal deadlines from completed sources and the failed source
+  -> [AnalysisPackageOwner::wait_capacity](../../crates/araphor-analysis_back/src/package/supervision.rs) Analysis waits for the actual blocked resource with the source pass memory scope
+  -> [DiscoveryOwner::run_clock](../../crates/araphor-analysis_back/src/discovery/live.rs) Discovery also accepts progress, authority changes, and stop while it waits
 
-[DiscoveryOwner::run_clock](../../crates/araphor-analysis/src/discovery/live.rs) Discovery receives stop during a blocking page
-  -> [DiscoveryOwner::run_clock](../../crates/araphor-analysis/src/discovery/live.rs) Discovery joins that page before the service returns
+[DiscoveryOwner::run_clock](../../crates/araphor-analysis_back/src/discovery/live.rs) Discovery receives stop during a blocking page
+  -> [DiscoveryOwner::run_clock](../../crates/araphor-analysis_back/src/discovery/live.rs) Discovery joins that page before the service returns
 
 ```mermaid
 sequenceDiagram
@@ -1203,7 +1290,7 @@ notices that arrive during the pass remain pending. A later pass can therefore
 check an earlier source again. SQL follow and package input capture retain
 their existing captured-revision protocol.
 
-The [provider contract](../../crates/araphor-analysis/src/discovery/mod.rs)
+The [provider contract](../../crates/araphor-analysis_back/src/discovery/mod.rs)
 returns None only when context changes already produce a Data notice.
 [ControlStore::changes](../../crates/mithril-control/src/store/discovery_context.rs)
 uses the existing Control revision watch. A Control context change can wake
@@ -1217,17 +1304,17 @@ change metadata without a Data revision notice. refresh_source reads further
 pages until none remain. An unchanged page ends the attempt instead of a busy
 loop. The seventeen-profile case covers a complete metadata-only drain.
 
-[DiscoveryOwner::new](../../crates/araphor-analysis/src/discovery/mod.rs)
+[DiscoveryOwner::new](../../crates/araphor-analysis_back/src/discovery/mod.rs)
 assigns an operation Memory scope to its installed execution handle.
-[InstalledAnalysis](../../crates/araphor-analysis/src/package/installed.rs),
-[snapshot loading](../../crates/araphor-analysis/src/package/installed/snapshot.rs),
-and [evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs)
+[InstalledAnalysis](../../crates/araphor-analysis_back/src/package/installed.rs),
+[snapshot loading](../../crates/araphor-analysis_back/src/package/installed/snapshot.rs),
+and [evaluate_artifact](../../crates/araphor-analysis_back/src/package/execution.rs)
 pass that owner group through retained bundles, inputs, backend transfer,
-[SQL ModelRun](../../crates/araphor-analysis/src/model/operation.rs), and
+[SQL ModelRun](../../crates/araphor-analysis_back/src/model/operation.rs), and
 retained output. Memory.child supplies separate consumer IDs for each finite
 evaluation and keeps the owner's release counter. A prior retained result
 therefore causes temporary Busy pressure for the next evaluation. The existing
-[retained descriptor case](../../crates/araphor-analysis/src/package/installed/read/tests/descriptors.rs)
+[retained descriptor case](../../crates/araphor-analysis_back/src/package/installed/read/tests/descriptors.rs)
 keeps both borrowed-buffer assertions. The
 [child scope case](../../crates/araphor-query/src/memory.rs) checks separate
 working sets and shared release notices. The Memory capacity epoch excludes
@@ -1242,7 +1329,7 @@ a periodic retry. The existing
 [Control task](../../crates/mithril-control/src/main.rs) logs the error and
 stops optional Discovery. The policy service remains active.
 
-The [Discovery event tests](../../crates/araphor-analysis/src/discovery/live/tests/events.rs)
+The [Discovery event tests](../../crates/araphor-analysis_back/src/discovery/live/tests/events.rs)
 cover idle waits, context revision changes without intake, exact sealing while evaluation capacity is held,
 source-page progress, capacity release, joined stop, and seventeen metadata-only
 notices. The [Progress tests](../../crates/araphor-query/src/follow/tests/progress.rs)
@@ -1304,7 +1391,7 @@ aliases. Native CTE alias counts and HAVING resolution apply.
 
 [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) supplies the
 source catalog from canonical providers and declared Table aliases.
-[AdmittedModel::relations](../../crates/araphor-analysis/src/model.rs) creates
+[AdmittedModel::relations](../../crates/araphor-analysis_back/src/model.rs) creates
 native MemTables for the declared indexed schemas. Output SQL sees model inputs,
 parameters, and prior checkpoint tables. Checkpoint, evidence, and reason SQL
 also see completed output tables. Dataset SQL receives only its supplied
@@ -1320,10 +1407,10 @@ retains the native configuration, runtime, functions, and planner rules.
 Catalog construction no longer rebuilds the native function registries.
 [The closed-catalog case](../../crates/araphor-query/src/execution/tests.rs)
 checks qualified local execution, case-sensitive names, local schema binding,
-and absent durable sources. The [model operation cases](../../crates/araphor-analysis/src/model/operation/tests.rs)
+and absent durable sources. The [model operation cases](../../crates/araphor-analysis_back/src/model/operation/tests.rs)
 retain all five source-denial variants and check status, retry hint, and
 package error code. The qualified model produces the same encoded output.
-[The dataset case](../../crates/araphor-analysis/src/model/tests.rs) keeps its
+[The dataset case](../../crates/araphor-analysis_back/src/model/tests.rs) keeps its
 row-index checks and rejects an undeclared source inside an unused CTE.
 
 [Session::indexed_schema](../../crates/araphor-query/src/execution/tables.rs)
@@ -1344,10 +1431,10 @@ of those same headers. The existing native MemTable registration stays in use.
 check prepaid capacity, existing claims, batch and empty-batch index continuity,
 Arrow metadata, empty tables, and aliases after the session closes.
 
-[AnalysisPackageOwner::evaluate_active](../../crates/araphor-analysis/src/package/evaluation.rs)
+[AnalysisPackageOwner::evaluate_active](../../crates/araphor-analysis_back/src/package/evaluation.rs)
 reuses the context already decoded by manual Run. A repeated request checks
 the same stored request and returns its existing receipt. The
-[retry case](../../crates/araphor-analysis/src/package/tests/lifecycle.rs)
+[retry case](../../crates/araphor-analysis_back/src/package/tests/lifecycle.rs)
 also checks that activation, result heads, and store metadata do not change.
 
 The affected selection passes 73 distinct cases: 33 Query, 39 Analysis, and
@@ -1687,11 +1774,11 @@ Borrowed arrays keep their buffer charges after the run ends.
 The [local execution cases](../../crates/araphor-query/src/execution/tests.rs)
 check absent store reads, output limits, cancellation, foreign permits, unused
 prepayment, and capacity recovery. The
-[gated model case](../../crates/araphor-analysis/src/model/tests/stream.rs)
+[gated model case](../../crates/araphor-analysis_back/src/model/tests/stream.rs)
 requires an invalid first conversion to stop before a later native error is
 polled. The case also checks stream drop, permit release, and complete input
 and output capacity recovery. The
-[model program cases](../../crates/araphor-analysis/src/model/tests.rs)
+[model program cases](../../crates/araphor-analysis_back/src/model/tests.rs)
 execute the ordered program outside Tokio, inside both runtime types, and in
 a blocking worker. These cases pass in the current-source qualification below.
 
@@ -1712,7 +1799,7 @@ before Query or ModelRun reserves conversion memory. Binary to FixedSizeBinary
 includes the target width for null rows. The
 [SDK batch tests](../../crates/araphor-analysis-sdk/src/batch/tests.rs) retain
 the sliced, masked, metadata, and fixed-width assertions. The
-[model reservation regression](../../crates/araphor-analysis/src/model/execute.rs)
+[model reservation regression](../../crates/araphor-analysis_back/src/model/execute.rs)
 requires reservation failure before casting and checks capacity recovery.
 
 [Memory](../../crates/araphor-query/src/memory.rs) uses native memory pools
@@ -1762,15 +1849,15 @@ metadata can require decoding the retained obligation context.
 
 ### Optional Wasm code memory
 
-[WasmLimits](../../crates/araphor-analysis/src/limits.rs) has optional
+[WasmLimits](../../crates/araphor-analysis_back/src/limits.rs) has optional
 cache_bytes, cache_entries, and compiler_bytes settings. All three settings
 default to None. The compiler setting counts address-space bytes.
 
-[AnalysisPackageOwner::new_with_limits](../../crates/araphor-analysis/src/package/owner.rs) receives runtime configuration
-  -> [WasmExecution::new](../../crates/araphor-analysis/src/package/wasm.rs) creates CodeCache with the optional quotas
-  -> [CodeCache::reserve](../../crates/araphor-analysis/src/package/wasm/cache.rs) applies explicit byte and entry quotas
-  -> [CompilerChild::restrict](../../crates/araphor-analysis/src/package/wasm/compiler.rs) sets an address-space limit only for Some
-  -> [PreparedComponent](../../crates/araphor-analysis/src/package/wasm.rs) retains the code pin through evaluation and error lifetimes
+[AnalysisPackageOwner::new_with_limits](../../crates/araphor-analysis_back/src/package/owner.rs) receives runtime configuration
+  -> [WasmExecution::new](../../crates/araphor-analysis_back/src/package/wasm.rs) creates CodeCache with the optional quotas
+  -> [CodeCache::reserve](../../crates/araphor-analysis_back/src/package/wasm/cache.rs) applies explicit byte and entry quotas
+  -> [CompilerChild::restrict](../../crates/araphor-analysis_back/src/package/wasm/compiler.rs) sets an address-space limit only for Some
+  -> [PreparedComponent](../../crates/araphor-analysis_back/src/package/wasm.rs) retains the code pin through evaluation and error lifetimes
 
 An explicit quota can evict an unpinned entry. Pinned entries keep their
 charge until release. A temporary shortage returns Busy and uses the existing
@@ -2080,19 +2167,19 @@ The current source reading route is:
 - [Data package extraction](../../crates/araphor-data/src/analysis/extraction/package.rs) and [package-output tests](../../crates/araphor-data/src/analysis/packages/tests/output.rs): same-reader output resolution, historical scope, payload admission, current refs, and reference-origin merging.
 - [SDK normalization tests](../../crates/araphor-analysis-sdk/src/batch/tests.rs): preallocation, exact declared metadata, sliced and masked nulls, and schema rejection.
 - [Execution tests](../../crates/araphor-query/src/execution/tests.rs): repeated native plans, local bindings, runtime entry modes, cancellation, permits, and input/output category separation.
-- [Native loader tests](../../crates/araphor-analysis/src/package/native/loading.rs) and [native package cases](../../crates/araphor-analysis/src/package/tests/native/mod.rs): pinned files, ABI and dependency errors, invalid paths, disabled options, cancellation, checkpoints, lifecycle, and host fault recovery.
-- [Prepared Wasm tests](../../crates/araphor-analysis/src/package/wasm/tests/runtime/prepared.rs): engine identity, cancellation, code pins, and retained prepared execution after cache removal.
+- [Native loader tests](../../crates/araphor-analysis_back/src/package/native/loading.rs) and [native package cases](../../crates/araphor-analysis_back/src/package/tests/native/mod.rs): pinned files, ABI and dependency errors, invalid paths, disabled options, cancellation, checkpoints, lifecycle, and host fault recovery.
+- [Prepared Wasm tests](../../crates/araphor-analysis_back/src/package/wasm/tests/runtime/prepared.rs): engine identity, cancellation, code pins, and retained prepared execution after cache removal.
 - [Memory tests](../../crates/araphor-query/src/memory.rs): shared buffers, nested children, borrowed aliases, capacity denial, and producer cancellation.
 - [Native template tests](../../crates/araphor-query/src/stream/tests.rs) and [physical kernel tests](../../crates/araphor-query/src/stream/physical/kernel/tests.rs): native parameters, NULL filters, zero-column row counts, native COUNT updates and retractions, aliases, errors, exact metadata, borrowed arrays, and schema checks.
 - [Output completion tests](../../crates/araphor-query/src/stream/physical/output/tests.rs): `logical_rows_ignore_batches`, `zero_columns_keep_rows`, `later_error_releases_output`, `borrowed_output_keeps_charge`, `empty_prefix_yields_cancel`, and `empty_backing_obeys_limit` prove identity, error classification, cancellation, retained limits, and cleanup.
 - [Raw change tests](../../crates/araphor-data/src/analysis/extraction/changes/tests.rs): existing-journal replay, retirement ranges, complete frontiers, scope, and resource bounds.
 - [Follow tests](../../crates/araphor-query/src/follow/tests.rs): append positions, `health_keeps_cursor`, `count_consumes_committed_changes`, `moving_window_nanoseconds`, `notification_follow_deadline`, and cursor binding. The COUNT case checks later insert scans, full retained witnesses, retraction after retention, and released reservations.
 - [Delivery tests](../../crates/araphor-query/src/follow/delivery/tests.rs): disclosure phases, conversion lifetime, immediate failure cleanup, renewed output demand, native waits, and authority changes during native waits or read checks.
-- [Model operation tests](../../crates/araphor-analysis/src/model/operation/tests.rs): exact input order, revisions, original provenance, retained capacity, and local source scope.
-- [Model tests](../../crates/araphor-analysis/src/model/tests.rs) and [package lifecycle tests](../../crates/araphor-analysis/src/package/tests/lifecycle.rs): checkpoints, parameters, evidence, source bounds, retries, installed revisions, and the complete SQL program through each supported runtime entry.
-- [Model stream test](../../crates/araphor-analysis/src/model/tests/stream.rs): conversion failure before another native poll, stream drop, permit release, and capacity recovery.
+- [Model operation tests](../../crates/araphor-analysis_back/src/model/operation/tests.rs): exact input order, revisions, original provenance, retained capacity, and local source scope.
+- [Model tests](../../crates/araphor-analysis_back/src/model/tests.rs) and [package lifecycle tests](../../crates/araphor-analysis_back/src/package/tests/lifecycle.rs): checkpoints, parameters, evidence, source bounds, retries, installed revisions, and the complete SQL program through each supported runtime entry.
+- [Model stream test](../../crates/araphor-analysis_back/src/model/tests/stream.rs): conversion failure before another native poll, stream drop, permit release, and capacity recovery.
 - [SDK metadata test](../../crates/araphor-analysis-sdk/src/memory/tests.rs): sliced buffer aliases, nested Null headers, schema-map capacity, and input metadata allocations.
-- [Interruption tests](../../crates/araphor-analysis/src/package/tests/interruption.rs): authority change, cancellation, stop before commit, Busy, and preservation of committed state.
+- [Interruption tests](../../crates/araphor-analysis_back/src/package/tests/interruption.rs): authority change, cancellation, stop before commit, Busy, and preservation of committed state.
 - [Control tests](../../crates/mithril-control/src/client_grpc/tests.rs) and [follow E2E cases](../../crates/mithril-e2e/src/discovery/query_follow.rs): actual protocol frames and native subscription behavior across owners.
 
 
@@ -2231,7 +2318,7 @@ improvement is claimed.
 
 ### Earlier qualification records
 
-The [mixed package retry case](../../crates/araphor-analysis/src/package/tests/wasm/metadata.rs)
+The [mixed package retry case](../../crates/araphor-analysis_back/src/package/tests/wasm/metadata.rs)
 uses two valid native queries with different source text. The changed query
 keeps the declared binary schema. The case checks revision conflict and the
 unchanged retained revision after repeated encoding and reopen. Unsupported

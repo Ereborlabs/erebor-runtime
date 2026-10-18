@@ -9,7 +9,7 @@ impl AnalysisStore {
         &self,
         inputs: &[AnalysisContextVersionV1],
     ) -> Result<Vec<AnalysisContextRefV1>> {
-        self.commit_context_values(inputs, false, None)
+        self.commit_context_values(inputs, false, None, &mut || Ok(()))
     }
 
     pub fn commit_context(&self, input: &AnalysisContextVersionV1) -> Result<u64> {
@@ -27,13 +27,23 @@ impl AnalysisStore {
     }
 
     pub fn intern_context(&self, input: &AnalysisContextVersionV1) -> Result<AnalysisContextRefV1> {
+        self.intern_context_guarded(input, || Ok(()))
+    }
+
+    pub fn intern_context_guarded(
+        &self,
+        input: &AnalysisContextVersionV1,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<AnalysisContextRefV1> {
         if !matches!(
             input.key.owner_id.as_str(),
-            "discovery-facts-v1" | "discovery-source-v1"
+            "discovery-facts-v1" | "discovery-source-v1" | "native-package-v1"
         ) {
             return self.reject("the qualified context owner is invalid");
         }
-        self.commit_context_value(input, true, None)
+        self.commit_context_values(std::slice::from_ref(input), true, None, &mut check)?
+            .pop()
+            .ok_or_else(|| self.state_error("the committed context reference is absent"))
     }
 
     fn commit_context_value(
@@ -42,9 +52,14 @@ impl AnalysisStore {
         intern: bool,
         expected: Option<u64>,
     ) -> Result<AnalysisContextRefV1> {
-        self.commit_context_values(std::slice::from_ref(input), intern, expected)?
-            .pop()
-            .ok_or_else(|| self.state_error("the committed context reference is absent"))
+        self.commit_context_values(
+            std::slice::from_ref(input),
+            intern,
+            expected,
+            &mut || Ok(()),
+        )?
+        .pop()
+        .ok_or_else(|| self.state_error("the committed context reference is absent"))
     }
 
     fn commit_context_values(
@@ -52,8 +67,10 @@ impl AnalysisStore {
         inputs: &[AnalysisContextVersionV1],
         intern: bool,
         expected: Option<u64>,
+        check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Vec<AnalysisContextRefV1>> {
         if inputs.is_empty() {
+            check()?;
             return Ok(Vec::new());
         }
         for input in inputs {
@@ -131,6 +148,7 @@ impl AnalysisStore {
             });
         }
         let Some(revision) = revision else {
+            check()?;
             return Ok(references);
         };
         for tenant in tenants {
@@ -141,6 +159,7 @@ impl AnalysisStore {
         self.run_commit_hook(super::super::AnalysisCommitStage::BeforeContextCommit)?;
         #[cfg(test)]
         self.crash_at("context.before");
+        check()?;
         self.commit_metadata(transaction, "commit context version")?;
         #[cfg(test)]
         self.crash_at("context.after");

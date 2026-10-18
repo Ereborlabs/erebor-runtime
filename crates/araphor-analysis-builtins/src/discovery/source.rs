@@ -12,7 +12,9 @@ pub fn node_id_is_valid(value: &str) -> bool {
         && !value.contains(['/', '\\', '\0'])
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
+#[derive(
+    Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(deny_unknown_fields)]
 /// Separates retained input by authenticated source and source epoch.
 pub struct EvidenceIntakeIdentityV1 {

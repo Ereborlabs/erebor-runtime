@@ -69,8 +69,8 @@ pub enum Error {
     },
     #[snafu(display("Araphor analysis test failed: {source}"))]
     Analysis {
-        #[snafu(source(from(araphor_analysis::Error, Box::new)))]
-        source: Box<araphor_analysis::Error>,
+        #[snafu(source(from(araphor_analysis_back::Error, Box::new)))]
+        source: Box<araphor_analysis_back::Error>,
         #[snafu(implicit)]
         location: Location,
     },

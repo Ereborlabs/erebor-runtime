@@ -82,7 +82,7 @@ pub(crate) struct SourceSnapshot {
     inputs: Option<InputCapture>,
     limits: AnalysisExtractLimits,
     control: AnalysisReadControl,
-    extract_timeout: Duration,
+    extract_timeout: Option<Duration>,
     now: u64,
     memory: Arc<Memory>,
     captured: Mutex<Option<rows::Captured>>,
@@ -146,7 +146,7 @@ impl SourceSnapshot {
         inputs: Option<InputCapture>,
         limits: AnalysisExtractLimits,
         control: AnalysisReadControl,
-        extract_timeout: Duration,
+        extract_timeout: Option<Duration>,
         now: u64,
         memory: Arc<Memory>,
     ) -> Arc<Self> {

@@ -2,6 +2,58 @@ use super::*;
 use duckdb::params;
 
 #[test]
+fn context_guard_rolls_back() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("analysis");
+    let store = AnalysisStore::open(&root)?;
+    let input = AnalysisContextVersionV1 {
+        key: AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "discovery-facts-v1".into(),
+            entity_key: b"guarded".to_vec(),
+            lifetime_key: b"source".to_vec(),
+            owner_revision: 1,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: ContextSensitivityV1::Tenant,
+        body: b"captured".to_vec(),
+    };
+    let control = std::sync::Arc::new(crate::AnalysisReadControl::default());
+    control.check()?;
+    let cancelled = std::sync::Arc::clone(&control);
+    store.set_commit_hook(
+        super::super::AnalysisCommitStage::BeforeContextCommit,
+        move || cancelled.cancel(),
+    )?;
+    let mut notices = store.subscribe_revision();
+    let before = store.meta()?;
+    assert!(matches!(
+        store.intern_context_guarded(&input, || control.check()),
+        Err(crate::Error::AnalysisReadCancelled { .. })
+    ));
+    assert_eq!(store.meta()?, before);
+    assert_eq!(store.context_version(&input.key)?, None);
+    assert!(!notices.has_changed()?);
+    let reference = store.intern_context_guarded(&input, || Ok(()))?;
+    notices.borrow_and_update();
+    let committed = store.meta()?;
+    assert!(matches!(
+        store.intern_context_guarded(&input, || control.check()),
+        Err(crate::Error::AnalysisReadCancelled { .. })
+    ));
+    assert_eq!(store.meta()?, committed);
+    assert_eq!(store.context_version(&reference.key)?, Some(input.clone()));
+    assert!(!notices.has_changed()?);
+    drop(store);
+    assert_eq!(
+        AnalysisStore::open(root)?.context_version(&reference.key)?,
+        Some(input)
+    );
+    Ok(())
+}
+
+#[test]
 fn control_graph_context_head_pages_keep_exact_versions_and_bounds(
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;

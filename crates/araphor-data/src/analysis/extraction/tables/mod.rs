@@ -16,6 +16,7 @@ use crate::{
 mod builder;
 mod context;
 mod discovery;
+mod discovery_state;
 mod events;
 mod graph;
 mod metadata;

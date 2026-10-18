@@ -541,6 +541,7 @@ impl DiscoveryValidate for BehaviorAtomKeyV1 {
 #[serde(deny_unknown_fields)]
 pub struct BehaviorSnapshotV1 {
     pub schema_version: u32,
+    #[serde(with = "serde_bytes")]
     pub tenant_id: [u8; 16],
     pub source_revision: String,
     pub proof_kind: DiscoveryProofKindV1,

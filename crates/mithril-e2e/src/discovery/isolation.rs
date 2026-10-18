@@ -53,7 +53,7 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
         let tls = MtlsFixture::new(false)?;
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]);
         let mut config = tls.configuration()?;
-        config.discovery = enabled.then(araphor_data::DiscoveryConfigV1::default);
+        config.discovery = enabled;
         config.data_retention.raw_max_age_ns = Some(1);
         config.trust.policy_issuer_sequence_epoch = 1;
         config.trust.policy_signers = vec![PolicySignerTrustV1 {
@@ -103,6 +103,16 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
                 .ok_or("the native policy owner is absent")?,
         };
         let store = fixture.owner.store();
+        let legacy = if enabled {
+            Some(Arc::new(araphor_analysis_back::DiscoveryOwner::new(
+                Arc::new(store.clone()),
+                araphor_data::DiscoveryConfigV1::default(),
+                control.installed_analysis()?,
+            )?))
+        } else {
+            None
+        };
+
         let policy = fixture.resource(1)?;
         let facts = fixture.inventory(&policy)?;
         let initial =
@@ -137,7 +147,7 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
         for cursor in [1, 2] {
             accept_record(output, &observations, &mut connection, cursor).await?;
             if cursor == 1 {
-                if let Some(owner) = &parts.discovery {
+                if let Some(owner) = &legacy {
                     ensure!(
                         owner.process(now)? == 1,
                         InvalidInputSnafu {
@@ -252,7 +262,7 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
                 reason: "discovery blocked native policy work or changed retained authority"
             }
         );
-        let prior = if let Some(owner) = &parts.discovery {
+        let prior = if let Some(owner) = &legacy {
             let profile = owner
                 .profile(&source)?
                 .ok_or("lagged discovery profile absent")?;
@@ -288,7 +298,7 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
                 reason: "optional discovery prevented raw evidence retention",
             }
         );
-        if let (Some(owner), Some(profile)) = (&parts.discovery, &prior) {
+        if let (Some(owner), Some(profile)) = (&legacy, &prior) {
             ensure!(
                 owner.profile(&source)?.as_ref() == Some(profile)
                     && data
@@ -337,7 +347,7 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
                 reason: "raw expiry blocked intake, query, or retained trace output",
             }
         );
-        if let Some(owner) = &parts.discovery {
+        if let Some(owner) = &legacy {
             ensure!(
                 owner.process(resumed_at)? == 1,
                 InvalidInputSnafu {

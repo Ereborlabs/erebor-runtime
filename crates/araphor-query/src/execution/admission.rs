@@ -53,3 +53,23 @@ impl Engine {
         )
     }
 }
+
+impl super::Session {
+    pub fn subscribe(
+        self,
+        plan: LogicalPlan,
+        sources: AnalysisTableRequests,
+        binding: &[u8],
+        follow: bool,
+    ) -> Result<Subscription> {
+        Subscription::new(
+            self,
+            Arc::new(plan),
+            sources,
+            binding,
+            None,
+            Arc::new(crate::follow::SystemClock::default()),
+            follow,
+        )
+    }
+}

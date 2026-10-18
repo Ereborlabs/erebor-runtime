@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use araphor_analysis::{
+use araphor_analysis_back::{
     GraphAndFindingOwner, GraphContextProvider, InstalledAnalysis, NotificationRouter,
 };
 use araphor_data::*;

@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use araphor_analysis::AnalysisPackageOwner;
+use araphor_analysis_back::AnalysisPackageOwner;
 use araphor_data::AnalysisStore;
 use araphor_query::execution::{Engine, Limits};
 use erebor_runtime_error::StatusCode;

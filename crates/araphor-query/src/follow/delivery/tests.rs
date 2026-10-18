@@ -127,8 +127,12 @@ impl Fixture {
         let engine = Engine::new(
             store,
             Limits {
-                extract_timeout: Duration::from_secs(5),
+                input_capacity: Some(128 * 1024 * 1024),
+                output_capacity: Some(16 * 1024 * 1024),
+                extract_timeout: Some(Duration::from_secs(5)),
                 evaluate_timeout: Some(Duration::from_secs(5)),
+                global_streams: Some(16),
+                tenant_streams: Some(4),
                 ..Default::default()
             },
         )
@@ -189,7 +193,11 @@ async fn phases_and_conversion_lifetime() {
     let mut delivery = fixture
         .delivery(Duration::from_secs(10), false, false)
         .await;
-    let capacity = fixture.engine.limits().output_capacity;
+    let capacity = fixture
+        .engine
+        .limits()
+        .output_capacity
+        .expect("configured output capacity");
     assert_eq!(next(&mut delivery).await, Ok(Item::Metadata));
     assert!(delivery.holds_output());
     assert_eq!(delivery.frame_bytes(), 8);
@@ -212,7 +220,13 @@ async fn failed_conversion_releases_immediately() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
     assert!(delivery.next().await.is_none());
 }
@@ -313,7 +327,13 @@ async fn authority_interrupts_read_check() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
     assert!(delivery.next().await.is_none());
 }

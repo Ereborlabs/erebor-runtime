@@ -247,7 +247,7 @@ impl ReplayQualification {
         assert_eq!(dense.unrouted, 257);
         assert!(matches!(
             router.obligations(&grants[1], now),
-            Err(araphor_analysis::Error::Data {
+            Err(araphor_analysis_back::Error::Data {
                 source: Error::Notification {
                     code: NotificationErrorCodeV1::Limit,
                     field: "notification read count",
@@ -336,7 +336,7 @@ impl ReplayQualification {
         );
         assert!(matches!(
             router.route_finding(&graph, authenticated.tenant_id, &old, now + 104),
-            Err(araphor_analysis::Error::Data {
+            Err(araphor_analysis_back::Error::Data {
                 source: Error::Notification {
                     code: NotificationErrorCodeV1::Conflict,
                     field: "current finding reference",
@@ -389,7 +389,7 @@ impl ReplayQualification {
         for _ in 0..4 {
             match router.deliver(&graph, &sink, now + 104) {
                 Ok(_) => {}
-                Err(araphor_analysis::Error::Data {
+                Err(araphor_analysis_back::Error::Data {
                     source: Error::StorageCapacity { resource, .. },
                 }) => {
                     capacity = Some(resource);
@@ -822,7 +822,7 @@ impl ReplayQualification {
         mixed.records.push(self.record(&remote, 1)?);
         assert!(matches!(
             GraphAndFindingOwner::derive(&mixed, &self.execution),
-            Err(araphor_analysis::Error::Data {
+            Err(araphor_analysis_back::Error::Data {
                 source: Error::GraphInvalid {
                     field: "replay record identity",
                     ..
@@ -1004,7 +1004,7 @@ impl ReplayQualification {
                     if name == "other-admission" {
                         assert!(matches!(
                             GraphAndFindingOwner::derive(&borrowed, &self.execution),
-                            Err(araphor_analysis::Error::Data {
+                            Err(araphor_analysis_back::Error::Data {
                                 source: Error::GraphInvalid {
                                     field: "credential read completion",
                                     ..

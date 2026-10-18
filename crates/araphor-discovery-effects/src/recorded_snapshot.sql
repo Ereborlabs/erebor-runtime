@@ -16,16 +16,28 @@ __discovery_cte_record_values AS (
         kernel_sequence, process_instance_id, entry_instance_id, binding_id,
         role_id, state_id, entry_rule_id, exact_profile_generation_ref_id,
         mount_id_unique, inode, inode_generation, mount_namespace_inode, filesystem_device,
-        (tenant_id IS NULL OR node_id IS NULL OR node_boot_id IS NULL OR label_epoch IS NULL
-            OR source_id IS NULL OR source_epoch IS NULL OR cpu_id IS NULL OR source_cursor IS NULL
-            OR framed_record IS NULL OR coverage_interval_id IS NULL OR temporal_coverage IS NULL
-            OR task_cookie IS NULL OR process_lineage_id IS NULL OR authority_domain_id IS NULL
-            OR execution_set_id IS NULL OR exact_object_id IS NULL OR destination_id IS NULL
-            OR policy_rule_id IS NULL OR reason IS NULL OR decision IS NULL OR effect_family IS NULL
-            OR operation IS NULL OR configured_errno IS NULL OR kernel_result IS NULL
-            OR (exact_profile_generation_ref_id IS NOT NULL AND (
-                mount_id_unique IS NULL OR inode IS NULL OR inode_generation IS NULL
-                OR mount_namespace_inode IS NULL OR filesystem_device IS NULL)))
+        (
+            (
+                (((tenant_id IS NULL OR node_id IS NULL)
+                    OR (node_boot_id IS NULL OR label_epoch IS NULL))
+                    OR ((source_id IS NULL OR source_epoch IS NULL)
+                        OR (cpu_id IS NULL OR source_cursor IS NULL)))
+                OR (((framed_record IS NULL OR coverage_interval_id IS NULL)
+                    OR (temporal_coverage IS NULL OR task_cookie IS NULL))
+                    OR ((process_lineage_id IS NULL OR authority_domain_id IS NULL)
+                        OR (execution_set_id IS NULL OR exact_object_id IS NULL)))
+            )
+            OR (
+                (((destination_id IS NULL OR policy_rule_id IS NULL)
+                    OR (reason IS NULL OR decision IS NULL))
+                    OR ((effect_family IS NULL OR operation IS NULL)
+                        OR (configured_errno IS NULL OR kernel_result IS NULL)))
+                OR (exact_profile_generation_ref_id IS NOT NULL AND (
+                    (mount_id_unique IS NULL OR inode IS NULL)
+                    OR (inode_generation IS NULL
+                        OR (mount_namespace_inode IS NULL OR filesystem_device IS NULL))))
+            )
+        )
             AS required_record_missing,
         COUNT(*) OVER (PARTITION BY tenant_id, node_id, node_boot_id, label_epoch,
             source_id, source_epoch, cpu_id, source_cursor) AS delivery_count,
@@ -55,24 +67,34 @@ __discovery_cte_context_versions AS (
     SELECT DISTINCT record_id, subject_revision, image_digest, configuration_digest,
         process_instance_id, entry_instance_id, binding_id, role_id, state_id,
         entry_rule_id, catalog_revision, static_key, policy_revision,
-        (record_id IS NULL OR record_id['stream'] IS NULL
-            OR record_id['stream']['tenant_id'] IS NULL OR record_id['stream']['node_id'] IS NULL
-            OR record_id['stream']['node_boot_id'] IS NULL OR record_id['stream']['label_epoch'] IS NULL
-            OR record_id['stream']['source_id'] IS NULL OR record_id['stream']['source_epoch'] IS NULL
-            OR record_id['cpu_id'] IS NULL OR record_id['durable_cursor'] IS NULL
-            OR subject_revision IS NULL OR image_digest IS NULL OR configuration_digest IS NULL
-            OR process_instance_id IS NULL OR entry_instance_id IS NULL OR binding_id IS NULL
-            OR role_id IS NULL OR state_id IS NULL OR entry_rule_id IS NULL OR catalog_revision IS NULL
-            OR static_key IS NULL OR static_key['workload_selector_id'] IS NULL
-            OR static_key['protected_scope_id'] IS NULL OR static_key['execution_set_id'] IS NULL
-            OR static_key['entry_kind'] IS NULL OR static_key['role_id'] IS NULL
-            OR static_key['process_state_id'] IS NULL OR static_key['effect_family'] IS NULL
-            OR static_key['operation_id'] IS NULL OR static_key['operation'] IS NULL
-            OR static_key['operation_argument'] IS NULL OR static_key['argument_wildcard'] IS NULL
-            OR static_key['object_selector'] IS NULL OR static_key['binding_lifecycle'] IS NULL
-            OR policy_revision IS NULL OR policy_revision['profile_id'] IS NULL
-            OR policy_revision['profile_version'] IS NULL OR policy_revision['source_revision_id'] IS NULL
-            OR policy_revision['signed_profile_digest'] IS NULL) AS required_context_missing
+        (
+            (
+                (((record_id IS NULL OR record_id['stream'] IS NULL)
+                    OR (record_id['stream']['tenant_id'] IS NULL OR record_id['stream']['node_id'] IS NULL))
+                    OR ((record_id['stream']['node_boot_id'] IS NULL OR record_id['stream']['label_epoch'] IS NULL)
+                        OR (record_id['stream']['source_id'] IS NULL OR record_id['stream']['source_epoch'] IS NULL)))
+                OR (((record_id['cpu_id'] IS NULL OR record_id['durable_cursor'] IS NULL)
+                    OR (subject_revision IS NULL OR image_digest IS NULL))
+                    OR ((configuration_digest IS NULL OR process_instance_id IS NULL)
+                        OR (entry_instance_id IS NULL OR binding_id IS NULL)))
+            )
+            OR (
+                (
+                    (((role_id IS NULL OR state_id IS NULL)
+                        OR (entry_rule_id IS NULL OR catalog_revision IS NULL))
+                        OR ((static_key IS NULL OR static_key['workload_selector_id'] IS NULL)
+                            OR (static_key['protected_scope_id'] IS NULL OR static_key['execution_set_id'] IS NULL)))
+                    OR (((static_key['entry_kind'] IS NULL OR static_key['role_id'] IS NULL)
+                        OR (static_key['process_state_id'] IS NULL OR static_key['effect_family'] IS NULL))
+                        OR ((static_key['operation_id'] IS NULL OR static_key['operation'] IS NULL)
+                            OR (static_key['operation_argument'] IS NULL OR static_key['argument_wildcard'] IS NULL)))
+                )
+                OR (((static_key['object_selector'] IS NULL OR static_key['binding_lifecycle'] IS NULL)
+                    OR (policy_revision IS NULL OR policy_revision['profile_id'] IS NULL))
+                    OR (policy_revision['profile_version'] IS NULL
+                        OR (policy_revision['source_revision_id'] IS NULL OR policy_revision['signed_profile_digest'] IS NULL)))
+            )
+        ) AS required_context_missing
     FROM contexts
 ),
 __discovery_cte_contexts AS (
@@ -246,33 +268,24 @@ __discovery_cte_atoms AS (
         'evidence_sample', evidence_sample) ORDER BY
         key['stream']['tenant_id'], key['stream']['node_id'], key['stream']['node_boot_id'],
         key['stream']['label_epoch'], key['stream']['source_id'], key['stream']['source_epoch'],
-        key['cpu_id'], key['subject_revision'], key['image_digest'], key['configuration_digest'],
-        key['process_instance_id'], key['entry_instance_id'], key['binding_id'],
-        key['role_id'], key['state_id'], key['entry_rule_id'], key['catalog_revision'],
-        key['static_key']['workload_selector_id'], key['static_key']['protected_scope_id'],
-        key['static_key']['execution_set_id'], key['static_key']['entry_kind'],
-        key['static_key']['role_id'], key['static_key']['process_state_id'],
-        key['static_key']['effect_family'], key['static_key']['operation_id'],
-        key['static_key']['operation'], key['static_key']['operation_argument'],
-        key['static_key']['argument_wildcard'], key['static_key']['object_selector'],
-        key['static_key']['binding_lifecycle'], key['policy_revision']['profile_id'],
-        key['policy_revision']['profile_version'], key['policy_revision']['source_revision_id'],
-        key['policy_revision']['signed_profile_digest'], key['generation'],
-        key['coverage_interval_id'], key['temporal_coverage'], key['effect']['task_cookie'],
-        key['effect']['target_task_cookie'] NULLS FIRST, key['effect']['process_lineage_id'],
-        key['effect']['authority_domain_id'], key['effect']['execution_set_id'],
-        key['effect']['exact_object_id'], key['effect']['destination_id'],
-        key['effect']['policy_rule_id'], key['effect']['reason'], key['effect']['decision'],
-        key['effect']['effect_family'], key['effect']['operation'],
-        key['effect']['operation_argument'] NULLS FIRST, key['effect']['configured_errno'],
-        key['effect']['kernel_result'],
-        key['effect']['exact_file_object']['profile_generation_ref_id'] NULLS FIRST,
-        key['effect']['exact_file_object']['mount_id_unique'] NULLS FIRST,
-        key['effect']['exact_file_object']['inode'] NULLS FIRST,
-        key['effect']['exact_file_object']['inode_generation'] NULLS FIRST,
-        key['effect']['exact_file_object']['mount_namespace_inode'] NULLS FIRST,
-        key['effect']['exact_file_object']['filesystem_device'] NULLS FIRST,
-        key['physical_result']) FILTER (WHERE key IS NOT NULL), []) AS atoms,
+        key['cpu_id'], key['subject_revision'], key['image_digest'],
+        key['configuration_digest'], key['process_instance_id'], key['entry_instance_id'],
+        key['binding_id'], key['role_id'], key['state_id'],
+        key['entry_rule_id'], key['catalog_revision'], key['static_key']['workload_selector_id'],
+        key['static_key']['protected_scope_id'], key['static_key']['execution_set_id'], key['static_key']['entry_kind'],
+        key['static_key']['role_id'], key['static_key']['process_state_id'], key['static_key']['effect_family'],
+        key['static_key']['operation_id'], key['static_key']['operation'], key['static_key']['operation_argument'],
+        key['static_key']['argument_wildcard'], key['static_key']['object_selector'], key['static_key']['binding_lifecycle'],
+        key['policy_revision']['profile_id'], key['policy_revision']['profile_version'], key['policy_revision']['source_revision_id'],
+        key['policy_revision']['signed_profile_digest'], key['generation'], key['coverage_interval_id'],
+        key['temporal_coverage'], key['effect']['task_cookie'], key['effect']['target_task_cookie'] NULLS FIRST,
+        key['effect']['process_lineage_id'], key['effect']['authority_domain_id'], key['effect']['execution_set_id'],
+        key['effect']['exact_object_id'], key['effect']['destination_id'], key['effect']['policy_rule_id'],
+        key['effect']['reason'], key['effect']['decision'], key['effect']['effect_family'],
+        key['effect']['operation'], key['effect']['operation_argument'] NULLS FIRST, key['effect']['configured_errno'],
+        key['effect']['kernel_result'], key['effect']['exact_file_object']['profile_generation_ref_id'] NULLS FIRST, key['effect']['exact_file_object']['mount_id_unique'] NULLS FIRST,
+        key['effect']['exact_file_object']['inode'] NULLS FIRST, key['effect']['exact_file_object']['inode_generation'] NULLS FIRST, key['effect']['exact_file_object']['mount_namespace_inode'] NULLS FIRST,
+        key['effect']['exact_file_object']['filesystem_device'] NULLS FIRST, key['physical_result']) FILTER (WHERE key IS NOT NULL), []) AS atoms,
         COALESCE(flatten(array_agg(unresolved)), []) AS unresolved,
         COALESCE(flatten(array_agg(excluded)), []) AS excluded,
         COALESCE(SUM(CAST(accepted AS DECIMAL(38, 0))), CAST(0 AS DECIMAL(38, 0))) AS accepted_total,
@@ -299,19 +312,27 @@ __discovery_cte_range_counts AS (
 __discovery_cte_range_states AS (
     SELECT range.*, CASE
         WHEN range.tenant_id IS DISTINCT FROM metadata.tenant_id THEN 'coverage tenant'
-        WHEN range.tenant_id IS NULL OR node_id IS NULL OR node_boot_id IS NULL OR label_epoch IS NULL
-            OR source_id IS NULL OR source_epoch IS NULL OR cpu_id IS NULL
-            OR first_cursor IS NULL OR last_cursor IS NULL OR expected_records IS NULL
-            OR first_cursor = 0 OR last_cursor < first_cursor
-            OR CAST(expected_records AS DECIMAL(20, 0))
-                > CAST(last_cursor AS DECIMAL(20, 0)) - CAST(first_cursor AS DECIMAL(20, 0)) + 1
-            OR coverage_revision IS NULL OR coverage_interval_id IS NULL
-            OR state IS NULL OR state NOT IN ('HEALTHY', 'GAPPED', 'UNKNOWN', 'CLOSED')
-            OR gap_reasons IS NULL
-            OR array_position(gap_reasons, arrow_cast(NULL, 'Utf8')) IS NOT NULL
-            OR (state = 'HEALTHY' AND array_length(gap_reasons) <> 0)
-            OR (coverage_revision = 0 AND NOT (
-                state IN ('UNKNOWN', 'GAPPED') AND array_length(gap_reasons) > 0))
+        WHEN (
+            (
+                (((range.tenant_id IS NULL OR node_id IS NULL)
+                    OR (node_boot_id IS NULL OR label_epoch IS NULL))
+                    OR ((source_id IS NULL OR source_epoch IS NULL)
+                        OR (cpu_id IS NULL OR first_cursor IS NULL)))
+                OR (((last_cursor IS NULL OR expected_records IS NULL)
+                    OR (first_cursor = 0 OR last_cursor < first_cursor))
+                    OR ((CAST(expected_records AS DECIMAL(20, 0))
+                            > CAST(last_cursor AS DECIMAL(20, 0)) - CAST(first_cursor AS DECIMAL(20, 0)) + 1
+                        OR coverage_revision IS NULL)
+                        OR (coverage_interval_id IS NULL OR state IS NULL)))
+            )
+            OR (
+                (state NOT IN ('HEALTHY', 'GAPPED', 'UNKNOWN', 'CLOSED') OR gap_reasons IS NULL)
+                OR (array_position(gap_reasons, arrow_cast(NULL, 'Utf8')) IS NOT NULL
+                    OR ((state = 'HEALTHY' AND array_length(gap_reasons) <> 0)
+                        OR (coverage_revision = 0 AND NOT (
+                            state IN ('UNKNOWN', 'GAPPED') AND array_length(gap_reasons) > 0))))
+            )
+        )
             THEN 'coverage identity'
         WHEN previous_last >= first_cursor THEN 'snapshot overlap'
         ELSE NULL END AS relational_error,

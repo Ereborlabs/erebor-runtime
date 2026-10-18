@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 
-use araphor_analysis::{AnalysisPackageOwner, InstalledAnalysis};
+use araphor_analysis_back::{AnalysisPackageOwner, InstalledAnalysis};
 use araphor_data::PackageAuthorization;
 use araphor_data::{
     AnalysisReadControl, AnalysisSelectionV1, PackageActionV1, PackageBundleV1, PackageGrantV1,
@@ -67,7 +67,9 @@ impl ControlPlane {
                     })
             })
             .collect::<crate::Result<BTreeSet<_>>>()?;
-        let pins = AnalysisPackageOwner::required_bundles()
+        let mut bundles = AnalysisPackageOwner::required_bundles();
+        bundles.push(araphor_discovery_effects::ObservedEffects::live_bundle()?);
+        let pins = bundles
             .iter()
             .map(PackageBundleV1::digest)
             .collect::<araphor_data::Result<BTreeSet<_>>>()?;
@@ -121,6 +123,26 @@ impl ControlPlane {
 }
 
 impl ControlPackages {
+    pub(crate) fn discovery(&self) -> crate::Result<araphor_analysis::DiscoveryOwner> {
+        let bundle = araphor_discovery_effects::ObservedEffects::live_bundle()?;
+        let packages = self
+            .authority
+            .tenants
+            .iter()
+            .map(|tenant| {
+                araphor_analysis::Package::new(
+                    self.query.clone(),
+                    self.authority.clone(),
+                    self.authority.grant(*tenant),
+                    bundle.clone(),
+                    "live",
+                    "snapshot",
+                )
+            })
+            .collect::<araphor_analysis::Result<Vec<_>>>()?;
+        araphor_analysis::DiscoveryOwner::new(packages).map_err(Into::into)
+    }
+
     pub(crate) fn bind_client(&self, auth: Arc<crate::ClientAuth>) -> crate::Result<()> {
         let mut client = self.authority.client.write().map_err(|_| {
             crate::error::InvalidConfigurationSnafu {
@@ -240,11 +262,68 @@ impl PackageAuthorization for ControlPackageAuthority {
             .commit_many(&external, action, operation)
     }
 
+    fn changes_for(&self, grant: &PackageGrantV1) -> tokio::sync::watch::Receiver<u64> {
+        if self.internal(grant) {
+            self.changes.subscribe()
+        } else {
+            self.changes()
+        }
+    }
+
     fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.client
             .read()
             .ok()
             .and_then(|client| client.as_ref().map(|client| client.changes()))
             .unwrap_or_else(|| self.changes.subscribe())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn package_notice_scope() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let client = crate::client_auth::tests::owner()?;
+        client.replace_package_managers(vec![crate::InvestigateGrant {
+            subject: "alice".into(),
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+        }])?;
+        let session = crate::client_auth::tests::session(&client)?;
+        let access = client.browser(
+            &session.token,
+            [1; 16],
+            "https://control.example",
+            None,
+            false,
+        )?;
+        let external =
+            access.package_grant(AnalysisSelectionV1::tenant([1; 16]), PackageActionV1::Run)?;
+        let authority = ControlPackageAuthority {
+            tenants: BTreeSet::from([[1; 16]]),
+            pins: BTreeSet::new(),
+            client: RwLock::new(Some(Arc::clone(&client))),
+            changes: tokio::sync::watch::channel(1).0,
+        };
+        let internal = authority.grant([1; 16]);
+        authority.check(&internal, PackageActionV1::Run)?;
+        authority.check(&external, PackageActionV1::Run)?;
+        let internal_notice = authority.changes_for(&internal);
+        let external_notice = authority.changes_for(&external);
+        assert!(!internal_notice.has_changed()?);
+        assert!(!external_notice.has_changed()?);
+        assert!(client.revoke_session(&session.token)?);
+        assert!(!internal_notice.has_changed()?);
+        assert!(external_notice.has_changed()?);
+        authority.check(&internal, PackageActionV1::Run)?;
+        assert!(matches!(
+            authority.check(&external, PackageActionV1::Run),
+            Err(araphor_data::Error::Package {
+                code: araphor_data::PackageErrorCodeV1::Denied,
+                ..
+            })
+        ));
+        Ok(())
     }
 }

@@ -43,7 +43,7 @@ struct DelayedContext {
     calls: AtomicUsize,
 }
 
-impl araphor_analysis::DiscoveryContextProvider for DelayedContext {
+impl araphor_analysis_back::DiscoveryContextProvider for DelayedContext {
     fn revision(&self, _source: &EvidenceIntakeIdentityV1) -> araphor_data::Result<u64> {
         Ok(if self.available.load(Ordering::Acquire) {
             2
@@ -58,7 +58,7 @@ impl araphor_analysis::DiscoveryContextProvider for DelayedContext {
     ) -> araphor_data::Result<araphor_data::DiscoveryContextJoinV1> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.available.load(Ordering::Acquire) {
-            araphor_analysis::DiscoveryContextProvider::context(&self.store, record)
+            araphor_analysis_back::DiscoveryContextProvider::context(&self.store, record)
         } else {
             Ok(araphor_data::DiscoveryContextJoinV1::Unresolved(
                 araphor_data::DiscoveryContextUnavailableV1::MissingWorkloadFact,
@@ -336,7 +336,7 @@ impl DiscoveryQualificationRunner {
                 available: AtomicBool::new(false),
                 calls: AtomicUsize::new(0),
             });
-            let owner = araphor_analysis::DiscoveryOwner::new(
+            let owner = araphor_analysis_back::DiscoveryOwner::new(
                 provider.clone(),
                 profile_config,
                 execution.ok_or("installed discovery handle is absent")?,
@@ -447,10 +447,10 @@ impl DiscoveryQualificationRunner {
                 available: AtomicBool::new(true),
                 calls: AtomicUsize::new(0),
             });
-            let owner = araphor_analysis::DiscoveryOwner::new(
+            let owner = araphor_analysis_back::DiscoveryOwner::new(
                 provider.clone(),
                 profile_config,
-                araphor_analysis::InstalledAnalysis::testing(
+                araphor_analysis_back::InstalledAnalysis::testing(
                     Some(recovered.clone()),
                     stream.tenant_id,
                 )?,

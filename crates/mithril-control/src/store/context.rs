@@ -856,7 +856,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = ControlStore::open(directory.path().join("control"))?;
         let data = AnalysisStore::open(directory.path().join("data"))?;
-        let mut changes = araphor_analysis::DiscoveryContextProvider::changes(&store)?
+        let mut changes = araphor_analysis_back::DiscoveryContextProvider::changes(&store)?
             .ok_or("context watch absent")?;
         assert!(!changes.has_changed()?);
         assert_eq!(data.meta()?.commit_revision, 0);

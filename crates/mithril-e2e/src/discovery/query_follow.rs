@@ -1139,8 +1139,10 @@ impl QueryFollowQualification {
         let source = evidence_source(1, 3);
         commit(&store, &source, 1, MINUTE, records(1, 1, 7))?;
         let limits = Limits {
-            global_streams: 1,
-            tenant_streams: 1,
+            global_streams: Some(1),
+            tenant_streams: Some(1),
+            input_capacity: Some(128 * 1024 * 1024),
+            output_capacity: Some(16 * 1024 * 1024),
             ..Default::default()
         };
         let owner = Engine::new(store.clone(), limits.clone())?;
@@ -1202,17 +1204,23 @@ impl QueryFollowQualification {
             "stream drop retained its query owner",
         )?;
         self.check(
-            memory.reserve_output(limits.output_capacity).is_err()
+            memory
+                .reserve_output(limits.output_capacity.ok_or("configured output capacity")?)
+                .is_err()
                 && ScalarValue::try_from_array(&alias, 0)? == ScalarValue::UInt64(Some(2)),
             "borrowed native output lost its allocation or value after producer drop",
         )?;
         self.check(
-            memory.reserve_input(limits.input_capacity).is_ok(),
+            memory
+                .reserve_input(limits.input_capacity.ok_or("configured input capacity")?)
+                .is_ok(),
             "borrowed output retained unrelated source input capacity",
         )?;
         drop(alias);
         self.check(
-            memory.reserve_output(limits.output_capacity).is_ok(),
+            memory
+                .reserve_output(limits.output_capacity.ok_or("configured output capacity")?)
+                .is_ok(),
             "final native buffer drop did not release output capacity",
         )?;
         let owner = Engine::new(store, limits.clone())?;

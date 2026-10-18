@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use araphor_analysis::{DiscoveryOwner, InstalledAnalysis};
+use araphor_analysis_back::{DiscoveryOwner, InstalledAnalysis};
 use araphor_data::{DiscoveryInputManifestV1, DiscoveryPhysicalResultV1, DiscoveryProofKindV1};
 use mithril_control::{
     DiscoveryPreviewOwner, PolicyDocumentV1, SimulatedDispositionV1, SimulatedPhysicalResultV1,

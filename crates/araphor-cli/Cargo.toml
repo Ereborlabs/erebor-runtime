@@ -7,7 +7,7 @@ repository.workspace = true
 
 [dependencies]
 araphor-data = { path = "../araphor-data" }
-araphor-analysis = { path = "../araphor-analysis" }
+araphor-analysis_back = { path = "../araphor-analysis_back" }
 clap.workspace = true
 comfy-table.workspace = true
 erebor-runtime-audit = { path = "../erebor-runtime-audit" }

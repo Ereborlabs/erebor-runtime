@@ -64,7 +64,7 @@ pub struct ControlConfig {
     #[serde(default)]
     pub data_retirements: Vec<araphor_data::ProcessorRetirementV1>,
     #[serde(default)]
-    pub discovery: Option<araphor_data::DiscoveryConfigV1>,
+    pub discovery: bool,
     #[serde(default)]
     pub graph_enabled: bool,
     #[serde(default)]
@@ -122,7 +122,7 @@ impl ControlConfig {
                     self.trust.clone(),
                     EvidenceIntakeOwner::new(store.clone(), data.clone(), clock)?,
                 )?;
-                if self.discovery.is_some()
+                if self.discovery
                     || self.graph_enabled
                     || self
                         .client
@@ -136,19 +136,13 @@ impl ControlConfig {
                             .map(|config| config.query.clone()),
                     )?;
                 }
-                let (discovery, discovery_error) = match self
-                    .discovery
-                    .map(|config| -> Result<_> {
-                        Ok(araphor_analysis::DiscoveryOwner::new(
-                            Arc::new(store.clone()),
-                            config,
-                            control.installed_analysis()?,
-                        )?)
-                    })
-                    .transpose()
-                {
-                    Ok(owner) => (owner.map(Arc::new), None),
-                    Err(source) => (None, Some(source)),
+                let (discovery, discovery_error) = if self.discovery {
+                    match control.analysis_packages(None)?.discovery() {
+                        Ok(owner) => (Some(Arc::new(owner)), None),
+                        Err(error) => (None, Some(error)),
+                    }
+                } else {
+                    (None, None)
                 };
                 (control, None, discovery, discovery_error)
             }
@@ -213,12 +207,6 @@ impl ControlConfig {
         if let Some(trust) = &self.authority_trust {
             trust.validate()?;
         }
-        ensure!(
-            self.discovery.as_ref().is_none_or(|config| config.valid()),
-            InvalidConfigurationSnafu {
-                reason: "discovery limits are invalid",
-            }
-        );
         ensure!(
             !self.allowed_nodes.is_empty(),
             InvalidConfigurationSnafu {
@@ -366,7 +354,7 @@ mod tests {
                 "tls": { "certificate_path": directory.path().join("control.pem"), "private_key_path": directory.path().join("control-key.pem"), "node_ca_path": directory.path().join("node-ca.pem") },
                 "allowed_nodes": [{ "node_id": "node-a", "certificate_sha256": "a".repeat(64), "tenant_id": "00000000-0000-0001-0000-000000000002" }],
                 "trust": { "generation": 1, "bundle_digest": "b".repeat(64), "policy_issuer_sequence_epoch": 0, "policy_signers": [] },
-                "client": null, "evidence_directory": directory.path(), "graph_enabled": true, "discovery": null,
+                "client": null, "evidence_directory": directory.path(), "graph_enabled": true, "discovery": false,
                 "data_retention": { "raw_max_age_ns": 1, "raw_max_bytes": 100_000 }
             }))?,
         )?;
@@ -485,36 +473,24 @@ mod tests {
             }
             source["evidence_admission"][field] = previous;
         }
-        source["discovery"] = serde_json::json!({});
+        source["discovery"] = serde_json::json!(true);
         fs::write(&path, serde_json::to_vec(&source)?)?;
         let parts = ControlConfig::load(&path)?.into_parts()?;
         assert!(parts.data_error.is_none());
         assert!(parts.discovery_error.is_none());
-        assert_eq!(
-            parts
-                .discovery
-                .as_ref()
-                .ok_or("discovery owner absent")?
-                .process(1)?,
-            0
-        );
+        assert!(parts.discovery.is_some());
         assert!(parts.control.analysis_store().is_some());
         assert!(!directory.path().join("discovery").exists());
         drop(parts);
-        for field in [
-            "interval_records",
-            "input_bytes",
-            "atom_limit",
-            "sources_per_pass",
-            "seal_interval_ns",
-            "witness_age_ns",
-        ] {
-            source["discovery"] = serde_json::json!({});
-            source["discovery"][field] = serde_json::json!(0);
+        for invalid in serde_json::json!([null, 0, 1, "true", {}, []])
+            .as_array()
+            .ok_or("invalid cases")?
+        {
+            source["discovery"] = invalid.clone();
             fs::write(&path, serde_json::to_vec(&source)?)?;
-            assert!(ControlConfig::load(&path).is_err(), "{field}");
+            assert!(ControlConfig::load(&path).is_err(), "{invalid}");
         }
-        source["discovery"] = serde_json::json!({});
+        source["discovery"] = serde_json::json!(true);
         fs::write(&path, serde_json::to_vec(&source)?)?;
         let database = directory.path().join("analysis/analysis.duckdb");
         fs::write(&database, b"invalid database")?;

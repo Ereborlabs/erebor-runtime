@@ -51,6 +51,11 @@ optimization, physical planning, and execution. Add no duplicate implementation
 when DataFusion supplies the behavior. Package execution uses the same Query
 machinery. All Araphor owners must follow this rule.
 
+The [subscription stream result](araphor-component-redesign.md#subscription-streams-and-shared-validation)
+records the fresh Analysis owner, shared validation, and selected qualification.
+Complete polling removal, quota defaults, and production reduction remain
+**Not done**.
+
 ### Component redesign
 
 The user accepts the deletion work and requires simpler complete components.
@@ -455,7 +460,7 @@ Full workspace CI and benchmarks are not run. No speed improvement is claimed.
 ### Complete SQL model program
 
 Implementation and selected host verification: **Done**.
-[Package execution](../../crates/araphor-analysis/src/package/execution.rs)
+[Package execution](../../crates/araphor-analysis_back/src/package/execution.rs)
 moves one owned SQL evaluation and the exact installed bundle into the existing
 Engine runtime. A complete private ModelRun holds one Session, evaluation
 permit, child control, and output reservation. Native streams produce batches
@@ -464,7 +469,7 @@ raw result vector are deleted. Trace-read checks run asynchronously before
 and after the program. Native and Wasm invocation remain synchronous.
 
 The checked public dataset route is
-[SqlDatasetOutputV1::query](../../crates/araphor-analysis/src/model/datasets.rs).
+[SqlDatasetOutputV1::query](../../crates/araphor-analysis_back/src/model/datasets.rs).
 The existing [SDK allocation owner](../../crates/araphor-analysis-sdk/src/evaluation.rs)
 also supplies input and dataset-result metadata charges. Schema headers and
 metadata-map capacity raise the retained metadata floor. Shared native buffers
@@ -513,7 +518,7 @@ CI and benchmarks are not run. Complete redesign: **Not done**.
 ### Analysis build inputs
 
 Implementation and selected host verification: **Done**.
-[build.rs](../../crates/araphor-analysis/build.rs) now declares only build.rs as
+[build.rs](../../crates/araphor-analysis_back/build.rs) now declares only build.rs as
 its file input. The checked Cargo fingerprint no longer scans package source.
 The emitted native target stays unchanged. Strict Analysis Clippy passes for
 the library and tests. Formatting and whitespace checks pass. Runtime tests,

@@ -77,7 +77,9 @@ impl Fixture {
     }
 
     fn open(mut limits: Limits, retention: araphor_data::RetentionLimitsV1) -> Self {
-        limits.extract_timeout = Duration::from_secs(5);
+        limits.input_capacity.get_or_insert(128 * 1024 * 1024);
+        limits.output_capacity.get_or_insert(16 * 1024 * 1024);
+        limits.extract_timeout = Some(Duration::from_secs(5));
         limits.evaluate_timeout = Some(Duration::from_secs(5));
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(
@@ -1159,12 +1161,24 @@ async fn append_view_byte_limit() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_ok());
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_err());
     assert_eq!(
         borrowed
@@ -1192,12 +1206,24 @@ async fn append_view_byte_limit() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_ok());
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
     let mut recovered = fixture.subscribe("SELECT source_cursor FROM events", clock, None, true);
     let output = next(&mut recovered).await;
@@ -1221,12 +1247,24 @@ async fn append_view_byte_limit() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_ok());
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
 }
 
@@ -1327,12 +1365,24 @@ async fn native_append_execution() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_ok());
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_err());
     assert_eq!(
         ScalarValue::try_from_array(&borrowed, 0).unwrap(),
@@ -1342,7 +1392,13 @@ async fn native_append_execution() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
 }
 
@@ -1607,7 +1663,11 @@ async fn native_subscribe_execution() {
         ScalarValue::try_from_array(first.column(0), 0).unwrap(),
         ScalarValue::Int64(Some(2))
     );
-    let capacity = fixture.engine.limits().output_capacity;
+    let capacity = fixture
+        .engine
+        .limits()
+        .output_capacity
+        .expect("configured output capacity");
     let buffers = first.column(0).get_buffer_memory_size();
     let held = capacity
         - fixture
@@ -1667,12 +1727,24 @@ async fn native_subscribe_execution() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_err());
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_err());
     assert_eq!(
         ScalarValue::try_from_array(&borrowed, 0).unwrap(),
@@ -1683,14 +1755,26 @@ async fn native_subscribe_execution() {
         fixture
             .engine
             .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)
+            .reserve_input(
+                fixture
+                    .engine
+                    .limits()
+                    .input_capacity
+                    .expect("configured input capacity"),
+            )
             .unwrap(),
     );
     drop(
         fixture
             .engine
             .memory()
-            .reserve_output(fixture.engine.limits().output_capacity)
+            .reserve_output(
+                fixture
+                    .engine
+                    .limits()
+                    .output_capacity
+                    .expect("configured output capacity"),
+            )
             .unwrap(),
     );
     assert!(stream.next().await.is_none());
@@ -1730,7 +1814,12 @@ async fn count_consumes_committed_changes() {
         .engine
         .memory()
         .reserve_input(
-            fixture.engine.limits().input_capacity - fixture.engine.limits().input_bytes / 2,
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+                - fixture.engine.limits().input_bytes / 2,
         )
         .unwrap();
     araphor_data::EvidenceRetentionOwner::new(fixture.store.as_ref())
@@ -1750,12 +1839,24 @@ async fn count_consumes_committed_changes() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_ok());
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
 }
 

@@ -159,9 +159,8 @@ impl Subscription {
                     {
                         let capture = async {
                             let now = state.run.clock.now_ns()?;
-                            let control = AnalysisReadControl::with_timeout(
-                                state.run.session.engine().limits().extract_timeout,
-                            )?;
+                            let control = AnalysisReadControl::default()
+                                .within(state.run.session.engine().limits().extract_timeout)?;
                             state
                                 .run
                                 .session
@@ -203,6 +202,31 @@ impl Subscription {
             operation,
             stream,
         })
+    }
+
+    pub fn until_change(mut self, mut changes: tokio::sync::watch::Receiver<u64>) -> Self {
+        let control = Arc::clone(self.session.control());
+        let changed = Box::pin(async move {
+            let _changed = changes.changed().await;
+            let _cancelled = control.cancel();
+        });
+        let inner = std::mem::replace(&mut self.stream, Box::pin(futures_util::stream::empty()));
+        let mut stream = inner.take_until(changed);
+        self.stream = futures_util::stream::poll_fn(move |context| {
+            match Pin::new(&mut stream).poll_next(context) {
+                Poll::Ready(None) if stream.take_result().is_some() => Poll::Ready(Some(Err((
+                    crate::Error::Data {
+                        source: araphor_data::Error::AnalysisReadDenied {
+                            location: snafu::location!(),
+                        },
+                    },
+                    None,
+                )))),
+                next => next,
+            }
+        })
+        .boxed();
+        self
     }
 
     pub fn schema(&self) -> SchemaRef {

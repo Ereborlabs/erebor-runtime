@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn memory_pressure_keeps_category() -> Result<(), Box<dyn std::error::Error>> {
-        let memory = araphor_query::memory::Memory::new(8, 8);
+        let memory = araphor_query::memory::Memory::new(Some(8), Some(8));
         let _held = memory.reserve_input(8)?;
         let pressure = araphor_query::Error::Sql {
             source: memory

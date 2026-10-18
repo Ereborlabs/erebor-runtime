@@ -18,6 +18,66 @@ use crate::parser::Parser;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+#[tokio::test]
+async fn unbounded_extraction_cancels() -> TestResult {
+    let fixture = Fixture::new_with_limits(Limits::default())?;
+    assert_eq!(fixture.engine.limits().extract_timeout, None);
+    fixture.commit(&fixture.source, 1, 10_000)?;
+    let control = Arc::new(AnalysisReadControl::default());
+    assert_eq!(control.remaining()?, None);
+    let (entered, entering) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    control.on_read_step(move || {
+        let _entered = entered.send(());
+        released.recv().map_err(|_| {
+            araphor_data::PackageErrorCodeV1::Incomplete.error("test extraction gate")
+        })?;
+        Ok(())
+    })?;
+    let (plan, sources) = fixture.plan("SELECT source_cursor FROM events")?;
+    let session = fixture
+        .engine
+        .session(fixture.selection(), &control, 20_000)?;
+    let worker = tokio::spawn(async move {
+        session
+            .stream(&plan, &sources, Read::Snapshot)
+            .await
+            .map(|_| ())
+    });
+    tokio::time::timeout(Duration::from_secs(30), entering).await??;
+    control.cancel()?;
+    release.send(())?;
+    let error = tokio::time::timeout(Duration::from_secs(30), worker)
+        .await??
+        .err()
+        .ok_or("cancelled extraction succeeded")?;
+    assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
+    drop(
+        fixture
+            .engine
+            .reserve_evaluation(fixture.source.tenant_id)?,
+    );
+    drop(
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
+    );
+    drop(
+        fixture.engine.memory().reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity"),
+        )?,
+    );
+    Ok(())
+}
+
 struct Fixture {
     engine: Arc<Engine>,
     store: Arc<AnalysisStore>,
@@ -28,13 +88,15 @@ struct Fixture {
 impl Fixture {
     fn new() -> TestResult<Self> {
         Self::new_with_limits(Limits {
-            extract_timeout: Duration::from_secs(5),
+            extract_timeout: Some(Duration::from_secs(5)),
             evaluate_timeout: Some(Duration::from_secs(5)),
             ..Default::default()
         })
     }
 
-    fn new_with_limits(limits: Limits) -> TestResult<Self> {
+    fn new_with_limits(mut limits: Limits) -> TestResult<Self> {
+        limits.input_capacity.get_or_insert(128 * 1024 * 1024);
+        limits.output_capacity.get_or_insert(16 * 1024 * 1024);
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let engine = Engine::new(Arc::clone(&store), limits)?;
@@ -168,7 +230,7 @@ fn source_scope_and_time() -> TestResult {
 async fn cursor_scan_keeps_frames() -> TestResult {
     let fixture = Fixture::new_with_limits(Limits {
         scan_bytes: 4096,
-        extract_timeout: Duration::from_secs(5),
+        extract_timeout: Some(Duration::from_secs(5)),
         evaluate_timeout: Some(Duration::from_secs(5)),
         ..Default::default()
     })?;
@@ -348,7 +410,7 @@ async fn native_source_demands() -> TestResult {
         None,
         Default::default(),
         fixture.control()?,
-        Duration::from_secs(5),
+        Some(Duration::from_secs(5)),
         20_000,
         Arc::clone(fixture.engine.memory()),
     );
@@ -398,7 +460,7 @@ fn clock_prunes_history() -> TestResult {
     let fixture = Fixture::new_with_limits(Limits {
         scan_bytes: 32 * 1024,
         input_bytes: 64 * 1024,
-        extract_timeout: Duration::from_secs(5),
+        extract_timeout: Some(Duration::from_secs(5)),
         evaluate_timeout: Some(Duration::from_secs(5)),
         ..Default::default()
     })?;
@@ -595,7 +657,7 @@ async fn native_capture_isolated() -> TestResult {
             None,
             Default::default(),
             AnalysisReadControl::default(),
-            Duration::from_secs(5),
+            Some(Duration::from_secs(5)),
             20_000,
             Arc::clone(fixture.engine.memory()),
         )
@@ -636,8 +698,8 @@ async fn native_stream_keeps_metadata() -> TestResult {
 
     let fixture = Fixture::new_with_limits(Limits {
         input_bytes: 64 * 1024,
-        input_capacity: 128 * 1024,
-        extract_timeout: Duration::from_secs(5),
+        input_capacity: Some(128 * 1024),
+        extract_timeout: Some(Duration::from_secs(5)),
         evaluate_timeout: Some(Duration::from_secs(5)),
         ..Default::default()
     })?;
@@ -647,7 +709,11 @@ async fn native_stream_keeps_metadata() -> TestResult {
     let physical = state.create_physical_plan(&logical).await?;
     assert!(SourceData::from_plan(physical.as_ref()).is_some());
     let memory = Arc::clone(fixture.engine.memory());
-    let capacity = fixture.engine.limits().input_capacity;
+    let capacity = fixture
+        .engine
+        .limits()
+        .input_capacity
+        .expect("configured input capacity");
     let charged = || -> datafusion::common::Result<usize> {
         let available = memory.prepare_input(capacity)?;
         Ok(capacity - available.size())
@@ -661,7 +727,7 @@ async fn native_stream_keeps_metadata() -> TestResult {
             ..Default::default()
         },
         fixture.control()?,
-        Duration::from_secs(5),
+        Some(Duration::from_secs(5)),
         20_000,
         Arc::clone(&memory),
     );
@@ -765,7 +831,7 @@ async fn native_ports_share_cut() -> TestResult {
         None,
         Default::default(),
         fixture.control()?,
-        Duration::from_secs(5),
+        Some(Duration::from_secs(5)),
         20_000,
         Arc::clone(fixture.engine.memory()),
     );

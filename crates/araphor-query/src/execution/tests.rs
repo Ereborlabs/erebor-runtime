@@ -31,7 +31,9 @@ struct Fixture {
 
 impl Fixture {
     fn new(mut limits: Limits) -> Self {
-        limits.extract_timeout = Duration::from_secs(5);
+        limits.input_capacity.get_or_insert(128 * 1024 * 1024);
+        limits.output_capacity.get_or_insert(16 * 1024 * 1024);
+        limits.extract_timeout = Some(Duration::from_secs(5));
         limits.evaluate_timeout = Some(Duration::from_secs(5));
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(AnalysisStore::open(directory.path().join("data")).unwrap());
@@ -59,7 +61,7 @@ fn scoped_session_keeps_family() -> std::result::Result<(), Box<dyn std::error::
         Arc::clone(&scope),
     )?;
     assert!(Arc::ptr_eq(session.memory(), &scope));
-    let foreign = crate::memory::Memory::new(1024, 1024);
+    let foreign = crate::memory::Memory::new(Some(1024), Some(1024));
     assert!(matches!(
         fixture
             .engine
@@ -377,6 +379,91 @@ fn evaluation_timeout_zero() {
 }
 
 #[test]
+fn extraction_timeout_config() {
+    let defaults: Limits = serde_json::from_str("{}").unwrap();
+    assert_eq!(defaults.extract_timeout, None);
+    for timeout in [None, Some(Duration::new(2, 3))] {
+        let limits: Limits = serde_json::from_value(serde_json::json!({
+            "extract_timeout": timeout,
+        }))
+        .unwrap();
+        assert_eq!(limits.extract_timeout, timeout);
+        limits.validate().unwrap();
+        let restored: Limits =
+            serde_json::from_value(serde_json::to_value(&limits).unwrap()).unwrap();
+        assert_eq!(restored, limits);
+    }
+    assert!(Limits {
+        extract_timeout: Some(Duration::ZERO),
+        ..Limits::default()
+    }
+    .validate()
+    .is_err());
+}
+
+#[test]
+fn stream_limits_default_disabled() {
+    let defaults: Limits = serde_json::from_str("{}").unwrap();
+    assert_eq!(defaults.global_streams, None);
+    assert_eq!(defaults.tenant_streams, None);
+    let fixture = Fixture::new(defaults);
+    let permits = (0..32)
+        .map(|_| fixture.engine.reserve_stream([1; 16]).unwrap())
+        .collect::<Vec<_>>();
+    assert!(fixture.engine.streams.is_none());
+    assert!(fixture.engine.tenant([1; 16]).unwrap().streams.is_none());
+    assert!(permits
+        .iter()
+        .all(|permit| permit._global.is_none() && permit._local.is_none()));
+    drop(permits);
+}
+
+#[test]
+fn stream_limits_configured() {
+    for (global, tenant) in [(Some(2), Some(1)), (Some(1), None), (None, Some(1))] {
+        let limits = Limits {
+            global_streams: global,
+            tenant_streams: tenant,
+            ..Limits::default()
+        };
+        let restored: Limits =
+            serde_json::from_value(serde_json::to_value(&limits).unwrap()).unwrap();
+        assert_eq!(restored, limits);
+        let fixture = Fixture::new(limits);
+        let first = fixture.engine.reserve_stream([1; 16]).unwrap();
+        assert!(matches!(
+            fixture.engine.reserve_stream([1; 16]),
+            Err(Error::Busy {
+                resource: "stream",
+                ..
+            })
+        ));
+        let second = fixture.engine.reserve_stream([2; 16]);
+        if global == Some(1) {
+            assert!(second.is_err());
+        } else {
+            let second = second.unwrap();
+            if global == Some(2) {
+                assert!(fixture.engine.reserve_stream([3; 16]).is_err());
+            } else {
+                assert!(fixture.engine.reserve_stream([3; 16]).is_ok());
+            }
+            drop(second);
+        }
+        drop(first);
+        assert!(fixture.engine.reserve_stream([1; 16]).is_ok());
+    }
+    for (global, tenant) in [(Some(0), None), (None, Some(0))] {
+        let fixture = Fixture::new(Limits {
+            global_streams: global,
+            tenant_streams: tenant,
+            ..Limits::default()
+        });
+        assert!(fixture.engine.reserve_stream([1; 16]).is_err());
+    }
+}
+
+#[test]
 fn native_memory_limit_is_optional() {
     use datafusion::execution::memory_pool::{MemoryConsumer, MemoryLimit};
 
@@ -540,7 +627,13 @@ fn local_output_bounds() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
 }
 
@@ -582,7 +675,7 @@ fn registration_reuses_input_claims() {
     let data = batch(11);
     let fixture = Fixture::new(Limits {
         input_bytes: data.get_array_memory_size(),
-        input_capacity: 4096,
+        input_capacity: Some(4096),
         ..Default::default()
     });
     let (plan, _) = local_plan(&fixture.engine);
@@ -596,7 +689,14 @@ fn registration_reuses_input_claims() {
     let held = fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity - allocated)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+                - allocated,
+        )
         .unwrap();
     assert!(fixture.engine.memory().reserve_input(1).is_err());
     let mut session = fixture
@@ -630,7 +730,13 @@ fn registration_reuses_input_claims() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_ok());
 }
 
@@ -874,23 +980,23 @@ async fn buffers_outlive_producer_permits() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(limits.input_capacity)
+        .reserve_input(limits.input_capacity.expect("configured input capacity"))
         .is_err());
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(limits.output_capacity)
+        .reserve_output(limits.output_capacity.expect("configured output capacity"))
         .is_err());
     drop(borrowed);
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(limits.input_capacity)
+        .reserve_input(limits.input_capacity.expect("configured input capacity"))
         .is_ok());
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(limits.output_capacity)
+        .reserve_output(limits.output_capacity.expect("configured output capacity"))
         .is_ok());
 }
 
@@ -960,9 +1066,9 @@ fn idle_sessions_skip_admission() {
 fn input_output_budget() {
     let fixture = Fixture::new(Limits {
         input_bytes: 64 * 1024,
-        input_capacity: 128 * 1024,
+        input_capacity: Some(128 * 1024),
         output_bytes: 128,
-        output_capacity: 128,
+        output_capacity: Some(128),
         ..Default::default()
     });
     let state = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
@@ -1012,11 +1118,24 @@ fn input_output_budget() {
         ScalarValue::try_from_array(batches[0].column(0), 0).unwrap(),
         ScalarValue::Utf8(Some(text))
     );
-    assert!(batches[0].get_array_memory_size() > fixture.engine.limits().output_capacity);
+    assert!(
+        batches[0].get_array_memory_size()
+            > fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+    );
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
     let client = fixture
         .engine
@@ -1028,14 +1147,24 @@ fn input_output_budget() {
     let borrowed = Arc::clone(batches[0].column(0));
     drop(input);
     drop(client);
-    let capacity = fixture.engine.limits().input_capacity;
+    let capacity = fixture
+        .engine
+        .limits()
+        .input_capacity
+        .expect("configured input capacity");
     assert!(fixture.engine.memory().reserve_input(capacity).is_err());
     drop(borrowed);
     assert!(fixture.engine.memory().reserve_input(capacity).is_ok());
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
 }
 
@@ -1327,7 +1456,13 @@ async fn cancellation_stops_native_producers() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
 }
 
@@ -1372,7 +1507,13 @@ async fn local_producer_cancel() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_ok());
 }
 
@@ -1396,7 +1537,13 @@ fn local_stream_keeps_capacity() {
             assert!(engine.reserve_evaluation([1; 16]).is_err());
             let held = engine
                 .memory()
-                .reserve_output(engine.limits().output_capacity - engine.limits().output_bytes)
+                .reserve_output(
+                    engine
+                        .limits()
+                        .output_capacity
+                        .expect("configured output capacity")
+                        - engine.limits().output_bytes,
+                )
                 .unwrap();
             assert!(engine.memory().reserve_output(1).is_err());
             drop(held);
@@ -1405,7 +1552,13 @@ fn local_stream_keeps_capacity() {
             let retained = batch.column(0).to_data().buffers()[0].capacity();
             let held = engine
                 .memory()
-                .reserve_output(engine.limits().output_capacity - retained)
+                .reserve_output(
+                    engine
+                        .limits()
+                        .output_capacity
+                        .expect("configured output capacity")
+                        - retained,
+                )
                 .unwrap();
             assert!(engine.memory().reserve_output(1).is_err());
             drop(held);
@@ -1421,21 +1574,39 @@ fn local_stream_keeps_capacity() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_output(fixture.engine.limits().output_capacity)
+        .reserve_output(
+            fixture
+                .engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_err());
     drop(batch);
     drop(
         fixture
             .engine
             .memory()
-            .reserve_output(fixture.engine.limits().output_capacity)
+            .reserve_output(
+                fixture
+                    .engine
+                    .limits()
+                    .output_capacity
+                    .expect("configured output capacity"),
+            )
             .unwrap(),
     );
     drop(
         fixture
             .engine
             .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)
+            .reserve_input(
+                fixture
+                    .engine
+                    .limits()
+                    .input_capacity
+                    .expect("configured input capacity"),
+            )
             .unwrap(),
     );
 }
@@ -1472,7 +1643,13 @@ async fn local_rejects_foreign_permits() {
         fixture
             .engine
             .memory()
-            .reserve_output(fixture.engine.limits().output_capacity)
+            .reserve_output(
+                fixture
+                    .engine
+                    .limits()
+                    .output_capacity
+                    .expect("configured output capacity"),
+            )
             .unwrap(),
     );
 }
@@ -1494,13 +1671,23 @@ fn local_empty_releases_prepayment() {
             let mut stream = session.stream_local(&plan, Arc::clone(&permit)).await?;
             assert!(engine
                 .memory()
-                .reserve_output(engine.limits().output_capacity)
+                .reserve_output(
+                    engine
+                        .limits()
+                        .output_capacity
+                        .expect("configured output capacity")
+                )
                 .is_err());
             assert!(stream.try_next().await.unwrap().is_none());
             drop(
                 engine
                     .memory()
-                    .reserve_output(engine.limits().output_capacity)
+                    .reserve_output(
+                        engine
+                            .limits()
+                            .output_capacity
+                            .expect("configured output capacity"),
+                    )
                     .unwrap(),
             );
             assert!(engine.reserve_evaluation([1; 16]).is_err());

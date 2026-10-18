@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn capacity_pressure_can_retry() {
-        let memory = crate::memory::Memory::new(8, 8);
+        let memory = crate::memory::Memory::new(Some(8), Some(8));
         let held = memory.reserve_input(8).unwrap();
         let pressure = Error::Sql {
             source: memory.reserve_input(1).unwrap_err(),

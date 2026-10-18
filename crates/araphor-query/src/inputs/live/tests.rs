@@ -68,6 +68,8 @@ impl Fixture {
         let engine = Engine::new(
             Arc::clone(&store),
             Limits {
+                input_capacity: Some(128 * 1024 * 1024),
+                output_capacity: Some(16 * 1024 * 1024),
                 tenant_evaluations: 1,
                 ..Default::default()
             },
@@ -567,10 +569,13 @@ async fn restart_skips_input_capacity() -> TestResult {
         .store
         .package_activation(&fixture.active.key)?
         .ok_or("active head")?;
-    let held = fixture
-        .engine
-        .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)?;
+    let held = fixture.engine.memory().reserve_input(
+        fixture
+            .engine
+            .limits()
+            .input_capacity
+            .expect("configured input capacity"),
+    )?;
     let mut restarted = fixture.inputs.watch(
         Arc::clone(&fixture.engine),
         active,
@@ -747,10 +752,13 @@ async fn quiet_cancel_expiry_release() -> TestResult {
     drop(operation);
     drop(fixture.engine.reserve_evaluation([1; 16])?);
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)?,
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
     Ok(())
 }
@@ -767,7 +775,13 @@ async fn drop_retains_input_capacity() -> TestResult {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_err());
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     {
@@ -781,10 +795,13 @@ async fn drop_retains_input_capacity() -> TestResult {
     }
     drop(input);
     drop(
-        fixture
-            .engine
-            .memory()
-            .reserve_input(fixture.engine.limits().input_capacity)?,
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
     Ok(())
 }

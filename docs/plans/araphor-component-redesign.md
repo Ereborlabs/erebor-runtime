@@ -30,8 +30,8 @@ source states.
 On 2026-10-18, the user restates simplification, coherence, and real production
 Rust reduction as the main acceptance criteria. Every new execution path,
 including Discovery, must pass through native SQL parsing, native logical
-planning, native optimization, physical planning, and execution. Move the existing Discovery owner and packages into the real
-`araphor-discovery_back` crate. Create `araphor-discovery` from scratch. The
+planning, native optimization, physical planning, and execution. Move the complete existing Analysis crate into the real
+`araphor-analysis_back` crate. Create `araphor-analysis` from scratch. The
 new crate must not call the backup owner, retain `run_clock`, sweep sources,
 or pass subscription identities to the old reader. Retain the backup for
 explicit legacy use and comparison.
@@ -40,6 +40,14 @@ DataFusion or dependency support. Polling is prohibited. The
 [package and job plan](araphor-package-jobs.md#current-goal-and-acceptance-criteria)
 records these criteria and the immediate native SQL package delivery. Its
 earlier controller and storage draft is not a prerequisite or blanket approval.
+
+The user permits reuse of old Analysis code only when that code meets the
+native pipeline and reactive subscription design. Keep the complete old crate
+in `araphor-analysis_back`. The fresh `araphor-analysis` must not depend on the
+backup or receive a clock. Query subscriptions supply pipeline events and SQL
+window deadlines. Use a native stream collection that supports insertion and
+removal on demand. Do not keep a permanent set of sources or a source sweep.
+The replacement and complete production Rust reduction remain **Not done**.
 
 The user requires all quotas to be configurable and disabled by default.
 This requirement replaces earlier instructions to retain mandatory quotas.
@@ -55,27 +63,90 @@ The user permits subagents for the current work.
 
 Implementation of these complete requirements: **Not done**. Query, SDK,
 compiler, cache, and remaining retained-store resource quotas need checks.
-The storage lock wait still polls. Discovery still has a separate
-source sweep and seal scheduler. This design does not meet the user requirement.
+The storage lock wait still polls. Backup Discovery still has a separate
+source sweep and seal scheduler. The fresh Analysis owner receives Query
+streams through futures_util::SelectAll. SelectAll uses FuturesUnordered and
+polls only streams that receive a wake. The owner inserts subscriptions and
+drops removed subscriptions through the native collection iterator. It has
+no clock or source sweep.
+Its complete functional qualification is **Not done**.
 Every Discovery execution must consume a Query subscription, including finite
 execution and manual refresh. The subscription must supply the actual input
 batches. A query that returns identities to the old input reader is not a
 replacement. This work is **Not done**.
 
-The existing Discovery loop uses shared progress notices and exact seal
+The backup Discovery loop uses shared progress notices and exact seal
 deadlines. It is reactive, but it still enumerates sources and reads inputs
 outside actual Query input subscriptions. Graph processing and notification
 delivery still have one-second polling loops. Data lock and
 cancellation waits and the Wasm epoch ticker also require replacement.
 
-Query still has finite default input, output, concurrency, and read-time
-quotas. Disabled quotas must bypass quota work. Native DataFusion supplies an
-unbounded execution pool. The current shared Arrow allocation registry also
-preserves configured alias-lifetime accounting; changing the native pool alone
-does not replace that obligation. DuckDB resets interruption during statement
+Query still has finite default scan bytes, per-query input and output bytes,
+output rows, and evaluation concurrency quotas. Shared input and output
+capacity, stream quotas, and extraction deadlines now default to None. Data
+read controls also default to no deadline. Disabled shared capacities use
+native DataFusion unbounded pools and bypass the Arrow allocation registry.
+Configured shared capacities preserve accounting until the last buffer alias
+is released. DuckDB resets interruption during statement
 initialization. Its current Rust wrapper exposes no pending-query registration
-point. Removing the default read deadline requires cancellation-safe native
-execution first. These requirements remain **Not done**.
+point. Complete cancellation qualification and removal of the remaining lock
+and interrupt polling are **Not done**.
+
+### Subscription streams and shared validation
+
+Implementation and selected host qualification: **Done**. The complete
+Discovery replacement remains **Not done**.
+
+The complete old Analysis crate is retained as `araphor-analysis_back`.
+The fresh Analysis owner consumes actual Query subscription batches through
+futures_util::SelectAll. Its existing FuturesUnordered queue receives stream
+wakes. Membership changes insert new streams or drop removed streams. The
+owner has no clock, periodic task, source sweep, or dependency on the backup.
+
+Native SQL computes the live snapshot and merge. The existing Data package,
+context, processor, and PreparedProfile owners retain durable writes. Final
+grant checks run inside those transactions. PackageGrantV1::remaining now
+owns the shared grant shape and expiry check for both Analysis crates. A grant
+without expiry reads no clock and keeps the backup read control unchanged.
+
+Shared Query input and output capacities default to None. Disabled capacities
+use native unbounded pools and skip the shared Arrow allocation registry.
+Configured capacities retain the existing alias charges and release notices.
+Per-query byte and row limits and evaluation concurrency still have finite
+defaults. Data lock and interrupt waits still poll.
+
+Frozen replay, continuation across interior expired spans, window sealing,
+sealed-profile witnesses, complete quota defaults, and complete polling removal
+remain **Not done**. The backup retains the existing implementations. Their
+later reuse must preserve the native SQL and Query subscription route.
+
+The final selected run passes all 15 cases: five fresh Analysis, three backup
+Analysis, four Data, one Discovery Effects, and two Control cases. These cover
+stream insertion and removal, retirement, stale publication, stop, scope,
+grant shape and expiry, current state, revision retry, cancellation, capacity,
+resume gaps, and Control startup. Query, CLI, and E2E executables build in the
+same run but select no cases. The cold test build takes 30 minutes 49 seconds.
+It includes a second native DuckDB build unit after Clippy. It is not a CI or
+performance measurement.
+
+Earlier checks pass all 241 distinct Query library cases across the full run
+and corrected focused retries. The Discovery Effects library passes all 34
+cases before the final test-only Copy cleanup. The final selected gap case
+covers that cleanup. Strict Clippy passes all targets in the eight affected
+crates. Formatting passes for all 311 selected Rust files. Added local links
+and whitespace checks pass. The exact commands and source hashes are in
+`/tmp/araphor-fresh-stream-verification1.json` and
+`/tmp/araphor-fresh-stream-state4.json`.
+
+These checks qualify Linux x86_64 with the GNU target. Full workspace CI,
+benchmarks, physical Kubernetes qualification, and complete unchanged native
+and Wasm backend suites are not run.
+
+The syntax count adds 2,189 production Rust code lines in this delivery and
+3,486 against `7b7b407a`. Moves, tests, comments, blank lines, and documents do
+not count. Another 9,486 net code deletions are required for the 6,000-line
+reduction. The count record is `/tmp/araphor-fresh-stream-count1.json`.
+The complete redesign remains **Not done**. No speed result is claimed.
 
 ### Atomic reactive context publication
 
@@ -1706,14 +1777,14 @@ program runs in one existing
 [Engine::wait](../../crates/araphor-query/src/execution.rs) future. Earlier
 qualification records remain attached to their recorded source.
 
-[AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs) selects the exact installed SQL export
-  -> [AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis/src/package/execution.rs) moves its bundle Arc, export index, evaluation, retained input set, and child control into the future
-  -> [ModelRun::evaluate](../../crates/araphor-analysis/src/model/execute.rs) awaits current trace-read checks and validates the SDK evaluation
-  -> [ModelRun::new](../../crates/araphor-analysis/src/model/operation.rs) creates the complete Session, shared evaluation permit, and output reservation
+[AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis_back/src/package/execution.rs) selects the exact installed SQL export
+  -> [AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis_back/src/package/execution.rs) moves its bundle Arc, export index, evaluation, retained input set, and child control into the future
+  -> [ModelRun::evaluate](../../crates/araphor-analysis_back/src/model/execute.rs) awaits current trace-read checks and validates the SDK evaluation
+  -> [ModelRun::new](../../crates/araphor-analysis_back/src/model/operation.rs) creates the complete Session, shared evaluation permit, and output reservation
   -> [Session::stream_local](../../crates/araphor-query/src/execution.rs) executes each admitted output, checkpoint, evidence, and reason plan in stage order
-  -> [ModelRun::query](../../crates/araphor-analysis/src/model/execute.rs) reserves conversion growth and normalizes each native batch before the next poll
-  -> [ModelRun::evaluate](../../crates/araphor-analysis/src/model/execute.rs) checks complete output, control, and current trace-read authority
-  -> [SqlModelOutputV1::retain](../../crates/araphor-analysis/src/model.rs) retains the output metadata and buffer claims for the caller
+  -> [ModelRun::query](../../crates/araphor-analysis_back/src/model/execute.rs) reserves conversion growth and normalizes each native batch before the next poll
+  -> [ModelRun::evaluate](../../crates/araphor-analysis_back/src/model/execute.rs) checks complete output, control, and current trace-read authority
+  -> [SqlModelOutputV1::retain](../../crates/araphor-analysis_back/src/model.rs) retains the output metadata and buffer claims for the caller
 
 The per-stage synchronous dispatch and raw result vector are deleted. Native
 local streams share the run's permit. Each stream releases unused output
@@ -1722,7 +1793,7 @@ batches remain available for row references and output tables. The SQL future
 borrows the descriptor and admitted program from its owned bundle. Native and
 Wasm invocation remain synchronous under their existing guards.
 
-[SqlDatasetOutputV1::query](../../crates/araphor-analysis/src/model/datasets.rs)
+[SqlDatasetOutputV1::query](../../crates/araphor-analysis_back/src/model/datasets.rs)
 keeps the checked synchronous dataset-only API. The
 [SDK metadata owner](../../crates/araphor-analysis-sdk/src/evaluation.rs) replaces
 the separate input and dataset-result metadata estimators. Its schema headers,
@@ -1811,7 +1882,7 @@ No speed result is claimed.
 ### Analysis build inputs
 
 Implementation and selected host verification: **Done**.
-[build.rs](../../crates/araphor-analysis/build.rs) reads only Cargo's TARGET.
+[build.rs](../../crates/araphor-analysis_back/build.rs) reads only Cargo's TARGET.
 Its rerun declaration now names build.rs. Cargo no longer scans the complete
 Analysis package for build-script inputs. The checked Cargo fingerprint names
 only build.rs; the emitted native target stays x86_64-unknown-linux-gnu.
@@ -2008,7 +2079,7 @@ Discovery receives Busy from a source page
 Discovery receives stop during a blocking page
   -> Discovery joins that page before the service returns
 
-The [source-pass owner](../../crates/araphor-analysis/src/discovery/live.rs)
+The [source-pass owner](../../crates/araphor-analysis_back/src/discovery/live.rs)
 uses the existing [Progress](../../crates/araphor-query/src/stream/progress.rs)
 owner from SQL follow and live package inputs. It registers the watches before
 the pass. It does not call captured with an end-of-pass Data revision.
@@ -2017,7 +2088,7 @@ does not end the complete source pass. The service visits later sources and
 keeps the earliest seal deadline. Existing package input offers and their
 actual commit-receipt checks remain separate.
 
-The [context provider](../../crates/araphor-analysis/src/discovery/mod.rs)
+The [context provider](../../crates/araphor-analysis_back/src/discovery/mod.rs)
 supplies an optional watch. None is valid only when context changes already
 produce a Data notice. [ControlStore](../../crates/mithril-control/src/store/discovery_context.rs)
 supplies its existing revision watch directly. Late Control context therefore
@@ -2031,7 +2102,7 @@ page without a Data revision. Discovery requests that next page before it
 waits. An unchanged page ends the attempt. The seventeen-profile test keeps
 the Data revision and all retained profile bytes fixed.
 
-[InstalledAnalysis](../../crates/araphor-analysis/src/package/installed.rs)
+[InstalledAnalysis](../../crates/araphor-analysis_back/src/package/installed.rs)
 retains its owner Memory scope. Discovery assigns its own operation scope.
 Each finite evaluation uses Memory.child for separate native consumer IDs.
 Children share the owner's release counter. A prior retained result therefore
@@ -2482,10 +2553,10 @@ execution with Query-owned Inputs and InputSet. Package lifecycle, executable
 admission, backend execution, checkpoint selection, authority, and the Data
 commit compare-and-swap checks keep their existing owners.
 
-[AdmittedExport::admit](../../crates/araphor-analysis/src/model.rs) admits the installed export
+[AdmittedExport::admit](../../crates/araphor-analysis_back/src/model.rs) admits the installed export
   -> [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) retains native plans, original provider origins, and input dependency order
 
-[AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs) checks current authority and reads the admitted Inputs directly
+[AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis_back/src/package/evaluation/preparation.rs) checks current authority and reads the admitted Inputs directly
   -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) plans all physical children at one frozen time
   -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) combines the prepared source columns and time ranges in one capture
   -> [AnalysisStore::extract_mode](../../crates/araphor-data/src/analysis/extraction.rs) fixes one Data read transaction for the original source receipts
@@ -2494,7 +2565,7 @@ commit compare-and-swap checks keep their existing owners.
   -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) materializes each completed port with one dataset-global row index before dependent SQL runs
   -> [Inputs::input](../../crates/araphor-query/src/inputs/receipt.rs) assigns per-port revisions and coverage from the original source scopes and reference origins
   -> [InputSet](../../crates/araphor-query/src/inputs/physical.rs) returns declared input order, retained tables, and complete provenance
-  -> [ModelRun::prepared](../../crates/araphor-analysis/src/model/operation.rs) supplies the retained input set to model execution
+  -> [ModelRun::prepared](../../crates/araphor-analysis_back/src/model/operation.rs) supplies the retained input set to model execution
 
 SourceOrigin distinguishes durable canonical tables, materialized port slots,
 and exact package-output slots. Typed port providers have unknown native
@@ -3130,8 +3201,8 @@ A zero-column Arrow batch must retain its row count for `COUNT(*)`.
 
 One operation does not grant every statement access to every relation. Keep
 the current stage-specific relation sets from
-[model relation construction](../../crates/araphor-analysis/src/model.rs)
-and [model evaluation](../../crates/araphor-analysis/src/model/execute.rs):
+[model relation construction](../../crates/araphor-analysis_back/src/model.rs)
+and [model evaluation](../../crates/araphor-analysis_back/src/model/execute.rs):
 
 | Statement | Allowed relations |
 | --- | --- |
@@ -3371,7 +3442,7 @@ these transferred lessons in the affected test groups:
 - Preserve reordered and non-prefix column projections after replacing a scan
   source. Check column values, names, types, metadata, and output order.
 - Preserve both witnesses in the existing
-  [pruned source evidence case](../../crates/araphor-analysis/src/model/operation/tests.rs),
+  [pruned source evidence case](../../crates/araphor-analysis_back/src/model/operation/tests.rs),
   including `operation = 7 AND false`.
 - Keep a run's captured revision while new data arrives. Preserve independent
   cursors for repeated scans, joins, and a second invocation.

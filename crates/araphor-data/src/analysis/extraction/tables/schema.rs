@@ -38,6 +38,10 @@ impl Capture<'_> {
                     "tenant_id,entity_key,lifetime_key,owner_revision",
                     "Recorded compiled policy proof and its exact retained context revision.",
                 ),
+                "discovery_state" => (
+                    "tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,method_version",
+                    "Captured source receipt, discovery processor head, and typed retained profile state.",
+                ),
                 "behaviors" => (
                     "tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,profile_id,profile_revision",
                     "Retained discovery profile summary or behavior atom. An open profile can change.",
@@ -129,6 +133,7 @@ impl Capture<'_> {
         insert("targets", Self::target_fields());
         insert("compiled_policies", Self::compiled_fields());
         insert("behaviors", Self::behavior_fields());
+        insert("discovery_state", Self::discovery_state_fields());
         insert("findings", Self::finding_fields());
         insert("relationships", Self::relationship_fields());
         insert("graph_subjects", Self::subject_fields());

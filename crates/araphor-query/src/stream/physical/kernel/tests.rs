@@ -148,7 +148,9 @@ impl Fixture {
             store,
             Limits {
                 input_bytes,
-                extract_timeout: Duration::from_secs(5),
+                input_capacity: Some(128 * 1024 * 1024),
+                output_capacity: Some(16 * 1024 * 1024),
+                extract_timeout: Some(Duration::from_secs(5)),
                 evaluate_timeout: Some(Duration::from_secs(5)),
                 ..Default::default()
             },
@@ -470,7 +472,13 @@ async fn replacement_counts_both_signs() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_ok());
     assert!(fixture.output.next().await.is_none());
 }
@@ -576,7 +584,13 @@ async fn failed_transaction_releases_source() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_err());
     let producer = Arc::new(());
     let weak = Arc::downgrade(&producer);
@@ -611,7 +625,13 @@ async fn failed_transaction_releases_source() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_ok());
     assert!(output.next().await.is_none());
 }
@@ -630,7 +650,12 @@ async fn upstream_error_releases_execution_before_delivery() {
             }
             assert!(engine
                 .memory()
-                .reserve_input(engine.limits().input_capacity)
+                .reserve_input(
+                    engine
+                        .limits()
+                        .input_capacity
+                        .expect("configured input capacity")
+                )
                 .is_err());
             Some((
                 Err(crate::Error::Sql {
@@ -661,7 +686,13 @@ async fn upstream_error_releases_execution_before_delivery() {
     assert!(fixture
         .engine
         .memory()
-        .reserve_input(fixture.engine.limits().input_capacity)
+        .reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity")
+        )
         .is_ok());
     assert!(output.next().await.is_none());
 }

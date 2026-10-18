@@ -1,6 +1,6 @@
 use std::{io::Write as _, path::Path, sync::Arc, time::SystemTime};
 
-use araphor_analysis::GraphAndFindingOwner;
+use araphor_analysis_back::GraphAndFindingOwner;
 use araphor_analysis_sdk as sdk;
 use araphor_component_build::ComponentBuilder;
 use araphor_data::{

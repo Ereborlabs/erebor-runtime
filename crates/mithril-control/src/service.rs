@@ -150,7 +150,7 @@ pub struct ControlPlane {
     trust: crate::TrustBundleOwner,
     state: Arc<Mutex<ControlState>>,
     evidence: Option<crate::EvidenceIntakeOwner>,
-    graph: Option<Arc<araphor_analysis::GraphAndFindingOwner>>,
+    graph: Option<Arc<araphor_analysis_back::GraphAndFindingOwner>>,
     policy_store: Option<crate::ControlStore>,
     policy_rollout: Option<crate::PolicyRolloutOwner>,
     policy_desired_state: Option<crate::PolicyDesiredStateOwner>,
@@ -177,7 +177,7 @@ impl ControlPlane {
             }
             .build()
         })?;
-        self.graph = Some(Arc::new(araphor_analysis::GraphAndFindingOwner::new(
+        self.graph = Some(Arc::new(araphor_analysis_back::GraphAndFindingOwner::new(
             data,
             Arc::new(store),
             self.installed_analysis()?,
@@ -185,7 +185,7 @@ impl ControlPlane {
         Ok(self)
     }
 
-    pub fn graph_owner(&self) -> Option<Arc<araphor_analysis::GraphAndFindingOwner>> {
+    pub fn graph_owner(&self) -> Option<Arc<araphor_analysis_back::GraphAndFindingOwner>> {
         self.graph.clone()
     }
 

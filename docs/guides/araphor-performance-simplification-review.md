@@ -18,7 +18,7 @@ is the single model batch collector. Affected qualification passes. The
 full production reduction is **Not done**. Read the
 [SQL operation guide](araphor-sql-operation-review.md) for this source route.
 
-The Analysis [build script](../../crates/araphor-analysis/build.rs) reads only
+The Analysis [build script](../../crates/araphor-analysis_back/build.rs) reads only
 Cargo's TARGET. Its rerun declaration names only build.rs. The checked Cargo
 fingerprint confirms this input; the emitted native target stays unchanged.
 Strict Analysis Clippy passes for the library and tests. Runtime cases are not

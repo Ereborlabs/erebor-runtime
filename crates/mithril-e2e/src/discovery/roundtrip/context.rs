@@ -1,6 +1,6 @@
 use std::{error::Error, sync::Arc};
 
-use araphor_analysis::DiscoveryOwner;
+use araphor_analysis_back::DiscoveryOwner;
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisStore, ContextSensitivityV1, DiscoveryContextAccessV1,
     DiscoveryContextBindingV1, DiscoveryContextEvidenceV1, DiscoveryContextRequestV1,

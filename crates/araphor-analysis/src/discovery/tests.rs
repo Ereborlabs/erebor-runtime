@@ -1,624 +1,404 @@
-use araphor_data::EvidenceRecord;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::time::Duration;
 
-mod baseline;
-mod corpus;
-mod crash;
-mod notice_storage;
+use araphor_analysis_sdk::arrow_array::{RecordBatch, StructArray};
+use araphor_analysis_sdk::DataType;
+use araphor_data::{
+    AnalysisSelectionV1, AnalysisStore, DiscoveryInputManifestV1, DiscoveryProfileV1,
+    DiscoveryRecordV1, PackageActionV1, PackageAuthorization, PackageBundleRef, PackageGrantV1,
+    ProcessorClassV1, ProcessorRetirementV1, ProcessorScopeV1, ValidatedEvidenceBatchV1,
+    DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
+};
+use araphor_discovery_effects::ObservedEffects;
+use araphor_query::execution::{Engine, Limits};
+use araphor_query::follow::Operation;
 
-use serde::Deserialize;
-
-use super::model::add;
 use super::*;
 
-type TestResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-fn execution() -> TestResult<crate::InstalledAnalysis> {
-    let tenant = input()?.tenant_id;
-    Ok(crate::InstalledAnalysis::testing(None, tenant)?.snapshot(tenant)?)
-}
+struct Authority(watch::Sender<u64>);
 
-pub(super) fn input() -> araphor_data::Result<DiscoveryInputManifestV1> {
-    DiscoveryInputManifestV1::try_from(
-        include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
-    )
-}
-
-fn edit_record(
-    record: &mut DiscoveryRecordV1,
-    edit: impl FnOnce(&mut EvidenceRecord),
-) -> TestResult<()> {
-    let mut wire = record.decode()?;
-    edit(&mut wire);
-    record.wire_record = Vec::<u8>::try_from(&wire)?;
-    Ok(())
-}
-
-#[test]
-fn discovery_derivation_replay_counts() -> TestResult<()> {
-    let execution = execution()?;
-    let original = input()?;
-    let result = DiscoveryOwner::derive_recorded(&original, &execution)?;
-    assert_eq!(result.duplicate_deliveries, 1);
-    assert_eq!(result.snapshot.accepted_records, 3);
-    assert_eq!(result.snapshot.included_records, 2);
-    assert_eq!(result.snapshot.unresolved_records, 1);
-    assert_eq!(result.snapshot.atoms.len(), 1);
-    assert_eq!(result.snapshot.atoms[0].count, 2);
-    assert_eq!(
-        result.snapshot.atoms[0].key.physical_result,
-        DiscoveryPhysicalResultV1::Prevented
-    );
-    let encoded = serde_json::to_value(&result.snapshot.atoms[0])?;
-    assert_eq!(
-        encoded
-            .as_object()
-            .ok_or("atom object absent")?
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            "key",
-            "count",
-            "first_cursor",
-            "last_cursor",
-            "evidence_sample"
-        ])
-    );
-    for field in [
-        "source_reason",
-        "source_decision",
-        "kernel_result",
-        "physical_result",
-        "static_key",
-    ] {
-        let mut changed = encoded.clone();
-        changed[field] = serde_json::Value::Null;
-        assert!(serde_json::from_value::<BehaviorAtomV1>(changed).is_err());
+impl PackageAuthorization for Authority {
+    fn check(&self, _: &PackageGrantV1, _: PackageActionV1) -> araphor_data::Result<()> {
+        Ok(())
     }
-    let retained: BehaviorSnapshotV1 =
-        serde_json::from_slice(&serde_json::to_vec(&result.snapshot)?)?;
-    retained.validate()?;
-    assert_eq!(retained, result.snapshot);
-    let mut permuted = original.clone();
-    permuted.records.reverse();
-    permuted.contexts.reverse();
-    assert_eq!(
-        DiscoveryOwner::derive_recorded(&permuted, &execution)?.snapshot,
-        result.snapshot
-    );
-    permuted.records.extend(original.records);
-    assert_eq!(
-        DiscoveryOwner::derive_recorded(&permuted, &execution)?.snapshot,
-        result.snapshot
-    );
-    let encoded = serde_json::to_vec(&permuted)?;
-    assert_eq!(
-        DiscoveryInputManifestV1::try_from(encoded.as_slice())?,
-        permuted
-    );
-    Ok(())
-}
-
-#[test]
-fn discovery_derivation_conflicting_input() -> TestResult<()> {
-    let execution = execution()?;
-    let mut changed = input()?;
-    edit_record(&mut changed.records[3], |wire| wire.kernel_result = 0)?;
-    assert!(matches!(
-        DiscoveryOwner::derive_recorded(&changed, &execution),
-        Err(crate::Error::Data {
-            source: araphor_data::Error::DiscoveryConflict {
-                kind: "record bytes",
-                ..
-            }
-        })
-    ));
-    changed = input()?;
-    changed.contexts.push(changed.contexts[0].clone());
-    changed
-        .contexts
-        .last_mut()
-        .ok_or("context absent")?
-        .state_id = 2;
-    assert!(matches!(
-        DiscoveryOwner::derive_recorded(&changed, &execution),
-        Err(crate::Error::Data {
-            source: araphor_data::Error::DiscoveryConflict {
-                kind: "context values",
-                ..
-            }
-        })
-    ));
-    changed = input()?;
-    changed.contexts[0].record_id.stream.node_id = "another-node".into();
-    assert!(DiscoveryOwner::derive_recorded(&changed, &execution).is_err());
-    changed = input()?;
-    changed.records[0].id.stream.tenant_id = [9; 16];
-    assert!(changed.validate().is_err());
-    Ok(())
-}
-
-#[test]
-fn discovery_derivation_distinct_keys() -> TestResult<()> {
-    let execution = execution()?;
-    for change in 0..6 {
-        let mut changed = input()?;
-        match change {
-            0 => edit_record(&mut changed.records[1], |wire| wire.kernel_result = -1)?,
-            1 => edit_record(&mut changed.records[1], |wire| wire.task_cookie += 1)?,
-            2 => changed.contexts[1].image_digest = "sha256:new-image".into(),
-            3 => edit_record(&mut changed.records[1], |wire| {
-                wire.exact_object_id = vec![31; 16].into()
-            })?,
-            4 => {
-                changed.contexts[1].policy_revision.signed_profile_digest =
-                    "replacement-profile".into()
-            }
-            _ => changed.contexts[1].entry_instance_id[15] += 1,
-        }
-        assert_eq!(
-            DiscoveryOwner::derive_recorded(&changed, &execution)?
-                .snapshot
-                .atoms
-                .len(),
-            2,
-            "change {change}"
-        );
+    fn admit(&self, _: &PackageGrantV1, _: &PackageBundleRef<'_>) -> araphor_data::Result<()> {
+        Ok(())
     }
-    let mut changed = input()?;
-    edit_record(&mut changed.records[1], |wire| {
-        wire.decision = 0;
-        wire.kernel_result = -5;
-    })?;
-    let result = DiscoveryOwner::derive_recorded(&changed, &execution)?;
-    assert!(result
-        .snapshot
-        .atoms
-        .iter()
-        .any(|atom| atom.key.effect.kernel_result == -5
-            && atom.key.physical_result == DiscoveryPhysicalResultV1::Unknown));
-    changed = input()?;
-    changed.proof_kind = DiscoveryProofKindV1::RecordedInput;
-    assert_ne!(
-        DiscoveryOwner::derive_recorded(&changed, &execution)?.snapshot,
-        DiscoveryOwner::derive_recorded(&input()?, &execution)?.snapshot
-    );
-    Ok(())
-}
-
-#[test]
-fn discovery_derivation_missing_generation() -> TestResult<()> {
-    let execution = execution()?;
-    let mut input = input()?;
-    input.records.truncate(1);
-    input.contexts.truncate(1);
-    input.coverage[0].last_cursor = 1;
-    input.coverage[0].expected_records = 1;
-    let sequence = input.records[0]
-        .original_kernel_sequence
-        .unwrap_or_default();
-    edit_record(&mut input.records[0], |wire| {
-        wire.profile_generation_ref_id = None;
-        wire.decision_context = Some(crate::EvidenceDecisionContext {
-            schema_version: 1,
-            original_kernel_sequence: sequence,
-            profile_generation_ref_id: 0,
-            ..Default::default()
-        });
-    })?;
-    input.records[0].decode()?;
-    let snapshot = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
-    assert_eq!(snapshot.unresolved_records, 1);
-    assert_eq!(snapshot.included_records, 0);
-    assert_eq!(
-        snapshot.unresolved[0].reason,
-        "MISSING_EXACT_OBJECT_OR_GENERATION"
-    );
-    input.proof_kind = DiscoveryProofKindV1::ObservedRuntime;
-    edit_record(&mut input.records[0], |wire| {
-        wire.profile_generation_ref_id = Some(7);
-        wire.decision_context = None;
-    })?;
-    let snapshot = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
-    assert_eq!(snapshot.unresolved_records, 1);
-    assert_eq!(snapshot.unresolved[0].reason, "MISSING_DECISION_CONTEXT");
-    Ok(())
-}
-
-#[test]
-fn discovery_derivation_disposition_accounting() -> TestResult<()> {
-    let execution = execution()?;
-    let mut changed = input()?;
-    changed.exclusions.push(DiscoveryUnresolvedV1 {
-        record_id: changed.records[1].id.clone(),
-        reason: "DECLARED_FILTER".into(),
-    });
-    let result = DiscoveryOwner::derive_recorded(&changed, &execution)?;
-    assert_eq!(result.snapshot.included_records, 1);
-    assert_eq!(result.snapshot.excluded_records, 1);
-    assert_eq!(result.snapshot.unresolved_records, 1);
-    assert_eq!(result.snapshot.accepted_records, 3);
-    assert_eq!(result.duplicate_deliveries, 1);
-    assert_eq!(result.snapshot.excluded[0].reason, "DECLARED_FILTER");
-    changed
-        .records
-        .retain(|record| record.id.durable_cursor != 3);
-    let result = DiscoveryOwner::derive_recorded(&changed, &execution)?;
-    assert_eq!(
-        result.snapshot.coverage[0].state,
-        DiscoveryCoverageStateV1::Gapped
-    );
-    assert!(result.snapshot.coverage[0]
-        .gap_reasons
-        .iter()
-        .any(|reason| reason == "INPUT_RANGE_INCOMPLETE"));
-    let mut count = u64::MAX;
-    assert!(add(&mut count, 1).is_err());
-    assert_eq!(count, u64::MAX);
-    Ok(())
-}
-
-#[test]
-fn discovery_derivation_page_merge() -> TestResult<()> {
-    let execution = execution()?;
-    let input = input()?;
-    let complete = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
-    let mut first = input.clone();
-    first.records.retain(|record| record.id.durable_cursor == 1);
-    first
-        .contexts
-        .retain(|context| context.record_id.durable_cursor == 1);
-    first.coverage[0].last_cursor = 1;
-    first.coverage[0].expected_records = 1;
-    let mut second = input.clone();
-    second
-        .records
-        .retain(|record| record.id.durable_cursor != 1);
-    second
-        .contexts
-        .retain(|context| context.record_id.durable_cursor != 1);
-    second.coverage[0].first_cursor = 2;
-    second.coverage[0].expected_records = 2;
-    let first = DiscoveryOwner::derive_recorded(&first, &execution)?.snapshot;
-    let second = DiscoveryOwner::derive_recorded(&second, &execution)?.snapshot;
-    assert_eq!(
-        DiscoveryOwner::merge(&first, &second, &execution)?,
-        complete
-    );
-    assert_eq!(
-        DiscoveryOwner::merge(&second, &first, &execution)?,
-        complete
-    );
-    assert_eq!(
-        DiscoveryOwner::merge(&complete, &complete, &execution)?,
-        complete
-    );
-    assert!(DiscoveryOwner::merge(&complete, &first, &execution).is_err());
-    assert!(!serde_json::to_string(&complete)?.contains("wire_record"));
-    Ok(())
-}
-
-#[test]
-fn discovery_derivation_lifecycle_schema() -> TestResult<()> {
-    let execution = execution()?;
-    let mut input = input()?;
-    let missing = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
-    assert_eq!(missing.lifecycle.len(), 9);
-    assert!(missing
-        .lifecycle
-        .iter()
-        .all(|entry| entry.state == DiscoveryLifecycleStateV1::Missing));
-    input.lifecycle = vec![
-        DiscoveryLifecycleEntryV1 {
-            case: DiscoveryLifecycleCaseV1::Startup,
-            state: DiscoveryLifecycleStateV1::Recorded {
-                records: vec![input.records[0].id.clone()],
-            },
-        },
-        DiscoveryLifecycleEntryV1 {
-            case: DiscoveryLifecycleCaseV1::ScheduledWork,
-            state: DiscoveryLifecycleStateV1::NotApplicable {
-                reason: "NO_SCHEDULED_WORK".into(),
-            },
-        },
-    ];
-    let snapshot = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
-    assert!(matches!(
-        snapshot.lifecycle[0].state,
-        DiscoveryLifecycleStateV1::Recorded { .. }
-    ));
-    assert_eq!(
-        snapshot.lifecycle[1].state,
-        DiscoveryLifecycleStateV1::Missing
-    );
-    assert_eq!(snapshot.lifecycle[7].state, input.lifecycle[1].state);
-    input.schema_version = DISCOVERY_SCHEMA_VERSION - 1;
-    assert!(input.validate().is_err());
-    input.schema_version = DISCOVERY_SCHEMA_VERSION;
-    let mut json = serde_json::to_value(input)?;
-    json["contexts"][0]["static_key"]["authority"] = serde_json::json!("allow");
-    assert!(DiscoveryInputManifestV1::try_from(serde_json::to_vec(&json)?.as_slice()).is_err());
-    Ok(())
-}
-
-#[test]
-fn discovery_comparison_reviewed_changes() -> TestResult<()> {
-    let execution = execution()?;
-    let original = input()?;
-    let snapshot = DiscoveryOwner::derive_recorded(&original, &execution)?.snapshot;
-    let baseline = DiscoveryReviewedBaselineV1 {
-        reviewer: "operator".into(),
-        reviewed_utc_ns: 3000,
-        forbidden: vec![snapshot.atoms[0].key.static_key.clone()],
-        snapshot: snapshot.clone(),
-    };
-    let mut changed = original.clone();
-    changed
-        .records
-        .retain(|record| record.id.durable_cursor != 2);
-    changed
-        .contexts
-        .retain(|context| context.record_id.durable_cursor != 2);
-    changed.coverage[0].expected_records = 2;
-    let repeated = DiscoveryOwner::derive_recorded(&changed, &execution)?.snapshot;
-    let comparison = DiscoveryOwner::compare(&repeated, &baseline, &execution)?;
-    assert!(comparison.added.is_empty());
-    assert_eq!(comparison.changed_counts.len(), 1);
-    assert_eq!(comparison.forbidden_groups.len(), 1);
-    let mut changed = original.clone();
-    edit_record(&mut changed.records[1], |wire| wire.kernel_result = -1)?;
-    let comparison = DiscoveryOwner::compare(
-        &DiscoveryOwner::derive_recorded(&changed, &execution)?.snapshot,
-        &baseline,
-        &execution,
-    )?;
-    assert_eq!(comparison.added.len(), 1);
-    assert_eq!(comparison.changed_results.len(), 1);
-    changed
-        .records
-        .retain(|record| record.id.durable_cursor != 1);
-    changed
-        .contexts
-        .retain(|context| context.record_id.durable_cursor != 1);
-    changed.coverage[0].expected_records = 2;
-    let comparison = DiscoveryOwner::compare(
-        &DiscoveryOwner::derive_recorded(&changed, &execution)?.snapshot,
-        &baseline,
-        &execution,
-    )?;
-    assert_eq!(comparison.changed_results.len(), 1);
-    let mut changed = original;
-    changed.contexts[0].image_digest = "replacement-image".into();
-    changed.contexts[1].image_digest = "replacement-image".into();
-    let comparison = DiscoveryOwner::compare(
-        &DiscoveryOwner::derive_recorded(&changed, &execution)?.snapshot,
-        &baseline,
-        &execution,
-    )?;
-    assert_eq!(comparison.changed_identities.len(), 1);
-    assert_eq!(baseline.snapshot, snapshot);
-    let mut unreviewed = baseline;
-    unreviewed.reviewer.clear();
-    assert!(DiscoveryOwner::compare(&snapshot, &unreviewed, &execution).is_err());
-    Ok(())
-}
-
-#[derive(Deserialize)]
-struct Corpus {
-    version: u32,
-    proof_kind: DiscoveryProofKindV1,
-    splits: BTreeMap<String, Split>,
-    cases: Vec<Case>,
-}
-
-#[derive(Deserialize)]
-struct Split {
-    workload_id: String,
-    start_utc_ns: i64,
-    end_utc_ns: i64,
-}
-
-#[derive(Deserialize)]
-struct Case {
-    id: String,
-    partition: String,
-    groups: Vec<Group>,
-    expected: Expected,
-}
-
-#[derive(Deserialize)]
-struct Group {
-    count: u64,
-    label: String,
-    variation: Variation,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum Variation {
-    Routine,
-    Denied,
-    State,
-    Release,
-    Entry,
-    MissingContext,
-    Gapped,
-    ReplicaGapped,
-    Unknown,
-    MissingObject,
-    Outbound,
-}
-
-#[derive(Deserialize)]
-struct Expected {
-    accepted: u64,
-    atoms: usize,
-    unresolved: u64,
-    prevented: u64,
-    coverage: DiscoveryCoverageStateV1,
-}
-
-fn case_input(case: &Case, split: &Split) -> TestResult<DiscoveryInputManifestV1> {
-    let mut input = input()?;
-    let seed = input.records[0].clone();
-    let seed_wire = seed.decode()?;
-    let mut binding = input.contexts[0].clone();
-    binding.subject_revision = format!("{}/revision-1", split.workload_id);
-    binding.static_key.workload_selector_id = split.workload_id.clone();
-    input.source_revision = format!("synthetic-pilot-v1/{}", case.id);
-    input.records.clear();
-    input.contexts.clear();
-    for (ordinal, group) in case.groups.iter().enumerate() {
-        assert!(!group.label.is_empty());
-        assert!((1..=10_000).contains(&group.count));
-        for _ in 0..group.count {
-            let cursor = input.records.len() as u64 + 1;
-            let mut record = seed.clone();
-            record.id.durable_cursor = cursor;
-            record.original_kernel_sequence = Some(cursor + 100);
-            let mut wire = seed_wire.clone();
-            wire.observed_boottime_ns = cursor + 1000;
-            wire.ingested_utc_ns = split
-                .start_utc_ns
-                .checked_add(cursor.try_into()?)
-                .ok_or("timestamp overflow")?;
-            assert!(wire.ingested_utc_ns < split.end_utc_ns);
-            wire.decision = 0;
-            wire.kernel_result = 0;
-            wire.configured_errno = 0;
-            let mut context = binding.clone();
-            context.record_id = record.id.clone();
-            match group.variation {
-                Variation::Routine | Variation::MissingContext => {}
-                Variation::Denied => {
-                    wire.decision = 1;
-                    wire.kernel_result = -13;
-                    wire.configured_errno = -13;
-                }
-                Variation::State => context.state_id += ordinal as u32 + 1,
-                Variation::Release => {
-                    context.image_digest = "sha256:replacement-image".into();
-                    context.configuration_digest = "replacement-configuration".into();
-                    context.subject_revision = format!("{}/revision-2", split.workload_id);
-                }
-                Variation::Entry => {
-                    context.entry_instance_id[15] += 1;
-                    context.entry_rule_id += 1;
-                }
-                Variation::Gapped => wire.temporal_coverage = 2,
-                Variation::ReplicaGapped => {
-                    record.id.stream.node_id = "node-b".into();
-                    context.record_id = record.id.clone();
-                    context.subject_revision = format!("{}-replica/revision-1", split.workload_id);
-                    context.process_instance_id[15] += 1;
-                    context.entry_instance_id[15] += 1;
-                    context.binding_id[15] += 1;
-                    wire.temporal_coverage = 2;
-                }
-                Variation::Unknown => wire.temporal_coverage = 0,
-                Variation::MissingObject => wire.exact_object_id = Default::default(),
-                Variation::Outbound => {
-                    wire.effect_family = 3;
-                    wire.operation = 12;
-                    wire.exact_object_id = Default::default();
-                    wire.destination_id = 31;
-                    context.static_key.effect_family = 3;
-                    context.static_key.operation = 12;
-                    context.static_key.operation_id = "CONNECT".into();
-                    context.static_key.object_selector = "DESTINATION:fixture-api".into();
-                }
-            }
-            record.wire_record = Vec::<u8>::try_from(&wire)?;
-            if !matches!(group.variation, Variation::MissingContext) {
-                input.contexts.push(context);
-            }
-            input.records.push(record);
-        }
+    fn commit(
+        &self,
+        _: &PackageGrantV1,
+        _: PackageActionV1,
+        _: &PackageBundleRef<'_>,
+        operation: &mut dyn FnMut() -> araphor_data::Result<()>,
+    ) -> araphor_data::Result<()> {
+        operation()
     }
-    let seed = input.coverage[0].clone();
-    input.coverage.clear();
-    for record in &input.records {
-        if let Some(range) = input
-            .coverage
-            .iter_mut()
-            .find(|range| range.stream == record.id.stream)
-        {
-            range.last_cursor = record.id.durable_cursor;
-            range.expected_records += 1;
-        } else {
-            let mut range = seed.clone();
-            range.stream = record.id.stream.clone();
-            range.first_cursor = record.id.durable_cursor;
-            range.last_cursor = record.id.durable_cursor;
-            range.expected_records = 1;
-            input.coverage.push(range);
-        }
+    fn changes(&self) -> watch::Receiver<u64> {
+        self.0.subscribe()
     }
-    Ok(input)
 }
 
-#[test]
-fn discovery_derivation_corpus_parity() -> TestResult<()> {
-    let execution = execution()?;
-    let corpus: Corpus = serde_json::from_slice(include_bytes!(
-        "../../../mithril-e2e/fixtures/discovery/pilot.json"
-    ))?;
-    assert_eq!(corpus.version, 1);
-    assert_eq!(corpus.proof_kind, DiscoveryProofKindV1::Synthetic);
-    assert_eq!(corpus.cases.len(), 21);
-    for case in corpus.cases {
-        let mut input = case_input(
-            &case,
-            corpus.splits.get(&case.partition).ok_or("split absent")?,
+struct Fixture {
+    store: Arc<AnalysisStore>,
+    query: Arc<Engine>,
+    source: EvidenceIntakeIdentityV1,
+    records: BTreeMap<u64, DiscoveryRecordV1>,
+    _directory: tempfile::TempDir,
+}
+
+impl Fixture {
+    fn new(limits: Limits) -> TestResult<Self> {
+        let manifest = DiscoveryInputManifestV1::try_from(
+            include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
         )?;
-        let result = DiscoveryOwner::derive_recorded(&input, &execution)
-            .map_err(|error| format!("{} normal: {error:?}", case.id))?
-            .snapshot;
-        assert_eq!(
-            result.accepted_records, case.expected.accepted,
-            "{}",
-            case.id
-        );
-        assert_eq!(result.atoms.len(), case.expected.atoms, "{}", case.id);
-        assert_eq!(
-            result.unresolved_records, case.expected.unresolved,
-            "{}",
-            case.id
-        );
-        assert!(
-            result
-                .coverage
-                .iter()
-                .any(|range| range.state == case.expected.coverage),
-            "{}",
-            case.id
-        );
-        assert_eq!(
-            result.included_records + result.unresolved_records + result.excluded_records,
-            result.accepted_records
-        );
-        assert_eq!(
-            result
-                .atoms
-                .iter()
-                .filter(|atom| atom.key.physical_result == DiscoveryPhysicalResultV1::Prevented)
-                .map(|atom| atom.count)
-                .sum::<u64>(),
-            case.expected.prevented,
-            "{}",
-            case.id
-        );
-        input.records.reverse();
-        input.contexts.reverse();
-        input.records.extend(input.records.clone());
-        let replay = DiscoveryOwner::derive_recorded(&input, &execution)
-            .map_err(|error| format!("{} replay: {error:?}", case.id))?;
-        assert_eq!(replay.duplicate_deliveries, case.expected.accepted);
-        assert_eq!(replay.snapshot, result, "{}", case.id);
-        if case.id == "rare-forbidden" {
-            corpus::rare_exports(&input, &result, &replay.snapshot, &execution)?;
+        let records = manifest
+            .records
+            .into_iter()
+            .map(|record| (record.id.durable_cursor, record))
+            .collect::<BTreeMap<_, _>>();
+        let source = records
+            .first_key_value()
+            .ok_or("fixture record absent")?
+            .1
+            .id
+            .stream
+            .clone();
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let mut query = Engine::new(
+            Arc::clone(&store),
+            Limits {
+                global_streams: Some(2),
+                tenant_streams: Some(2),
+                extract_timeout: Some(Duration::from_secs(30)),
+                ..limits
+            },
+        )?;
+        Arc::get_mut(&mut query)
+            .ok_or("query already shared")?
+            .register_relation_planner(Arc::new(ObservedEffects))?;
+        Ok(Self {
+            store,
+            query,
+            source,
+            records,
+            _directory: directory,
+        })
+    }
+
+    fn owner(&self, selection: AnalysisSelectionV1) -> TestResult<DiscoveryOwner> {
+        Ok(DiscoveryOwner::new(vec![Package::new(
+            Arc::clone(&self.query),
+            Arc::new(Authority(watch::channel(0).0)),
+            PackageGrantV1 {
+                principal: "fixture".into(),
+                revision: 1,
+                selection,
+                expires_utc_ns: None,
+                authorization_id: None,
+            },
+            ObservedEffects::live_bundle()?,
+            "live",
+            "snapshot",
+        )?])?)
+    }
+
+    fn scope(&self) -> ProcessorScopeV1 {
+        ProcessorScopeV1 {
+            processor_id: DISCOVERY_PROCESSOR.into(),
+            method_version: u64::from(DISCOVERY_SCHEMA_VERSION),
+            identity: self.source.clone(),
         }
     }
+
+    fn append(&self, cursor: u64) -> TestResult {
+        let record = self.records.get(&cursor).ok_or("fixture cursor absent")?;
+        self.store.accept_validated_batch(
+            self.source.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: record.id.cpu_id,
+                first_cursor: cursor,
+                last_cursor: cursor,
+                intake_utc_ns: cursor * 1_000_000_000,
+                frame_ends: vec![record.wire_record.len()],
+                framed_records: record.wire_record.clone().into(),
+            },
+        )?;
+        Ok(())
+    }
+
+    fn profile(&self) -> TestResult<Option<DiscoveryProfileV1>> {
+        self.store
+            .processor_result(&self.scope())?
+            .map(|result| DiscoveryProfileV1::try_from(result.body.as_slice()).map_err(Into::into))
+            .transpose()
+    }
+
+    fn released(&self) -> TestResult {
+        let first = self.query.reserve_stream(self.source.tenant_id)?;
+        let second = self.query.reserve_stream(self.source.tenant_id)?;
+        assert!(self.query.reserve_stream(self.source.tenant_id).is_err());
+        drop((first, second));
+        drop(self.query.reserve_evaluation(self.source.tenant_id)?);
+        if let Some(capacity) = self.query.limits().input_capacity {
+            drop(self.query.memory().reserve_input(capacity)?);
+        }
+        if let Some(capacity) = self.query.limits().output_capacity {
+            drop(self.query.memory().reserve_output(capacity)?);
+        }
+        Ok(())
+    }
+}
+
+async fn registry(streams: &mut Updates, tenant: [u8; 16]) -> TestResult<Update> {
+    let stream = streams
+        .iter_mut()
+        .find_map(|entry| (entry.key == Pipeline::Sources(tenant)).then_some(&mut entry.stream))
+        .ok_or("registry absent")?;
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let update = stream.next().await.ok_or("registry ended")??;
+            if update.batches.is_some() {
+                assert_eq!(update.operation, Operation::Replace);
+                return Ok(update);
+            }
+        }
+    })
+    .await?
+}
+
+#[tokio::test]
+async fn native_source_stream_lifecycle() -> TestResult {
+    let fixture = Fixture::new(Limits {
+        input_capacity: Some(128 * 1024 * 1024),
+        output_capacity: Some(16 * 1024 * 1024),
+        ..Default::default()
+    })?;
+    let owner = fixture.owner(AnalysisSelectionV1::tenant(fixture.source.tenant_id))?;
+    let tenant = fixture.source.tenant_id;
+    let mut streams = owner.sources().await?;
+    assert!(streams
+        .iter()
+        .all(|entry| entry.stream.moving_resolution_ns().is_none()));
+    let empty = registry(&mut streams, tenant).await?;
+    assert!(DiscoveryOwner::identities(&empty)?.is_empty());
+    owner.derive(&mut streams, tenant, &empty).await?;
+    drop(empty);
+    assert_eq!(streams.len(), 1);
+    fixture
+        .store
+        .register_processor(&fixture.scope(), ProcessorClassV1::Required, 1)?;
+    fixture.append(1)?;
+    let mut added = registry(&mut streams, tenant).await?;
+    assert_eq!(
+        DiscoveryOwner::identities(&added)?.as_slice(),
+        std::slice::from_ref(&fixture.source)
+    );
+    added.limited = true;
+    assert!(owner.derive(&mut streams, tenant, &added).await.is_err());
+    assert_eq!(streams.len(), 1);
+    added.limited = false;
+    owner.derive(&mut streams, tenant, &added).await?;
+    owner.derive(&mut streams, tenant, &added).await?;
+    drop(added);
+    assert_eq!(streams.len(), 2);
+    assert!(streams
+        .iter()
+        .any(|entry| entry.key == Pipeline::Profile(fixture.source.clone())));
+    assert!(streams
+        .iter()
+        .all(|entry| entry.stream.moving_resolution_ns().is_none()));
+    assert!(fixture.query.reserve_stream(tenant).is_err());
+    let update = tokio::time::timeout(
+        Duration::from_secs(90),
+        streams
+            .iter_mut()
+            .find_map(|entry| {
+                (entry.key == Pipeline::Profile(fixture.source.clone()))
+                    .then_some(&mut entry.stream)
+            })
+            .ok_or("profile stream absent")?
+            .next(),
+    )
+    .await?
+    .ok_or("profile stream ended")??;
+    assert_eq!(
+        DiscoveryOwner::publish(Arc::clone(owner.package(tenant)?), update).await?,
+        1
+    );
+    let profile = fixture.profile()?.ok_or("profile absent")?;
+    assert_eq!(profile.snapshot.accepted_records, 1);
+    assert_eq!(profile.snapshot.unresolved_records, 1);
+    assert!(!profile.snapshot.coverage.is_empty());
+    fixture.append(2)?;
+    let stale = tokio::time::timeout(
+        Duration::from_secs(90),
+        streams
+            .iter_mut()
+            .find_map(|entry| {
+                (entry.key == Pipeline::Profile(fixture.source.clone()))
+                    .then_some(&mut entry.stream)
+            })
+            .ok_or("profile stream absent")?
+            .next(),
+    )
+    .await?
+    .ok_or("profile stream ended")??;
+    assert!(stale.batches.is_some());
+    assert!(stale
+        .snapshot
+        .page
+        .extraction
+        .sources
+        .iter()
+        .any(|source| source.receipt.contiguous_cursor == 2));
+    fixture.store.retire_required(&ProcessorRetirementV1 {
+        scope: fixture.scope(),
+        change_id: "retire-native".into(),
+        reason: "Retire this source processor.".into(),
+        expected_cursor: 1,
+        cutoff_cursor: 2,
+    })?;
+    let retired = fixture.store.meta()?;
+    assert!(matches!(
+        DiscoveryOwner::publish(Arc::clone(owner.package(tenant)?), stale).await,
+        Err(crate::Error::Data {
+            source: araphor_data::Error::AnalysisConflict { .. }
+        })
+    ));
+    assert_eq!(fixture.store.meta()?, retired);
+    assert_eq!(fixture.profile()?, Some(profile));
+    let removed = registry(&mut streams, tenant).await?;
+    assert!(DiscoveryOwner::identities(&removed)?.is_empty());
+    owner.derive(&mut streams, tenant, &removed).await?;
+    drop(removed);
+    assert!(!streams
+        .iter()
+        .any(|entry| entry.key == Pipeline::Profile(fixture.source.clone())));
+    assert_eq!(streams.len(), 1);
+    let available = fixture.query.reserve_stream(tenant)?;
+    assert!(fixture.query.reserve_stream(tenant).is_err());
+    drop(available);
+    let before = fixture.store.meta()?;
+    assert!(fixture
+        .store
+        .register_processor(&fixture.scope(), ProcessorClassV1::Required, 1)
+        .is_err());
+    assert_eq!(fixture.store.meta()?, before);
+    drop(streams);
+    fixture.released()?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_run_stops() -> TestResult {
+    let fixture = Fixture::new(Limits {
+        input_capacity: Some(128 * 1024 * 1024),
+        output_capacity: Some(16 * 1024 * 1024),
+        ..Default::default()
+    })?;
+    let owner = Arc::new(fixture.owner(AnalysisSelectionV1::tenant(fixture.source.tenant_id))?);
+    let (stop, stopped) = watch::channel(false);
+    let mut notices = fixture.store.subscribe_revision();
+    let mut worker = tokio::spawn(Arc::clone(&owner).run(stopped));
+    for cursor in [1, 2] {
+        fixture.append(cursor)?;
+        tokio::time::timeout(Duration::from_secs(90), async {
+            loop {
+                notices.borrow_and_update();
+                if fixture
+                    .profile()?
+                    .is_some_and(|profile| profile.snapshot.accepted_records == cursor)
+                {
+                    return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(());
+                }
+                tokio::select! {
+                    result = &mut worker => return Err(format!("owner ended: {result:?}").into()),
+                    changed = notices.changed() => { changed?; }
+                }
+            }
+        })
+        .await??;
+    }
+    let profile = fixture.profile()?.ok_or("profile absent")?;
+    assert_eq!(profile.snapshot.accepted_records, 2);
+    assert_eq!(profile.snapshot.unresolved.len(), 2);
+    let before = fixture.store.meta()?;
+    assert!(tokio::time::timeout(Duration::from_millis(40), &mut worker)
+        .await
+        .is_err());
+    assert_eq!(fixture.store.meta()?, before);
+    assert_eq!(fixture.profile()?, Some(profile));
+    stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(90), worker).await???;
+    fixture.released()?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_source_scope_rejection() -> TestResult {
+    let fixture = Fixture::new(Limits::default())?;
+    fixture.append(1)?;
+    let tenant = fixture.source.tenant_id;
+    let owner = fixture.owner(AnalysisSelectionV1::tenant(tenant))?;
+    let package = owner.package(tenant)?;
+    let mut stream = package.subscribe(Some(&fixture.source), false).await?;
+    let update = tokio::time::timeout(Duration::from_secs(90), stream.next())
+        .await?
+        .ok_or("profile stream ended")??;
+    let other = EvidenceIntakeIdentityV1 {
+        source_id: [8; 16],
+        ..fixture.source.clone()
+    };
+    let batch = update
+        .batches
+        .as_ref()
+        .and_then(|batches| batches.first())
+        .ok_or("publication absent")?;
+    let source = batch.schema().index_of("source")?;
+    let DataType::Struct(fields) = batch.schema().field(source).data_type().clone() else {
+        return Err("source schema is not a struct".into());
+    };
+    let foreign = serde_arrow::to_record_batch(&fields, &std::slice::from_ref(&other))?;
+    let mut columns = batch.columns().to_vec();
+    columns[source] = Arc::new(StructArray::from(foreign));
+    let changed = RecordBatch::try_new(batch.schema(), columns)?;
+    let rows: Vec<Publication> = serde_arrow::from_record_batch(&changed)?;
+    assert_eq!(rows.len(), 1);
+    let before = fixture.store.meta()?;
+    for row in rows {
+        assert!(matches!(
+            row.commit(package, &update),
+            Err(crate::Error::Data {
+                source: araphor_data::Error::Package {
+                    code: Code::Denied,
+                    field: "captured discovery source",
+                    ..
+                }
+            })
+        ));
+    }
+    assert_eq!(fixture.store.meta()?, before);
+    let selected = fixture.owner(AnalysisSelectionV1::new(
+        tenant,
+        vec![fixture.source.clone()],
+    ))?;
+    assert!(selected
+        .package(tenant)?
+        .subscribe(Some(&other), false)
+        .await
+        .is_err());
+    let foreign_tenant = EvidenceIntakeIdentityV1 {
+        tenant_id: [9; 16],
+        ..fixture.source.clone()
+    };
+    assert!(package
+        .subscribe(Some(&foreign_tenant), false)
+        .await
+        .is_err());
+    drop((stream, update));
+    fixture.released()?;
     Ok(())
 }

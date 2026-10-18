@@ -7,6 +7,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::memory_pool::{
     GreedyMemoryPool, MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
+    UnboundedMemoryPool,
 };
 use tokio::sync::watch;
 
@@ -201,37 +202,44 @@ impl ArrowPool for Claim {
 #[derive(Debug)]
 pub struct Memory {
     released: Arc<AtomicU64>,
+    capacity: Arc<Capacity>,
     family: [usize; 2],
     registry: Arc<Registry>,
     input: MemoryReservation,
-    input_pool: Arc<Pool>,
+    input_pool: Arc<dyn MemoryPool>,
     output: MemoryReservation,
-    output_pool: Arc<Pool>,
-    input_capacity: usize,
-    output_capacity: usize,
+    output_pool: Arc<dyn MemoryPool>,
+    input_capacity: Option<usize>,
+    output_capacity: Option<usize>,
 }
 
 impl Memory {
-    pub fn new(input_capacity: usize, output_capacity: usize) -> Arc<Self> {
+    pub fn new(input_capacity: Option<usize>, output_capacity: Option<usize>) -> Arc<Self> {
         let (changes, _) = watch::channel(());
         let capacity = Arc::new(Capacity {
             released: Mutex::default(),
             changes,
         });
-        let pool = |bytes, resource| {
-            Arc::new(Pool {
-                native: GreedyMemoryPool::new(bytes),
-                capacity: Arc::clone(&capacity),
-                resource,
-            })
+        let pool = |bytes: Option<usize>, resource| -> Arc<dyn MemoryPool> {
+            match bytes {
+                Some(bytes) => Arc::new(Pool {
+                    native: GreedyMemoryPool::new(bytes),
+                    capacity: Arc::clone(&capacity),
+                    resource,
+                }),
+                None => Arc::new(UnboundedMemoryPool::default()),
+            }
         };
         let input = pool(input_capacity, "shared input");
         let output = pool(output_capacity, "shared output");
         let released = Arc::default();
-        let input_reservation = Self::consumer("araphor input", &input, &released, false);
-        let output_reservation = Self::consumer("araphor output", &output, &released, false);
+        let input_reservation =
+            Self::consumer("araphor input", &input, &capacity, &released, false);
+        let output_reservation =
+            Self::consumer("araphor output", &output, &capacity, &released, false);
         Arc::new(Self {
             released,
+            capacity,
             family: [
                 input_reservation.consumer().id(),
                 output_reservation.consumer().id(),
@@ -248,26 +256,28 @@ impl Memory {
 
     fn consumer(
         name: &str,
-        pool: &Arc<Pool>,
+        pool: &Arc<dyn MemoryPool>,
+        capacity: &Arc<Capacity>,
         released: &Arc<AtomicU64>,
         scoped: bool,
     ) -> MemoryReservation {
         let consumer = MemoryConsumer::new(name);
-        pool.capacity
-            .released
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .consumers
-            .insert(
-                consumer.id(),
-                Consumer {
-                    released: Arc::clone(released),
-                    bytes: 0,
-                    scoped,
-                },
-            );
-        let pool: Arc<dyn MemoryPool> = pool.clone();
-        consumer.register(&pool)
+        if matches!(pool.memory_limit(), MemoryLimit::Finite(_)) {
+            capacity
+                .released
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .consumers
+                .insert(
+                    consumer.id(),
+                    Consumer {
+                        released: Arc::clone(released),
+                        bytes: 0,
+                        scoped,
+                    },
+                );
+        }
+        consumer.register(pool)
     }
 
     pub fn scope(&self) -> Arc<Self> {
@@ -280,9 +290,22 @@ impl Memory {
 
     fn scoped(&self, released: Arc<AtomicU64>) -> Arc<Self> {
         Arc::new(Self {
-            input: Self::consumer("araphor input", &self.input_pool, &released, true),
-            output: Self::consumer("araphor output", &self.output_pool, &released, true),
+            input: Self::consumer(
+                "araphor input",
+                &self.input_pool,
+                &self.capacity,
+                &released,
+                true,
+            ),
+            output: Self::consumer(
+                "araphor output",
+                &self.output_pool,
+                &self.capacity,
+                &released,
+                true,
+            ),
             released,
+            capacity: Arc::clone(&self.capacity),
             family: self.family,
             registry: Arc::clone(&self.registry),
             input_pool: Arc::clone(&self.input_pool),
@@ -298,7 +321,6 @@ impl Memory {
 
     pub fn capacity_epoch(&self) -> u64 {
         let released = self
-            .input_pool
             .capacity
             .released
             .lock()
@@ -309,7 +331,7 @@ impl Memory {
     }
 
     pub async fn capacity_changed(&self, epoch: u64) -> crate::Result<()> {
-        let mut changes = self.input_pool.capacity.changes.subscribe();
+        let mut changes = self.capacity.changes.subscribe();
         loop {
             changes.borrow_and_update();
             if self.capacity_epoch() != epoch {
@@ -333,22 +355,24 @@ impl Memory {
     }
 
     pub(crate) fn prepare_output(&self, bytes: usize) -> Result<MemoryReservation> {
-        if bytes > self.output_capacity {
+        let Some(capacity) = self.output_capacity else {
+            return self.reserve_output(0);
+        };
+        if bytes > capacity {
             return self.reserve_output(bytes);
         }
-        let available = self
-            .output_capacity
-            .saturating_sub(self.output_pool.reserved());
+        let available = capacity.saturating_sub(self.output_pool.reserved());
         self.reserve_output(bytes.min(available).max(usize::from(bytes != 0)))
     }
 
     pub(crate) fn prepare_input(&self, bytes: usize) -> Result<MemoryReservation> {
-        if bytes > self.input_capacity {
+        let Some(capacity) = self.input_capacity else {
+            return self.reserve_input(bytes);
+        };
+        if bytes > capacity {
             return self.reserve_input(bytes);
         }
-        let available = self
-            .input_capacity
-            .saturating_sub(self.input_pool.reserved());
+        let available = capacity.saturating_sub(self.input_pool.reserved());
         self.reserve_input(bytes.min(available).max(usize::from(bytes != 0)))
     }
 
@@ -367,9 +391,9 @@ impl Memory {
     fn reserve(
         anchor: &MemoryReservation,
         bytes: usize,
-        capacity: usize,
+        capacity: Option<usize>,
     ) -> Result<MemoryReservation> {
-        if bytes > capacity {
+        if let Some(capacity) = capacity.filter(|capacity| bytes > *capacity) {
             return Err(DataFusionError::ResourcesExhausted(format!(
                 "{} requires {bytes} bytes, capacity is {capacity}",
                 anchor.consumer().name(),
@@ -396,6 +420,9 @@ impl Memory {
                 "Arrow reservation category changed".into(),
             ));
         }
+        let Some(capacity) = capacity else {
+            return Ok(());
+        };
         let columns = batch
             .columns()
             .iter()
@@ -487,9 +514,77 @@ mod tests {
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
+    #[test]
+    fn unbounded_pools_skip_quota() -> TestResult {
+        let limits = crate::execution::Limits::default();
+        assert_eq!(limits.input_capacity, None);
+        assert_eq!(limits.output_capacity, None);
+        let memory = Memory::new(limits.input_capacity, limits.output_capacity);
+        assert!(matches!(
+            memory.input_pool.memory_limit(),
+            MemoryLimit::Infinite
+        ));
+        assert!(matches!(
+            memory.output_pool.memory_limit(),
+            MemoryLimit::Infinite
+        ));
+        let scope = memory.scope();
+        let bytes = 256 * 1024 * 1024;
+        let input = scope.prepare_input(bytes)?;
+        let prepared = scope.prepare_output(bytes)?;
+        assert_eq!(input.size(), bytes);
+        assert_eq!(prepared.size(), 0);
+        let output = scope.reserve_output(bytes)?;
+        let concurrent = memory.scope().prepare_output(bytes)?;
+        assert_eq!(concurrent.size(), 0);
+        let column: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        let batch = RecordBatch::try_from_iter([("value", column)])?;
+        scope.retain_input(&batch, &input)?;
+        scope.retain_output(&batch, &output)?;
+        assert!(allocations(&memory).is_empty());
+        assert!(scope.retain_input(&batch, &prepared).is_err());
+        assert_eq!(memory.input_pool.reserved(), bytes);
+        assert_eq!(memory.output_pool.reserved(), bytes);
+        drop((input, output, prepared, concurrent, scope));
+        assert_eq!(memory.input_pool.reserved(), 0);
+        assert_eq!(memory.output_pool.reserved(), 0);
+        assert!(memory
+            .capacity
+            .released
+            .lock()
+            .map_err(|_| "capacity lock")?
+            .consumers
+            .is_empty());
+        drop(batch);
+        Ok(())
+    }
+
+    #[test]
+    fn optional_categories_stay_independent() -> TestResult {
+        let column: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        let capacity = column.get_buffer_memory_size();
+        let batch = RecordBatch::try_from_iter([("value", column)])?;
+        let alias = Arc::clone(batch.column(0));
+        let memory = Memory::new(None, Some(capacity));
+        let input = memory.reserve_input(capacity * 2)?;
+        memory.retain_input(&batch, &input)?;
+        assert!(allocations(&memory).is_empty());
+        let output = memory.prepare_output(capacity)?;
+        memory.retain_output(&batch, &output)?;
+        assert!(memory.reserve_output(1).is_err());
+        drop((input, output, batch));
+        assert_eq!(memory.input_pool.reserved(), 0);
+        assert_eq!(memory.output_pool.reserved(), capacity);
+        assert!(memory.reserve_output(1).is_err());
+        drop(alias);
+        drop(memory.reserve_output(capacity)?);
+        assert_eq!(memory.output_pool.reserved(), 0);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn scoped_releases_ignore_self() -> TestResult {
-        let memory = Memory::new(64, 64);
+        let memory = Memory::new(Some(64), Some(64));
         let first = memory.scope();
         let other = memory.scope();
         let epoch = first.capacity_epoch();
@@ -515,7 +610,7 @@ mod tests {
 
     #[tokio::test]
     async fn children_share_wake_group() -> TestResult {
-        let memory = Memory::new(64, 64);
+        let memory = Memory::new(Some(64), Some(64));
         let owner = memory.scope();
         let before = owner.capacity_epoch();
         let previous = owner.child();
@@ -541,7 +636,7 @@ mod tests {
         let column: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
         let bytes = column.get_buffer_memory_size();
         let batch = RecordBatch::try_from_iter([("value", column)])?;
-        let memory = Memory::new(bytes, bytes);
+        let memory = Memory::new(Some(bytes), Some(bytes));
         let first = memory.scope();
         let other = memory.scope();
         let input = first.reserve_input(bytes)?;
@@ -560,7 +655,6 @@ mod tests {
         drop(memory.reserve_input(bytes)?);
         drop(memory.reserve_output(bytes)?);
         let live = memory
-            .input_pool
             .capacity
             .released
             .lock()
@@ -571,7 +665,7 @@ mod tests {
 
     #[test]
     fn native_resize_preserves_capacity() -> TestResult {
-        let memory = Memory::new(64, 64);
+        let memory = Memory::new(Some(64), Some(64));
         let scope = memory.scope();
         let hold = memory.reserve_input(64)?;
         let pending = scope.reserve_input(0)?;
@@ -592,7 +686,7 @@ mod tests {
 
     #[test]
     fn retained_working_set_limit() -> TestResult {
-        let memory = Memory::new(64, 64);
+        let memory = Memory::new(Some(64), Some(64));
         let scope = memory.scope();
         let held = scope.reserve_input(64)?;
         let retained = held.split(40);
@@ -623,7 +717,7 @@ mod tests {
 
     #[test]
     fn prepay_keeps_existing_charges() {
-        let memory = Memory::new(1024, 1024);
+        let memory = Memory::new(Some(1024), Some(1024));
         let batch = RecordBatch::try_from_iter([(
             "value",
             Arc::new(Int64Array::from(vec![1])) as ArrayRef,
@@ -683,7 +777,7 @@ mod tests {
         let column: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
         let capacity = column.get_buffer_memory_size();
         let batch = RecordBatch::try_from_iter([("value", column)])?;
-        let memory = Memory::new(capacity, capacity);
+        let memory = Memory::new(Some(capacity), Some(capacity));
         let input = memory.reserve_input(capacity)?;
         memory.retain_input(&batch, &input)?;
         assert_eq!(input.size(), 0);
@@ -721,7 +815,7 @@ mod tests {
         ]));
         let capacity = nested.get_buffer_memory_size() + views.get_buffer_memory_size();
         let batch = RecordBatch::try_from_iter([("nested", nested), ("views", views)])?;
-        let memory = Memory::new(capacity, capacity);
+        let memory = Memory::new(Some(capacity), Some(capacity));
         let input = memory.reserve_input(capacity)?;
         memory.retain_input(&batch, &input)?;
         let owners = allocations(&memory);
@@ -745,7 +839,7 @@ mod tests {
     fn rejected_claim_releases_registry() -> Result<()> {
         let column: ArrayRef = Arc::new(Int64Array::from(vec![1]));
         let batch = RecordBatch::try_from_iter([("value", column)])?;
-        let memory = Memory::new(0, 0);
+        let memory = Memory::new(Some(0), Some(0));
         let input = memory.reserve_input(0)?;
         let buffer = batch.column(0).to_data().buffers()[0].clone();
         let key = BufferKey {
@@ -764,7 +858,7 @@ mod tests {
         let column: ArrayRef = Arc::new(Int64Array::from(vec![1]));
         let capacity = column.get_buffer_memory_size();
         let batch = RecordBatch::try_from_iter([("value", column)])?;
-        let memory = Memory::new(capacity, capacity);
+        let memory = Memory::new(Some(capacity), Some(capacity));
         let producer_memory = Arc::clone(&memory);
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let producer = tokio::spawn(async move {
@@ -790,8 +884,8 @@ mod tests {
         let column: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
         let capacity = column.get_buffer_memory_size();
         let batch = RecordBatch::try_from_iter([("value", column)])?;
-        let first = Memory::new(0, capacity);
-        let second = Memory::new(capacity, 0);
+        let first = Memory::new(Some(0), Some(capacity));
+        let second = Memory::new(Some(capacity), Some(0));
         assert!(Arc::ptr_eq(&first.registry, &second.registry));
         let output = first.reserve_output(capacity)?;
         first.retain_output(&batch, &output)?;
@@ -821,7 +915,7 @@ mod tests {
         let column: ArrayRef = Arc::new(Int64Array::from(vec![1]));
         let capacity = column.get_buffer_memory_size();
         let batch = RecordBatch::try_from_iter([("value", column)])?;
-        let memory = Memory::new(capacity, 0);
+        let memory = Memory::new(Some(capacity), Some(0));
         let held = memory.reserve_input(capacity)?;
         let input = memory.reserve_input(0)?;
         let error = memory.retain_input(&batch, &input).unwrap_err();

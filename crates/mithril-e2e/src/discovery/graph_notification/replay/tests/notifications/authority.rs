@@ -46,7 +46,7 @@ fn notification_agent_cannot_acknowledge() -> crate::platform::TestResult<()> {
     foreign.tenant_id = [99; 16];
     assert!(matches!(
         router.record_agent(&foreign, key, [4; 16], advisory, NOW + 2),
-        Err(araphor_analysis::Error::Data {
+        Err(araphor_analysis_back::Error::Data {
             source: Error::Notification {
                 code: NotificationErrorCodeV1::Denied,
                 ..
@@ -55,7 +55,7 @@ fn notification_agent_cannot_acknowledge() -> crate::platform::TestResult<()> {
     ));
     assert!(matches!(
         router.acknowledge(&grants[2], key, revision, [5; 16], NOW + 2),
-        Err(araphor_analysis::Error::Data {
+        Err(araphor_analysis_back::Error::Data {
             source: Error::Notification {
                 code: NotificationErrorCodeV1::Denied,
                 field: "human acknowledgement",
@@ -67,7 +67,7 @@ fn notification_agent_cannot_acknowledge() -> crate::platform::TestResult<()> {
     foreign.tenant_id = [99; 16];
     assert!(matches!(
         router.acknowledge(&foreign, key, revision, [6; 16], NOW + 101),
-        Err(araphor_analysis::Error::Data {
+        Err(araphor_analysis_back::Error::Data {
             source: Error::Notification {
                 code: NotificationErrorCodeV1::Denied,
                 ..

@@ -13,9 +13,9 @@ use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 #[cfg(any(test, feature = "test-fixtures"))]
 type ReadStep = Box<dyn FnOnce() -> Result<()> + Send>;
 
-/// One deadline for a read stage and shared cancellation. The default is one second.
+/// Shared cancellation and an optional read deadline. The default has no deadline.
 pub struct AnalysisReadControl {
-    deadline: Instant,
+    deadline: Option<Instant>,
     cancelled: Arc<AtomicBool>,
     cancelled_event: Arc<tokio::sync::Notify>,
     interrupt: Arc<Mutex<Option<Arc<duckdb::InterruptHandle>>>>,
@@ -34,10 +34,10 @@ impl Default for AnalysisReadControl {
 
 impl AnalysisReadControl {
     pub(super) fn monitored(monitor: Arc<ReadMonitor>) -> Self {
-        Self::at(Instant::now() + Duration::from_secs(1), monitor)
+        Self::at(None, monitor)
     }
 
-    fn at(deadline: Instant, monitor: Arc<ReadMonitor>) -> Self {
+    fn at(deadline: Option<Instant>, monitor: Arc<ReadMonitor>) -> Self {
         Self {
             deadline,
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -66,12 +66,12 @@ impl AnalysisReadControl {
 
     pub fn with_timeout(timeout: Duration) -> Result<Self> {
         Ok(Self::at(
-            Self::timeout_deadline(timeout)?,
+            Some(Self::timeout_deadline(timeout)?),
             Arc::new(ReadMonitor::default()),
         ))
     }
 
-    fn child(&self, deadline: Instant) -> Self {
+    fn child(&self, deadline: Option<Instant>) -> Self {
         Self {
             deadline,
             cancelled: Arc::clone(&self.cancelled),
@@ -86,13 +86,19 @@ impl AnalysisReadControl {
     }
 
     pub fn stage(&self, timeout: Duration) -> Result<Self> {
-        Ok(self.child(Self::timeout_deadline(timeout)?))
+        Ok(self.child(Some(Self::timeout_deadline(timeout)?)))
     }
 
     pub fn within(&self, timeout: impl Into<Option<Duration>>) -> Result<Self> {
         self.check()?;
         let deadline = match timeout.into() {
-            Some(timeout) => Self::timeout_deadline(timeout)?.min(self.deadline),
+            Some(timeout) => {
+                let deadline = Self::timeout_deadline(timeout)?;
+                Some(
+                    self.deadline
+                        .map_or(deadline, |parent| parent.min(deadline)),
+                )
+            }
             None => self.deadline,
         };
         Ok(self.child(deadline))
@@ -141,15 +147,29 @@ impl AnalysisReadControl {
         if self.cancelled.load(Ordering::Acquire) {
             return crate::AnalysisReadCancelledSnafu.fail();
         }
-        if Instant::now() >= self.deadline {
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
             return crate::AnalysisReadDeadlineSnafu.fail();
         }
         Ok(())
     }
 
-    pub fn remaining(&self) -> Result<Duration> {
+    pub fn remaining(&self) -> Result<Option<Duration>> {
         self.check()?;
-        Ok(self.deadline.saturating_duration_since(Instant::now()))
+        Ok(self
+            .deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now())))
+    }
+
+    pub async fn expired(&self) {
+        match self.deadline {
+            Some(deadline) => {
+                tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await
+            }
+            None => std::future::pending().await,
+        }
     }
 
     pub(super) fn lock<T>(&self, mut acquire: impl FnMut() -> TryLockResult<T>) -> Result<T> {
@@ -244,7 +264,7 @@ impl AnalysisReadControl {
         let result = tokio::select! {
             biased;
             _ = &mut cancelled => Err(crate::AnalysisReadCancelledSnafu.build().into()),
-            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(self.deadline)) => {
+            _ = self.expired() => {
                 Err(crate::AnalysisReadDeadlineSnafu.build().into())
             }
             result = query => result,
@@ -270,7 +290,10 @@ impl AnalysisReadControl {
         *slot = Some(interrupt.clone());
         drop(slot);
         let guard = ReadInterrupt(self);
-        let deadline = monitor.enter(self, interrupt)?;
+        let deadline = self
+            .deadline
+            .map(|deadline| monitor.enter(self, deadline, interrupt))
+            .transpose()?;
         self.check()?;
         let result = read();
         drop(deadline);
@@ -295,6 +318,7 @@ impl ReadMonitor {
     fn enter(
         &self,
         control: &AnalysisReadControl,
+        deadline: Instant,
         interrupt: Arc<duckdb::InterruptHandle>,
     ) -> Result<ReadStage<'_>> {
         let mut worker = control.lock(|| self.worker.try_lock())?;
@@ -330,7 +354,7 @@ impl ReadMonitor {
                     })?,
             );
         }
-        state.active = Some((control.deadline, interrupt));
+        state.active = Some((deadline, interrupt));
         self.state.1.notify_one();
         Ok(ReadStage(self))
     }
@@ -540,7 +564,7 @@ mod tests {
         assert!(parent.within(Some(Duration::ZERO)).is_err());
         assert!(parent.within(Some(Duration::MAX)).is_err());
         let mut expired = inherited;
-        expired.deadline = Instant::now();
+        expired.deadline = Some(Instant::now());
         assert!(matches!(
             expired.within(None),
             Err(crate::Error::AnalysisReadDeadline { .. })
@@ -589,6 +613,125 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn default_read_control_cancels() -> TestResult {
+        let parent = AnalysisReadControl::default();
+        let child = parent.within(None)?;
+        assert!(parent.deadline.is_none());
+        assert_eq!(parent.remaining()?, None);
+        assert_eq!(child.deadline, parent.deadline);
+        let expiry = child.expired();
+        tokio::pin!(expiry);
+        assert!(futures_util::poll!(&mut expiry).is_pending());
+        assert_eq!(
+            child
+                .query_async(async { Ok::<_, crate::Error>(7) })
+                .await?,
+            7
+        );
+        let waiting = child.query_async(std::future::pending::<Result<()>>());
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        parent.cancel()?;
+        assert!(matches!(
+            waiting.await,
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert!(matches!(
+            child.within(None),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert!(parent
+            .monitor
+            .worker
+            .lock()
+            .map_err(|_| "monitor poisoned")?
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn default_native_read_monitor() -> TestResult {
+        let control = AnalysisReadControl::default();
+        let connection = Connection::open_in_memory()?;
+        let value = control.query_run(&connection, || {
+            assert!(control
+                .interrupt
+                .lock()
+                .map_err(|_| AnalysisReadControl::lock_error())?
+                .is_some());
+            assert!(control
+                .monitor
+                .worker
+                .lock()
+                .map_err(|_| AnalysisReadControl::lock_error())?
+                .is_none());
+            connection
+                .query_row("SELECT 7", [], |row| row.get::<_, u64>(0))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "test unbounded native read",
+                })
+        })?;
+        assert_eq!(value, 7);
+        assert!(control
+            .interrupt
+            .lock()
+            .map_err(|_| "interrupt poisoned")?
+            .is_none());
+        assert!(control
+            .monitor
+            .worker
+            .lock()
+            .map_err(|_| "monitor poisoned")?
+            .is_none());
+        let bounded = control.within(Some(Duration::from_secs(60)))?;
+        assert!(control.deadline.is_none());
+        assert!(bounded.deadline.is_some());
+        assert_eq!(bounded.within(None)?.deadline, bounded.deadline);
+        bounded.query_run(&connection, || Ok(()))?;
+        let worker = bounded
+            .monitor
+            .worker
+            .lock()
+            .map_err(|_| "monitor poisoned")?
+            .as_ref()
+            .ok_or("monitor absent")?
+            .thread()
+            .id();
+        bounded.within(None)?.query_run(&connection, || Ok(()))?;
+        assert_eq!(
+            bounded
+                .monitor
+                .worker
+                .lock()
+                .map_err(|_| "monitor poisoned")?
+                .as_ref()
+                .ok_or("monitor absent")?
+                .thread()
+                .id(),
+            worker
+        );
+        assert!(bounded
+            .monitor
+            .state
+            .0
+            .lock()
+            .map_err(|_| "monitor poisoned")?
+            .active
+            .is_none());
+        control.cancel()?;
+        assert!(matches!(
+            bounded.query_run(&connection, || Ok(())),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert!(control
+            .interrupt
+            .lock()
+            .map_err(|_| "interrupt poisoned")?
+            .is_none());
+        Ok(())
+    }
+
     #[test]
     fn read_monitor_store_reuse() -> TestResult {
         let directory = tempfile::tempdir()?;
@@ -610,32 +753,23 @@ mod tests {
         };
         assert_eq!(store.meta()?, expected);
         let before = workers()?;
-        assert!(before.iter().all(Option::is_some));
+        assert!(before.iter().all(Option::is_none));
         assert_eq!(store.meta()?, expected);
         assert_eq!(workers()?, before);
         assert!(store.trace_intent([1; 16], [1; 16])?.is_none());
-        let writer = store
+        assert!(store
             .write_monitor
             .worker
             .lock()
             .map_err(|_| "monitor poisoned")?
-            .as_ref()
-            .ok_or("monitor absent")?
-            .thread()
-            .id();
+            .is_none());
         assert!(store.trace_intent([1; 16], [1; 16])?.is_none());
-        assert_eq!(
-            store
-                .write_monitor
-                .worker
-                .lock()
-                .map_err(|_| "monitor poisoned")?
-                .as_ref()
-                .ok_or("monitor absent")?
-                .thread()
-                .id(),
-            writer
-        );
+        assert!(store
+            .write_monitor
+            .worker
+            .lock()
+            .map_err(|_| "monitor poisoned")?
+            .is_none());
         Ok(())
     }
 
@@ -755,7 +889,7 @@ mod tests {
             .threads(1)?;
         let connection = duckdb::Connection::open_in_memory_with_flags(config)?;
         let mut control = AnalysisReadControl::with_timeout(Duration::from_secs(2))?;
-        control.deadline = Instant::now();
+        control.deadline = Some(Instant::now());
         assert!(matches!(
             control.check(),
             Err(crate::Error::AnalysisReadDeadline { .. })
@@ -828,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_metadata_read_deadlines() -> TestResult {
+    fn metadata_default_reads_wait() -> TestResult {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = EvidenceIntakeIdentityV1 {
@@ -847,7 +981,7 @@ mod tests {
             lifetime_key: vec![1],
             owner_revision: 0,
         };
-        let reads: [&dyn Fn() -> Result<()>; 8] = [
+        let reads: [&(dyn Fn() -> Result<()> + Sync); 8] = [
             &|| store.meta().map(|_| ()),
             &|| store.source_status(&identity).map(|_| ()),
             &|| store.context_version(&context).map(|_| ()),
@@ -863,13 +997,18 @@ mod tests {
                 .maintenance
                 .write()
                 .map_err(|_| "maintenance poisoned")?;
-            let started = Instant::now();
-            assert!(matches!(
-                read(),
-                Err(crate::Error::AnalysisReadDeadline { .. })
-            ));
-            assert!(started.elapsed() < Duration::from_secs(3));
-            drop(maintenance);
+            std::thread::scope(|scope| -> TestResult {
+                let (ready, result) = std::sync::mpsc::channel();
+                let worker = scope.spawn(move || ready.send(read()));
+                assert!(matches!(
+                    result.recv_timeout(Duration::from_millis(20)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ));
+                drop(maintenance);
+                result.recv_timeout(Duration::from_secs(5))??;
+                worker.join().map_err(|_| "metadata reader panicked")??;
+                Ok(())
+            })?;
             assert_eq!(store.read_slots.available_permits(), 16);
             read()?;
         }
@@ -1004,8 +1143,10 @@ mod tests {
             snapshot.rollback()?;
         }
         drop(reader);
+        let control = AnalysisReadControl::with_timeout(Duration::from_millis(50))?;
+        let mut reader = store.reader_until(&control)?;
         let call_line = line!() + 1;
-        let result = store.read_snapshot(|snapshot| {
+        let result = control.run(&mut reader, |snapshot| {
             snapshot
                 .query_row("SELECT sum(range) FROM range(100000000000)", [], |row| {
                     row.get::<_, i64>(0)
@@ -1022,6 +1163,7 @@ mod tests {
             ),
             "{result:?}"
         );
+        drop(reader);
         assert_eq!(store.read_slots.available_permits(), 16);
         assert!(store.maintenance.try_write().is_ok());
         assert_eq!(store.meta()?, before);

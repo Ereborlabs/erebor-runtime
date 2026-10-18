@@ -1,6 +1,6 @@
 use super::*;
 use crate::error::DiscoverySnafu;
-use araphor_analysis::DiscoveryContextProvider;
+use araphor_analysis_back::DiscoveryContextProvider;
 use araphor_data::{
     DiscoveryContextBindingV1, DiscoveryContextJoinV1, DiscoveryContextUnavailableV1,
     DiscoveryPinnedContextV1, DiscoveryPolicyKeyV1, DiscoveryPolicyRevisionV1, DiscoveryRecordV1,

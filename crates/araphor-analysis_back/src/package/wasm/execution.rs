@@ -1,0 +1,322 @@
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    mpsc, Mutex,
+};
+use std::time::Duration;
+
+use araphor_analysis_sdk as sdk;
+use snafu::{IntoError as _, ResultExt as _};
+use tokio::sync::watch;
+use wasmtime::{Engine, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
+
+use crate::{AnalysisReadControl, Result, WasmLimits};
+
+use super::{
+    bindings::{self, araphor::analysis::types},
+    Code, PreparedComponent,
+};
+
+pub(super) const MAX_EVALUATIONS: usize = 4;
+
+#[derive(snafu::Snafu)]
+#[snafu(display("{source}"))]
+struct EvaluationFailure {
+    // Drop the trap source before the code pin.
+    #[snafu(source(from(wasmtime::Error, wasmtime::Error::into_boxed_dyn_error)))]
+    source: Box<dyn std::error::Error + Send + Sync>,
+    _pin: PreparedComponent,
+}
+
+impl std::fmt::Debug for EvaluationFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EvaluationFailure")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+pub(super) struct GuestEntry {
+    pub(super) entered: mpsc::Sender<()>,
+    pub(super) release: Option<mpsc::Receiver<()>>,
+}
+
+pub(super) struct GuestState {
+    limits: StoreLimits,
+    control: AnalysisReadControl,
+    host_calls: usize,
+    host_limit: Option<usize>,
+    limited: bool,
+    #[cfg(test)]
+    entered: Option<GuestEntry>,
+}
+
+impl GuestState {
+    fn new(control: AnalysisReadControl, quota: &WasmLimits) -> Self {
+        let mut limits = StoreLimitsBuilder::new()
+            .memories(1)
+            .table_elements(16_384)
+            .tables(4)
+            .instances(16)
+            .trap_on_grow_failure(true);
+        if let Some(bytes) = quota.memory_bytes {
+            limits = limits.memory_size(bytes);
+        }
+        Self {
+            limits: limits.build(),
+            control,
+            host_calls: 0,
+            host_limit: quota.host_calls,
+            limited: false,
+            #[cfg(test)]
+            entered: None,
+        }
+    }
+}
+
+impl types::Host for GuestState {}
+
+impl ResourceLimiter for GuestState {
+    fn memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let result = self.limits.memory_growing(current, desired, maximum);
+        self.limited |= !matches!(result, Ok(true));
+        result
+    }
+
+    fn table_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let result = self.limits.table_growing(current, desired, maximum);
+        self.limited |= !matches!(result, Ok(true));
+        result
+    }
+
+    fn instances(&self) -> usize {
+        self.limits.instances()
+    }
+    fn memories(&self) -> usize {
+        self.limits.memories()
+    }
+    fn tables(&self) -> usize {
+        self.limits.tables()
+    }
+}
+
+impl bindings::araphor::analysis::host::Host for GuestState {
+    fn cancelled(&mut self) -> wasmtime::Result<bool> {
+        #[cfg(test)]
+        if let Some(entered) = self.entered.take() {
+            entered.entered.send(()).map_err(wasmtime::Error::new)?;
+            if let Some(release) = entered.release {
+                match self.control.remaining().map_err(wasmtime::Error::new)? {
+                    Some(timeout) => release.recv_timeout(timeout).map_err(wasmtime::Error::new),
+                    None => release.recv().map_err(wasmtime::Error::new),
+                }?;
+            }
+        }
+        if self
+            .host_limit
+            .is_some_and(|maximum| self.host_calls >= maximum)
+        {
+            self.limited = true;
+            return Err(wasmtime::Error::msg("analysis host call limit"));
+        }
+        self.host_calls = self.host_calls.saturating_add(1);
+        Ok(self.control.check().is_err())
+    }
+}
+
+pub(super) struct EpochTicker {
+    engine: Engine,
+    worker: Mutex<Option<EpochWorker>>,
+}
+
+struct EpochWorker {
+    stop: Option<mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl EpochTicker {
+    pub(super) fn new(engine: Engine) -> Self {
+        Self {
+            engine,
+            worker: Mutex::new(None),
+        }
+    }
+
+    fn start(&self) -> Result<()> {
+        let mut worker = self
+            .worker
+            .lock()
+            .map_err(|_| Code::Incomplete.error("component epoch worker lock"))?;
+        if worker.as_ref().is_some_and(|worker| {
+            worker
+                .thread
+                .as_ref()
+                .is_some_and(|thread| thread.is_finished())
+        }) {
+            return Err(Code::Incomplete
+                .error("component epoch worker stopped")
+                .into());
+        }
+        if worker.is_none() {
+            let engine = self.engine.clone();
+            let (stop, stopped) = mpsc::channel::<()>();
+            let thread = std::thread::Builder::new()
+                .name("analysis-wasm-epoch".into())
+                .spawn(move || {
+                    while matches!(
+                        stopped.recv_timeout(Duration::from_millis(5)),
+                        Err(mpsc::RecvTimeoutError::Timeout)
+                    ) {
+                        engine.increment_epoch();
+                    }
+                })
+                .map_err(wasmtime::Error::new)
+                .context(crate::PackageWasmSnafu {
+                    code: Code::Incomplete,
+                    operation: "component epoch worker",
+                })?;
+            *worker = Some(EpochWorker {
+                stop: Some(stop),
+                thread: Some(thread),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Drop for EpochWorker {
+    fn drop(&mut self) {
+        self.stop.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+pub(super) struct EvaluationPermit<'a>(&'a AtomicUsize, &'a watch::Sender<()>);
+
+impl<'a> EvaluationPermit<'a> {
+    pub(super) fn acquire(
+        running: &'a AtomicUsize,
+        capacity: &'a watch::Sender<()>,
+    ) -> Result<Self> {
+        running
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < MAX_EVALUATIONS).then_some(count + 1)
+            })
+            .map_err(|_| {
+                crate::AnalysisBusySnafu {
+                    resource: "component evaluations",
+                    requested: 1_usize,
+                }
+                .build()
+            })?;
+        Ok(Self(running, capacity))
+    }
+}
+
+impl Drop for EvaluationPermit<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+        self.1.send_replace(());
+    }
+}
+
+impl super::WasmExecution {
+    pub(in crate::package) fn invoke(
+        &self,
+        prepared: &PreparedComponent,
+        input: types::Evaluation,
+        control: &AnalysisReadControl,
+    ) -> Result<types::Output> {
+        control.check()?;
+        let _permit = EvaluationPermit::acquire(&self.running, &self.capacity)?;
+        if !Engine::same(&self.engine, prepared.component().engine()) {
+            return Err(Code::Unsupported.error("component engine").into());
+        }
+        let control = match self.limits.timeout {
+            Some(timeout) => control.within(timeout)?,
+            None => control.within(control.remaining()?)?,
+        };
+        self.epoch.start()?;
+        let mut store = Store::new(&self.engine, GuestState::new(control, &self.limits));
+        #[cfg(test)]
+        {
+            store.data_mut().entered = self
+                .entered
+                .lock()
+                .map_err(|_| Code::Incomplete.error("component test gate"))?
+                .take();
+        }
+        store.limiter(|state| state);
+        if let Some(fuel) = self.limits.fuel {
+            store.set_fuel(fuel).context(crate::PackageWasmSnafu {
+                code: Code::Incomplete,
+                operation: "component fuel",
+            })?;
+        }
+        store.set_hostcall_fuel(self.limits.allocation_bytes.unwrap_or(usize::MAX));
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_callback(|store| {
+            if store.data().control.check().is_err() {
+                Ok(UpdateDeadline::Interrupt)
+            } else {
+                Ok(UpdateDeadline::Continue(1))
+            }
+        });
+        let result = prepared
+            .component()
+            .instantiate(&mut store)
+            .and_then(|instance| {
+                instance
+                    .araphor_analysis_analysis()
+                    .call_evaluate(&mut store, &input)
+            });
+        let result = result.map_err(|source| {
+            let code = if store.data().limited
+                || matches!(
+                    source.downcast_ref::<wasmtime::Trap>(),
+                    Some(wasmtime::Trap::OutOfFuel | wasmtime::Trap::StackOverflow)
+                )
+                // Wasmtime 49 keeps this lifting limit error type private.
+                || source.root_cause().to_string()
+                    == concat!(
+                        "too much data is being copied between the host and the guest: ",
+                        "fuel allocated for hostcalls has been exhausted"
+                    ) {
+                Code::Limit
+            } else {
+                Code::Incomplete
+            };
+            crate::PackageWasmSnafu {
+                code,
+                operation: "component evaluation",
+            }
+            .into_error(wasmtime::Error::new(
+                EvaluationFailureSnafu {
+                    _pin: prepared.clone(),
+                }
+                .into_error(source),
+            ))
+        });
+        store.data().control.check()?;
+        result?.map_err(|error| {
+            let wire = sdk::wire::EvaluationError::from(error);
+            if wire.field.len() > 1024 {
+                return Code::Limit.error("component error field").into();
+            }
+            crate::AnalysisContractSnafu.into_error(sdk::Error::contract(wire.code, wire.field))
+        })
+    }
+}

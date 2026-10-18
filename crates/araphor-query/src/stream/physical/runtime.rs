@@ -161,9 +161,15 @@ impl Runtime {
             let worker = Arc::clone(&stage);
             let store = Arc::clone(self.run.session.engine().store());
             let selection = selection.clone();
+            let relations: &'static [&'static str] =
+                if self.run.sources.contains_key("discovery_state") {
+                    &["processor_progress", "processor_gaps", "analysis_results"]
+                } else {
+                    &[]
+                };
             match Engine::blocking(stage, move || {
                 store
-                    .dependency_revision(&selection, &worker)
+                    .dependency_revision_for(&selection, relations, &worker)
                     .map_err(crate::Error::from)
             })
             .await

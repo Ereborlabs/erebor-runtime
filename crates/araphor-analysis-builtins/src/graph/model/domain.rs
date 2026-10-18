@@ -5,9 +5,15 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
 pub struct AnalysisContextKeyV1 {
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub tenant_id: [u8; 16],
     pub owner_id: String,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub entity_key: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub lifetime_key: Vec<u8>,
     pub owner_revision: u64,
 }

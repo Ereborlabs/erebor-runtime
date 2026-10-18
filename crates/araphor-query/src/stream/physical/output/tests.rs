@@ -23,7 +23,9 @@ async fn owner() -> TestResult<(tempfile::TempDir, Session, Arc<ArrowSnapshot>)>
     let engine = Engine::new(
         Arc::new(AnalysisStore::open(directory.path().join("data"))?),
         Limits {
-            extract_timeout: Duration::from_secs(30),
+            input_capacity: Some(128 * 1024 * 1024),
+            output_capacity: Some(16 * 1024 * 1024),
+            extract_timeout: Some(Duration::from_secs(30)),
             evaluate_timeout: Some(Duration::from_secs(30)),
             ..Limits::default()
         },
@@ -278,10 +280,13 @@ async fn later_error_releases_output() -> TestResult {
     assert_eq!(Arc::strong_count(&producer), 1);
     drop(session.engine().reserve_evaluation([1; 16])?);
     drop(
-        session
-            .engine()
-            .memory()
-            .reserve_output(session.engine().limits().output_capacity)?,
+        session.engine().memory().reserve_output(
+            session
+                .engine()
+                .limits()
+                .output_capacity
+                .expect("configured output capacity"),
+        )?,
     );
     session.set_output(1, session.engine().limits().output_bytes)?;
     let error = output(&session, snapshot)?
@@ -309,10 +314,13 @@ async fn later_error_releases_output() -> TestResult {
     assert_eq!(previous, None);
     drop(session.engine().reserve_evaluation([1; 16])?);
     drop(
-        session
-            .engine()
-            .memory()
-            .reserve_output(session.engine().limits().output_capacity)?,
+        session.engine().memory().reserve_output(
+            session
+                .engine()
+                .limits()
+                .output_capacity
+                .expect("configured output capacity"),
+        )?,
     );
     Ok(())
 }
@@ -354,13 +362,21 @@ async fn borrowed_output_keeps_charge() -> TestResult {
     drop(session);
     drop(engine.reserve_evaluation([1; 16])?);
     drop(
-        engine
-            .memory()
-            .reserve_input(engine.limits().input_capacity)?,
+        engine.memory().reserve_input(
+            engine
+                .limits()
+                .input_capacity
+                .expect("configured input capacity"),
+        )?,
     );
     assert!(engine
         .memory()
-        .reserve_output(engine.limits().output_capacity)
+        .reserve_output(
+            engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity")
+        )
         .is_err());
     assert_eq!(
         array
@@ -372,9 +388,12 @@ async fn borrowed_output_keeps_charge() -> TestResult {
     );
     drop(array);
     drop(
-        engine
-            .memory()
-            .reserve_output(engine.limits().output_capacity)?,
+        engine.memory().reserve_output(
+            engine
+                .limits()
+                .output_capacity
+                .expect("configured output capacity"),
+        )?,
     );
     Ok(())
 }
@@ -407,9 +426,12 @@ async fn empty_prefix_yields_cancel() -> TestResult {
         assert_eq!(Arc::strong_count(&active), 1);
         drop(engine.reserve_evaluation([1; 16])?);
         drop(
-            engine
-                .memory()
-                .reserve_output(engine.limits().output_capacity)?,
+            engine.memory().reserve_output(
+                engine
+                    .limits()
+                    .output_capacity
+                    .expect("configured output capacity"),
+            )?,
         );
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     })
@@ -453,10 +475,13 @@ async fn empty_backing_obeys_limit() -> TestResult {
     assert_eq!(previous, None);
     drop(session.engine().reserve_evaluation([1; 16])?);
     drop(
-        session
-            .engine()
-            .memory()
-            .reserve_output(session.engine().limits().output_capacity)?,
+        session.engine().memory().reserve_output(
+            session
+                .engine()
+                .limits()
+                .output_capacity
+                .expect("configured output capacity"),
+        )?,
     );
     Ok(())
 }

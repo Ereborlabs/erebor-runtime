@@ -42,6 +42,8 @@ pub struct DiscoveryCoverageV1 {
     pub last_cursor: u64,
     pub expected_records: u64,
     pub coverage_revision: u64,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub coverage_interval_id: [u8; 16],
     pub state: DiscoveryCoverageStateV1,
     pub gap_reasons: Vec<String>,
@@ -163,9 +165,17 @@ pub struct DiscoveryFileObjectV1 {
 pub struct DiscoveryEffectKeyV1 {
     pub task_cookie: u64,
     pub target_task_cookie: Option<u64>,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub process_lineage_id: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub authority_domain_id: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub execution_set_id: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub exact_object_id: Vec<u8>,
     pub destination_id: u64,
     pub policy_rule_id: u64,
@@ -187,8 +197,14 @@ pub struct BehaviorAtomKeyV1 {
     pub subject_revision: String,
     pub image_digest: String,
     pub configuration_digest: String,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub process_instance_id: [u8; 16],
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub entry_instance_id: [u8; 16],
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub binding_id: [u8; 16],
     pub role_id: u32,
     pub state_id: u32,
@@ -197,6 +213,8 @@ pub struct BehaviorAtomKeyV1 {
     pub static_key: DiscoveryPolicyKeyV1,
     pub policy_revision: DiscoveryPolicyRevisionV1,
     pub generation: u64,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "Vec<u8>")]
     pub coverage_interval_id: [u8; 16],
     pub temporal_coverage: i32,
     pub effect: DiscoveryEffectKeyV1,
