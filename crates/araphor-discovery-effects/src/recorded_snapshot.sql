@@ -423,7 +423,8 @@ __discovery_cte_lifecycle AS (
     FULL JOIN __discovery_cte_lifecycle_states AS states ON cases.lifecycle_case = states."case"
     LEFT JOIN __discovery_cte_lifecycle_records AS ids
         ON COALESCE(cases.lifecycle_case, states."case") = ids."case"
-)
+),
+__discovery_cte_snapshot AS (
 SELECT CAST(3 AS INT UNSIGNED) AS schema_version,
     metadata.tenant_id, metadata.source_revision, metadata.proof_kind,
     atoms.atoms, coverage.coverage, atoms.unresolved, atoms.excluded,
@@ -462,3 +463,7 @@ FROM __discovery_cte_metadata AS metadata
 CROSS JOIN __discovery_cte_atoms AS atoms
 CROSS JOIN __discovery_cte_coverage AS coverage
 CROSS JOIN __discovery_cte_lifecycle AS lifecycle
+)
+SELECT * EXCLUDE (__discovery_error) FROM __discovery_cte_snapshot
+-- A present error has a non-Boolean prefix, so the native cast must fail.
+WHERE COALESCE(CAST('Discovery recorded input: ' || __discovery_error AS BOOLEAN), TRUE)

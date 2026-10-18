@@ -495,13 +495,7 @@ impl Recorded {
         .await
     }
 
-    async fn query_scope(
-        &self,
-        split: bool,
-        outer: &str,
-        records: &str,
-        contexts: &str,
-    ) -> TestResult<RecordBatch> {
+    fn fixture(&self, split: bool) -> TestResult<Fixture> {
         let fixture = Fixture::new()?;
         let canonical = &araphor_data::AnalysisStore::table_schemas()["events"];
         let events = self
@@ -520,8 +514,10 @@ impl Recorded {
             split,
         )?;
         let id = Record::port().schema.field(0).data_type().clone();
-        let mut bindings =
-            Vec::<FieldRef>::from_samples(&Recorded::new(1).contexts, TracingOptions::default())?;
+        let mut bindings = Vec::<FieldRef>::from_samples(
+            &Recorded::new(1).contexts,
+            TracingOptions::default().strings_as_large_utf8(false),
+        )?;
         for field in &mut bindings {
             let datatype = match field.name().as_str() {
                 "record_id" => Some(id.clone()),
@@ -615,6 +611,17 @@ impl Recorded {
             &self.metadata,
             false,
         )?;
+        Ok(fixture)
+    }
+
+    async fn query_scope(
+        &self,
+        split: bool,
+        outer: &str,
+        records: &str,
+        contexts: &str,
+    ) -> TestResult<RecordBatch> {
+        let fixture = self.fixture(split)?;
         let dataframe = fixture.context.sql(&format!("{outer} SELECT * FROM discovery.recorded_snapshot(
             ({records}), ({contexts}), (SELECT * FROM input_ranges),
             (SELECT * FROM input_exclusions), (SELECT * FROM input_lifecycle), (SELECT * FROM input_metadata))")).await?;
@@ -639,6 +646,114 @@ impl Recorded {
         assert_eq!(batch.num_rows(), 1);
         Ok(batch)
     }
+}
+
+#[tokio::test]
+async fn recorded_oci_is_native() -> TestResult {
+    use std::collections::BTreeMap;
+
+    use araphor_data::{PackageArtifactV1, PackageBundleV1, PackageImplementationV1, SqlModelV1};
+
+    for count in [0, 2] {
+        let fixture = Recorded::new(count);
+        let tables = fixture.fixture(true)?;
+        let native = SessionContext::new();
+        let mut ports = Vec::new();
+        for name in [
+            "events",
+            "contexts",
+            "ranges",
+            "exclusions",
+            "lifecycle",
+            "metadata",
+        ] {
+            let name = format!("input_{name}");
+            let table = tables.context.table_provider(&name).await?;
+            ports.push(sdk::Port::new(&name, table.schema().as_ref().clone()));
+            native.register_table(name, table)?;
+        }
+        let sql = format!(
+            "WITH records AS (SELECT * FROM input_events), \
+                contexts AS (SELECT * FROM input_contexts), \
+                ranges AS (SELECT * FROM input_ranges), \
+                exclusions AS (SELECT * FROM input_exclusions), \
+                lifecycle AS (SELECT * FROM input_lifecycle), \
+                metadata AS (SELECT * FROM input_metadata) \
+            SELECT * FROM ({}) AS snapshot",
+            ObservedEffects::RECORDED_SNAPSHOT_SQL
+        );
+        let frame = native.sql(&sql).await?;
+        let schema = Arc::new(frame.schema().as_arrow().clone());
+        let artifact = PackageArtifactV1 {
+            descriptor: sdk::Package::new(
+                "discovery-effects",
+                "1",
+                vec![sdk::Model::new(
+                    "recorded_snapshot",
+                    ports,
+                    vec![sdk::Port::new("snapshot", schema.as_ref().clone())],
+                )],
+            ),
+            implementations: vec![PackageImplementationV1::Sql {
+                export: "recorded_snapshot".into(),
+                program: SqlModelV1 {
+                    outputs: BTreeMap::from([("snapshot".into(), sql.clone())]),
+                    ..Default::default()
+                },
+            }],
+            fixtures: Vec::new(),
+        };
+        let bundle = PackageBundleV1 {
+            schema_version: 1,
+            root: artifact.reference(),
+            artifacts: vec![artifact],
+        };
+        bundle.validate()?;
+        let mut restored = PackageBundleV1::from_bytes(&bundle.encode()?)?;
+        restored.validate()?;
+        assert!(restored.artifacts[0].prepared("recorded_snapshot"));
+        let digest = restored.digest()?;
+        let PackageImplementationV1::Sql { program, .. } =
+            &mut restored.artifacts[0].implementations[0]
+        else {
+            return Err("SQL artifact absent".into());
+        };
+        assert_eq!(program.outputs["snapshot"], sql);
+        let batches = native
+            .sql(&program.outputs["snapshot"])
+            .await?
+            .collect()
+            .await?;
+        fixture
+            .oracle()?
+            .assert_batch(concat_batches(&schema, &batches)?)?;
+        program
+            .outputs
+            .get_mut("snapshot")
+            .ok_or("SQL output absent")?
+            .push('\n');
+        assert_ne!(restored.digest()?, digest);
+
+        let previous = native
+            .deregister_table("input_metadata")?
+            .ok_or("metadata absent")?;
+        native.register_table(
+            "input_metadata",
+            Arc::new(MemTable::try_new(
+                previous.schema(),
+                vec![vec![RecordBatch::new_empty(previous.schema())]],
+            )?),
+        )?;
+        let error = native.sql(&sql).await?.collect().await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("discovery recorded input: metadata"),
+            "{error}"
+        );
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -853,7 +968,10 @@ async fn recorded_rejects_null_keys() -> TestResult {
             .await
             .unwrap_err();
         assert!(
-            error.to_string().contains("Discovery recorded input"),
+            error
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("discovery recorded input"),
             "{error}"
         );
     }

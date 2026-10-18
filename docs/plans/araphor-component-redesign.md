@@ -74,6 +74,70 @@ initialization. Its current Rust wrapper exposes no pending-query registration
 point. Removing the default read deadline requires cancellation-safe native
 execution first. These requirements remain **Not done**.
 
+### SQL artifacts with provided inputs
+
+Implementation and selected functional qualification: **Done**. SQL packages
+can now declare Provided input mode. The existing installed executor already
+registers supplied Arrow batches and uses admitted native plans. Data removes
+the SQL-only mode rejection and includes SQL in prepared target selection.
+Target ambiguity and native qualification checks remain explicit.
+
+```text
+An installed caller supplies the declared Arrow inputs
+  -> InstalledAnalysis checks current authority and the retained artifact
+  -> ModelRun registers the supplied batches under declared port names
+  -> native physical planning and execution evaluate the admitted SQL
+  -> SDK validates the output and retains its Arrow buffers
+  -> the caller receives the result without changing activation or checkpoint
+```
+
+SQL admission exposes only declared inputs, parameters, and prior checkpoint
+relations. An undeclared events read fails before activation. Installation does
+not execute Provided SQL. No executor, source reader, result store, or timer is
+added. Existing callers still own authorized durable publication.
+
+The recorded snapshot body now includes its native validation Filter and private
+column removal. A present error receives a prefix that cannot be converted to
+Boolean. Native CAST therefore fails; a NULL error passes. The custom scalar
+function and host Filter construction are deleted. The complete body is
+ObservedEffects::RECORDED_SNAPSHOT_SQL, so an OCI program can retain the actual
+SQL rather than a call to a mutable built-in template.
+
+Selected tests pass 59 distinct cases: 21 Discovery Effects, 16 installed
+Analysis, 14 Data package, and eight Query subscription cases. The OCI case
+restores the complete SQL body and executes it without the Discovery planner.
+It preserves exact Arrow parity, empty inputs, changed body identity, and
+metadata rejection. Installed cases preserve changed and empty batches,
+current grants, retained leases, schema checks, source checks, and target
+selection. Subscription cases preserve idle waits, source scope, cancellation,
+coverage notices, and exact expiry without new intake.
+
+The source and command record is
+`/tmp/araphor-provided-sql-verification1.json`. Strict Clippy passes all targets
+in Data, Discovery Effects, Query, Analysis, Control, and E2E. Scoped formatting, local document links, and whitespace
+checks pass. Full workspace CI, benchmarks, and physical Kubernetes
+qualification are not run.
+
+This delivery removes 50 production Rust code lines and adds five SQL lines.
+Tests, comments, blank lines, documents, and moves do not count as the Rust
+reduction. The complete redesign still adds 887 production code lines against
+`7b7b407a`. The 6,000-line reduction requires 6,887 more net code deletions.
+The count is `/tmp/araphor-provided-sql-count1.json`.
+
+Complete Discovery replacement: **Not done**. The OCI case proves the artifact
+body; the live owner does not yet install or select that producer. It still
+requires captured context and interval state, correct new package pins, and
+atomic profile publication. Preserve the retained algorithms for comparison.
+
+The existing Data read captures all requested source tables in one transaction.
+The context gap is authoritative content and publication completeness. Control
+currently publishes workload facts separately. A complete publication must not
+make one ambiguous candidate visible before its conflicting candidate. Typed
+catalog, target snapshot, signed policy, and compiled-cell proof must reach the
+same capture through the existing context owner. Keep policy compilation and
+signature authority in Control. Do not add a second policy compiler, store,
+reader, or execution operator.
+
 ### Native recorded Discovery computation
 
 Implementation and selected functional qualification: **Done**. The new

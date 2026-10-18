@@ -218,11 +218,6 @@ impl PackageArtifactV1 {
                 return Err(Code::Missing.error("export implementation"));
             }
             match self.implementation(&model.name) {
-                Ok(super::PackageImplementationV1::Sql { .. })
-                    if model.input_mode != araphor_analysis_sdk::InputMode::Resolved =>
-                {
-                    return Err(Code::Invalid.error("SQL input mode"));
-                }
                 Ok(_)
                 | Err(crate::Error::Package {
                     code: Code::Unsupported,

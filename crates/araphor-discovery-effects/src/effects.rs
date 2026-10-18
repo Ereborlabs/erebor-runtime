@@ -1,17 +1,15 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, FieldRef, SchemaRef};
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::file_options::file_type::FileType;
-use datafusion::common::{DataFusionError, Result, ScalarValue, TableReference};
+use datafusion::common::{DataFusionError, Result, TableReference};
 use datafusion::logical_expr::planner::{
     ExprPlanner, PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
     TypePlanner,
 };
 use datafusion::logical_expr::{
-    col, create_udf, AggregateUDF, ColumnarValue, Expr as LogicalExpr, LogicalPlanBuilder,
-    ScalarUDF, TableSource, Volatility, WindowUDF,
+    AggregateUDF, Expr as LogicalExpr, LogicalPlanBuilder, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -96,39 +94,7 @@ impl ContextProvider for NativeContext<'_> {
 }
 
 impl ObservedEffects {
-    fn guard() -> ScalarUDF {
-        create_udf(
-            "discovery_guard",
-            vec![DataType::Utf8],
-            DataType::Boolean,
-            Volatility::Immutable,
-            Arc::new(|args| {
-                let message = match args.first() {
-                    Some(ColumnarValue::Scalar(ScalarValue::Utf8(message))) => message.as_deref(),
-                    Some(ColumnarValue::Array(array)) => array
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal("Discovery guard requires UTF-8".into())
-                        })?
-                        .iter()
-                        .flatten()
-                        .next(),
-                    _ => {
-                        return Err(DataFusionError::Internal(
-                            "Discovery guard requires one argument".into(),
-                        ));
-                    }
-                };
-                match message {
-                    Some(message) => Err(DataFusionError::Execution(format!(
-                        "Discovery recorded input: {message}"
-                    ))),
-                    None => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))),
-                }
-            }),
-        )
-    }
+    pub const RECORDED_SNAPSHOT_SQL: &str = include_str!("recorded_snapshot.sql");
 
     fn query(sql: &str) -> Result<SqlStatement> {
         let mut statements = DFParser::parse_sql(sql)?;
@@ -166,7 +132,7 @@ impl RelationPlanner for ObservedEffects {
             "observed_effects" => (include_str!("observed_effects.sql"), &["records"]),
             "coverage_ranges" => (include_str!("coverage_ranges.sql"), &["records", "reports"]),
             "recorded_snapshot" => (
-                include_str!("recorded_snapshot.sql"),
+                Self::RECORDED_SNAPSHOT_SQL,
                 &[
                     "records",
                     "contexts",
@@ -231,20 +197,8 @@ impl RelationPlanner for ObservedEffects {
             scope.insert_cte(*name, plan);
         }
         let provider = NativeContext(context.context_provider());
-        let mut plan = SqlToRel::new(&provider)
+        let plan = SqlToRel::new(&provider)
             .sql_statement_to_plan_with_context(Self::query(sql)?, &mut scope)?;
-        if name.table() == "recorded_snapshot" {
-            let columns = plan
-                .schema()
-                .columns()
-                .into_iter()
-                .filter(|column| column.name != "__discovery_error")
-                .map(LogicalExpr::Column);
-            plan = LogicalPlanBuilder::from(plan)
-                .filter(Self::guard().call(vec![col("__discovery_error")]))?
-                .project(columns)?
-                .build()?;
-        }
         Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
             plan, alias,
         ))))

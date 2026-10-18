@@ -293,11 +293,12 @@ sample contract; it is not an input quota. Native decimal sums preserve
 UInt64 overflow checks. Adjacent ranges with the same identity, revision, and
 interval combine their worst coverage state and ordered distinct reasons.
 
-SQL computes relational conflicts and required NULL-field errors. A small
-scalar guard converts those errors into a query failure through an ordinary
-native Filter. DataFusion 53.1 has no installed assertion function. The guard
-does not compute atoms or add an execution operator. Data retains wire and
-primitive field validation.
+SQL computes relational conflicts and required NULL-field errors. The final
+native Filter casts a prefixed error message to Boolean. A NULL message passes;
+a present message cannot be a Boolean and causes a native conversion error.
+The SQL body contains this check and removes its private error column. No
+custom scalar function is required. Data retains wire and primitive field
+validation.
 
 Repeated uses of one admitted received-time window share Query progress and
 one captured input selection. Every events scan must have the same bounds.
@@ -315,6 +316,41 @@ This computation does not replace the old Discovery reader, interval state,
 package revision pins, authoritative context capture, or atomic profile commit.
 Existing native and Wasm algorithms remain the comparison implementations.
 Do not attribute this built-in SQL computation to an old installed artifact.
+
+### Installed SQL with provided inputs
+
+[PackageArtifactV1::prepared](../../crates/araphor-data/src/package/bundle.rs)
+now accepts SQL when the descriptor declares Provided input mode. The existing
+implementation selector still rejects ambiguous targets and unqualified native
+code. [Bundle admission](../../crates/araphor-data/src/package/admission.rs)
+no longer rejects this SQL input mode.
+
+```text
+An installed caller supplies declared Arrow inputs
+  -> InstalledAnalysis checks the current grant and exact retained artifact
+  -> ModelRun registers the supplied batches under the declared port names
+  -> the admitted native plan executes against those tables
+  -> SDK checks the output schema and the caller receives the retained result
+```
+
+SQL admission exposes only declared port, parameter, and checkpoint relations.
+It cannot read an undeclared events source. Installation does not execute a
+Provided model or commit a result. Finite evaluation does not change its
+activation or checkpoint. The existing caller retains publication ownership.
+There is no new executor, source reader, result store, or timer.
+
+The complete body is ObservedEffects::RECORDED_SNAPSHOT_SQL. The
+[OCI body case](../../crates/araphor-discovery-effects/src/tests/recorded.rs)
+embeds that body in an OCI artifact, restores it, and executes the restored SQL
+in a native SessionContext without the Discovery relation planner. It compares
+all Arrow output arrays against the retained algorithm. A changed SQL body
+changes the bundle digest. Invalid metadata still causes a native error.
+
+Read the [installed SQL cases](../../crates/araphor-analysis/src/package/installed/read/tests/prepared.rs)
+for actual installed execution, changed and empty input batches, schema and
+source rejection, and target checks. This proof does not install the new
+producer in the live Discovery owner. Old profile pins and atomic publication
+still require replacement before that owner can use this body.
 
 The evaluate_timeout configuration is optional and defaults to None.
 [AnalysisReadControl::within](../../crates/araphor-data/src/analysis/read.rs)

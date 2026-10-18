@@ -185,7 +185,8 @@ impl PackageArtifactV1 {
             .any(|model| model.name == export && model.input_mode == sdk::InputMode::Provided)
             && matches!(
                 self.implementation(export),
-                Ok(PackageImplementationV1::Wasm { .. }
+                Ok(PackageImplementationV1::Sql { .. }
+                    | PackageImplementationV1::Wasm { .. }
                     | PackageImplementationV1::Native {
                         qualification: Some(_),
                         ..

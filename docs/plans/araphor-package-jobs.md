@@ -137,6 +137,37 @@ and interval state, pins the correct computation revision, and publishes the
 profile atomically. This SQL result does not prove that cutover. Full managed
 jobs, OCI callable identity, and old Discovery replacement remain **Not done**.
 
+### SQL artifacts with provided inputs
+
+Implementation and selected functional qualification: **Done**. Data no longer
+rejects Provided SQL. Existing InstalledAnalysis and ModelRun execute supplied
+Arrow inputs through admitted native plans. Installation does not execute that
+model, and finite evaluation does not change its activation or checkpoint.
+Declared-only SQL admission and the existing authority, schema, lease, and
+target checks remain active. No new executor, reader, store, or timer is added.
+
+The complete recorded SQL body includes validation and private column removal.
+Native CAST rejects a prefixed error; a NULL error passes. The custom guard
+function and host Filter construction are deleted. The exported
+ObservedEffects::RECORDED_SNAPSHOT_SQL can be stored in an OCI program. The
+round-trip case executes that retained body in plain native DataFusion, with
+no Discovery relation planner, and compares every Arrow array with the old
+algorithm. A changed body changes the artifact digest.
+
+Selected checks pass 59 cases across Discovery Effects, installed Analysis,
+Data package storage, and Query subscriptions. Strict Clippy passes all targets
+in Data, Discovery Effects, Query, Analysis, Control, and E2E. Scoped formatting, local document links, and whitespace
+checks pass. The command and source record is
+`/tmp/araphor-provided-sql-verification1.json`. Full workspace CI and benchmarks
+are not run. This delivery removes 50 production Rust code lines and adds five
+SQL lines. The complete redesign still adds 887 production code lines against
+`7b7b407a`; the reduction target remains **Not done**.
+
+Live producer installation, captured authoritative context and interval state,
+new package pins, and atomic profile publication remain **Not done**. This
+increment does not authorize or implement the earlier draft job controller.
+The parent plan records the exact context publication gap.
+
 ## Earlier design draft
 
 The sections below retain the earlier design for review. Their controller,
