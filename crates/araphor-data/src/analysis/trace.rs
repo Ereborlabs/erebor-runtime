@@ -767,14 +767,23 @@ mod tests {
     fn observability_intent_pressure() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("data");
-        let store = AnalysisStore::open(&root)?;
+        let store = AnalysisStore::open_with_limits(
+            &root,
+            Default::default(),
+            super::super::StorageLimitsV1::fixture(),
+        )?;
         let input = intent(3)?;
         let state = store.accept_trace(&input)?;
         let padding = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(root.join("quota-test"))?;
-        padding.set_len(store.storage.disk_max_bytes)?;
+        padding.set_len(
+            store
+                .storage
+                .disk_max_bytes
+                .ok_or("configured disk limit")?,
+        )?;
         assert!(matches!(
             store.accept_trace(&intent(4)?),
             Err(crate::Error::StorageCapacity { .. })
@@ -795,12 +804,43 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_sources_are_optional() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let limits = super::super::StorageLimitsV1 {
+            diagnostic_sources: Some(1),
+            tenant_diagnostic_sources: Some(1),
+            ..Default::default()
+        };
+        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        let first = intent(3)?;
+        let state = store.accept_trace(&first)?;
+        let before = store.meta()?;
+        assert!(matches!(
+            store.accept_trace(&intent(4)?),
+            Err(crate::Error::StorageCapacity {
+                resource: "diagnostic sources",
+                ..
+            })
+        ));
+        assert_eq!(store.meta()?, before);
+        assert!(store.trace_intent([1; 16], [4; 16])?.is_none());
+        assert_eq!(store.accept_trace(&first)?, state);
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        store.accept_trace(&intent(4)?)?;
+        assert!(store.trace_intent([1; 16], [3; 16])?.is_some());
+        assert!(store.trace_intent([1; 16], [4; 16])?.is_some());
+        Ok(())
+    }
+
+    #[test]
     fn observability_intent_quota() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("data");
         let limits = super::super::StorageLimitsV1 {
-            logical_max_bytes: 256 * 1024,
-            tenant_max_bytes: 256 * 1024,
+            logical_max_bytes: Some(256 * 1024),
+            tenant_max_bytes: Some(256 * 1024),
             ..Default::default()
         };
         let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;

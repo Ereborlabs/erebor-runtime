@@ -10,8 +10,7 @@ use snafu::ResultExt as _;
 use uuid::Uuid;
 
 use super::{
-    capacity::{StorageLimitsV1, StorageUsageV1},
-    AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
+    capacity::StorageLimitsV1, AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
 };
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
 
@@ -34,14 +33,13 @@ pub struct AnalysisBackupSegmentV1 {
     pub bytes: u64,
 }
 
-const MAX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
-
 impl AnalysisBackupManifestV1 {
-    fn copy_bytes(&self, root: &Path) -> Result<u64> {
+    fn copy_bytes(&self, root: &Path, manifest_bytes: u64) -> Result<u64> {
         let volume = rustix::fs::statvfs(root)
             .map_err(std::io::Error::from)
             .context(IoSnafu { path: root })?;
-        std::iter::once(self.database_bytes)
+        [self.database_bytes, manifest_bytes]
+            .into_iter()
             .chain(self.segments.iter().map(|segment| segment.bytes))
             .try_fold(0_u64, |total, bytes| {
                 total.checked_add(bytes.checked_next_multiple_of(volume.f_frsize)?)
@@ -286,19 +284,14 @@ impl AnalysisStore {
             );
         }
         let mut statement = writer
-            .prepare("SELECT segment_id, committed_end, file_name FROM segments ORDER BY segment_id LIMIT ?")
+            .prepare(
+                "SELECT segment_id, committed_end, file_name FROM segments ORDER BY segment_id",
+            )
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare backup segment list",
             })?;
         let files = statement
-            .query_map(
-                params![
-                    (super::capacity::MAX_STORAGE_ENTRIES + super::capacity::MAX_DIAGNOSTIC_ENTRIES)
-                        as u64
-                        + 1
-                ],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .context(AnalysisDatabaseSnafu {
                 operation: "read backup segment list",
             })?
@@ -306,14 +299,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "decode backup segment list",
             })?;
-        if files.len()
-            > super::capacity::MAX_STORAGE_ENTRIES + super::capacity::MAX_DIAGNOSTIC_ENTRIES
-        {
-            return Self::reject_path(
-                Path::new("<backup-catalog>"),
-                "the backup has too many segments",
-            );
-        }
         Ok(files)
     }
 
@@ -355,9 +340,7 @@ impl AnalysisStore {
         let bytes = serde_json::to_vec(&manifest).context(JsonSnafu {
             path: &manifest_path,
         })?;
-        if bytes.len() as u64 > MAX_MANIFEST_BYTES {
-            return self.reject("the backup manifest exceeds its size bound");
-        }
+        self.storage.check_manifest(bytes.len() as u64)?;
         let (trace_slots, trace_reserve) = {
             let raw = self
                 .raw
@@ -370,30 +353,44 @@ impl AnalysisStore {
             .filter(|(_, _, name)| name.split('.').nth(1) == Some("d"))
             .count();
         let copy_bytes = manifest
-            .copy_bytes(&self.root)?
-            .checked_add(bytes.len() as u64)
-            .and_then(|bytes| bytes.checked_add(trace_reserve))
+            .copy_bytes(&self.root, bytes.len() as u64)?
+            .checked_add(trace_reserve)
             .ok_or_else(|| self.state_error("the backup reservation size is invalid"))?;
-        self.storage.check_backup(
-            self.storage_with_reserve(files.len() - diagnostics + 4, diagnostics + trace_slots)?,
-            copy_bytes,
+        let entries = files
+            .len()
+            .checked_sub(diagnostics)
+            .and_then(|entries| entries.checked_add(2))
+            .ok_or_else(|| self.state_error("the backup entry count overflows"))?;
+        let diagnostics = diagnostics
+            .checked_add(trace_slots)
+            .ok_or_else(|| self.state_error("the diagnostic slot reserve overflows"))?;
+        self.storage_with_reserve(
+            entries
+                .checked_add(2)
+                .ok_or_else(|| self.state_error("the backup entry count overflows"))?,
+            diagnostics,
         )?;
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(destination)
-            .context(IoSnafu { path: destination })?;
-        Self::segment_directory(destination)?;
-        Self::copy_bundle_file(&source, &destination.join("analysis.duckdb"), source_bytes)?;
+        let staging = tempfile::Builder::new()
+            .prefix(".backup-")
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(parent)
+            .context(IoSnafu { path: parent })?;
+        let staged = staging.path();
+        Self::segment_directory(staged)?;
+        self.storage
+            .check_backup(self.storage_with_reserve(entries, diagnostics)?, copy_bytes)?;
+        Self::copy_bundle_file(&source, &staged.join("analysis.duckdb"), source_bytes)?;
         for segment in &manifest.segments {
             Self::copy_bundle_file(
                 &super::raw::RawJournal::file_path(&self.root, &segment.file_name)?,
-                &super::raw::RawJournal::file_path(destination, &segment.file_name)?,
+                &super::raw::RawJournal::file_path(staged, &segment.file_name)?,
                 segment.bytes,
             )?;
         }
         #[cfg(test)]
         self.crash_at("backup.copied");
-        Self::validate_bundle(&manifest, destination)?;
+        Self::validate_bundle(&manifest, staged)?;
+        let manifest_path = staged.join("manifest.json");
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -408,16 +405,27 @@ impl AnalysisStore {
         output.sync_all().context(IoSnafu {
             path: &manifest_path,
         })?;
-        for directory in [
-            destination.join("segments"),
-            destination.to_owned(),
-            parent.to_owned(),
-        ] {
+        for directory in [staged.join("segments"), staged.to_owned()] {
             File::open(&directory)
                 .context(IoSnafu { path: &directory })?
                 .sync_all()
                 .context(IoSnafu { path: &directory })?;
         }
+        self.storage
+            .check_append(self.storage_with_reserve(0, trace_slots)?, trace_reserve)?;
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            staged,
+            rustix::fs::CWD,
+            destination,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)
+        .context(IoSnafu { path: destination })?;
+        File::open(parent)
+            .context(IoSnafu { path: parent })?
+            .sync_all()
+            .context(IoSnafu { path: parent })?;
         Ok(manifest)
     }
 
@@ -461,12 +469,10 @@ impl AnalysisStore {
         Ok(())
     }
 
-    fn validate_bundle(manifest: &AnalysisBackupManifestV1, root: &Path) -> Result<()> {
+    fn validate_bundle(manifest: &AnalysisBackupManifestV1, root: &Path) -> Result<(u64, usize)> {
         if manifest.schema_version != ANALYSIS_SCHEMA_VERSION as u32
             || Uuid::parse_str(&manifest.store_uuid).is_err()
             || manifest.database_bytes == 0
-            || manifest.segments.len()
-                > super::capacity::MAX_STORAGE_ENTRIES + super::capacity::MAX_DIAGNOSTIC_ENTRIES
             || manifest
                 .segments
                 .windows(2)
@@ -595,10 +601,21 @@ impl AnalysisStore {
         }
         raw.restore_receipts(&writer)?;
         raw.validate_catalog(&writer)?;
-        Ok(())
+        Self::terminal_reserve(&writer)
     }
 
     pub fn restore(backup: &Path, root: &Path) -> Result<Self> {
+        Self::restore_with_limits(backup, root, StorageLimitsV1::default())
+    }
+
+    pub fn restore_with_limits(
+        backup: &Path,
+        root: &Path,
+        storage: StorageLimitsV1,
+    ) -> Result<Self> {
+        if !storage.valid() {
+            return Self::reject_path(root, "the storage limits are invalid");
+        }
         if !backup.is_absolute() || !root.is_absolute() {
             return Self::reject_path(root, "backup and restore paths must be absolute");
         }
@@ -611,10 +628,10 @@ impl AnalysisStore {
             || !manifest_meta.is_file()
             || backup_meta.permissions().mode() & 0o077 != 0
             || manifest_meta.permissions().mode() & 0o077 != 0
-            || manifest_meta.len() > MAX_MANIFEST_BYTES
         {
             return Self::reject_path(root, "the backup files are unsafe or exceed their bounds");
         }
+        storage.check_manifest(manifest_meta.len())?;
         let mut bytes = Vec::new();
         OpenOptions::new()
             .read(true)
@@ -625,19 +642,25 @@ impl AnalysisStore {
             .context(IoSnafu {
                 path: &manifest_path,
             })?
-            .take(MAX_MANIFEST_BYTES + 1)
+            .take(manifest_meta.len().checked_add(1).ok_or_else(|| {
+                crate::StorageCapacitySnafu {
+                    resource: "backup manifest bytes",
+                }
+                .build()
+            })?)
             .read_to_end(&mut bytes)
             .context(IoSnafu {
                 path: &manifest_path,
             })?;
-        if bytes.len() as u64 > MAX_MANIFEST_BYTES {
-            return Self::reject_path(backup, "the backup manifest exceeds its size bound");
+        if bytes.len() as u64 != manifest_meta.len() {
+            return Self::reject_path(backup, "the backup manifest changed size during read");
         }
+        storage.check_manifest(bytes.len() as u64)?;
         let manifest: AnalysisBackupManifestV1 =
             serde_json::from_slice(&bytes).context(JsonSnafu {
                 path: &manifest_path,
             })?;
-        Self::validate_bundle(&manifest, backup)?;
+        let (trace_reserve, trace_slots) = Self::validate_bundle(&manifest, backup)?;
         for (index, entry) in fs::read_dir(backup)
             .context(IoSnafu { path: backup })?
             .enumerate()
@@ -657,11 +680,25 @@ impl AnalysisStore {
             .iter()
             .filter(|segment| segment.file_name.split('.').nth(1) == Some("d"))
             .count();
-        if manifest.segments.len() - diagnostics + 5 > super::capacity::MAX_STORAGE_ENTRIES
-            || diagnostics > super::capacity::MAX_DIAGNOSTIC_ENTRIES
-        {
-            return Self::reject_path(backup, "the restored store would exceed its entry bound");
-        }
+        storage.check_entries(
+            manifest
+                .segments
+                .len()
+                .checked_sub(diagnostics)
+                .and_then(|entries| entries.checked_add(5))
+                .ok_or_else(|| {
+                    crate::StorageCapacitySnafu {
+                        resource: "storage entries",
+                    }
+                    .build()
+                })?,
+            diagnostics.checked_add(trace_slots).ok_or_else(|| {
+                crate::StorageCapacitySnafu {
+                    resource: "diagnostic storage entries",
+                }
+                .build()
+            })?,
+        )?;
         let lease = super::connection::AnalysisLease::acquire(root)?;
         for entry in fs::read_dir(root).context(IoSnafu { path: root })? {
             if entry.context(IoSnafu { path: root })?.file_name() != "analysis.lock" {
@@ -683,11 +720,16 @@ impl AnalysisStore {
             .context(IoSnafu { path: root })?;
         #[cfg(test)]
         Self::crash_path(root, "restore.marked");
-        let storage = StorageLimitsV1::default();
-        storage.check_copy(
-            StorageUsageV1::free_bytes(root)?,
-            manifest.copy_bytes(root)?,
-        )?;
+        let copy_bytes = manifest
+            .copy_bytes(root, 0)?
+            .checked_add(trace_reserve)
+            .ok_or_else(|| {
+                crate::StorageCapacitySnafu {
+                    resource: "copy reserve",
+                }
+                .build()
+            })?;
+        storage.check_append(Self::storage_at(root, 0, 0)?, copy_bytes)?;
         Self::segment_directory(root)?;
         Self::copy_bundle_file(
             &backup.join("analysis.duckdb"),
@@ -898,6 +940,128 @@ mod tests {
     }
 
     #[test]
+    fn backup_manifest_limit_is_optional() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let mut store = AnalysisStore::open(&root)?;
+        store.accept_validated_batch(identity(), batch(1))?;
+        let backup = root.join("backups/first");
+        let manifest = store.backup(&backup)?;
+        let bytes = fs::metadata(backup.join("manifest.json"))?.len();
+        let limits = StorageLimitsV1 {
+            manifest_max_bytes: Some(bytes - 1),
+            ..Default::default()
+        };
+        store.storage = limits;
+        let before = store.meta()?;
+        let blocked = root.join("backups/blocked");
+        assert!(matches!(
+            store.backup(&blocked),
+            Err(crate::Error::StorageCapacity {
+                resource: "backup manifest bytes",
+                ..
+            })
+        ));
+        assert!(!blocked.exists());
+        assert_eq!(store.meta()?, before);
+        let restored = directory.path().join("restored");
+        assert!(matches!(
+            AnalysisStore::restore_with_limits(&backup, &restored, limits),
+            Err(crate::Error::StorageCapacity {
+                resource: "backup manifest bytes",
+                ..
+            })
+        ));
+        assert!(!restored.exists());
+        let entries = StorageLimitsV1 {
+            storage_entries: Some(0),
+            ..Default::default()
+        };
+        assert!(matches!(
+            AnalysisStore::restore_with_limits(&backup, &restored, entries),
+            Err(crate::Error::StorageCapacity {
+                resource: "storage entries",
+                ..
+            })
+        ));
+        assert!(!restored.exists());
+        let store = AnalysisStore::restore(&backup, &restored)?;
+        assert_eq!(store.meta()?.store_uuid.to_string(), manifest.store_uuid);
+        assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn backup_accounts_manifest_allocation() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let mut store = AnalysisStore::open(&root)?;
+        store.accept_validated_batch(identity(), batch(1))?;
+        let manifest = store.backup(&root.join("backups/first"))?;
+        let bytes = serde_json::to_vec(&manifest)?.len() as u64;
+        let block = rustix::fs::statvfs(&root)?.f_frsize;
+        let allocated = bytes
+            .checked_next_multiple_of(block)
+            .ok_or("allocation overflow")?;
+        assert!(allocated > bytes);
+        let copied = manifest.copy_bytes(&root, 0)?;
+        let actual = manifest.copy_bytes(&root, bytes)?;
+        assert_eq!(
+            actual,
+            copied.checked_add(allocated).ok_or("copy overflow")?
+        );
+        let usage = store.storage_usage()?;
+        let unrounded = copied.checked_add(bytes).ok_or("copy overflow")?;
+        store.storage = StorageLimitsV1 {
+            disk_max_bytes: Some(
+                usage
+                    .file_bytes
+                    .checked_add(unrounded)
+                    .ok_or("quota overflow")?,
+            ),
+            ..Default::default()
+        };
+        store.storage.check_backup(usage, unrounded)?;
+        let before = store.meta()?;
+        let blocked = root.join("backups/blocked");
+        assert!(matches!(
+            store.backup(&blocked),
+            Err(crate::Error::StorageCapacity {
+                resource: "data files",
+                ..
+            })
+        ));
+        assert!(!blocked.exists());
+        assert_eq!(store.meta()?, before);
+        let usage = store.storage_usage()?;
+        store.storage.disk_max_bytes = Some(
+            usage
+                .file_bytes
+                .checked_add(actual)
+                .ok_or("quota overflow")?,
+        );
+        store.storage.check_backup(usage, actual)?;
+        assert!(matches!(
+            store.backup(&blocked),
+            Err(crate::Error::StorageCapacity {
+                resource: "data files",
+                ..
+            })
+        ));
+        assert!(!blocked.exists());
+        assert!(fs::read_dir(root.join("backups"))?.all(|entry| entry
+            .is_ok_and(|entry| { !entry.file_name().to_string_lossy().starts_with(".backup-") })));
+        let limits = StorageLimitsV1 {
+            policy_reserve_bytes: Some(1),
+            ..Default::default()
+        };
+        assert!(limits.check_copy(actual, actual).is_err());
+        limits.check_copy(actual.checked_add(1).ok_or("reserve overflow")?, actual)?;
+        Ok(())
+    }
+
+    #[test]
     fn observability_backup_reserve() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use super::super::raw::tests::{trace_intent, trace_terminal};
         use crate::{TraceBatchV1, TraceFrameKindV1, TraceFrameV1};
@@ -905,8 +1069,8 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("data");
         let limits = StorageLimitsV1 {
-            disk_max_bytes: 1024 * 1024 * 1024,
-            ..Default::default()
+            disk_max_bytes: Some(1024 * 1024 * 1024),
+            ..StorageLimitsV1::fixture()
         };
         let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
         let intent = trace_intent()?;
@@ -924,7 +1088,7 @@ mod tests {
         };
         let receipt = store.append_trace(trace, &input, 200)?;
         let manifest = store.backup(&root.join("backups/first"))?;
-        let copy_bytes = manifest.copy_bytes(&root)? + serde_json::to_vec(&manifest)?.len() as u64;
+        let copy_bytes = manifest.copy_bytes(&root, serde_json::to_vec(&manifest)?.len() as u64)?;
         let usage = store.storage_usage()?;
         let padding = OpenOptions::new()
             .write(true)
@@ -932,11 +1096,10 @@ mod tests {
             .mode(0o600)
             .open(root.join("quota"))?;
         padding.set_len(
-            limits.disk_max_bytes
+            limits.disk_max_bytes.ok_or("configured disk limit")?
                 - 256 * 1024 * 1024
                 - usage.file_bytes
                 - copy_bytes
-                - copy_bytes / 4
                 - 8192,
         )?;
         limits.check_backup(store.storage_usage()?, copy_bytes)?;
@@ -953,7 +1116,7 @@ mod tests {
         padding.set_len(0)?;
         let held = root.join("backups/held");
         DirBuilder::new().mode(0o700).create(&held)?;
-        for index in 0..super::super::capacity::MAX_DIAGNOSTIC_ENTRIES - 3 {
+        for index in 0..limits.diagnostic_entries.ok_or("configured entry limit")? - 3 {
             OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -995,8 +1158,8 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let limits = StorageLimitsV1 {
-            disk_max_bytes: 1024 * 1024 * 1024,
-            ..Default::default()
+            disk_max_bytes: Some(1024 * 1024 * 1024),
+            ..StorageLimitsV1::fixture()
         };
         let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
         store.accept_validated_batch(identity(), batch(1))?;
@@ -1027,7 +1190,7 @@ mod tests {
             .write(true)
             .create_new(true)
             .open(root.join("quota"))?;
-        padding.set_len(limits.disk_max_bytes)?;
+        padding.set_len(limits.disk_max_bytes.ok_or("configured disk limit")?)?;
         let blocked = root.join("backups/blocked");
         assert!(matches!(
             store.backup(&blocked),

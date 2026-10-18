@@ -2,10 +2,8 @@ use duckdb::{params, Connection, Transaction};
 use snafu::ResultExt as _;
 
 use super::{AnalysisReadControl, AnalysisStore};
-use crate::{AnalysisDatabaseSnafu, Result, StorageCapacitySnafu};
+use crate::{AnalysisDatabaseSnafu, Result};
 
-const TENANT_REVISIONS: u64 = 1_024;
-const GLOBAL_REVISIONS: u64 = 4_096;
 pub(super) const TRACE_RESERVE: u64 = 16 * 1024;
 pub(super) const TRACE_CHARGES: &str = "SELECT tenant_id,
     256 + octet_length(source) + octet_length(encode(bindings)) + octet_length(authority) AS bytes FROM traces
@@ -133,37 +131,69 @@ impl AnalysisStore {
             charge += 256 + key.len() as i64 + json.len() as i64 + TRACE_RESERVE as i64;
         }
         UsageChange::from(charge).apply(transaction, &intent.tenant_id)?;
-        let (total, scoped): (u64, u64) = transaction.query_row(
-            "SELECT COUNT(*)::UBIGINT, COUNT(*) FILTER (WHERE tenant_id = ?)::UBIGINT FROM trace_receipts",
-            params![intent.tenant_id.as_slice()], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "count diagnostic sources" })?;
-        if total > super::capacity::MAX_DIAGNOSTIC_ENTRIES as u64 || scoped > 256 {
-            return StorageCapacitySnafu {
-                resource: "diagnostic sources",
-            }
-            .fail();
-        }
-        let (total, scoped): (u64, u64) = transaction.query_row(
-            &format!("SELECT COALESCE(SUM(bytes), 0)::UBIGINT,
-                COALESCE(SUM(bytes) FILTER (WHERE tenant_id = ?), 0)::UBIGINT FROM ({TRACE_CHARGES})"),
-            params![intent.tenant_id.as_slice()], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "check diagnostic byte partition" })?;
-        if total > self.storage.logical_max_bytes / 8 || scoped > self.storage.tenant_max_bytes / 8
+        if self.storage.diagnostic_sources.is_some()
+            || self.storage.tenant_diagnostic_sources.is_some()
         {
-            return StorageCapacitySnafu {
-                resource: "diagnostic logical bytes",
-            }
-            .fail();
+            let (total, scoped): (u64, u64) = transaction
+                .query_row(
+                    "SELECT COUNT(*)::UBIGINT,
+                        COUNT(*) FILTER (WHERE tenant_id = ?)::UBIGINT FROM trace_receipts",
+                    params![intent.tenant_id.as_slice()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "count diagnostic sources",
+                })?;
+            self.storage.check_sources(
+                usize::try_from(total)
+                    .map_err(|_| self.state_error("the diagnostic source count overflows"))?,
+                usize::try_from(scoped)
+                    .map_err(|_| self.state_error("the tenant source count overflows"))?,
+                true,
+            )?;
         }
-        let (reserved, slots): (u64, usize) = transaction.query_row(
-            "SELECT COUNT(*)::UBIGINT * 16384,
+        if self.storage.logical_max_bytes.is_some() || self.storage.tenant_max_bytes.is_some() {
+            let (total, scoped): (u64, u64) = transaction
+                .query_row(
+                    &format!(
+                        "SELECT COALESCE(SUM(bytes), 0)::UBIGINT,
+                        COALESCE(SUM(bytes) FILTER (WHERE tenant_id = ?), 0)::UBIGINT
+                        FROM ({TRACE_CHARGES})"
+                    ),
+                    params![intent.tenant_id.as_slice()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "check diagnostic byte partition",
+                })?;
+            self.storage.check_diagnostics(total, scoped)?;
+        }
+        let (reserved, slots) = Self::terminal_reserve(transaction)?;
+        self.storage
+            .check_append(self.storage_with_reserve(0, slots)?, reserved)
+    }
+
+    pub(super) fn terminal_reserve(connection: &Connection) -> Result<(u64, usize)> {
+        let (count, slots): (u64, u64) = connection.query_row(
+            "SELECT COUNT(*)::UBIGINT,
                 COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM segments s
                     WHERE s.stream_key = t.stream_key AND s.state = 'Live') THEN 1 ELSE 2 END), 0)::UBIGINT
                 FROM trace_receipts t WHERE terminal IS NULL", [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).context(AnalysisDatabaseSnafu { operation: "count diagnostic terminal reserves" })?;
-        self.storage
-            .check_append(self.storage_with_reserve(0, slots)?, reserved)
+        let bytes = count.checked_mul(TRACE_RESERVE).ok_or_else(|| {
+            crate::StorageCapacitySnafu {
+                resource: "diagnostic physical reserve",
+            }
+            .build()
+        })?;
+        let slots = usize::try_from(slots).map_err(|_| {
+            crate::StorageCapacitySnafu {
+                resource: "diagnostic storage entries",
+            }
+            .build()
+        })?;
+        Ok((bytes, slots))
     }
 
     const WITNESS_USAGE: &'static str = "WITH pins AS (
@@ -380,33 +410,17 @@ impl AnalysisStore {
         tenant: [u8; 16],
         maintenance: bool,
     ) -> Result<()> {
+        if storage.logical_max_bytes.is_none()
+            && storage.tenant_max_bytes.is_none()
+            && storage.retained_revisions.is_none()
+            && storage.tenant_revisions.is_none()
+        {
+            return Ok(());
+        }
         let (total, scoped, revisions, tenant_revisions) =
             Self::logical_usage(transaction, tenant)?;
-        let global_limit = storage.logical_max_bytes;
-        let tenant_limit = storage.tenant_max_bytes;
-        let (global_limit, tenant_limit) = if maintenance {
-            (global_limit, tenant_limit)
-        } else {
-            (
-                global_limit - global_limit / 4,
-                tenant_limit - tenant_limit / 4,
-            )
-        };
-        let resource = if scoped > tenant_limit {
-            Some("tenant logical bytes")
-        } else if total > global_limit {
-            Some("global logical bytes")
-        } else if tenant_revisions > TENANT_REVISIONS {
-            Some("tenant retained revisions")
-        } else if revisions > GLOBAL_REVISIONS {
-            Some("global retained revisions")
-        } else {
-            None
-        };
-        match resource {
-            Some(resource) => StorageCapacitySnafu { resource }.fail(),
-            None => Ok(()),
-        }
+        storage.check_logical(total, scoped, maintenance)?;
+        storage.check_revisions(revisions, tenant_revisions)
     }
 
     pub(super) fn logical_pressure(
@@ -414,10 +428,22 @@ impl AnalysisStore {
         transaction: &Transaction<'_>,
         tenant: [u8; 16],
     ) -> Result<bool> {
+        if self.storage.logical_max_bytes.is_none() && self.storage.tenant_max_bytes.is_none() {
+            return Ok(false);
+        }
         let (total, scoped, _, _) = Self::logical_usage(transaction, tenant)?;
-        let global_limit = self.storage.logical_max_bytes - self.storage.logical_max_bytes / 4;
-        let tenant_limit = self.storage.tenant_max_bytes - self.storage.tenant_max_bytes / 4;
-        Ok(total >= global_limit - global_limit / 10 || scoped >= tenant_limit - tenant_limit / 10)
+        let pressure = |limit: u64, bytes| {
+            let allowance = limit - limit / 4;
+            bytes >= allowance - allowance / 10
+        };
+        Ok(self
+            .storage
+            .logical_max_bytes
+            .is_some_and(|limit| pressure(limit, total))
+            || self
+                .storage
+                .tenant_max_bytes
+                .is_some_and(|limit| pressure(limit, scoped)))
     }
 
     pub(super) fn check_witnesses(
@@ -426,6 +452,9 @@ impl AnalysisStore {
         tenant: [u8; 16],
         now: u64,
     ) -> Result<()> {
+        if self.storage.witness_max_bytes.is_none() {
+            return Ok(());
+        }
         let referenced: bool = transaction
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM evidence_refs WHERE tenant_id = ? AND expires_utc_ns > ?)
@@ -440,13 +469,7 @@ impl AnalysisStore {
             return Ok(());
         }
         let usage = self.witness_totals(transaction, tenant, now)?;
-        if usage.charged_bytes > self.storage.witness_max_bytes {
-            return StorageCapacitySnafu {
-                resource: "tenant witness bytes",
-            }
-            .fail();
-        }
-        Ok(())
+        self.storage.check_witness(usage.charged_bytes)
     }
 }
 
@@ -486,8 +509,8 @@ mod tests {
             let directory = tempfile::tempdir()?;
             let root = directory.path().join("analysis");
             let limits = StorageLimitsV1 {
-                tenant_max_bytes: 1024 * 1024,
-                logical_max_bytes: if global { 1024 * 1024 } else { 2 * 1024 * 1024 },
+                tenant_max_bytes: Some(1024 * 1024),
+                logical_max_bytes: Some(if global { 1024 * 1024 } else { 2 * 1024 * 1024 }),
                 ..Default::default()
             };
             let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
@@ -536,9 +559,18 @@ mod tests {
                     params![identity.tenant_id.as_slice()],
                     |row| row.get(0),
                 )?;
-                assert!(total < limits.logical_max_bytes && scoped < limits.tenant_max_bytes);
-                assert_eq!(total > limits.logical_max_bytes * 3 / 4, global);
-                assert_eq!(scoped > limits.tenant_max_bytes * 3 / 4, !global);
+                assert!(
+                    total < limits.logical_max_bytes.ok_or("configured logical limit")?
+                        && scoped < limits.tenant_max_bytes.ok_or("configured tenant limit")?
+                );
+                assert_eq!(
+                    total > limits.logical_max_bytes.ok_or("configured logical limit")? * 3 / 4,
+                    global
+                );
+                assert_eq!(
+                    scoped > limits.tenant_max_bytes.ok_or("configured tenant limit")? * 3 / 4,
+                    !global
+                );
             }
             let before = store.trace_receipt(identity)?.ok_or("receipt absent")?;
             let revision = store.meta()?;
@@ -621,8 +653,8 @@ mod tests {
             let directory = tempfile::tempdir()?;
             let root = directory.path().join("analysis");
             let limits = StorageLimitsV1 {
-                tenant_max_bytes: 346,
-                logical_max_bytes: if global { 346 } else { 8 * 1024 * 1024 * 1024 },
+                tenant_max_bytes: Some(346),
+                logical_max_bytes: Some(if global { 346 } else { 8 * 1024 * 1024 * 1024 }),
                 ..Default::default()
             };
             let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
@@ -771,7 +803,7 @@ mod tests {
             let transaction = writer.get_mut()?.transaction()?;
             AnalysisStore::logical_usage(&transaction, input.scope.identity.tenant_id)?.1
         };
-        store.storage.tenant_max_bytes = current_bytes;
+        store.storage.tenant_max_bytes = Some(current_bytes);
         let before = store.meta()?;
         assert!(matches!(
             store.accept_validated_batch(
@@ -793,7 +825,7 @@ mod tests {
         assert_eq!(store.meta()?, before);
         let request_bytes = input.request_meta()?.len() as u64;
         let result_bytes = 776 + request_bytes + key_bytes + input.result_id.len() as u64;
-        store.storage.tenant_max_bytes = current_bytes + result_bytes - 1;
+        store.storage.tenant_max_bytes = Some(current_bytes + result_bytes - 1);
         assert!(matches!(
             store.commit_result(&input),
             Err(crate::Error::StorageCapacity {
@@ -802,9 +834,9 @@ mod tests {
             })
         ));
         assert_eq!(store.meta()?, before);
-        store.storage.tenant_max_bytes = current_bytes + result_bytes;
+        store.storage.tenant_max_bytes = Some(current_bytes + result_bytes);
         let witness_bytes = file_bytes + 260;
-        store.storage.witness_max_bytes = witness_bytes - 1;
+        store.storage.witness_max_bytes = Some(witness_bytes - 1);
         let before = store.meta()?;
         assert!(matches!(
             store.commit_result(&input),
@@ -815,7 +847,7 @@ mod tests {
         ));
         assert_eq!(store.meta()?, before);
         assert!(store.read_result([1; 16], "r")?.is_none());
-        store.storage.witness_max_bytes = witness_bytes;
+        store.storage.witness_max_bytes = Some(witness_bytes);
         let receipt = store.commit_result(&input)?;
         {
             let reader = store.reader()?;
@@ -893,7 +925,7 @@ mod tests {
         }
         for (tenant, now, expected) in [(1_u8, 2_u64, witness_bytes), (1, 100, 260), (2, 2, 0)] {
             for limit in [expected.saturating_sub(1), expected] {
-                store.storage.witness_max_bytes = limit;
+                store.storage.witness_max_bytes = Some(limit);
                 let mut writer = store.writer()?;
                 let transaction = writer.get_mut()?.transaction()?;
                 let checked = store.check_witnesses(&transaction, [tenant; 16], now);
@@ -910,7 +942,7 @@ mod tests {
                 }
             }
         }
-        store.storage.witness_max_bytes = witness_bytes;
+        store.storage.witness_max_bytes = Some(witness_bytes);
         let before_bytes = store.writer()?.get()?.query_row(
             "SELECT logical_bytes FROM tenant_usage",
             [],
@@ -920,7 +952,7 @@ mod tests {
             before_bytes,
             current_bytes + result_bytes + 776 + second.request_meta()?.len() as u64 + key_bytes
         );
-        store.storage.tenant_max_bytes = 1;
+        store.storage.tenant_max_bytes = Some(1);
         let retention = crate::EvidenceRetentionOwner::new(&store);
         assert_eq!(
             retention.retain(&second.scope.identity, 3)?.removed_records,
@@ -1060,7 +1092,15 @@ mod tests {
     #[test]
     fn analysis_store_revision_limits() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            Default::default(),
+            StorageLimitsV1 {
+                retained_revisions: Some(4096),
+                tenant_revisions: Some(1024),
+                ..Default::default()
+            },
+        )?;
         let mut writer = store.writer()?;
         let transaction = writer.get_mut()?.transaction()?;
         // Only relation counts are under test. The fixture transaction is not committed.

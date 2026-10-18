@@ -461,7 +461,7 @@ mod tests {
             },
         )?;
         let pinned_bytes = fs::metadata(SegmentRange::path(&store.root, 1))?.len();
-        store.storage.witness_max_bytes = pinned_bytes;
+        store.storage.witness_max_bytes = Some(pinned_bytes);
         let scope = ProcessorScopeV1 {
             processor_id: "witness".into(),
             method_version: 1,

@@ -51,13 +51,54 @@ does not supply the required behavior. Keep state with its actual owner.
 The user permits subagents for the current work.
 
 Implementation of these complete requirements: **Not done**. Query, SDK,
-compiler, cache, and retained-store quota defaults need checks. The storage
-lock wait still polls. Discovery still has a separate
+compiler, cache, and remaining retained-store resource quotas need checks.
+The storage lock wait still polls. Discovery still has a separate
 source sweep and seal scheduler. This design does not meet the user requirement.
 Every Discovery execution must consume a Query subscription, including finite
 execution and manual refresh. The subscription must supply the actual input
 batches. A query that returns identities to the old input reader is not a
 replacement. This work is **Not done**.
+
+### Optional retained-storage quotas
+
+Implementation and selected qualification: **Done**.
+All 14 StorageLimitsV1 settings are optional and default to None. Configured
+byte, count, revision, reserve, and manifest limits remain available. Disabled
+settings do not run quota-only source, logical usage, diagnostic, or witness
+queries. Pending writes still check actual space and arithmetic. Accepted
+trace work retains prepaid terminal bytes and file slots.
+
+Quota policy is removed from raw recovery, source integrity validation, and
+backup integrity validation. Valid retained data can reopen above lowered
+quotas. Reads and reclamation remain available. New growth still uses configured
+admission. Backup uses native private staging and NOREPLACE publication. Its
+checks include actual directories, rounded manifest allocation, and outstanding
+terminal promises. Restore accepts explicit storage limits. The default restore
+entry point disables those quotas. Full raw-budget refresh is removed from
+backup validation. The existing terminal-reservation query supplies only the
+needed bytes and slots.
+
+This increment adds 149 nonblank production Rust lines. It implements the
+explicit default-disabled quota requirement; it is not a code reduction.
+With this increment, the complete redesign adds 1,124 production Rust lines
+against `7b7b407a`. The separate native coverage package is excluded from that
+total. The source count is `/tmp/araphor-native-coverage-count3.json`.
+The complete redesign and the required 6,000-line reduction remain **Not done**.
+
+Selected qualification passes 59 distinct Data cases across the focused runs.
+Two existing memory cases remain ignored. The final backup and terminal-owner
+run passes all 18 cases. The Control quota case and two E2E cases pass. The
+first TLS E2E run times out before ACK; its unchanged focused retry passes.
+Four initial Data cases fail at the host filesystem reserve; their focused
+retry passes. An intermediate backup gate finds private-directory permissions;
+the native staging directory now uses mode 0700, and the final gate passes.
+
+Strict Clippy passes all targets in Data, Discovery Effects, Query, Control,
+and E2E. Scoped formatting and whitespace checks pass. Functional runs precede
+test-only lint corrections; strict Clippy compiles those corrected tests.
+The command and source record is
+`/tmp/araphor-optional-storage-verification1.json`. Full workspace CI,
+performance tests, and physical Kubernetes checks are not run.
 
 ### Exact package evaluation time
 

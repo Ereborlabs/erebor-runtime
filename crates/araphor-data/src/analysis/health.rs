@@ -127,7 +127,7 @@ mod tests {
                 .contiguous_cursor,
             1
         );
-        store.storage.policy_reserve_bytes = u64::MAX / 4;
+        store.storage.policy_reserve_bytes = Some(u64::MAX / 4);
         let capacity = store.storage_health()?;
         assert!(capacity.retention_healthy);
         assert!(!capacity.intake_capacity && !capacity.maintenance_capacity);

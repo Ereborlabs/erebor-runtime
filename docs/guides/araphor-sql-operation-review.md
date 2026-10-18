@@ -35,6 +35,46 @@ to None. The same Limits Arc is registered in native session configuration.
 Native SQL defines join and window behavior when these quotas are disabled.
 Control validates and moves transport values once before native binding.
 
+## Optional storage quotas
+
+[StorageLimitsV1](../../crates/araphor-data/src/analysis/capacity.rs) owns 14
+optional storage settings. Every setting defaults to None. Omitted or null
+configuration disables that quota. An explicit zero remains a configured
+bound. The settings cover file bytes, free-space reserves, logical bytes,
+witness bytes, file and source counts, retained revisions, and manifest bytes.
+The existing ordinary and diagnostic partitions apply only to configured byte
+limits. Disabled quotas do not cause quota-only source or usage queries.
+
+[AnalysisStore::commit_raw](../../crates/araphor-data/src/analysis/raw.rs) checks configured source and byte admission before durable acceptance
+  -> [StorageLimitsV1](../../crates/araphor-data/src/analysis/capacity.rs) checks the projected growth and configured bounds
+  -> [reserve_trace](../../crates/araphor-data/src/analysis/quota.rs) retains prepaid terminal bytes and file slots
+  -> [RawJournal](../../crates/araphor-data/src/analysis/raw_segments.rs) retains the existing format, identity, ordering, and corruption checks
+
+Quota policy does not define valid retained data. Reopen, reads, usage
+measurement, and retention can operate above a lowered quota. Configured
+admission still rejects new growth. The existing terminal reservations remain
+accounting obligations when quota settings are disabled. Pending writes and
+copies still require actual filesystem space and checked arithmetic.
+
+[copy_backup](../../crates/araphor-data/src/analysis/backup.rs) uses a private
+native temporary directory. Preflight includes its actual directories and
+rounded file allocation. The completed staging directory must also pass the
+actual usage and terminal-reservation checks. Native NOREPLACE rename publishes
+the backup. Ordinary failures remove the owned temporary directory. A crash
+before publication cannot expose a completed destination.
+
+[restore_with_limits](../../crates/araphor-data/src/analysis/backup.rs) accepts
+configured manifest, count, and physical limits before restore admission.
+The existing restore entry point uses disabled quotas. Backup validation uses
+the shared terminal-reservation query. It does not build and discard a complete
+raw budget. Native DuckDB memory settings, extraction quotas, and other runtime
+quotas remain outside this storage change.
+
+The storage qualification passes 59 distinct Data cases, the Control quota
+case, and two E2E cases across the recorded runs and retries. The final backup
+and terminal-owner gate passes 18 cases. The source and command record is
+`/tmp/araphor-optional-storage-verification1.json`.
+
 ## Subscription execution triggers
 
 Read [Progress](../../crates/araphor-query/src/stream/progress.rs) and the

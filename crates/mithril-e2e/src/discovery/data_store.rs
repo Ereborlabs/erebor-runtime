@@ -2030,7 +2030,7 @@ mod tests {
             let tls = MtlsFixture::new(false)?;
             let mut config = tls.configuration()?;
             config.evidence_directory = directory.path().join("evidence");
-            config.data_storage.disk_max_bytes = GIB;
+            config.data_storage.disk_max_bytes = Some(GIB);
             let parts = config.into_parts()?;
             assert!(parts.data_error.is_none(), "{:?}", parts.data_error);
             let data = parts.control.analysis_store().ok_or("data owner absent")?;
@@ -2674,9 +2674,9 @@ mod tests {
             }
             let mut config = tls.configuration()?;
             if logical {
-                config.data_storage.tenant_max_bytes = 1;
+                config.data_storage.tenant_max_bytes = Some(1);
             } else {
-                config.data_storage.policy_reserve_bytes = u64::MAX / 4;
+                config.data_storage.policy_reserve_bytes = Some(u64::MAX / 4);
             }
             let parts = config.into_parts()?;
             assert!(parts.data_error.is_none());

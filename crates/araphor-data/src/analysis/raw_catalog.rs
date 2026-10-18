@@ -849,7 +849,7 @@ impl RawJournal {
                 }
                 contiguous = span.last;
             }
-            if AnalysisStore::bind_source(&transaction, &self.root, &receipt.identity)? {
+            if AnalysisStore::bind_source(&transaction, &self.root, &receipt.identity, None)? {
                 binding_revision = binding_revision.max(first_revision);
             }
             let changed = transaction

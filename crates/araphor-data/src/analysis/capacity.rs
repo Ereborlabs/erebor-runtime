@@ -7,69 +7,98 @@ use snafu::ResultExt as _;
 use super::AnalysisStore;
 use crate::{IoSnafu, Result, StorageCapacitySnafu};
 
-const WRITE_RESERVE: u64 = 256 * 1024 * 1024;
-pub(super) const MAX_STORAGE_ENTRIES: usize = 4096;
-pub(super) const MAX_DIAGNOSTIC_ENTRIES: usize = MAX_STORAGE_ENTRIES / 4;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StorageLimitsV1 {
-    pub disk_max_bytes: u64,
-    pub policy_reserve_bytes: u64,
-    pub logical_max_bytes: u64,
-    pub tenant_max_bytes: u64,
-    pub witness_max_bytes: u64,
-}
-
-impl Default for StorageLimitsV1 {
-    fn default() -> Self {
-        Self {
-            disk_max_bytes: 8 * 1024 * 1024 * 1024,
-            policy_reserve_bytes: 256 * 1024 * 1024,
-            logical_max_bytes: 8 * 1024 * 1024 * 1024,
-            tenant_max_bytes: 2 * 1024 * 1024 * 1024,
-            witness_max_bytes: 512 * 1024 * 1024,
-        }
-    }
+    pub disk_max_bytes: Option<u64>,
+    pub policy_reserve_bytes: Option<u64>,
+    pub write_reserve_bytes: Option<u64>,
+    pub logical_max_bytes: Option<u64>,
+    pub tenant_max_bytes: Option<u64>,
+    pub witness_max_bytes: Option<u64>,
+    pub storage_entries: Option<usize>,
+    pub diagnostic_entries: Option<usize>,
+    pub source_entries: Option<usize>,
+    pub diagnostic_sources: Option<usize>,
+    pub tenant_diagnostic_sources: Option<usize>,
+    pub retained_revisions: Option<u64>,
+    pub tenant_revisions: Option<u64>,
+    pub manifest_max_bytes: Option<u64>,
 }
 
 impl StorageLimitsV1 {
     pub fn valid(&self) -> bool {
-        self.disk_max_bytes >= 4 * WRITE_RESERVE
-            && self.policy_reserve_bytes >= WRITE_RESERVE
-            && self.tenant_max_bytes > 0
-            && self.tenant_max_bytes <= self.logical_max_bytes
-            && self.witness_max_bytes > 0
-            && self
-                .policy_reserve_bytes
-                .checked_add(self.disk_max_bytes)
-                .is_some()
+        let reserve = self
+            .policy_reserve_bytes
+            .unwrap_or(0)
+            .checked_add(self.write_reserve_bytes.unwrap_or(0));
+        reserve.is_some_and(|reserve| {
+            self.disk_max_bytes.is_none_or(|limit| {
+                limit >= self.write_reserve_bytes.unwrap_or(0)
+                    && reserve.checked_add(limit).is_some()
+            })
+        }) && self
+            .tenant_max_bytes
+            .zip(self.logical_max_bytes)
+            .is_none_or(|(tenant, total)| tenant <= total)
+    }
+
+    fn bound(limit: Option<u64>, value: u64, resource: &'static str) -> Result<()> {
+        if limit.is_some_and(|limit| value > limit) {
+            return StorageCapacitySnafu { resource }.fail();
+        }
+        Ok(())
     }
 
     pub(super) fn check(&self, usage: StorageUsageV1, maintenance: bool) -> Result<()> {
-        let reserve = self.maintenance_bytes();
-        let reserve = if maintenance {
-            reserve
-        } else {
-            reserve + self.disk_max_bytes / 4
-        };
+        let reserve = self
+            .maintenance_bytes()?
+            .checked_add(if maintenance {
+                0
+            } else {
+                self.disk_max_bytes.map_or(0, |limit| limit / 4)
+            })
+            .ok_or_else(|| {
+                StorageCapacitySnafu {
+                    resource: "filesystem reserve",
+                }
+                .build()
+            })?;
         if usage.available_bytes < reserve {
             return StorageCapacitySnafu {
                 resource: "filesystem reserve",
             }
             .fail();
         }
-        if !maintenance && usage.file_bytes > self.disk_max_bytes - WRITE_RESERVE {
-            return StorageCapacitySnafu {
-                resource: "data files",
-            }
-            .fail();
+        if !maintenance {
+            let limit = self
+                .disk_max_bytes
+                .map(|limit| {
+                    limit
+                        .checked_sub(self.write_reserve_bytes.unwrap_or(0))
+                        .ok_or_else(|| {
+                            StorageCapacitySnafu {
+                                resource: "data files",
+                            }
+                            .build()
+                        })
+                })
+                .transpose()?;
+            Self::bound(limit, usage.file_bytes, "data files")?;
         }
         Ok(())
     }
 
-    pub(super) fn maintenance_bytes(&self) -> u64 {
-        self.policy_reserve_bytes + WRITE_RESERVE
+    pub(super) fn maintenance_bytes(&self) -> Result<u64> {
+        self.policy_reserve_bytes
+            .unwrap_or(0)
+            .checked_add(self.write_reserve_bytes.unwrap_or(0))
+            .ok_or_else(|| {
+                StorageCapacitySnafu {
+                    resource: "filesystem reserve",
+                }
+                .build()
+            })
     }
 
     pub(super) fn check_append(&self, usage: StorageUsageV1, bytes: u64) -> Result<()> {
@@ -97,20 +126,14 @@ impl StorageLimitsV1 {
                 }
                 .build()
             })?;
-        if maintenance && projected.file_bytes > self.disk_max_bytes {
-            return StorageCapacitySnafu {
-                resource: "data files",
-            }
-            .fail();
+        if maintenance {
+            Self::bound(self.disk_max_bytes, projected.file_bytes, "data files")?;
         }
         self.check(projected, maintenance)
     }
 
     pub(super) fn check_copy(&self, available: u64, bytes: u64) -> Result<()> {
-        let required = bytes
-            .checked_add(bytes / 4)
-            .and_then(|size| size.checked_add(self.policy_reserve_bytes))
-            .and_then(|size| size.checked_add(WRITE_RESERVE));
+        let required = bytes.checked_add(self.maintenance_bytes()?);
         if required.is_none_or(|size| available < size) {
             return StorageCapacitySnafu {
                 resource: "copy reserve",
@@ -122,23 +145,136 @@ impl StorageLimitsV1 {
 
     pub(super) fn check_backup(&self, usage: StorageUsageV1, bytes: u64) -> Result<()> {
         self.check_copy(usage.available_bytes, bytes)?;
-        let reserve = bytes
-            .checked_add(bytes / 4)
-            .and_then(|size| size.checked_add(4096));
-        let projected = reserve.and_then(|reserve| {
-            Some(StorageUsageV1 {
-                file_bytes: usage.file_bytes.checked_add(reserve)?,
-                available_bytes: usage.available_bytes.checked_sub(reserve)?,
-                ..usage
-            })
-        });
-        let projected = projected.ok_or_else(|| {
-            StorageCapacitySnafu {
-                resource: "backup files",
-            }
-            .build()
-        })?;
+        let projected = StorageUsageV1 {
+            file_bytes: usage.file_bytes.checked_add(bytes).ok_or_else(|| {
+                StorageCapacitySnafu {
+                    resource: "backup files",
+                }
+                .build()
+            })?,
+            available_bytes: usage.available_bytes.checked_sub(bytes).ok_or_else(|| {
+                StorageCapacitySnafu {
+                    resource: "backup files",
+                }
+                .build()
+            })?,
+            ..usage
+        };
         self.check(projected, false)
+    }
+
+    pub(super) fn check_entries(&self, entries: usize, diagnostics: usize) -> Result<()> {
+        if self.storage_entries.is_some_and(|limit| entries > limit) {
+            return StorageCapacitySnafu {
+                resource: "storage entries",
+            }
+            .fail();
+        }
+        if self
+            .diagnostic_entries
+            .is_some_and(|limit| diagnostics > limit)
+        {
+            return StorageCapacitySnafu {
+                resource: "diagnostic storage entries",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_sources(
+        &self,
+        total: usize,
+        tenant: usize,
+        diagnostic: bool,
+    ) -> Result<()> {
+        let resource = if diagnostic {
+            "diagnostic sources"
+        } else {
+            "source bindings"
+        };
+        let limit = if diagnostic {
+            self.diagnostic_sources
+        } else {
+            self.source_entries
+        };
+        if limit.is_some_and(|limit| total > limit)
+            || (diagnostic
+                && self
+                    .tenant_diagnostic_sources
+                    .is_some_and(|limit| tenant > limit))
+        {
+            return StorageCapacitySnafu { resource }.fail();
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_logical(&self, total: u64, tenant: u64, maintenance: bool) -> Result<()> {
+        let allowance = |limit| {
+            if maintenance {
+                limit
+            } else {
+                limit - limit / 4
+            }
+        };
+        Self::bound(
+            self.tenant_max_bytes.map(allowance),
+            tenant,
+            "tenant logical bytes",
+        )?;
+        Self::bound(
+            self.logical_max_bytes.map(allowance),
+            total,
+            "global logical bytes",
+        )
+    }
+
+    pub(super) fn check_diagnostics(&self, total: u64, tenant: u64) -> Result<()> {
+        Self::bound(
+            self.tenant_max_bytes.map(|limit| limit / 8),
+            tenant,
+            "diagnostic logical bytes",
+        )?;
+        Self::bound(
+            self.logical_max_bytes.map(|limit| limit / 8),
+            total,
+            "diagnostic logical bytes",
+        )
+    }
+
+    pub(super) fn check_revisions(&self, total: u64, tenant: u64) -> Result<()> {
+        Self::bound(self.tenant_revisions, tenant, "tenant retained revisions")?;
+        Self::bound(self.retained_revisions, total, "global retained revisions")
+    }
+
+    pub(super) fn check_witness(&self, bytes: u64) -> Result<()> {
+        Self::bound(self.witness_max_bytes, bytes, "tenant witness bytes")
+    }
+
+    pub(super) fn check_manifest(&self, bytes: u64) -> Result<()> {
+        Self::bound(self.manifest_max_bytes, bytes, "backup manifest bytes")
+    }
+}
+
+#[cfg(test)]
+impl StorageLimitsV1 {
+    pub(super) fn fixture() -> Self {
+        Self {
+            disk_max_bytes: Some(8 * 1024 * 1024 * 1024),
+            policy_reserve_bytes: Some(256 * 1024 * 1024),
+            write_reserve_bytes: Some(256 * 1024 * 1024),
+            logical_max_bytes: Some(8 * 1024 * 1024 * 1024),
+            tenant_max_bytes: Some(2 * 1024 * 1024 * 1024),
+            witness_max_bytes: Some(512 * 1024 * 1024),
+            storage_entries: Some(4096),
+            diagnostic_entries: Some(1024),
+            source_entries: Some(4096),
+            diagnostic_sources: Some(1024),
+            tenant_diagnostic_sources: Some(256),
+            retained_revisions: Some(4096),
+            tenant_revisions: Some(1024),
+            manifest_max_bytes: Some(2 * 1024 * 1024),
+        }
     }
 }
 
@@ -151,12 +287,152 @@ mod tests {
     };
 
     #[test]
+    fn storage_defaults_disable_quotas() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let limits: StorageLimitsV1 = serde_json::from_str("{}")?;
+        assert_eq!(limits, StorageLimitsV1::default());
+        assert!(limits.valid());
+        assert_eq!(limits.maintenance_bytes()?, 0);
+        limits.check(
+            StorageUsageV1 {
+                file_bytes: u64::MAX,
+                ..Default::default()
+            },
+            false,
+        )?;
+        limits.check_entries(usize::MAX, usize::MAX)?;
+        limits.check_sources(usize::MAX, usize::MAX, false)?;
+        limits.check_sources(usize::MAX, usize::MAX, true)?;
+        limits.check_logical(u64::MAX, u64::MAX, false)?;
+        limits.check_diagnostics(u64::MAX, u64::MAX)?;
+        limits.check_revisions(u64::MAX, u64::MAX)?;
+        limits.check_witness(u64::MAX)?;
+        limits.check_manifest(u64::MAX)?;
+        let available = StorageUsageV1 {
+            available_bytes: 5,
+            ..Default::default()
+        };
+        limits.check_append(available, 5)?;
+        limits.check_terminal(available, 5)?;
+        limits.check_backup(available, 5)?;
+        limits.check_copy(5, 5)?;
+        assert!(limits.check_append(available, 6).is_err());
+        assert!(limits.check_backup(available, 6).is_err());
+        assert!(limits.check_copy(5, 6).is_err());
+        assert!(limits
+            .check_append(
+                StorageUsageV1 {
+                    file_bytes: u64::MAX,
+                    available_bytes: 1,
+                    ..Default::default()
+                },
+                1
+            )
+            .is_err());
+        let limits: StorageLimitsV1 = serde_json::from_str(
+            r#"{"tenant_max_bytes":8,"source_entries":1,"tenant_revisions":1}"#,
+        )?;
+        assert!(limits.valid());
+        limits.check_logical(100, 6, false)?;
+        assert!(limits.check_logical(100, 7, false).is_err());
+        limits.check_logical(100, 8, true)?;
+        assert!(limits.check_logical(100, 9, true).is_err());
+        limits.check_diagnostics(100, 1)?;
+        assert!(limits.check_diagnostics(100, 2).is_err());
+        limits.check_sources(1, 1, false)?;
+        assert!(limits.check_sources(2, 1, false).is_err());
+        limits.check_revisions(100, 1)?;
+        assert!(limits.check_revisions(100, 2).is_err());
+        assert!(serde_json::from_str::<StorageLimitsV1>(r#"{"unknown":1}"#).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn source_quota_preserves_recovery() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let limits = StorageLimitsV1 {
+            source_entries: Some(1),
+            ..Default::default()
+        };
+        let source = |epoch| EvidenceIntakeIdentityV1 {
+            source_epoch: epoch,
+            ..crate::analysis::tests::identity()
+        };
+        let batch = || ValidatedEvidenceBatchV1 {
+            cpu_id: 0,
+            first_cursor: 1,
+            last_cursor: 1,
+            intake_utc_ns: 100,
+            framed_records: b"frame".to_vec().into(),
+            frame_ends: vec![5],
+        };
+        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        assert_eq!(
+            store.accept_validated_batch(source(1), batch())?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        let before = store.meta()?;
+        assert!(matches!(
+            store.accept_validated_batch(source(2), batch()),
+            Err(crate::Error::StorageCapacity {
+                resource: "source bindings",
+                ..
+            })
+        ));
+        assert_eq!(store.meta()?, before);
+        assert!(store.source_receipt(&source(2))?.is_none());
+        assert_eq!(
+            store.accept_validated_batch(source(1), batch())?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(
+            store.accept_validated_batch(source(2), batch())?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        drop(store);
+        let store = AnalysisStore::open_with_limits(
+            &root,
+            RetentionLimitsV1 {
+                raw_max_age_ns: 1,
+                ..Default::default()
+            },
+            StorageLimitsV1 {
+                disk_max_bytes: Some(0),
+                storage_entries: Some(0),
+                ..limits
+            },
+        )?;
+        assert_eq!(store.read_page(&source(1), 1)?.records.len(), 1);
+        assert_eq!(store.read_page(&source(2), 1)?.records.len(), 1);
+        assert!(store.storage_usage()?.file_bytes > 0);
+        let retained = crate::EvidenceRetentionOwner::new(&store).retain(&source(1), 200)?;
+        assert_eq!(retained.removed_records, 1);
+        assert_eq!(store.read_page(&source(2), 1)?.records.len(), 1);
+        let before = store.meta()?;
+        assert!(matches!(
+            store.accept_validated_batch(source(3), batch()),
+            Err(crate::Error::StorageCapacity {
+                resource: "source bindings",
+                ..
+            })
+        ));
+        assert_eq!(store.meta()?, before);
+        let mut reader = store.reader()?;
+        let snapshot = reader.get_mut()?.transaction()?;
+        assert!(!store.logical_pressure(&snapshot, source(1).tenant_id)?);
+        snapshot.rollback()?;
+        Ok(())
+    }
+
+    #[test]
     fn observability_terminal_reserve() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let limits = StorageLimitsV1::default();
+        let limits = StorageLimitsV1::fixture();
         let usage = StorageUsageV1 {
-            file_bytes: limits.disk_max_bytes - 1024,
+            file_bytes: limits.disk_max_bytes.ok_or("configured disk limit")? - 1024,
             allocated_bytes: 0,
-            available_bytes: limits.maintenance_bytes() + 1024,
+            available_bytes: limits.maintenance_bytes()? + 1024,
         };
         assert!(limits.check_append(usage, 1024).is_err());
         limits.check_terminal(usage, 1024)?;
@@ -176,16 +452,18 @@ mod tests {
     #[test]
     fn observability_entry_partition() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("data"))?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("data"),
+            Default::default(),
+            StorageLimitsV1::fixture(),
+        )?;
         let baseline = store.storage_with_reserve(1, 0)?;
         assert_eq!(
-            store
-                .storage_with_reserve(1, MAX_DIAGNOSTIC_ENTRIES)?
-                .file_bytes,
+            store.storage_with_reserve(1, 1024)?.file_bytes,
             baseline.file_bytes
         );
         assert!(matches!(
-            store.storage_with_reserve(0, MAX_DIAGNOSTIC_ENTRIES + 1),
+            store.storage_with_reserve(0, 1024 + 1),
             Err(crate::Error::StorageCapacity {
                 resource: "diagnostic storage entries",
                 ..
@@ -196,9 +474,9 @@ mod tests {
 
     #[test]
     fn analysis_store_copy_limits() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let limits = StorageLimitsV1::default();
+        let limits = StorageLimitsV1::fixture();
         for bytes in [0, 1, 3, 4, 1024 * 1024] {
-            let required = bytes + bytes / 4 + limits.maintenance_bytes();
+            let required = bytes + limits.maintenance_bytes()?;
             limits.check_copy(required, bytes)?;
             assert!(matches!(
                 limits.check_copy(required - 1, bytes),
@@ -209,13 +487,21 @@ mod tests {
             ));
         }
         assert!(limits.check_copy(u64::MAX, u64::MAX).is_err());
-        assert!(limits.check_copy(u64::MAX, u64::MAX / 5 * 4).is_err());
+        assert!(limits
+            .check_copy(u64::MAX, u64::MAX - limits.maintenance_bytes()? + 1)
+            .is_err());
         let bytes = 1024 * 1024;
-        let reserve = bytes + bytes / 4 + 4096;
+        let reserve = bytes;
         let usage = StorageUsageV1 {
-            file_bytes: limits.disk_max_bytes - WRITE_RESERVE - reserve,
+            file_bytes: limits.disk_max_bytes.ok_or("configured disk limit")?
+                - limits
+                    .write_reserve_bytes
+                    .ok_or("configured write reserve")?
+                - reserve,
             allocated_bytes: 0,
-            available_bytes: limits.maintenance_bytes() + limits.disk_max_bytes / 4 + reserve,
+            available_bytes: limits.maintenance_bytes()?
+                + limits.disk_max_bytes.ok_or("configured disk limit")? / 4
+                + reserve,
         };
         limits.check_backup(usage, bytes)?;
         assert!(limits
@@ -252,17 +538,21 @@ mod tests {
 
     #[test]
     fn analysis_store_capacity_bounds() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let limits = StorageLimitsV1::default();
+        let limits = StorageLimitsV1::fixture();
         assert!(limits.valid());
         assert!(!StorageLimitsV1 {
-            disk_max_bytes: u64::MAX,
+            disk_max_bytes: Some(u64::MAX),
             ..limits
         }
         .valid());
         let usage = StorageUsageV1 {
-            file_bytes: limits.disk_max_bytes - WRITE_RESERVE,
+            file_bytes: limits.disk_max_bytes.ok_or("configured disk limit")?
+                - limits
+                    .write_reserve_bytes
+                    .ok_or("configured write reserve")?,
             allocated_bytes: 0,
-            available_bytes: limits.maintenance_bytes() + limits.disk_max_bytes / 4,
+            available_bytes: limits.maintenance_bytes()?
+                + limits.disk_max_bytes.ok_or("configured disk limit")? / 4,
         };
         limits.check(usage, false)?;
         let pending = StorageUsageV1 {
@@ -313,7 +603,7 @@ mod tests {
         limits.check(
             StorageUsageV1 {
                 file_bytes: u64::MAX,
-                available_bytes: limits.maintenance_bytes(),
+                available_bytes: limits.maintenance_bytes()?,
                 ..usage
             },
             true,
@@ -321,7 +611,7 @@ mod tests {
         assert!(limits
             .check(
                 StorageUsageV1 {
-                    available_bytes: limits.maintenance_bytes() - 1,
+                    available_bytes: limits.maintenance_bytes()? - 1,
                     ..usage
                 },
                 true
@@ -349,7 +639,10 @@ mod tests {
         let mut next = first.clone();
         next.first_cursor = 2;
         next.last_cursor = 2;
-        let ordinary = limits.disk_max_bytes - WRITE_RESERVE;
+        let ordinary = limits.disk_max_bytes.ok_or("configured disk limit")?
+            - limits
+                .write_reserve_bytes
+                .ok_or("configured write reserve")?;
         let usage = store.storage_usage()?;
         padding.set_len(ordinary - usage.file_bytes - 4)?;
         assert!(matches!(
@@ -374,9 +667,9 @@ mod tests {
         assert!(store.source_receipt(&fresh)?.is_none());
         assert_eq!(store.meta()?, before);
         assert_eq!(store.storage_usage()?.file_bytes, ordinary - 5);
-        padding.set_len(limits.disk_max_bytes)?;
+        padding.set_len(limits.disk_max_bytes.ok_or("configured disk limit")?)?;
         let usage = store.storage_usage()?;
-        assert!(usage.file_bytes >= limits.disk_max_bytes);
+        assert!(usage.file_bytes >= limits.disk_max_bytes.ok_or("configured disk limit")?);
         assert!(usage.allocated_bytes < usage.file_bytes);
         assert!(matches!(
             store.accept_validated_batch(identity.clone(), next.clone()),
@@ -557,19 +850,26 @@ mod tests {
     #[test]
     #[ignore = "release-only isolated process RSS qualification on Linux"]
     fn analysis_store_thread_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        check_thread_memory(1, StorageLimitsV1::default())
+        check_thread_memory(1, StorageLimitsV1::fixture())
     }
 
     #[test]
-    #[ignore = "release-only default global quota RSS qualification on Linux"]
+    #[ignore = "release-only configured global quota RSS qualification on Linux"]
     fn analysis_store_global_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let mut limits = StorageLimitsV1::default();
+        let mut limits = StorageLimitsV1::fixture();
         if let Some(bytes) = std::env::var_os("ARAPHOR_GLOBAL_BYTES") {
-            limits.logical_max_bytes = bytes
-                .to_str()
-                .ok_or("the global test quota is not UTF-8")?
-                .parse()?;
-            limits.tenant_max_bytes = limits.tenant_max_bytes.min(limits.logical_max_bytes);
+            limits.logical_max_bytes = Some(
+                bytes
+                    .to_str()
+                    .ok_or("the global test quota is not UTF-8")?
+                    .parse()?,
+            );
+            limits.tenant_max_bytes = Some(
+                limits
+                    .tenant_max_bytes
+                    .ok_or("configured tenant limit")?
+                    .min(limits.logical_max_bytes.ok_or("configured logical limit")?),
+            );
         }
         check_thread_memory(5, limits)
     }
@@ -588,7 +888,14 @@ mod tests {
         let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
         println!(
             "MEMORY_QUOTA tenants={tenants} logical_bytes={} tenant_bytes={}",
-            store.storage.logical_max_bytes, store.storage.tenant_max_bytes
+            store
+                .storage
+                .logical_max_bytes
+                .ok_or("configured logical limit")?,
+            store
+                .storage
+                .tenant_max_bytes
+                .ok_or("configured tenant limit")?
         );
         store.writer()?.get()?.execute_batch(
             "SET logging_storage = 'stdout';
@@ -674,9 +981,15 @@ mod tests {
                 let mut cursors = vec![0_u64; identities.len()];
                 let mut sample = None;
                 let limit = if tenants == 1 {
-                    store.storage.tenant_max_bytes
+                    store
+                        .storage
+                        .tenant_max_bytes
+                        .ok_or("configured tenant limit")?
                 } else {
-                    store.storage.logical_max_bytes
+                    store
+                        .storage
+                        .logical_max_bytes
+                        .ok_or("configured logical limit")?
                 };
                 let allowance = limit - limit / 4;
                 let frame_bytes = 128 * 1024;
@@ -839,7 +1152,7 @@ impl StorageUsageV1 {
 
 impl AnalysisStore {
     pub fn storage_usage(&self) -> Result<StorageUsageV1> {
-        self.storage_with_entries(0)
+        Self::storage_at(&self.root, 0, 0)
     }
 
     pub(super) fn storage_with_entries(&self, entries: usize) -> Result<StorageUsageV1> {
@@ -851,7 +1164,7 @@ impl AnalysisStore {
         entries: usize,
         diagnostics: usize,
     ) -> Result<StorageUsageV1> {
-        Self::storage_at(&self.root, entries, diagnostics)
+        Self::inspect_storage(&self.root, entries, diagnostics, None, self.storage)
     }
 
     pub(super) fn storage_at(
@@ -859,7 +1172,7 @@ impl AnalysisStore {
         entries: usize,
         diagnostics: usize,
     ) -> Result<StorageUsageV1> {
-        Self::inspect_storage(root, entries, diagnostics, None)
+        Self::inspect_storage(root, entries, diagnostics, None, StorageLimitsV1::default())
     }
 
     pub(super) fn storage_for_append(
@@ -868,7 +1181,7 @@ impl AnalysisStore {
         entries: usize,
         diagnostics: usize,
     ) -> Result<StorageUsageV1> {
-        Self::inspect_storage(&self.root, entries, diagnostics, Some(raw))
+        Self::inspect_storage(&self.root, entries, diagnostics, Some(raw), self.storage)
     }
 
     fn inspect_storage(
@@ -876,13 +1189,9 @@ impl AnalysisStore {
         mut entries: usize,
         mut diagnostics: usize,
         raw: Option<&super::raw::RawJournal>,
+        limits: StorageLimitsV1,
     ) -> Result<StorageUsageV1> {
-        if diagnostics > MAX_DIAGNOSTIC_ENTRIES {
-            return StorageCapacitySnafu {
-                resource: "diagnostic storage entries",
-            }
-            .fail();
-        }
+        limits.check_entries(entries, diagnostics)?;
         let mut usage = StorageUsageV1 {
             available_bytes: StorageUsageV1::free_bytes(root)?,
             ..Default::default()
@@ -905,16 +1214,40 @@ impl AnalysisStore {
                         .to_str()
                         .is_some_and(|name| name.split('.').nth(1) == Some("d"))
                 {
-                    diagnostics = diagnostics.saturating_add(1);
+                    diagnostics = diagnostics.checked_add(1).ok_or_else(|| {
+                        crate::AnalysisStateSnafu {
+                            path: root,
+                            reason: "the diagnostic entry count overflows",
+                        }
+                        .build()
+                    })?;
                 } else {
-                    entries = entries.saturating_add(1);
+                    entries = entries.checked_add(1).ok_or_else(|| {
+                        crate::AnalysisStateSnafu {
+                            path: root,
+                            reason: "the storage entry count overflows",
+                        }
+                        .build()
+                    })?;
                 }
                 if metadata.is_dir() {
                     if path == segment_root {
                         if let Some((segment_usage, evidence, diagnostic)) = known {
                             usage.add(segment_usage, root)?;
-                            entries = entries.saturating_add(evidence);
-                            diagnostics = diagnostics.saturating_add(diagnostic);
+                            entries = entries.checked_add(evidence).ok_or_else(|| {
+                                crate::AnalysisStateSnafu {
+                                    path: root,
+                                    reason: "the storage entry count overflows",
+                                }
+                                .build()
+                            })?;
+                            diagnostics = diagnostics.checked_add(diagnostic).ok_or_else(|| {
+                                crate::AnalysisStateSnafu {
+                                    path: root,
+                                    reason: "the diagnostic entry count overflows",
+                                }
+                                .build()
+                            })?;
                         } else {
                             pending.push(path.clone());
                         }
@@ -924,15 +1257,7 @@ impl AnalysisStore {
                 } else if !metadata.is_file() {
                     return Self::reject_path(root, "the data directory contains a non-file entry");
                 }
-                if entries > MAX_STORAGE_ENTRIES {
-                    return Self::reject_path(root, "the data directory exceeds its entry bound");
-                }
-                if diagnostics > MAX_DIAGNOSTIC_ENTRIES {
-                    return StorageCapacitySnafu {
-                        resource: "diagnostic storage entries",
-                    }
-                    .fail();
-                }
+                limits.check_entries(entries, diagnostics)?;
                 usage.add(StorageUsageV1::from_metadata(&path, &metadata)?, root)?;
             }
         }
@@ -940,6 +1265,11 @@ impl AnalysisStore {
     }
 
     pub(super) fn require_capacity(&self, maintenance: bool) -> Result<()> {
-        self.storage.check(self.storage_usage()?, maintenance)
+        let usage = if maintenance {
+            self.storage_usage()?
+        } else {
+            self.storage_with_entries(0)?
+        };
+        self.storage.check(usage, maintenance)
     }
 }

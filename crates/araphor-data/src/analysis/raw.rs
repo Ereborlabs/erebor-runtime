@@ -653,6 +653,33 @@ impl AnalysisStore {
         let revision = (*self.revision.borrow())
             .checked_add(1)
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
+        let diagnostic = identity.evidence().is_none();
+        let source_limit = if diagnostic {
+            self.storage.diagnostic_sources.is_some()
+                || self.storage.tenant_diagnostic_sources.is_some()
+        } else {
+            self.storage.source_entries.is_some()
+        };
+        if source_limit && !raw.sources.contains_key(&key) {
+            let matching = raw
+                .sources
+                .values()
+                .filter(|source| source.receipt.evidence().is_none() == diagnostic);
+            let total = matching
+                .clone()
+                .count()
+                .checked_add(1)
+                .ok_or_else(|| self.state_error("the source count overflows"))?;
+            let scoped = matching
+                .filter(|source| match &source.receipt {
+                    RawReceipt::Evidence(receipt) => receipt.identity.tenant_id == tenant,
+                    RawReceipt::Diagnostic(receipt) => receipt.identity.tenant_id == tenant,
+                })
+                .count()
+                .checked_add(1)
+                .ok_or_else(|| self.state_error("the tenant source count overflows"))?;
+            self.storage.check_sources(total, scoped, diagnostic)?;
+        }
         let commit = raw.prepare(&identity, &batch, revision)?;
         if commit.spans.is_empty() {
             return Ok((
@@ -709,63 +736,22 @@ impl AnalysisStore {
             .trace_reserve
             .checked_sub(released_reserve)
             .ok_or_else(|| self.state_error("the diagnostic byte reserve underflows"))?;
-        let scoped = raw.budget.usage.get(&tenant).copied().unwrap_or(0);
-        if scoped
-            .checked_add(charge)
-            .and_then(|bytes| bytes.checked_sub(released_reserve))
-            .is_none_or(|bytes| {
-                bytes
-                    > self.storage.tenant_max_bytes
-                        - if prepaid {
-                            0
-                        } else {
-                            self.storage.tenant_max_bytes / 4
-                        }
-            })
-        {
-            return crate::StorageCapacitySnafu {
-                resource: "tenant logical bytes",
-            }
-            .fail();
-        }
-        if raw
-            .budget
-            .total
-            .checked_add(charge)
-            .and_then(|bytes| bytes.checked_sub(released_reserve))
-            .is_none_or(|bytes| {
-                bytes
-                    > self.storage.logical_max_bytes
-                        - if prepaid {
-                            0
-                        } else {
-                            self.storage.logical_max_bytes / 4
-                        }
-            })
-        {
-            return crate::StorageCapacitySnafu {
-                resource: "global logical bytes",
-            }
-            .fail();
-        }
-        if diagnostic {
-            let tenant_bytes = raw.budget.diagnostics.get(&tenant).copied().unwrap_or(0);
-            if tenant_bytes
+        let projected = |bytes: u64| {
+            bytes
                 .checked_add(charge)
                 .and_then(|bytes| bytes.checked_sub(released_reserve))
-                .is_none_or(|bytes| bytes > self.storage.tenant_max_bytes / 8)
-                || raw
-                    .budget
-                    .diagnostic_total
-                    .checked_add(charge)
-                    .and_then(|bytes| bytes.checked_sub(released_reserve))
-                    .is_none_or(|bytes| bytes > self.storage.logical_max_bytes / 8)
-            {
-                return crate::StorageCapacitySnafu {
-                    resource: "diagnostic logical bytes",
-                }
-                .fail();
-            }
+                .ok_or_else(|| self.state_error("the projected logical bytes overflow"))
+        };
+        self.storage.check_logical(
+            projected(raw.budget.total)?,
+            projected(raw.budget.usage.get(&tenant).copied().unwrap_or(0))?,
+            prepaid,
+        )?;
+        if diagnostic {
+            self.storage.check_diagnostics(
+                projected(raw.budget.diagnostic_total)?,
+                projected(raw.budget.diagnostics.get(&tenant).copied().unwrap_or(0))?,
+            )?;
         }
         let required = raw.budget.required.contains_key(&key);
         if required {
@@ -782,32 +768,35 @@ impl AnalysisStore {
                 return crate::ProtectedInputCapacitySnafu { resource: "bytes" }.fail();
             }
         }
-        let mut witnesses = raw.budget.contexts.get(&tenant).copied().unwrap_or(0);
-        for (segment_id, segment) in &raw.segments {
-            if raw
-                .budget
-                .pins
-                .get(segment_id)
-                .is_some_and(|(tenant, expiry)| {
-                    *tenant == identity.tenant() && *expiry > batch.intake_utc_ns
-                })
-            {
-                witnesses += segment.end;
-                if *segment_id == id {
-                    witnesses += added;
+        if self.storage.witness_max_bytes.is_some() {
+            let mut witnesses = raw.budget.contexts.get(&tenant).copied().unwrap_or(0);
+            for (segment_id, segment) in &raw.segments {
+                if raw
+                    .budget
+                    .pins
+                    .get(segment_id)
+                    .is_some_and(|(tenant, expiry)| {
+                        *tenant == identity.tenant() && *expiry > batch.intake_utc_ns
+                    })
+                {
+                    witnesses = witnesses
+                        .checked_add(segment.end)
+                        .ok_or_else(|| self.state_error("the witness byte count overflows"))?;
+                    if *segment_id == id {
+                        witnesses = witnesses
+                            .checked_add(added)
+                            .ok_or_else(|| self.state_error("the witness byte count overflows"))?;
+                    }
                 }
             }
-        }
-        if witnesses > self.storage.witness_max_bytes {
-            return crate::StorageCapacitySnafu {
-                resource: "tenant witness bytes",
-            }
-            .fail();
+            self.storage.check_witness(witnesses)?;
         }
         let usage = self.storage_for_append(
             &raw,
             usize::from(created && !diagnostic),
-            trace_slots + usize::from(created && diagnostic),
+            trace_slots
+                .checked_add(usize::from(created && diagnostic))
+                .ok_or_else(|| self.state_error("the diagnostic slot reserve overflows"))?,
         )?;
         let projected = added
             .checked_add(trace_reserve)
@@ -1634,24 +1623,6 @@ impl RawJournal {
                 return Err(self.invalid("the raw source changed its identity or CPU"));
             }
         } else {
-            if self
-                .sources
-                .values()
-                .filter(|source| {
-                    source.receipt.evidence().is_some() == identity.evidence().is_some()
-                })
-                .count()
-                >= if identity.evidence().is_some() {
-                    4096
-                } else {
-                    1024
-                }
-            {
-                return crate::StorageCapacitySnafu {
-                    resource: "source bindings",
-                }
-                .fail();
-            }
             if identity.evidence().is_some_and(|identity| {
                 self.sources
                     .values()
@@ -2351,7 +2322,9 @@ pub(super) mod tests {
             let identity = &intent.bindings[0].identity;
             let store = AnalysisStore::open(&root)?;
             let limits = StorageLimitsV1 {
-                witness_max_bytes: store.witness_usage(identity.tenant_id, 203)?.charged_bytes,
+                witness_max_bytes: Some(
+                    store.witness_usage(identity.tenant_id, 203)?.charged_bytes,
+                ),
                 ..Default::default()
             };
             drop(store);
@@ -2421,7 +2394,7 @@ pub(super) mod tests {
         })?;
         let usage = store.witness_usage(identity.tenant_id, 202)?;
         let limits = StorageLimitsV1 {
-            witness_max_bytes: usage.charged_bytes,
+            witness_max_bytes: Some(usage.charged_bytes),
             ..Default::default()
         };
         drop(store);

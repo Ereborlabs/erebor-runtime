@@ -6,8 +6,6 @@ use snafu::ResultExt as _;
 use super::AnalysisStore;
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result};
 
-const MAX_SOURCES: u64 = 4096;
-
 impl AnalysisStore {
     pub(super) fn validate_state(writer: &Connection, root: &Path) -> Result<()> {
         let meta = Self::read_meta_from(writer, &root.join("analysis.duckdb"))?;
@@ -356,9 +354,6 @@ impl AnalysisStore {
             "SELECT (SELECT COUNT(*) FROM source_receipts), (SELECT COUNT(*) FROM source_bindings)",
             [], |row| Ok((row.get(0)?, row.get(1)?)),
         ).context(AnalysisDatabaseSnafu { operation: "validate binding count" })?;
-        if counts.0 > MAX_SOURCES || counts.1 > MAX_SOURCES {
-            return Self::reject_path(root, "the stored source count exceeds its limit");
-        }
         if counts.0 != counts.1 {
             return Self::reject_path(root, "the stored epoch binding has no receipt");
         }
@@ -586,6 +581,7 @@ impl AnalysisStore {
         writer: &duckdb::Transaction<'_>,
         root: &Path,
         identity: &EvidenceIntakeIdentityV1,
+        limit: Option<usize>,
     ) -> Result<bool> {
         let key = identity.epoch_key();
         let saved: Option<(Vec<u8>, Vec<u8>, u64)> = writer
@@ -607,16 +603,18 @@ impl AnalysisStore {
             }
             return Ok(false);
         }
-        let count: u64 = writer
-            .query_row("SELECT COUNT(*) FROM source_bindings", [], |row| row.get(0))
-            .context(AnalysisDatabaseSnafu {
-                operation: "check source count",
-            })?;
-        if count >= MAX_SOURCES {
-            return crate::StorageCapacitySnafu {
-                resource: "source bindings",
+        if let Some(limit) = limit {
+            let count: u64 = writer
+                .query_row("SELECT COUNT(*) FROM source_bindings", [], |row| row.get(0))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "check source count",
+                })?;
+            if count >= limit as u64 {
+                return crate::StorageCapacitySnafu {
+                    resource: "source bindings",
+                }
+                .fail();
             }
-            .fail();
         }
         writer
             .execute(
@@ -798,15 +796,12 @@ mod tests {
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let mut writer = store.writer()?;
         let transaction = writer.get_mut()?.transaction()?;
-        // These count-only rows remain inside an uncommitted test transaction.
+        let limit = 8usize;
+        // These rows exist only in this test transaction.
         transaction.execute(
             "INSERT INTO source_bindings
             SELECT encode(md5(i::VARCHAR)), ?, ?, 1 FROM range(?::BIGINT) t(i)",
-            params![
-                [1_u8; 16].as_slice(),
-                [2_u8; 16].as_slice(),
-                MAX_SOURCES - 1
-            ],
+            params![[1_u8; 16].as_slice(), [2_u8; 16].as_slice(), limit - 1],
         )?;
         let mut identity = EvidenceIntakeIdentityV1 {
             node_id: "n".into(),
@@ -815,16 +810,18 @@ mod tests {
         assert!(AnalysisStore::bind_source(
             &transaction,
             &store.root,
-            &identity
+            &identity,
+            Some(limit),
         )?);
         assert!(!AnalysisStore::bind_source(
             &transaction,
             &store.root,
-            &identity
+            &identity,
+            Some(limit),
         )?);
         identity.source_epoch = 2;
         assert!(matches!(
-            AnalysisStore::bind_source(&transaction, &store.root, &identity),
+            AnalysisStore::bind_source(&transaction, &store.root, &identity, Some(limit)),
             Err(crate::Error::StorageCapacity {
                 resource: "source bindings",
                 ..
@@ -833,7 +830,7 @@ mod tests {
         assert_eq!(
             transaction.query_row("SELECT COUNT(*) FROM source_bindings", [], |row| row
                 .get::<_, u64>(0))?,
-            MAX_SOURCES
+            limit as u64
         );
         transaction.rollback()?;
         drop(writer);

@@ -362,16 +362,7 @@ impl RawJournal {
         };
         let directory = root.join("segments");
         let mut paths = BTreeMap::new();
-        let mut diagnostics = 0;
-        for (count, entry) in fs::read_dir(&directory)
-            .context(IoSnafu { path: &directory })?
-            .enumerate()
-        {
-            if count
-                >= super::capacity::MAX_STORAGE_ENTRIES + super::capacity::MAX_DIAGNOSTIC_ENTRIES
-            {
-                return Err(journal.invalid("the raw segment directory exceeds its entry bound"));
-            }
+        for entry in fs::read_dir(&directory).context(IoSnafu { path: &directory })? {
             let path = entry.context(IoSnafu { path: &directory })?.path();
             let name = path
                 .file_name()
@@ -394,12 +385,6 @@ impl RawJournal {
                 .map_err(|_| journal.invalid("the evidence segment name is invalid"))?;
             if value == 0 || id != format!("{value:016x}") || (sealed_only && sealed.is_none()) {
                 return Err(journal.invalid("the evidence segment name or state is invalid"));
-            }
-            diagnostics += usize::from(kind == "d");
-            if diagnostics > super::capacity::MAX_DIAGNOSTIC_ENTRIES
-                || count + 1 - diagnostics > super::capacity::MAX_STORAGE_ENTRIES
-            {
-                return Err(journal.invalid("the raw stream kind exceeds its entry bound"));
             }
             let kind = if kind == "r" { "records" } else { "diagnostic" };
             if paths.insert(value, (path, kind, sealed)).is_some() {

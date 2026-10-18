@@ -247,7 +247,7 @@ mod tests {
         changed.scope.identity.tenant_id = [9; 16];
         assert!(store.retire_required(&changed).is_err());
         let storage = store.storage;
-        store.storage.tenant_max_bytes = 1;
+        store.storage.tenant_max_bytes = Some(1);
         assert!(store.retire_required(&input).is_err());
         store.storage = storage;
         assert_eq!(store.meta()?, before);

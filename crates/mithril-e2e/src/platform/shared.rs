@@ -733,7 +733,7 @@ impl Shared {
                     path,
                     Default::default(),
                     araphor_data::StorageLimitsV1 {
-                        disk_max_bytes: 1024 * 1024 * 1024,
+                        disk_max_bytes: Some(1024 * 1024 * 1024),
                         ..Default::default()
                     },
                 )?),

@@ -779,7 +779,12 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin coverage",
         })?;
-        let bound = Self::bind_source(&transaction, &self.root, identity)?;
+        let bound = Self::bind_source(
+            &transaction,
+            &self.root,
+            identity,
+            self.storage.source_entries,
+        )?;
         let previous = Self::read_receipt_from(&transaction, &self.root, identity, &key)?;
         if previous
             .as_ref()

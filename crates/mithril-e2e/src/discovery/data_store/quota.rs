@@ -5,7 +5,11 @@ use araphor_data::StorageLimitsV1;
 
 impl DataStoreQualification {
     pub async fn quota(&self) -> Result<()> {
-        self.quota_with_limits(StorageLimitsV1::default()).await
+        self.quota_with_limits(StorageLimitsV1 {
+            tenant_max_bytes: Some(2 * 1024 * 1024 * 1024),
+            ..Default::default()
+        })
+        .await
     }
 
     fn quota_failure(
@@ -93,7 +97,10 @@ impl DataStoreQualification {
         let mut digest = Sha256::new();
         let mut samples = Vec::new();
         let mut previous = None;
-        let allowance = limits.tenant_max_bytes - limits.tenant_max_bytes / 4;
+        let quota = limits
+            .tenant_max_bytes
+            .ok_or("the qualification needs a tenant quota")?;
+        let allowance = quota - quota / 4;
         let batch_limit = allowance
             .checked_div(wire.framed_records.len() as u64)
             .and_then(|count| count.checked_add(2))
@@ -340,7 +347,7 @@ mod tests {
         let output = directory.path().join("quota");
         DataStoreQualification::new(output.clone())
             .quota_with_limits(StorageLimitsV1 {
-                tenant_max_bytes: 64 * 1024 * 1024,
+                tenant_max_bytes: Some(64 * 1024 * 1024),
                 ..Default::default()
             })
             .await?;

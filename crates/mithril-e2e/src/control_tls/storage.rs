@@ -48,7 +48,7 @@ async fn storage_failure_keeps_evidence() -> TestResult<()> {
     fs::remove_file(&path)?;
     fs::rename(retained, &path)?;
     let mut trust = TrustCache::load(fixture.path())?;
-    for capacity in [1, araphor_data::StorageLimitsV1::default().tenant_max_bytes] {
+    for capacity in [Some(1), None] {
         let store = wait_for_async(
             &path,
             "the stopped Control server to release its store lease",
@@ -74,8 +74,8 @@ async fn storage_failure_keeps_evidence() -> TestResult<()> {
         connection.send_evidence_group(vec![batch.clone()]).await?;
         let message = timeout(wait, connection.next_message())
             .await
-            .map_err(|error| format!("capacity {capacity} response at {path:?}: {error}"))?;
-        if capacity == 1 {
+            .map_err(|error| format!("capacity {capacity:?} response at {path:?}: {error}"))?;
+        if capacity == Some(1) {
             assert!(message.is_err(), "Control acknowledged beyond capacity");
             assert_eq!(intake.contiguous_cursor(&identity)?, 0);
             assert!(data.source_receipt(&identity)?.is_none());

@@ -679,8 +679,8 @@ mod tests {
             directory.path().join("data"),
             Default::default(),
             araphor_data::StorageLimitsV1 {
-                logical_max_bytes: 1,
-                tenant_max_bytes: 1,
+                logical_max_bytes: Some(1),
+                tenant_max_bytes: Some(1),
                 ..Default::default()
             },
         )?);
