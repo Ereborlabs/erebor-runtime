@@ -93,11 +93,10 @@ async fn wasm_installed_lifecycle() -> TestResult {
     if returned.stale {
         let saved: crate::package::evaluation::ResultContext =
             AnalysisPackageOwner::decode(&committed.commit.metadata)?;
-        assert!(AnalysisPackageOwner::clock_changed(
-            true,
+        assert_ne!(
             saved.context.time_utc_ns,
-            AnalysisPackageOwner::now(),
-        ));
+            AnalysisPackageOwner::now() as i64,
+        );
     }
     assert_receipt(&returned, &receipt)?;
     let output: sdk::wire::Output = AnalysisPackageOwner::decode(&committed.commit.datasets)?;

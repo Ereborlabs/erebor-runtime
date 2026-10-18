@@ -59,6 +59,31 @@ execution and manual refresh. The subscription must supply the actual input
 batches. A query that returns identities to the old input reader is not a
 replacement. This work is **Not done**.
 
+### Exact package evaluation time
+
+Implementation and selected verification: **Done**. Package preparation uses
+the supplied evaluation time. Manual inspection no longer rounds that time
+to a 500-millisecond bucket. A time-dependent result remains current only at
+its saved evaluation time. A result that does not read time retains the
+existing input and authority checks. Query remains the owner of notices and
+actual window deadlines. This change adds no timer.
+
+All five selected preparation and Wasm lifecycle cases pass. The new case
+commits a SQL result at an exact time, inspects it at that time, then inspects
+it one nanosecond later. Only the later inspection marks the result stale.
+The saved evaluation time remains unchanged. Existing automatic deadline,
+unchanged input, and Wasm lifecycle cases also pass. Strict Clippy passes all
+targets in Query, Analysis, and Control. Scoped formatting, review-guide
+links, and the diff check pass. The verification record is
+`/tmp/araphor-exact-package-time-verification1.json`. No full workspace CI or
+benchmark is run.
+
+This increment adds four nonblank production Rust lines and removes 32, for
+a net reduction of 28. Together with the native cursor projection, it removes
+114 lines. The complete redesign still adds 975 production Rust lines against
+`7b7b407a`. The source count is `/tmp/araphor-native-lineage-count1.json`.
+The complete redesign and the required 6,000-line reduction remain **Not done**.
+
 ### Native append cursor projection
 
 Implementation and selected verification: **Done**. Subscribe adds two native

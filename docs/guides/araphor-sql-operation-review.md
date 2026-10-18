@@ -600,6 +600,15 @@ suppress another backend offer when the model does not read time. The client
 subscription can request its existing health deadline. Package execution
 supplies no health deadline.
 
+Manual [prepare_model](../../crates/araphor-analysis/src/package/evaluation/preparation.rs)
+also uses the exact supplied time. Inspect compares a time-dependent result
+with that saved time. It does not round either value to a clock bucket.
+The [inspect_uses_exact_time](../../crates/araphor-analysis/src/package/evaluation/preparation/tests.rs)
+case verifies an unchanged instant and a one-nanosecond change. All five
+selected preparation and Wasm lifecycle cases pass. Strict Clippy passes all
+targets in Query, Analysis, and Control. The source record is
+`/tmp/araphor-exact-package-time-verification1.json`.
+
 [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) uses the
 shared [Window](../../crates/araphor-query/src/follow/window.rs) rules to compute
 the next supported event-window expiry. Each input port uses its own source

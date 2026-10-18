@@ -22,11 +22,7 @@ impl AnalysisPackageOwner {
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageCommitV1>> {
         control.check()?;
-        let mut now = if action == Action::Inspect {
-            Self::clock_tick(request.now)
-        } else {
-            request.now
-        };
+        let now = request.now;
         if action == Action::Run && bundle.value.root != context.root {
             return Err(Code::Conflict.error("activation package root").into());
         }
@@ -36,11 +32,8 @@ impl AnalysisPackageOwner {
                     .package_current(active, request.now, true, control)?
             {
                 let saved: ResultContext = Self::decode(&metadata)?;
-                if !Self::clock_changed(
-                    context.clock != ClockDependency::None,
-                    saved.context.time_utc_ns,
-                    request.now,
-                ) {
+                if context.clock == ClockDependency::None || saved.context.time_utc_ns == now as i64
+                {
                     return Ok(None);
                 }
             }
@@ -61,14 +54,6 @@ impl AnalysisPackageOwner {
             .as_ref()
             .map(|previous| Self::decode::<ResultContext>(&previous.commit.metadata))
             .transpose()?;
-        if action == Action::Inspect {
-            if let Some(prior) = prior
-                .as_ref()
-                .filter(|prior| Self::clock_tick(prior.context.time_utc_ns as u64) == now)
-            {
-                now = prior.context.time_utc_ns as u64;
-            }
-        }
         if context.grant.selection.tenant_id != active.key.tenant_id {
             return Err(Code::Denied.error("model input tenant").into());
         }
@@ -102,11 +87,7 @@ impl AnalysisPackageOwner {
             .is_some_and(|prior| prior.matches(&inputs.inputs));
         let current = unchanged
             && !prior.as_ref().is_some_and(|prior| {
-                Self::clock_changed(
-                    context.clock == ClockDependency::Model,
-                    prior.context.time_utc_ns,
-                    now,
-                )
+                context.clock == ClockDependency::Model && prior.context.time_utc_ns != now as i64
             });
         if !current && active.generation != 0 && active.result_id.is_some() {
             self.store.mark_package_stale(active)?;
@@ -200,15 +181,6 @@ impl AnalysisPackageOwner {
             context_refs: inputs.contexts().cloned().collect(),
             created_utc_ns: metadata.context.time_utc_ns as u64,
         }))
-    }
-
-    pub(in crate::package) fn clock_tick(now: u64) -> u64 {
-        let period = Self::RECONCILE_INTERVAL.as_nanos() as u64;
-        now / period * period
-    }
-
-    pub(in crate::package) fn clock_changed(clocked: bool, prior: i64, now: u64) -> bool {
-        clocked && Self::clock_tick(prior as u64) != Self::clock_tick(now)
     }
 }
 

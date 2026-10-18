@@ -24,9 +24,6 @@ impl Drop for PackageTask {
 }
 
 impl AnalysisPackageOwner {
-    pub(super) const RECONCILE_INTERVAL: std::time::Duration =
-        std::time::Duration::from_millis(500);
-
     pub fn new(query: Arc<Engine>, authority: Arc<dyn PackageAuthorization>) -> Result<Self> {
         Self::new_with_limits(query, authority, crate::AnalysisLimits::default())
     }

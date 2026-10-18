@@ -109,7 +109,7 @@ impl araphor_query::follow::Clock for Clock {
 async fn automatic_clock_events() -> TestResult {
     for source in [None, Some(EXPIRY), Some(NOTIFICATION_COUNT)] {
         let fixture = Fixture::new()?;
-        let period = AnalysisPackageOwner::RECONCILE_INTERVAL.as_nanos() as u64;
+        let period = 500_000_000;
         let _router = if source == Some(NOTIFICATION_COUNT) {
             Some(notification_deadline(&fixture, period)?)
         } else {
@@ -309,6 +309,67 @@ async fn automatic_clock_events() -> TestResult {
         )?;
         let stored = fixture.result(active.result_id.as_deref().ok_or("active result")?)?;
         assert_eq!(stored.stale, source.is_none());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn inspect_uses_exact_time() -> TestResult {
+    let fixture = Fixture::new()?;
+    let package = bundle("1", EXPIRY);
+    fixture.install(package.clone(), None).await?;
+    let package =
+        InstalledBundle::new(&fixture.owner.query, package, fixture.owner.query.memory())?;
+    let active = fixture.store.package_activation_page(None)?.remove(0);
+    let context: InstalledContext = AnalysisPackageOwner::decode(&active.metadata)?;
+    assert_eq!(context.clock, ClockDependency::Model);
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let now = START + 123;
+    let prepared = fixture
+        .owner
+        .prepare_model(
+            &active,
+            &context,
+            &package,
+            RunPreparation {
+                inputs: None,
+                id: "exact-time",
+                rebuild: false,
+                now,
+            },
+            Action::Run,
+            &control,
+        )?
+        .ok_or("clock evaluation")?;
+    let receipt = fixture
+        .store
+        .commit_package(&prepared, || control.check())?;
+    let active = fixture
+        .store
+        .package_activation(&active.key)?
+        .ok_or("clock activation")?;
+    assert!(!fixture.result(&receipt.result_id)?.stale);
+    for (time, stale) in [(now, false), (now + 1, true)] {
+        assert!(fixture
+            .owner
+            .prepare_model(
+                &active,
+                &context,
+                &package,
+                RunPreparation {
+                    inputs: None,
+                    id: "inspect-time",
+                    rebuild: false,
+                    now: time,
+                },
+                Action::Inspect,
+                &control,
+            )?
+            .is_none());
+        let result = fixture.result(&receipt.result_id)?;
+        assert_eq!(result.stale, stale);
+        let saved: ResultContext = AnalysisPackageOwner::decode(&result.commit.metadata)?;
+        assert_eq!(saved.context.time_utc_ns, now as i64);
     }
     Ok(())
 }
