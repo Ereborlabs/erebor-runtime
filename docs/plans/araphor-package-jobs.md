@@ -166,7 +166,34 @@ SQL lines. The complete redesign still adds 887 production code lines against
 Live producer installation, captured authoritative context and interval state,
 new package pins, and atomic profile publication remain **Not done**. This
 increment does not authorize or implement the earlier draft job controller.
-The parent plan records the exact context publication gap.
+The parent plan records the remaining context content gap.
+
+### Atomic reactive context publication
+
+Implementation and selected functional qualification: **Done**. The existing
+Control context owner captures all changed facts under one lock. Data commits
+the complete batch in one transaction with one revision for all new rows.
+The former partial-copy cursor and one-second failure retry are deleted.
+Relevant Control notices trigger work. After a failure, Data repair notices
+can also trigger work without a new Control revision. No new source reader,
+store, controller, or execution operator is added.
+
+The shared transaction preserves exact retries, imported history, package
+provenance, tenant scope, and rollback. The optional context body quota defaults
+to None. The context page reader preserves rows above the former fixed byte
+cutoff. This change prepares complete Query captures; authoritative proof
+projection and live Discovery package execution remain **Not done**.
+
+Selected checks pass 14 Data cases, eight Control cases, and one native Query
+E2E case. The E2E case proves failure rollback and repair wake without a new
+Control revision. The crash case proves two-row atomic recovery. Strict Clippy
+passes all targets in the six affected crates. Scoped formatting, local links,
+and whitespace checks pass. The source and command record is
+`/tmp/araphor-context-cut-verification1.json`. Full workspace CI, benchmarks,
+and physical Kubernetes qualification are not run.
+
+The delivery removes 12 production Rust code lines. The complete redesign
+still adds 875 against `7b7b407a`. The required reduction is **Not done**.
 
 ## Earlier design draft
 

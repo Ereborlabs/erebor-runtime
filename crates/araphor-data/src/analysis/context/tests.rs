@@ -76,28 +76,36 @@ fn control_graph_context_head_pages_keep_exact_versions_and_bounds(
         let mut version = original.clone();
         version.key.owner_id = "large-owner".into();
         version.key.entity_key = entity.to_be_bytes().to_vec();
-        version.body = vec![1; MAX_CONTEXT_BYTES];
+        version.body = vec![
+            1;
+            if entity == 1 {
+                2 * 1024 * 1024
+            } else {
+                32 * 1024
+            }
+        ];
         store.commit_context(&version)?;
     }
     let page = store.context_head_page(tenant, "large-owner", None)?;
-    assert!(!page.is_empty() && page.len() < 34);
-    assert!(
-        page.iter().map(|version| version.body.len()).sum::<usize>()
-            <= super::super::MAX_ANALYSIS_PAGE_BYTES
-    );
+    assert_eq!(page.len(), 34);
+    assert_eq!(page[0].body.len(), 2 * 1024 * 1024);
+    assert!(page.windows(2).all(|pair| pair[0].key < pair[1].key));
+    for version in &page {
+        assert_eq!(store.context_version(&version.key)?, Some(version.clone()));
+    }
     let next = store.context_head_page(
         tenant,
         "large-owner",
-        Some(&page.last().ok_or("byte cursor")?.key),
+        Some(&page.last().ok_or("page cursor")?.key),
     )?;
-    assert_eq!(page.len() + next.len(), 34);
+    assert!(next.is_empty());
     {
         let mut writer = store.writer()?;
         writer.get_mut()?.execute(
             "UPDATE context_versions SET body = ? WHERE tenant_id = ? AND owner_id = ?
              AND entity_key = ? AND lifetime_key = ? AND owner_revision = ?",
             params![
-                vec![1u8; super::super::MAX_ANALYSIS_PAGE_BYTES + 1].as_slice(),
+                b"".as_slice(),
                 tenant.as_slice(),
                 "large-owner",
                 original.key.entity_key.as_slice(),
@@ -185,5 +193,319 @@ fn analysis_store_context_versions() -> std::result::Result<(), Box<dyn std::err
         ],
     )?;
     assert!(reopened.context_version(&input.key).is_err());
+    Ok(())
+}
+
+type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+fn context_value(entity: u8, revision: u64) -> AnalysisContextVersionV1 {
+    AnalysisContextVersionV1 {
+        key: AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "p".into(),
+            entity_key: vec![entity],
+            lifetime_key: vec![1],
+            owner_revision: revision,
+        },
+        valid_from_utc_ns: Some(1),
+        valid_until_utc_ns: None,
+        sensitivity: ContextSensitivityV1::Tenant,
+        body: vec![entity],
+    }
+}
+
+#[test]
+fn context_batch_commits() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("analysis");
+    let store = AnalysisStore::open(&root)?;
+    let mut changes = store.subscribe_revision();
+    let first = context_value(1, 1);
+    let mut second = context_value(2, 1);
+    second.key.tenant_id = [2; 16];
+    let inputs = [second, first];
+    let references = store.commit_contexts(&inputs)?;
+    assert_eq!(references.len(), inputs.len());
+    assert_eq!(store.meta()?.commit_revision, 1);
+    assert!(changes.has_changed()?);
+    assert_eq!(*changes.borrow_and_update(), 1);
+    assert!(!changes.has_changed()?);
+    for (input, reference) in inputs.iter().zip(&references) {
+        assert_eq!(reference.key, input.key);
+        assert_eq!(reference.commit_revision, 1);
+        assert_eq!(store.context_version(&input.key)?, Some(input.clone()));
+    }
+    drop(store);
+    let store = AnalysisStore::open(root)?;
+    assert_eq!(store.commit_contexts(&inputs)?, references);
+    assert_eq!(store.meta()?.commit_revision, 1);
+    Ok(())
+}
+
+#[test]
+fn context_batch_retries() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("analysis"))?;
+    let first = context_value(1, 1);
+    let second = context_value(2, 1);
+    assert_eq!(store.commit_context(&first)?, 1);
+    let mut changes = store.subscribe_revision();
+    let inputs = [second.clone(), first, second];
+    let references = store.commit_contexts(&inputs)?;
+    assert_eq!(
+        references
+            .iter()
+            .map(|reference| reference.commit_revision)
+            .collect::<Vec<_>>(),
+        vec![2, 1, 2]
+    );
+    assert_eq!(references[0], references[2]);
+    assert!(changes.has_changed()?);
+    assert_eq!(*changes.borrow_and_update(), 2);
+    let before = store.meta()?;
+    assert_eq!(store.commit_contexts(&inputs)?, references);
+    assert!(store.commit_contexts(&[])?.is_empty());
+    assert_eq!(store.meta()?, before);
+    assert!(!changes.has_changed()?);
+    Ok(())
+}
+
+#[test]
+fn context_batch_conflicts() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("analysis"))?;
+    let first = context_value(1, 1);
+    store.commit_context(&first)?;
+    let changes = store.subscribe_revision();
+    let before = store.meta()?;
+    let second = context_value(2, 1);
+    let mut conflict = first.clone();
+    conflict.body.push(3);
+    assert!(matches!(
+        store.commit_contexts(&[second.clone(), conflict]),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    let mut duplicate = second.clone();
+    duplicate.body.push(3);
+    assert!(matches!(
+        store.commit_contexts(&[second.clone(), duplicate]),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    assert!(store.context_version(&second.key)?.is_none());
+    assert_eq!(store.context_version(&first.key)?, Some(first));
+    assert_eq!(store.meta()?, before);
+    assert!(!changes.has_changed()?);
+    Ok(())
+}
+
+#[test]
+fn context_batch_checked() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("analysis"))?;
+    let first = context_value(1, 1);
+    assert_eq!(store.commit_context_checked(&first, 0)?, 1);
+    assert_eq!(store.commit_context_checked(&first, u64::MAX)?, 1);
+    let next = context_value(1, 2);
+    let changes = store.subscribe_revision();
+    assert!(matches!(
+        store.commit_context_checked(&next, 0),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    assert!(store.context_version(&next.key)?.is_none());
+    assert_eq!(store.meta()?.commit_revision, 1);
+    assert!(!changes.has_changed()?);
+    assert_eq!(store.commit_context_checked(&next, 1)?, 2);
+    assert_eq!(store.commit_context_checked(&next, 0)?, 2);
+    assert_eq!(store.commit_context_checked(&first, 0)?, 1);
+    Ok(())
+}
+
+#[test]
+fn context_batch_interns() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("analysis"))?;
+    let mut first = context_value(1, 1);
+    first.key.owner_id = "discovery-facts-v1".into();
+    let reference = store.intern_context(&first)?;
+    let mut second = first.clone();
+    second.key.entity_key = vec![2];
+    second.key.owner_revision = 2;
+    let changes = store.subscribe_revision();
+    assert_eq!(store.intern_context(&second)?, reference);
+    assert!(store.context_version(&second.key)?.is_none());
+    assert_eq!(store.meta()?.commit_revision, reference.commit_revision);
+    assert!(!changes.has_changed()?);
+    second.key.owner_id = "unqualified".into();
+    assert!(store.intern_context(&second).is_err());
+    assert_eq!(store.meta()?.commit_revision, reference.commit_revision);
+    Ok(())
+}
+
+#[test]
+fn context_batch_packages() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("analysis"))?;
+    let first = context_value(1, 1);
+    let mut invalid = context_value(2, 1);
+    invalid.key.owner_id = "graph-packages-v1".into();
+    invalid.body = serde_json::to_vec(&serde_json::json!({"installed_packages": [{
+        "package_id": "absent", "revision": "1", "export": "run", "generation": 1,
+        "parameters": null, "root": {"package_id": "absent", "revision": "1"}
+    }]}))?;
+    let changes = store.subscribe_revision();
+    assert!(store.commit_contexts(&[first.clone(), invalid]).is_err());
+    assert!(store.context_version(&first.key)?.is_none());
+    assert_eq!(store.meta()?.commit_revision, 0);
+    assert!(!changes.has_changed()?);
+    Ok(())
+}
+
+#[test]
+fn context_batch_history() -> TestResult {
+    use crate::{
+        DiscoveryContextDocumentV1, DiscoveryContextKindV1, DiscoveryContextRevisionV1,
+        DiscoveryMethodV1,
+    };
+
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("analysis"))?;
+    let mut imported = DiscoveryContextRevisionV1 {
+        imported_utc_ns: 1,
+        document: DiscoveryContextDocumentV1 {
+            schema_version: crate::DISCOVERY_SCHEMA_VERSION,
+            tenant_id: [1; 16],
+            id: "runbook".into(),
+            revision: 1,
+            kind: DiscoveryContextKindV1::Runbook,
+            subject: context_value(1, 1).key,
+            method: DiscoveryMethodV1 {
+                id: "fixture".into(),
+                revision: 1,
+            },
+            origin: "fixture".into(),
+            valid_from_utc_ns: 1,
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            approver: None,
+            text: "first".into(),
+        },
+    };
+    let first = AnalysisContextVersionV1::try_from(&imported)?;
+    imported.document.revision = 3;
+    let skipped = AnalysisContextVersionV1::try_from(&imported)?;
+    let changes = store.subscribe_revision();
+    assert!(store.commit_contexts(&[first.clone(), skipped]).is_err());
+    assert!(store.context_version(&first.key)?.is_none());
+    assert_eq!(store.meta()?.commit_revision, 0);
+    assert!(!changes.has_changed()?);
+    imported.document.revision = 2;
+    imported.imported_utc_ns = 2;
+    let second = AnalysisContextVersionV1::try_from(&imported)?;
+    let references = store.commit_contexts(&[first.clone(), second.clone()])?;
+    assert!(references
+        .iter()
+        .all(|reference| reference.commit_revision == 1));
+    assert_eq!(store.context_version(&first.key)?, Some(first));
+    assert_eq!(store.context_version(&second.key)?, Some(second));
+    assert_eq!(store.meta()?.commit_revision, 1);
+    Ok(())
+}
+
+#[test]
+fn context_batch_tenant_quota() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open_with_limits(
+        directory.path().join("analysis"),
+        Default::default(),
+        crate::StorageLimitsV1 {
+            tenant_max_bytes: Some(346),
+            ..Default::default()
+        },
+    )?;
+    let first = context_value(1, 1);
+    let mut existing = first.clone();
+    existing.key.tenant_id = [2; 16];
+    store.commit_context(&existing)?;
+    let mut second = existing.clone();
+    second.key.owner_revision = 2;
+    let changes = store.subscribe_revision();
+    let before = store.meta()?;
+    assert!(matches!(
+        store.commit_contexts(&[first.clone(), second.clone()]),
+        Err(crate::Error::StorageCapacity { .. })
+    ));
+    assert!(store.context_version(&first.key)?.is_none());
+    assert!(store.context_version(&second.key)?.is_none());
+    assert_eq!(store.context_version(&existing.key)?, Some(existing));
+    assert_eq!(store.meta()?, before);
+    assert!(!changes.has_changed()?);
+    Ok(())
+}
+
+#[test]
+fn context_body_quota() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("analysis");
+    let store = AnalysisStore::open(&root)?;
+    let mut large = context_value(1, 1);
+    large.body = vec![1; 32 * 1024 + 1];
+    assert_eq!(store.commit_context(&large)?, 1);
+    assert_eq!(store.context_version(&large.key)?, Some(large.clone()));
+    drop(store);
+    let store = AnalysisStore::open_with_limits(
+        &root,
+        Default::default(),
+        crate::StorageLimitsV1 {
+            context_max_bytes: Some(0),
+            ..Default::default()
+        },
+    )?;
+    let changes = store.subscribe_revision();
+    assert_eq!(store.commit_context_checked(&large, 0)?, 1);
+    assert!(!changes.has_changed()?);
+    let fresh = context_value(2, 1);
+    assert!(matches!(
+        store.commit_context(&fresh),
+        Err(crate::Error::StorageCapacity {
+            resource: "context version bytes",
+            ..
+        })
+    ));
+    assert_eq!(store.meta()?.commit_revision, 1);
+    assert!(!changes.has_changed()?);
+    drop(store);
+    let store = AnalysisStore::open_with_limits(
+        &root,
+        Default::default(),
+        crate::StorageLimitsV1 {
+            context_max_bytes: Some(3),
+            ..Default::default()
+        },
+    )?;
+    let changes = store.subscribe_revision();
+    let mut exact = fresh.clone();
+    exact.body = vec![2; 3];
+    let mut oversized = context_value(3, 1);
+    oversized.body = vec![3; 4];
+    assert!(matches!(
+        store.commit_contexts(&[exact.clone(), oversized.clone()]),
+        Err(crate::Error::StorageCapacity {
+            resource: "context version bytes",
+            ..
+        })
+    ));
+    assert!(store.context_version(&exact.key)?.is_none());
+    assert!(store.context_version(&oversized.key)?.is_none());
+    assert_eq!(store.meta()?.commit_revision, 1);
+    assert!(!changes.has_changed()?);
+    assert_eq!(store.commit_context(&exact)?, 2);
+    let mut empty = oversized;
+    empty.body.clear();
+    assert!(matches!(
+        store.commit_context(&empty),
+        Err(crate::Error::AnalysisState { .. })
+    ));
+    assert_eq!(store.context_version(&exact.key)?, Some(exact));
+    assert_eq!(store.meta()?.commit_revision, 2);
     Ok(())
 }

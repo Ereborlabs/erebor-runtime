@@ -16,6 +16,7 @@ pub struct StorageLimitsV1 {
     pub logical_max_bytes: Option<u64>,
     pub tenant_max_bytes: Option<u64>,
     pub witness_max_bytes: Option<u64>,
+    pub context_max_bytes: Option<u64>,
     pub storage_entries: Option<usize>,
     pub diagnostic_entries: Option<usize>,
     pub source_entries: Option<usize>,
@@ -251,6 +252,10 @@ impl StorageLimitsV1 {
         Self::bound(self.witness_max_bytes, bytes, "tenant witness bytes")
     }
 
+    pub(super) fn check_context(&self, bytes: u64) -> Result<()> {
+        Self::bound(self.context_max_bytes, bytes, "context version bytes")
+    }
+
     pub(super) fn check_manifest(&self, bytes: u64) -> Result<()> {
         Self::bound(self.manifest_max_bytes, bytes, "backup manifest bytes")
     }
@@ -266,6 +271,7 @@ impl StorageLimitsV1 {
             logical_max_bytes: Some(8 * 1024 * 1024 * 1024),
             tenant_max_bytes: Some(2 * 1024 * 1024 * 1024),
             witness_max_bytes: Some(512 * 1024 * 1024),
+            context_max_bytes: None,
             storage_entries: Some(4096),
             diagnostic_entries: Some(1024),
             source_entries: Some(4096),
@@ -306,6 +312,7 @@ mod tests {
         limits.check_diagnostics(u64::MAX, u64::MAX)?;
         limits.check_revisions(u64::MAX, u64::MAX)?;
         limits.check_witness(u64::MAX)?;
+        limits.check_context(u64::MAX)?;
         limits.check_manifest(u64::MAX)?;
         let available = StorageUsageV1 {
             available_bytes: 5,

@@ -5,6 +5,13 @@ use snafu::ResultExt as _;
 use super::*;
 
 impl AnalysisStore {
+    pub fn commit_contexts(
+        &self,
+        inputs: &[AnalysisContextVersionV1],
+    ) -> Result<Vec<AnalysisContextRefV1>> {
+        self.commit_context_values(inputs, false, None)
+    }
+
     pub fn commit_context(&self, input: &AnalysisContextVersionV1) -> Result<u64> {
         self.commit_context_value(input, false, None)
             .map(|reference| reference.commit_revision)
@@ -35,63 +42,110 @@ impl AnalysisStore {
         intern: bool,
         expected: Option<u64>,
     ) -> Result<AnalysisContextRefV1> {
-        if !input.valid() {
-            return self.reject("the context version identity or bounds are invalid");
+        self.commit_context_values(std::slice::from_ref(input), intern, expected)?
+            .pop()
+            .ok_or_else(|| self.state_error("the committed context reference is absent"))
+    }
+
+    fn commit_context_values(
+        &self,
+        inputs: &[AnalysisContextVersionV1],
+        intern: bool,
+        expected: Option<u64>,
+    ) -> Result<Vec<AnalysisContextRefV1>> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        for input in inputs {
+            if !input.valid() {
+                return self.reject("the context version identity or bounds are invalid");
+            }
         }
         let path = self.root.join("analysis.duckdb");
-        let key = &input.key;
-        let imported = (key.owner_id == "discovery-context-v1")
-            .then(|| crate::DiscoveryContextRevisionV1::try_from(input))
-            .transpose()?;
         let mut writer_guard = self.writer()?;
         let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin context version",
         })?;
-        Self::validate_context_packages(&transaction, &self.root, input)?;
-        let sensitivity: &'static str = input.sensitivity.into();
-        if let Some(reference) = self.context_retry(&transaction, input, intern)? {
-            return Ok(reference);
+        let mut references = Vec::with_capacity(inputs.len());
+        let mut tenants = std::collections::BTreeSet::new();
+        let check_tenants = self.storage.logical_max_bytes.is_some()
+            || self.storage.tenant_max_bytes.is_some()
+            || self.storage.retained_revisions.is_some()
+            || self.storage.tenant_revisions.is_some();
+        let mut revision = None;
+        for input in inputs {
+            let key = &input.key;
+            let imported = (key.owner_id == "discovery-context-v1")
+                .then(|| crate::DiscoveryContextRevisionV1::try_from(input))
+                .transpose()?;
+            Self::validate_context_packages(&transaction, &self.root, input)?;
+            if let Some(reference) = self.context_retry(&transaction, input, intern)? {
+                references.push(reference);
+                continue;
+            }
+            self.storage.check_context(input.body.len() as u64)?;
+            self.context_expected(&transaction, key, expected)?;
+            if let Some(imported) = imported {
+                self.context_import(&transaction, key, &imported)?;
+            }
+            let current = match revision {
+                Some(revision) => revision,
+                None => {
+                    let current = Self::read_meta_from(&transaction, &path)?
+                        .commit_revision
+                        .checked_add(1)
+                        .ok_or_else(|| {
+                            self.state_error("the analysis commit revision is exhausted")
+                        })?;
+                    revision = Some(current);
+                    current
+                }
+            };
+            let sensitivity: &'static str = input.sensitivity.into();
+            transaction
+                .execute(
+                    "INSERT INTO context_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    params![
+                        key.tenant_id.as_slice(),
+                        key.owner_id,
+                        key.entity_key.as_slice(),
+                        key.lifetime_key.as_slice(),
+                        key.owner_revision,
+                        input.valid_from_utc_ns,
+                        input.valid_until_utc_ns,
+                        sensitivity,
+                        input.body.as_slice(),
+                        current,
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "insert context version",
+                })?;
+            if check_tenants {
+                tenants.insert(key.tenant_id);
+            }
+            references.push(AnalysisContextRefV1 {
+                key: key.clone(),
+                commit_revision: current,
+            });
         }
-        self.context_expected(&transaction, key, expected)?;
-        if let Some(imported) = imported {
-            self.context_import(&transaction, key, &imported)?;
+        let Some(revision) = revision else {
+            return Ok(references);
+        };
+        for tenant in tenants {
+            self.check_logical(&transaction, tenant, false)?;
         }
-        let revision = Self::read_meta_from(&transaction, &path)?
-            .commit_revision
-            .checked_add(1)
-            .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
-        transaction
-            .execute(
-                "INSERT INTO context_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    key.tenant_id.as_slice(),
-                    key.owner_id,
-                    key.entity_key.as_slice(),
-                    key.lifetime_key.as_slice(),
-                    key.owner_revision,
-                    input.valid_from_utc_ns,
-                    input.valid_until_utc_ns,
-                    sensitivity,
-                    input.body.as_slice(),
-                    revision,
-                ],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "insert context version",
-            })?;
-        self.check_logical(&transaction, key.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["context_versions"])?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(super::super::AnalysisCommitStage::BeforeContextCommit)?;
         #[cfg(test)]
         self.crash_at("context.before");
         self.commit_metadata(transaction, "commit context version")?;
         #[cfg(test)]
         self.crash_at("context.after");
         self.revision.send_replace(revision);
-        Ok(AnalysisContextRefV1 {
-            key: key.clone(),
-            commit_revision: revision,
-        })
+        Ok(references)
     }
 
     fn context_retry(

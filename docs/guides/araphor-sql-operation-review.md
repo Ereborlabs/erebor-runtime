@@ -37,11 +37,12 @@ Control validates and moves transport values once before native binding.
 
 ## Optional storage quotas
 
-[StorageLimitsV1](../../crates/araphor-data/src/analysis/capacity.rs) owns 14
+[StorageLimitsV1](../../crates/araphor-data/src/analysis/capacity.rs) owns 15
 optional storage settings. Every setting defaults to None. Omitted or null
 configuration disables that quota. An explicit zero remains a configured
 bound. The settings cover file bytes, free-space reserves, logical bytes,
-witness bytes, file and source counts, retained revisions, and manifest bytes.
+witness and context bytes, file and source counts, retained revisions, and
+manifest bytes.
 The existing ordinary and diagnostic partitions apply only to configured byte
 limits. Disabled quotas do not cause quota-only source or usage queries.
 
@@ -111,6 +112,111 @@ passes 142 Data cases and five Analysis graph caller cases. Strict Clippy passes
 all targets in Data and Analysis. The unchanged Rust source hashes, commands,
 and verification limits are in `/tmp/araphor-derived-usage-verification1.json`.
 The source count is a net 356 nonblank production Rust deletions.
+
+## Atomic Control context publication
+
+This section covers the working-tree context publication change after
+`72fda6b4`. Control retains policy authority. Data retains immutable copies of
+committed facts for queries. Publication does not grant policy authority.
+
+[ControlStore::commit](../../crates/mithril-control/src/store.rs) writes the accepted Control state before it publishes changes
+  -> [ContextIndex::apply](../../crates/mithril-control/src/store/context.rs) updates the changed source keys and sends a filtered Control notice
+  -> [ControlPlane::run_context](../../crates/mithril-control/src/service.rs) starts one blocking publication pass
+  -> [ControlStore::context_records](../../crates/mithril-control/src/store/context.rs) captures the Control commit index and all changed facts for allowed tenants under one lock
+  -> [ControlContextOwner::reconcile](../../crates/mithril-control/src/store/context.rs) submits the complete version batch after capture releases the Control lock
+  -> [AnalysisStore::commit_contexts](../../crates/araphor-data/src/analysis/context/write.rs) checks and inserts the versions in one existing DuckDB transaction
+  -> [AnalysisStore::commit_metadata](../../crates/araphor-data/src/analysis/connection.rs) commits the transaction before Data sends one revision notice
+  -> [Subscription](../../crates/araphor-query/src/follow/mod.rs) returns native query batches and the captured context references
+
+```mermaid
+sequenceDiagram
+    participant Control as ControlStore
+    participant Worker as ControlPlane
+    participant Owner as ControlContextOwner
+    participant Data as AnalysisStore
+    participant Query as Query subscription
+    Control-->>Worker: Filtered context notice
+    Worker->>Owner: Reconcile changed facts
+    Owner->>Control: Capture changed facts for allowed tenants
+    Control-->>Owner: Commit index and versions; release lock
+    Owner->>Data: Commit complete context batch
+    Data-->>Query: Revision notice after commit
+    Data-->>Owner: References in input order
+    Owner-->>Worker: Capture accepted
+    Query->>Data: Capture retained context rows
+```
+
+ControlPlane owns the notice receivers and wait lifetime.
+ControlContextOwner owns the allowed tenant set and last captured Control
+index. AnalysisStore owns the durable context versions and Data revision.
+The Control commit index and Data commit revision are separate values.
+Control captures one current state, including changes from earlier Control
+transactions. Control and Data never hold their locks at the same time in
+this path. For a nonempty capture, the owner advances its captured Control
+index only after Data accepts the batch. An empty capture requires no Data
+write. A restart reads the current facts again. Exact retained versions make
+that replay idempotent.
+
+All new rows in a batch share one Data commit revision. Repeated versions
+return their original references. Equal duplicates within a batch return the
+same reference. Conflicting duplicates reject the batch. Empty batches and
+batches that contain only exact retries do not advance the Data revision or
+send a context publication notice. The single-write, checked-write, and
+qualified interning APIs use this same transaction path. Exact retries still
+precede the expected owner revision check.
+
+[AnalysisStore::commit_contexts](../../crates/araphor-data/src/analysis/context/write.rs) returns a validation, conflict, history, package, quota, or test hook error
+  -> [context transaction](../../crates/araphor-data/src/analysis/context/write.rs) rolls back all staged context rows and their revision
+  -> [ControlPlane::run_context](../../crates/mithril-control/src/service.rs) waits for a relevant Control notice or a Data notice after failure
+  -> [AnalysisStore::recover](../../crates/araphor-data/src/analysis/connection.rs) sends a repair notice even when the durable Data revision is unchanged
+
+A transaction commit error retains the existing Data recovery requirement.
+An error while Control creates a fact rejects the capture before Data receives
+any row. The worker marks notices as seen before work. A notice that arrives
+during capture or publication therefore permits another pass. Successful
+publication waits only for the filtered Control watch. Its own Data notice
+does not cause another pass. The former partial-copy cursor, 16-entry passes,
+and one-second failure retry are removed. Shutdown can leave one already
+running blocking pass to complete its atomic transaction.
+
+[StorageLimitsV1::context_max_bytes](../../crates/araphor-data/src/analysis/capacity.rs)
+defaults to None. The quota applies only to a new context version. An exact
+retained retry still succeeds after the quota is lowered. Some(0) rejects a
+new nonempty body. Mandatory identity, validity, sensitivity, package, and
+history checks remain active. With all logical quotas disabled, the batch
+does not allocate a tenant quota set or query logical usage.
+
+[context_head_page](../../crates/araphor-data/src/analysis/context/pages.rs)
+uses its native SQL row limit. The fixed byte counter and page byte cutoff
+are removed. A large first row cannot make a page appear empty. Exact row,
+tenant, package, and corruption checks remain active.
+
+Read the [Data context cases](../../crates/araphor-data/src/analysis/context/tests.rs),
+[batch crash case](../../crates/araphor-data/src/analysis/crash.rs),
+[Control context cases](../../crates/mithril-control/src/store/context.rs), and
+[data_context_projection](../../crates/mithril-e2e/src/discovery/data_store.rs)
+in that order. The crash case checks two rows at the existing context.before
+and context.after points. The E2E case injects a failure before context commit,
+checks rollback, calls Data recovery without a new Control revision, and reads
+both copied facts through a real native Query subscription. A later source
+change preserves the earlier captured references.
+
+Selected qualification passes 23 distinct cases. The final Data run passes
+14 cases, including the two-row crash proof. Eight Control context cases pass
+before the fixture commit hook was added. The current E2E case passes with
+that hook, failure, recovery, and the native query stream. Strict Clippy passes
+all targets in six crates with warnings denied. The source and command record
+is `/tmp/araphor-context-cut-verification1.json`. Full workspace CI, benchmarks,
+and physical Kubernetes checks are not run for this change.
+
+This delivery removes 12 production code lines. The complete redesign still
+adds 875 production code lines against `7b7b407a`. The required reduction needs
+another 6,875 deletions.
+
+This change is a context ingestion prerequisite. The retained rows are raw
+Control facts. Authoritative normalized Discovery context proof remains
+**Not done**. The native Discovery producer cutover, new package pins, and
+atomic profile publication remain **Not done**.
 
 ## Reactive retention
 

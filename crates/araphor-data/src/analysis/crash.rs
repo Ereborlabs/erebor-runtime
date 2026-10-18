@@ -413,6 +413,9 @@ fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error:
         sensitivity: ContextSensitivityV1::Tenant,
         body: b"context".to_vec(),
     };
+    let mut second = context.clone();
+    second.key.entity_key = b"second-workload".to_vec();
+    let contexts = [context.clone(), second];
     let apply = |store: &AnalysisStore, kind: &str| -> Result<()> {
         match kind {
             "evidence" | "segment" => {
@@ -442,7 +445,13 @@ fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error:
                     1
                 );
             }
-            "context" => assert_eq!(store.commit_context(&context)?, 3),
+            "context" => {
+                let references = store.commit_contexts(&contexts)?;
+                assert_eq!(references.len(), 2);
+                assert!(references
+                    .iter()
+                    .all(|reference| reference.commit_revision == 3));
+            }
             "recovery" => assert_eq!(
                 store.record_recovery_floor(&source, 5)?,
                 AnalysisRecoveryStatusV1::Partial {
@@ -534,11 +543,13 @@ fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error:
                         "{point}"
                     );
                 }
-                assert_eq!(
-                    store.context_version(&context.key)?,
-                    (applied && kind == "context").then(|| context.clone()),
-                    "{point}"
-                );
+                for context in &contexts {
+                    assert_eq!(
+                        store.context_version(&context.key)?,
+                        (applied && kind == "context").then(|| context.clone()),
+                        "{point}"
+                    );
+                }
                 let gaps = store.recovery_gaps(&source, 0)?;
                 if applied && kind == "recovery" {
                     assert_eq!(gaps.len(), 1, "{point}");

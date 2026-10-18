@@ -10,7 +10,6 @@ mod reads;
 mod tests;
 mod write;
 
-const MAX_CONTEXT_BYTES: usize = 32 * 1024;
 const MAX_CONTEXT_KEY_BYTES: usize = 256;
 type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, u64);
 
@@ -64,6 +63,5 @@ impl AnalysisContextVersionV1 {
                 (None, Some(_)) => false,
             }
             && !self.body.is_empty()
-            && self.body.len() <= MAX_CONTEXT_BYTES
     }
 }

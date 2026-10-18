@@ -74,6 +74,72 @@ initialization. Its current Rust wrapper exposes no pending-query registration
 point. Removing the default read deadline requires cancellation-safe native
 execution first. These requirements remain **Not done**.
 
+### Atomic reactive context publication
+
+Implementation and selected functional qualification: **Done**. This change
+prepares complete Query captures. It does not replace Discovery execution.
+
+```text
+A Control transaction changes a retained context source
+  -> ContextIndex publishes a notice after the durable Control commit
+  -> ControlContextOwner captures all changed facts under one Control lock
+  -> the owner releases the Control lock before Data admission
+  -> AnalysisStore commits all new context versions in one transaction
+  -> every new row receives the same Data revision
+  -> Query subscriptions receive the committed context notice
+
+Serialization, validation, admission, or commit fails
+  -> no new context version becomes visible
+  -> the owner retains its last complete Control revision
+  -> a relevant Control notice or Data repair notice permits another attempt
+```
+
+The existing context owner no longer has a cross-pass cursor or a 16-entry
+partial-copy cycle. Unrelated Control commits do not wake this owner. A notice
+that arrives during capture or commit remains pending. Successful publication
+does not wake itself through Data. Failure has no timer retry. Data::recover
+can publish a repair notice without a new Control revision.
+
+The existing commit_context, commit_context_checked, and intern_context APIs
+use the same transaction path as commit_contexts. Exact retained retries keep
+their original references and precede new-row admission. A batch conflict,
+invalid imported history, missing package, or configured quota failure rolls
+back every new row. Empty and retry-only calls create no revision or notice.
+
+StorageLimitsV1::context_max_bytes replaces the mandatory 32 KiB body limit.
+It defaults to None and applies only to new rows. The context page reader no
+longer stops at a fixed byte count that can hide its first large row. Native
+row pagination, identity checks, exact reads, and tenant scope remain active.
+Disabled logical quotas cause no tenant collection or usage query.
+
+No store, controller, compiler, SQL operator, or execution path is added.
+Control owns source authority. Data owns durable copies and atomic publication.
+Native DataFusion remains the required Query execution route. Complete
+authoritative catalog, target, signed-policy, and compiled-cell projection,
+live Discovery cutover, remaining quota defaults, and polling removal are
+**Not done**.
+
+Selected checks pass 23 distinct cases: 14 Data, eight Control, and one E2E.
+Data cases cover retries, rollback, import order, package references, quotas,
+large context pages, and two-row crash recovery. Control cases cover complete
+publication, captured revisions, failure, tenant scope, and filtered notices.
+The E2E case uses the production TLS service and a native Query subscription.
+It injects a pre-commit failure, checks that no row is published, calls
+Data::recover without a Control change, and receives the complete Arrow result.
+A later policy change updates the stream and preserves the earlier receipt.
+
+Strict Clippy passes all targets in Data, Discovery Effects, Query, Analysis,
+Control, and E2E. Scoped formatting, local document links, and whitespace checks
+pass. The source and command record is
+`/tmp/araphor-context-cut-verification1.json`. Full workspace CI, benchmarks,
+and physical Kubernetes qualification are not run.
+
+This delivery removes 12 production Rust code lines. Tests, comments, blank
+lines, documents, and moves do not count as the reduction. The complete
+redesign still adds 875 production code lines against `7b7b407a`. The required
+6,000-line reduction needs 6,875 more net code deletions. The count is
+`/tmp/araphor-context-cut-count1.json`. No performance result is claimed.
+
 ### SQL artifacts with provided inputs
 
 Implementation and selected functional qualification: **Done**. SQL packages
@@ -130,9 +196,9 @@ requires captured context and interval state, correct new package pins, and
 atomic profile publication. Preserve the retained algorithms for comparison.
 
 The existing Data read captures all requested source tables in one transaction.
-The context gap is authoritative content and publication completeness. Control
-currently publishes workload facts separately. A complete publication must not
-make one ambiguous candidate visible before its conflicting candidate. Typed
+The remaining context gap is authoritative content. Atomic publication is
+implemented above. A complete publication must not make one ambiguous
+candidate visible before its conflicting candidate. Typed
 catalog, target snapshot, signed policy, and compiled-cell proof must reach the
 same capture through the existing context owner. Keep policy compilation and
 signature authority in Control. Do not add a second policy compiler, store,

@@ -86,6 +86,7 @@ pub enum AnalysisCommitStage {
     AfterTraceFreeze,
     BeforeResultCommit,
     BeforeRetentionCommit,
+    BeforeContextCommit,
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]

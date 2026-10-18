@@ -2401,6 +2401,9 @@ mod tests {
     #[tokio::test]
     async fn data_context_projection() -> Result<()> {
         use araphor_data::AnalysisContextKeyV1;
+        use araphor_query::execution::{Engine, Limits};
+        use araphor_query::follow::SystemClock;
+        use futures_util::StreamExt as _;
         let tls = MtlsFixture::new(false)?;
         let store = ControlStore::open(tls.path().join("control-store"))?;
         let fixture = OutagePolicyFixture::new(store.clone());
@@ -2428,7 +2431,36 @@ mod tests {
             owner_revision: source.object_generation,
         };
         assert_eq!(data.context_version(&source_key)?, None);
+        let engine = Engine::new(data.clone(), Limits::default())?;
+        let mut subscription = engine
+            .subscribe(
+                "SELECT owner_id, entity_key, lifetime_key, owner_revision, body \
+                    FROM context_versions ORDER BY owner_id, entity_key, lifetime_key, owner_revision",
+                Vec::new(),
+                araphor_data::AnalysisSelectionV1::tenant(source_key.tenant_id),
+                Arc::new(araphor_data::AnalysisReadControl::with_timeout(Duration::from_secs(60))?),
+                b"context-publication", None, Arc::new(SystemClock::default()), true,
+            )
+            .await?;
+        let initial = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+            .await?
+            .ok_or("initial context capture absent")??;
+        assert_eq!(initial.snapshot.contexts().count(), 0);
+        let (fail, failed) = tokio::sync::oneshot::channel();
+        data.set_commit_hook(
+            araphor_data::AnalysisCommitStage::BeforeContextCommit,
+            move || {
+                let _sent = fail.send(());
+                Err(araphor_data::PackageErrorCodeV1::Incomplete.error("injected context commit"))
+            },
+        )?;
         let server = tls.start(control.clone()).await?;
+        tokio::time::timeout(Duration::from_secs(5), failed).await??;
+        assert_eq!(data.meta()?, initial.snapshot.page.extraction.meta);
+        assert!(data.context_version(&source_key)?.is_none());
+        assert_eq!(store.commit_index(), authority);
+        data.recover()?;
+        assert_eq!(store.commit_index(), authority);
         let projected = ControlServerFixture::wait_context(&data, &source_key).await?;
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&projected.body)?,
@@ -2448,6 +2480,30 @@ mod tests {
         };
         let pending = ControlServerFixture::wait_context(&data, &rollout_key).await?;
         assert_eq!(pending.body, serde_json::to_vec(rollout)?);
+        let captured = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+            .await?
+            .ok_or("published context capture absent")??;
+        let source_ref = captured
+            .snapshot
+            .contexts()
+            .find(|reference| reference.key == source_key)
+            .ok_or("source receipt absent")?;
+        let rollout_ref = captured
+            .snapshot
+            .contexts()
+            .find(|reference| reference.key == rollout_key)
+            .ok_or("rollout receipt absent")?;
+        assert_eq!(source_ref.commit_revision, rollout_ref.commit_revision);
+        assert_eq!(
+            captured
+                .batches
+                .as_ref()
+                .ok_or("context batches absent")?
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum::<usize>(),
+            captured.snapshot.contexts().count()
+        );
         assert_eq!(store.commit_index(), authority);
         let mut foreign = source_key.clone();
         foreign.tenant_id = [9; 16];
@@ -2467,6 +2523,19 @@ mod tests {
             ..source_key.clone()
         };
         let second_copy = ControlServerFixture::wait_context(&data, &second_key).await?;
+        let updated = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+            .await?
+            .ok_or("changed context capture absent")??;
+        let changed = updated
+            .snapshot
+            .contexts()
+            .find(|reference| reference.key == second_key)
+            .ok_or("changed source receipt absent")?;
+        assert!(changed.commit_revision > source_ref.commit_revision);
+        assert!(captured
+            .snapshot
+            .contexts()
+            .all(|reference| reference.key != second_key));
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&second_copy.body)?,
             serde_json::json!({"source": source,
@@ -2474,6 +2543,7 @@ mod tests {
         );
         assert_eq!(data.context_version(&source_key)?, Some(projected));
         assert_eq!(data.context_version(&rollout_key)?, Some(pending));
+        subscription.cancel()?;
         server.shutdown().await?;
         let allowed: Vec<_> = control.allowed_nodes().values().cloned().collect();
         let mut projector =

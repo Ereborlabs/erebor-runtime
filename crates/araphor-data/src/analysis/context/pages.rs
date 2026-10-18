@@ -57,29 +57,12 @@ impl AnalysisStore {
                     operation: "read context head page",
                 })?;
             let mut versions = Vec::new();
-            let mut bytes = 0usize;
             for row in rows {
                 let (key, stored) = row.context(AnalysisDatabaseSnafu {
                     operation: "decode context head page",
                 })?;
                 let (version, _) = Self::decode_context_row(&self.root, key, stored)?;
                 Self::validate_context_packages(reader, &self.root, &version)?;
-                let next_bytes = bytes
-                    .checked_add(std::mem::size_of::<AnalysisContextVersionV1>())
-                    .and_then(|bytes| bytes.checked_add(version.key.owner_id.len()))
-                    .and_then(|bytes| bytes.checked_add(version.key.entity_key.len()))
-                    .and_then(|bytes| bytes.checked_add(version.key.lifetime_key.len()))
-                    .and_then(|bytes| bytes.checked_add(version.body.len()))
-                    .ok_or_else(|| {
-                        crate::AnalysisInputTooLargeSnafu {
-                            resource: "context head page",
-                        }
-                        .build()
-                    })?;
-                if next_bytes > crate::analysis::MAX_ANALYSIS_PAGE_BYTES {
-                    break;
-                }
-                bytes = next_bytes;
                 versions.push(version);
             }
             Ok(versions)

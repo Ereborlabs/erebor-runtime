@@ -367,8 +367,18 @@ impl ControlPlane {
                 return std::future::pending().await;
             }
         };
+        let mut changes = match store.subscribe_context() {
+            Ok(changes) => changes,
+            Err(error) => {
+                erebor_telemetry::warn!("Control context is unavailable", error = %error);
+                return std::future::pending().await;
+            }
+        };
+        let mut repairs = data.subscribe_revision();
         let mut failed = false;
         loop {
+            changes.borrow_and_update();
+            repairs.borrow_and_update();
             match tokio::task::spawn_blocking(move || {
                 let result = owner.reconcile();
                 (owner, result)
@@ -394,6 +404,7 @@ impl ControlPlane {
                 }
                 Err(error) => {
                     erebor_telemetry::warn!("Control context worker failed", error = %error);
+                    failed = true;
                     owner = match crate::ControlContextOwner::new(
                         store.clone(),
                         data.clone(),
@@ -404,12 +415,17 @@ impl ControlPlane {
                     };
                 }
             }
-            if failed {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            } else if owner.idle() {
-                owner.changed().await;
-            } else {
-                tokio::task::yield_now().await;
+            tokio::select! {
+                changed = changes.changed() => {
+                    if changed.is_err() {
+                        return std::future::pending().await;
+                    }
+                }
+                repaired = repairs.changed(), if failed => {
+                    if repaired.is_err() {
+                        return std::future::pending().await;
+                    }
+                }
             }
         }
     }

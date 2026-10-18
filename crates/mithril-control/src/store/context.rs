@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::sync::Arc;
 
 use araphor_data::{
@@ -82,7 +81,7 @@ pub(super) type ContextChanges = Vec<(ContextSource, bool)>;
 
 pub(super) struct ContextIndex {
     sources: BTreeMap<ContextSource, u64>,
-    revision: u64,
+    changes: tokio::sync::watch::Sender<u64>,
 }
 
 impl ContextIndex {
@@ -113,12 +112,15 @@ impl ContextIndex {
         for id in state.authority.handles.keys() {
             sources.insert(ContextSource::Audit(*id), revision);
         }
-        Self { sources, revision }
+        Self {
+            sources,
+            changes: tokio::sync::watch::channel(revision).0,
+        }
     }
 
     pub(super) fn apply(&mut self, changes: ContextChanges, revision: u64) {
-        if !changes.is_empty() {
-            self.revision = revision;
+        if changes.is_empty() {
+            return;
         }
         for (source, present) in changes {
             if present {
@@ -127,6 +129,7 @@ impl ContextIndex {
                 self.sources.remove(&source);
             }
         }
+        self.changes.send_replace(revision);
     }
 }
 
@@ -335,21 +338,12 @@ impl ContextSource {
     }
 }
 
-struct ContextCursor {
-    source: ContextSource,
-    position: Option<(usize, usize)>,
-}
-
 /// Copies committed Control facts. Copies never grant policy authority.
 pub struct ControlContextOwner {
     store: ControlStore,
     data: Arc<AnalysisStore>,
     tenants: Vec<[u8; 16]>,
-    cursor: Option<ContextCursor>,
-    changes: tokio::sync::watch::Receiver<u64>,
-    since: Option<u64>,
-    revision: u64,
-    complete: bool,
+    revision: Option<u64>,
 }
 
 impl ControlContextOwner {
@@ -371,80 +365,27 @@ impl ControlContextOwner {
                 })?;
             tenants.insert(tenant.into_bytes());
         }
-        let mut changes = store.subscribe_revision()?;
-        let revision = *changes.borrow_and_update();
         Ok(Self {
             store,
             data,
             tenants: tenants.into_iter().collect(),
-            cursor: None,
-            changes,
-            since: None,
-            revision,
-            complete: false,
+            revision: None,
         })
     }
 
-    /// Reads at most 16 Control entries. Storage failures keep the retry cursor.
+    /// Commits all changed facts from one Control revision in one Data transaction.
     pub fn reconcile(&mut self) -> Result<usize> {
-        if self.tenants.is_empty() {
-            self.revision = *self.changes.borrow_and_update();
-            self.complete = true;
-            return Ok(0);
+        let (revision, records) = self.store.context_records(&self.tenants, self.revision)?;
+        if !records.is_empty() {
+            self.data
+                .commit_contexts(&records)
+                .map_err(|source| crate::Error::DataStore {
+                    source: Box::new(source),
+                    location: snafu::Location::default(),
+                })?;
         }
-        if self.complete {
-            let revision = *self.changes.borrow_and_update();
-            if revision == self.revision {
-                return Ok(0);
-            }
-            if self.store.evidence_lock()?.context_index.revision <= self.revision {
-                self.revision = revision;
-                return Ok(0);
-            }
-            self.since = Some(self.revision);
-            self.revision = revision;
-            self.complete = false;
-        }
-        let mut copied = 0;
-        for _ in 0..16 {
-            let Some((next, record)) = self.store.next_context(
-                &self.tenants,
-                self.cursor.as_ref(),
-                self.since,
-                self.revision,
-            )?
-            else {
-                self.cursor = None;
-                self.complete = true;
-                break;
-            };
-            if let Some(record) = record {
-                let record = match record {
-                    Ok(record) => record,
-                    Err(error) => {
-                        self.cursor = Some(next);
-                        return Err(error);
-                    }
-                };
-                self.data
-                    .commit_context(&record)
-                    .map_err(|source| crate::Error::DataStore {
-                        source: Box::new(source),
-                        location: snafu::Location::default(),
-                    })?;
-                copied += 1;
-            }
-            self.cursor = Some(next);
-        }
-        Ok(copied)
-    }
-
-    pub(crate) fn idle(&self) -> bool {
-        self.complete && *self.changes.borrow() == self.revision
-    }
-
-    pub(crate) async fn changed(&mut self) {
-        let _changed = self.changes.changed().await;
+        self.revision = Some(revision);
+        Ok(records.len())
     }
 }
 
@@ -453,42 +394,38 @@ impl ControlStore {
         Ok(self.lock()?.changes.subscribe())
     }
 
-    fn next_context(
+    pub(crate) fn subscribe_context(&self) -> Result<tokio::sync::watch::Receiver<u64>> {
+        Ok(self.lock()?.context_index.changes.subscribe())
+    }
+
+    fn context_records(
         &self,
         tenants: &[[u8; 16]],
-        after: Option<&ContextCursor>,
         since: Option<u64>,
-        through: u64,
-    ) -> Result<Option<(ContextCursor, Option<Result<AnalysisContextVersionV1>>)>> {
+    ) -> Result<(u64, Vec<AnalysisContextVersionV1>)> {
         let inner = self.evidence_lock()?;
-        if since.is_some_and(|since| inner.context_index.revision <= since) {
-            return Ok(None);
+        let revision = inner.state.commit_index;
+        let mut records = Vec::new();
+        if tenants.is_empty()
+            || since.is_some_and(|since| *inner.context_index.changes.borrow() <= since)
+        {
+            return Ok((revision, records));
         }
-        let bounds = (
-            after.map_or(Unbounded, |cursor| {
-                if cursor.position.is_some() {
-                    Included(&cursor.source)
-                } else {
-                    Excluded(&cursor.source)
+        for (source, changed) in &inner.context_index.sources {
+            if since.is_some_and(|since| *changed <= since) {
+                continue;
+            }
+            let mut position = None;
+            loop {
+                if let Some(record) = source.record(&inner, tenants, &mut position) {
+                    records.push(record?);
                 }
-            }),
-            Unbounded,
-        );
-        let Some((source, revision)) = inner.context_index.sources.range(bounds).next() else {
-            return Ok(None);
-        };
-        let mut next = ContextCursor {
-            source: source.clone(),
-            position: after
-                .filter(|cursor| cursor.source == *source)
-                .and_then(|cursor| cursor.position),
-        };
-        if since.is_some_and(|since| since >= *revision) || *revision > through {
-            next.position = None;
-            return Ok(Some((next, None)));
+                if position.is_none() {
+                    break;
+                }
+            }
         }
-        let record = source.record(&inner, tenants, &mut next.position);
-        Ok(Some((next, record)))
+        Ok((revision, records))
     }
 
     fn encode_context(
@@ -496,14 +433,12 @@ impl ControlStore {
         key: AnalysisContextKeyV1,
         fact: &impl Serialize,
     ) -> Result<AnalysisContextVersionV1> {
-        let mut output = ContextLimit(32 * 1024, Vec::new());
-        serde_json::to_writer(&mut output, fact).context(JsonSnafu { path })?;
         Ok(AnalysisContextVersionV1 {
             key,
             valid_from_utc_ns: None,
             valid_until_utc_ns: None,
             sensitivity: ContextSensitivityV1::Tenant,
-            body: output.1,
+            body: serde_json::to_vec(fact).context(JsonSnafu { path })?,
         })
     }
 }
@@ -607,13 +542,9 @@ mod tests {
             })
         };
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
-        assert!(owner.reconcile()? <= 16);
-        assert!(data
-            .context_version(&key(facts.last().ok_or("missing fact")?)?)?
-            .is_none());
-        for _ in 0..4 {
-            assert!(owner.reconcile()? <= 16);
-        }
+        assert_eq!(owner.reconcile()?, facts.len() + 2);
+        assert_eq!(data.meta()?.commit_revision, 1);
+        assert_eq!(owner.revision, Some(authority));
         for fact in &facts {
             let context = data
                 .context_version(&key(fact)?)?
@@ -637,9 +568,8 @@ mod tests {
         let store = ControlStore::open(store_path)?;
         let data = Arc::new(AnalysisStore::open(data_path)?);
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
-        for _ in 0..4 {
-            assert!(owner.reconcile()? <= 16);
-        }
+        assert_eq!(owner.reconcile()?, facts.len() + 2);
+        assert_eq!(owner.reconcile()?, 0);
         assert_eq!(data.meta()?, before);
         assert_eq!(store.commit_index(), authority);
         for fact in &facts {
@@ -667,6 +597,54 @@ mod tests {
         assert!(changes.has_changed()?);
         assert_eq!(*changes.borrow_and_update(), store.commit_index());
         assert_eq!(data.meta()?.commit_revision, 0);
+        assert!(!changes.has_changed()?);
+        Ok(())
+    }
+
+    #[test]
+    fn control_context_relevant_notices() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path().join("control"))?;
+        let data = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let allowed = [AllowedNodeIdentity {
+            node_id: "node-a".into(),
+            certificate_sha256: "a".repeat(64),
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+        }];
+        store.install_trust_generation(TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "a".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        })?;
+        let mut changes = store.subscribe_context()?;
+        let mut global = store.subscribe_revision()?;
+        let context_revision = *changes.borrow_and_update();
+        assert!(!changes.has_changed()?);
+        let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
+        assert_eq!(owner.reconcile()?, 1);
+        let before = data.meta()?;
+        store.update_authority(|state| Ok(state.proofs.insert([7; 16])))?;
+        assert!(global.has_changed()?);
+        assert_eq!(*global.borrow_and_update(), store.commit_index());
+        assert!(!changes.has_changed()?);
+        assert_eq!(*changes.borrow(), context_revision);
+        assert_eq!(owner.reconcile()?, 0);
+        assert_eq!(owner.revision, Some(store.commit_index()));
+        assert_eq!(data.meta()?, before);
+        store.install_trust_generation(TrustGenerationV1 {
+            generation: 2,
+            bundle_digest: "b".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        })?;
+        assert!(global.has_changed()?);
+        assert!(changes.has_changed()?);
+        assert_eq!(*changes.borrow_and_update(), store.commit_index());
+        assert_eq!(data.meta()?, before);
+        assert_eq!(owner.reconcile()?, 1);
+        assert_eq!(owner.revision, Some(store.commit_index()));
+        assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
         assert!(!changes.has_changed()?);
         Ok(())
     }
@@ -701,14 +679,70 @@ mod tests {
                 matches!(owner.reconcile(), Err(crate::Error::DataStore { source, .. })
                 if matches!(*source, araphor_data::Error::StorageCapacity { .. }))
             );
-            assert!(owner.cursor.is_none());
+            assert_eq!(owner.revision, None);
             assert_eq!(data.meta()?.commit_revision, 0);
         }
         Ok(())
     }
 
     #[test]
-    fn control_context_bounded_replay() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn control_context_captured_revision() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path().join("control"))?;
+        let data = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let allowed = [AllowedNodeIdentity {
+            node_id: "node-a".into(),
+            certificate_sha256: "a".repeat(64),
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+        }];
+        for generation in 1..=2 {
+            store.install_trust_generation(TrustGenerationV1 {
+                generation,
+                bundle_digest: format!("{generation:064x}"),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            })?;
+        }
+        let mut changes = store.subscribe_context()?;
+        changes.borrow_and_update();
+        let (revision, records) = store.context_records(&[[1; 16]], None)?;
+        assert_eq!(records.len(), 2);
+        assert_eq!(revision, store.commit_index());
+        store.install_trust_generation(TrustGenerationV1 {
+            generation: 3,
+            bundle_digest: format!("{:064x}", 3),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        })?;
+        let references = data.commit_contexts(&records)?;
+        assert_eq!(references.len(), 2);
+        assert!(references
+            .iter()
+            .all(|reference| reference.commit_revision == 1));
+        for record in &records {
+            assert_eq!(data.context_version(&record.key)?, Some(record.clone()));
+        }
+        let later = AnalysisContextKeyV1 {
+            owner_revision: 3,
+            lifetime_key: format!("{:064x}", 3).into_bytes(),
+            ..records[0].key.clone()
+        };
+        assert!(data.context_version(&later)?.is_none());
+        assert!(changes.has_changed()?);
+        let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
+        owner.revision = Some(revision);
+        assert_eq!(owner.reconcile()?, 1);
+        assert_eq!(owner.revision, Some(store.commit_index()));
+        assert_eq!(data.meta()?.commit_revision, 2);
+        assert!(data.context_version(&later)?.is_some());
+        for record in &records {
+            assert_eq!(data.context_version(&record.key)?, Some(record.clone()));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn control_context_atomic_replay() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = ControlStore::open(directory.path().join("control"))?;
         let data_path = directory.path().join("data");
@@ -731,16 +765,11 @@ mod tests {
         }
         let authority = store.commit_index();
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
-        assert_eq!(owner.reconcile()?, 16);
-        assert_eq!(data.meta()?.commit_revision, 16);
-        assert_eq!(owner.reconcile()?, 4);
+        assert_eq!(owner.reconcile()?, 20);
+        assert_eq!(data.meta()?.commit_revision, 1);
         let before = data.meta()?;
-        for _ in 0..4 {
-            owner.reconcile()?;
-        }
-        assert!(owner.idle());
+        assert_eq!(owner.revision, Some(authority));
         assert_eq!(owner.reconcile()?, 0);
-        assert!(!owner.changes.has_changed()?);
         assert_eq!(data.meta()?, before);
         assert_eq!(store.commit_index(), authority);
         let key = AnalysisContextKeyV1 {
@@ -766,10 +795,11 @@ mod tests {
         let reopened = Arc::new(AnalysisStore::open(data_path)?);
         assert_eq!(reopened.context_version(&key)?, Some(context));
         let mut owner = ControlContextOwner::new(store, reopened.clone(), &allowed)?;
-        owner.reconcile()?;
-        owner.reconcile()?;
+        assert_eq!(owner.reconcile()?, 20);
+        assert_eq!(owner.reconcile()?, 0);
         assert_eq!(reopened.meta()?, before);
-        let mut oversized = TrustGenerationV1 {
+        let mut changes = owner.store.subscribe_context()?;
+        let oversized = TrustGenerationV1 {
             generation: 21,
             bundle_digest: "e".repeat(64),
             policy_issuer_sequence_epoch: 1,
@@ -795,31 +825,36 @@ mod tests {
             .context_index
             .sources
             .contains_key(&ContextSource::Trust(21)));
-        assert!(!owner.changes.has_changed()?);
+        assert!(!changes.has_changed()?);
         assert_eq!(owner.reconcile()?, 0);
-        assert!(owner.idle());
+        assert_eq!(owner.revision, Some(authority));
         assert_eq!(reopened.meta()?, before);
         std::fs::remove_dir(&pending)?;
         owner.store.install_trust_generation(oversized.clone())?;
-        oversized.generation = 22;
-        oversized.policy_signers.clear();
-        owner.store.install_trust_generation(oversized)?;
-        assert!(!owner.idle());
-        assert!(owner.changes.has_changed()?);
-        assert_eq!(owner.reconcile()?, 0);
-        assert!(matches!(
-            owner.cursor.as_ref(),
-            Some(ContextCursor {
-                source: ContextSource::Trust(16),
-                position: None,
-            })
-        ));
+        let mut latest = oversized.clone();
+        latest.generation = 22;
+        latest.policy_signers.clear();
+        owner.store.install_trust_generation(latest)?;
+        assert_ne!(owner.revision, Some(owner.store.commit_index()));
+        assert!(changes.has_changed()?);
         assert_eq!(reopened.meta()?, before);
-        assert!(owner.reconcile().is_err());
-        assert_eq!(reopened.meta()?, before);
-        assert_eq!(owner.reconcile()?, 1);
+        changes.borrow_and_update();
+        assert_eq!(owner.reconcile()?, 2);
         assert_eq!(reopened.meta()?.commit_revision, before.commit_revision + 1);
-        assert!(owner.idle());
+        assert_eq!(owner.revision, Some(owner.store.commit_index()));
+        assert!(!changes.has_changed()?);
+        let large = reopened
+            .context_version(&AnalysisContextKeyV1 {
+                lifetime_key: oversized.bundle_digest.as_bytes().to_vec(),
+                owner_revision: oversized.generation,
+                ..key.clone()
+            })?
+            .ok_or("missing large trust")?;
+        assert!(large.body.len() > 32 * 1024);
+        assert_eq!(
+            serde_json::from_slice::<TrustGenerationV1>(&large.body)?,
+            oversized
+        );
         let trust = owner
             .store
             .current_trust_generation()?
@@ -845,7 +880,7 @@ mod tests {
                 bundle_digest: trust.bundle_digest,
             })?;
         assert_eq!(owner.reconcile()?, 0);
-        assert!(owner.idle());
+        assert_eq!(owner.revision, Some(owner.store.commit_index()));
         assert_eq!(reopened.meta()?.commit_revision, before.commit_revision + 1);
         Ok(())
     }
@@ -881,7 +916,7 @@ mod tests {
         })?;
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
         assert_eq!(owner.reconcile()?, 1);
-        assert!(owner.idle());
+        assert_eq!(owner.revision, Some(store.commit_index()));
         let before = data.meta()?;
         let prior = data
             .context_version(&AnalysisContextKeyV1 {
@@ -894,8 +929,9 @@ mod tests {
             .ok_or("missing retained approval")?;
         store.update_authority(|state| Ok(state.proofs.insert([7; 16])))?;
         assert_eq!(owner.reconcile()?, 0);
-        assert!(owner.idle());
+        assert_eq!(owner.revision, Some(store.commit_index()));
         assert_eq!(data.meta()?, before);
+        let published = owner.revision;
         store.update_authority(|state| {
             let approval = state.approvals.get_mut(&[2; 16]).ok_or_else(|| {
                 crate::AuthorityErrorCodeV1::Invalid.error("missing test approval")
@@ -903,13 +939,28 @@ mod tests {
             approval.state = crate::AuthorityIntentStateV1::Cancelled;
             Ok(true)
         })?;
+        store.install_trust_generation(TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "a".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        })?;
+        let trust = AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "mithril-control/trust".into(),
+            entity_key: b"trust".to_vec(),
+            lifetime_key: vec![b'a'; 64],
+            owner_revision: 1,
+        };
         for _ in 0..2 {
             assert!(
                 matches!(owner.reconcile(), Err(crate::Error::DataStore { source, .. })
                 if matches!(*source, araphor_data::Error::AnalysisConflict { .. }))
             );
-            assert!(owner.cursor.is_none());
+            assert_eq!(owner.revision, published);
             assert_eq!(data.meta()?, before);
+            assert!(data.context_version(&trust)?.is_none());
+            assert_eq!(data.context_version(&prior.key)?, Some(prior.clone()));
         }
         store.update_authority(|state| {
             let mut approval = state.approvals.remove(&[2; 16]).ok_or_else(|| {
@@ -932,9 +983,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![[8; 16]]
         );
-        assert_eq!(owner.reconcile()?, 0);
-        assert_eq!(owner.reconcile()?, 1);
-        assert!(owner.idle());
+        assert_eq!(owner.reconcile()?, 2);
+        assert_eq!(owner.revision, Some(store.commit_index()));
+        assert!(data.context_version(&trust)?.is_some());
         let mut current = prior.key.clone();
         current.entity_key = vec![8; 16];
         assert!(data.context_version(&current)?.is_some());
@@ -953,7 +1004,7 @@ mod tests {
         assert_eq!(owner.reconcile()?, 0);
         store.update_authority(|state| Ok(state.proofs.insert([7; 16])))?;
         assert_eq!(owner.reconcile()?, 0);
-        assert!(owner.idle());
+        assert_eq!(owner.revision, Some(store.commit_index()));
         let allowed: Vec<_> = [1, 2]
             .into_iter()
             .map(|tenant| AllowedNodeIdentity {
@@ -965,19 +1016,19 @@ mod tests {
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
         assert_eq!(owner.reconcile()?, 0);
         assert_eq!(owner.reconcile()?, 0);
-        assert!(owner.idle());
+        assert_eq!(owner.revision, Some(store.commit_index()));
         store.update_authority(|state| Ok(state.proofs.insert([8; 16])))?;
         assert_eq!(owner.reconcile()?, 0);
-        assert!(owner.idle());
+        assert_eq!(owner.revision, Some(store.commit_index()));
         store.install_trust_generation(TrustGenerationV1 {
             generation: 1,
             bundle_digest: "a".repeat(64),
             policy_issuer_sequence_epoch: 0,
             policy_signers: Vec::new(),
         })?;
-        assert!(!owner.idle());
+        assert_ne!(owner.revision, Some(store.commit_index()));
         assert_eq!(owner.reconcile()?, 2);
-        assert!(owner.idle());
+        assert_eq!(owner.revision, Some(store.commit_index()));
         assert_eq!(owner.reconcile()?, 0);
         for tenant in [1, 2] {
             assert!(data
