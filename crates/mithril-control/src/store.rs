@@ -2822,9 +2822,12 @@ fn apply_transaction(
                 context::ContextSource::Policy,
             );
             if let Some(artifact) = artifact {
-                let existing = state.compiled_artifacts.insert(
+                let existing = context::ContextSource::insert(
+                    &mut changes,
+                    &mut state.compiled_artifacts,
                     source_revision.policy_source_revision_id.clone(),
                     artifact.as_ref().clone(),
+                    context::ContextSource::Compiled,
                 );
                 if existing.is_some_and(|existing| {
                     existing != *artifact.as_ref()
@@ -2871,9 +2874,13 @@ fn apply_transaction(
                     .build()
                 })?;
             validate_legacy_compiled_artifact(state, document, artifact, path)?;
-            state
-                .compiled_artifacts
-                .insert(policy_source_revision_id.clone(), artifact.as_ref().clone());
+            context::ContextSource::insert(
+                &mut changes,
+                &mut state.compiled_artifacts,
+                policy_source_revision_id.clone(),
+                artifact.as_ref().clone(),
+                context::ContextSource::Compiled,
+            );
         }
         ControlTransactionV1::RolloutCreated { rollout } => {
             let PolicyRolloutTransactionV1 {
@@ -2899,13 +2906,16 @@ fn apply_transaction(
         ControlTransactionV1::TargetSetReconciled { reconciliation } => {
             validate_target_set_reconciliation(state, reconciliation, path)?;
             if let Some(artifact) = &reconciliation.refreshed_active_artifact {
-                state.compiled_artifacts.insert(
+                context::ContextSource::insert(
+                    &mut changes,
+                    &mut state.compiled_artifacts,
                     reconciliation
                         .desired
                         .target_snapshot
                         .policy_source_revision_id
                         .clone(),
                     artifact.clone(),
+                    context::ContextSource::Compiled,
                 );
             }
             apply_rollout_transaction(state, &reconciliation.desired, &mut changes);
@@ -4439,6 +4449,84 @@ mod tests {
         Ok(())
     }
 
+    fn native_context_rows(
+        store: &super::ControlStore,
+        record: &araphor_data::DiscoveryRecordV1,
+    ) -> std::result::Result<Vec<araphor_data::DiscoveryContextBindingV1>, Box<dyn std::error::Error>>
+    {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisStore};
+        use araphor_query::execution::{Engine, Limits};
+        use araphor_query::follow::SystemClock;
+        use futures_util::TryStreamExt as _;
+
+        {
+            let mut inner = store.evidence_lock()?;
+            let index = super::context::ContextIndex::new(&inner.state);
+            inner.context_index = index;
+        }
+        let directory = TempDir::new()?;
+        let data = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let allowed = [crate::AllowedNodeIdentity {
+            node_id: record.id.stream.node_id.clone(),
+            certificate_sha256: "a".repeat(64),
+            tenant_id: uuid::Uuid::from_bytes(record.id.stream.tenant_id).to_string(),
+        }];
+        super::ControlContextOwner::new(store.clone(), data.clone(), &allowed)?.reconcile()?;
+        data.accept_validated_batch(
+            record.id.stream.clone(),
+            araphor_data::ValidatedEvidenceBatchV1 {
+                cpu_id: record.id.cpu_id,
+                first_cursor: record.id.durable_cursor,
+                last_cursor: record.id.durable_cursor,
+                intake_utc_ns: 1,
+                framed_records: record.wire_record.clone().into(),
+                frame_ends: vec![record.wire_record.len()],
+            },
+        )?;
+        let mut engine = Engine::new(
+            data,
+            Limits {
+                extract_timeout: Duration::from_secs(10),
+                ..Default::default()
+            },
+        )?;
+        Arc::get_mut(&mut engine)
+            .ok_or("native context engine is already shared")?
+            .register_relation_planner(Arc::new(araphor_discovery_effects::ObservedEffects))?;
+        let runtime = Arc::clone(&engine);
+        let tenant = record.id.stream.tenant_id;
+        let update = runtime.wait(async move {
+            let mut subscription = engine
+                .subscribe(
+                    "SELECT * FROM discovery.context_bindings(\
+                        (SELECT * FROM events), (SELECT * FROM targets),\
+                        (SELECT * FROM compiled_policies))",
+                    Vec::new(),
+                    AnalysisSelectionV1::tenant(tenant),
+                    Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(60))?),
+                    b"native context parity",
+                    None,
+                    Arc::new(SystemClock::default()),
+                    false,
+                )
+                .await?;
+            let update = subscription.try_next().await?;
+            assert!(subscription.try_next().await?.is_none());
+            Ok(update)
+        })?;
+        let update = update.ok_or("native context capture is absent")?;
+        let mut rows = Vec::new();
+        for batch in update.batches.as_deref().unwrap_or_default() {
+            rows.extend(serde_arrow::from_record_batch::<
+                Vec<araphor_data::DiscoveryContextBindingV1>,
+            >(batch)?);
+        }
+        Ok(rows)
+    }
+
     #[test]
     fn discovery_context_retained_facts() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use araphor_data::{
@@ -4605,9 +4693,20 @@ mod tests {
             pin.binding.policy_revision.profile_version,
             artifact.header.profile_version
         );
+        assert_eq!(
+            native_context_rows(&store, &record)?,
+            vec![pin.binding.clone()]
+        );
         drop(store);
         let store = super::ControlStore::open(directory.path())?;
         assert_eq!(store.discovery_context(&record)?, resolved);
+        let Join::Available(pin) = &resolved else {
+            return Err("retained context was not resolved".into());
+        };
+        assert_eq!(
+            native_context_rows(&store, &record)?,
+            vec![pin.binding.clone()]
+        );
         for scenario in [
             "tenant",
             "node",
@@ -4622,6 +4721,9 @@ mod tests {
             "kernel_sequence",
             "context_version",
             "execution_set",
+            "membership",
+            "catalog_json",
+            "catalog_digest",
         ] {
             let mut changed = record.clone();
             let mut changed_wire = wire.clone();
@@ -4681,20 +4783,32 @@ mod tests {
                     context.schema_version += 1;
                     Missing::PolicyContextMismatch
                 }
-                _ => {
+                "membership" => {
+                    changed_catalog.static_key.execution_set_id =
+                        "99999999-9999-4999-8999-999999999999".into();
+                    Missing::PolicyContextMismatch
+                }
+                "catalog_json" | "catalog_digest" => Missing::PolicyContextMismatch,
+                "kernel_sequence" => {
                     changed.original_kernel_sequence = Some(102);
                     Missing::PolicyContextMismatch
                 }
+                _ => return Err("unknown context parity scenario".into()),
             };
-            context.catalog_json = if scenario == "catalog" {
-                Vec::new()
-            } else {
-                changed_catalog.seal()?
+            context.catalog_json = match scenario {
+                "catalog" => Vec::new(),
+                "catalog_json" => b"{".to_vec(),
+                "catalog_digest" => serde_json::to_vec(&changed_catalog)?,
+                _ => changed_catalog.seal()?,
             };
             changed.wire_record = Vec::<u8>::try_from(&changed_wire)?;
             if matches!(
                 scenario,
-                "operation" | "kernel_sequence" | "context_version"
+                "operation"
+                    | "kernel_sequence"
+                    | "context_version"
+                    | "catalog_json"
+                    | "catalog_digest"
             ) {
                 assert!(store.discovery_context(&changed).is_err(), "{scenario}");
                 let Err(araphor_data::Error::DiscoveryContext { source, .. }) =
@@ -4703,15 +4817,92 @@ mod tests {
                     return Err("the context provider lost the Control error source".into());
                 };
                 assert!(source.downcast_ref::<crate::Error>().is_some());
+                if scenario != "kernel_sequence" {
+                    let Err(error) = native_context_rows(&store, &changed) else {
+                        return Err("the native query accepted an invalid catalog".into());
+                    };
+                    let native = error
+                        .downcast_ref::<araphor_query::Error>()
+                        .ok_or("the native context read lost its Query error")?;
+                    assert_eq!(
+                        araphor_query::Failure::from(native),
+                        araphor_query::Failure::EvaluationFailed,
+                        "{scenario}"
+                    );
+                    let mut data_error = matches!(native, araphor_query::Error::Data { .. });
+                    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(native);
+                    while let Some(error) = cause {
+                        data_error |= error.is::<araphor_data::Error>();
+                        cause = error.source();
+                    }
+                    assert!(data_error, "{scenario}");
+                }
             } else {
                 assert_eq!(
                     store.discovery_context(&changed)?,
                     Join::Unresolved(expected),
                     "{scenario}"
                 );
+                assert!(
+                    native_context_rows(&store, &changed)?.is_empty(),
+                    "{scenario}"
+                );
             }
         }
-        let mut conflicting = snapshot;
+        let original = store.evidence_lock()?.state.target_snapshots.clone();
+        for scenario in [
+            "boot_text",
+            "binding_text",
+            "policy_source",
+            "workload_digest",
+        ] {
+            let expected = {
+                let mut inner = store.evidence_lock()?;
+                let workload = &mut inner
+                    .state
+                    .target_snapshots
+                    .values_mut()
+                    .next()
+                    .ok_or("target snapshot absent")?
+                    .targets[0]
+                    .workload_targets[0];
+                let identity = workload
+                    .kubernetes
+                    .as_mut()
+                    .ok_or("target identity absent")?;
+                match scenario {
+                    "boot_text" => {
+                        identity.node_boot_id = uuid::Uuid::from_bytes([1; 16]).to_string();
+                        Missing::MissingWorkloadFact
+                    }
+                    "binding_text" => {
+                        identity.binding_id = identity.binding_id.replace('-', "");
+                        Missing::MissingWorkloadFact
+                    }
+                    "policy_source" => {
+                        identity.policy_source_revision_id = "different-source".into();
+                        Missing::MissingWorkloadFact
+                    }
+                    "workload_digest" => {
+                        workload.workload_binding_generation_digest = "0".repeat(64);
+                        Missing::PolicyContextMismatch
+                    }
+                    _ => return Err("unknown target parity scenario".into()),
+                }
+            };
+            assert_eq!(
+                store.discovery_context(&record)?,
+                Join::Unresolved(expected),
+                "{scenario}"
+            );
+            assert!(
+                native_context_rows(&store, &record)?.is_empty(),
+                "{scenario}"
+            );
+            store.evidence_lock()?.state.target_snapshots = original.clone();
+        }
+        let mut conflicting = snapshot.clone();
+        conflicting.target_snapshot_digest = "c".repeat(64);
         conflicting.targets[0].workload_targets[0].image_digest =
             format!("sha256:{}", "b".repeat(64));
         {
@@ -4725,6 +4916,25 @@ mod tests {
             store.discovery_context(&record)?,
             Join::Unresolved(Missing::AmbiguousWorkloadFact)
         );
+        assert!(native_context_rows(&store, &record)?.is_empty());
+        {
+            let mut inner = store.evidence_lock()?;
+            let conflicting = inner
+                .state
+                .target_snapshots
+                .get_mut("conflicting-context")
+                .ok_or("conflicting snapshot absent")?;
+            *conflicting = snapshot;
+            conflicting.target_snapshot_digest = "c".repeat(64);
+            conflicting.targets[0].workload_targets[0]
+                .pod_labels
+                .insert("distinct".into(), "workload".into());
+        }
+        assert_eq!(
+            store.discovery_context(&record)?,
+            Join::Unresolved(Missing::AmbiguousWorkloadFact)
+        );
+        assert!(native_context_rows(&store, &record)?.is_empty());
         {
             let mut inner = store.evidence_lock()?;
             inner
@@ -4746,7 +4956,6 @@ mod tests {
         );
         Ok(())
     }
-
     pub(super) fn signed_artifact(
         document: &PolicyDocumentV1,
         issuer_sequence: u64,

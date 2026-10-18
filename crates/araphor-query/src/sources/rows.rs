@@ -209,8 +209,10 @@ impl SourceSnapshot {
         });
         let discovery = sources.contains_key("behaviors");
         let targets = sources.contains_key("targets");
-        let context =
-            sources.contains_key("context") || sources.contains_key("context_versions") || targets;
+        let context = sources.contains_key("context")
+            || sources.contains_key("context_versions")
+            || sources.contains_key("compiled_policies")
+            || targets;
         if !sources.contains_key("events")
             && !sources.contains_key("coverage")
             && !sources.contains_key("notifications")
@@ -235,7 +237,8 @@ impl SourceSnapshot {
             targets
                 && !sources.contains_key("events")
                 && !sources.contains_key("context")
-                && !sources.contains_key("context_versions"),
+                && !sources.contains_key("context_versions")
+                && !sources.contains_key("compiled_policies"),
         )?;
         let profiles = if selection.profiles().is_empty() {
             Selection::All

@@ -185,6 +185,32 @@ impl Table {
         budget.projected(bytes);
     }
 
+    pub(super) fn append_native(
+        &mut self,
+        batch: RecordBatch,
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<bool> {
+        if batch.schema() != self.schema || batch.num_rows() != 1 {
+            return Err(invalid("the native row differs from its table schema"));
+        }
+        let bytes = batch.get_array_memory_size();
+        if !budget.admit(bytes.max(1))? {
+            return Ok(false);
+        }
+        let rows = self.total_rows.checked_add(1).ok_or_else(overflow)?;
+        budget.charge(
+            bytes
+                .checked_add(size_of::<RecordBatch>())
+                .and_then(|bytes| bytes.checked_add(batch.num_columns() * size_of::<ArrayRef>()))
+                .ok_or_else(overflow)?,
+        )?;
+        budget.grow(&mut self.batches)?;
+        self.batches.push(batch);
+        self.total_rows = rows;
+        budget.projected(bytes);
+        Ok(true)
+    }
+
     pub(super) fn finish(&mut self, budget: &mut ReadBudget<'_>) -> Result<()> {
         if self.rows == 0 {
             return Ok(());

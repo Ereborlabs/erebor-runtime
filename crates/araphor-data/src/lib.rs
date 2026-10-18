@@ -23,9 +23,12 @@ pub use error::{
 };
 pub use error::{Error, Result};
 pub use evidence::{
-    CoverageCounters, CoverageInterval, CoverageReport, EvidenceDecisionContext,
-    EvidenceExactFileObject, EvidenceRecord, EvidenceRecords, EvidenceTemporalCoverage,
-    MAX_EVIDENCE_RECORD_BYTES,
+    BindingLifecycleV1, CompiledOperationV1, CoverageCounters, CoverageInterval, CoverageReport,
+    EffectFamilyV1, EntryKindV1, EvidenceDecisionCatalogV1, EvidenceDecisionContext,
+    EvidenceDigestV1, EvidenceExactFileObject, EvidenceFileObjectV1, EvidenceIdV1,
+    EvidenceModelError, EvidenceModelResult, EvidenceRecord, EvidenceRecords,
+    EvidenceTemporalCoverage, KernelEffectEvidenceV1, ObservationEnvelopeV1, StaticDecisionKeyV1,
+    MAX_EVIDENCE_DECISION_CONTEXT_BYTES, MAX_EVIDENCE_RECORD_BYTES,
 };
 pub use graph::*;
 pub use notification::*;

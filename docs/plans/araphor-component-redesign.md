@@ -30,8 +30,11 @@ source states.
 On 2026-10-18, the user restates simplification, coherence, and real production
 Rust reduction as the main acceptance criteria. Every new execution path,
 including Discovery, must pass through native SQL parsing, native logical
-planning, native optimization, physical planning, and execution. Build new
-Discovery packages and retain the existing package implementations for reuse.
+planning, native optimization, physical planning, and execution. Move the existing Discovery owner and packages into the real
+`araphor-discovery_back` crate. Create `araphor-discovery` from scratch. The
+new crate must not call the backup owner, retain `run_clock`, sweep sources,
+or pass subscription identities to the old reader. Retain the backup for
+explicit legacy use and comparison.
 Before an addition, check design fit, a simpler form, actual need, and existing
 DataFusion or dependency support. Polling is prohibited. The
 [package and job plan](araphor-package-jobs.md#current-goal-and-acceptance-criteria)
@@ -189,6 +192,63 @@ This delivery adds 21 production Rust code lines. The complete redesign adds
 deletions. Tests, comments, blank lines, documents, and moves do not count.
 The count is `/tmp/araphor-target-proof-count1.json`. The reduction target is
 **Not done**.
+
+### Native Discovery binding resolution
+
+Implementation and selected functional qualification: **Done**.
+The delivery keeps catalog validation in one shared Data codec. Control and
+Node use the same codec. The JSON catalog format and digest remain unchanged.
+
+```text
+Control commits a compiled artifact or target snapshot
+  -> the existing context owner captures the changed authoritative facts
+  -> Data retains the compiled proof as one uncompressed Arrow IPC row
+  -> one native Query capture reads events, targets, and compiled_policies
+  -> native SQL joins the catalog key to the target and current compiled proof
+  -> native grouping rejects ambiguous or invalid candidates
+  -> Query returns binding batches and exact captured context references
+```
+
+The proof contains the admitted artifact header, actual execution-set IDs, and
+actual compiled keys. Data does not compile policy. The publisher encodes the
+proof once. The native reader projects its requested columns. Native footer
+decoding checks block bounds before allocation. The shared format rejects
+dictionaries, compressed buffers, and multiple rows. Metadata-only projections
+do not decode the payload.
+
+Checked catalog columns retain all existing coordinate, digest, object, and
+operation checks. Absent catalogs remain NULL. A requested malformed catalog
+fails the capture. Raw projections remain available. Target rows retain the
+original boot and binding text. The publisher records workload-digest validity;
+SQL checks this value after candidate ambiguity.
+
+The resolver selects the current compiled proof by captured Data revision.
+Control admission rejects artifact rollback and exact historical reactivation.
+Artifact digests and issuer sequences do not define the SQL order. The binding
+retains the signed-profile digest from the selected target snapshot.
+
+This delivery adds no scheduler, store, policy compiler, physical operator, or
+polling loop. Native parsing, logical planning, optimization, physical planning,
+and execution supply the query. Live Discovery still uses the old reader.
+Its complete package, cumulative state, exact replay inputs, installation pins,
+and atomic profile cutover remain **Not done**. General context selection still
+retains some unrelated context references. The required production Rust
+reduction remains **Not done**.
+
+Selected checks pass 105 distinct cases: 25 Data, two Query, 11 Control,
+seven builtin Discovery, 21 Discovery Effects, 38 policy compilation, and one
+Node catalog case. They cover the shared catalog codec, projected native proof,
+malformed IPC bounds, context publication, native binding parity, retained cuts,
+reopen, and subscription changes. Strict Clippy passes all targets in eight
+crates. Scoped formatting and whitespace checks pass. The command and source
+record is `/tmp/araphor-native-binding-verification1.json`. Full workspace CI,
+benchmarks, and physical Kubernetes qualification are not run.
+
+This delivery adds 401 production Rust code lines. The complete redesign adds
+1,297 against `7b7b407a`. The 6,000-line reduction requires 7,297 further net
+code deletions. The count is `/tmp/araphor-native-binding-count1.json`. Moves,
+tests, comments, blank lines, and documents do not count as the reduction.
+The fresh Discovery owner and the reduction target remain **Not done**.
 
 ### SQL artifacts with provided inputs
 

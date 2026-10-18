@@ -652,7 +652,7 @@ impl PolicyDocumentV1 {
             let subject = &exception.exact_subject;
             let digests = bound
                 .iter()
-                .map(|cell| cell.key.digest(self.profile_id()))
+                .map(|cell| crate::PolicyCompiler::key_digest(self.profile_id(), &cell.key))
                 .collect::<Result<BTreeSet<_>>>()?;
             let scopes = bound
                 .iter()

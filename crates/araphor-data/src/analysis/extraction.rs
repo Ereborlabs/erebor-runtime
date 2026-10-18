@@ -1455,6 +1455,18 @@ impl AnalysisStore {
             return self.reject("the extraction limits must be positive");
         }
         let decode_events = !selection.binding_ids.is_empty() || read.needs_event_decode();
+        let checked_catalog = read.projected("events").is_some_and(|columns| {
+            let schema = &Self::table_schemas()["events"];
+            columns.iter().any(|index| {
+                let name = schema.field(*index).name();
+                matches!(
+                    name.as_str(),
+                    "catalog_profile_id"
+                        | "catalog_profile_version"
+                        | "catalog_policy_document_digest"
+                ) || name.starts_with("catalog_key_")
+            })
+        });
         let coordinator = self.read_coordinator(control)?;
         let explicit_traces = !selection.traces.is_all() && !selection.traces.as_slice().is_empty();
         let unscoped_notifications = selection.sources.is_all()
@@ -1683,6 +1695,7 @@ impl AnalysisStore {
                                 capture.event(identity,
                                     cpu.ok_or_else(|| self.state_error("the selected evidence CPU is absent"))?,
                                     range.intake, &record, decoded.as_ref(),
+                                    checked_catalog,
                                     &mut output.row_budget(control, page_bytes))?
                             } else {
                                 true
@@ -1753,7 +1766,7 @@ impl AnalysisStore {
                 match Self::read_context_from(snapshot, &self.root, key)? {
                     Some((context, revision)) => {
                         output.reference_context(&context.key, revision, AnalysisReferenceOriginV1::Context)?;
-                        capture.context(&context, &mut output.sink(control))?;
+                        capture.context(&context, revision, &mut output.sink(control))?;
                     }
                     None => {
                         let key = key.clone();

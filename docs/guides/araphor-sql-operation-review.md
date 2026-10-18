@@ -256,6 +256,45 @@ case are not run for this delivery. The new target path adds 21 production
 code lines. The complete redesign adds 896 against `7b7b407a`; the required
 reduction remains **Not done**.
 
+## Native Discovery binding resolution
+
+[ContextSource::record](../../crates/mithril-control/src/store/context.rs) reads a committed compiled artifact or target snapshot
+  -> [ControlContextOwner::reconcile](../../crates/mithril-control/src/store/context.rs) captures and publishes the changed authoritative facts
+  -> [CompiledPolicyContextV1::encode](../../crates/araphor-data/src/discovery/compiled.rs) encodes the actual artifact header, execution-set IDs, and compiled keys once as Arrow IPC
+  -> [Capture::event](../../crates/araphor-data/src/analysis/extraction/tables/events.rs) exposes the catalog through the shared checked codec
+  -> [Capture::compiled](../../crates/araphor-data/src/analysis/extraction/tables/context.rs) reads the projected proof from the same Data capture
+  -> [ObservedEffects::plan_relation](../../crates/araphor-discovery-effects/src/effects.rs) binds the three native input plans in caller scope
+  -> [context_bindings.sql](../../crates/araphor-discovery-effects/src/context_bindings.sql) joins the catalog key to the target and current compiled proof
+  -> [native grouping](../../crates/araphor-discovery-effects/src/context_bindings.sql) rejects ambiguous or invalid candidates
+  -> [Engine::subscribe](../../crates/araphor-query/src/execution/admission.rs) returns binding batches and captured references
+
+Read [EvidenceDecisionCatalogV1](../../crates/araphor-data/src/evidence/model.rs)
+before the SQL. Control and Node reuse this codec. No second catalog validator
+or policy compiler exists. An absent catalog produces NULL checked fields.
+A requested malformed catalog fails the capture. A raw-only projection does
+not decode the catalog. The catalog JSON format and digest remain unchanged.
+
+The proof reader uses the installed native footer decoder. It checks encoded
+block bounds before the native reader allocates a block. It accepts the one-row,
+uncompressed format that the publisher writes. Metadata-only reads skip the
+payload. Native Arrow arrays preserve list and key widths, including UInt32
+operation arguments.
+
+SQL orders compiled proofs by captured Data revision. Control admission
+rejects historical artifact reactivation. SQL preserves the original boot
+and binding strings and checks complete workload ambiguity before digest
+validity. The output signed-profile digest comes from the target snapshot.
+
+Read [discovery_context_retained_facts](../../crates/mithril-control/src/store.rs),
+[control_context_compiled_refresh](../../crates/mithril-control/src/store/context.rs),
+[native_compiled_policies](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs),
+and [compiled_policies_follow_sources](../../crates/araphor-query/src/follow/tests/discovery.rs).
+Selected qualification passes 105 distinct cases and strict Clippy in eight
+crates. The source and command record is
+`/tmp/araphor-native-binding-verification1.json`. Live Discovery still uses the
+old reader. Complete package installation, cumulative state, frozen replay inputs,
+and atomic profile publication remain **Not done**.
+
 ## Reactive retention
 
 [EvidenceIntakeOwner::run_retention](../../crates/mithril-control/src/evidence.rs) starts with a configured retention or logical pressure quota

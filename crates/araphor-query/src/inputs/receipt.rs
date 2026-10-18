@@ -86,8 +86,11 @@ impl Inputs {
                 .iter()
                 .any(|origin| origin.durable() == Some(name))
         };
-        let target_only =
-            has("targets") && !has("events") && !has("context") && !has("context_versions");
+        let target_only = has("targets")
+            && !has("events")
+            && !has("context")
+            && !has("context_versions")
+            && !has("compiled_policies");
         let context = |key: &AnalysisContextKeyV1| {
             (scope.selection.contexts.is_all() || scope.selection.contexts.as_slice().contains(key))
                 && (!target_only || key.owner_id == "mithril-control/target")

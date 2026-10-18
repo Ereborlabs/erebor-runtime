@@ -5,9 +5,7 @@ use sha2::{Digest as _, Sha256};
 use snafu::ensure;
 
 use super::canonical::canonical_cbor;
-use super::source::{
-    BindingLifecycleV1, EffectFamilyV1, EntryKindV1, PolicyDocumentV1, ProfileModeV1, RuleMatchV1,
-};
+use super::source::{PolicyDocumentV1, ProfileModeV1, RuleMatchV1};
 use crate::error::PolicyValidationSnafu;
 use crate::Result;
 
@@ -19,27 +17,7 @@ use expansion::{LocalActionPlan, RuleDecision, RuleDimensions};
 
 const MAX_COMPILED_CELLS: usize = 65_536;
 
-/// One exact selector key after the compiler expands all policy dimensions.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StaticDecisionKeyV1 {
-    pub workload_selector_id: String,
-    pub protected_scope_id: String,
-    pub execution_set_id: String,
-    pub entry_kind: EntryKindV1,
-    pub role_id: String,
-    pub process_state_id: String,
-    pub effect_family: EffectFamilyV1,
-    pub operation_id: String,
-    pub object_selector: String,
-    pub binding_lifecycle: BindingLifecycleV1,
-}
-
-impl StaticDecisionKeyV1 {
-    pub fn digest(&self, policy_id: &str) -> Result<String> {
-        canonical_cbor(policy_id, self).map(|bytes| digest(&bytes))
-    }
-}
+pub use araphor_data::StaticDecisionKeyV1;
 
 /// The physical kernel result for one compiled policy cell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -79,6 +57,10 @@ pub struct StaticExpandedProfileV1 {
 pub struct PolicyCompiler;
 
 impl PolicyCompiler {
+    pub fn key_digest(policy_id: &str, key: &StaticDecisionKeyV1) -> Result<String> {
+        canonical_cbor(policy_id, key).map(|bytes| digest(&bytes))
+    }
+
     pub fn compile(&self, document: &PolicyDocumentV1) -> Result<StaticExpandedProfileV1> {
         document.validate_closed()?;
         let canonical_policy = canonical_cbor(document.profile_id(), document)?;

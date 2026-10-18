@@ -31,6 +31,10 @@ fn schema_contract() -> TestResult {
             "c0327a34b237d15874de33e8b47518cd2b6981e1717d4757ee3bb68ad70cfe0a",
         ),
         (
+            "compiled_policies",
+            "97442a869208f2918b3d3cd18cf5b49cf1c17fb56ac1a193da4380890ea43b7e",
+        ),
+        (
             "context",
             "9bedf8f1dbd69eecff2bf1d24b6b19889f10683d763ac8ff40ea34f916367e2d",
         ),
@@ -48,7 +52,7 @@ fn schema_contract() -> TestResult {
         ),
         (
             "events",
-            "0a18c5edf190bfb425009eebb679e4c672eb070308781f1285de9634f502ab39",
+            "c011ab8b90ca3bbf6d389593163bb7e6bf07395a74a9a11d723a03d934aa50b1",
         ),
         (
             "findings",
@@ -80,7 +84,7 @@ fn schema_contract() -> TestResult {
         ),
         (
             "targets",
-            "2ae4c9be5878e2d6ae1e0a7dce00cfbe17451af189f7175815b711d38cb92349",
+            "20539b0c81d065c54359b4307ec7f97d7df0aebbb088b466de9759c789c80f2a",
         ),
         (
             "trace_measurements",
@@ -187,6 +191,54 @@ fn row_preflight_keeps_existing_native_builders() -> TestResult {
         .ok_or("the cursor column is not UInt64")?;
     assert_eq!(tenants.value(0), [1u8; 16]);
     assert_eq!(cursors.value(0), 1);
+    Ok(())
+}
+
+#[test]
+fn native_batch_preserves_rows() -> TestResult {
+    let (mut output, control) = extraction()?;
+    let columns = columns("compiled_policies", &["commit_revision"])?;
+    let read = AnalysisTableRead {
+        requests: &columns,
+        event_ranges: None,
+        inputs: None,
+        mode: AnalysisReadModeV1::Complete,
+        now: 1,
+    };
+    let scope = AnalysisSelectionV1::tenant([1; 16]);
+    let mut capture = Capture::new(&read, &scope);
+    let context = crate::AnalysisContextVersionV1 {
+        key: crate::AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "mithril-control/compiled-policy".into(),
+            entity_key: b"source".to_vec(),
+            lifetime_key: b"artifact".to_vec(),
+            owner_revision: 1,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: crate::ContextSensitivityV1::Tenant,
+        body: b"unselected".to_vec(),
+    };
+    let mut budget = output.sink(&control);
+    assert!(capture.context(&context, 7, &mut budget)?);
+    budget.output.limits.input_bytes = budget.output.input_bytes;
+    assert!(matches!(
+        capture.context(&context, 8, &mut budget),
+        Err(crate::Error::AnalysisInputTooLarge { .. })
+    ));
+    let table = capture
+        .tables
+        .get("compiled_policies")
+        .ok_or("proof table absent")?;
+    assert_eq!(table.total_rows, 1);
+    assert_eq!(table.batches.len(), 1);
+    let revisions = table.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or("proof revision type")?;
+    assert_eq!(revisions.values(), &[7]);
     Ok(())
 }
 

@@ -60,6 +60,7 @@ zerocopy.workspace = true
 tonic-build.workspace = true
 
 [dev-dependencies]
+serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-58"] }
 araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
 araphor-query = { path = "../araphor-query", features = ["test-fixtures"] }
 araphor-analysis = { path = "../araphor-analysis", features = ["test-fixtures"] }

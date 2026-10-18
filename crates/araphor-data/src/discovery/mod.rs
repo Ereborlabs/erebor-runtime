@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+mod compiled;
 mod context;
 mod derive;
 mod model;
 mod profile;
 
+pub use compiled::CompiledPolicyContextV1;
 pub use context::*;
 pub use model::*;
 pub use profile::{DiscoveryProfileV1, DiscoveryReplayV1};

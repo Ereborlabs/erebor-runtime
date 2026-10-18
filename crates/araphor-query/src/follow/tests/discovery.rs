@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use araphor_data::{
-    AnalysisContextKeyV1, AnalysisContextVersionV1, ContainerKindV1, ContextSensitivityV1,
-    KubernetesWorkloadIdentityV1, TargetContextV1, WorkloadTargetFactV1,
+    AnalysisContextKeyV1, AnalysisContextVersionV1, CompiledPolicyContextV1, ContainerKindV1,
+    ContextSensitivityV1, KubernetesWorkloadIdentityV1, TargetContextV1, WorkloadTargetFactV1,
 };
 use araphor_discovery_effects::ObservedEffects;
 use datafusion::common::ScalarValue;
@@ -159,6 +159,7 @@ fn target_context(
     signature: &str,
 ) -> AnalysisContextVersionV1 {
     let target = TargetContextV1 {
+        workload_digest_valid: true,
         workload: WorkloadTargetFactV1 {
             node_id: fixture.source.node_id.clone(),
             workload_binding_generation_digest: "f".repeat(64),
@@ -373,6 +374,180 @@ async fn targets_keep_snapshot_metadata() {
     assert!(subscription.next().await.is_none());
     drop((subscription, first, second));
     assert_released(&fixture);
+}
+
+#[tokio::test]
+async fn compiled_policies_follow_sources() {
+    for mixed in [false, true] {
+        let fixture = Fixture::new(Limits {
+            tenant_streams: 1,
+            ..Default::default()
+        });
+        let contexts = |snapshot: &str, signature: &str| {
+            let proof = CompiledPolicyContextV1 {
+                source_revision_id: "snapshot-policy".into(),
+                signed_profile_digest: signature.into(),
+                profile_id: "profile".into(),
+                profile_version: 1,
+                policy_document_digest: "policy-document".into(),
+                execution_set_ids: vec![uuid::Uuid::from_bytes([4; 16]).to_string()],
+                compiled_keys: Vec::new(),
+            };
+            let mut rows = vec![AnalysisContextVersionV1 {
+                key: AnalysisContextKeyV1 {
+                    tenant_id: fixture.source.tenant_id,
+                    owner_id: "mithril-control/compiled-policy".into(),
+                    entity_key: proof.source_revision_id.as_bytes().to_vec(),
+                    lifetime_key: signature.as_bytes().to_vec(),
+                    owner_revision: 1,
+                },
+                valid_from_utc_ns: None,
+                valid_until_utc_ns: None,
+                sensitivity: ContextSensitivityV1::Tenant,
+                body: proof.encode().unwrap(),
+            }];
+            if mixed {
+                rows.push(target_context(
+                    &fixture,
+                    snapshot,
+                    &proof.source_revision_id,
+                    signature,
+                ));
+            }
+            rows
+        };
+        let initial = contexts(&"a".repeat(64), &"c".repeat(64));
+        let mut retained = initial.clone();
+        retained.extend(initial.iter().cloned().map(|mut context| {
+            context.key.tenant_id = [9; 16];
+            context
+        }));
+        let published = fixture.store.commit_contexts(&retained).unwrap();
+        let sql = format!(
+            "SELECT p.source_revision_id, p.signed_profile_digest, p.commit_revision,
+                array_length(p.execution_set_ids), array_length(p.compiled_keys)
+            FROM compiled_policies p {} ORDER BY p.signed_profile_digest",
+            if mixed {
+                "JOIN targets t ON t.source_revision_id = p.source_revision_id
+                AND t.signed_profile_digest = p.signed_profile_digest"
+            } else {
+                ""
+            }
+        );
+        let (_, sources) = fixture.engine.prepare(&sql, vec![]).await.unwrap();
+        assert_eq!(
+            sources.keys().map(String::as_str).collect::<Vec<_>>(),
+            if mixed {
+                vec!["compiled_policies", "targets"]
+            } else {
+                vec!["compiled_policies"]
+            }
+        );
+        let clock = TestClock::new(2_000_000_000);
+        let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap());
+        let mut subscription = fixture
+            .engine
+            .subscribe(
+                &sql,
+                vec![],
+                AnalysisSelectionV1::tenant(fixture.source.tenant_id),
+                Arc::clone(&control),
+                b"compiled policy proofs",
+                None,
+                clock.clone(),
+                true,
+            )
+            .await
+            .unwrap();
+        let first = next(&mut subscription).await;
+        let mut expected = published[..initial.len()].to_vec();
+        expected.sort_by(|left, right| left.key.cmp(&right.key));
+        assert_eq!(
+            first.snapshot.contexts().cloned().collect::<Vec<_>>(),
+            expected
+        );
+        let refreshed = fixture
+            .store
+            .commit_contexts(&contexts(&"b".repeat(64), &"d".repeat(64)))
+            .unwrap();
+        let second = next(&mut subscription).await;
+        expected.extend(refreshed.iter().cloned());
+        expected.sort_by(|left, right| left.key.cmp(&right.key));
+        assert_eq!(
+            second.snapshot.contexts().cloned().collect::<Vec<_>>(),
+            expected
+        );
+        for (update, signatures, revisions) in [
+            (
+                &first,
+                vec!["c".repeat(64)],
+                vec![published[0].commit_revision],
+            ),
+            (
+                &second,
+                vec!["c".repeat(64), "d".repeat(64)],
+                vec![published[0].commit_revision, refreshed[0].commit_revision],
+            ),
+        ] {
+            assert_eq!(update.operation, Operation::Replace);
+            assert_eq!(
+                values(update, 0),
+                vec![ScalarValue::Utf8(Some("snapshot-policy".into())); signatures.len()]
+            );
+            assert_eq!(
+                values(update, 1),
+                signatures
+                    .into_iter()
+                    .map(|value| ScalarValue::Utf8(Some(value)))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                values(update, 2),
+                revisions
+                    .into_iter()
+                    .map(|value| ScalarValue::UInt64(Some(value)))
+                    .collect::<Vec<_>>()
+            );
+            let count = values(update, 0).len();
+            assert_eq!(values(update, 3), vec![ScalarValue::UInt64(Some(1)); count]);
+            assert_eq!(values(update, 4), vec![ScalarValue::UInt64(Some(0)); count]);
+            assert!(update.snapshot.witnesses.is_empty());
+        }
+        assert_eq!(first.cursor.read_revision(), published[0].commit_revision);
+        assert_eq!(second.cursor.read_revision(), refreshed[0].commit_revision);
+        assert!(second.cursor.read_revision() > first.cursor.read_revision());
+        assert_eq!(
+            first.snapshot.contexts().cloned().collect::<Vec<_>>(),
+            published[..initial.len()]
+        );
+        assert_eq!(
+            fixture.store.context_version(&initial[0].key).unwrap(),
+            Some(initial[0].clone())
+        );
+        {
+            let waiting = subscription.next();
+            tokio::pin!(waiting);
+            assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+            let reads = clock.reads.load(Ordering::SeqCst);
+            clock.now.store(1_000_000_000_000, Ordering::SeqCst);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(40), waiting.as_mut())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(clock.reads.load(Ordering::SeqCst), reads);
+            control.cancel().unwrap();
+            let error = tokio::time::timeout(Duration::from_secs(8), waiting)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
+        }
+        assert!(subscription.next().await.is_none());
+        drop((subscription, first, second));
+        assert_released(&fixture);
+    }
 }
 
 #[tokio::test]

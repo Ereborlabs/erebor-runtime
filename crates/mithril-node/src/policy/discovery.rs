@@ -434,6 +434,7 @@ impl NodeDiscoveryContextCatalog {
                     digest: DiscoveryDigestV1([0; 32]),
                 }
                 .seal()
+                .map_err(mithril_control::Error::from)
                 .context(PolicySnafu)?;
                 self.insert(key, bytes);
                 if self.unavailable.is_some() {

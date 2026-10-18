@@ -743,9 +743,7 @@ fn bounded_exception_binds_one_exact_allow_cell() -> mithril_control::Result<()>
     effect.operation_ids = vec!["OPEN_WRITE".to_owned()];
     let write_cell = PolicyCompiler.compile(&write_document)?;
     assert_eq!(
-        write_cell.compiled_cells[0]
-            .key
-            .digest(document.profile_id())?,
+        PolicyCompiler::key_digest(document.profile_id(), &write_cell.compiled_cells[0].key)?,
         "501b6f332e0cb9d64d878fd1269a51d792a1c2769a04fe5c6d8e1178ba5e7438"
     );
     document.exceptions.push(ExceptionV1 {
@@ -784,7 +782,10 @@ fn bounded_exception_binds_one_exact_allow_cell() -> mithril_control::Result<()>
     });
     document.exceptions[0]
         .exact_subject
-        .exact_compiled_key_digests = vec![cell.key.digest(document.profile_id())?];
+        .exact_compiled_key_digests = vec![PolicyCompiler::key_digest(
+        document.profile_id(),
+        &cell.key,
+    )?];
     document.exceptions[0]
         .authority_delta
         .added_or_removed_operation_cells = document.exceptions[0]
@@ -823,7 +824,7 @@ fn bounded_exception_binds_one_exact_allow_cell() -> mithril_control::Result<()>
         .exact_compiled_key_digests = preliminary
         .compiled_cells
         .iter()
-        .map(|cell| cell.key.digest(multiple_cells.profile_id()))
+        .map(|cell| PolicyCompiler::key_digest(multiple_cells.profile_id(), &cell.key))
         .collect::<mithril_control::Result<Vec<_>>>()?;
     multiple_cells.exceptions[0]
         .authority_delta

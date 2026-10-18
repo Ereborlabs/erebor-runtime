@@ -67,6 +67,161 @@ fn column<'a, A: Array + 'static>(
         .ok_or_else(|| format!("native column type differs: {field}").into())
 }
 
+#[test]
+fn native_compiled_policies() -> TestResult {
+    use sdk::arrow_array::{ListArray, StructArray, UInt16Array};
+
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("analysis");
+    let store = AnalysisStore::open(&root)?;
+    let proof = CompiledPolicyContextV1 {
+        source_revision_id: "source".into(),
+        signed_profile_digest: "a".repeat(64),
+        profile_id: "profile".into(),
+        profile_version: 7,
+        policy_document_digest: "b".repeat(64),
+        execution_set_ids: vec!["used".into(), "unused".into()],
+        compiled_keys: vec![DiscoveryPolicyKeyV1 {
+            workload_selector_id: "selector".into(),
+            protected_scope_id: "scope".into(),
+            execution_set_id: "used".into(),
+            entry_kind: "CONTAINER_START".into(),
+            role_id: "role".into(),
+            process_state_id: "state".into(),
+            effect_family: 3,
+            operation_id: "CONNECT".into(),
+            operation: 1,
+            operation_argument: u32::MAX,
+            argument_wildcard: false,
+            object_selector: "object".into(),
+            binding_lifecycle: "BOUND".into(),
+        }],
+    };
+    let context = AnalysisContextVersionV1 {
+        key: AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "mithril-control/compiled-policy".into(),
+            entity_key: proof.source_revision_id.as_bytes().to_vec(),
+            lifetime_key: proof.signed_profile_digest.as_bytes().to_vec(),
+            owner_revision: 1,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: ContextSensitivityV1::Tenant,
+        body: proof.encode()?,
+    };
+    let mut empty = proof.clone();
+    empty.signed_profile_digest = "c".repeat(64);
+    empty.execution_set_ids.clear();
+    empty.compiled_keys.clear();
+    let mut second = context.clone();
+    second.key.lifetime_key = empty.signed_profile_digest.as_bytes().to_vec();
+    second.body = empty.encode()?;
+    let mut foreign = context.clone();
+    foreign.key.tenant_id = [9; 16];
+    let references = store.commit_contexts(&[context.clone(), second, foreign])?;
+    let selection = AnalysisSelectionV1::tenant([1; 16]);
+    let page = read(&store, &selection, &["compiled_policies"], 1)?;
+    assert_eq!(page.extraction.references.len(), 2);
+    let first = row(&page, "compiled_policies", 0)?;
+    let second = row(&page, "compiled_policies", 1)?;
+    assert_eq!(
+        column::<UInt64Array>(&first, "commit_revision")?.value(0),
+        references[0].commit_revision
+    );
+    let ids = column::<ListArray>(&first, "execution_set_ids")?.value(0);
+    let ids = ids
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or("execution IDs type")?;
+    assert_eq!(
+        ids.iter().collect::<Vec<_>>(),
+        vec![Some("used"), Some("unused")]
+    );
+    let keys = column::<ListArray>(&first, "compiled_keys")?.value(0);
+    let keys = keys
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or("policy keys type")?;
+    assert_eq!(keys.len(), 1);
+    let family = keys
+        .column_by_name("effect_family")
+        .ok_or("family absent")?
+        .as_any()
+        .downcast_ref::<UInt16Array>()
+        .ok_or("family type")?;
+    assert_eq!(family.value(0), 3);
+    let argument = keys
+        .column_by_name("operation_argument")
+        .ok_or("argument absent")?
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or("argument type")?;
+    assert_eq!(argument.value(0), u32::MAX);
+    assert!(column::<ListArray>(&second, "compiled_keys")?
+        .value(0)
+        .is_empty());
+    assert!(column::<ListArray>(&second, "execution_set_ids")?
+        .value(0)
+        .is_empty());
+    drop(store);
+    let store = AnalysisStore::open(&root)?;
+    assert_eq!(store.context_version(&context.key)?, Some(context.clone()));
+    let mut malformed = context;
+    malformed.key.lifetime_key = b"malformed".to_vec();
+    malformed.body = b"malformed".to_vec();
+    store.commit_context(&malformed)?;
+    for fields in [&[][..], &["commit_revision"][..]] {
+        let requests = super::columns("compiled_policies", fields)?;
+        let page = store.read_tables(
+            &selection,
+            AnalysisTableRead {
+                requests: &requests,
+                event_ranges: None,
+                inputs: None,
+                mode: AnalysisReadModeV1::Complete,
+                now: 1,
+            },
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+        )?;
+        assert_eq!(
+            page.tables["compiled_policies"]
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            3
+        );
+    }
+    assert!(read(&store, &selection, &["compiled_policies"], 1).is_err());
+    let mut oversized = malformed;
+    oversized.key.lifetime_key = b"oversized".to_vec();
+    oversized.body = proof.encode()?;
+    let trailer = oversized.body.len().checked_sub(10).ok_or("trailer")?;
+    let footer_len = arrow_ipc::reader::read_footer_length(oversized.body[trailer..].try_into()?)?;
+    let start = trailer.checked_sub(footer_len).ok_or("footer")?;
+    let footer = arrow_ipc::root_as_footer(&oversized.body[start..trailer])
+        .map_err(|_| "the generated IPC footer is invalid")?;
+    let blocks = footer.recordBatches().ok_or("record batches")?;
+    let mut block = *blocks.get(0);
+    let offset = oversized.body[start..trailer]
+        .windows(block.0.len())
+        .position(|bytes| bytes == block.0)
+        .ok_or("serialized native block")?
+        + start;
+    block.set_bodyLength(i64::MAX);
+    oversized.body[offset..offset + block.0.len()].copy_from_slice(&block.0);
+    let mut exact = selection;
+    exact.contexts = Selection::Exact(vec![oversized.key.clone()]);
+    store.commit_context(&oversized)?;
+    assert!(matches!(
+        read(&store, &exact, &["compiled_policies"], 1),
+        Err(crate::Error::AnalysisState { reason, .. })
+            if reason == "the compiled policy IPC block exceeds its body"
+    ));
+    Ok(())
+}
+
 fn row(
     page: &AnalysisPositionPageV1,
     table: &str,
@@ -355,6 +510,7 @@ fn context_notification_fields() -> TestResult {
         sensitivity: ContextSensitivityV1::Tenant,
         body: serde_json::to_vec(&TargetContextV1 {
             workload: target.clone(),
+            workload_digest_valid: true,
             policy_source_revision_id: "snapshot-policy".into(),
             target_snapshot_digest: "a".repeat(64),
             signed_profile_digest: "b".repeat(64),
@@ -532,6 +688,15 @@ fn context_notification_fields() -> TestResult {
         column::<BinaryArray>(targets, "node_boot_id")?.value(0),
         [2; 16]
     );
+    assert_eq!(
+        column::<StringArray>(targets, "node_boot_id_text")?.value(0),
+        uuid::Uuid::from_bytes([2; 16]).to_string()
+    );
+    assert_eq!(
+        column::<StringArray>(targets, "binding_id_text")?.value(0),
+        uuid::Uuid::from_bytes([10; 16]).to_string()
+    );
+    assert!(column::<BooleanArray>(targets, "workload_digest_valid")?.value(0));
     assert_eq!(
         column::<StringArray>(targets, "container_kind")?.value(0),
         "APPLICATION"

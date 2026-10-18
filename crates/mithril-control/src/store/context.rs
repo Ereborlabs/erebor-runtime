@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_data::{
-    AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisStore, ContextSensitivityV1,
-    TargetContextV1,
+    AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisStore, CompiledPolicyContextV1,
+    ContextSensitivityV1, DiscoveryPolicyKeyV1, TargetContextV1,
 };
 use serde::Serialize;
 use snafu::ResultExt as _;
@@ -69,6 +69,7 @@ impl<'a> From<&'a crate::AuthorityApprovalV1> for PublicAuthorityApproval<'a> {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum ContextSource {
     Policy(String),
+    Compiled(String),
     Trust(u64),
     Rollout(PolicyRolloutKeyV1),
     Target(String),
@@ -91,6 +92,9 @@ impl ContextIndex {
         let revision = state.commit_index;
         for id in state.source_revisions.keys() {
             sources.insert(ContextSource::Policy(id.clone()), revision);
+        }
+        for id in state.compiled_artifacts.keys() {
+            sources.insert(ContextSource::Compiled(id.clone()), revision);
         }
         for generation in state.trust_generations.keys() {
             sources.insert(ContextSource::Trust(*generation), revision);
@@ -215,6 +219,44 @@ impl ContextSource {
                     )
                 })
             }
+            Self::Compiled(id) => {
+                let source = state.source_revisions.get(id)?;
+                let artifact = state.compiled_artifacts.get(id)?;
+                selected(&source.tenant_id).map(|tenant| {
+                    let digest = super::artifact_digest(artifact, &inner.root)?;
+                    let proof = CompiledPolicyContextV1 {
+                        source_revision_id: id.clone(),
+                        signed_profile_digest: digest.clone(),
+                        profile_id: artifact.header.profile_id.clone(),
+                        profile_version: artifact.header.profile_version,
+                        policy_document_digest: artifact.header.policy_document_digest.clone(),
+                        execution_set_ids: artifact
+                            .policy_document
+                            .protected_universe
+                            .execution_set_ids
+                            .clone(),
+                        compiled_keys: artifact
+                            .compiled_profile
+                            .compiled_cells
+                            .iter()
+                            .map(|cell| DiscoveryPolicyKeyV1::try_from(&cell.key))
+                            .collect::<araphor_data::Result<_>>()?,
+                    };
+                    Ok(AnalysisContextVersionV1 {
+                        key: AnalysisContextKeyV1 {
+                            tenant_id: tenant,
+                            owner_id: "mithril-control/compiled-policy".into(),
+                            entity_key: id.as_bytes().to_vec(),
+                            lifetime_key: digest.into_bytes(),
+                            owner_revision: 1,
+                        },
+                        valid_from_utc_ns: None,
+                        valid_until_utc_ns: None,
+                        sensitivity: ContextSensitivityV1::Tenant,
+                        body: proof.encode()?,
+                    })
+                })
+            }
             Self::Trust(generation) => {
                 let trust = state.trust_generations.get(generation)?;
                 let index = position.map_or(0, |(index, _)| index);
@@ -283,6 +325,8 @@ impl ContextSource {
                         },
                         &TargetContextV1 {
                             workload: fact.clone(),
+                            workload_digest_valid: crate::workload_target_fact_digest(fact)?
+                                == fact.workload_binding_generation_digest,
                             policy_source_revision_id: snapshot.policy_source_revision_id.clone(),
                             target_snapshot_digest: snapshot.target_snapshot_digest.clone(),
                             signed_profile_digest: snapshot.signed_profile_digest.clone(),
@@ -606,7 +650,7 @@ mod tests {
                 })
             };
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
-        assert_eq!(owner.reconcile()?, snapshots.len() * (facts.len() + 2));
+        assert_eq!(owner.reconcile()?, snapshots.len() * (facts.len() + 3));
         assert_eq!(data.meta()?.commit_revision, 1);
         assert_eq!(owner.revision, Some(authority));
         for snapshot in &snapshots {
@@ -616,6 +660,7 @@ mod tests {
                     .ok_or("missing retained target")?;
                 let retained: TargetContextV1 = serde_json::from_slice(&context.body)?;
                 assert_eq!(retained.workload, *fact);
+                assert!(retained.workload_digest_valid);
                 assert_eq!(
                     retained.policy_source_revision_id,
                     snapshot.policy_source_revision_id
@@ -644,7 +689,7 @@ mod tests {
         let store = ControlStore::open(store_path)?;
         let data = Arc::new(AnalysisStore::open(data_path)?);
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
-        assert_eq!(owner.reconcile()?, snapshots.len() * (facts.len() + 2));
+        assert_eq!(owner.reconcile()?, snapshots.len() * (facts.len() + 3));
         assert_eq!(owner.reconcile()?, 0);
         assert_eq!(data.meta()?, before);
         assert_eq!(store.commit_index(), authority);
@@ -653,6 +698,155 @@ mod tests {
                 assert!(data.context_version(&key(snapshot, fact)?)?.is_some());
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn control_context_compiled_refresh() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let control_path = directory.path().join("control");
+        let data_path = directory.path().join("data");
+        let store = ControlStore::open(&control_path)?;
+        let data = Arc::new(AnalysisStore::open(&data_path)?);
+        let document = crate::PolicyDocumentV1::parse(
+            std::path::Path::new("policy-v1.yaml"),
+            include_bytes!("../../tests/fixtures/policy-v1.yaml"),
+        )?;
+        let source = source_revision(&document, crate::PolicySourceStateV1::Accepted, 1, '8')?;
+        let tenant = uuid::Uuid::parse_str(&source.tenant_id)?.into_bytes();
+        let artifact = signed_artifact(&document, 1)?;
+        store.accept_compiled_source_revision(source.clone(), document.clone(), artifact)?;
+        let target = kubernetes_target(
+            &source,
+            &document,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            1,
+            1,
+        )?;
+        let signing = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+        let initial = rollout_transaction(
+            &source,
+            &store
+                .compiled_artifact(&source.policy_source_revision_id)?
+                .ok_or("missing initial artifact")?,
+            vec![(target.clone(), None)],
+            crate::PolicyDeliveryOperationV1::Activate,
+            document.rollout.rollout_generation,
+            1,
+            &signing,
+        )?;
+        let initial_digest = initial.target_snapshot.signed_profile_digest.clone();
+        let predecessor = initial.bundles[0].candidate.candidate_content_id.clone();
+        store.create_rollout(
+            initial.target_snapshot,
+            initial.bundles,
+            initial.rollout_states,
+        )?;
+        let allowed = [AllowedNodeIdentity {
+            node_id: target.node_id.clone(),
+            certificate_sha256: "a".repeat(64),
+            tenant_id: source.tenant_id.clone(),
+        }];
+        let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
+        assert_eq!(owner.reconcile()?, 4);
+        let artifact = signed_artifact(&document, 2)?;
+        let refreshed = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(target, Some(predecessor))],
+            crate::PolicyDeliveryOperationV1::Replace,
+            document.rollout.rollout_generation,
+            2,
+            &signing,
+        )?;
+        let snapshot = refreshed.target_snapshot.clone();
+        let mut notices = store.subscribe_context()?;
+        store.reconcile_target_set(
+            refreshed.target_snapshot,
+            refreshed.bundles,
+            refreshed.rollout_states,
+            Some(artifact.clone()),
+        )?;
+        assert!(notices.has_changed()?);
+        notices.borrow_and_update();
+        assert_eq!(owner.reconcile()?, 3);
+        assert_eq!(data.meta()?.commit_revision, 2);
+        let proof_key = |digest: &str| AnalysisContextKeyV1 {
+            tenant_id: tenant,
+            owner_id: "mithril-control/compiled-policy".into(),
+            entity_key: source.policy_source_revision_id.as_bytes().to_vec(),
+            lifetime_key: digest.as_bytes().to_vec(),
+            owner_revision: 1,
+        };
+        assert!(data.context_version(&proof_key(&initial_digest))?.is_some());
+        let retained = data
+            .context_version(&proof_key(&snapshot.signed_profile_digest))?
+            .ok_or("missing refreshed proof")?;
+        let expected = CompiledPolicyContextV1 {
+            source_revision_id: source.policy_source_revision_id.clone(),
+            signed_profile_digest: snapshot.signed_profile_digest.clone(),
+            profile_id: artifact.header.profile_id.clone(),
+            profile_version: artifact.header.profile_version,
+            policy_document_digest: artifact.header.policy_document_digest.clone(),
+            execution_set_ids: artifact
+                .policy_document
+                .protected_universe
+                .execution_set_ids
+                .clone(),
+            compiled_keys: artifact
+                .compiled_profile
+                .compiled_cells
+                .iter()
+                .map(|cell| DiscoveryPolicyKeyV1::try_from(&cell.key))
+                .collect::<araphor_data::Result<_>>()?,
+        };
+        assert_eq!(retained.body, expected.encode()?);
+        let columns = araphor_data::AnalysisTableRequests::from([
+            ("compiled_policies".into(), Some(Default::default())),
+            ("targets".into(), Some(Default::default())),
+        ]);
+        let page = data.read_tables(
+            &araphor_data::AnalysisSelectionV1::tenant(tenant),
+            araphor_data::AnalysisTableRead {
+                requests: &columns,
+                event_ranges: None,
+                inputs: None,
+                mode: araphor_data::AnalysisReadModeV1::Complete,
+                now: 1,
+            },
+            araphor_data::AnalysisExtractLimits::default(),
+            &araphor_data::AnalysisReadControl::default(),
+        )?;
+        let refreshed_refs = page
+            .extraction
+            .references
+            .iter()
+            .filter_map(|value| value.context())
+            .filter(|reference| {
+                reference.key == retained.key
+                    || (reference.key.owner_id == "mithril-control/target"
+                        && reference
+                            .key
+                            .lifetime_key
+                            .starts_with(snapshot.target_snapshot_digest.as_bytes()))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(refreshed_refs.len(), 2);
+        assert!(refreshed_refs
+            .iter()
+            .all(|reference| reference.commit_revision == 2));
+        let before = data.meta()?;
+        drop(owner);
+        drop(store);
+        drop(data);
+        let store = ControlStore::open(control_path)?;
+        let data = Arc::new(AnalysisStore::open(data_path)?);
+        let mut owner = ControlContextOwner::new(store, data.clone(), &allowed)?;
+        assert_eq!(owner.reconcile()?, 6);
+        assert_eq!(owner.reconcile()?, 0);
+        assert_eq!(data.meta()?, before);
+        assert_eq!(data.context_version(&retained.key)?, Some(retained));
+        assert!(data.context_version(&proof_key(&initial_digest))?.is_some());
         Ok(())
     }
 

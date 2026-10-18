@@ -24,9 +24,11 @@ The user directs implementation under these criteria on 2026-10-18:
 2. Every new execution path, including Discovery, uses native SQL parsing,
    native logical planning, native optimization, physical planning, and
    execution. A direct call or PRQL source must reach that same SQL route.
-3. Build new Discovery packages. Keep the existing package implementations
-   available for reuse and comparison. Remove obsolete orchestration only when
-   its replacement preserves the required behavior.
+3. Move the existing Discovery owner and packages into the real
+   `araphor-discovery_back` crate. Create `araphor-discovery` from scratch.
+   The new crate consumes actual Query subscription output. It must not call
+   the backup owner or retain `run_clock`, source sweeps, or the old reader.
+   Keep the backup available for explicit legacy use and comparison.
 4. Before each addition, check whether it fits this design, whether a simpler
    form works, whether it is required, and whether DataFusion or an existing
    dependency already supplies it. Reuse native implementation when it does.
@@ -213,6 +215,19 @@ local links, and whitespace checks pass. The source and command record is
 and physical Kubernetes qualification are not run. The delivery adds 21
 production Rust code lines. The complete redesign adds 896 against `7b7b407a`;
 the required reduction remains **Not done**.
+
+### Native Discovery binding resolution
+
+Implementation and selected functional qualification: **Done**.
+The [component plan](araphor-component-redesign.md#native-discovery-binding-resolution)
+records the shared catalog codec, native compiled-policy proof, and SQL binding
+resolver. The resolver uses native joins, window functions, grouping, and
+equality checks. No new compiler, scheduler, store, or physical operator is
+added. Live Discovery package execution, cumulative state, exact replay inputs,
+installation pins, and atomic profile cutover remain **Not done**. The parent
+records 105 selected passing cases, strict Clippy in eight crates, and the exact
+source receipt. This delivery adds 401 production Rust code lines. The complete
+redesign and the required production Rust reduction remain **Not done**.
 
 ## Earlier design draft
 

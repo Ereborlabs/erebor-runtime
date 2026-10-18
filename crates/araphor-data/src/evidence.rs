@@ -1,3 +1,13 @@
+#[cfg(test)]
+pub(crate) mod catalog_tests;
+mod error;
+mod model;
+mod policy;
+
+pub use error::{EvidenceModelError, EvidenceModelResult};
+pub use model::*;
+pub use policy::*;
+
 use prost::{bytes::Buf, Message as _};
 use snafu::ResultExt as _;
 

@@ -81,8 +81,14 @@ pub struct DiscoveryContextBindingV1 {
     pub subject_revision: String,
     pub image_digest: String,
     pub configuration_digest: String,
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "[u8; 16]")]
     pub process_instance_id: [u8; 16],
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "[u8; 16]")]
     pub entry_instance_id: [u8; 16],
+    #[serde(with = "serde_bytes")]
+    #[schemars(with = "[u8; 16]")]
     pub binding_id: [u8; 16],
     pub role_id: u32,
     pub state_id: u32,

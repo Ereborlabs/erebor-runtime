@@ -94,6 +94,7 @@ impl ContextProvider for NativeContext<'_> {
 }
 
 impl ObservedEffects {
+    pub const CONTEXT_BINDINGS_SQL: &str = include_str!("context_bindings.sql");
     pub const RECORDED_SNAPSHOT_SQL: &str = include_str!("recorded_snapshot.sql");
 
     fn query(sql: &str) -> Result<SqlStatement> {
@@ -131,6 +132,10 @@ impl RelationPlanner for ObservedEffects {
         let (sql, inputs): (&str, &[&'static str]) = match name.table() {
             "observed_effects" => (include_str!("observed_effects.sql"), &["records"]),
             "coverage_ranges" => (include_str!("coverage_ranges.sql"), &["records", "reports"]),
+            "context_bindings" => (
+                Self::CONTEXT_BINDINGS_SQL,
+                &["records", "targets", "policies"],
+            ),
             "recorded_snapshot" => (
                 Self::RECORDED_SNAPSHOT_SQL,
                 &[

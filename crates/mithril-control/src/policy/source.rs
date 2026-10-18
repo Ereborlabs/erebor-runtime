@@ -527,22 +527,7 @@ pub struct RoleDefinitionV1 {
     pub description_artifact_digest: Option<String>,
 }
 
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum EntryKindV1 {
-    ContainerStart,
-    ExternalRuntimeUnknown,
-    DeclaredPostStart,
-    DeclaredPreStop,
-    DeclaredStartupProbe,
-    DeclaredReadinessProbe,
-    DeclaredLivenessProbe,
-    QualifiedJoinedPurpose,
-    ApprovedAdministrativeExec,
-    RestoredUnknown,
-}
+pub use araphor_data::EntryKindV1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -667,19 +652,7 @@ pub struct EffectFamilyDefaultV1 {
     pub finding: Option<FindingSpecV1>,
 }
 
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum EffectFamilyV1 {
-    Exec,
-    File,
-    Network,
-    Device,
-    Privilege,
-    Ipc,
-    Mount,
-}
+pub use araphor_data::EffectFamilyV1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1044,17 +1017,7 @@ pub enum LocalObjectSelectorV1 {
     },
 }
 
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum BindingLifecycleV1 {
-    Preparing,
-    Active,
-    Draining,
-    Terminating,
-    Tombstoned,
-}
+pub use araphor_data::BindingLifecycleV1;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

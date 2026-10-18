@@ -1,4 +1,3 @@
-use super::super::compiler::CompiledOperationV1;
 use super::super::{source::*, source_proof::ProofQualityPredicateV1, source_response::*};
 use super::value::PolicyValue;
 use super::{Validate, ValidationIssue, ValidationResult};
@@ -138,59 +137,6 @@ impl Validate for IpcRelationshipRuleV1 {
             )
         );
         Ok(())
-    }
-}
-
-impl EffectFamilyV1 {
-    pub(super) fn accepts(self, operation: &str) -> bool {
-        match self {
-            Self::Exec => matches!(operation, "EXECUTE" | "MMAP_EXEC" | "MPROTECT"),
-            Self::File => matches!(
-                operation,
-                "OPEN_READ"
-                    | "OPEN_WRITE"
-                    | "READ"
-                    | "WRITE"
-                    | "MMAP_READ"
-                    | "MMAP_WRITE"
-                    | "MPROTECT"
-                    | "CREATE"
-                    | "SETATTR"
-                    | "UNLINK"
-                    | "LINK"
-                    | "RENAME"
-            ),
-            Self::Network => matches!(
-                operation,
-                "SOCKET_CREATE"
-                    | "BIND"
-                    | "LISTEN"
-                    | "ACCEPT"
-                    | "CONNECT"
-                    | "SEND"
-                    | "RECEIVE"
-                    | "SHUTDOWN"
-                    | "SETSOCKOPT"
-            ),
-            Self::Device => operation == "IOCTL",
-            Self::Privilege => {
-                matches!(
-                    operation,
-                    "CAPABILITY"
-                        | "BPF"
-                        | "IO_URING_SETUP"
-                        | "IO_URING_REGISTER"
-                        | "IO_URING_SQPOLL"
-                        | "IO_URING_OVERRIDE_CREDS"
-                        | "IO_URING_COMMAND"
-                ) || CompiledOperationV1::try_from(operation)
-                    .ok()
-                    .and_then(CompiledOperationV1::process_control)
-                    .is_some()
-            }
-            Self::Ipc => operation == "IPC_ACCESS",
-            Self::Mount => matches!(operation, "MOUNT" | "UNMOUNT" | "PIVOT_ROOT" | "MOVE_MOUNT"),
-        }
     }
 }
 

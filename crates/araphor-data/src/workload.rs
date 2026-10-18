@@ -39,6 +39,7 @@ pub struct WorkloadTargetFactV1 {
 #[serde(deny_unknown_fields)]
 pub struct TargetContextV1 {
     pub workload: WorkloadTargetFactV1,
+    pub workload_digest_valid: bool,
     pub policy_source_revision_id: String,
     pub target_snapshot_digest: String,
     pub signed_profile_digest: String,

@@ -285,6 +285,7 @@ dependencies = [
  "rustix 1.1.4",
  "schemars 1.2.2",
  "serde",
+ "serde_arrow",
  "serde_json",
  "sha2 0.10.9",
  "snafu",
@@ -292,6 +293,7 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+ "zerocopy",
 ]
 
 [[package]]
@@ -5009,6 +5011,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde-saphyr 1.0.1",
+ "serde_arrow",
  "serde_json",
  "sha2 0.10.9",
  "snafu",
