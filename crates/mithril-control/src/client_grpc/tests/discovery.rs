@@ -7,6 +7,52 @@ const SQL: &str = "SELECT tenant_id, source_id, event_count, first_cursor, last_
         effect_family, operation, binding_id
     FROM discovery.observed_effects((SELECT * FROM events))";
 
+const RECORDED_COUNTS: &str = "SELECT accepted_records, included_records,
+    unresolved_records, excluded_records, duplicate_deliveries,
+    array_length(atoms), array_length(coverage), array_length(unresolved),
+    array_length(excluded), array_length(lifecycle) FROM snapshot";
+
+fn recorded_sql(projection: &str) -> String {
+    format!(
+        "WITH identified AS (
+            SELECT events.*, named_struct('stream', named_struct(
+                'tenant_id', tenant_id, 'node_id', node_id, 'node_boot_id', node_boot_id,
+                'label_epoch', label_epoch, 'source_id', source_id, 'source_epoch', source_epoch),
+                'cpu_id', cpu_id, 'durable_cursor', source_cursor) AS record_id
+            FROM events
+        ),
+        empty_contexts AS (
+            SELECT record_id, '' AS subject_revision, '' AS image_digest,
+                '' AS configuration_digest, process_instance_id, entry_instance_id,
+                binding_id, role_id, state_id, entry_rule_id,
+                CAST(0 AS BIGINT UNSIGNED) AS catalog_revision,
+                named_struct('workload_selector_id', '', 'protected_scope_id', '',
+                    'execution_set_id', '', 'entry_kind', '', 'role_id', '',
+                    'process_state_id', '', 'effect_family', effect_family,
+                    'operation_id', '', 'operation', operation,
+                    'operation_argument', COALESCE(operation_argument, 0),
+                    'argument_wildcard', FALSE, 'object_selector', '',
+                    'binding_lifecycle', '') AS static_key,
+                named_struct('profile_id', '', 'profile_version', CAST(0 AS BIGINT UNSIGNED),
+                    'source_revision_id', '', 'signed_profile_digest', '') AS policy_revision
+            FROM identified WHERE FALSE
+        ),
+        snapshot AS (
+            SELECT * FROM discovery.recorded_snapshot(
+                (SELECT * FROM events), (SELECT * FROM empty_contexts),
+                (SELECT * FROM discovery.coverage_ranges(
+                    (SELECT * FROM events), (SELECT * FROM coverage))),
+                (SELECT record_id, CAST(NULL AS VARCHAR) AS reason FROM identified WHERE FALSE),
+                (SELECT CAST(NULL AS VARCHAR) AS \"case\", CAST(NULL AS VARCHAR) AS state,
+                    [record_id] AS records, CAST(NULL AS VARCHAR) AS reason
+                    FROM identified WHERE FALSE),
+                (SELECT decode('01010101010101010101010101010101', 'hex') AS tenant_id,
+                    'retained-cut' AS source_revision, 'OBSERVED_RUNTIME' AS proof_kind))
+        )
+        {projection}"
+    )
+}
+
 fn source(tenant_id: [u8; 16]) -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {
         tenant_id,
@@ -65,13 +111,7 @@ async fn next_rows(stream: &mut ClientStream<proto::QueryFrame>) -> TestResult<p
     }
 }
 
-fn assert_rows(
-    frame: &proto::QueryFrame,
-    source: &EvidenceIntakeIdentityV1,
-    count: u64,
-) -> TestResult {
-    use proto::query_value::Kind;
-
+fn assert_receipt(frame: &proto::QueryFrame, source: &EvidenceIntakeIdentityV1, count: u64) {
     assert_eq!(frame.operation, proto::QueryOperation::Replace as i32);
     assert_eq!(frame.coverage.len(), 1);
     let receipt = &frame.coverage[0];
@@ -88,6 +128,16 @@ fn assert_rows(
     );
     assert_eq!(receipt.cpu_id, 0);
     assert_eq!(receipt.contiguous_cursor, count);
+}
+
+fn assert_rows(
+    frame: &proto::QueryFrame,
+    source: &EvidenceIntakeIdentityV1,
+    count: u64,
+) -> TestResult {
+    use proto::query_value::Kind;
+
+    assert_receipt(frame, source, count);
     let Some(proto::query_frame::Payload::Rows(rows)) = &frame.payload else {
         return Err("query rows are absent".into());
     };
@@ -109,6 +159,26 @@ fn assert_rows(
             Some(Kind::Unsigned(7)),
             Some(Kind::Null(true)),
         ]
+    );
+    Ok(())
+}
+
+fn assert_recorded(frame: &proto::QueryFrame, count: u64) -> TestResult {
+    let Some(proto::query_frame::Payload::Rows(rows)) = &frame.payload else {
+        return Err("recorded rows are absent".into());
+    };
+    assert!(!rows.limited);
+    assert_eq!(rows.rows.len(), 1);
+    assert_eq!(
+        rows.rows[0]
+            .values
+            .iter()
+            .map(|value| value.kind.clone())
+            .collect::<Vec<_>>(),
+        [count, 0, count, 0, 0, 0, 1, count, 0, 9]
+            .into_iter()
+            .map(|value| Some(proto::query_value::Kind::Unsigned(value)))
+            .collect::<Vec<_>>()
     );
     Ok(())
 }
@@ -276,5 +346,123 @@ async fn discovery_rpc_coverage() -> TestResult {
             ]
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorded_rpc_finite() -> TestResult {
+    use proto::query_value::Kind;
+
+    let fixture = Fixture::new()?;
+    let source = source([1; 16]);
+    retain(&fixture, &source, 1, 2)?;
+    retain(
+        &fixture,
+        &EvidenceIntakeIdentityV1 {
+            tenant_id: [9; 16],
+            ..source.clone()
+        },
+        1,
+        5,
+    )?;
+    let meta = fixture.service.data()?.store.meta()?;
+    for projection in [
+        RECORDED_COUNTS,
+        "SELECT item['record_id']['stream']['tenant_id'] AS tenant_id,
+            item['record_id']['stream']['source_id'] AS source_id,
+            item['record_id']['cpu_id'] AS cpu_id,
+            item['record_id']['durable_cursor'] AS source_cursor, item['reason'] AS reason
+        FROM (SELECT UNNEST(unresolved) AS item FROM snapshot) ORDER BY source_cursor",
+    ] {
+        let mut stream = fixture
+            .service
+            .query(fixture.request(
+                proto::QueryRequest {
+                    sql: recorded_sql(projection),
+                    ..Default::default()
+                },
+                false,
+            )?)
+            .await?
+            .into_inner();
+        let frame = next_rows(&mut stream).await?;
+        assert_receipt(&frame, &source, 2);
+        assert_eq!(frame.store_uuid, meta.store_uuid.as_bytes());
+        assert_eq!(frame.recovery_epoch, meta.recovery_epoch);
+        assert_eq!(frame.read_revision, meta.commit_revision);
+        if projection == RECORDED_COUNTS {
+            assert_recorded(&frame, 2)?;
+        } else {
+            let Some(proto::query_frame::Payload::Rows(rows)) = &frame.payload else {
+                return Err("unresolved rows are absent".into());
+            };
+            assert!(!rows.limited);
+            assert_eq!(
+                rows.rows
+                    .iter()
+                    .map(|row| row
+                        .values
+                        .iter()
+                        .map(|value| value.kind.clone())
+                        .collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+                (1..=2)
+                    .map(|cursor| vec![
+                        Some(Kind::Binary(source.tenant_id.to_vec())),
+                        Some(Kind::Binary(source.source_id.to_vec())),
+                        Some(Kind::Unsigned(0)),
+                        Some(Kind::Unsigned(cursor)),
+                        Some(Kind::Text("MISSING_RECORDED_CONTEXT".into())),
+                    ])
+                    .collect::<Vec<_>>()
+            );
+        }
+        loop {
+            match Fixture::next(&mut stream).await?.payload {
+                Some(proto::query_frame::Payload::Terminal(terminal)) => {
+                    assert_eq!(terminal.reason, "Completed");
+                    assert!(!terminal.last_checkpoint.is_empty());
+                    break;
+                }
+                Some(proto::query_frame::Payload::Error(error)) => {
+                    return Err(format!("query failed: {}", error.code).into());
+                }
+                Some(proto::query_frame::Payload::Rows(_)) => {
+                    return Err("finite query repeated its rows".into());
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorded_rpc_follow() -> TestResult {
+    let fixture = Fixture::new()?;
+    let source = source([1; 16]);
+    retain(&fixture, &source, 1, 1)?;
+    let mut stream = fixture
+        .service
+        .query(fixture.request(
+            proto::QueryRequest {
+                sql: recorded_sql(RECORDED_COUNTS),
+                follow: true,
+                ..Default::default()
+            },
+            false,
+        )?)
+        .await?
+        .into_inner();
+    let first = next_rows(&mut stream).await?;
+    assert_receipt(&first, &source, 1);
+    assert_recorded(&first, 1)?;
+    retain(&fixture, &source, 2, 2)?;
+    let update = next_rows(&mut stream).await?;
+    assert_receipt(&update, &source, 3);
+    assert_recorded(&update, 3)?;
+    assert!(update.read_revision > first.read_revision);
+    assert_eq!(update.store_uuid, first.store_uuid);
+    assert_eq!(update.recovery_epoch, first.recovery_epoch);
     Ok(())
 }

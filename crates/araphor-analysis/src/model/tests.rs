@@ -69,7 +69,7 @@ pub(in crate::model) fn evaluate(
 fn sql_model_state_provenance() -> TestResult {
     let fixture = QueryFixture::new()?;
     let owner = fixture.owner(Limits {
-        evaluate_timeout: Duration::from_secs(30),
+        evaluate_timeout: Some(Duration::from_secs(30)),
         ..Default::default()
     })?;
     let events = port("events", "id");
@@ -232,7 +232,7 @@ fn sql_model_source_bounds() -> TestResult {
     let owner = fixture.owner(Limits {
         output_rows: 1,
         extract_timeout: Duration::from_secs(30),
-        evaluate_timeout: Duration::from_secs(30),
+        evaluate_timeout: Some(Duration::from_secs(30)),
         ..Default::default()
     })?;
     let selection =
@@ -397,7 +397,7 @@ fn sql_model_exact_parameters() -> TestResult {
 fn admitted_program_order() -> TestResult {
     let fixture = QueryFixture::new()?;
     let owner = fixture.owner(Limits {
-        evaluate_timeout: Duration::from_secs(30),
+        evaluate_timeout: Some(Duration::from_secs(30)),
         ..Default::default()
     })?;
     let mut model = sdk::Model::new(

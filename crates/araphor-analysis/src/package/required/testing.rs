@@ -83,7 +83,7 @@ impl InstalledAnalysis {
         let query = Engine::new(
             store,
             Limits {
-                evaluate_timeout: Duration::from_secs(30),
+                evaluate_timeout: Some(Duration::from_secs(30)),
                 ..Default::default()
             },
         )?;

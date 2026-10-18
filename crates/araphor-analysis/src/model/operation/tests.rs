@@ -28,7 +28,7 @@ fn limits() -> Limits {
     Limits {
         tenant_evaluations: 1,
         extract_timeout: Duration::from_secs(30),
-        evaluate_timeout: Duration::from_secs(30),
+        evaluate_timeout: Some(Duration::from_secs(30)),
         ..Default::default()
     }
 }

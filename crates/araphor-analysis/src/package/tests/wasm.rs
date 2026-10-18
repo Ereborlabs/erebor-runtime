@@ -148,7 +148,7 @@ async fn wasm_failure_retains_state() -> TestResult {
         let fixture = Fixture::new_backend_limits(
             crate::Limits {
                 extract_timeout: std::time::Duration::from_secs(30),
-                evaluate_timeout: std::time::Duration::from_secs(30),
+                evaluate_timeout: Some(std::time::Duration::from_secs(30)),
                 ..Default::default()
             },
             crate::AnalysisLimits {

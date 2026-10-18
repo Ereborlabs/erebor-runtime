@@ -45,7 +45,7 @@ impl RetainedFixture {
         let query = Engine::new(
             fixture.store.clone(),
             Limits {
-                evaluate_timeout: Duration::from_secs(30),
+                evaluate_timeout: Some(Duration::from_secs(30)),
                 ..Default::default()
             },
         )?;

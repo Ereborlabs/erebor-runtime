@@ -19,6 +19,7 @@ use datafusion::logical_expr::LogicalPlan;
 use crate::ObservedEffects;
 
 mod coverage;
+mod recorded;
 
 const INPUTS: [&str; 18] = [
     "tenant_id",

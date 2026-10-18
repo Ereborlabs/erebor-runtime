@@ -128,7 +128,7 @@ impl Fixture {
             store,
             Limits {
                 extract_timeout: Duration::from_secs(5),
-                evaluate_timeout: Duration::from_secs(5),
+                evaluate_timeout: Some(Duration::from_secs(5)),
                 ..Default::default()
             },
         )

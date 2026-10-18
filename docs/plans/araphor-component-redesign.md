@@ -74,6 +74,67 @@ initialization. Its current Rust wrapper exposes no pending-query registration
 point. Removing the default read deadline requires cancellation-safe native
 execution first. These requirements remain **Not done**.
 
+### Native recorded Discovery computation
+
+Implementation and selected functional qualification: **Done**. The new
+discovery.recorded_snapshot call belongs to araphor-discovery-effects. It
+accepts six explicit typed relations: events, raw context bindings, qualified
+ranges, exclusions, lifecycle entries, and one metadata row. Native SQL builds
+complete atoms, coverage, dispositions, lifecycle, and accounting counters.
+The existing algorithms remain available for exact result comparison.
+
+The caller submits SQL
+  -> the native relation hook plans each input subquery once in caller scope
+  -> a new native PlannerContext binds those logical plans to the input names
+  -> native SqlToRel plans the package SQL and its CTEs
+  -> the native optimizer and physical planner build ordinary operators
+  -> one Data capture supplies the authorized Arrow inputs and receipts
+  -> native execution computes the typed snapshot fields
+  -> a native Filter rejects SQL-computed relational or required NULL-field errors
+  -> Query returns the Arrow result and captured receipts
+
+The former AST input substitution is deleted for all three Discovery SQL calls.
+A borrowed ContextProvider adapter only supplies the sized SqlToRel interface;
+it forwards all methods and adds no catalog policy or execution state. This
+replaces the first draft that expanded CTEs into nested SQL and overflowed the
+parser stack when the recorded call composed with coverage_ranges.
+
+Query recognizes repeated uses of the same source window. Every events scan
+must have identical bounds through a valid source path. An unbounded branch,
+changed received_at expression, or a bound above a limit, aggregate, window,
+or multi-input operation cannot restrict the captured source. The existing
+Query progress owner supplies intake notices and exact expiry events. There
+is no new source reader, scheduler, physical operator, or result cache.
+
+The evaluation timeout is now optional and defaults to None. An unset timeout
+retains the parent deadline and shared cancellation without creating another
+deadline. Configured timeouts still bound physical planning and execution.
+Zero remains invalid. Read extraction retains its separate deadline; the
+remaining default quotas and polling are **Not done**.
+
+Selected qualification passes 68 distinct cases: 12 Data read-control cases,
+20 SQL package cases, 13 Query cases, 15 Analysis cases, and eight Control
+cases. The cases preserve exact Arrow results, eight ordered witnesses,
+source and tenant identity, duplicate rejection, lifecycle, coverage, maximum
+UInt64 cursors, native and Wasm deadlines, cancellation, RPC receipts, idle
+waits, and expiry without new intake. The source and command record is
+`/tmp/araphor-recorded-snapshot-verification1.json`. No speed result is claimed.
+
+Strict Clippy passes all targets in Data, Discovery Effects, Query, Analysis,
+Control, and E2E. Scoped formatting and whitespace checks pass. Full workspace
+CI, physical Kubernetes qualification, and benchmarks are not run.
+
+This increment adds 166 production Rust code lines and 464 native SQL lines.
+The Rust count excludes comments, blank lines, tests, documents, and moves.
+The complete redesign still adds 937 production code lines against
+`7b7b407a`. The required 6,000-line reduction needs 6,937 more net code
+deletions. The count is `/tmp/araphor-recorded-snapshot-count1.json`.
+
+Complete Discovery replacement: **Not done**. The old reader, interval state,
+installed package pins, authoritative context capture, and atomic profile
+publication remain. Do not run the new SQL body under an old installed native
+or Wasm artifact identity. The complete redesign remains **Not done**.
+
 ### Reactive retention
 
 Implementation and selected qualification: **Done**. Control no longer

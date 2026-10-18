@@ -234,11 +234,16 @@ arrays preserve the admitted report order. The coverage relation encodes
 Control-admitted reason tokens as comma-separated text. This call does not
 define a new encoding for arbitrary reason strings.
 
-The shared input binder uses the native SQL parser and a post-order native
-AST visitor. It replaces input references in the package body. It does not
-visit or change the inserted caller queries. Caller CTE names remain in caller
-scope. Explicit parentheses keep each IS DISTINCT FROM comparison inside its
-OR operand under the native parser rules.
+The shared input binder plans each caller subquery once in its original scope.
+It aliases each native logical plan to its input name and inserts that plan
+into a new native PlannerContext. SqlToRel plans the fixed package SQL in that
+scope. DataFusion owns CTE lookup and planning. The former AST substitution
+visitor is removed. Caller CTE names cannot capture package CTE names.
+
+NativeContext only adapts a borrowed ContextProvider to the sized SqlToRel
+interface. It forwards all catalog, function, option, and planner methods.
+It has no policy, table filter, state, or execution owner. Explicit parentheses
+keep each IS DISTINCT FROM comparison inside its OR operand.
 
 This call supplies the raw range qualifier. It does not perform the later
 builtin temporal degradation or final profile merge. Graph callers still use
@@ -263,6 +268,65 @@ in that order. They cover native SQL plans, split batches, repeated evaluation,
 NULL dimensions, aliases, invalid arguments, retained input, source and tenant
 scope, window expiry without intake, idle waits, and joined cancellation.
 The plan records the final verification result.
+
+### Recorded snapshot computation
+
+[recorded_snapshot.sql](../../crates/araphor-discovery-effects/src/recorded_snapshot.sql)
+computes one snapshot through native joins, windows, aggregates, and Arrow
+structs and lists. The SQL call is discovery.recorded_snapshot. It takes six
+subquery arguments in this order:
+
+| Input | Required content |
+| --- | --- |
+| records | Canonical events fields, full source identity, cursor, decoded effect and lifetime fields, and original framed_record bytes. |
+| contexts | Typed DiscoveryContextBindingV1 fields. The caller supplies raw bindings, not prepared atom keys. |
+| ranges | The flat coverage_ranges schema for the same selected records. |
+| exclusions | A typed record_id and reason. |
+| lifecycle | Case, state, a list of record IDs, and an optional reason. |
+| metadata | One tenant_id, source_revision, and proof_kind row. |
+
+The result contains atoms, coverage, unresolved records, excluded records,
+all nine lifecycle cases, and five accounting counters. Empty collections
+remain typed empty lists. Native ROW_NUMBER selects at most eight ordered
+witnesses per atom before list construction. This is the existing witness
+sample contract; it is not an input quota. Native decimal sums preserve
+UInt64 overflow checks. Adjacent ranges with the same identity, revision, and
+interval combine their worst coverage state and ordered distinct reasons.
+
+SQL computes relational conflicts and required NULL-field errors. A small
+scalar guard converts those errors into a query failure through an ordinary
+native Filter. DataFusion 53.1 has no installed assertion function. The guard
+does not compute atoms or add an execution operator. Data retains wire and
+primitive field validation.
+
+Repeated uses of one admitted received-time window share Query progress and
+one captured input selection. Every events scan must have the same bounds.
+The window checks reject an unbounded branch, a changed received_at expression,
+or a bound above a limit, aggregate, window, or multi-input operation. These
+placements cannot safely restrict the source before native execution. Finite
+queries retain native SQL behavior.
+
+Read the [recorded cases](../../crates/araphor-discovery-effects/src/tests/recorded.rs),
+then the existing subscription and RPC cases above. The comparison encodes
+the retained algorithm result with the actual Arrow schema and compares all
+arrays. No byte-array-to-JSON result conversion is required.
+
+This computation does not replace the old Discovery reader, interval state,
+package revision pins, authoritative context capture, or atomic profile commit.
+Existing native and Wasm algorithms remain the comparison implementations.
+Do not attribute this built-in SQL computation to an old installed artifact.
+
+The evaluate_timeout configuration is optional and defaults to None.
+[AnalysisReadControl::within](../../crates/araphor-data/src/analysis/read.rs)
+inherits the parent deadline and shared cancellation for None. A configured
+duration creates a shorter stage deadline. Zero is invalid. Extraction has a
+separate deadline; disabling evaluation timeout does not disable authorization.
+
+Selected qualification passes 68 distinct cases across Data, Query, Analysis,
+Control, and the SQL package. Strict Clippy passes all targets in the six
+affected crates. Final source and command records are kept in
+`/tmp/araphor-recorded-snapshot-verification1.json`. Full workspace CI and
+benchmarks are not run. Complete Discovery replacement remains **Not done**.
 
 ## Discovery record input contract
 

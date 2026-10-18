@@ -9,7 +9,7 @@ async fn native_checkpoint_retry_and_restart() -> TestResult {
         global_evaluations: 1,
         tenant_evaluations: 1,
         extract_timeout: std::time::Duration::from_secs(30),
-        evaluate_timeout: std::time::Duration::from_secs(30),
+        evaluate_timeout: Some(std::time::Duration::from_secs(30)),
         ..Default::default()
     })?;
     super::super::wasm::checkpoint::replay(fixture, native(bundle()?)?, "native").await

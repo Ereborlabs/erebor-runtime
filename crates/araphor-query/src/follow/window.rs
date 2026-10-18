@@ -2,7 +2,7 @@ use std::ops::Bound;
 
 use araphor_data::AnalysisSelectionV1;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::{ExprSchema, ScalarValue};
 use datafusion::datasource::source_as_provider;
 use datafusion::logical_expr::{Expr, LogicalPlan, Operator};
@@ -11,10 +11,66 @@ use snafu::ResultExt as _;
 use crate::sources::SourceProvider;
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Window {
     inclusive: Option<u64>,
     exclusive: Option<u64>,
+}
+
+#[derive(Default)]
+struct Windows {
+    stack: Vec<Option<Window>>,
+    scans: Vec<Option<Window>>,
+    filters: usize,
+    invalid: bool,
+}
+
+impl<'n> TreeNodeVisitor<'n> for Windows {
+    type Node = LogicalPlan;
+
+    fn f_down(&mut self, plan: &'n LogicalPlan) -> datafusion::common::Result<TreeNodeRecursion> {
+        let mut window = self.stack.last().copied().flatten();
+        if !Window::preserves(plan) && !Window::events(plan) {
+            window = None;
+        }
+        if let LogicalPlan::Filter(filter) = plan {
+            let filters = self.filters;
+            filter.predicate.apply(|expression| {
+                if matches!(expression, Expr::BinaryExpr(binary) if binary.op == Operator::And) {
+                    return Ok(TreeNodeRecursion::Continue);
+                }
+                if let Some(found) = Window::predicate(expression, filter.input.schema()) {
+                    window = Some(window.map_or(found, |current| current.intersect(found)));
+                    self.filters += 1;
+                }
+                Ok(TreeNodeRecursion::Jump)
+            })?;
+            if self.filters != filters {
+                let mut local = false;
+                filter.input.apply(|input| {
+                    if Window::events(input) {
+                        local = true;
+                    }
+                    Ok(if Window::preserves(input) {
+                        TreeNodeRecursion::Continue
+                    } else {
+                        TreeNodeRecursion::Jump
+                    })
+                })?;
+                self.invalid |= !local;
+            }
+        }
+        if Window::events(plan) {
+            self.scans.push(window);
+        }
+        self.stack.push(window);
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn f_up(&mut self, _: &'n LogicalPlan) -> datafusion::common::Result<TreeNodeRecursion> {
+        self.stack.pop();
+        Ok(TreeNodeRecursion::Continue)
+    }
 }
 
 impl Window {
@@ -50,46 +106,56 @@ impl Window {
         if clocks == 0 {
             return Ok(None);
         }
-        let mut windows = Vec::new();
-        let mut scans = 0;
-        plan.apply_with_subqueries(|plan| {
-            if let LogicalPlan::TableScan(scan) = plan {
-                if scan.table_name.table() == "events"
-                    && source_as_provider(&scan.source).is_ok_and(|provider| {
-                        provider
-                            .as_any()
-                            .downcast_ref::<SourceProvider>()
-                            .is_some_and(|source| source.origin.durable() == Some("events"))
-                    })
-                {
-                    scans += 1;
-                }
-            }
-            if let LogicalPlan::Filter(filter) = plan {
-                filter.predicate.apply(|expression| {
-                    if matches!(expression, Expr::BinaryExpr(binary) if binary.op == Operator::And)
-                    {
-                        return Ok(TreeNodeRecursion::Continue);
-                    }
-                    if let Some(window) = Self::predicate(expression, filter.input.schema()) {
-                        windows.push(window);
-                    }
-                    Ok(TreeNodeRecursion::Jump)
-                })?;
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .context(SqlSnafu)?;
-        if scans != 1 || windows.len() != clocks {
+        let mut windows = Windows::default();
+        plan.visit_with_subqueries(&mut windows).context(SqlSnafu)?;
+        let window = windows.scans.first().copied().flatten();
+        if windows.invalid
+            || window.is_none()
+            || windows.filters != clocks
+            || windows.scans.iter().any(|scan| *scan != window)
+        {
             return InvalidSnafu {
                 field: "follow clock filter",
             }
             .fail();
         }
-        Ok(Some(Self {
-            inclusive: windows.iter().filter_map(|window| window.inclusive).min(),
-            exclusive: windows.iter().filter_map(|window| window.exclusive).min(),
-        }))
+        Ok(window)
+    }
+
+    fn intersect(self, other: Self) -> Self {
+        Self {
+            inclusive: self.inclusive.into_iter().chain(other.inclusive).min(),
+            exclusive: self.exclusive.into_iter().chain(other.exclusive).min(),
+        }
+    }
+
+    fn events(plan: &LogicalPlan) -> bool {
+        matches!(plan, LogicalPlan::TableScan(scan)
+        if scan.table_name.table() == "events"
+            && source_as_provider(&scan.source).is_ok_and(|provider| {
+                provider.as_any().downcast_ref::<SourceProvider>()
+                    .is_some_and(|source| source.origin.durable() == Some("events"))
+            }))
+    }
+
+    fn preserves(plan: &LogicalPlan) -> bool {
+        if let LogicalPlan::Projection(projection) = plan {
+            return projection.expr.iter().zip(projection.schema.fields()).any(|(expression, field)| {
+                let expression = match expression {
+                    Expr::Alias(alias) => alias.expr.as_ref(),
+                    expression => expression,
+                };
+                field.name() == "received_at"
+                    && matches!(expression, Expr::Column(column) if column.name == "received_at")
+            });
+        }
+        matches!(
+            plan,
+            LogicalPlan::SubqueryAlias(_)
+                | LogicalPlan::Filter(_)
+                | LogicalPlan::Repartition(_)
+                | LogicalPlan::Distinct(datafusion::logical_expr::Distinct::All(_))
+        ) || matches!(plan, LogicalPlan::Sort(sort) if sort.fetch.is_none())
     }
 
     fn predicate(expression: &Expr, schema: &datafusion::common::DFSchema) -> Option<Self> {

@@ -109,7 +109,7 @@ impl Fixture {
     pub fn new() -> TestResult<Self> {
         Self::new_limits(Limits {
             extract_timeout: Duration::from_secs(30),
-            evaluate_timeout: Duration::from_secs(30),
+            evaluate_timeout: Some(Duration::from_secs(30)),
             ..Default::default()
         })
     }
@@ -133,7 +133,7 @@ impl Fixture {
             root,
             Limits {
                 extract_timeout: Duration::from_secs(30),
-                evaluate_timeout: Duration::from_secs(30),
+                evaluate_timeout: Some(Duration::from_secs(30)),
                 ..Default::default()
             },
             AnalysisLimits::default(),

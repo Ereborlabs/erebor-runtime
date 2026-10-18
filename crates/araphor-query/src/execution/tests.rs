@@ -32,7 +32,7 @@ struct Fixture {
 impl Fixture {
     fn new(mut limits: Limits) -> Self {
         limits.extract_timeout = Duration::from_secs(5);
-        limits.evaluate_timeout = Duration::from_secs(5);
+        limits.evaluate_timeout = Some(Duration::from_secs(5));
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(AnalysisStore::open(directory.path().join("data")).unwrap());
         let engine = Engine::new(store, limits).unwrap();
@@ -341,6 +341,39 @@ fn native_registry_contract() {
             .keys()
             .collect::<std::collections::BTreeSet<_>>(),
     );
+}
+
+#[test]
+fn evaluation_timeout_config() {
+    let defaults: Limits = serde_json::from_str("{}").unwrap();
+    assert_eq!(defaults.evaluate_timeout, None);
+    defaults.validate().unwrap();
+    for timeout in [None, Some(Duration::new(2, 3))] {
+        let limits: Limits = serde_json::from_value(serde_json::json!({
+            "evaluate_timeout": timeout,
+        }))
+        .unwrap();
+        assert_eq!(limits.evaluate_timeout, timeout);
+        limits.validate().unwrap();
+        let restored: Limits =
+            serde_json::from_value(serde_json::to_value(&limits).unwrap()).unwrap();
+        assert_eq!(restored, limits);
+    }
+}
+
+#[test]
+fn evaluation_timeout_zero() {
+    let limits: Limits = serde_json::from_value(serde_json::json!({
+        "evaluate_timeout": Duration::ZERO,
+    }))
+    .unwrap();
+    assert!(matches!(
+        limits.validate(),
+        Err(crate::Error::Invalid {
+            field: "execution limits",
+            ..
+        })
+    ));
 }
 
 #[test]

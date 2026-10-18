@@ -203,7 +203,7 @@ async fn receipt_releases_binary_scratch() -> TestResult {
             input_capacity: 2 * 1024 * 1024,
             output_capacity: 2 * 1024 * 1024,
             extract_timeout: Duration::from_secs(5),
-            evaluate_timeout: Duration::from_secs(5),
+            evaluate_timeout: Some(Duration::from_secs(5)),
             ..Default::default()
         },
     )?;

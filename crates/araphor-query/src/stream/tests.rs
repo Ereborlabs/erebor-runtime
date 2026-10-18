@@ -31,7 +31,7 @@ impl Fixture {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(AnalysisStore::open(directory.path().join("data")).unwrap());
         let limits = Limits {
-            evaluate_timeout: Duration::from_secs(5),
+            evaluate_timeout: Some(Duration::from_secs(5)),
             extract_timeout: Duration::from_secs(5),
             ..Default::default()
         };

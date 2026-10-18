@@ -34,8 +34,12 @@ impl Default for AnalysisReadControl {
 
 impl AnalysisReadControl {
     pub(super) fn monitored(monitor: Arc<ReadMonitor>) -> Self {
+        Self::at(Instant::now() + Duration::from_secs(1), monitor)
+    }
+
+    fn at(deadline: Instant, monitor: Arc<ReadMonitor>) -> Self {
         Self {
-            deadline: Instant::now() + Duration::from_secs(1),
+            deadline,
             cancelled: Arc::new(AtomicBool::new(false)),
             cancelled_event: Arc::new(tokio::sync::Notify::new()),
             interrupt: Arc::new(Mutex::new(None)),
@@ -47,8 +51,8 @@ impl AnalysisReadControl {
         }
     }
 
-    pub fn with_timeout(timeout: Duration) -> Result<Self> {
-        let deadline = Instant::now()
+    fn timeout_deadline(timeout: Duration) -> Result<Instant> {
+        Instant::now()
             .checked_add(timeout)
             .filter(|_| !timeout.is_zero())
             .ok_or_else(|| {
@@ -57,30 +61,41 @@ impl AnalysisReadControl {
                     reason: "the read timeout is zero or exceeds the clock range",
                 }
                 .build()
-            })?;
-        Ok(Self {
-            deadline,
-            ..Default::default()
-        })
+            })
     }
 
-    pub fn stage(&self, timeout: Duration) -> Result<Self> {
-        Ok(Self {
+    pub fn with_timeout(timeout: Duration) -> Result<Self> {
+        Ok(Self::at(
+            Self::timeout_deadline(timeout)?,
+            Arc::new(ReadMonitor::default()),
+        ))
+    }
+
+    fn child(&self, deadline: Instant) -> Self {
+        Self {
+            deadline,
             cancelled: Arc::clone(&self.cancelled),
             cancelled_event: Arc::clone(&self.cancelled_event),
             interrupt: Arc::clone(&self.interrupt),
             monitor: Arc::clone(&self.monitor),
             #[cfg(any(test, feature = "test-fixtures"))]
             read_step: Arc::clone(&self.read_step),
-            ..Self::with_timeout(timeout)?
-        })
+            #[cfg(test)]
+            wait_signal: Mutex::new(None),
+        }
     }
 
-    pub fn within(&self, timeout: Duration) -> Result<Self> {
+    pub fn stage(&self, timeout: Duration) -> Result<Self> {
+        Ok(self.child(Self::timeout_deadline(timeout)?))
+    }
+
+    pub fn within(&self, timeout: impl Into<Option<Duration>>) -> Result<Self> {
         self.check()?;
-        let mut stage = self.stage(timeout)?;
-        stage.deadline = stage.deadline.min(self.deadline);
-        Ok(stage)
+        let deadline = match timeout.into() {
+            Some(timeout) => Self::timeout_deadline(timeout)?.min(self.deadline),
+            None => self.deadline,
+        };
+        Ok(self.child(deadline))
     }
 
     pub fn cancel(&self) -> Result<()> {
@@ -511,6 +526,68 @@ mod tests {
     use super::*;
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    #[test]
+    fn optional_deadline_inherits() -> TestResult {
+        let parent = AnalysisReadControl::with_timeout(Duration::from_secs(60))?;
+        let inherited = parent.within(None)?;
+        assert_eq!(inherited.deadline, parent.deadline);
+        assert_eq!(
+            parent.within(Some(Duration::from_secs(120)))?.deadline,
+            parent.deadline
+        );
+        assert!(parent.within(Some(Duration::from_secs(1)))?.deadline < parent.deadline);
+        assert!(parent.within(Some(Duration::ZERO)).is_err());
+        assert!(parent.within(Some(Duration::MAX)).is_err());
+        let mut expired = inherited;
+        expired.deadline = Instant::now();
+        assert!(matches!(
+            expired.within(None),
+            Err(crate::Error::AnalysisReadDeadline { .. })
+        ));
+        parent.check()?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn optional_deadline_cancels() -> TestResult {
+        let parent = AnalysisReadControl::with_timeout(Duration::from_secs(60))?;
+        let inherited = parent.within(None)?;
+        assert_eq!(
+            inherited
+                .query_async(async { Ok::<_, crate::Error>(7) })
+                .await?,
+            7
+        );
+        let waiting = inherited.query_async(std::future::pending::<Result<()>>());
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        parent.cancel()?;
+        assert!(matches!(
+            waiting.await,
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert!(matches!(
+            inherited.within(None),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn optional_deadline_expires() -> TestResult {
+        let parent = AnalysisReadControl::with_timeout(Duration::from_secs(60))?;
+        let evaluation = parent.within(Some(Duration::from_millis(10)))?;
+        assert!(matches!(
+            evaluation
+                .query_async(std::future::pending::<Result<()>>())
+                .await,
+            Err(crate::Error::AnalysisReadDeadline { .. })
+        ));
+        parent.check()?;
+        parent.within(None)?.check()?;
+        Ok(())
+    }
 
     #[test]
     fn read_monitor_store_reuse() -> TestResult {

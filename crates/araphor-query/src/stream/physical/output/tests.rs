@@ -24,7 +24,7 @@ async fn owner() -> TestResult<(tempfile::TempDir, Session, Arc<ArrowSnapshot>)>
         Arc::new(AnalysisStore::open(directory.path().join("data"))?),
         Limits {
             extract_timeout: Duration::from_secs(30),
-            evaluate_timeout: Duration::from_secs(30),
+            evaluate_timeout: Some(Duration::from_secs(30)),
             ..Limits::default()
         },
     )?;

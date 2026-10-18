@@ -78,7 +78,7 @@ async fn conversion_stops_native_polling() -> TestResult {
     let owner = fixture.owner(Limits {
         global_evaluations: 1,
         tenant_evaluations: 1,
-        evaluate_timeout: Duration::from_secs(5),
+        evaluate_timeout: Some(Duration::from_secs(5)),
         ..Default::default()
     })?;
     let schema = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Binary, false)]);

@@ -105,6 +105,38 @@ profile merge. Full replacement remains **Not done**. This increment adds 20
 nonblank production Rust lines. The complete redesign adds 1,144 against
 `7b7b407a`. The count is `/tmp/araphor-native-coverage-count3.json`.
 
+### Native recorded snapshot
+
+Implementation and selected qualification: **Done**. The new SQL package
+exports discovery.recorded_snapshot with explicit records, raw bindings,
+ranges, exclusions, lifecycle, and metadata relations. Native SQL constructs
+full atom keys and all snapshot outputs. The retained algorithm is the test
+oracle. No new executor, source reader, scheduler, or state store is added.
+
+All three native Discovery calls now plan each caller argument once, then bind
+the resulting logical plan in a new native PlannerContext. DataFusion owns
+package CTE planning. The AST substitution visitor is deleted. A borrowed
+ContextProvider adapter only forwards the existing native catalog interface.
+
+Query can reuse one admitted received-time window across these input plans.
+Every events scan must have the same valid source bounds. The existing progress
+owner handles intake and exact expiry. Physical planning and evaluation have
+an optional timeout that defaults to None. Parent authorization and cancellation
+remain active. Extraction deadlines and other quotas still require work.
+
+The selected checks pass 68 distinct cases across Data, the SQL package, Query,
+Analysis, and Control. The source and command record is
+`/tmp/araphor-recorded-snapshot-verification1.json`. Strict Clippy passes all
+targets in the six affected crates. Full workspace CI and benchmarks are not
+run. This increment adds 166
+production Rust code lines and 464 SQL lines. The complete redesign adds 937
+production code lines against `7b7b407a`; the reduction target is **Not done**.
+
+Old Discovery orchestration is retained until its replacement captures context
+and interval state, pins the correct computation revision, and publishes the
+profile atomically. This SQL result does not prove that cutover. Full managed
+jobs, OCI callable identity, and old Discovery replacement remain **Not done**.
+
 ## Earlier design draft
 
 The sections below retain the earlier design for review. Their controller,

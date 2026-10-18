@@ -80,7 +80,7 @@ async fn wasm_dependency_replacements() -> TestResult {
         global_evaluations: 1,
         tenant_evaluations: 1,
         extract_timeout: std::time::Duration::from_secs(30),
-        evaluate_timeout: std::time::Duration::from_secs(30),
+        evaluate_timeout: Some(std::time::Duration::from_secs(30)),
         ..Default::default()
     })?;
     fixture.store.commit_context(&context(1))?;

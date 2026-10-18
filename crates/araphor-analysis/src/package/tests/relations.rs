@@ -367,7 +367,7 @@ async fn output_read_shares_capacity() -> TestResult {
         tenant_evaluations: 1,
         input_capacity: 3 * Limits::default().input_bytes,
         extract_timeout: Duration::from_secs(30),
-        evaluate_timeout: Duration::from_secs(30),
+        evaluate_timeout: Some(Duration::from_secs(30)),
         ..Default::default()
     })?;
     let installed = fixture
@@ -472,7 +472,7 @@ async fn alias_import_budget() -> TestResult {
         global_evaluations: 1,
         tenant_evaluations: 1,
         extract_timeout: Duration::from_secs(30),
-        evaluate_timeout: Duration::from_secs(30),
+        evaluate_timeout: Some(Duration::from_secs(30)),
         ..Default::default()
     })?;
     let mut package = bundle("1", "SELECT count FROM supplied");
@@ -570,7 +570,7 @@ async fn alias_import_budget() -> TestResult {
                 global_evaluations: 1,
                 tenant_evaluations: 1,
                 extract_timeout: Duration::from_secs(30),
-                evaluate_timeout: Duration::from_secs(30),
+                evaluate_timeout: Some(Duration::from_secs(30)),
                 ..Default::default()
             },
         )?;

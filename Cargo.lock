@@ -315,8 +315,13 @@ dependencies = [
 name = "araphor-discovery-effects"
 version = "0.1.0"
 dependencies = [
+ "araphor-analysis-builtins",
+ "araphor-analysis-sdk",
  "araphor-data",
  "datafusion",
+ "serde",
+ "serde_arrow",
+ "serde_json",
  "tokio",
 ]
 

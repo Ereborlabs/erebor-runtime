@@ -98,7 +98,7 @@ fn model_clock_dependencies() -> TestResult {
 fn model_output_deadline() -> TestResult {
     let fixture = QueryFixture::new()?;
     let owner = fixture.owner(Limits {
-        evaluate_timeout: Duration::from_millis(100),
+        evaluate_timeout: Some(Duration::from_millis(100)),
         ..Default::default()
     })?;
     let rows = port("rows", "count");

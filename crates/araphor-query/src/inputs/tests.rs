@@ -33,7 +33,7 @@ impl Fixture {
             Limits {
                 tenant_evaluations: 1,
                 extract_timeout: Duration::from_secs(10),
-                evaluate_timeout: Duration::from_secs(10),
+                evaluate_timeout: Some(Duration::from_secs(10)),
                 ..Default::default()
             },
         )?;

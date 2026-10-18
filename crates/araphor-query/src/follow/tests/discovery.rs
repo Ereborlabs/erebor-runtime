@@ -14,6 +14,79 @@ use super::{
 const COUNTS: &str = "SELECT event_count, first_cursor, last_cursor, binding_id, source_id
     FROM discovery.observed_effects((SELECT * FROM events)) ORDER BY source_id";
 
+fn recorded_sql(events: &str) -> String {
+    format!(
+        "WITH input_events AS ({events}),
+        identified AS (
+            SELECT input_events.*, named_struct('stream', named_struct(
+                'tenant_id', tenant_id, 'node_id', node_id, 'node_boot_id', node_boot_id,
+                'label_epoch', label_epoch, 'source_id', source_id, 'source_epoch', source_epoch),
+                'cpu_id', cpu_id, 'durable_cursor', source_cursor) AS record_id
+            FROM input_events
+        ),
+        empty_contexts AS (
+            SELECT record_id, '' AS subject_revision, '' AS image_digest,
+                '' AS configuration_digest, process_instance_id, entry_instance_id,
+                binding_id, role_id, state_id, entry_rule_id,
+                CAST(0 AS BIGINT UNSIGNED) AS catalog_revision,
+                named_struct('workload_selector_id', '', 'protected_scope_id', '',
+                    'execution_set_id', '', 'entry_kind', '', 'role_id', '',
+                    'process_state_id', '', 'effect_family', effect_family,
+                    'operation_id', '', 'operation', operation,
+                    'operation_argument', COALESCE(operation_argument, 0),
+                    'argument_wildcard', FALSE, 'object_selector', '',
+                    'binding_lifecycle', '') AS static_key,
+                named_struct('profile_id', '', 'profile_version', CAST(0 AS BIGINT UNSIGNED),
+                    'source_revision_id', '', 'signed_profile_digest', '') AS policy_revision
+            FROM identified WHERE FALSE
+        ),
+        snapshot AS (
+            SELECT * FROM discovery.recorded_snapshot(
+                (SELECT * FROM input_events), (SELECT * FROM empty_contexts),
+                (SELECT * FROM discovery.coverage_ranges(
+                    (SELECT * FROM input_events), (SELECT * FROM coverage))),
+                (SELECT record_id, CAST(NULL AS VARCHAR) AS reason FROM identified WHERE FALSE),
+                (SELECT CAST(NULL AS VARCHAR) AS \"case\", CAST(NULL AS VARCHAR) AS state,
+                    [record_id] AS records, CAST(NULL AS VARCHAR) AS reason
+                    FROM identified WHERE FALSE),
+                (SELECT decode('01010101010101010101010101010101', 'hex') AS tenant_id,
+                    'retained-cut' AS source_revision, 'OBSERVED_RUNTIME' AS proof_kind))
+        )
+        SELECT accepted_records, included_records, unresolved_records, excluded_records,
+            duplicate_deliveries, array_length(atoms), array_length(coverage),
+            array_length(unresolved), array_length(excluded), array_length(lifecycle),
+            unresolved[1]['record_id']['durable_cursor'] AS first_cursor,
+            unresolved[CAST(array_length(unresolved) AS BIGINT)]['record_id']['durable_cursor'] AS last_cursor,
+            unresolved[1]['reason'] AS reason,
+            unresolved[1]['record_id']['stream']['source_id'] AS source_id
+        FROM snapshot"
+    )
+}
+
+fn assert_recorded(update: &super::Update, count: u64, first: Option<u64>, last: Option<u64>) {
+    for (column, expected) in [count, 0, count, 0, 0, 0, u64::from(count > 0), count, 0, 9]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(
+            values(update, column),
+            [ScalarValue::UInt64(Some(expected))]
+        );
+    }
+    assert_eq!(values(update, 10), [ScalarValue::UInt64(first)]);
+    assert_eq!(values(update, 11), [ScalarValue::UInt64(last)]);
+    assert_eq!(
+        values(update, 12),
+        [ScalarValue::Utf8(
+            (count > 0).then(|| "MISSING_RECORDED_CONTEXT".into())
+        )]
+    );
+    assert_eq!(
+        values(update, 13),
+        [ScalarValue::Binary((count > 0).then(|| vec![3; 16]))]
+    );
+}
+
 fn fixture(limits: Limits) -> Fixture {
     let mut fixture = Fixture::new(limits);
     Arc::get_mut(&mut fixture.engine)
@@ -426,5 +499,91 @@ async fn cancel_joins_source_read() {
     assert!(joined.load(Ordering::SeqCst));
     assert!(subscription.next().await.is_none());
     drop(subscription);
+    assert_released(&fixture);
+}
+
+#[tokio::test]
+async fn recorded_updates_and_expires() {
+    let fixture = fixture(Limits {
+        tenant_streams: 1,
+        ..Default::default()
+    });
+    fixture.commit(&fixture.source, 1, 2, 1_000_000_123);
+    for source in [
+        EvidenceIntakeIdentityV1 {
+            source_id: [8; 16],
+            ..fixture.source.clone()
+        },
+        EvidenceIntakeIdentityV1 {
+            tenant_id: [9; 16],
+            ..fixture.source.clone()
+        },
+    ] {
+        fixture.commit(&source, 1, 5, 1_500_000_000);
+    }
+    let clock = TestClock::new(3_500_000_000);
+    let sql = recorded_sql(
+        "SELECT * FROM events
+        WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '3 seconds'",
+    );
+    let (_, sources) = fixture.engine.prepare(&sql, vec![]).await.unwrap();
+    assert_eq!(
+        sources.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["coverage", "events"]
+    );
+    let (mut subscription, control) = subscribe(&fixture, &sql, Arc::clone(&clock)).await;
+    assert_eq!(subscription.moving_resolution_ns(), Some(1_000));
+    let first = next(&mut subscription).await;
+    assert_eq!(first.operation, Operation::Replace);
+    assert_recorded(&first, 2, Some(1), Some(2));
+    assert_eq!(first.snapshot.witnesses.len(), 2);
+    assert_eq!(first.snapshot.page.extraction.sources.len(), 1);
+    assert_eq!(
+        first.snapshot.page.extraction.sources[0].receipt.identity,
+        fixture.source
+    );
+
+    fixture.commit(&fixture.source, 3, 1, 3_000_000_000);
+    let second = next(&mut subscription).await;
+    assert_recorded(&second, 3, Some(1), Some(3));
+    assert_eq!(second.snapshot.witnesses.len(), 3);
+    assert!(second.cursor.read_revision() > first.cursor.read_revision());
+    let revision = second.cursor.read_revision();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&reads);
+    control
+        .on_read_step(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+    {
+        let waiting = subscription.next();
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+        let clock_reads = clock.reads.load(Ordering::SeqCst);
+        assert!(tokio::time::timeout(Duration::from_millis(40), waiting)
+            .await
+            .is_err());
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        assert_eq!(clock.reads.load(Ordering::SeqCst), clock_reads);
+    }
+
+    clock.set(4_000_001_000);
+    let expired = next(&mut subscription).await;
+    assert!(expired.clock_changed);
+    assert_recorded(&expired, 1, Some(3), Some(3));
+    assert_eq!(expired.snapshot.witnesses.len(), 1);
+    assert_eq!(expired.cursor.read_revision(), revision);
+    clock.set(6_000_001_000);
+    let empty = next(&mut subscription).await;
+    assert!(empty.clock_changed);
+    assert_recorded(&empty, 0, None, None);
+    assert!(empty.snapshot.witnesses.is_empty());
+    assert_eq!(empty.cursor.read_revision(), revision);
+    assert_recorded(&first, 2, Some(1), Some(2));
+    assert_eq!(first.snapshot.witnesses.len(), 2);
+    subscription.cancel().unwrap();
+    drop((subscription, first, second, expired, empty));
     assert_released(&fixture);
 }

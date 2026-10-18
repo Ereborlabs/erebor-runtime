@@ -1,60 +1,146 @@
-use std::ops::ControlFlow;
+use std::sync::Arc;
 
-use datafusion::common::{DataFusionError, Result};
+use datafusion::arrow::array::StringArray;
+use datafusion::arrow::datatypes::{DataType, FieldRef, SchemaRef};
+use datafusion::common::config::ConfigOptions;
+use datafusion::common::file_options::file_type::FileType;
+use datafusion::common::{DataFusionError, Result, ScalarValue, TableReference};
 use datafusion::logical_expr::planner::{
-    PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
+    ExprPlanner, PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
+    TypePlanner,
+};
+use datafusion::logical_expr::{
+    col, create_udf, AggregateUDF, ColumnarValue, Expr as LogicalExpr, LogicalPlanBuilder,
+    ScalarUDF, TableSource, Volatility, WindowUDF,
 };
 use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast::{
-    Expr, FunctionArg, FunctionArgExpr, Ident, Query, Statement as SqlStatement, TableAlias,
-    TableFactor, VisitMut, VisitorMut,
+    Expr, FunctionArg, FunctionArgExpr, Statement as SqlStatement, TableFactor,
 };
 
 #[derive(Debug)]
 pub struct ObservedEffects;
 
-struct Inputs(Vec<(&'static str, Box<Query>)>);
+// Adapt the borrowed provider to the sized native planner interface.
+struct NativeContext<'a>(&'a dyn ContextProvider);
 
-impl VisitorMut for Inputs {
-    type Break = ();
+impl ContextProvider for NativeContext<'_> {
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+        self.0.get_table_source(name)
+    }
 
-    fn post_visit_table_factor(&mut self, relation: &mut TableFactor) -> ControlFlow<()> {
-        let TableFactor::Table { name, alias, .. } = relation else {
-            return ControlFlow::Continue(());
-        };
-        let Some((name, query)) = self.0.iter().find(|(input, _)| name.to_string() == *input)
-        else {
-            return ControlFlow::Continue(());
-        };
-        *relation = TableFactor::Derived {
-            lateral: false,
-            subquery: query.clone(),
-            alias: alias.clone().or_else(|| {
-                Some(TableAlias {
-                    explicit: true,
-                    name: Ident::new(*name),
-                    columns: Vec::new(),
-                })
-            }),
-            sample: None,
-        };
-        ControlFlow::Continue(())
+    fn get_file_type(&self, extension: &str) -> Result<Arc<dyn FileType>> {
+        self.0.get_file_type(extension)
+    }
+
+    fn get_table_function_source(
+        &self,
+        name: &str,
+        args: Vec<LogicalExpr>,
+    ) -> Result<Arc<dyn TableSource>> {
+        self.0.get_table_function_source(name, args)
+    }
+
+    fn create_cte_work_table(&self, name: &str, schema: SchemaRef) -> Result<Arc<dyn TableSource>> {
+        self.0.create_cte_work_table(name, schema)
+    }
+
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        self.0.get_expr_planners()
+    }
+
+    fn get_relation_planners(&self) -> &[Arc<dyn RelationPlanner>] {
+        self.0.get_relation_planners()
+    }
+
+    fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
+        self.0.get_type_planner()
+    }
+
+    fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
+        self.0.get_function_meta(name)
+    }
+
+    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+        self.0.get_aggregate_meta(name)
+    }
+
+    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
+        self.0.get_window_meta(name)
+    }
+
+    fn get_variable_type(&self, names: &[String]) -> Option<DataType> {
+        self.0.get_variable_type(names)
+    }
+
+    fn get_variable_field(&self, names: &[String]) -> Option<FieldRef> {
+        self.0.get_variable_field(names)
+    }
+
+    fn options(&self) -> &ConfigOptions {
+        self.0.options()
+    }
+
+    fn udf_names(&self) -> Vec<String> {
+        self.0.udf_names()
+    }
+
+    fn udaf_names(&self) -> Vec<String> {
+        self.0.udaf_names()
+    }
+
+    fn udwf_names(&self) -> Vec<String> {
+        self.0.udwf_names()
     }
 }
 
 impl ObservedEffects {
-    fn query(sql: &str, mut inputs: Inputs) -> Result<Box<Query>> {
+    fn guard() -> ScalarUDF {
+        create_udf(
+            "discovery_guard",
+            vec![DataType::Utf8],
+            DataType::Boolean,
+            Volatility::Immutable,
+            Arc::new(|args| {
+                let message = match args.first() {
+                    Some(ColumnarValue::Scalar(ScalarValue::Utf8(message))) => message.as_deref(),
+                    Some(ColumnarValue::Array(array)) => array
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal("Discovery guard requires UTF-8".into())
+                        })?
+                        .iter()
+                        .flatten()
+                        .next(),
+                    _ => {
+                        return Err(DataFusionError::Internal(
+                            "Discovery guard requires one argument".into(),
+                        ));
+                    }
+                };
+                match message {
+                    Some(message) => Err(DataFusionError::Execution(format!(
+                        "Discovery recorded input: {message}"
+                    ))),
+                    None => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))),
+                }
+            }),
+        )
+    }
+
+    fn query(sql: &str) -> Result<SqlStatement> {
         let mut statements = DFParser::parse_sql(sql)?;
         let Some(Statement::Statement(statement)) = statements.pop_front() else {
             return Err(DataFusionError::Internal("Discovery SQL is absent".into()));
         };
-        let SqlStatement::Query(mut query) = *statement else {
+        if !matches!(statement.as_ref(), SqlStatement::Query(_)) {
             return Err(DataFusionError::Internal(
                 "Discovery SQL is not a query".into(),
             ));
-        };
-        let _visited = query.visit(&mut inputs);
-        Ok(query)
+        }
+        Ok(*statement)
     }
 }
 
@@ -79,6 +165,17 @@ impl RelationPlanner for ObservedEffects {
         let (sql, inputs): (&str, &[&'static str]) = match name.table() {
             "observed_effects" => (include_str!("observed_effects.sql"), &["records"]),
             "coverage_ranges" => (include_str!("coverage_ranges.sql"), &["records", "reports"]),
+            "recorded_snapshot" => (
+                include_str!("recorded_snapshot.sql"),
+                &[
+                    "records",
+                    "contexts",
+                    "ranges",
+                    "exclusions",
+                    "lifecycle",
+                    "metadata",
+                ],
+            ),
             _ => return Ok(RelationPlanning::Original(Box::new(relation))),
         };
         let TableFactor::Table {
@@ -116,24 +213,38 @@ impl RelationPlanner for ObservedEffects {
                 inputs.len()
             )));
         }
-        let inputs = inputs
-            .iter()
-            .zip(args.args)
-            .map(|(name, arg)| match arg {
-                FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Subquery(query))) => {
-                    Ok((*name, query))
-                }
-                _ => Err(DataFusionError::Plan(
+        let mut scope = PlannerContext::new();
+        for (name, argument) in inputs.iter().zip(args.args) {
+            let FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Subquery(query))) = argument
+            else {
+                return Err(DataFusionError::Plan(
                     "Discovery requires subquery arguments".into(),
-                )),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let plan = context.plan(TableFactor::Derived {
-            lateral: false,
-            subquery: Self::query(sql, Inputs(inputs))?,
-            alias: None,
-            sample: None,
-        })?;
+                ));
+            };
+            let plan = context.plan(TableFactor::Derived {
+                lateral: false,
+                subquery: query,
+                alias: None,
+                sample: None,
+            })?;
+            let plan = LogicalPlanBuilder::from(plan).alias(*name)?.build()?;
+            scope.insert_cte(*name, plan);
+        }
+        let provider = NativeContext(context.context_provider());
+        let mut plan = SqlToRel::new(&provider)
+            .sql_statement_to_plan_with_context(Self::query(sql)?, &mut scope)?;
+        if name.table() == "recorded_snapshot" {
+            let columns = plan
+                .schema()
+                .columns()
+                .into_iter()
+                .filter(|column| column.name != "__discovery_error")
+                .map(LogicalExpr::Column);
+            plan = LogicalPlanBuilder::from(plan)
+                .filter(Self::guard().call(vec![col("__discovery_error")]))?
+                .project(columns)?
+                .build()?;
+        }
         Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
             plan, alias,
         ))))

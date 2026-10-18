@@ -9,7 +9,12 @@ repository.workspace = true
 datafusion = { version = "=53.1.0", default-features = false, features = ["sql", "nested_expressions", "encoding_expressions", "string_expressions"] }
 
 [dev-dependencies]
+araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
+araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 araphor-data = { path = "../araphor-data" }
+serde.workspace = true
+serde_json.workspace = true
+serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-58"] }
 tokio.workspace = true
 
 [lints]

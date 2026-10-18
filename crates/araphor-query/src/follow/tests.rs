@@ -78,7 +78,7 @@ impl Fixture {
 
     fn open(mut limits: Limits, retention: araphor_data::RetentionLimitsV1) -> Self {
         limits.extract_timeout = Duration::from_secs(5);
-        limits.evaluate_timeout = Duration::from_secs(5);
+        limits.evaluate_timeout = Some(Duration::from_secs(5));
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(
             AnalysisStore::open_with_limits(
@@ -2059,6 +2059,66 @@ fn clock_requires_time_filter() {
                 ))
                 .is_err()
         );
+    }
+}
+
+#[test]
+fn shared_windows_keep_scopes() {
+    let fixture = Fixture::new(Limits::default());
+    let recent = "SELECT * FROM events \
+        WHERE received_at >= now() - INTERVAL '3 seconds'";
+    for body in [
+        "SELECT a.source_cursor FROM recent a JOIN recent b USING (source_cursor)",
+        "SELECT source_cursor FROM recent UNION ALL SELECT source_cursor FROM recent",
+    ] {
+        let sql = format!("WITH recent AS ({recent}) {body}");
+        let (plan, _) = fixture.plan(&sql, vec![]);
+        let window = Window::from_plan(&plan).unwrap().unwrap();
+        assert_eq!(window.expiry(Some(1_000_000_000)), Some(4_000_001_000));
+    }
+    for sql in [
+        format!(
+            "WITH recent AS ({recent}) \
+            SELECT a.source_cursor FROM recent a JOIN events b USING (source_cursor)"
+        ),
+        "WITH recent AS (SELECT * FROM events \
+            WHERE received_at >= now() - INTERVAL '3 seconds' \
+                AND received_at >= now() - INTERVAL '3 seconds') \
+            SELECT a.source_cursor FROM recent a JOIN events b USING (source_cursor)"
+            .into(),
+        "SELECT a.source_cursor FROM events a JOIN events b USING (source_cursor) \
+            WHERE a.received_at >= now() - INTERVAL '3 seconds'"
+            .into(),
+        "SELECT source_cursor FROM events \
+            WHERE received_at >= now() - INTERVAL '3 seconds' \
+                AND source_cursor <= (SELECT MAX(source_cursor) FROM events)"
+            .into(),
+        format!(
+            "WITH recent AS ({recent}), older AS (SELECT * FROM events \
+            WHERE received_at >= now() - INTERVAL '4 seconds') \
+            SELECT a.source_cursor FROM recent a JOIN older b USING (source_cursor)"
+        ),
+        format!(
+            "WITH recent AS ({recent}) \
+            SELECT a.source_cursor FROM recent a JOIN recent b USING (source_cursor) \
+            WHERE a.received_at >= now() - INTERVAL '1 second'"
+        ),
+        "SELECT * FROM (SELECT * FROM events ORDER BY source_cursor LIMIT 1) limited \
+            WHERE received_at >= now() - INTERVAL '3 seconds'"
+            .into(),
+        "SELECT * FROM (SELECT *, row_number() OVER (ORDER BY source_cursor) AS n \
+            FROM events) ranked WHERE received_at >= now() - INTERVAL '3 seconds'"
+            .into(),
+        "SELECT * FROM (SELECT received_at, count(*) FROM events GROUP BY received_at) grouped \
+            WHERE received_at >= now() - INTERVAL '3 seconds'"
+            .into(),
+        "SELECT * FROM (SELECT CAST(CAST(received_at AS TIMESTAMP(0)) AS TIMESTAMP(6)) \
+            AS received_at FROM events) changed \
+            WHERE received_at >= now() - INTERVAL '1 second'"
+            .into(),
+    ] {
+        let (plan, _) = fixture.plan(&sql, vec![]);
+        assert!(Window::from_plan(&plan).is_err(), "{sql}");
     }
 }
 

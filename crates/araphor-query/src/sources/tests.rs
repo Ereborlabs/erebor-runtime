@@ -29,7 +29,7 @@ impl Fixture {
     fn new() -> TestResult<Self> {
         Self::new_with_limits(Limits {
             extract_timeout: Duration::from_secs(5),
-            evaluate_timeout: Duration::from_secs(5),
+            evaluate_timeout: Some(Duration::from_secs(5)),
             ..Default::default()
         })
     }
@@ -169,7 +169,7 @@ async fn cursor_scan_keeps_frames() -> TestResult {
     let fixture = Fixture::new_with_limits(Limits {
         scan_bytes: 4096,
         extract_timeout: Duration::from_secs(5),
-        evaluate_timeout: Duration::from_secs(5),
+        evaluate_timeout: Some(Duration::from_secs(5)),
         ..Default::default()
     })?;
     let old = EvidenceRecord {
@@ -399,7 +399,7 @@ fn clock_prunes_history() -> TestResult {
         scan_bytes: 32 * 1024,
         input_bytes: 64 * 1024,
         extract_timeout: Duration::from_secs(5),
-        evaluate_timeout: Duration::from_secs(5),
+        evaluate_timeout: Some(Duration::from_secs(5)),
         ..Default::default()
     })?;
     let history = vec![
@@ -638,7 +638,7 @@ async fn native_stream_keeps_metadata() -> TestResult {
         input_bytes: 64 * 1024,
         input_capacity: 128 * 1024,
         extract_timeout: Duration::from_secs(5),
-        evaluate_timeout: Duration::from_secs(5),
+        evaluate_timeout: Some(Duration::from_secs(5)),
         ..Default::default()
     })?;
     fixture.commit(&fixture.source, 1, 10_001)?;

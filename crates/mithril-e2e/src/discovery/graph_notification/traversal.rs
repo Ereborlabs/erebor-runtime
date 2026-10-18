@@ -174,7 +174,7 @@ impl GraphNotificationQualification {
                 "scan_bytes": limits.scan_bytes, "input_bytes": limits.input_bytes,
                 "output_rows": limits.output_rows, "output_bytes": limits.output_bytes,
                 "extract_timeout_ns": limits.extract_timeout.as_nanos(),
-                "evaluate_timeout_ns": limits.evaluate_timeout.as_nanos(),
+                "evaluate_timeout_ns": limits.evaluate_timeout.map(|timeout| timeout.as_nanos()),
             },
         })
     }

@@ -6,7 +6,7 @@ use super::*;
 fn sql_model_portable_precision() -> TestResult {
     let fixture = QueryFixture::new()?;
     let owner = fixture.owner(Limits {
-        evaluate_timeout: Duration::from_secs(30),
+        evaluate_timeout: Some(Duration::from_secs(30)),
         ..Default::default()
     })?;
     let schema = sdk::Schema::new(vec![

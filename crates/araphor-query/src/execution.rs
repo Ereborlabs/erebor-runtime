@@ -48,7 +48,7 @@ pub struct Limits {
     pub output_rows: usize,
     pub output_bytes: usize,
     pub extract_timeout: Duration,
-    pub evaluate_timeout: Duration,
+    pub evaluate_timeout: Option<Duration>,
     pub global_evaluations: usize,
     pub tenant_evaluations: usize,
     pub global_streams: usize,
@@ -71,7 +71,7 @@ impl Default for Limits {
             output_rows: 200,
             output_bytes: 1024 * 1024,
             extract_timeout: Duration::from_secs(1),
-            evaluate_timeout: Duration::from_secs(1),
+            evaluate_timeout: None,
             global_evaluations: 2,
             tenant_evaluations: 1,
             global_streams: 16,
@@ -95,7 +95,7 @@ impl Limits {
             || self.output_bytes == 0
             || self.output_rows == 0
             || self.extract_timeout.is_zero()
-            || self.evaluate_timeout.is_zero()
+            || self.evaluate_timeout == Some(Duration::ZERO)
             || self.global_evaluations == 0
             || self.tenant_evaluations == 0
             || self.tenant_evaluations > self.global_evaluations

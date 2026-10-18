@@ -10,7 +10,7 @@ fn preparation_precedes_evaluation_deadline() -> TestResult {
     let query = crate::Engine::new(
         Arc::clone(&fixture.store),
         crate::Limits {
-            evaluate_timeout: Duration::from_nanos(1),
+            evaluate_timeout: Some(Duration::from_nanos(1)),
             ..Default::default()
         },
     )?;
