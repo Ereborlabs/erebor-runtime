@@ -218,6 +218,15 @@ impl Engine {
         &self.store
     }
 
+    pub fn register_relation_planner(
+        &mut self,
+        planner: Arc<dyn datafusion::logical_expr::planner::RelationPlanner>,
+    ) -> Result<()> {
+        self.state
+            .register_relation_planner(planner)
+            .context(SqlSnafu)
+    }
+
     pub async fn check_read(self: &Arc<Self>, snapshot: &Arc<ArrowSnapshot>) -> Result<()> {
         if snapshot.page.extraction.trace_reads().is_empty() {
             return Ok(());

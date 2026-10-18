@@ -21,6 +21,11 @@ master plan invented for them.
 
 ## Proposed Master Plans
 
+- [Araphor packages and managed jobs](araphor-package-jobs.md) records the
+  current native SQL pipeline, reactive execution, new Discovery packages,
+  and code reduction criteria. Earlier controller and storage proposals in
+  that file remain draft material. The first native SQL package and selected
+  query-RPC proof pass. The complete replacement remains open.
 - [Araphor performance simplification TODO](araphor-performance-simplification-todo.md) —
   the user approves all 17 source-audit items. The file records implementation
   and verification status for each item.

@@ -10,6 +10,7 @@ build = "build.rs"
 test-fixtures = ["araphor-data/test-fixtures", "araphor-query/test-fixtures", "araphor-analysis/test-fixtures", "araphor-observability/test-support"]
 
 [dependencies]
+araphor-discovery-effects = { path = "../araphor-discovery-effects" }
 araphor-data = { path = "../araphor-data" }
 araphor-query = { path = "../araphor-query" }
 araphor-analysis = { path = "../araphor-analysis" }

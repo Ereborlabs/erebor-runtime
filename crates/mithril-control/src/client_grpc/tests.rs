@@ -18,6 +18,7 @@ use crate::{
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 const WAIT: Duration = Duration::from_secs(5);
 
+mod discovery;
 mod graph_traversal;
 mod packages;
 

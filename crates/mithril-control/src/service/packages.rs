@@ -78,7 +78,15 @@ impl ControlPlane {
             changes: tokio::sync::watch::channel(1).0,
         });
         let limits = limits.unwrap_or_default();
-        let query = Engine::new(data, limits.clone())?;
+        let mut query = Engine::new(data, limits.clone())?;
+        Arc::get_mut(&mut query)
+            .ok_or_else(|| {
+                crate::error::InvalidConfigurationSnafu {
+                    reason: "query engine is shared before package registration",
+                }
+                .build()
+            })?
+            .register_relation_planner(Arc::new(araphor_discovery_effects::ObservedEffects))?;
         let owner = AnalysisPackageOwner::new(query.clone(), authority.clone())?;
         #[cfg(test)]
         let owner = {

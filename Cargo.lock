@@ -312,6 +312,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "araphor-discovery-effects"
+version = "0.1.0"
+dependencies = [
+ "araphor-data",
+ "datafusion",
+ "tokio",
+]
+
+[[package]]
 name = "araphor-kubernetes-component"
 version = "0.1.0"
 dependencies = [
@@ -352,6 +361,7 @@ version = "0.1.0"
 dependencies = [
  "araphor-analysis-sdk",
  "araphor-data",
+ "araphor-discovery-effects",
  "arrow-buffer",
  "async-trait",
  "chrono",
@@ -4961,6 +4971,7 @@ dependencies = [
  "araphor-analysis",
  "araphor-analysis-sdk",
  "araphor-data",
+ "araphor-discovery-effects",
  "araphor-observability",
  "araphor-query",
  "arrow-array",

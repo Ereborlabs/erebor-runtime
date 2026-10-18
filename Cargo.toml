@@ -24,6 +24,7 @@ members = [
     "crates/araphor-data",
     "crates/araphor-query",
     "crates/araphor-analysis",
+    "crates/araphor-discovery-effects",
     "crates/araphor-analysis-sdk",
     "crates/araphor-analysis-builtins",
     "crates/araphor-analysis-builtins/components/discovery",

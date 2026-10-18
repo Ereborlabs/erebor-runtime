@@ -27,6 +27,17 @@ source states.
 
 ### Current user requirements
 
+On 2026-10-18, the user restates simplification, coherence, and real production
+Rust reduction as the main acceptance criteria. Every new execution path,
+including Discovery, must pass through native SQL parsing, native logical
+planning, native optimization, physical planning, and execution. Build new
+Discovery packages and retain the existing package implementations for reuse.
+Before an addition, check design fit, a simpler form, actual need, and existing
+DataFusion or dependency support. Polling is prohibited. The
+[package and job plan](araphor-package-jobs.md#current-goal-and-acceptance-criteria)
+records these criteria and the immediate native SQL package delivery. Its
+earlier controller and storage draft is not a prerequisite or blanket approval.
+
 The user requires all quotas to be configurable and disabled by default.
 This requirement replaces earlier instructions to retain mandatory quotas.
 No time-based polling is permitted. Source, authority, capacity, cancellation,
@@ -37,7 +48,7 @@ Native DataFusion supplies SQL parsing, logical planning, optimization,
 physical planning, and execution. Package execution uses this route and the
 same Query progress machinery. Use an Araphor extension only when DataFusion
 does not supply the required behavior. Keep state with its actual owner.
-All subagents are stopped, as requested by the user.
+The user permits subagents for the current work.
 
 Implementation of these complete requirements: **Not done**. Query, SDK,
 compiler, cache, and retained-store quota defaults need checks. The storage
@@ -47,6 +58,34 @@ Every Discovery execution must consume a Query subscription, including finite
 execution and manual refresh. The subscription must supply the actual input
 batches. A query that returns identities to the old input reader is not a
 replacement. This work is **Not done**.
+
+### Discovery package subscriptions
+
+Result: **Not done**. The new `araphor-discovery-effects` crate provides the
+native SQL call `discovery.observed_effects((SELECT * FROM events))`. Native
+SQL supplies grouping, counts, cursor bounds, and received-time bounds. Query
+owns subscription progress and window expiry. Control registers the native
+relation planner at startup. Four native package tests, five Query subscription
+tests, and two Control query-RPC tests pass. Strict Clippy passes all targets in
+the three affected crates. Scoped formatting and the diff check pass. The
+verification record is `/tmp/araphor-native-discovery-verification1.json`.
+
+This increment adds 132 nonblank production Rust lines. The complete worktree
+still adds 1,089 against `7b7b407a`. The required 6,000-line reduction remains
+**Not done**. The source count is `/tmp/araphor-native-discovery-count2.json`.
+Unused uncommitted draft removal is not counted as baseline reduction.
+
+The unused draft partition API, external deadline setter, context setter,
+and duplicate observed-time field are withdrawn. No production caller used
+these interfaces. The new package uses the existing Query subscription API.
+The discarded job, callback, and storage drafts are not prerequisites.
+
+The existing Discovery packages remain available. Their complete behavior
+profile, coverage, context, and durable output contracts still need a native
+SQL replacement. The old source sweep and separate Control task are not a
+completed replacement. The stopped removal of `run_clock` is withdrawn. Existing callers retain
+their original entry points. Data lock waiting and native interruption still poll. The
+complete route does not yet meet the no-polling requirement.
 
 ### Native SQL admission and optional quotas
 

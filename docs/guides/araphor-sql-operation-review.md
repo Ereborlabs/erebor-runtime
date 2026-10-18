@@ -49,6 +49,53 @@ is **Not done** against the required architecture. The replacement must
 consume the actual Query input batches for live execution, finite execution,
 and manual refresh. An identity-only query must not invoke the old reader.
 
+## Native Discovery SQL package
+
+The new [ObservedEffects](../../crates/araphor-discovery-effects/src/effects.rs)
+relation planner binds one subquery to the checked-in
+[SQL body](../../crates/araphor-discovery-effects/src/observed_effects.sql).
+The body uses native projection, GROUP BY, COUNT, MIN, and MAX. There is no
+package logical operator, physical operator, executor, or retained result cache.
+The relation hook is required because a native table function accepts scalar
+expressions, not an input relation. The hook delegates the bound derived table
+to the native planner. It does not parse a second SQL grammar.
+
+```sql
+SELECT source_id, binding_id, event_count, first_cursor, last_cursor
+FROM discovery.observed_effects((
+    SELECT * FROM events
+    WHERE received_at >= now() - INTERVAL '60 seconds'
+))
+```
+
+[ControlPlane::analysis_packages](../../crates/mithril-control/src/service/packages.rs) registers the native relation hook
+  -> [Engine::prepare](../../crates/araphor-query/src/execution/admission.rs) parses SQL and records the original sources
+  -> [ObservedEffects::plan_relation](../../crates/araphor-discovery-effects/src/effects.rs) binds the input subquery to the native SQL body
+  -> DataFusion plans and optimizes the ordinary logical operators
+  -> [SourceSnapshot](../../crates/araphor-query/src/sources/mod.rs) captures authorized input for physical execution
+  -> native physical operators return Arrow batches
+  -> [Subscription](../../crates/araphor-query/src/follow/mod.rs) returns the batches and their captured receipts
+
+The existing Progress owner starts replacement execution on a source notice
+or an exact supported window boundary. The package has no private wake loop.
+Each result describes the supplied relation. Projected source keys are data;
+the authorized selection and snapshot witnesses supply evidence provenance.
+The received-time bounds use receipt time with microsecond precision.
+
+This is a built-in SQL package. It does not establish OCI admission, persisted
+managed jobs, complete coverage, or old behavior-profile parity. Existing
+Discovery packages and entry points remain available. The Data lock wait and
+native interrupt monitor still poll. The complete no-polling requirement is
+**Not done**.
+
+Read the [package tests](../../crates/araphor-discovery-effects/src/tests.rs),
+[subscription tests](../../crates/araphor-query/src/follow/tests/discovery.rs),
+and [Control RPC tests](../../crates/mithril-control/src/client_grpc/tests/discovery.rs)
+in that order. They cover native SQL plans, split batches, repeated evaluation,
+NULL dimensions, aliases, invalid arguments, retained input, source and tenant
+scope, window expiry without intake, idle waits, and joined cancellation.
+The plan records the final verification result.
+
 ## Discovery record input contract
 
 [Record::port](../../crates/araphor-analysis-builtins/src/discovery/record.rs)
