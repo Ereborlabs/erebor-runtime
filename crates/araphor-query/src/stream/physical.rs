@@ -3,6 +3,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{DataFusionError, Result as NativeResult};
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -47,9 +48,7 @@ enum Mode {
         journal: Option<Arc<dyn ExecutionPlan>>,
         compiled: Option<Arc<Compiled>>,
     },
-    Page {
-        lowered: bool,
-    },
+    Page,
 }
 
 #[derive(Debug)]
@@ -95,9 +94,14 @@ impl SubscribeExec {
         })
     }
 
-    pub(crate) fn page(input: Arc<dyn ExecutionPlan>) -> NativeResult<Self> {
+    pub(crate) fn page(input: Arc<dyn ExecutionPlan>, schema: SchemaRef) -> NativeResult<Self> {
+        if input.schema().fields().len() != schema.fields().len() + 2 {
+            return Err(DataFusionError::Internal(
+                "Subscribe page input schema changed".into(),
+            ));
+        }
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(input.schema()),
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Incremental,
             Boundedness::Unbounded {
@@ -106,20 +110,9 @@ impl SubscribeExec {
         ));
         Ok(Self {
             input,
-            mode: Mode::Page { lowered: false },
+            mode: Mode::Page,
             properties,
         })
-    }
-
-    pub(crate) fn lower_page(&self) -> NativeResult<Option<Arc<dyn ExecutionPlan>>> {
-        if !matches!(self.mode, Mode::Page { lowered: false }) {
-            return Ok(None);
-        }
-        Ok(Some(Arc::new(Self {
-            input: Self::page_input(&self.input)?,
-            mode: Mode::Page { lowered: true },
-            properties: Arc::clone(&self.properties),
-        })))
     }
 
     fn compile(
@@ -204,7 +197,8 @@ impl SubscribeExec {
         let logical = crate::planner::subscription::Subscribe::runtime(
             run.plan.as_ref().clone(),
             run.operation == crate::follow::Operation::Append,
-        );
+        )
+        .context(SqlSnafu)?;
         state.config_mut().set_extension(run);
         let physical = session.physical(&logical, &state).await?;
         let subscription = physical
@@ -338,11 +332,7 @@ impl ExecutionPlan for SubscribeExec {
         let input = children.remove(0);
         match self.mode {
             Mode::Count { .. } => Ok(Arc::new(Self::new(input, children.into_iter().next())?)),
-            Mode::Page { lowered } => Ok(Arc::new(Self {
-                input,
-                mode: Mode::Page { lowered },
-                properties: Arc::clone(&self.properties),
-            })),
+            Mode::Page => Ok(Arc::new(Self::page(input, self.schema())?)),
         }
     }
 

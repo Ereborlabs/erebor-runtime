@@ -59,6 +59,34 @@ execution and manual refresh. The subscription must supply the actual input
 batches. A query that returns identities to the old input reader is not a
 replacement. This work is **Not done**.
 
+### Native append cursor projection
+
+Implementation and selected verification: **Done**. Subscribe adds two native
+column expressions to the internal append projection before native optimization.
+It retains the original public schema and source binding. DataFusion supplies
+column propagation and physical planning. The custom PageLineage rule, recursive
+physical operator reconstruction, extra source expansion, and lowering state
+are deleted. The default native optimizer rules remain unchanged.
+
+The selected Query checks pass all 89 follow and stream cases. The initial
+execution check also passes separately. These cases cover public alias collisions, qualified source names,
+empty results, zero-column results, cursor bounds, source projection, output
+memory, native COUNT execution, and window changes. Four selected Control RPC
+cases pass. One initially fails at the filesystem reserve after test linking
+fills the disk. It passes after inactive test binaries are removed. Strict
+Query, Analysis, and Control Clippy passes all targets. Scoped formatting,
+review-guide links, and the diff check pass. The verification record is
+`/tmp/araphor-native-lineage-verification1.json`. No full workspace CI or
+benchmark is run, as instructed. No performance claim is made.
+
+This increment adds 70 nonblank production Rust lines and removes 156, for a
+net reduction of 86. Tests, documents, blank lines, and code moves do not count
+toward that result. With this increment, the complete redesign still adds
+1,003 production Rust lines against `7b7b407a`. The source count is
+`/tmp/araphor-native-lineage-count1.json`. The separate exact package-time
+change is excluded from this increment. The complete redesign and the
+6,000-line production reduction remain **Not done**.
+
 ### Discovery package subscriptions
 
 Result: **Not done**. The new `araphor-discovery-effects` crate provides the
@@ -533,6 +561,10 @@ formatting of the replacement crates. Later edits are not included in this
 count. The required 6,000-line reduction is **Not done**.
 
 ### Native physical append pages
+
+This historical result is superseded by
+[native append cursor projection](#native-append-cursor-projection). The current
+implementation has no PageLineage rule or physical operator reconstruction.
 
 Implementation and selected host verification: **Done**. The
 logical append SQL rewrite and its Sort are deleted. The native Subscribe

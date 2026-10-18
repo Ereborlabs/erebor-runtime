@@ -25,7 +25,6 @@ use datafusion::execution::{SessionState, TaskContext};
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     execute_stream, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
@@ -183,14 +182,8 @@ impl Engine {
             .with_batch_size(200);
         config.options_mut().execution.planning_concurrency = 1;
         config.set_extension(Arc::clone(&limits));
-        let mut optimizers = PhysicalOptimizer::new().rules;
-        optimizers.insert(
-            optimizers.len() - 1,
-            Arc::new(crate::planner::subscription::PageLineage),
-        );
         let state = SessionStateBuilder::new()
             .with_default_features()
-            .with_physical_optimizer_rules(optimizers)
             .with_config(config)
             .with_runtime_env(native)
             .with_query_planner(Arc::new(crate::planner::subscription::SubscriptionPlanner))

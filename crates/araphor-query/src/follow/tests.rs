@@ -280,7 +280,10 @@ fn lazy_native_shape() {
         ),
         ("SELECT count(*) FROM events", Operation::Replace),
         ("SELECT sequence FROM trace_output", Operation::Append),
-        ("SELECT sequence FROM trace_measurements", Operation::Replace),
+        (
+            "SELECT sequence FROM trace_measurements",
+            Operation::Replace,
+        ),
         (
             "SELECT a.source_cursor FROM events a JOIN events b ON a.source_cursor = b.source_cursor",
             Operation::Replace,
@@ -295,8 +298,25 @@ fn lazy_native_shape() {
             crate::planner::subscription::Subscribe::appendable(&plan).unwrap(),
             expected == Operation::Append
         );
-        let subscription = fixture.engine.session(fixture.selection(), &(Arc::new(AnalysisReadControl::default())), 0).and_then(|session| Subscription::new(session, plan, sources, b"authority", None, clock.clone(), true))
-        .unwrap();
+        let subscription = fixture
+            .engine
+            .session(
+                fixture.selection(),
+                &(Arc::new(AnalysisReadControl::default())),
+                0,
+            )
+            .and_then(|session| {
+                Subscription::new(
+                    session,
+                    plan,
+                    sources,
+                    b"authority",
+                    None,
+                    clock.clone(),
+                    true,
+                )
+            })
+            .unwrap();
         assert_eq!(clock.reads.load(Ordering::SeqCst), 0);
         drop(subscription);
     }
@@ -554,8 +574,25 @@ async fn subqueries_keep_policy() {
     ] {
         let (plan, sources) = fixture.engine.prepare(sql, vec![]).await.unwrap();
         assert_eq!(sources, expected);
-        let subscription = fixture.engine.session(fixture.selection(), &(Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap())), 0).and_then(|session| Subscription::new(session, Arc::new(plan), sources, b"subquery principal", None, TestClock::new(2_000_000_000), true))
-        .unwrap();
+        let subscription = fixture
+            .engine
+            .session(
+                fixture.selection(),
+                &(Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap())),
+                0,
+            )
+            .and_then(|session| {
+                Subscription::new(
+                    session,
+                    Arc::new(plan),
+                    sources,
+                    b"subquery principal",
+                    None,
+                    TestClock::new(2_000_000_000),
+                    true,
+                )
+            })
+            .unwrap();
         assert_eq!(subscription.operation, Operation::Replace);
     }
     let (plan, sources) = fixture
@@ -819,7 +856,7 @@ async fn append_preserves_expressions() {
 
 #[tokio::test]
 async fn append_positions_ignore_aliases() {
-    let sql = "SELECT CAST(91 AS BIGINT UNSIGNED) AS commit_revision, CAST(NULL AS INT UNSIGNED) AS ordinal, CAST(73 AS BIGINT UNSIGNED) AS \"__follow_revision\", CAST(29 AS BIGINT UNSIGNED) AS \"__follow_ordinal\", source_cursor FROM events";
+    let sql = "SELECT CAST(91 AS BIGINT UNSIGNED) AS commit_revision, CAST(NULL AS INT UNSIGNED) AS ordinal, CAST(73 AS BIGINT UNSIGNED) AS \"__follow_revision\", CAST(29 AS BIGINT UNSIGNED) AS \"__follow_ordinal\", source_cursor, CAST(79 AS BIGINT UNSIGNED) AS \"__follow_revision_\", CAST(31 AS BIGINT UNSIGNED) AS \"__follow_ordinal_\" FROM events AS \"Evidence\"";
     for count in [2, 3] {
         let fixture = Fixture::new(Limits {
             output_rows: 2,
@@ -849,6 +886,8 @@ async fn append_positions_ignore_aliases() {
             values(&first, 4),
             [ScalarValue::UInt64(Some(1)), ScalarValue::UInt64(Some(2))]
         );
+        assert_eq!(values(&first, 5), vec![ScalarValue::UInt64(Some(79)); 2]);
+        assert_eq!(values(&first, 6), vec![ScalarValue::UInt64(Some(31)); 2]);
         assert!(first
             .batches
             .as_ref()
@@ -876,6 +915,8 @@ async fn append_positions_ignore_aliases() {
         assert_eq!(values(&second, 2), [ScalarValue::UInt64(Some(73))]);
         assert_eq!(values(&second, 3), [ScalarValue::UInt64(Some(29))]);
         assert_eq!(values(&second, 4), [ScalarValue::UInt64(Some(3))]);
+        assert_eq!(values(&second, 5), [ScalarValue::UInt64(Some(79))]);
+        assert_eq!(values(&second, 6), [ScalarValue::UInt64(Some(31))]);
         assert!(second.exhausted && !second.limited);
         assert_eq!(
             second.cursor.position(),
@@ -1210,12 +1251,39 @@ async fn native_append_execution() {
             window: None,
             resume: None,
         }));
-    let logical = crate::planner::subscription::Subscribe::runtime(plan, true);
+    let logical = crate::planner::subscription::Subscribe::runtime(plan, true).unwrap();
+    assert_eq!(logical.schema().inner(), &schema);
+    assert_eq!(
+        logical.inputs()[0].schema().fields().len(),
+        schema.fields().len() + 2
+    );
     let physical = state.create_physical_plan(&logical).await.unwrap();
     assert!(physical
         .as_any()
         .is::<crate::stream::physical::SubscribeExec>());
     assert_eq!(physical.schema(), schema);
+    let children = physical.children();
+    assert_eq!(children.len(), 1);
+    assert_eq!(
+        children[0].schema().fields().len(),
+        schema.fields().len() + 2
+    );
+    let canonical = &SourceSnapshot::schemas()["events"];
+    let mut requests = BTreeMap::from([("events".to_owned(), None)]);
+    let bounds = SourceSnapshot::requests(&mut requests, &[Arc::clone(children[0])]).unwrap();
+    assert_eq!(
+        requests["events"],
+        Some(
+            ["source_cursor", "commit_revision", "ordinal"]
+                .into_iter()
+                .map(|name| canonical.index_of(name).unwrap())
+                .collect()
+        )
+    );
+    assert_eq!(
+        bounds["source_cursor"].lower(),
+        &ScalarValue::UInt64(Some(2))
+    );
     let context = state.task_ctx();
     drop(state);
     let mut stream = datafusion::physical_plan::execute_stream(physical, context).unwrap();
@@ -1361,22 +1429,7 @@ async fn native_subscribe_execution() {
         .iter()
         .map(|rule| rule.name())
         .collect::<Vec<_>>();
-    assert_eq!(actual.len(), native.len() + 1);
-    assert_eq!(
-        &actual[actual.len() - 2..],
-        &["PageLineage", "SanityCheckPlan"]
-    );
-    assert_eq!(
-        actual.iter().filter(|name| **name == "PageLineage").count(),
-        1
-    );
-    assert_eq!(
-        actual
-            .into_iter()
-            .filter(|name| *name != "PageLineage")
-            .collect::<Vec<_>>(),
-        native
-    );
+    assert_eq!(actual, native);
     state
         .config_mut()
         .set_extension(Arc::new(crate::stream::Run {
@@ -1403,7 +1456,7 @@ async fn native_subscribe_execution() {
         .iter()
         .any(|rule| rule.name() == "EnsureCooperative"));
     crate::planner::subscription::Subscribe::maintainable(&plan).unwrap();
-    let logical = crate::planner::subscription::Subscribe::runtime(plan, false);
+    let logical = crate::planner::subscription::Subscribe::runtime(plan, false).unwrap();
     let physical = state.create_physical_plan(&logical).await.unwrap();
     assert!(physical
         .as_any()
@@ -1964,7 +2017,25 @@ fn clock_requires_time_filter() {
         "SELECT operation FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '1 second' OR operation = 7",
     ] {
         let (plan, sources) = fixture.plan(sql, vec![]);
-        assert!(fixture.engine.session(fixture.selection(), &(Arc::new(AnalysisReadControl::default())), 0).and_then(|session| Subscription::new(session, plan, sources, b"authority", None, TestClock::new(0), true)).is_err());
+        assert!(
+            fixture
+                .engine
+                .session(
+                    fixture.selection(),
+                    &(Arc::new(AnalysisReadControl::default())),
+                    0
+                )
+                .and_then(|session| Subscription::new(
+                    session,
+                    plan,
+                    sources,
+                    b"authority",
+                    None,
+                    TestClock::new(0),
+                    true
+                ))
+                .is_err()
+        );
     }
 }
 
@@ -1984,10 +2055,28 @@ async fn window_matches_native_precision() {
             };
             let inclusive = timestamp + width + 1000;
             let cases = [
-                (format!("received_at > now() - INTERVAL '{interval}'"), strict(width)),
-                (format!("received_at >= now() - INTERVAL '{interval}'"), inclusive),
-                (format!("received_at >= now() - INTERVAL '{interval}' AND received_at > now() - INTERVAL '{} nanoseconds'", width + 1), inclusive.min(strict(width + 1))),
-                (format!("received_at >= now() - INTERVAL '{interval}' AND received_at > now() - INTERVAL '{} nanoseconds'", width + 1500), inclusive.min(strict(width + 1500))),
+                (
+                    format!("received_at > now() - INTERVAL '{interval}'"),
+                    strict(width),
+                ),
+                (
+                    format!("received_at >= now() - INTERVAL '{interval}'"),
+                    inclusive,
+                ),
+                (
+                    format!(
+                        "received_at >= now() - INTERVAL '{interval}' AND received_at > now() - INTERVAL '{} nanoseconds'",
+                        width + 1
+                    ),
+                    inclusive.min(strict(width + 1)),
+                ),
+                (
+                    format!(
+                        "received_at >= now() - INTERVAL '{interval}' AND received_at > now() - INTERVAL '{} nanoseconds'",
+                        width + 1500
+                    ),
+                    inclusive.min(strict(width + 1500)),
+                ),
             ];
             for (predicate, expiry) in cases {
                 let sql = format!("SELECT count(*) AS total FROM events WHERE {predicate}");
@@ -2037,16 +2126,47 @@ async fn native_join_source_capture() {
     fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
     let clock = TestClock::new(2_000_000_000);
     for (sql, left, right) in [
-        ("SELECT l.source_cursor AS a, r.source_cursor AS b FROM events l JOIN events r ON l.source_cursor + 1 = r.source_cursor ORDER BY a", vec![1, 2], vec![2, 3]),
-        ("SELECT l.source_cursor AS a, r.source_cursor AS b FROM events l CROSS JOIN events r ORDER BY a, b", vec![1,1,1,2,2,2,3,3,3], vec![1,2,3,1,2,3,1,2,3]),
-        ("SELECT l.source_cursor AS a, r.source_cursor AS b FROM events l LEFT JOIN events r ON l.source_cursor < r.source_cursor WHERE r.source_cursor IS NOT NULL ORDER BY a, b", vec![1,1,2], vec![2,3,3]),
+        (
+            "SELECT l.source_cursor AS a, r.source_cursor AS b FROM events l JOIN events r ON l.source_cursor + 1 = r.source_cursor ORDER BY a",
+            vec![1, 2],
+            vec![2, 3],
+        ),
+        (
+            "SELECT l.source_cursor AS a, r.source_cursor AS b FROM events l CROSS JOIN events r ORDER BY a, b",
+            vec![1, 1, 1, 2, 2, 2, 3, 3, 3],
+            vec![1, 2, 3, 1, 2, 3, 1, 2, 3],
+        ),
+        (
+            "SELECT l.source_cursor AS a, r.source_cursor AS b FROM events l LEFT JOIN events r ON l.source_cursor < r.source_cursor WHERE r.source_cursor IS NOT NULL ORDER BY a, b",
+            vec![1, 1, 2],
+            vec![2, 3, 3],
+        ),
     ] {
         let mut subscription = fixture.subscribe(sql, clock.clone(), None, false);
         let update = next(&mut subscription).await;
         assert_eq!(update.operation, Operation::Replace);
-        assert_eq!(values(&update, 0), left.into_iter().map(|value| ScalarValue::UInt64(Some(value))).collect::<Vec<_>>(), "{sql}");
-        assert_eq!(values(&update, 1), right.into_iter().map(|value| ScalarValue::UInt64(Some(value))).collect::<Vec<_>>(), "{sql}");
-        assert_eq!(update.snapshot.page.scanned_through, araphor_data::StorePositionV1 { commit_revision: update.snapshot.page.extraction.meta.commit_revision, ordinal: u32::MAX });
+        assert_eq!(
+            values(&update, 0),
+            left.into_iter()
+                .map(|value| ScalarValue::UInt64(Some(value)))
+                .collect::<Vec<_>>(),
+            "{sql}"
+        );
+        assert_eq!(
+            values(&update, 1),
+            right
+                .into_iter()
+                .map(|value| ScalarValue::UInt64(Some(value)))
+                .collect::<Vec<_>>(),
+            "{sql}"
+        );
+        assert_eq!(
+            update.snapshot.page.scanned_through,
+            araphor_data::StorePositionV1 {
+                commit_revision: update.snapshot.page.extraction.meta.commit_revision,
+                ordinal: u32::MAX
+            }
+        );
         assert!(subscription.next().await.is_none());
     }
 }

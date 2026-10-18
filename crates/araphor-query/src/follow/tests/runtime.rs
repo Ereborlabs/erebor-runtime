@@ -578,7 +578,8 @@ async fn native_first_clock_time() {
             window: None,
             resume: None,
         }));
-    let logical = crate::planner::subscription::Subscribe::runtime(plan.as_ref().clone(), false);
+    let logical =
+        crate::planner::subscription::Subscribe::runtime(plan.as_ref().clone(), false).unwrap();
     let physical = state.create_physical_plan(&logical).await.unwrap();
     assert!(physical
         .as_any()
@@ -673,7 +674,8 @@ async fn native_page_follow_properties() {
                 window: None,
                 resume: None,
             }));
-        let logical = crate::planner::subscription::Subscribe::runtime(plan.as_ref().clone(), true);
+        let logical =
+            crate::planner::subscription::Subscribe::runtime(plan.as_ref().clone(), true).unwrap();
         let physical = state.create_physical_plan(&logical).await.unwrap();
         assert!(physical
             .as_any()
@@ -780,7 +782,8 @@ async fn subscription_prunes_columns() {
         .unwrap();
     let state = session.state().unwrap();
     let ordinary = session.physical(&plan, &state).await.unwrap();
-    let wrapped = crate::planner::subscription::Subscribe::runtime(plan.as_ref().clone(), false);
+    let wrapped =
+        crate::planner::subscription::Subscribe::runtime(plan.as_ref().clone(), false).unwrap();
     let subscription = session.physical(&wrapped, &state).await.unwrap();
     let scans = |physical: &Arc<dyn ExecutionPlan>| {
         let mut schemas = Vec::new();

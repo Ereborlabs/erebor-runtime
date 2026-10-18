@@ -404,7 +404,7 @@ async fn unsupported_plans_stay_batch() {
         "SELECT count(*) AS total FROM events HAVING count(*) > 0",
     ] {
         let plan = fixture.plan(sql, vec![]).await;
-        let logical = crate::planner::subscription::Subscribe::runtime(plan, false);
+        let logical = crate::planner::subscription::Subscribe::runtime(plan, false).unwrap();
         let physical = fixture.state.create_physical_plan(&logical).await.unwrap();
         let subscription = physical.as_any().downcast_ref::<SubscribeExec>().unwrap();
         assert!(!subscription.maintained(), "{sql}");

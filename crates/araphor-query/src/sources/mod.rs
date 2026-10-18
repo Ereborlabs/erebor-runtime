@@ -437,24 +437,6 @@ pub(crate) struct SourceData {
 }
 
 impl SourceData {
-    pub(crate) fn positioned(&self) -> Result<Arc<dyn ExecutionPlan>> {
-        let Some(name @ ("events" | "trace_output")) = self.origin.durable() else {
-            return Err(DataFusionError::NotImplemented("positioned source".into()));
-        };
-        let canonical = &SourceSnapshot::schemas()[name];
-        if canonical.project(&self.indices)? != *self.schema {
-            return Err(DataFusionError::Execution("source schema changed".into()));
-        }
-        let mut indices = self.indices.clone();
-        indices.push(canonical.index_of("commit_revision")?);
-        indices.push(canonical.index_of("ordinal")?);
-        Ok(DataSourceExec::from_data_source(Self {
-            schema: Arc::new(canonical.project(&indices)?),
-            indices,
-            ..self.clone()
-        }))
-    }
-
     pub(crate) fn from_plan(plan: &dyn ExecutionPlan) -> Option<&Self> {
         plan.as_any()
             .downcast_ref::<DataSourceExec>()?

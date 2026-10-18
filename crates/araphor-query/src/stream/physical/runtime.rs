@@ -46,12 +46,6 @@ impl Runtime {
         initial: Option<(Arc<crate::execution::Permit>, u64)>,
         progress: Progress,
     ) -> Result<Self> {
-        if matches!(physical.mode, Mode::Page { lowered: false }) {
-            return Err(DataFusionError::Internal(
-                "page lineage is not planned".into(),
-            ))
-            .context(SqlSnafu);
-        }
         let maintained = match &physical.mode {
             Mode::Count {
                 journal: Some(journal),

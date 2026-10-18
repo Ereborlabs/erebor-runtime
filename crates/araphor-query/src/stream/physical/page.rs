@@ -7,87 +7,16 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::compute::interleave_record_batch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, Result as NativeResult};
+use datafusion::common::DataFusionError;
 use datafusion::execution::memory_pool::MemoryReservation;
-use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::projection::ProjectionExpr;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::coop::CooperativeExec;
-use datafusion::physical_plan::empty::EmptyExec;
-use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
-use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use datafusion::physical_plan::SendableRecordBatchStream;
 use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
 
-use super::SubscribeExec;
 use crate::execution::{Permit, Session};
-use crate::sources::{ArrowSnapshot, SourceData};
+use crate::sources::ArrowSnapshot;
 use crate::stream::Output;
 use crate::{Result, SqlSnafu};
-
-impl SubscribeExec {
-    pub(super) fn page_input(
-        input: &Arc<dyn ExecutionPlan>,
-    ) -> NativeResult<Arc<dyn ExecutionPlan>> {
-        if let Some(source) = SourceData::from_plan(input.as_ref()) {
-            return source.positioned();
-        }
-        if input.as_any().is::<EmptyExec>() {
-            return Ok(Arc::clone(input));
-        }
-        let children = input.children();
-        let [child] = children.as_slice() else {
-            return Err(DataFusionError::NotImplemented(
-                "positioned unary plan".into(),
-            ));
-        };
-        let projection = input.as_any().downcast_ref::<ProjectionExec>();
-        let filter = input.as_any().downcast_ref::<FilterExec>();
-        let transparent = input.as_any().is::<CooperativeExec>()
-            || (input.as_any().is::<CoalescePartitionsExec>()
-                && child.properties().partitioning.partition_count() == 1);
-        if projection.is_none() && filter.is_none() && !transparent {
-            return Err(DataFusionError::NotImplemented(
-                "positioned native operator".into(),
-            ));
-        }
-        let positioned = Self::page_input(child)?;
-        let width = child.schema().fields().len();
-        let schema = positioned.schema();
-        if schema.fields().len() == width {
-            return Ok(Arc::clone(input));
-        }
-        if schema.fields().len() != width + 2 {
-            return Err(DataFusionError::Execution(
-                "positioned input schema changed".into(),
-            ));
-        }
-        if let Some(projection) = projection {
-            let mut expressions = projection.expr().to_vec();
-            for index in width..width + 2 {
-                let field = schema.field(index);
-                expressions.push(ProjectionExpr::new(
-                    Arc::new(Column::new(field.name(), index)),
-                    field.name().clone(),
-                ));
-            }
-            return Ok(Arc::new(ProjectionExec::try_new(expressions, positioned)?));
-        }
-        if let Some(filter) = filter {
-            let mut builder = FilterExecBuilder::from(filter).with_input(positioned);
-            if let Some(projection) = filter.projection() {
-                let mut indices = projection.to_vec();
-                indices.extend([width, width + 1]);
-                builder = builder
-                    .apply_projection(None)?
-                    .apply_projection(Some(indices))?;
-            }
-            return Ok(Arc::new(builder.build()?));
-        }
-        Arc::clone(input).with_new_children(vec![positioned])
-    }
-}
 
 impl Output {
     pub(super) async fn page(

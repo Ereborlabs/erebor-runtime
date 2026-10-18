@@ -1322,38 +1322,36 @@ compiler worker entry points run through their parent tests. Other compiler,
 VM, Query, SDK, and retained-store quotas remain. Polling removal is not complete.
 The source records use the `/tmp/araphor-discovery-wasm-memory-` prefix.
 
-### Native physical append pages
+### Native append cursor projection
 
 [Subscribe::appendable](../../crates/araphor-query/src/planner/subscription.rs) selects a projection with filters and aliases over one durable events or trace_output source
   -> [SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) acquires the evaluation permit before the clock read and physical planning
   -> [SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) registers both watches before time is fixed and supplies run facts through native configuration
-  -> [Subscribe::runtime](../../crates/araphor-query/src/planner/subscription.rs) retains the public native SQL schema
+  -> [Subscribe::runtime](../../crates/araphor-query/src/planner/subscription.rs) retains the public native SQL schema and adds native cursor expressions to its internal projection
   -> DataFusion runs its default logical and physical optimizer rules
-  -> the late registered [PageLineage](../../crates/araphor-query/src/planner/subscription.rs) extends the actual native physical child with its real source positions
-  -> native SanityCheckPlan checks the completed physical tree
+  -> DataFusion carries the required source columns through native physical planning
+  -> [SubscribeExec::page](../../crates/araphor-query/src/stream/physical.rs) retains the public schema over the widened child
   -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) opens the planned page child through shared Session.start_physical
   -> [Output::page](../../crates/araphor-query/src/stream/physical/page.rs) selects and compacts the disclosed prefix
   -> [State::next](../../crates/araphor-query/src/follow/mod.rs) checks the store binding and creates Update from the completed physical event
 
 The public append result requires a raw position for each disclosed row. A
 native SQL projection can discard those fields. RecordBatchStream supplies no
-separate per-row position channel. PageLineage carries the real fields through
-physical execution to preserve that existing result contract.
+separate per-row position channel. Subscribe retains the original result schema
+and source binding. Its internal native Projection also selects commit_revision
+and ordinal. Each added expression uses the source qualifier and an alias that
+does not match a public result name. The native planner supplies the expressions;
+the implementation does not rewrite SQL text or add a Sort.
 
-The logical SQL plan has no added position alias or Sort. The physical source
-adds its real commit_revision and ordinal columns after its existing scan
-columns. Native ProjectionExec keeps its bound expressions and carries those
-positions. Native FilterExec applies its mask to the complete Arrow row. An
-embedded native filter projection retains its original fields and both position
-fields. SourceData capture reads the final descriptor, including those fields.
-Output removes the two physical fields before disclosure. The public schema,
-field metadata, aliases, and values remain the native SQL result.
+DataFusion propagates those columns through its own optimizer and physical
+planner. Subscribe declares all child columns necessary. SourceData captures
+the resulting native scan projection. Output removes the two internal fields
+before disclosure. Public names, types, field metadata, aliases, and values
+remain the native SQL result. A zero-column public result still carries its
+row count. Public aliases can use the internal name prefixes and suffixes.
 
-PageLineage runs after all default rewrite rules and before the existing final
-sanity check. The complete native rule order remains intact. No duplicate sanity
-check is added. Ordinary and COUNT plans need only a root check for this rule.
-No name-based projection or filter rewrite runs after this rule. Public aliases can therefore equal the
-position field names. The final sanity check does not rewrite expressions.
+The complete default optimizer rule order remains intact. There is no custom
+physical optimizer rule or recursive physical operator reconstruction.
 The events provider keeps its Inexact filter promise. SQL predicates remain native;
 the source adds no separate filter implementation or matched-position registry.
 
@@ -1362,7 +1360,13 @@ filter, cooperative, or single-partition coalescing operators. Data emits raw
 positions in global revision and ordinal order. These operators preserve that
 row order. An optimizer-eliminated empty scan stays empty. The original source
 inventory still supplies receipts and page progress before SQL filtering.
-This rule does not establish order for joins, unions, or multiple partitions.
+This path does not establish order for joins, unions, or multiple partitions.
+
+The current source passes all 89 follow and stream cases and four selected
+Control RPC cases. Strict Clippy passes all targets in Query, Analysis, and
+Control. Formatting and the diff check pass. The source record is
+`/tmp/araphor-native-lineage-verification1.json`. No benchmark or full workspace
+CI is run. This change makes no performance claim.
 
 The page collector retains the prior logical-byte, row, staging, scratch, and
 actual Arrow allocation checks. Native interleave copies the selected prefix;

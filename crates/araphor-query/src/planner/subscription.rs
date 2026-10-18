@@ -1,27 +1,38 @@
+use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{DFSchemaRef, DataFusionError, Result};
+use datafusion::common::{Column, DFSchemaRef, DataFusionError, Result};
 use datafusion::datasource::source_as_provider;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{
-    Expr, Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility,
+    Expr, Extension, LogicalPlan, Projection, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+    Volatility,
 };
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 
 use crate::sources::{JournalExec, SourceData, SourceProvider, SourceSnapshot};
 use crate::stream::physical::SubscribeExec;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Subscribe {
     input: LogicalPlan,
     append: bool,
+    schema: DFSchemaRef,
+}
+
+impl PartialOrd for Subscribe {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => self.append.partial_cmp(&other.append),
+            ordering => ordering,
+        }
+        .filter(|ordering| *ordering != Ordering::Equal || self == other)
+    }
 }
 
 impl Subscribe {
@@ -66,10 +77,39 @@ impl Subscribe {
         }
     }
 
-    pub(crate) fn runtime(input: LogicalPlan, append: bool) -> LogicalPlan {
-        LogicalPlan::Extension(Extension {
-            node: Arc::new(Self { input, append }),
-        })
+    pub(crate) fn runtime(mut input: LogicalPlan, append: bool) -> Result<LogicalPlan> {
+        let schema = Arc::clone(input.schema());
+        if append {
+            let LogicalPlan::Projection(projection) = input else {
+                return Err(DataFusionError::Internal(
+                    "Subscribe page projection is absent".into(),
+                ));
+            };
+            let mut expressions = projection.expr;
+            for (name, alias) in [
+                ("commit_revision", "__follow_revision"),
+                ("ordinal", "__follow_ordinal"),
+            ] {
+                let (qualifier, field) = projection
+                    .input
+                    .schema()
+                    .qualified_field_with_unqualified_name(name)?;
+                let mut alias = alias.to_owned();
+                while schema.has_column_with_unqualified_name(&alias) {
+                    alias.push('_');
+                }
+                expressions
+                    .push(Expr::Column(Column::new(qualifier.cloned(), field.name())).alias(alias));
+            }
+            input = LogicalPlan::Projection(Projection::try_new(expressions, projection.input)?);
+        }
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(Self {
+                input,
+                append,
+                schema,
+            }),
+        }))
     }
 
     pub(crate) fn maintainable(input: &LogicalPlan) -> Result<()> {
@@ -134,7 +174,7 @@ impl UserDefinedLogicalNodeCore for Subscribe {
     }
 
     fn schema(&self) -> &DFSchemaRef {
-        self.input.schema()
+        &self.schema
     }
 
     fn expressions(&self) -> Vec<Expr> {
@@ -162,6 +202,7 @@ impl UserDefinedLogicalNodeCore for Subscribe {
         Ok(Self {
             input: inputs.remove(0),
             append: self.append,
+            schema: Arc::clone(&self.schema),
         })
     }
 }
@@ -201,7 +242,10 @@ impl ExtensionPlanner for SubscriptionPlanner {
             ));
         };
         if subscription.append {
-            return Ok(Some(Arc::new(SubscribeExec::page(Arc::clone(input))?)));
+            return Ok(Some(Arc::new(SubscribeExec::page(
+                Arc::clone(input),
+                Arc::clone(subscription.schema.inner()),
+            )?)));
         }
         let mut scans = 0;
         let mut journal = None;
@@ -225,30 +269,6 @@ impl ExtensionPlanner for SubscriptionPlanner {
             Arc::clone(input),
             journal,
         )?)))
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct PageLineage;
-
-impl PhysicalOptimizerRule for PageLineage {
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        match plan.as_any().downcast_ref::<SubscribeExec>() {
-            Some(subscription) => Ok(subscription.lower_page()?.unwrap_or(plan)),
-            None => Ok(plan),
-        }
-    }
-
-    fn name(&self) -> &str {
-        "PageLineage"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
     }
 }
 
