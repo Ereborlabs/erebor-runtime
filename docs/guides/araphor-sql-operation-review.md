@@ -92,9 +92,9 @@ and manual refresh. An identity-only query must not invoke the old reader.
 ## Native Discovery SQL package
 
 The new [ObservedEffects](../../crates/araphor-discovery-effects/src/effects.rs)
-relation planner binds one subquery to the checked-in
-[SQL body](../../crates/araphor-discovery-effects/src/observed_effects.sql).
-The body uses native projection, GROUP BY, COUNT, MIN, and MAX. There is no
+relation planner binds explicit subqueries to the checked-in SQL bodies.
+[Observed effects](../../crates/araphor-discovery-effects/src/observed_effects.sql)
+uses one input and native projection, GROUP BY, COUNT, MIN, and MAX. There is no
 package logical operator, physical operator, executor, or retained result cache.
 The relation hook is required because a native table function accepts scalar
 expressions, not an input relation. The hook delegates the bound derived table
@@ -121,6 +121,44 @@ or an exact supported window boundary. The package has no private wake loop.
 Each result describes the supplied relation. Projected source keys are data;
 the authorized selection and snapshot witnesses supply evidence provenance.
 The received-time bounds use receipt time with microsecond precision.
+
+[Coverage ranges](../../crates/araphor-discovery-effects/src/coverage_ranges.sql)
+uses two inputs. Native joins qualify each event against the supplied coverage
+receipt and interval. Native LAG, running SUM, and GROUP BY combine adjacent
+cursors with equal interval, revision, state, and ordered reasons.
+
+```sql
+SELECT source_id, first_cursor, last_cursor, state, gap_reasons
+FROM discovery.coverage_ranges(
+    (SELECT * FROM events),
+    (SELECT * FROM coverage)
+)
+```
+
+The joins and windows use tenant, node, boot, label epoch, source, source epoch,
+and CPU. Receipt revisions remain distinct from interval revisions. Missing
+receipts or intervals produce Unknown. A malformed interval identifier falls
+back to the source identifier. Counter sums use native decimal arithmetic.
+An overflowing UInt64 sum cannot establish complete coverage. Native reason
+arrays preserve the admitted report order. The coverage relation encodes
+Control-admitted reason tokens as comma-separated text. This call does not
+define a new encoding for arbitrary reason strings.
+
+The shared input binder uses the native SQL parser and a post-order native
+AST visitor. It replaces input references in the package body. It does not
+visit or change the inserted caller queries. Caller CTE names remain in caller
+scope. Explicit parentheses keep each IS DISTINCT FROM comparison inside its
+OR operand under the native parser rules.
+
+This call supplies the raw range qualifier. It does not perform the later
+builtin temporal degradation or final profile merge. Graph callers still use
+their exact historical reports through the existing qualifier. Those callers
+must supply the same frozen rows before that qualifier can be deleted.
+
+The expanded package passes 11 package cases, seven Query subscription cases,
+and three Control query-RPC cases. Strict Clippy passes all targets in the five
+affected crates. The source and command record is
+`/tmp/araphor-native-coverage-verification1.json`.
 
 This is a built-in SQL package. It does not establish OCI admission, persisted
 managed jobs, complete coverage, or old behavior-profile parity. Existing

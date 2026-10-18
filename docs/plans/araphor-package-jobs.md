@@ -89,6 +89,22 @@ are not kernel sequence numbers. This work does not yet replace pinned context
 or full atom and profile derivation. Delete the old coverage interpreter only
 after all callers use the qualified replacement. Result: **Not done**.
 
+The raw range call is now implemented as discovery.coverage_ranges in the new
+Discovery Effects crate. The shared native relation planner binds explicit
+event and coverage queries. Native SQL performs range qualification and
+coalescing. No custom executor or timer is added. All 11 package tests, seven
+Query subscription tests, and three Control query-RPC tests pass. The cases
+include receipt-only changes and exact window expiry without new intake.
+Strict Clippy passes all targets in the five affected crates. The command and
+source record is `/tmp/araphor-native-coverage-verification1.json`.
+
+The existing qualifier remains for three Discovery and two graph callers.
+Those callers must supply their original historical reports and intervals.
+The new call does not perform the later builtin temporal degradation or final
+profile merge. Full replacement remains **Not done**. This increment adds 20
+nonblank production Rust lines. The complete redesign adds 1,144 against
+`7b7b407a`. The count is `/tmp/araphor-native-coverage-count3.json`.
+
 ## Earlier design draft
 
 The sections below retain the earlier design for review. Their controller,

@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-datafusion = { version = "=53.1.0", default-features = false, features = ["sql"] }
+datafusion = { version = "=53.1.0", default-features = false, features = ["sql", "nested_expressions", "encoding_expressions", "string_expressions"] }
 
 [dev-dependencies]
 araphor-data = { path = "../araphor-data" }

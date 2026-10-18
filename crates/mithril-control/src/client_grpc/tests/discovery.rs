@@ -1,4 +1,5 @@
 use araphor_data::{EvidenceIntakeIdentityV1, ValidatedEvidenceBatchV1};
+use prost::Message as _;
 
 use super::*;
 
@@ -194,5 +195,86 @@ async fn discovery_rpc_follow() -> TestResult {
     assert!(next.read_revision > first.read_revision);
     assert_eq!(next.store_uuid, first.store_uuid);
     assert_eq!(next.recovery_epoch, first.recovery_epoch);
+    Ok(())
+}
+
+#[tokio::test]
+async fn discovery_rpc_coverage() -> TestResult {
+    use proto::query_value::Kind;
+
+    let fixture = Fixture::new()?;
+    let source = source([1; 16]);
+    retain(&fixture, &source, 1, 2)?;
+    let mut stream = fixture
+        .service
+        .query(
+            fixture.request(
+                proto::QueryRequest {
+                    sql: "SELECT state, expected_records, coverage_revision,
+                        array_to_string(gap_reasons, ',') AS reasons
+                    FROM discovery.coverage_ranges(
+                        (SELECT * FROM events), (SELECT * FROM coverage))"
+                        .into(),
+                    follow: true,
+                    ..Default::default()
+                },
+                false,
+            )?,
+        )
+        .await?
+        .into_inner();
+    let mut revision = 0;
+    for (coverage, state, reason) in [
+        (0, "UNKNOWN", "MISSING_COVERAGE_REPORT"),
+        (1, "GAPPED", "SOURCE_COVERAGE_GAPPED"),
+    ] {
+        if coverage != 0 {
+            fixture.service.data()?.store.accept_validated_coverage(
+                araphor_data::ValidatedCoverageV1 {
+                    identity: source.clone(),
+                    cpu_id: 0,
+                    revision: coverage,
+                    encoded_report: araphor_data::CoverageReport {
+                        source_id: source.source_id.to_vec(),
+                        source_epoch: source.source_epoch,
+                        cpu_id: 0,
+                        revision: coverage,
+                        intervals: vec![araphor_data::CoverageInterval {
+                            interval_id: vec![4; 16],
+                            source_epoch: source.source_epoch,
+                            revision: coverage,
+                            state: state.into(),
+                            ..Default::default()
+                        }],
+                    }
+                    .encode_to_vec(),
+                },
+            )?;
+        }
+        let frame = next_rows(&mut stream).await?;
+        assert_eq!(frame.operation, proto::QueryOperation::Replace as i32);
+        assert!(frame.read_revision > revision);
+        revision = frame.read_revision;
+        assert_eq!(frame.coverage.len(), 1);
+        assert_eq!(frame.coverage[0].contiguous_cursor, 2);
+        assert_eq!(frame.coverage[0].coverage_revision, coverage);
+        let Some(proto::query_frame::Payload::Rows(rows)) = &frame.payload else {
+            return Err("coverage rows are absent".into());
+        };
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(
+            rows.rows[0]
+                .values
+                .iter()
+                .map(|value| value.kind.clone())
+                .collect::<Vec<_>>(),
+            [
+                Some(Kind::Text(state.into())),
+                Some(Kind::Unsigned(2)),
+                Some(Kind::Unsigned(coverage)),
+                Some(Kind::Text(reason.into())),
+            ]
+        );
+    }
     Ok(())
 }

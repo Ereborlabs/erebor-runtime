@@ -100,6 +100,42 @@ The command and source record is
 `/tmp/araphor-optional-storage-verification1.json`. Full workspace CI,
 performance tests, and physical Kubernetes checks are not run.
 
+### Native coverage package
+
+Implementation and selected qualification: **Done**.
+The new package also exports discovery.coverage_ranges with explicit event and
+coverage subqueries. Native SQL supplies joins, CASE, LAG, running SUM, GROUP BY,
+reason arrays, and counter arithmetic. The native relation hook binds both
+exports through one input binder. No package logical node, physical operator,
+executor, timer, or durable store is added.
+
+The raw range result preserves the full source identity and CPU, durable cursor
+holes, receipt revision, historical interval selection, kernel sequence proof,
+ordered reasons, and malformed identifier fallback. Decimal sums prevent
+UInt64 overflow from establishing complete coverage. The native parser needs
+explicit parentheses around IS DISTINCT FROM terms in the OR expression.
+A regression checks Boolean operands in the unoptimized native plan.
+
+The existing Discovery and graph qualifiers remain. Their callers do not yet
+supply their exact selected historical rows to this call. The new call does not
+perform the later builtin temporal degradation or complete profile merge.
+
+This increment adds 20 nonblank production Rust lines. SQL, tests, documents,
+and blank lines are excluded from that count. The storage quota and native
+coverage increments add 169 production Rust lines. The complete redesign adds 1,144 against `7b7b407a`.
+The source count is `/tmp/araphor-native-coverage-count3.json`.
+The complete Discovery replacement and the 6,000-line reduction remain **Not done**.
+
+Selected qualification passes 11 package cases, seven Query subscription
+cases, and three Control query-RPC cases. The cases include receipt-only
+updates, exact window expiry, cursor holes, counter overflow, caller CTE names,
+and native Boolean comparison planning. Strict Clippy passes all targets in
+the five affected crates. Scoped formatting and whitespace checks pass.
+Functional runs precede test-only lint corrections; strict Clippy compiles
+those corrected tests. The command and source record is
+`/tmp/araphor-native-coverage-verification1.json`. Full workspace CI and
+performance tests are not run. No speed result is claimed.
+
 ### Exact package evaluation time
 
 Implementation and selected verification: **Done**. Package preparation uses

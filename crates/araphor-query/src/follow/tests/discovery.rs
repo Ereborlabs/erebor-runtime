@@ -4,6 +4,7 @@ use std::sync::Arc;
 use araphor_discovery_effects::ObservedEffects;
 use datafusion::common::ScalarValue;
 use futures_util::StreamExt as _;
+use prost::Message as _;
 
 use super::{
     next, values, AnalysisReadControl, AnalysisSelectionV1, Duration, EvidenceIntakeIdentityV1,
@@ -166,6 +167,130 @@ async fn tenant_sources_stay_separate() {
     );
     assert_eq!(result.snapshot.witnesses.len(), 5);
     assert!(subscription.next().await.is_none());
+}
+
+#[tokio::test]
+async fn coverage_notices_update_ranges() {
+    let fixture = fixture(Limits::default());
+    fixture.commit(&fixture.source, 1, 2, 1_000_000_000);
+    let sql = "SELECT first_cursor, last_cursor, expected_records, coverage_revision,
+            coverage_interval_id, state, gap_reasons
+        FROM discovery.coverage_ranges(
+            (SELECT * FROM events), (SELECT * FROM coverage))";
+    let (_, sources) = fixture.engine.prepare(sql, vec![]).await.unwrap();
+    assert_eq!(
+        sources.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["coverage", "events"]
+    );
+    let (mut subscription, _) = subscribe(&fixture, sql, TestClock::new(2_000_000_000)).await;
+    let first = next(&mut subscription).await;
+    assert_eq!(first.operation, Operation::Replace);
+    assert_eq!(values(&first, 0), [ScalarValue::UInt64(Some(1))]);
+    assert_eq!(values(&first, 1), [ScalarValue::UInt64(Some(2))]);
+    assert_eq!(values(&first, 2), [ScalarValue::UInt64(Some(2))]);
+    assert_eq!(values(&first, 3), [ScalarValue::UInt64(Some(0))]);
+    assert_eq!(
+        values(&first, 4),
+        [ScalarValue::Binary(Some(fixture.source.source_id.to_vec()))]
+    );
+    assert_eq!(
+        values(&first, 5),
+        [ScalarValue::Utf8(Some("UNKNOWN".into()))]
+    );
+    for (revision, state, expected) in [(1, "GAPPED", "GAPPED"), (2, "HEALTHY", "UNKNOWN")] {
+        fixture
+            .store
+            .accept_validated_coverage(araphor_data::ValidatedCoverageV1 {
+                identity: fixture.source.clone(),
+                cpu_id: 0,
+                revision,
+                encoded_report: araphor_data::CoverageReport {
+                    source_id: fixture.source.source_id.to_vec(),
+                    source_epoch: fixture.source.source_epoch,
+                    cpu_id: 0,
+                    revision,
+                    intervals: vec![araphor_data::CoverageInterval {
+                        interval_id: fixture.source.source_id.to_vec(),
+                        source_epoch: fixture.source.source_epoch,
+                        revision,
+                        state: state.into(),
+                        ..Default::default()
+                    }],
+                }
+                .encode_to_vec(),
+            })
+            .unwrap();
+        let update = next(&mut subscription).await;
+        assert_eq!(update.operation, Operation::Replace);
+        assert_eq!(values(&update, 0), values(&first, 0));
+        assert_eq!(values(&update, 1), values(&first, 1));
+        assert_eq!(values(&update, 2), values(&first, 2));
+        assert_eq!(values(&update, 3), [ScalarValue::UInt64(Some(revision))]);
+        assert_eq!(
+            values(&update, 5),
+            [ScalarValue::Utf8(Some(expected.into()))]
+        );
+        assert_eq!(update.snapshot.witnesses.len(), 2);
+        assert!(update.cursor.read_revision() > first.cursor.read_revision());
+        assert!(update
+            .snapshot
+            .page
+            .extraction
+            .sources
+            .iter()
+            .all(|source| {
+                source.receipt.coverage_revision == revision
+                    && source.receipt.contiguous_cursor == 2
+            }));
+    }
+    assert_eq!(values(&first, 3), [ScalarValue::UInt64(Some(0))]);
+    assert_eq!(
+        values(&first, 5),
+        [ScalarValue::Utf8(Some("UNKNOWN".into()))]
+    );
+    subscription.cancel().unwrap();
+}
+
+#[tokio::test]
+async fn coverage_window_uses_deadlines() {
+    let fixture = fixture(Limits::default());
+    fixture.commit(&fixture.source, 1, 1, 1_000_000_123);
+    fixture.commit(&fixture.source, 2, 1, 3_000_000_000);
+    let clock = TestClock::new(4_000_000_000);
+    let sql = "SELECT first_cursor, last_cursor, expected_records
+        FROM discovery.coverage_ranges(
+            (SELECT * FROM events
+                WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '3 seconds'),
+            (SELECT * FROM coverage))";
+    let (mut subscription, _) = subscribe(&fixture, sql, Arc::clone(&clock)).await;
+    assert_eq!(subscription.moving_resolution_ns(), Some(1_000));
+    let revision = fixture.store.meta().unwrap().commit_revision;
+    for (now, count, first) in [
+        (4_000_000_000, 2, 1),
+        (4_000_001_000, 1, 2),
+        (6_000_001_000, 0, 0),
+    ] {
+        clock.set(now);
+        let update = next(&mut subscription).await;
+        if count == 0 {
+            assert!(values(&update, 0).is_empty());
+            assert!(values(&update, 1).is_empty());
+            assert!(values(&update, 2).is_empty());
+        } else {
+            assert_eq!(values(&update, 0), [ScalarValue::UInt64(Some(first))]);
+            assert_eq!(values(&update, 1), [ScalarValue::UInt64(Some(2))]);
+            assert_eq!(values(&update, 2), [ScalarValue::UInt64(Some(count))]);
+        }
+        if now > 4_000_000_000 {
+            assert!(update.clock_changed);
+        }
+        assert_eq!(update.snapshot.witnesses.len(), count as usize);
+        assert_eq!(
+            update.snapshot.page.extraction.meta.commit_revision,
+            revision
+        );
+    }
+    subscription.cancel().unwrap();
 }
 
 #[tokio::test]

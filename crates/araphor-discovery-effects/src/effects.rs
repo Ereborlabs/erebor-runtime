@@ -1,21 +1,50 @@
+use std::ops::ControlFlow;
+
 use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::ast::{
-    Expr, FunctionArg, FunctionArgExpr, Ident, Query, SetExpr, Statement as SqlStatement,
-    TableAlias, TableFactor,
+    Expr, FunctionArg, FunctionArgExpr, Ident, Query, Statement as SqlStatement, TableAlias,
+    TableFactor, VisitMut, VisitorMut,
 };
 
 #[derive(Debug)]
 pub struct ObservedEffects;
 
-impl ObservedEffects {
-    const SQL: &'static str = include_str!("observed_effects.sql");
+struct Inputs(Vec<(&'static str, Box<Query>)>);
 
-    fn query(input: Box<Query>) -> Result<Box<Query>> {
-        let mut statements = DFParser::parse_sql(Self::SQL)?;
+impl VisitorMut for Inputs {
+    type Break = ();
+
+    fn post_visit_table_factor(&mut self, relation: &mut TableFactor) -> ControlFlow<()> {
+        let TableFactor::Table { name, alias, .. } = relation else {
+            return ControlFlow::Continue(());
+        };
+        let Some((name, query)) = self.0.iter().find(|(input, _)| name.to_string() == *input)
+        else {
+            return ControlFlow::Continue(());
+        };
+        *relation = TableFactor::Derived {
+            lateral: false,
+            subquery: query.clone(),
+            alias: alias.clone().or_else(|| {
+                Some(TableAlias {
+                    explicit: true,
+                    name: Ident::new(*name),
+                    columns: Vec::new(),
+                })
+            }),
+            sample: None,
+        };
+        ControlFlow::Continue(())
+    }
+}
+
+impl ObservedEffects {
+    fn query(sql: &str, mut inputs: Inputs) -> Result<Box<Query>> {
+        let mut statements = DFParser::parse_sql(sql)?;
         let Some(Statement::Statement(statement)) = statements.pop_front() else {
             return Err(DataFusionError::Internal("Discovery SQL is absent".into()));
         };
@@ -24,26 +53,7 @@ impl ObservedEffects {
                 "Discovery SQL is not a query".into(),
             ));
         };
-        let SetExpr::Select(select) = query.body.as_mut() else {
-            return Err(DataFusionError::Internal(
-                "Discovery SQL has no SELECT".into(),
-            ));
-        };
-        let [source] = select.from.as_mut_slice() else {
-            return Err(DataFusionError::Internal(
-                "Discovery SQL has no input".into(),
-            ));
-        };
-        source.relation = TableFactor::Derived {
-            lateral: false,
-            subquery: input,
-            alias: Some(TableAlias {
-                explicit: true,
-                name: Ident::new("records"),
-                columns: Vec::new(),
-            }),
-            sample: None,
-        };
+        let _visited = query.visit(&mut inputs);
         Ok(query)
     }
 }
@@ -63,12 +73,14 @@ impl RelationPlanner for ObservedEffects {
             return Ok(RelationPlanning::Original(Box::new(relation)));
         };
         let name = context.object_name_to_table_reference(name.clone())?;
-        if name.catalog().is_some()
-            || name.schema() != Some("discovery")
-            || name.table() != "observed_effects"
-        {
+        if name.catalog().is_some() || name.schema() != Some("discovery") {
             return Ok(RelationPlanning::Original(Box::new(relation)));
         }
+        let (sql, inputs): (&str, &[&'static str]) = match name.table() {
+            "observed_effects" => (include_str!("observed_effects.sql"), &["records"]),
+            "coverage_ranges" => (include_str!("coverage_ranges.sql"), &["records", "reports"]),
+            _ => return Ok(RelationPlanning::Original(Box::new(relation))),
+        };
         let TableFactor::Table {
             alias,
             args: Some(args),
@@ -97,17 +109,28 @@ impl RelationPlanner for ObservedEffects {
                 "Discovery call has unsupported modifiers".into(),
             ));
         }
-        let mut args = args.args.into_iter();
-        let (Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Subquery(input)))), None) =
-            (args.next(), args.next())
-        else {
-            return Err(DataFusionError::Plan(
-                "Discovery requires one subquery argument".into(),
-            ));
-        };
+        if args.args.len() != inputs.len() {
+            return Err(DataFusionError::Plan(format!(
+                "Discovery {} requires {} subquery arguments",
+                name.table(),
+                inputs.len()
+            )));
+        }
+        let inputs = inputs
+            .iter()
+            .zip(args.args)
+            .map(|(name, arg)| match arg {
+                FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Subquery(query))) => {
+                    Ok((*name, query))
+                }
+                _ => Err(DataFusionError::Plan(
+                    "Discovery requires subquery arguments".into(),
+                )),
+            })
+            .collect::<Result<Vec<_>>>()?;
         let plan = context.plan(TableFactor::Derived {
             lateral: false,
-            subquery: Self::query(input)?,
+            subquery: Self::query(sql, Inputs(inputs))?,
             alias: None,
             sample: None,
         })?;
