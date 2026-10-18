@@ -96,7 +96,6 @@ impl AnalysisStore {
             check()?;
             return Ok(());
         }
-        let before = Self::package_bytes(&transaction, key.tenant_id)?;
         transaction
             .execute(
                 "UPDATE package_activations SET metadata = ?
@@ -113,7 +112,7 @@ impl AnalysisStore {
                 operation: "write package status",
             })?;
         Self::check_package_scope(&transaction, key)?;
-        self.package_charge(&transaction, key.tenant_id, before, 0, 0)?;
+        self.check_logical(&transaction, key.tenant_id, false)?;
         let revision = self.package_next(&transaction)?;
         Self::record_revision(
             &transaction,
@@ -163,14 +162,13 @@ impl AnalysisStore {
             check()?;
             return Ok(expected.clone());
         }
-        let before = Self::package_bytes(&transaction, expected.key.tenant_id)?;
         let revision = self.package_next(&transaction)?;
         let mut renewed = expected.clone();
         renewed.generation = revision;
         renewed.metadata = metadata.into();
         renewed.grant_id = grant_id.into();
         Self::write_activation(&transaction, &renewed)?;
-        self.package_charge(&transaction, expected.key.tenant_id, before, 0, 0)?;
+        self.check_logical(&transaction, expected.key.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["package_activations"])?;
         check()?;
         self.commit_metadata(transaction, "commit package authority renewal")?;

@@ -22,7 +22,7 @@ fn frozen(store: &AnalysisStore, result_id: &str) -> TestResult<FrozenResult> {
 }
 
 fn usage(store: &AnalysisStore, tenant: [u8; 16]) -> TestResult<(u64, u64, u64, u64)> {
-    Ok(store.tenant_usage(tenant)?)
+    Ok(store.retained_usage(tenant)?)
 }
 
 #[test]

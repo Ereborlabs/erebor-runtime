@@ -34,8 +34,8 @@ impl AnalysisStore {
 }
 
 impl AnalysisStore {
-    pub fn verify_usage(&self) -> Result<()> {
-        Self::validate_usage(self.writer()?.get()?, &self.root)
+    pub fn verify_state(&self) -> Result<()> {
+        Self::validate_state(self.writer()?.get()?, &self.root)
     }
 
     pub fn frozen_result(&self, result_id: &str) -> Result<(Vec<u8>, Vec<u8>, u64)> {
@@ -48,10 +48,10 @@ impl AnalysisStore {
         })
     }
 
-    pub fn tenant_usage(&self, tenant: [u8; 16]) -> Result<(u64, u64, u64, u64)> {
+    pub fn retained_usage(&self, tenant: [u8; 16]) -> Result<(u64, u64, u64, u64)> {
         self.read_snapshot(|reader| {
             reader.query_row(
-                "SELECT logical_bytes, coverage_count, context_count, result_count FROM tenant_usage WHERE tenant_id = ?",
+                &format!("SELECT logical_bytes, coverage_count, context_count, result_count FROM ({}) WHERE tenant_id = ?", AnalysisStore::usage_projection()),
                 params![tenant.as_slice()],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             ).context(AnalysisDatabaseSnafu { operation: "read tenant usage fixture" })

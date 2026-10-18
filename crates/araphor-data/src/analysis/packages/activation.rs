@@ -98,7 +98,6 @@ impl AnalysisStore {
         }) {
             return AnalysisConflictSnafu.fail();
         }
-        let before = Self::package_bytes(&transaction, input.key.tenant_id)?;
         let revision = self.package_next(&transaction)?;
         let mut active = input.clone();
         active.generation = revision;
@@ -119,11 +118,11 @@ impl AnalysisStore {
             }
         }
         if let Some(prepared) = prepared {
-            self.package_commit_rows(&transaction, prepared, revision, before)?;
+            self.package_commit_rows(&transaction, prepared, revision)?;
             active.result_id = Some(prepared.result_id.clone());
             active.checkpoint_revision = revision;
         } else {
-            self.package_charge(&transaction, input.key.tenant_id, before, 0, 0)?;
+            self.check_logical(&transaction, input.key.tenant_id, false)?;
             Self::record_revision(
                 &transaction,
                 revision,
@@ -242,7 +241,6 @@ impl AnalysisStore {
             check()?;
             return Ok(());
         }
-        let before = Self::package_bytes(&transaction, key.tenant_id)?;
         let revision = self.package_next(&transaction)?;
         active.active = false;
         active.generation = revision;
@@ -269,7 +267,7 @@ impl AnalysisStore {
             &key.package_id,
             &active.revision,
         )?;
-        self.package_charge(&transaction, key.tenant_id, before, 0, 0)?;
+        self.check_logical(&transaction, key.tenant_id, false)?;
         Self::record_revision(
             &transaction,
             revision,

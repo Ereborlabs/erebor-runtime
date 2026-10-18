@@ -1,4 +1,4 @@
-use duckdb::{params, Connection, Transaction};
+use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
 use super::{PackageRevisionV1, MAX_PACKAGE_ROWS};
@@ -39,7 +39,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "begin package installation",
             })?;
-        let before = Self::package_bytes(&transaction, tenant)?;
         let revision = self.package_next(&transaction)?;
         let mut changed = false;
         for package in revisions {
@@ -103,7 +102,7 @@ impl AnalysisStore {
             check()?;
             return Ok(());
         }
-        self.package_charge(&transaction, tenant, before, 0, 0)?;
+        self.check_logical(&transaction, tenant, false)?;
         Self::record_revision(&transaction, revision, &["package_revisions"])?;
         check()?;
         self.commit_metadata(transaction, "commit package installation")?;
@@ -116,41 +115,5 @@ impl AnalysisStore {
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the package commit revision is exhausted"))
-    }
-
-    pub(super) fn package_bytes(reader: &Connection, tenant: [u8; 16]) -> Result<i64> {
-        reader
-            .query_row(
-                &format!(
-                    "SELECT COALESCE(SUM(bytes), 0)::BIGINT FROM ({}) WHERE tenant_id = ?",
-                    Self::PACKAGE_CHARGES
-                ),
-                params![tenant.as_slice()],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "count package charges",
-            })
-    }
-
-    pub(super) fn package_charge(
-        &self,
-        transaction: &Transaction<'_>,
-        tenant: [u8; 16],
-        before: i64,
-        extra: i64,
-        results: i64,
-    ) -> Result<()> {
-        let bytes = Self::package_bytes(transaction, tenant)? - before + extra;
-        if bytes == 0 && results == 0 {
-            return self.check_logical(transaction, tenant, false);
-        }
-        super::super::quota::UsageChange {
-            bytes,
-            results,
-            ..Default::default()
-        }
-        .apply(transaction, &tenant)?;
-        self.check_logical(transaction, tenant, false)
     }
 }

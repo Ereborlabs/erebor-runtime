@@ -128,7 +128,6 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
         "graph_subjects",
         "graph_relationships",
         "graph_findings",
-        "tenant_usage",
         "evidence_refs",
         "context_refs",
         "processor_progress",

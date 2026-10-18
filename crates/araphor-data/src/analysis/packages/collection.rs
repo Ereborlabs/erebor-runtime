@@ -59,12 +59,10 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "begin artifact release",
             })?;
-        let before = Self::package_bytes(&transaction, tenant)?;
-        self.collect_package_rows(&transaction, tenant, package, version)?;
-        if Self::package_bytes(&transaction, tenant)? == before {
+        if !self.collect_package_rows(&transaction, tenant, package, version)? {
             return Ok(());
         }
-        self.package_charge(&transaction, tenant, before, 0, 0)?;
+        self.check_logical(&transaction, tenant, false)?;
         let revision = self.package_next(&transaction)?;
         Self::record_revision(&transaction, revision, &["package_revisions"])?;
         self.commit_metadata(transaction, "commit artifact release")?;
@@ -78,7 +76,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         package: &str,
         version: &str,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let dependencies = transaction
             .query_row(
                 "SELECT dependencies FROM package_revisions
@@ -91,7 +89,7 @@ impl AnalysisStore {
                 operation: "read artifact dependency references",
             })?;
         let Some(dependencies) = dependencies else {
-            return Ok(());
+            return Ok(false);
         };
         let dependencies: Vec<PackageRevisionRefV1> =
             serde_json::from_str(&dependencies).context(JsonSnafu {
@@ -128,6 +126,6 @@ impl AnalysisStore {
                 )?;
             }
         }
-        Ok(())
+        Ok(removed != 0)
     }
 }

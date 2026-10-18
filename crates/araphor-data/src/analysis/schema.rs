@@ -169,7 +169,6 @@ impl AnalysisStore {
             return Self::reject_path(root, "the stored revision or pending bound is invalid");
         }
         Self::validate_packages(writer, root)?;
-        Self::validate_usage(writer, root)?;
         Self::validate_graphs(writer, root)?;
         Ok(())
     }
@@ -508,7 +507,6 @@ impl AnalysisStore {
 
     pub(super) fn validate_tables(writer: &Connection) -> Result<()> {
         let projections = [
-            "tenant_id, logical_bytes, coverage_count, context_count, result_count FROM tenant_usage",
             "singleton, store_uuid, schema_version, recovery_epoch, commit_revision FROM store_meta",
             "relation_name, last_changed_revision FROM relation_revisions",
             "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor FROM source_receipts",
@@ -629,8 +627,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "bind source epoch",
             })?;
-        super::quota::UsageChange::from(256 + key.len() as i64)
-            .apply(writer, &identity.tenant_id)?;
         Ok(true)
     }
 
@@ -729,7 +725,10 @@ mod tests {
         store.register_processor(&scope, super::super::ProcessorClassV1::Required, 1)?;
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
@@ -739,7 +738,10 @@ mod tests {
         let total = progress_bytes + 256 + key_bytes;
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
@@ -748,26 +750,32 @@ mod tests {
         store.record_recovery_floor(&scope.identity, 3)?;
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
             total
         );
         assert!(store.source_receipt(&scope.identity)?.is_none());
-        AnalysisStore::validate_usage(store.writer()?.get()?, &root)?;
+        AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
         drop(store);
         let store = AnalysisStore::open(&root)?;
         let mut writer = store.writer()?;
         assert_eq!(
-            writer
-                .get()?
-                .query_row("SELECT logical_bytes FROM tenant_usage", [], |row| {
-                    row.get::<_, u64>(0)
-                })?,
+            writer.get()?.query_row(
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
+                [],
+                |row| { row.get::<_, u64>(0) }
+            )?,
             total
         );
-        AnalysisStore::validate_usage(writer.get()?, &root)?;
+        AnalysisStore::validate_state(writer.get()?, &root)?;
         AnalysisStore::validate_sources(writer.get()?, &root)?;
         for table in ["processor_progress", "recovery_gaps"] {
             let transaction = writer.get_mut()?.transaction()?;

@@ -111,7 +111,7 @@ impl RecoveryFixture {
             .ok_or("processor result")?;
         assert_eq!(progress.result_id, self.first.result_id);
         assert_eq!(progress.body, self.first.body);
-        store.verify_usage()?;
+        store.verify_state()?;
         Ok(())
     }
 }

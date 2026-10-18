@@ -116,8 +116,6 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "record unrecoverable source range",
                 })?;
-            super::quota::UsageChange::from(256 + key.len() as i64)
-                .apply(&transaction, &identity.tenant_id)?;
             self.check_logical(&transaction, identity.tenant_id, true)?;
             Self::record_revision(&transaction, revision, &["recovery_gaps"])?;
             #[cfg(test)]
@@ -1442,7 +1440,7 @@ mod tests {
         let database = backup.join("analysis.duckdb");
         let database_bytes = fs::read(&database)?;
         for sql in [
-            "UPDATE tenant_usage SET logical_bytes = logical_bytes + 1",
+            "UPDATE source_receipts SET contiguous_cursor = contiguous_cursor + 1",
             "DROP TABLE coverage",
         ] {
             let writer = Connection::open(&database)?;

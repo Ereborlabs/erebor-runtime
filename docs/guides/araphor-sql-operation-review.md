@@ -75,6 +75,43 @@ case, and two E2E cases across the recorded runs and retries. The final backup
 and terminal-owner gate passes 18 cases. The source and command record is
 `/tmp/araphor-optional-storage-verification1.json`.
 
+## Derived retained usage
+
+[usage_projection](../../crates/araphor-data/src/analysis/quota.rs) calculates
+logical bytes and retained revision counts from the retained production rows.
+The current new-store schema has no tenant usage ledger. Metadata writers do
+not maintain separate debit and credit values. The raw owner does not cache
+logical, diagnostic, or pinned-context byte totals.
+
+[check_logical_limits](../../crates/araphor-data/src/analysis/quota.rs) checks a metadata transaction with a configured quota
+  -> native SQL measures the transaction's current retained rows
+  -> a quota failure returns before transaction commit
+
+[commit_raw](../../crates/araphor-data/src/analysis/raw.rs) admits raw input with a configured logical or witness byte quota
+  -> [project_raw](../../crates/araphor-data/src/analysis/connection.rs) publishes prior acknowledged journal records under the existing writer lock
+  -> native SQL measures the resulting catalog
+  -> the raw owner checks candidate growth before journal append
+
+Journal publication does not mark metadata dirty. The next raw operation must
+not refresh physical state from an older catalog and discard pending segments.
+Disabled quotas retain journal-only acceptance without logical usage queries.
+The existing raw owner still retains journal positions, receipts, witness pins,
+required processor floors, expired ranges, and terminal reservations.
+
+[Package collection](../../crates/araphor-data/src/analysis/packages/collection.rs)
+uses the native affected-row count to detect a change. It does not measure
+stored bytes before and after deletion. The existing source, reference,
+package, graph, and snapshot validators retain actual data integrity checks.
+There is no old-store migration or ledger compatibility layer.
+
+[Raw admission and rollback tests](../../crates/araphor-data/src/analysis/quota.rs)
+check two acknowledged writes before a usage read, finite and disabled quotas,
+rejection before append, terminal reserve release, and reopen. The focused gate
+passes 142 Data cases and five Analysis graph caller cases. Strict Clippy passes
+all targets in Data and Analysis. The unchanged Rust source hashes, commands,
+and verification limits are in `/tmp/araphor-derived-usage-verification1.json`.
+The source count is a net 356 nonblank production Rust deletions.
+
 ## Subscription execution triggers
 
 Read [Progress](../../crates/araphor-query/src/stream/progress.rs) and the

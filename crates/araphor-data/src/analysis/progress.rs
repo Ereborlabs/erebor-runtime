@@ -167,13 +167,6 @@ impl From<&crate::DiscoveryProfileV1> for ProfileHeader {
     }
 }
 
-impl ProfileHeader {
-    fn bytes(&self) -> usize {
-        self.stream_key.as_ref().map_or(0, Vec::len)
-            + self.interval_id.as_ref().map_or(0, String::len)
-    }
-}
-
 impl ProcessorScopeV1 {
     pub(super) fn valid(&self) -> bool {
         !self.processor_id.is_empty()
@@ -395,8 +388,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "register processor",
             })?;
-        super::quota::UsageChange::from(256 + key.len() as i64 + scope.processor_id.len() as i64)
-            .apply(&transaction, &scope.identity.tenant_id)?;
         self.check_logical(&transaction, scope.identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
         #[cfg(test)]
@@ -488,8 +479,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "record optional missing range",
             })?;
-        super::quota::UsageChange::from(256 + key.len() as i64 + scope.processor_id.len() as i64)
-            .apply(&transaction, &scope.identity.tenant_id)?;
         transaction
             .execute(
                 "UPDATE processor_progress SET resume_floor = ?
@@ -757,7 +746,6 @@ impl AnalysisStore {
                 operation: "read immutable result",
             })?;
         let replacing = existing.is_some() && previous.is_some();
-        let mut removed_bytes = 0;
         if let Some((tenant, stored, retained, revision)) = existing {
             let (Some(tenant), Some(stored), Some(mut retained)) = (tenant, stored, retained)
             else {
@@ -791,21 +779,6 @@ impl AnalysisStore {
             {
                 return AnalysisConflictSnafu.fail();
             }
-            removed_bytes = (256
-                + input.result_id.len()
-                + input.scope.processor_id.len()
-                + retained.len()
-                + stored.len()
-                + ProfileHeader::from(&profile).bytes()) as i64;
-            removed_bytes += transaction.query_row(
-                "SELECT COALESCE(SUM(bytes), 0)::BIGINT FROM (
-                    SELECT 256 + octet_length(encode(ref_id)) + octet_length(stream_key) AS bytes
-                    FROM evidence_refs WHERE ref_id = ?
-                    UNION ALL SELECT 256 + octet_length(encode(ref_id)) + octet_length(encode(owner_id))
-                    + octet_length(entity_key) + octet_length(lifetime_key)
-                    FROM context_refs WHERE ref_id = ?)",
-                params![input.result_id, input.result_id], |row| row.get::<_, i64>(0),
-            ).context(AnalysisDatabaseSnafu { operation: "count prior working references" })?;
         } else if previous.is_some() {
             return AnalysisConflictSnafu.fail();
         }
@@ -944,28 +917,10 @@ impl AnalysisStore {
                     operation: "insert analysis result",
                 })?;
         }
-        let row_bytes = if let Some(graph) = graph {
-            super::graph_rows::GraphRows::insert(graph, &transaction, &input.result_id)?
-        } else {
-            0
-        };
-        let mut usage = super::quota::UsageChange {
-            bytes: if advance {
-                input.result_id.len() as i64 - progress.as_ref().map_or(0, |row| row.3.len()) as i64
-            } else {
-                0
-            } + (256
-                + input.result_id.len()
-                + input.scope.processor_id.len()
-                + body.len()
-                + request.len()
-                + header.bytes()) as i64
-                + row_bytes
-                - removed_bytes,
-            results: i64::from(!replacing),
-            ..Default::default()
-        };
-        usage.bytes += Self::insert_references(
+        if let Some(graph) = graph {
+            super::graph_rows::GraphRows::insert(graph, &transaction, &input.result_id)?;
+        }
+        Self::insert_references(
             &transaction,
             &input.result_id,
             &input.witnesses,
@@ -1007,7 +962,6 @@ impl AnalysisStore {
         if !input.context_refs.is_empty() {
             relations.push("context_refs");
         }
-        usage.apply(&transaction, &input.scope.identity.tenant_id)?;
         self.check_logical(
             &transaction,
             input.scope.identity.tenant_id,

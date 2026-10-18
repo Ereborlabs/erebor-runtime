@@ -59,6 +59,67 @@ execution and manual refresh. The subscription must supply the actual input
 batches. A query that returns identities to the old input reader is not a
 replacement. This work is **Not done**.
 
+The existing Discovery loop uses shared progress notices and exact seal
+deadlines. It is reactive, but it still enumerates sources and reads inputs
+outside actual Query input subscriptions. Control retention, graph processing,
+and notification delivery still have one-second polling loops. Data lock and
+cancellation waits and the Wasm epoch ticker also require replacement.
+
+Query still has finite default input, output, concurrency, and read-time
+quotas. Disabled quotas must bypass quota work. Native DataFusion supplies an
+unbounded execution pool. The current shared Arrow allocation registry also
+preserves configured alias-lifetime accounting; changing the native pool alone
+does not replace that obligation. DuckDB resets interruption during statement
+initialization. Its current Rust wrapper exposes no pending-query registration
+point. Removing the default read deadline requires cancellation-safe native
+execution first. These requirements remain **Not done**.
+
+### Derived storage usage
+
+Implementation and selected qualification: **Done**. The persisted
+tenant_usage ledger and its manual debit and credit calls are removed. The
+existing native SQL usage projection is the single retained logical usage
+calculation. The raw owner's cached logical, diagnostic, and context byte
+totals are removed.
+
+Metadata transaction changes retained rows
+  -> AnalysisStore queries derived usage when a relevant quota is configured
+  -> AnalysisStore rejects excess growth before commit
+
+Raw intake has a configured logical or witness byte quota
+  -> the existing writer publishes previously accepted journal commits
+  -> native SQL measures retained rows under the held writer lock
+  -> the raw owner checks candidate growth before durable append
+
+Raw intake has no configured logical or witness byte quota
+  -> the raw owner retains journal-only durable acceptance
+  -> the raw owner does not query or update logical usage totals
+
+Keep journal positions, receipts, witness pins, required processor floors,
+expired ranges, and terminal byte and slot reservations. Those values govern
+physical retention and accepted work. Preserve configured quota boundaries,
+rollback, crash recovery, package no-op behavior, and per-family revision counts.
+Change the current new-store schema. Add no migration or old-store support.
+
+All 142 selected Data cases and five affected Analysis graph caller cases
+pass. The cases cover finite and disabled raw admission, consecutive ACKs,
+terminal reservations, transaction rollback, configured byte and revision
+quotas, witnesses, package collection, graph storage, retention, and crash
+recovery. Actual receipt and expired-range corruption replace obsolete ledger
+corruption cases. Native graph and package row validation remains in place.
+
+Strict Clippy passes all targets in Data and Analysis. Scoped formatting,
+local document links, and whitespace checks pass. The source and command
+record is `/tmp/araphor-derived-usage-verification1.json`. Full workspace CI,
+performance tests, and physical Kubernetes checks are not run.
+
+This increment removes a net 356 nonblank production Rust lines. Tests add
+239 nonblank lines. Tests, documents, blank lines, and moves do not contribute
+to the production reduction. The complete redesign still adds 788 production
+Rust lines against `7b7b407a`. The required 6,000-line reduction needs 6,788
+more net deletions. The count is `/tmp/araphor-derived-usage-count1.json`.
+The complete redesign remains **Not done**. No speed result is claimed.
+
 ### Optional retained-storage quotas
 
 Implementation and selected qualification: **Done**.

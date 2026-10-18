@@ -73,7 +73,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceReadPermi
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
 pub(crate) const NATIVE_MEMORY_BYTES: usize = 128 * 1024 * 1024;
-pub const ANALYSIS_SCHEMA_VERSION: i64 = 22;
+pub const ANALYSIS_SCHEMA_VERSION: i64 = 23;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -342,13 +342,6 @@ impl AnalysisStore {
                     recovery_epoch UBIGINT NOT NULL,
                     commit_revision UBIGINT NOT NULL,
                     next_segment_id UBIGINT NOT NULL
-                );
-                CREATE TABLE tenant_usage (
-                    tenant_id BLOB PRIMARY KEY,
-                    logical_bytes UBIGINT NOT NULL,
-                    coverage_count UBIGINT NOT NULL,
-                    context_count UBIGINT NOT NULL,
-                    result_count UBIGINT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS relation_revisions (
                     relation_name VARCHAR PRIMARY KEY,
@@ -832,12 +825,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert coverage",
             })?;
-        quota::UsageChange {
-            bytes: 256 + key.len() as i64 + bytes.len() as i64,
-            coverage: 1,
-            ..Default::default()
-        }
-        .apply(&transaction, &identity.tenant_id)?;
         if previous.is_some() {
             transaction
                 .execute(
@@ -865,8 +852,6 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert coverage receipt",
                 })?;
-            quota::UsageChange::from(256 + key.len() as i64 + identity_json.len() as i64)
-                .apply(&transaction, &identity.tenant_id)?;
         }
         let mut relations = vec!["coverage", "source_receipts"];
         if bound {
@@ -1526,7 +1511,10 @@ pub(crate) mod tests {
         assert_eq!(store.meta()?.commit_revision, 1);
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
@@ -1543,7 +1531,10 @@ pub(crate) mod tests {
         assert_eq!(store.meta()?.commit_revision, 1);
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
@@ -1563,13 +1554,16 @@ pub(crate) mod tests {
         assert_eq!(store.meta()?.commit_revision, 2);
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
             last_bytes
         );
-        AnalysisStore::validate_usage(store.writer()?.get()?, &root)?;
+        AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
         drop(store);
         let reopened = AnalysisStore::open(&root)?;
         assert_eq!(reopened.meta()?.commit_revision, 2);
@@ -1585,12 +1579,17 @@ pub(crate) mod tests {
             let writer_guard = reopened.writer()?;
             let writer = writer_guard.get()?;
             assert_eq!(
-                writer.query_row("SELECT logical_bytes FROM tenant_usage", [], |row| {
-                    row.get::<_, u64>(0)
-                })?,
+                writer.query_row(
+                    &format!(
+                        "SELECT logical_bytes FROM ({})",
+                        AnalysisStore::usage_projection()
+                    ),
+                    [],
+                    |row| { row.get::<_, u64>(0) }
+                )?,
                 last_bytes
             );
-            AnalysisStore::validate_usage(writer, &root)?;
+            AnalysisStore::validate_state(writer, &root)?;
             let changed: u64 = writer.query_row(
                 "SELECT COUNT(*) FROM relation_revisions WHERE last_changed_revision = 2",
                 [],

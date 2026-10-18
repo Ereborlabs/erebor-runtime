@@ -223,8 +223,7 @@ impl AnalysisStore {
         witnesses: &[AnalysisWitnessV1],
         segments: &[u64],
         contexts: &[AnalysisContextRefV1],
-    ) -> Result<i64> {
-        let mut bytes = 0;
+    ) -> Result<()> {
         for (witness, segment) in witnesses.iter().zip(segments) {
             transaction
                 .execute(
@@ -241,7 +240,6 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert exact witness",
                 })?;
-            bytes += 256 + witness.identity.key().len() as i64 + id.len() as i64;
         }
         for reference in contexts {
             transaction
@@ -260,13 +258,8 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert exact result context",
                 })?;
-            bytes += (256
-                + id.len()
-                + reference.key.owner_id.len()
-                + reference.key.entity_key.len()
-                + reference.key.lifetime_key.len()) as i64;
         }
-        Ok(bytes)
+        Ok(())
     }
 }
 

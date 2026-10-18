@@ -13,17 +13,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn budget_matches_charge_reads() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn usage_reads_retained_rows() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let mut guard = store.writer.lock().map_err(|_| "writer lock poisoned")?;
         let writer = guard.as_mut().ok_or("writer closed")?;
-        let mut raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
-        raw.refresh_budget(writer)?;
-        assert!(raw.budget.diagnostics.is_empty());
-        assert!(raw.budget.usage.is_empty());
-        assert!(raw.budget.contexts.is_empty());
-
+        assert_eq!(AnalysisStore::logical_usage(writer, [1; 16])?, (0, 0, 0, 0));
         for tenant in [1u8, 2] {
             writer.execute(
                 "INSERT INTO traces VALUES (?, ?, ?, ?, '[]', ?, 1, 2, false, 1, false, false)",
@@ -32,25 +27,18 @@ mod tests {
                     [3u8; 16].as_slice(),
                     [1u8, 2, 3].as_slice(),
                     [0u8; 32].as_slice(),
-                    [1u8, 2].as_slice(),
+                    [1u8, 2].as_slice()
                 ],
-            )?;
-        }
-        for (tenant, bytes) in [(1u8, 1000u64), (3, 3000), (4, 0)] {
-            writer.execute(
-                "INSERT INTO tenant_usage VALUES (?, ?, 0, 0, 0)",
-                params![[tenant; 16].as_slice(), bytes],
             )?;
         }
         for tenant in [1u8, 5, 6] {
             writer.execute(
-                "INSERT INTO context_versions VALUES (?, 'p', ?, ?, 1, 1, NULL,
-                 'Tenant', ?, 1)",
+                "INSERT INTO context_versions VALUES (?, 'p', ?, ?, 1, 1, NULL, 'Tenant', ?, 1)",
                 params![
                     [tenant; 16].as_slice(),
                     [1u8].as_slice(),
                     [1u8].as_slice(),
-                    [1u8, 2, 3].as_slice(),
+                    [1u8, 2, 3].as_slice()
                 ],
             )?;
         }
@@ -62,38 +50,42 @@ mod tests {
                     [tenant; 16].as_slice(),
                     [1u8].as_slice(),
                     [1u8].as_slice(),
-                    1u64,
+                    1u64
                 ],
             )?;
         }
-        raw.refresh_budget(writer)?;
         assert_eq!(
-            raw.budget.diagnostics,
-            BTreeMap::from([([1; 16], 263), ([2; 16], 263)])
+            AnalysisStore::diagnostic_usage(writer, [1; 16])?,
+            (526, 263)
         );
-        assert_eq!(raw.budget.diagnostic_total, 526);
         assert_eq!(
-            raw.budget.usage,
-            BTreeMap::from([([1; 16], 1000), ([3; 16], 3000), ([4; 16], 0)])
+            AnalysisStore::logical_usage(writer, [1; 16])?,
+            (2105, 1054, 3, 1)
         );
-        assert_eq!(raw.budget.total, 4000);
         assert_eq!(
-            raw.budget.contexts,
-            BTreeMap::from([([1; 16], 262), ([5; 16], 262)])
+            AnalysisStore::witness_base(writer, [1; 16], 1)?.context_bytes,
+            262
         );
-
-        writer.execute(
-            "UPDATE tenant_usage SET logical_bytes = 2000 WHERE tenant_id = ?",
-            params![[1u8; 16].as_slice()],
-        )?;
+        assert_eq!(
+            AnalysisStore::witness_base(writer, [5; 16], 1)?.context_bytes,
+            262
+        );
         writer.execute(
             "DELETE FROM context_refs WHERE tenant_id = ?",
             params![[1u8; 16].as_slice()],
         )?;
-        raw.refresh_budget(writer)?;
-        assert_eq!(raw.budget.usage[&[1; 16]], 2000);
-        assert_eq!(raw.budget.total, 5000);
-        assert_eq!(raw.budget.contexts, BTreeMap::from([([5; 16], 262)]));
+        assert_eq!(
+            AnalysisStore::logical_usage(writer, [1; 16])?,
+            (1576, 525, 3, 1)
+        );
+        assert_eq!(
+            AnalysisStore::witness_base(writer, [1; 16], 1)?.context_bytes,
+            0
+        );
+        assert_eq!(
+            AnalysisStore::witness_base(writer, [5; 16], 1)?.context_bytes,
+            262
+        );
         Ok(())
     }
 
@@ -182,16 +174,11 @@ mod tests {
 
 #[derive(Default)]
 pub(super) struct RawBudget {
-    pub usage: BTreeMap<[u8; 16], u64>,
-    pub total: u64,
     pub required: BTreeMap<Vec<u8>, u64>,
     pub protected: BTreeMap<[u8; 16], u64>,
     pub oldest: BTreeMap<Vec<u8>, u64>,
     pub pins: BTreeMap<u64, ([u8; 16], u64)>,
-    pub contexts: BTreeMap<[u8; 16], u64>,
     pub expired: BTreeMap<(Vec<u8>, u64), u64>,
-    pub diagnostics: BTreeMap<[u8; 16], u64>,
-    pub diagnostic_total: u64,
     pub trace_reserve: u64,
     pub trace_slots: usize,
 }
@@ -472,83 +459,7 @@ impl RawJournal {
     pub(super) fn refresh_budget(&mut self, writer: &Connection) -> Result<()> {
         self.restore_receipts(writer)?;
         let mut budget = RawBudget::default();
-        {
-            let mut statement = writer
-                .prepare(&format!(
-                    "SELECT 0::UTINYINT AS kind, tenant_id, SUM(bytes)::UBIGINT AS bytes,
-                     0::UBIGINT AS slots
-                     FROM ({}) GROUP BY tenant_id
-                     UNION ALL SELECT 1::UTINYINT, tenant_id, logical_bytes, 0::UBIGINT
-                     FROM tenant_usage
-                     UNION ALL SELECT 2::UTINYINT, c.tenant_id,
-                     SUM(256 + octet_length(c.body) + octet_length(encode(c.owner_id))
-                     + octet_length(c.entity_key) + octet_length(c.lifetime_key))::UBIGINT,
-                     0::UBIGINT
-                     FROM context_versions c SEMI JOIN context_refs r USING
-                     (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
-                     GROUP BY c.tenant_id
-                     UNION ALL SELECT 3::UTINYINT, ''::BLOB, COUNT(*)::UBIGINT,
-                     COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM segments s
-                     WHERE s.stream_key = r.stream_key AND s.state = 'Live')
-                     THEN 1 ELSE 2 END), 0)::UBIGINT
-                     FROM trace_receipts r WHERE terminal IS NULL",
-                    super::quota::TRACE_CHARGES
-                ))
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare raw budget charges",
-                })?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, u8>(0)?,
-                        row.get::<_, Vec<u8>>(1)?,
-                        row.get::<_, u64>(2)?,
-                        row.get::<_, u64>(3)?,
-                    ))
-                })
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read raw budget charges",
-                })?;
-            for row in rows {
-                let (kind, tenant, bytes, slots) = row.context(AnalysisDatabaseSnafu {
-                    operation: "decode raw budget charge",
-                })?;
-                if kind == 3 {
-                    budget.trace_reserve = bytes
-                        .checked_mul(super::quota::TRACE_RESERVE)
-                        .ok_or_else(|| self.invalid("the diagnostic reserve is exhausted"))?;
-                    budget.trace_slots = usize::try_from(slots)
-                        .map_err(|_| self.invalid("the diagnostic slot reserve is exhausted"))?;
-                    continue;
-                }
-                let reason = match kind {
-                    0 => "the diagnostic tenant is invalid",
-                    1 => "the raw quota tenant is invalid",
-                    2 => "the raw context tenant is invalid",
-                    _ => return Err(self.invalid("the raw budget charge kind is invalid")),
-                };
-                let tenant = tenant.try_into().map_err(|_| self.invalid(reason))?;
-                match kind {
-                    0 => {
-                        budget.diagnostics.insert(tenant, bytes);
-                        budget.diagnostic_total = budget
-                            .diagnostic_total
-                            .checked_add(bytes)
-                            .ok_or_else(|| self.invalid("the diagnostic budget is exhausted"))?;
-                    }
-                    1 => {
-                        budget.usage.insert(tenant, bytes);
-                        budget.total = budget
-                            .total
-                            .checked_add(bytes)
-                            .ok_or_else(|| self.invalid("the raw quota total is exhausted"))?;
-                    }
-                    _ => {
-                        budget.contexts.insert(tenant, bytes);
-                    }
-                }
-            }
-        }
+        (budget.trace_reserve, budget.trace_slots) = AnalysisStore::terminal_reserve(writer)?;
         {
             let mut statement = writer.prepare("SELECT stream_key, MIN(consumed_cursor)::UBIGINT FROM processor_progress WHERE class = 'required' AND NOT retired GROUP BY stream_key")
                 .context(AnalysisDatabaseSnafu { operation: "prepare raw processor floors" })?;
@@ -732,7 +643,6 @@ impl RawJournal {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin raw catalogue publication",
         })?;
-        let mut charges = BTreeMap::<[u8; 16], i64>::new();
         let mut sources = BTreeMap::new();
         let mut binding_revision = 0;
         let mut segments = BTreeMap::new();
@@ -759,13 +669,11 @@ impl RawJournal {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| self.invalid("the raw segment name is invalid"))?;
-            if let Some(prior) = prior {
+            if prior.is_some() {
                 transaction.execute(
                     "UPDATE segments SET committed_end = ?, file_name = ?, sealed = ? WHERE segment_id = ?",
                     params![entry.reference.offset, name, !name.ends_with(".open"), id],
                 ).context(AnalysisDatabaseSnafu { operation: "advance projected raw segment" })?;
-                *charges.entry(entry.identity.tenant()).or_default() +=
-                    (entry.reference.offset - prior) as i64;
             } else {
                 transaction
                     .execute(
@@ -785,8 +693,6 @@ impl RawJournal {
                     .context(AnalysisDatabaseSnafu {
                         operation: "publish raw segment",
                     })?;
-                *charges.entry(entry.identity.tenant()).or_default() +=
-                    256 + key.len() as i64 + json.len() as i64 + entry.reference.offset as i64;
             }
         }
         for (key, first_revision) in sources {
@@ -809,21 +715,6 @@ impl RawJournal {
                     .map(serde_json::to_string)
                     .transpose()
                     .context(JsonSnafu { path: &self.root })?;
-                let prior: Option<String> = transaction
-                    .query_row(
-                        "SELECT terminal FROM trace_receipts WHERE stream_key = ?",
-                        params![key.as_slice()],
-                        |row| row.get(0),
-                    )
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "read diagnostic terminal charge",
-                    })?;
-                if prior.is_none() {
-                    if let Some(terminal) = &terminal {
-                        *charges.entry(receipt.identity.tenant_id).or_default() +=
-                            terminal.len() as i64 - super::quota::TRACE_RESERVE as i64;
-                    }
-                }
                 transaction.execute(
                     "UPDATE trace_receipts SET last_sequence = ?, output_bytes = ?, terminal = ?, commit_revision = ? WHERE stream_key = ?",
                     params![receipt.last_sequence, receipt.output_bytes, terminal, receipt.commit_revision, key.as_slice()],
@@ -877,14 +768,9 @@ impl RawJournal {
                     .context(AnalysisDatabaseSnafu {
                         operation: "publish raw receipt",
                     })?;
-                *charges.entry(receipt.identity.tenant_id).or_default() +=
-                    256 + key.len() as i64 + json.len() as i64;
             }
         }
         self.project_paths(&transaction)?;
-        for (tenant, bytes) in charges {
-            super::quota::UsageChange::from(bytes).apply(&transaction, &tenant)?;
-        }
         transaction
             .execute(
                 "UPDATE store_meta SET next_segment_id = ?",

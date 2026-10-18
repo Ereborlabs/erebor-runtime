@@ -120,7 +120,7 @@ fn packages_dependency_contract_roundtrip() -> TestResult {
         store.commit_package(&changed, || Ok(())),
         Err(crate::Error::AnalysisConflict { .. })
     ));
-    AnalysisStore::validate_usage(store.writer()?.get()?, &store.root)?;
+    AnalysisStore::validate_state(store.writer()?.get()?, &store.root)?;
     drop(store);
     let reopened = AnalysisStore::open(&root)?;
     assert_eq!(
@@ -196,7 +196,9 @@ fn packages_result_charge() -> TestResult {
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let active = start(&store, "first")?;
     let input = commit(active, "result");
-    let before = store.read_snapshot(|reader| AnalysisStore::package_bytes(reader, [1; 16]))?;
+    let before = store.read_snapshot(|reader| {
+        AnalysisStore::logical_usage(reader, [1; 16]).map(|usage| usage.1)
+    })?;
     store.commit_package(&input, || Ok(()))?;
     let key = &input.activation.key;
     let row = 256
@@ -215,9 +217,19 @@ fn packages_result_charge() -> TestResult {
         + key.export.len()
         + input.window_id.len()
         + input.result_id.len();
-    let after = store.read_snapshot(|reader| AnalysisStore::package_bytes(reader, [1; 16]))?;
-    assert_eq!(after - before, (row + head + input.result_id.len()) as i64);
-    AnalysisStore::validate_usage(store.writer()?.get()?, &store.root)?;
+    let after = store.read_snapshot(|reader| {
+        AnalysisStore::logical_usage(reader, [1; 16]).map(|usage| usage.1)
+    })?;
+    let receipt = 256
+        + input.result_id.len()
+        + "analysis-package".len()
+        + input.metadata.len()
+        + input.request.len();
+    assert_eq!(
+        after - before,
+        (row + head + input.result_id.len() + receipt) as u64
+    );
+    AnalysisStore::validate_state(store.writer()?.get()?, &store.root)?;
     Ok(())
 }
 

@@ -304,10 +304,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert immutable trace intent",
             })?;
-        super::quota::UsageChange::from(
-            (256 + intent.source.bytes.len() + bindings.len() + intent.authority.len()) as i64,
-        )
-        .apply(&transaction, &intent.tenant_id)?;
         self.reserve_trace(&transaction, intent)?;
         self.check_logical(&transaction, intent.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["traces"])?;

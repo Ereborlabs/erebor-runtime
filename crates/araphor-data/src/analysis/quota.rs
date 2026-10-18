@@ -12,74 +12,6 @@ pub(super) const TRACE_CHARGES: &str = "SELECT tenant_id,
     UNION ALL SELECT tenant_id, 256 + octet_length(stream_key) + committed_end + octet_length(encode(identity_json))
         FROM segments WHERE stream_kind = 'diagnostic'";
 
-#[derive(Default)]
-pub(super) struct UsageChange {
-    pub bytes: i64,
-    pub coverage: i64,
-    pub contexts: i64,
-    pub results: i64,
-}
-
-impl From<i64> for UsageChange {
-    fn from(bytes: i64) -> Self {
-        Self {
-            bytes,
-            ..Self::default()
-        }
-    }
-}
-
-impl UsageChange {
-    pub(super) fn apply(&self, writer: &Transaction<'_>, tenant: &[u8]) -> Result<()> {
-        let changed = writer
-            .execute(
-                "UPDATE tenant_usage SET
-                logical_bytes = (logical_bytes::HUGEINT + ?)::UBIGINT,
-                coverage_count = (coverage_count::HUGEINT + ?)::UBIGINT,
-                context_count = (context_count::HUGEINT + ?)::UBIGINT,
-                result_count = (result_count::HUGEINT + ?)::UBIGINT WHERE tenant_id = ?",
-                params![
-                    self.bytes,
-                    self.coverage,
-                    self.contexts,
-                    self.results,
-                    tenant
-                ],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "update tenant usage",
-            })?;
-        if changed == 0 {
-            writer
-                .execute(
-                    "INSERT INTO tenant_usage VALUES (?, ?, ?, ?, ?)",
-                    params![
-                        tenant,
-                        self.bytes,
-                        self.coverage,
-                        self.contexts,
-                        self.results
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "initialize tenant usage",
-                })?;
-        }
-        if self.bytes < 0 {
-            writer
-                .execute(
-                    "DELETE FROM tenant_usage WHERE tenant_id = ? AND logical_bytes = 0
-                    AND coverage_count = 0 AND context_count = 0 AND result_count = 0",
-                    params![tenant],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "remove empty tenant usage",
-                })?;
-        }
-        Ok(())
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct WitnessUsageV1 {
     pub read_revision: u64,
@@ -111,7 +43,6 @@ impl AnalysisStore {
         transaction: &Transaction<'_>,
         intent: &super::TraceIntentV1,
     ) -> Result<()> {
-        let mut charge = 0;
         for binding in &intent.bindings {
             let identity = super::raw::RawIdentity::Diagnostic(binding.identity.clone());
             let key = identity.key();
@@ -128,9 +59,7 @@ impl AnalysisStore {
             if changed != 1 {
                 return crate::AnalysisConflictSnafu.fail();
             }
-            charge += 256 + key.len() as i64 + json.len() as i64 + TRACE_RESERVE as i64;
         }
-        UsageChange::from(charge).apply(transaction, &intent.tenant_id)?;
         if self.storage.diagnostic_sources.is_some()
             || self.storage.tenant_diagnostic_sources.is_some()
         {
@@ -153,24 +82,31 @@ impl AnalysisStore {
             )?;
         }
         if self.storage.logical_max_bytes.is_some() || self.storage.tenant_max_bytes.is_some() {
-            let (total, scoped): (u64, u64) = transaction
-                .query_row(
-                    &format!(
-                        "SELECT COALESCE(SUM(bytes), 0)::UBIGINT,
-                        COALESCE(SUM(bytes) FILTER (WHERE tenant_id = ?), 0)::UBIGINT
-                        FROM ({TRACE_CHARGES})"
-                    ),
-                    params![intent.tenant_id.as_slice()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "check diagnostic byte partition",
-                })?;
+            let (total, scoped) = Self::diagnostic_usage(transaction, intent.tenant_id)?;
             self.storage.check_diagnostics(total, scoped)?;
         }
         let (reserved, slots) = Self::terminal_reserve(transaction)?;
         self.storage
             .check_append(self.storage_with_reserve(0, slots)?, reserved)
+    }
+
+    pub(super) fn diagnostic_usage(
+        connection: &Connection,
+        tenant: [u8; 16],
+    ) -> Result<(u64, u64)> {
+        connection
+            .query_row(
+                &format!(
+                    "SELECT COALESCE(SUM(bytes), 0)::UBIGINT,
+                COALESCE(SUM(bytes) FILTER (WHERE tenant_id = ?), 0)::UBIGINT
+                FROM ({TRACE_CHARGES})"
+                ),
+                params![tenant.as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "count diagnostic logical bytes",
+            })
     }
 
     pub(super) fn terminal_reserve(connection: &Connection) -> Result<(u64, usize)> {
@@ -223,13 +159,12 @@ impl AnalysisStore {
         })
     }
 
-    fn witness_totals(
-        &self,
+    pub(super) fn witness_base(
         connection: &Connection,
         tenant: [u8; 16],
         now: u64,
     ) -> Result<WitnessUsageV1> {
-        let mut usage = connection
+        connection
             .query_row(
                 Self::WITNESS_USAGE,
                 params![tenant.as_slice(), now, tenant.as_slice()],
@@ -237,7 +172,16 @@ impl AnalysisStore {
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "count exact witness storage",
-            })?;
+            })
+    }
+
+    fn witness_totals(
+        &self,
+        connection: &Connection,
+        tenant: [u8; 16],
+        now: u64,
+    ) -> Result<WitnessUsageV1> {
+        let mut usage = Self::witness_base(connection, tenant, now)?;
         let mut statement = connection
             .prepare(
                 "SELECT DISTINCT stream_key, durable_cursor, segment_id FROM evidence_refs
@@ -333,7 +277,7 @@ impl AnalysisStore {
                         + CASE WHEN terminal IS NULL THEN 16 * 1024
                             ELSE octet_length(encode(terminal)) END FROM trace_receipts";
 
-    fn usage_projection() -> String {
+    pub(super) fn usage_projection() -> String {
         let graphs = format!(
             " UNION ALL SELECT tenant_id, 'graph_rows', bytes FROM ({})
             UNION ALL SELECT tenant_id, 'package_rows', bytes FROM ({})",
@@ -350,43 +294,21 @@ impl AnalysisStore {
         )
     }
 
-    pub(super) fn validate_usage(writer: &Connection, root: &std::path::Path) -> Result<()> {
-        let invalid: bool = writer
-            .query_row(
-                &format!(
-                    "WITH expected AS ({}) SELECT EXISTS (
-                SELECT 1 FROM expected e FULL JOIN tenant_usage u USING (tenant_id)
-                WHERE e.tenant_id IS NULL OR u.tenant_id IS NULL
-                    OR e.logical_bytes <> u.logical_bytes
-                    OR e.coverage_count <> u.coverage_count
-                    OR e.context_count <> u.context_count
-                    OR e.result_count <> u.result_count)",
-                    Self::usage_projection()
-                ),
-                [],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "validate tenant usage",
-            })?;
-        if invalid {
-            return Self::reject_path(root, "stored tenant usage does not match retained data");
-        }
-        Ok(())
-    }
-
-    fn logical_usage(
-        transaction: &Transaction<'_>,
+    pub(super) fn logical_usage(
+        transaction: &Connection,
         tenant: [u8; 16],
     ) -> Result<(u64, u64, u64, u64)> {
         transaction
             .query_row(
-                "SELECT COALESCE(SUM(logical_bytes), 0)::UBIGINT,
+                &format!(
+                    "WITH usage AS ({}) SELECT COALESCE(SUM(logical_bytes), 0)::UBIGINT,
                     COALESCE(SUM(logical_bytes) FILTER (WHERE tenant_id = ?), 0)::UBIGINT,
                     GREATEST(COALESCE(SUM(coverage_count), 0), COALESCE(SUM(context_count), 0),
                         COALESCE(SUM(result_count), 0))::UBIGINT,
                     COALESCE(MAX(GREATEST(coverage_count, context_count, result_count))
-                        FILTER (WHERE tenant_id = ?), 0)::UBIGINT FROM tenant_usage",
+                        FILTER (WHERE tenant_id = ?), 0)::UBIGINT FROM usage",
+                    Self::usage_projection()
+                ),
                 params![tenant.as_slice(), tenant.as_slice()],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
@@ -550,12 +472,18 @@ mod tests {
             {
                 let reader = store.reader()?;
                 let total: u64 = reader.get()?.query_row(
-                    "SELECT SUM(logical_bytes)::UBIGINT FROM tenant_usage",
+                    &format!(
+                        "SELECT SUM(logical_bytes)::UBIGINT FROM ({})",
+                        AnalysisStore::usage_projection()
+                    ),
                     [],
                     |row| row.get(0),
                 )?;
                 let scoped: u64 = reader.get()?.query_row(
-                    "SELECT logical_bytes FROM tenant_usage WHERE tenant_id = ?",
+                    &format!(
+                        "SELECT logical_bytes FROM ({}) WHERE tenant_id = ?",
+                        AnalysisStore::usage_projection()
+                    ),
                     params![identity.tenant_id.as_slice()],
                     |row| row.get(0),
                 )?;
@@ -624,7 +552,7 @@ mod tests {
                     .trace_reserve,
                 0
             );
-            AnalysisStore::validate_usage(store.reader()?.get()?, &root)?;
+            AnalysisStore::validate_state(store.reader()?.get()?, &root)?;
             drop(store);
 
             let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
@@ -642,7 +570,7 @@ mod tests {
                     .trace_reserve,
                 0
             );
-            AnalysisStore::validate_usage(store.reader()?.get()?, &root)?;
+            AnalysisStore::validate_state(store.reader()?.get()?, &root)?;
         }
         Ok(())
     }
@@ -764,7 +692,7 @@ mod tests {
         assert_eq!((key_bytes, epoch_bytes), (195, 170));
         let raw_bytes = file_bytes + 768 + 2 * json_bytes + 2 * key_bytes + epoch_bytes;
         assert_eq!(
-            store.raw.lock().map_err(|_| "raw poisoned")?.budget.total,
+            AnalysisStore::logical_usage(store.writer()?.get()?, identity.tenant_id)?.0,
             raw_bytes
         );
         let scope = ProcessorScopeV1 {
@@ -775,7 +703,10 @@ mod tests {
         store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
@@ -858,12 +789,15 @@ mod tests {
             )?;
             assert_eq!(stored_bytes, request_bytes);
             let charged: u64 = reader.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage WHERE tenant_id = ?",
+                &format!(
+                    "SELECT logical_bytes FROM ({}) WHERE tenant_id = ?",
+                    AnalysisStore::usage_projection()
+                ),
                 params![input.scope.identity.tenant_id.as_slice()],
                 |row| row.get(0),
             )?;
             assert_eq!(charged, current_bytes + result_bytes);
-            AnalysisStore::validate_usage(reader.get()?, &store.root)?;
+            AnalysisStore::validate_state(reader.get()?, &store.root)?;
             let plan: String = reader.get()?.query_row(
                 &format!("EXPLAIN {}", AnalysisStore::WITNESS_USAGE),
                 params![[1_u8; 16].as_slice(), 2_u64, [1_u8; 16].as_slice()],
@@ -877,7 +811,10 @@ mod tests {
         assert_eq!(store.commit_result(&input)?, receipt);
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
@@ -944,7 +881,10 @@ mod tests {
         }
         store.storage.witness_max_bytes = Some(witness_bytes);
         let before_bytes = store.writer()?.get()?.query_row(
-            "SELECT logical_bytes FROM tenant_usage",
+            &format!(
+                "SELECT logical_bytes FROM ({})",
+                AnalysisStore::usage_projection()
+            ),
             [],
             |row| row.get::<_, u64>(0),
         )?;
@@ -970,24 +910,30 @@ mod tests {
             - (file_bytes + 256 + json_bytes + key_bytes);
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
             retained_bytes
         );
-        AnalysisStore::validate_usage(store.writer()?.get()?, &store.root)?;
+        AnalysisStore::validate_state(store.writer()?.get()?, &store.root)?;
         drop(store);
         let store = AnalysisStore::open(&root)?;
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
             retained_bytes
         );
-        AnalysisStore::validate_usage(store.writer()?.get()?, &root)?;
+        AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
         Ok(())
     }
 
@@ -1085,7 +1031,7 @@ mod tests {
             0
         );
         assert!(store.maintenance.try_write().is_ok());
-        AnalysisStore::validate_usage(store.writer()?.get()?, &store.root)?;
+        AnalysisStore::validate_state(store.writer()?.get()?, &store.root)?;
         Ok(())
     }
 
@@ -1110,12 +1056,6 @@ mod tests {
                  1, NULL, 'tenant', 'b'::BLOB, 1 FROM range(1, 1025) t(i)",
                 params![[tenant; 16].as_slice()],
             )?;
-            UsageChange {
-                bytes: 260 * 1024,
-                contexts: 1024,
-                ..Default::default()
-            }
-            .apply(&transaction, &[tenant; 16])?;
             store.check_logical(&transaction, [tenant; 16], false)?;
         }
         transaction.execute(
@@ -1123,12 +1063,6 @@ mod tests {
              1, NULL, 'tenant', 'b'::BLOB, 1)",
             params![[4_u8; 16].as_slice()],
         )?;
-        UsageChange {
-            bytes: 260,
-            contexts: 1,
-            ..Default::default()
-        }
-        .apply(&transaction, &[4; 16])?;
         assert!(matches!(
             store.check_logical(&transaction, [4; 16], false),
             Err(crate::Error::StorageCapacity {
@@ -1150,71 +1084,211 @@ mod tests {
     }
 
     #[test]
-    fn usage_rejects_corruption() -> TestResult {
-        for mutation in [
-            "UPDATE tenant_usage SET logical_bytes = logical_bytes + 1",
-            "UPDATE tenant_usage SET context_count = 0",
-            "UPDATE tenant_usage SET coverage_count = 1",
-            "UPDATE tenant_usage SET result_count = 1",
-            "DELETE FROM tenant_usage",
-            "INSERT INTO tenant_usage VALUES ('extra'::BLOB, 0, 0, 0, 0)",
-        ] {
+    fn raw_admission_uses_current_usage() -> TestResult {
+        for finite in [false, true] {
             let directory = tempfile::tempdir()?;
             let root = directory.path().join("analysis");
-            let store = AnalysisStore::open(&root)?;
-            store.commit_context(&context(1, 1))?;
+            let identity = crate::analysis::tests::identity();
+            let mut store = AnalysisStore::open_with_limits(
+                &root,
+                Default::default(),
+                StorageLimitsV1 {
+                    tenant_max_bytes: finite.then_some(1024 * 1024),
+                    ..Default::default()
+                },
+            )?;
+            let batch = |cursor| ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: cursor,
+                last_cursor: cursor,
+                intake_utc_ns: cursor,
+                framed_records: vec![7; 100].into(),
+                frame_ends: vec![100],
+            };
+            let mut first_end = 0;
+            let mut accepted_bytes = 0;
+            for cursor in 1..=2 {
+                store.accept_validated_batch(identity.clone(), batch(cursor))?;
+                assert_eq!(*store.revision.borrow(), cursor);
+                assert!(store.raw_pending.load(std::sync::atomic::Ordering::Acquire));
+                assert!(!store.raw_dirty.load(std::sync::atomic::Ordering::Acquire));
+                if cursor == 1 {
+                    first_end =
+                        std::fs::metadata(super::super::segments::SegmentRange::path(&root, 1))?
+                            .len();
+                }
+            }
             {
-                let writer = store.writer()?;
-                AnalysisStore::validate_usage(writer.get()?, &root)?;
-                writer.get()?.execute(mutation, [])?;
+                let guard = store.writer.lock().map_err(|_| "writer poisoned")?;
+                let writer = guard.as_ref().ok_or("writer closed")?;
+                let projected = AnalysisStore::read_meta_from(writer, &root)?.commit_revision;
+                assert_eq!(projected, if finite { 1 } else { 0 });
+                let usage = AnalysisStore::logical_usage(writer, identity.tenant_id)?.1;
+                if finite {
+                    assert!(usage > 0);
+                    let end =
+                        std::fs::metadata(super::super::segments::SegmentRange::path(&root, 1))?
+                            .len();
+                    accepted_bytes = usage + end - first_end;
+                } else {
+                    assert_eq!(usage, 0);
+                }
+            }
+            let path = super::super::segments::SegmentRange::path(&root, 1);
+            let end = std::fs::metadata(&path)?.len();
+            if finite {
+                store.storage.tenant_max_bytes = Some(accepted_bytes);
+                assert!(matches!(
+                    store.accept_validated_batch(identity.clone(), batch(3)),
+                    Err(crate::Error::StorageCapacity {
+                        resource: "tenant logical bytes",
+                        ..
+                    })
+                ));
+                assert_eq!(std::fs::metadata(&path)?.len(), end);
+                assert_eq!(*store.revision.borrow(), 2);
+                assert!(store.write_ready.load(std::sync::atomic::Ordering::Acquire));
+                let guard = store.writer.lock().map_err(|_| "writer poisoned")?;
+                let writer = guard.as_ref().ok_or("writer closed")?;
+                assert_eq!(
+                    AnalysisStore::logical_usage(writer, identity.tenant_id)?.1,
+                    accepted_bytes
+                );
+                assert_eq!(
+                    AnalysisStore::read_meta_from(writer, &root)?.commit_revision,
+                    2
+                );
+            } else {
+                store.accept_validated_batch(identity.clone(), batch(3))?;
+                let guard = store.writer.lock().map_err(|_| "writer poisoned")?;
+                let writer = guard.as_ref().ok_or("writer closed")?;
+                assert_eq!(
+                    AnalysisStore::read_meta_from(writer, &root)?.commit_revision,
+                    0
+                );
+                assert_eq!(*store.revision.borrow(), 3);
             }
             drop(store);
-            assert!(
-                matches!(
-                    AnalysisStore::open(&root),
-                    Err(crate::Error::AnalysisState { .. })
-                ),
-                "{mutation}"
+            let store = AnalysisStore::open(&root)?;
+            assert_eq!(
+                store.read_page(&identity, 1)?.records.len(),
+                if finite { 2 } else { 3 }
             );
+            AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
         }
         Ok(())
     }
 
     #[test]
-    fn usage_updates_are_atomic() -> TestResult {
+    fn raw_projection_keeps_terminal_reserves() -> TestResult {
+        use super::super::raw::tests::{trace_intent, trace_terminal};
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
-        store.commit_context(&context(1, 1))?;
-        let mut writer = store.writer()?;
-        for change in [
-            UsageChange::from(-261),
-            UsageChange {
-                contexts: -2,
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open_with_limits(
+            &root,
+            Default::default(),
+            StorageLimitsV1 {
+                logical_max_bytes: Some(1024 * 1024),
+                witness_max_bytes: Some(1024 * 1024),
                 ..Default::default()
             },
-        ] {
-            let transaction = writer.get_mut()?.transaction()?;
-            assert!(change.apply(&transaction, &[1; 16]).is_err());
-            transaction.rollback()?;
-            AnalysisStore::validate_usage(writer.get()?, &store.root)?;
+        )?;
+        let intent = trace_intent()?;
+        let identity = &intent.bindings[0].identity;
+        store.accept_trace(&intent)?;
+        let frame = |sequence, byte| TraceFrameV1 {
+            execution_id: identity.execution_id,
+            sequence,
+            kind: TraceFrameKindV1::Data,
+            bytes: vec![byte],
+        };
+        store.append_trace(
+            identity,
+            &TraceBatchV1 {
+                execution_id: identity.execution_id,
+                frames: vec![frame(1, 7)],
+                terminal: None,
+            },
+            101,
+        )?;
+        {
+            let raw = store.raw.lock().map_err(|_| "raw poisoned")?;
+            assert_eq!(
+                (raw.budget.trace_reserve, raw.budget.trace_slots),
+                (TRACE_RESERVE, 1)
+            );
         }
+        let terminal = trace_terminal(2, 2);
+        let receipt = store.append_trace(
+            identity,
+            &TraceBatchV1 {
+                execution_id: identity.execution_id,
+                frames: vec![frame(2, 8)],
+                terminal: Some(terminal.clone()),
+            },
+            102,
+        )?;
+        {
+            let raw = store.raw.lock().map_err(|_| "raw poisoned")?;
+            assert_eq!((raw.budget.trace_reserve, raw.budget.trace_slots), (0, 0));
+        }
+        assert_eq!((receipt.last_sequence, receipt.output_bytes), (2, 2));
+        let page = store.read_trace(identity, 1, &AnalysisReadControl::default())?;
+        assert_eq!(page.frames, vec![frame(1, 7), frame(2, 8)]);
+        assert_eq!(page.terminal, Some(terminal));
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.trace_receipt(identity)?, Some(receipt));
+        assert_eq!(
+            store
+                .read_trace(identity, 1, &AnalysisReadControl::default())?
+                .frames,
+            vec![frame(1, 7), frame(2, 8)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn usage_tracks_transactions() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        store.commit_context(&context(1, 1))?;
+        let mut writer = store.writer()?;
+        let before = AnalysisStore::logical_usage(writer.get()?, [1; 16])?;
+        assert_eq!(before, (260, 260, 1, 1));
         let transaction = writer.get_mut()?.transaction()?;
         transaction.execute(
-            "UPDATE tenant_usage SET logical_bytes = 18446744073709551615",
-            [],
+            "INSERT INTO context_versions SELECT ?, owner_id, entity_key, lifetime_key,
+                owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body,
+                commit_revision FROM context_versions",
+            params![[2u8; 16].as_slice()],
         )?;
-        assert!(UsageChange::from(1).apply(&transaction, &[1; 16]).is_err());
-        transaction.rollback()?;
-        AnalysisStore::validate_usage(writer.get()?, &store.root)?;
-        let transaction = writer.get_mut()?.transaction()?;
-        UsageChange::from(256).apply(&transaction, &[2; 16])?;
-        UsageChange::from(-256).apply(&transaction, &[2; 16])?;
         assert_eq!(
             AnalysisStore::logical_usage(&transaction, [2; 16])?,
+            (520, 260, 2, 1)
+        );
+        transaction.execute(
+            "DELETE FROM context_versions WHERE tenant_id = ?",
+            params![[1u8; 16].as_slice()],
+        )?;
+        assert_eq!(
+            AnalysisStore::logical_usage(&transaction, [1; 16])?,
             (260, 0, 1, 0)
         );
-        AnalysisStore::validate_usage(&transaction, &store.root)?;
         transaction.rollback()?;
+        assert_eq!(
+            AnalysisStore::logical_usage(writer.get()?, [1; 16])?,
+            before
+        );
+        AnalysisStore::validate_state(writer.get()?, &root)?;
+        drop(writer);
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(
+            AnalysisStore::logical_usage(store.writer()?.get()?, [1; 16])?,
+            before
+        );
         Ok(())
     }
 }

@@ -41,7 +41,8 @@ fn native_rows_integrity() -> TestResult {
             graph.first_cursor
         ],
     )?;
-    let inserted_bytes = GraphRows::insert(graph, &writer, "version")?;
+    GraphRows::insert(graph, &writer, "version")?;
+    let inserted_bytes = GraphRows::stored_bytes(&writer, "version")? as i64;
     let header = GraphRows::read_header(&writer, graph.scope.identity.tenant_id, "version")?
         .ok_or("missing header")?;
     assert_eq!(GraphRows::read(&writer, "version", &header)?, *graph);
@@ -65,7 +66,8 @@ fn native_rows_integrity() -> TestResult {
             stream_key, method_version, first_cursor FROM analysis_results WHERE result_id = ?",
             params![other, "version"],
         )?;
-        let other_bytes = GraphRows::insert(graph, &transaction, other)?;
+        GraphRows::insert(graph, &transaction, other)?;
+        let other_bytes = GraphRows::stored_bytes(&transaction, other)? as i64;
         let count =
             (graph.graph.subjects.len() + graph.graph.edges.len() + graph.findings.len()) as i64;
         assert_eq!(

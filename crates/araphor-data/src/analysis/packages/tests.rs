@@ -100,18 +100,22 @@ fn packages_charge_stored_bytes() -> TestResult {
         + revision.revision.len()
         + revision.descriptor.len()
         + revision.artifact.len()
-        + serde_json::to_vec(&revision.dependencies)?.len()) as i64;
+        + serde_json::to_vec(&revision.dependencies)?.len()) as u64;
     for _ in 0..2 {
         store.install_package(std::slice::from_ref(&revision), || Ok(()))?;
         assert_eq!(
-            store.read_snapshot(|reader| AnalysisStore::package_bytes(reader, [1; 16]))?,
+            store.read_snapshot(
+                |reader| AnalysisStore::logical_usage(reader, [1; 16]).map(|usage| usage.1)
+            )?,
             expected
         );
     }
     drop(store);
     let store = AnalysisStore::open(&root)?;
     assert_eq!(
-        store.read_snapshot(|reader| AnalysisStore::package_bytes(reader, [1; 16]))?,
+        store.read_snapshot(
+            |reader| AnalysisStore::logical_usage(reader, [1; 16]).map(|usage| usage.1)
+        )?,
         expected
     );
     assert_eq!(

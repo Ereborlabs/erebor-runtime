@@ -376,26 +376,10 @@ impl<'a> EvidenceRetentionOwner<'a> {
                     operation: "record expired segment interval",
                 })?;
         }
-        let expired = merged.len();
-        let released: i64 = transaction
-            .query_row(
-                "SELECT COALESCE(SUM(256 + octet_length(stream_key) + octet_length(encode(ref_id))), 0)::BIGINT
-                FROM evidence_refs WHERE stream_key = ? AND tenant_id = ? AND expires_utc_ns <= ?",
-                params![key.as_slice(), tenant.as_slice(), now_utc_ns],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read expired witness charge",
-            })?;
         transaction.execute(
             "DELETE FROM evidence_refs WHERE stream_key = ? AND tenant_id = ? AND expires_utc_ns <= ?",
             params![key.as_slice(), tenant.as_slice(), now_utc_ns],
         ).context(AnalysisDatabaseSnafu { operation: "remove expired witness references" })?;
-        let floor_charge = if previous_floor.is_none() { 256 } else { 0 };
-        super::quota::UsageChange::from(
-            (256 + key.len() as i64) * expired as i64 + floor_charge - released,
-        )
-        .apply(&transaction, &tenant)?;
         let retained_floor = next_retained.map_or(receipt.cursor(), |cursor| cursor - 1);
         let (relation, receipts) = match identity {
             RawIdentity::Evidence(_) => ("events", "source_receipts"),
@@ -665,7 +649,7 @@ mod tests {
         let before = store.meta()?;
         assert_eq!(owner.retain(&source, u64::MAX)?.removed_records, 0);
         assert_eq!(store.meta()?, before);
-        store.read_snapshot(|snapshot| AnalysisStore::validate_usage(snapshot, &store.root))?;
+        store.read_snapshot(|snapshot| AnalysisStore::validate_state(snapshot, &store.root))?;
         Ok(())
     }
 
@@ -833,7 +817,7 @@ mod tests {
             1
         );
         assert_eq!(reopened.replay_floor(source.tenant_id)?, Some(floor));
-        reopened.read_snapshot(|snapshot| AnalysisStore::validate_usage(snapshot, &root))?;
+        reopened.read_snapshot(|snapshot| AnalysisStore::validate_state(snapshot, &root))?;
         Ok(())
     }
 
@@ -851,7 +835,7 @@ mod tests {
                 .to_owned(),
             "UPDATE replay_floors SET tenant_id = from_hex('01')".to_owned(),
             "DELETE FROM replay_floors".to_owned(),
-            "UPDATE tenant_usage SET logical_bytes = logical_bytes + 1".to_owned(),
+            "UPDATE expired_ranges SET last_cursor = last_cursor + 1".to_owned(),
         ]
         .into_iter()
         .enumerate()

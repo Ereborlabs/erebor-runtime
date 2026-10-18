@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 use std::path::Path;
@@ -107,9 +107,7 @@ impl AnalysisStore {
         let encoded = serde_json::to_string(ids).context(crate::JsonSnafu { path: root })?;
         let removals = writer
             .prepare(
-                "SELECT s.segment_id, s.file_name, s.tenant_id,
-                 (256 + octet_length(s.stream_key) + s.committed_end + octet_length(encode(s.identity_json)))::BIGINT
-                 FROM segments s WHERE s.segment_id IN (SELECT unnest(CAST(? AS UBIGINT[])))
+                "SELECT s.segment_id, s.file_name FROM segments s WHERE s.segment_id IN (SELECT unnest(CAST(? AS UBIGINT[])))
                  AND s.state = 'Deleting'
                  AND NOT EXISTS (SELECT 1 FROM evidence_refs r WHERE r.segment_id = s.segment_id)
                  AND EXISTS (SELECT 1 FROM expired_ranges x WHERE x.segment_id = s.segment_id
@@ -118,8 +116,7 @@ impl AnalysisStore {
             )
             .context(AnalysisDatabaseSnafu { operation: "prepare recorded segment removals" })?
             .query_map(params![encoded], |row| {
-                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?,
-                    row.get::<_, Vec<u8>>(2)?, row.get::<_, i64>(3)?))
+                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?))
             })
             .context(AnalysisDatabaseSnafu { operation: "check recorded segment removal" })?
             .collect::<duckdb::Result<Vec<_>>>()
@@ -162,8 +159,7 @@ impl AnalysisStore {
         }
         drop(expiry);
         let current = raw.directory_current()?;
-        let mut charges = BTreeMap::<_, i64>::new();
-        for (_, name, tenant, bytes) in removals {
+        for (_, name) in removals {
             let path = super::raw::RawJournal::file_path(root, &name)?;
             match fs::symlink_metadata(&path) {
                 Ok(metadata) => {
@@ -178,14 +174,6 @@ impl AnalysisStore {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(source) => return Err(source).context(IoSnafu { path: &path }),
             }
-            let charge = charges.entry(tenant).or_default();
-            *charge = charge.checked_add(bytes).ok_or_else(|| {
-                crate::AnalysisStateSnafu {
-                    path: root,
-                    reason: "the removed segment charge overflows",
-                }
-                .build()
-            })?;
             #[cfg(test)]
             Self::crash_path(root, "retention.unlinked");
         }
@@ -202,9 +190,6 @@ impl AnalysisStore {
             "DELETE FROM segments WHERE segment_id IN (SELECT unnest(CAST(? AS UBIGINT[]))) AND state = 'Deleting'",
             params![encoded],
         ).context(AnalysisDatabaseSnafu { operation: "remove expired segment metadata" })?;
-        for (tenant, bytes) in charges {
-            super::quota::UsageChange::from(-bytes).apply(&transaction, &tenant)?;
-        }
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit segment cleanup",
         })?;
@@ -254,14 +239,18 @@ mod tests {
         let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
         let files = [raw.segment_path(1)?, raw.segment_path(2)?];
         let original = [fs::read(files[0])?, fs::read(files[1])?];
-        let charge: u64 =
-            writer.query_row("SELECT logical_bytes FROM tenant_usage", [], |row| {
-                row.get(0)
-            })?;
         writer.execute_batch(
             "UPDATE segments SET state = 'Deleting';
              INSERT INTO expired_ranges
              SELECT segment_id, stream_key, tenant_id, 1, 1, 1 FROM segments",
+        )?;
+        let charge: u64 = writer.query_row(
+            &format!(
+                "SELECT logical_bytes FROM ({})",
+                AnalysisStore::usage_projection()
+            ),
+            [],
+            |row| row.get(0),
         )?;
         assert!(matches!(
             AnalysisStore::remove_segments(writer, &store.root, &raw, &BTreeSet::from([1, 2])),
@@ -272,8 +261,14 @@ mod tests {
             assert_eq!(fs::read(file)?, bytes);
         }
         assert_eq!(
-            writer.query_row("SELECT logical_bytes FROM tenant_usage", [], |row| row
-                .get::<_, u64>(0))?,
+            writer.query_row(
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
+                [],
+                |row| row.get::<_, u64>(0)
+            )?,
             charge
         );
         assert_eq!(

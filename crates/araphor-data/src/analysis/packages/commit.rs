@@ -29,9 +29,8 @@ impl AnalysisStore {
         {
             return AnalysisConflictSnafu.fail();
         }
-        let before = Self::package_bytes(&transaction, input.activation.key.tenant_id)?;
         let revision = self.package_next(&transaction)?;
-        self.package_commit_rows(&transaction, input, revision, before)?;
+        self.package_commit_rows(&transaction, input, revision)?;
         check()?;
         #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(super::super::AnalysisCommitStage::BeforeResultCommit)?;
@@ -94,7 +93,6 @@ impl AnalysisStore {
         transaction: &Transaction<'_>,
         input: &PackageCommitV1,
         revision: u64,
-        before: i64,
     ) -> Result<()> {
         let key = &input.activation.key;
         for (relation, captured) in &input.source_revisions {
@@ -179,20 +177,14 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "advance package checkpoint",
             })?;
-        let references = Self::insert_references(
+        Self::insert_references(
             transaction,
             &input.result_id,
             &input.witnesses,
             &segments,
             &input.context_refs,
         )?;
-        let extra = references
-            + (256
-                + input.result_id.len()
-                + "analysis-package".len()
-                + input.metadata.len()
-                + input.request.len()) as i64;
-        self.package_charge(transaction, key.tenant_id, before, extra, 1)?;
+        self.check_logical(transaction, key.tenant_id, false)?;
         self.check_witnesses(transaction, key.tenant_id, input.created_utc_ns)?;
         Self::record_revision(
             transaction,

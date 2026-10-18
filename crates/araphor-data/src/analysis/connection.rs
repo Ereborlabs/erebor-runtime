@@ -262,6 +262,29 @@ impl AnalysisStore {
         self.writer_wait(Some(control), true)
     }
 
+    pub(super) fn project_raw(
+        &self,
+        writer: &mut Connection,
+        raw: &mut super::raw::RawJournal,
+        control: Option<&AnalysisReadControl>,
+    ) -> Result<()> {
+        if self.raw_pending.load(Ordering::Acquire) {
+            self.write_ready.store(false, Ordering::Release);
+            let result = raw.project(writer, control);
+            if matches!(
+                &result,
+                Err(crate::Error::AnalysisReadDeadline { .. }
+                    | crate::Error::AnalysisReadCancelled { .. })
+            ) {
+                self.write_ready.store(true, Ordering::Release);
+            }
+            result?;
+            self.raw_pending.store(false, Ordering::Release);
+            self.write_ready.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+
     fn writer_wait(
         &self,
         control: Option<&AnalysisReadControl>,
@@ -287,19 +310,8 @@ impl AnalysisStore {
         let writer = connection
             .as_mut()
             .ok_or_else(|| self.state_error("the analysis connections are closed"))?;
-        if project && self.raw_pending.load(Ordering::Acquire) {
-            self.write_ready.store(false, Ordering::Release);
-            let result = raw.project(writer, control);
-            if matches!(
-                &result,
-                Err(crate::Error::AnalysisReadDeadline { .. }
-                    | crate::Error::AnalysisReadCancelled { .. })
-            ) {
-                self.write_ready.store(true, Ordering::Release);
-            }
-            result?;
-            self.raw_pending.store(false, Ordering::Release);
-            self.write_ready.store(true, Ordering::Release);
+        if project {
+            self.project_raw(writer, &mut raw, control)?;
         }
         if !project && self.raw_dirty.load(Ordering::Acquire) {
             raw.refresh_budget(writer)?;

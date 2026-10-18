@@ -133,8 +133,6 @@ impl AnalysisStore {
             "INSERT INTO processor_progress VALUES (?, ?, ?, ?, 'required', ?, ?, 0, 0, ?, ?, false, '', '', 0, 0, '')",
             params![GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, identity.tenant_id.as_slice(), key.as_slice(), floor, floor, start, floor],
         ).context(AnalysisDatabaseSnafu { operation: "register required graph processor" })?;
-        super::quota::UsageChange::from((256 + key.len() + GRAPH_PROCESSOR.len()) as i64)
-            .apply(&transaction, &identity.tenant_id)?;
         self.check_logical(&transaction, identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
         self.commit_metadata(transaction, "commit required graph registration")?;

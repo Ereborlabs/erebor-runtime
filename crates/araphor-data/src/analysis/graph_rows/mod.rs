@@ -98,7 +98,7 @@ impl GraphRows {
         snapshot: &GraphSnapshotV1,
         writer: &Connection,
         result_id: &str,
-    ) -> Result<i64> {
+    ) -> Result<()> {
         {
             let mut appender =
                 writer
@@ -141,13 +141,7 @@ impl GraphRows {
                 operation: "flush native graph findings",
             })?;
         }
-        let bytes = Self::stored_bytes(writer, result_id)?;
-        i64::try_from(bytes).map_err(|_| {
-            GraphInvalidSnafu {
-                field: "graph storage bytes",
-            }
-            .build()
-        })
+        Ok(())
     }
 
     pub(super) fn read(

@@ -562,14 +562,29 @@ impl AnalysisStore {
             .lock()
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
         self.require_retention()?;
+        let logical =
+            self.storage.logical_max_bytes.is_some() || self.storage.tenant_max_bytes.is_some();
+        if logical || self.storage.witness_max_bytes.is_some() {
+            self.project_raw(
+                writer
+                    .connection
+                    .as_mut()
+                    .ok_or_else(|| self.state_error("the analysis connections are closed"))?,
+                &mut raw,
+                None,
+            )?;
+        }
+
         if let RawIdentity::Evidence(source) = &identity {
             if self.graph_enabled() && self.graph_registration_required(writer.get()?, source)? {
-                if self.raw_pending.load(Ordering::Acquire) {
-                    self.write_ready.store(false, Ordering::Release);
-                    raw.project(writer.get_mut()?, None)?;
-                    self.raw_pending.store(false, Ordering::Release);
-                    self.write_ready.store(true, Ordering::Release);
-                }
+                self.project_raw(
+                    writer
+                        .connection
+                        .as_mut()
+                        .ok_or_else(|| self.state_error("the analysis connections are closed"))?,
+                    &mut raw,
+                    None,
+                )?;
                 let floor = raw
                     .sources
                     .get(&source.key())
@@ -693,15 +708,19 @@ impl AnalysisStore {
         let terminal_only = matches!(&commit.kind, Some(RawKind::Diagnostic(progress))
             if progress.terminal && commit.spans.len() == 1
                 && commit.spans[0].first == progress.last_sequence + 1);
-        let json = identity.json(&self.root)?;
         let mut charge = added;
-        if created {
-            charge += 256 + key.len() as u64 + json.len() as u64;
-        }
-        if !raw.sources.contains_key(&key) {
-            if let RawIdentity::Evidence(source) = &identity {
-                charge +=
-                    512 + key.len() as u64 + source.epoch_key().len() as u64 + json.len() as u64;
+        if logical || terminal_only {
+            let json = identity.json(&self.root)?;
+            if created {
+                charge += 256 + key.len() as u64 + json.len() as u64;
+            }
+            if !raw.sources.contains_key(&key) {
+                if let RawIdentity::Evidence(source) = &identity {
+                    charge += 512
+                        + key.len() as u64
+                        + source.epoch_key().len() as u64
+                        + json.len() as u64;
+                }
             }
         }
         let diagnostic = matches!(identity, RawIdentity::Diagnostic(_));
@@ -742,16 +761,15 @@ impl AnalysisStore {
                 .and_then(|bytes| bytes.checked_sub(released_reserve))
                 .ok_or_else(|| self.state_error("the projected logical bytes overflow"))
         };
-        self.storage.check_logical(
-            projected(raw.budget.total)?,
-            projected(raw.budget.usage.get(&tenant).copied().unwrap_or(0))?,
-            prepaid,
-        )?;
-        if diagnostic {
-            self.storage.check_diagnostics(
-                projected(raw.budget.diagnostic_total)?,
-                projected(raw.budget.diagnostics.get(&tenant).copied().unwrap_or(0))?,
-            )?;
+        if logical {
+            let (total, scoped, _, _) = Self::logical_usage(writer.get()?, tenant)?;
+            self.storage
+                .check_logical(projected(total)?, projected(scoped)?, prepaid)?;
+            if diagnostic {
+                let (total, scoped) = Self::diagnostic_usage(writer.get()?, tenant)?;
+                self.storage
+                    .check_diagnostics(projected(total)?, projected(scoped)?)?;
+            }
         }
         let required = raw.budget.required.contains_key(&key);
         if required {
@@ -769,25 +787,17 @@ impl AnalysisStore {
             }
         }
         if self.storage.witness_max_bytes.is_some() {
-            let mut witnesses = raw.budget.contexts.get(&tenant).copied().unwrap_or(0);
-            for (segment_id, segment) in &raw.segments {
-                if raw
-                    .budget
-                    .pins
-                    .get(segment_id)
-                    .is_some_and(|(tenant, expiry)| {
-                        *tenant == identity.tenant() && *expiry > batch.intake_utc_ns
-                    })
-                {
-                    witnesses = witnesses
-                        .checked_add(segment.end)
-                        .ok_or_else(|| self.state_error("the witness byte count overflows"))?;
-                    if *segment_id == id {
-                        witnesses = witnesses
-                            .checked_add(added)
-                            .ok_or_else(|| self.state_error("the witness byte count overflows"))?;
-                    }
-                }
+            let mut witnesses =
+                Self::witness_base(writer.get()?, tenant, batch.intake_utc_ns)?.charged_bytes;
+            if raw
+                .budget
+                .pins
+                .get(&id)
+                .is_some_and(|(owner, expiry)| *owner == tenant && *expiry > batch.intake_utc_ns)
+            {
+                witnesses = witnesses
+                    .checked_add(added)
+                    .ok_or_else(|| self.state_error("the witness byte count overflows"))?;
             }
             self.storage.check_witness(witnesses)?;
         }
@@ -837,18 +847,8 @@ impl AnalysisStore {
         self.run_commit_hook(super::AnalysisCommitStage::AfterSync)?;
         #[cfg(test)]
         self.crash_at("evidence.after");
-        raw.budget.total += charge;
-        raw.budget.total -= released_reserve;
-        *raw.budget.usage.entry(tenant).or_default() += charge;
-        *raw.budget.usage.entry(tenant).or_default() -= released_reserve;
         raw.budget.trace_slots = trace_slots;
         raw.budget.trace_reserve = trace_reserve;
-        if diagnostic {
-            raw.budget.diagnostic_total += charge;
-            raw.budget.diagnostic_total -= released_reserve;
-            *raw.budget.diagnostics.entry(tenant).or_default() += charge;
-            *raw.budget.diagnostics.entry(tenant).or_default() -= released_reserve;
-        }
         if required {
             *raw.budget.protected.entry(tenant).or_default() += body_bytes;
             let floor = raw.budget.required[&key];
@@ -2199,7 +2199,10 @@ pub(super) mod tests {
         assert_eq!(store.accept_trace(&intent)?, state);
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
@@ -2212,12 +2215,23 @@ pub(super) mod tests {
             serde_json::to_vec(batch.terminal.as_ref().ok_or("terminal absent")?)?.len() as u64;
         let total = reserve_bytes + file_bytes + 256 + key_bytes + json_bytes + terminal_bytes
             - TRACE_RESERVE;
-        {
-            let raw = store.raw.lock().map_err(|_| "raw poisoned")?;
-            assert_eq!(raw.budget.total, total);
-            assert_eq!(raw.budget.diagnostic_total, total);
-            assert_eq!(raw.budget.trace_reserve, 0);
-        }
+        assert_eq!(
+            AnalysisStore::logical_usage(store.writer()?.get()?, identity.tenant_id)?.0,
+            total
+        );
+        assert_eq!(
+            AnalysisStore::diagnostic_usage(store.writer()?.get()?, identity.tenant_id)?.0,
+            total
+        );
+        assert_eq!(
+            store
+                .raw
+                .lock()
+                .map_err(|_| "raw poisoned")?
+                .budget
+                .trace_reserve,
+            0
+        );
         assert_eq!((receipt.last_sequence, receipt.output_bytes), (0, 0));
         assert!(receipt.terminal.is_some());
         let page = store.read_trace(identity, 1, &super::super::AnalysisReadControl::default())?;
@@ -2228,11 +2242,14 @@ pub(super) mod tests {
         {
             let writer = store.writer()?;
             assert_eq!(
-                writer
-                    .get()?
-                    .query_row("SELECT logical_bytes FROM tenant_usage", [], |row| {
-                        row.get::<_, u64>(0)
-                    })?,
+                writer.get()?.query_row(
+                    &format!(
+                        "SELECT logical_bytes FROM ({})",
+                        AnalysisStore::usage_projection()
+                    ),
+                    [],
+                    |row| { row.get::<_, u64>(0) }
+                )?,
                 total
             );
             assert_eq!(
@@ -2243,7 +2260,7 @@ pub(super) mod tests {
                 )?,
                 total
             );
-            AnalysisStore::validate_usage(writer.get()?, &root)?;
+            AnalysisStore::validate_state(writer.get()?, &root)?;
         }
         drop(store);
         let store = AnalysisStore::open(&root)?;
@@ -2251,13 +2268,16 @@ pub(super) mod tests {
         assert_eq!(store.trace_receipt(identity)?, Some(receipt));
         assert_eq!(
             store.writer()?.get()?.query_row(
-                "SELECT logical_bytes FROM tenant_usage",
+                &format!(
+                    "SELECT logical_bytes FROM ({})",
+                    AnalysisStore::usage_projection()
+                ),
                 [],
                 |row| row.get::<_, u64>(0),
             )?,
             total
         );
-        AnalysisStore::validate_usage(store.writer()?.get()?, &root)?;
+        AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
         Ok(())
     }
 
