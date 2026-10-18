@@ -61,8 +61,8 @@ replacement. This work is **Not done**.
 
 The existing Discovery loop uses shared progress notices and exact seal
 deadlines. It is reactive, but it still enumerates sources and reads inputs
-outside actual Query input subscriptions. Control retention, graph processing,
-and notification delivery still have one-second polling loops. Data lock and
+outside actual Query input subscriptions. Graph processing and notification
+delivery still have one-second polling loops. Data lock and
 cancellation waits and the Wasm epoch ticker also require replacement.
 
 Query still has finite default input, output, concurrency, and read-time
@@ -73,6 +73,65 @@ does not replace that obligation. DuckDB resets interruption during statement
 initialization. Its current Rust wrapper exposes no pending-query registration
 point. Removing the default read deadline requires cancellation-safe native
 execution first. These requirements remain **Not done**.
+
+### Reactive retention
+
+Implementation and selected qualification: **Done**. Control no longer
+runs a one-second retention timer or a source-page cursor. Retention age and
+byte quotas default to None. An explicit zero remains a configured bound.
+
+Control starts retention with a configured age, byte, or logical pressure quota
+  -> native catalog SQL selects at most 16 eligible segments
+  -> Data validates each selected segment against its journal entries
+  -> Data commits exact expired spans, replay floors, and receipt floors
+  -> Data removes the committed segments through its existing cleanup owner
+  -> Control continues only while eligible segments remain
+  -> Control waits for a Data notice or the exact next age or pin expiry
+
+Retention fails
+  -> intake remains fail-closed
+  -> Control discards the old deadline and waits for a real notice
+  -> explicit recovery or a rejected intake request can request another pass
+  -> a successful repair publishes health before the wake notice
+
+Disabled retention returns before clock reads, worker dispatch, or selection
+SQL. Required processor progress and receipt bounds still prevent deletion.
+Pins delay deletion until their latest expiry. Progress-blocked segments wait
+for a committed progress notice. Native SQL computes pressure order and future
+deadlines; no Rust source sweep maintains a second schedule.
+
+The existing segments table stores cursor bounds and the latest intake time.
+Journal publication maintains these values. Recovery validates these values
+against the journal. Selected journal spans preserve cursor gaps and exact
+replay positions. There is no new span ledger, migration, or old-store support.
+Internal storage maintenance uses the existing native transactional catalog.
+Public queries and package execution retain the native DataFusion route.
+
+Selected qualification passes 119 distinct cases across the focused runs.
+The Data gate passes 94 cases, with two existing memory cases ignored. After
+removal of an unused Rust pressure calculation, all 22 retention cases and its
+changed quota case pass again. Five Control, four Query, 12 Analysis, one
+Observability, and three E2E cases pass. The failed E2E retention fixture now
+sets an explicit age; its unchanged assertions pass on the focused retry.
+
+Strict Clippy passes all targets in these six crates. A separate production
+Data and Control Clippy check passes with Data fixture features disabled.
+Scoped formatting, 485 local document links, and whitespace checks pass.
+Host disk exhaustion interrupts two link attempts before successful retries.
+The source hashes, commands, failures, and retries are recorded in
+`/tmp/araphor-reactive-retention-verification1.json`. Full workspace CI,
+benchmarks, memory qualification, quota-fill workloads, and physical Kubernetes
+checks are not run.
+
+This increment removes 29 nonblank production Rust lines. A separate count
+that excludes comments gives 28 production code deletions. The new native SQL
+file adds 39 nonblank lines. Tests add 623 nonblank lines. The Rust count
+excludes SQL files, tests, documents, blank lines, and file moves. The complete
+redesign still adds 759 nonblank production Rust lines against `7b7b407a`.
+The code-only total adds 771 lines. The required 6,000-line code reduction
+needs 6,771 more net code deletions. The count is
+`/tmp/araphor-reactive-retention-count2.json`. The complete redesign remains
+**Not done**. No speed result is claimed.
 
 ### Derived storage usage
 

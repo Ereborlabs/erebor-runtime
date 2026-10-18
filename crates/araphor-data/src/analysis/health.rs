@@ -42,8 +42,8 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let limits = RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 100,
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: Some(100),
         };
         let mut store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let required = scope();

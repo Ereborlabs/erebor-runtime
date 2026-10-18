@@ -1763,8 +1763,8 @@ mod tests {
     #[test]
     fn discovery_live_retention() -> TestResult {
         let fixture = DiscoveryFixture::new(RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 1_048_576,
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: Some(1_048_576),
         })?;
         fixture.accept(1)?;
         let owner = fixture.owner(Default::default())?;
@@ -1818,8 +1818,8 @@ mod tests {
     #[test]
     fn discovery_live_disabled() -> TestResult {
         let fixture = DiscoveryFixture::new(RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 1_048_576,
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: Some(1_048_576),
         })?;
         fixture.accept(1)?;
         assert_eq!(

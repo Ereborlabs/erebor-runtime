@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,8 @@ pub struct EvidenceIntakeOwner {
     store: crate::ControlStore,
     data: Arc<araphor_data::AnalysisStore>,
     clock: Arc<dyn IntakeClock>,
+    #[cfg(test)]
+    retention_checks: Option<tokio::sync::watch::Sender<()>>,
 }
 
 pub trait IntakeClock: Send + Sync {
@@ -121,16 +123,15 @@ impl EvidenceIntakeOwner {
     }
 
     pub(crate) async fn run_retention(&self) -> std::convert::Infallible {
-        let data = &self.data;
-        let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
-        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut after: Option<Vec<u8>> = None;
+        if !araphor_data::EvidenceRetentionOwner::new(&self.data).enabled() {
+            return std::future::pending().await;
+        }
+        let mut changes = self.data.subscribe_revision();
         let mut failed = false;
         loop {
-            timer.tick().await;
-            let data = data.clone();
+            changes.borrow_and_update();
+            let data = self.data.clone();
             let clock = self.clock.clone();
-            let cursor = after.clone();
             let result = tokio::task::spawn_blocking(move || -> crate::Result<_> {
                 let now = clock.now().duration_since(UNIX_EPOCH).map_err(|_| {
                     crate::error::InvalidConfigurationSnafu {
@@ -144,34 +145,71 @@ impl EvidenceIntakeOwner {
                     }
                     .build()
                 })?;
-                araphor_data::EvidenceRetentionOwner::new(&data)
-                    .sweep(cursor.as_deref(), now)
+                let instant = tokio::time::Instant::now();
+                let step = araphor_data::EvidenceRetentionOwner::new(&data)
+                    .step(now)
                     .map_err(|source| crate::Error::DataStore {
                         source: Box::new(source),
                         location: snafu::Location::default(),
+                    })?;
+                let deadline = step
+                    .next_deadline_utc_ns
+                    .map(|deadline| {
+                        instant
+                            .checked_add(Duration::from_nanos(deadline.saturating_sub(now)))
+                            .ok_or_else(|| {
+                                crate::error::InvalidConfigurationSnafu {
+                                    reason: "the retention deadline exceeds the timer range",
+                                }
+                                .build()
+                            })
                     })
+                    .transpose()?;
+                Ok((step, deadline))
             })
             .await;
-            match result {
-                Ok(Ok(sweep)) => {
-                    after = sweep.next_source;
+            let deadline = match result {
+                Ok(Ok((step, deadline))) => {
                     if failed {
                         erebor_telemetry::info!("data retention recovered");
                     }
                     failed = false;
+                    if step.more || *changes.borrow_and_update() > step.read_revision {
+                        continue;
+                    }
+                    deadline
                 }
                 Ok(Err(error)) => {
                     if !failed {
                         erebor_telemetry::warn!("data retention failed; intake has no retention guarantee", error = %error);
                     }
                     failed = true;
+                    None
                 }
                 Err(error) => {
                     if !failed {
                         erebor_telemetry::warn!("data retention worker failed", error = %error);
                     }
                     failed = true;
+                    None
                 }
+            };
+            #[cfg(test)]
+            if let Some(checks) = &self.retention_checks {
+                checks.send_replace(());
+            }
+            tokio::select! {
+                changed = changes.changed() => {
+                    if changed.is_err() {
+                        return std::future::pending().await;
+                    }
+                }
+                () = async {
+                    match deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => {}
             }
         }
     }
@@ -204,7 +242,13 @@ impl EvidenceIntakeOwner {
         data: Arc<araphor_data::AnalysisStore>,
         clock: Arc<dyn IntakeClock>,
     ) -> Result<Self> {
-        Ok(Self { store, data, clock })
+        Ok(Self {
+            store,
+            data,
+            clock,
+            #[cfg(test)]
+            retention_checks: None,
+        })
     }
 
     #[must_use]
@@ -697,6 +741,8 @@ fn internal_status(error: crate::Error) -> Status {
 
 #[cfg(test)]
 mod tests {
+    mod retention;
+
     use prost::Message as _;
     use std::sync::Arc;
 

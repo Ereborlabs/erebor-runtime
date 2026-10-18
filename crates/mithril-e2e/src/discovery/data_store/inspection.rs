@@ -301,7 +301,14 @@ mod tests {
             serde_json::from_slice(&fs::read(recovered.output.join("result.json"))?)?;
         assert_eq!(current.sources[0].record_count, 301);
         assert_eq!(current.sources[0].last_cursor, 301);
-        let store = AnalysisStore::open(&root)?;
+        let store = AnalysisStore::open_with_limits(
+            &root,
+            araphor_data::RetentionLimitsV1 {
+                raw_max_age_ns: Some(24 * HOUR),
+                ..Default::default()
+            },
+            Default::default(),
+        )?;
         let mut read_bytes = MAX_INSPECT_BYTES;
         assert!(SourceProof::read(
             &store,

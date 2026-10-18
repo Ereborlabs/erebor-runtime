@@ -3554,8 +3554,8 @@ mod tests {
     fn analysis_extract_gaps() -> TestResult {
         let directory = tempfile::tempdir()?;
         let limits = RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 1024,
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: Some(1024),
         };
         let store = AnalysisStore::open_with_limits(
             directory.path().join("analysis"),
@@ -3940,8 +3940,8 @@ mod tests {
     fn analysis_extract_history() -> TestResult {
         let directory = tempfile::tempdir()?;
         let limits = RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 1,
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: Some(1),
         };
         let store = AnalysisStore::open_with_limits(
             directory.path().join("analysis"),

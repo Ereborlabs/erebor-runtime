@@ -717,7 +717,16 @@ impl ObservabilityQualification {
         tls: &crate::control_fixture::MtlsFixture,
         key: &ed25519_dalek::SigningKey,
     ) -> ProofResult<mithril_control::ControlPlane> {
+        Self::trace_control_limits(tls, key, Default::default())
+    }
+
+    fn trace_control_limits(
+        tls: &crate::control_fixture::MtlsFixture,
+        key: &ed25519_dalek::SigningKey,
+        retention: araphor_data::RetentionLimitsV1,
+    ) -> ProofResult<mithril_control::ControlPlane> {
         let mut config = tls.configuration()?;
+        config.data_retention = retention;
         config.trust = mithril_control::TrustGenerationV1 {
             generation: 1,
             bundle_digest: String::new(),

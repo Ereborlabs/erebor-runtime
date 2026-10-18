@@ -206,8 +206,8 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
         cutoff_cursor: 3,
     };
     let limits = RetentionLimitsV1 {
-        raw_max_age_ns: 50,
-        raw_max_bytes: 1024,
+        raw_max_age_ns: Some(50),
+        raw_max_bytes: Some(1024),
     };
     let apply = |store: &AnalysisStore, kind: &str| -> Result<()> {
         match kind {
@@ -631,8 +631,8 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
         }],
     };
     let limits = RetentionLimitsV1 {
-        raw_max_age_ns: 50,
-        raw_max_bytes: 1024,
+        raw_max_age_ns: Some(50),
+        raw_max_bytes: Some(1024),
     };
     if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
         let store =

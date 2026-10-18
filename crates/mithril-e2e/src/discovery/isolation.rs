@@ -54,7 +54,7 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]);
         let mut config = tls.configuration()?;
         config.discovery = enabled.then(araphor_data::DiscoveryConfigV1::default);
-        config.data_retention.raw_max_age_ns = 1;
+        config.data_retention.raw_max_age_ns = Some(1);
         config.trust.policy_issuer_sequence_epoch = 1;
         config.trust.policy_signers = vec![PolicySignerTrustV1 {
             signing_key_id: "trace-key".into(),

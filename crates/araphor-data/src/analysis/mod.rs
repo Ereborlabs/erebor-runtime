@@ -63,9 +63,9 @@ pub use progress::{PreparedProfile, MAX_RESULT_BYTES, MAX_RESULT_REFS};
 pub use quota::WitnessUsageV1;
 pub use raw::{AnalysisStreamIdentityV1, TraceOutputPageV1, TraceOutputReceiptV1};
 pub use read::AnalysisReadControl;
-pub use retention::{
-    EvidenceRetentionOwner, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1,
-};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use retention::RetentionResultV1;
+pub use retention::{EvidenceRetentionOwner, RetentionLimitsV1, RetentionStepV1};
 pub use retirement::ProcessorRetirementV1;
 pub use segment_file::{SegmentFile, MAX_EVIDENCE_SEGMENT_BYTES};
 pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceReadPermit, TraceStateV1};
@@ -73,7 +73,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceReadPermi
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
 pub(crate) const NATIVE_MEMORY_BYTES: usize = 128 * 1024 * 1024;
-pub const ANALYSIS_SCHEMA_VERSION: i64 = 23;
+pub const ANALYSIS_SCHEMA_VERSION: i64 = 24;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -247,13 +247,6 @@ impl AnalysisStore {
             }
             .fail();
         }
-        if retention.raw_max_age_ns == 0 || retention.raw_max_bytes == 0 {
-            return AnalysisStateSnafu {
-                path: root,
-                reason: "the raw retention limits must be positive".to_owned(),
-            }
-            .fail();
-        }
         let lease = connection::AnalysisLease::acquire(&root)?;
         let pending = root.join("restore.pending");
         match fs::symlink_metadata(&pending) {
@@ -382,7 +375,10 @@ impl AnalysisStore {
                     state VARCHAR NOT NULL CHECK (state IN ('Live', 'Deleting')),
                     sealed BOOLEAN NOT NULL,
                     committed_end UBIGINT NOT NULL,
-                    file_name VARCHAR NOT NULL
+                    file_name VARCHAR NOT NULL,
+                    first_cursor UBIGINT NOT NULL,
+                    last_cursor UBIGINT NOT NULL,
+                    last_intake_utc_ns UBIGINT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS coverage (
                     stream_key BLOB NOT NULL,
@@ -525,7 +521,7 @@ impl AnalysisStore {
                 operation: "commit schema",
             })?;
         }
-        let raw = Self::recover_segments(&mut writer, &root)?;
+        let raw = Self::recover_segments(&mut writer, &root, retention)?;
         let meta = Self::read_meta_from(&writer, &path)?;
         let (revision, _) = watch::channel(meta.commit_revision);
         let (activations, _) = watch::channel(meta.commit_revision);
@@ -617,6 +613,7 @@ impl AnalysisStore {
 
     fn require_retention(&self) -> Result<()> {
         if !self.retention_healthy() {
+            self.revision.send_modify(|_| {});
             self.require_capacity(true)?;
             return crate::RetentionUnavailableSnafu.fail();
         }

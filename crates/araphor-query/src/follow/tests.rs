@@ -72,11 +72,22 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(mut limits: Limits) -> Self {
+    fn new(limits: Limits) -> Self {
+        Self::open(limits, Default::default())
+    }
+
+    fn open(mut limits: Limits, retention: araphor_data::RetentionLimitsV1) -> Self {
         limits.extract_timeout = Duration::from_secs(5);
         limits.evaluate_timeout = Duration::from_secs(5);
         let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(AnalysisStore::open(directory.path().join("data")).unwrap());
+        let store = Arc::new(
+            AnalysisStore::open_with_limits(
+                directory.path().join("data"),
+                retention,
+                Default::default(),
+            )
+            .unwrap(),
+        );
         let engine = Engine::new(Arc::clone(&store), limits).unwrap();
         Self {
             engine,
@@ -1687,7 +1698,13 @@ async fn native_subscribe_execution() {
 
 #[tokio::test]
 async fn count_consumes_committed_changes() {
-    let fixture = Fixture::new(Limits::default());
+    let fixture = Fixture::open(
+        Limits::default(),
+        araphor_data::RetentionLimitsV1 {
+            raw_max_age_ns: Some(24 * 60 * 60 * 1_000_000_000),
+            ..Default::default()
+        },
+    );
     fixture.commit(&fixture.source, 1, 128, 1_000_000_000);
     let clock = TestClock::new(2_000_000_000);
     let mut subscription = fixture.subscribe(
@@ -1744,7 +1761,13 @@ async fn count_consumes_committed_changes() {
 
 #[tokio::test]
 async fn journal_keeps_residual_filter() {
-    let fixture = Fixture::new(Limits::default());
+    let fixture = Fixture::open(
+        Limits::default(),
+        araphor_data::RetentionLimitsV1 {
+            raw_max_age_ns: Some(24 * 60 * 60 * 1_000_000_000),
+            ..Default::default()
+        },
+    );
     fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
     let clock = TestClock::new(2_000_000_000);
     let mut subscription = fixture.subscribe(

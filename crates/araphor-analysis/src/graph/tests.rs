@@ -899,8 +899,8 @@ fn control_graph_required_registration_precedes_intake_without_discovery() -> Te
     let store = Arc::new(AnalysisStore::open_with_limits(
         directory.path().join("analysis"),
         RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 100_000,
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: Some(100_000),
         },
         Default::default(),
     )?);
@@ -957,8 +957,8 @@ fn control_graph_new_source_registration_preserves_pending_other_source() -> Tes
     let store = Arc::new(AnalysisStore::open_with_limits(
         directory.path().join("analysis"),
         RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 100_000,
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: Some(100_000),
         },
         Default::default(),
     )?);
@@ -1008,8 +1008,8 @@ fn control_graph_committed_revision_retry_late_expiry_and_restart() -> TestResul
     let store = Arc::new(AnalysisStore::open_with_limits(
         &path,
         RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 100_000,
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: Some(100_000),
         },
         Default::default(),
     )?);

@@ -10,8 +10,8 @@ fn packages_preserve_native_references() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let retention = RetentionLimitsV1 {
-        raw_max_age_ns: 1,
-        raw_max_bytes: 1024 * 1024,
+        raw_max_age_ns: Some(1),
+        raw_max_bytes: Some(1024 * 1024),
     };
     let store = AnalysisStore::open_with_limits(&root, retention, Default::default())?;
     let identity = EvidenceIntakeIdentityV1 {

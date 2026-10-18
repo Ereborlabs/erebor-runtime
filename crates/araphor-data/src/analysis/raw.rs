@@ -590,7 +590,7 @@ impl AnalysisStore {
                     .get(&source.key())
                     .map_or(0, |source| source.receipt.floor());
                 self.register_graph_locked(writer.get_mut()?, source, floor)?;
-                raw.refresh_budget(writer.get()?)?;
+                raw.refresh_budget(writer.get()?, self.retention)?;
                 self.raw_dirty.store(false, Ordering::Release);
             }
         }
@@ -773,16 +773,20 @@ impl AnalysisStore {
         }
         let required = raw.budget.required.contains_key(&key);
         if required {
-            if raw.budget.oldest.get(&key).is_some_and(|time| {
-                batch.intake_utc_ns.saturating_sub(*time) >= self.retention.raw_max_age_ns
+            if self.retention.raw_max_age_ns.is_some_and(|limit| {
+                raw.budget
+                    .oldest
+                    .get(&key)
+                    .is_some_and(|time| batch.intake_utc_ns.saturating_sub(*time) >= limit)
             }) {
                 return crate::ProtectedInputCapacitySnafu { resource: "age" }.fail();
             }
             let protected = raw.budget.protected.get(&tenant).copied().unwrap_or(0);
-            if protected
-                .checked_add(commit.body.len() as u64)
-                .is_none_or(|bytes| bytes > self.retention.raw_max_bytes)
-            {
+            if self.retention.raw_max_bytes.is_some_and(|limit| {
+                protected
+                    .checked_add(commit.body.len() as u64)
+                    .is_none_or(|bytes| bytes > limit)
+            }) {
                 return crate::ProtectedInputCapacitySnafu { resource: "bytes" }.fail();
             }
         }
@@ -850,19 +854,23 @@ impl AnalysisStore {
         raw.budget.trace_slots = trace_slots;
         raw.budget.trace_reserve = trace_reserve;
         if required {
-            *raw.budget.protected.entry(tenant).or_default() += body_bytes;
+            if self.retention.raw_max_bytes.is_some() {
+                *raw.budget.protected.entry(tenant).or_default() += body_bytes;
+            }
             let floor = raw.budget.required[&key];
             let contiguous = raw.sources[&key].receipt.cursor();
-            let oldest = prior_cursor
-                .max(floor)
-                .checked_add(1)
-                .filter(|first| *first <= contiguous)
-                .and_then(|first| {
-                    raw.ranges
-                        .range((key.clone(), first)..=(key.clone(), contiguous))
-                        .map(|(_, (revision, _))| raw.entries[revision].commit.intake)
-                        .min()
-                });
+            let oldest = self.retention.raw_max_age_ns.and_then(|_| {
+                prior_cursor
+                    .max(floor)
+                    .checked_add(1)
+                    .filter(|first| *first <= contiguous)
+                    .and_then(|first| {
+                        raw.ranges
+                            .range((key.clone(), first)..=(key.clone(), contiguous))
+                            .map(|(_, (revision, _))| raw.entries[revision].commit.intake)
+                            .min()
+                    })
+            });
             if let Some(oldest) = oldest {
                 raw.budget
                     .oldest
@@ -1481,6 +1489,53 @@ impl RawJournal {
             next = end;
         }
         Ok(gaps)
+    }
+
+    pub(super) fn segment_entries(
+        &self,
+        id: u64,
+        first: u64,
+        last: u64,
+        intake: u64,
+        end: u64,
+    ) -> Result<Vec<&RawEntry>> {
+        if first == 0 || first > last || intake == 0 || end == 0 {
+            return Err(self.invalid("the retention segment bounds are invalid"));
+        }
+        let segment = self
+            .segments
+            .get(&id)
+            .ok_or_else(|| self.invalid("the retention segment is absent"))?;
+        let revisions: std::collections::BTreeSet<_> = self
+            .ranges
+            .range((segment.source.clone(), first)..=(segment.source.clone(), last))
+            .map(|(_, (revision, _))| *revision)
+            .filter(|revision| self.entries[revision].reference.id == id)
+            .collect();
+        let entries: Vec<_> = revisions
+            .iter()
+            .map(|revision| &self.entries[revision])
+            .collect();
+        let identity = &entries
+            .first()
+            .ok_or_else(|| self.invalid("the retention segment has no entries"))?
+            .identity;
+        let mut bytes = SegmentFile::encode_raw(identity)?.len() as u64;
+        let mut bounds = (u64::MAX, 0, 0);
+        for entry in &entries {
+            bytes = bytes
+                .checked_add(entry.frame_bytes as u64)
+                .ok_or_else(|| self.invalid("the retention frame bytes overflow"))?;
+            for span in &entry.commit.spans {
+                bounds.0 = bounds.0.min(span.first);
+                bounds.1 = bounds.1.max(span.last);
+            }
+            bounds.2 = bounds.2.max(entry.commit.intake);
+        }
+        if bounds != (first, last, intake) || bytes != end || end != segment.end {
+            return Err(self.invalid("the retention metadata differs from the durable segment"));
+        }
+        Ok(entries)
     }
 
     pub(super) fn forget_segments(&mut self, ids: impl IntoIterator<Item = u64>) -> Result<()> {
@@ -2495,7 +2550,7 @@ pub(super) mod tests {
         let store = AnalysisStore::open_with_limits(
             directory.path().join("data"),
             crate::RetentionLimitsV1 {
-                raw_max_age_ns: 50,
+                raw_max_age_ns: Some(50),
                 ..Default::default()
             },
             Default::default(),
@@ -2575,7 +2630,7 @@ pub(super) mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("data");
         let limits = RetentionLimitsV1 {
-            raw_max_age_ns: 50,
+            raw_max_age_ns: Some(50),
             ..Default::default()
         };
         let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
@@ -2620,8 +2675,12 @@ pub(super) mod tests {
         }
         assert_eq!(last.frames, batch.frames);
         assert_eq!(last.terminal, terminal.terminal);
-        let removed = EvidenceRetentionOwner::new(&store)
-            .retain_trace(identity, 116 + limits.raw_max_age_ns)?;
+        let removed = EvidenceRetentionOwner::new(&store).retain_trace(
+            identity,
+            116 + limits
+                .raw_max_age_ns
+                .ok_or("the configured age is absent")?,
+        )?;
         assert_eq!((removed.removed_records, removed.retained_floor), (15, 15));
         drop(store);
         let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;

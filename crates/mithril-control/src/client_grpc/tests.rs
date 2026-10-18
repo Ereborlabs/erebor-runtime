@@ -34,6 +34,13 @@ impl Fixture {
     }
 
     fn with_config(config: ClientGrpcConfig) -> TestResult<Self> {
+        Self::with_retention(config, Default::default())
+    }
+
+    fn with_retention(
+        config: ClientGrpcConfig,
+        retention: araphor_data::RetentionLimitsV1,
+    ) -> TestResult<Self> {
         let directory = TempDir::new()?;
         let key = SigningKey::from_bytes(&[23; 32]);
         let trust = TrustGenerationV1 {
@@ -47,10 +54,16 @@ impl Fixture {
             }],
         }
         .with_computed_bundle_digest();
-        let control = ControlPlane::with_control_store(
+        let store = ControlStore::open(directory.path().join("control"))?;
+        let data = Arc::new(araphor_data::AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            retention,
+            Default::default(),
+        )?);
+        let control = ControlPlane::from_intake(
             Vec::new(),
             trust,
-            ControlStore::open(directory.path().join("control"))?,
+            crate::EvidenceIntakeOwner::new(store, data, Arc::new(crate::SystemIntakeClock))?,
         )?
         .with_trace_signer("trace-key".into(), 1, key)?;
         let auth = crate::client_auth::tests::owner()?;
@@ -1260,7 +1273,13 @@ async fn observability_grpc_trace_bookmark() -> TestResult {
 
 #[tokio::test]
 async fn observability_grpc_trace_stream() -> TestResult {
-    let fixture = Fixture::new()?;
+    let fixture = Fixture::with_retention(
+        ClientGrpcConfig::default(),
+        araphor_data::RetentionLimitsV1 {
+            raw_max_age_ns: Some(24 * 60 * 60 * 1_000_000_000),
+            ..Default::default()
+        },
+    )?;
     let engine = &fixture.service.data()?.query;
     let memory = engine.memory().clone();
     let capacity = engine.limits().output_capacity;

@@ -345,29 +345,6 @@ impl AnalysisStore {
         storage.check_revisions(revisions, tenant_revisions)
     }
 
-    pub(super) fn logical_pressure(
-        &self,
-        transaction: &Transaction<'_>,
-        tenant: [u8; 16],
-    ) -> Result<bool> {
-        if self.storage.logical_max_bytes.is_none() && self.storage.tenant_max_bytes.is_none() {
-            return Ok(false);
-        }
-        let (total, scoped, _, _) = Self::logical_usage(transaction, tenant)?;
-        let pressure = |limit: u64, bytes| {
-            let allowance = limit - limit / 4;
-            bytes >= allowance - allowance / 10
-        };
-        Ok(self
-            .storage
-            .logical_max_bytes
-            .is_some_and(|limit| pressure(limit, total))
-            || self
-                .storage
-                .tenant_max_bytes
-                .is_some_and(|limit| pressure(limit, scoped)))
-    }
-
     pub(super) fn check_witnesses(
         &self,
         transaction: &Transaction<'_>,
@@ -668,7 +645,7 @@ mod tests {
     fn analysis_store_witness_limits() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
-        let mut store = AnalysisStore::open(&root)?;
+        let mut store = AnalysisStore::open_retention(&root)?;
         let identity = EvidenceIntakeIdentityV1 {
             node_id: "n".repeat(128),
             ..crate::analysis::tests::identity()
@@ -921,7 +898,7 @@ mod tests {
         );
         AnalysisStore::validate_state(store.writer()?.get()?, &store.root)?;
         drop(store);
-        let store = AnalysisStore::open(&root)?;
+        let store = AnalysisStore::open_retention(&root)?;
         assert_eq!(
             store.writer()?.get()?.query_row(
                 &format!(
@@ -942,8 +919,8 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let limits = crate::RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 32 * 1024 * 1024,
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: Some(32 * 1024 * 1024),
         };
         let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let identity = EvidenceIntakeIdentityV1 {

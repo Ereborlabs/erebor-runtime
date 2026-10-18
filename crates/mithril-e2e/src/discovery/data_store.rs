@@ -658,7 +658,15 @@ impl DataStoreQualification {
             .policy_document(&policy_id)?
             .ok_or("policy was not committed")?;
         let clock = Arc::new(TestClock(AtomicU64::new(START)));
-        let data = Arc::new(AnalysisStore::open(&data_root)?);
+        let retention = araphor_data::RetentionLimitsV1 {
+            raw_max_age_ns: Some(24 * HOUR),
+            ..Default::default()
+        };
+        let data = Arc::new(AnalysisStore::open_with_limits(
+            &data_root,
+            retention,
+            Default::default(),
+        )?);
         let stale_path = backup_root.join("stale");
         data.backup(&stale_path)?;
         let intake = EvidenceIntakeOwner::new(control.clone(), data.clone(), clock.clone())?;
@@ -864,7 +872,7 @@ impl DataStoreQualification {
         drop(control);
 
         let control = reopen_control_store(&control_root).await?;
-        let data = Arc::new(Self::reopen_data(&data_root).await?);
+        let data = Arc::new(Self::reopen_with_retention(&data_root, retention).await?);
         self.check(
             data.meta()? == before && data.source_status(&identity)? == Some(status),
             "restart changed identity, receipt, coverage, or count",
@@ -1209,11 +1217,18 @@ impl DataStoreQualification {
     }
 
     pub(super) async fn reopen_data(root: &Path) -> Result<AnalysisStore> {
+        Self::reopen_with_retention(root, Default::default()).await
+    }
+
+    async fn reopen_with_retention(
+        root: &Path,
+        retention: araphor_data::RetentionLimitsV1,
+    ) -> Result<AnalysisStore> {
         Ok(crate::physical::wait_for_async(
             root,
             "the stopped server to release its data lease",
             Duration::from_secs(5),
-            || match AnalysisStore::open(root) {
+            || match AnalysisStore::open_with_limits(root, retention, Default::default()) {
                 Err(araphor_data::Error::AnalysisState { reason, .. })
                     if reason.starts_with("the analysis writer is already owned:") =>
                 {
@@ -1643,7 +1658,14 @@ mod tests {
                     .spawn()?;
                 let exit = tokio::time::timeout(Duration::from_secs(10), child.wait()).await??;
                 assert_eq!(exit.code(), Some(73));
-                let data = AnalysisStore::open(&root)?;
+                let data = AnalysisStore::open_with_limits(
+                    &root,
+                    araphor_data::RetentionLimitsV1 {
+                        raw_max_age_ns: result.then_some(24 * HOUR),
+                        ..Default::default()
+                    },
+                    Default::default(),
+                )?;
                 if kind == "metadata" {
                     assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
                     assert_eq!(data.read_page(&scope.identity, 1)?.records.len(), 2);
@@ -1986,13 +2008,14 @@ mod tests {
         }
 
         async fn wait_capacity(data: &AnalysisStore) -> Result<()> {
+            let mut changes = data.subscribe_revision();
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     let health = data.storage_health()?;
                     if health.write_ready && health.retention_healthy && health.intake_capacity {
-                        break Ok::<_, araphor_data::Error>(());
+                        break Ok::<_, Box<dyn StdError>>(());
                     }
-                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    changes.changed().await?;
                 }
             })
             .await??;
@@ -2128,7 +2151,7 @@ mod tests {
                 assert!(matches!(padding.write_all(b"full"),
                     Err(error) if error.raw_os_error() == Some(libc::ENOSPC)));
                 assert!(matches!(
-                    EvidenceRetentionOwner::new(&data).sweep(None, START),
+                    EvidenceRetentionOwner::new(&data).step(START),
                     Err(araphor_data::Error::StorageCapacity {
                         resource: "filesystem reserve",
                         ..
@@ -2254,14 +2277,14 @@ mod tests {
             } else {
                 assert_eq!(source.code(), tonic::Code::ResourceExhausted);
             }
-            assert!(!changed.has_changed()?);
+            assert_eq!(*changed.borrow(), before.commit_revision);
             assert_eq!(observations.pending_evidence_records(), 1);
             assert_eq!(data.storage_health()?.write_ready, !native);
             connection.policy_inventory(None, Vec::new()).await?;
             if native {
                 data.recover()?;
                 assert!(data.storage_health()?.write_ready);
-                assert!(!changed.has_changed()?);
+                assert!(changed.has_changed()?);
             }
             assert_eq!(data.meta()?, before);
             assert_eq!(data.source_status(&identity)?, status);
@@ -2272,6 +2295,9 @@ mod tests {
             connection.policy_inventory(None, Vec::new()).await?;
             padding.set_len(0)?;
             padding.sync_all()?;
+            if disk.is_some() {
+                data.recover()?;
+            }
             let restored = AnalysisStore::restore(&backup_path, &backup_root.join("retry"))?;
             assert_eq!(restored.meta()?, saved_meta);
             assert_eq!(restored.meta()?.commit_revision, manifest.commit_revision);
@@ -2678,12 +2704,15 @@ mod tests {
             } else {
                 config.data_storage.policy_reserve_bytes = Some(u64::MAX / 4);
             }
+            if seeded {
+                config.data_retention.raw_max_age_ns = Some(24 * HOUR);
+            }
             let parts = config.into_parts()?;
             assert!(parts.data_error.is_none());
             let data = parts.control.analysis_store().ok_or("data owner absent")?;
             if seeded {
                 assert!(matches!(
-                    EvidenceRetentionOwner::new(&data).sweep(None, START),
+                    EvidenceRetentionOwner::new(&data).step(START),
                     Err(araphor_data::Error::StorageCapacity {
                         resource: "filesystem reserve",
                         ..
@@ -2720,7 +2749,7 @@ mod tests {
             }
             assert_eq!(observations.pending_evidence_records(), 1);
             assert_eq!(data.meta()?, before);
-            assert!(!changed.has_changed()?);
+            assert_eq!(*changed.borrow(), before.commit_revision);
             connection.policy_inventory(None, Vec::new()).await?;
             drop(connection);
             server.shutdown().await?;

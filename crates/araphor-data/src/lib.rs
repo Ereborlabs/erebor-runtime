@@ -38,6 +38,8 @@ pub use trace::{
 };
 pub use workload::{ContainerKindV1, KubernetesWorkloadIdentityV1, WorkloadTargetFactV1};
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use analysis::RetentionResultV1;
 pub use analysis::{
     AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisContextKeyV1, AnalysisContextRefV1,
     AnalysisContextVersionV1, AnalysisExtractLimits, AnalysisExtractionV1, AnalysisGapV1,
@@ -49,10 +51,10 @@ pub use analysis::{
     AnalysisStreamIdentityV1, AnalysisTableRead, AnalysisTableRequests, AnalysisWitnessV1,
     ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1, ProcessorClassV1,
     ProcessorHealthV1, ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1,
-    RetentionLimitsV1, RetentionResultV1, RetentionSweepV1, SegmentFile, Selection,
-    StorageHealthV1, StorageLimitsV1, StorageUsageV1, StorePositionV1, TraceBindingV1,
-    TraceIntentPageV1, TraceIntentV1, TraceOutputPageV1, TraceOutputReceiptV1, TraceStateV1,
-    ValidatedCoverageV1, ValidatedEvidenceBatchV1, WitnessUsageV1, ANALYSIS_DUCKDB_BINDING_VERSION,
+    RetentionLimitsV1, RetentionStepV1, SegmentFile, Selection, StorageHealthV1, StorageLimitsV1,
+    StorageUsageV1, StorePositionV1, TraceBindingV1, TraceIntentPageV1, TraceIntentV1,
+    TraceOutputPageV1, TraceOutputReceiptV1, TraceStateV1, ValidatedCoverageV1,
+    ValidatedEvidenceBatchV1, WitnessUsageV1, ANALYSIS_DUCKDB_BINDING_VERSION,
     ANALYSIS_SQLPARSER_VERSION, MAX_EVIDENCE_SEGMENT_BYTES,
 };
 

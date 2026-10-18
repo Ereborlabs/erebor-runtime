@@ -386,7 +386,7 @@ mod tests {
             EvidenceStoreOutcomeV1::Accepted
         );
         drop(store);
-        let store = AnalysisStore::open(&root)?;
+        let store = AnalysisStore::open_retention(&root)?;
         assert_eq!(
             store.accept_validated_batch(source(2), batch())?,
             EvidenceStoreOutcomeV1::Accepted
@@ -395,7 +395,7 @@ mod tests {
         let store = AnalysisStore::open_with_limits(
             &root,
             RetentionLimitsV1 {
-                raw_max_age_ns: 1,
+                raw_max_age_ns: Some(1),
                 ..Default::default()
             },
             StorageLimitsV1 {
@@ -419,10 +419,11 @@ mod tests {
             })
         ));
         assert_eq!(store.meta()?, before);
-        let mut reader = store.reader()?;
-        let snapshot = reader.get_mut()?.transaction()?;
-        assert!(!store.logical_pressure(&snapshot, source(1).tenant_id)?);
-        snapshot.rollback()?;
+        let step = crate::EvidenceRetentionOwner::new(&store).step(100)?;
+        assert_eq!(step.removed_records, 0);
+        assert!(!step.more);
+        assert_eq!(step.next_deadline_utc_ns, Some(101));
+        assert_eq!(store.read_page(&source(2), 1)?.records.len(), 1);
         Ok(())
     }
 
@@ -698,7 +699,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let limits = RetentionLimitsV1 {
-            raw_max_age_ns: 100,
+            raw_max_age_ns: Some(100),
             ..Default::default()
         };
         let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;

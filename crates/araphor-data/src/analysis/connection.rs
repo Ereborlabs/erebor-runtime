@@ -161,7 +161,7 @@ impl AnalysisStore {
         }
         Self::validate_tables(&connection)?;
         Self::validate_state(&connection, &self.root)?;
-        let raw = Self::recover_segments(&mut connection, &self.root)?;
+        let raw = Self::recover_segments(&mut connection, &self.root, self.retention)?;
         let meta = Self::read_meta_from(&connection, &path)?;
         if meta.commit_revision < *self.revision.borrow() {
             return self.reject("the recovered store lost an accepted revision");
@@ -181,12 +181,9 @@ impl AnalysisStore {
         *readers[0] = Some(first);
         *readers[1] = Some(second);
         *writer = Some(connection);
-        let recovered = self.revision.send_if_modified(|revision| {
-            let changed = *revision != meta.commit_revision;
-            *revision = meta.commit_revision;
-            changed
-        });
+        let recovered = *self.revision.borrow() != meta.commit_revision;
         self.write_ready.store(true, Ordering::Release);
+        self.revision.send_replace(meta.commit_revision);
         if recovered {
             self.activations.send_replace(meta.commit_revision);
         }
@@ -314,7 +311,7 @@ impl AnalysisStore {
             self.project_raw(writer, &mut raw, control)?;
         }
         if !project && self.raw_dirty.load(Ordering::Acquire) {
-            raw.refresh_budget(writer)?;
+            raw.refresh_budget(writer, self.retention)?;
             self.raw_dirty.store(false, Ordering::Release);
         }
         drop(raw);
@@ -493,7 +490,7 @@ mod tests {
             assert!(!notice.has_changed()?);
             store.recover()?;
             assert!(store.storage_health()?.write_ready);
-            assert_eq!(notice.has_changed()?, applied);
+            assert!(notice.has_changed()?);
             assert_eq!(*notice.borrow(), u64::from(applied));
             let next: u64 = store.reader()?.get()?.query_row(
                 "SELECT next_segment_id FROM store_meta",
@@ -604,8 +601,8 @@ mod tests {
     fn analysis_store_snapshot_maintenance() -> TestResult {
         let directory = tempfile::tempdir()?;
         let limits = RetentionLimitsV1 {
-            raw_max_age_ns: 50,
-            raw_max_bytes: 100,
+            raw_max_age_ns: Some(50),
+            raw_max_bytes: Some(100),
         };
         let store = AnalysisStore::open_with_limits(
             directory.path().join("analysis"),

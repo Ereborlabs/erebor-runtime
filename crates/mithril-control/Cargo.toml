@@ -68,6 +68,7 @@ araphor-observability = { path = "../araphor-observability", features = ["test-s
 prost-types.workspace = true
 rcgen = "0.13.2"
 tempfile = "3.23.0"
+tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
 
 [[bin]]

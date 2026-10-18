@@ -107,7 +107,7 @@ impl AnalysisStore {
         let encoded = serde_json::to_string(ids).context(crate::JsonSnafu { path: root })?;
         let removals = writer
             .prepare(
-                "SELECT s.segment_id, s.file_name FROM segments s WHERE s.segment_id IN (SELECT unnest(CAST(? AS UBIGINT[])))
+                "SELECT s.segment_id, s.file_name, s.first_cursor, s.last_cursor, s.last_intake_utc_ns, s.committed_end FROM segments s WHERE s.segment_id IN (SELECT unnest(CAST(? AS UBIGINT[])))
                  AND s.state = 'Deleting'
                  AND NOT EXISTS (SELECT 1 FROM evidence_refs r WHERE r.segment_id = s.segment_id)
                  AND EXISTS (SELECT 1 FROM expired_ranges x WHERE x.segment_id = s.segment_id
@@ -116,7 +116,7 @@ impl AnalysisStore {
             )
             .context(AnalysisDatabaseSnafu { operation: "prepare recorded segment removals" })?
             .query_map(params![encoded], |row| {
-                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?))
+                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?, row.get::<_, u64>(2)?, row.get::<_, u64>(3)?, row.get::<_, u64>(4)?, row.get::<_, u64>(5)?))
             })
             .context(AnalysisDatabaseSnafu { operation: "check recorded segment removal" })?
             .collect::<duckdb::Result<Vec<_>>>()
@@ -132,34 +132,38 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare segment expiry coverage",
             })?;
-        for entry in raw
-            .entries
-            .values()
-            .filter(|entry| ids.contains(&entry.reference.id))
-        {
-            for span in &entry.commit.spans {
-                let expired: bool = expiry
-                    .query_row(
-                        params![
-                            entry.reference.id,
-                            entry.identity.key().as_slice(),
-                            entry.identity.tenant().as_slice(),
-                            span.first,
-                            span.last
-                        ],
-                        |row| row.get(0),
-                    )
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "check segment expiry coverage",
-                    })?;
-                if !expired {
-                    return Self::reject_path(root, "the removed segment has unrecorded expiry");
+        for (id, _, first, last, intake, end) in &removals {
+            if !raw.segments.contains_key(id) {
+                continue;
+            }
+            for entry in raw.segment_entries(*id, *first, *last, *intake, *end)? {
+                for span in &entry.commit.spans {
+                    let expired: bool = expiry
+                        .query_row(
+                            params![
+                                entry.reference.id,
+                                entry.identity.key().as_slice(),
+                                entry.identity.tenant().as_slice(),
+                                span.first,
+                                span.last
+                            ],
+                            |row| row.get(0),
+                        )
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "check segment expiry coverage",
+                        })?;
+                    if !expired {
+                        return Self::reject_path(
+                            root,
+                            "the removed segment has unrecorded expiry",
+                        );
+                    }
                 }
             }
         }
         drop(expiry);
         let current = raw.directory_current()?;
-        for (_, name) in removals {
+        for (_, name, _, _, _, _) in removals {
             let path = super::raw::RawJournal::file_path(root, &name)?;
             match fs::symlink_metadata(&path) {
                 Ok(metadata) => {
@@ -376,8 +380,8 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let limits = RetentionLimitsV1 {
-            raw_max_age_ns: 100,
-            raw_max_bytes: 64 * 1024 * 1024,
+            raw_max_age_ns: Some(100),
+            raw_max_bytes: Some(64 * 1024 * 1024),
         };
         let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let identity = source();

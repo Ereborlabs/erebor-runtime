@@ -33,6 +33,7 @@ impl AnalysisStore {
                 WHERE e.segment_id = 0 OR e.segment_id >= (SELECT next_segment_id FROM store_meta)
                 OR e.state NOT IN ('Live', 'Deleting') OR e.stream_kind <> s.kind
                 OR e.committed_end < 70 OR e.committed_end > 16777216
+                OR e.first_cursor = 0 OR e.last_cursor < e.first_cursor OR e.last_intake_utc_ns = 0
                 OR s.stream_key IS NULL OR e.tenant_id <> s.tenant_id
                 OR e.cpu_id IS DISTINCT FROM s.cpu_id OR e.identity_json <> s.identity_json"),
             ("invalid coverage source or size", "SELECT 1 FROM coverage c LEFT JOIN source_receipts s USING (stream_key)
@@ -513,7 +514,7 @@ impl AnalysisStore {
             "stream_key, identity_json, tenant_id, last_sequence, output_bytes, terminal, retained_floor, commit_revision FROM trace_receipts",
             "epoch_key, tenant_id, node_boot_id, label_epoch FROM source_bindings",
             "next_segment_id FROM store_meta",
-            "segment_id, stream_key, tenant_id, identity_json, cpu_id, stream_kind, state, sealed, committed_end FROM segments",
+            "segment_id, stream_key, tenant_id, identity_json, cpu_id, stream_kind, state, sealed, committed_end, first_cursor, last_cursor, last_intake_utc_ns FROM segments",
             "stream_key, tenant_id, revision, report, commit_revision, ordinal FROM coverage",
             "tenant_id, owner_id, entity_key, lifetime_key, owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision FROM context_versions",
             "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired, retirement_id, retirement_reason, retirement_cursor, retirement_revision, result_id FROM processor_progress",
@@ -855,6 +856,9 @@ mod tests {
             "UPDATE source_bindings SET label_epoch = 9",
             "UPDATE segments SET cpu_id = 9",
             "UPDATE segments SET committed_end = committed_end + 1",
+            "UPDATE segments SET first_cursor = first_cursor + 1",
+            "UPDATE segments SET last_cursor = last_cursor + 1",
+            "UPDATE segments SET last_intake_utc_ns = last_intake_utc_ns + 1",
             "DELETE FROM segments",
             "UPDATE store_meta SET next_segment_id = 1",
             "UPDATE evidence_refs SET durable_cursor = 2",

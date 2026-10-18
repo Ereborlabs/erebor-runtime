@@ -255,12 +255,6 @@ impl ControlConfig {
             }
         );
         ensure!(
-            self.data_retention.raw_max_age_ns > 0 && self.data_retention.raw_max_bytes > 0,
-            InvalidConfigurationSnafu {
-                reason: "data retention limits must be positive"
-            }
-        );
-        ensure!(
             self.control_store_directory
                 .as_ref()
                 .is_none_or(|path| path.is_absolute()),
@@ -442,6 +436,8 @@ mod tests {
         });
         fs::write(&path, serde_json::to_vec(&source)?)?;
         let config = ControlConfig::load(&path)?;
+        assert_eq!(config.data_retention.raw_max_age_ns, None);
+        assert_eq!(config.data_retention.raw_max_bytes, None);
         assert_eq!(config.evidence_admission.total_slots, 8);
         assert_eq!(config.evidence_admission.slots_per_node, 2);
         let parts = config.into_parts()?;

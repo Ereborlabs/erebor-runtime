@@ -6,8 +6,8 @@ fn control_graph_overlap_expiry() -> TestResult {
     let store = Arc::new(AnalysisStore::open_with_limits(
         directory.path().join("analysis"),
         RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 1_000_000,
+            raw_max_age_ns: Some(1),
+            raw_max_bytes: Some(1_000_000),
         },
         Default::default(),
     )?);

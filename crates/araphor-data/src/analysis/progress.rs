@@ -1193,8 +1193,8 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let limits = RetentionLimitsV1 {
-            raw_max_age_ns: 100,
-            raw_max_bytes: 64 * 1024 * 1024,
+            raw_max_age_ns: Some(100),
+            raw_max_bytes: Some(64 * 1024 * 1024),
         };
         let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let evidence = identity(1);

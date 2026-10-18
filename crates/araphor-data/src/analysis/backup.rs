@@ -205,7 +205,7 @@ impl AnalysisStore {
                 .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
             raw.seal_all()?;
             raw.project_paths(writer.get()?)?;
-            raw.refresh_budget(writer.get()?)?;
+            raw.refresh_budget(writer.get()?, self.retention)?;
         }
         let files = Self::backup_segments(writer.get()?)?;
         for (_, bytes, name) in &files {
@@ -261,7 +261,7 @@ impl AnalysisStore {
         }
         Self::validate_tables(&connection)?;
         Self::validate_state(&connection, &self.root)?;
-        Self::recover_segments(&mut connection, &self.root)?;
+        Self::recover_segments(&mut connection, &self.root, self.retention)?;
         Ok(connection)
     }
 

@@ -153,7 +153,14 @@ impl ClientFixture {
         let root = fs::canonicalize(root)?;
         let tls = MtlsFixture::in_directory(tempfile::tempdir_in(&root)?, false)?;
         let key = SigningKey::from_bytes(&[23; 32]);
-        let control = ObservabilityQualification::trace_control(&tls, &key)?;
+        let control = ObservabilityQualification::trace_control_limits(
+            &tls,
+            &key,
+            araphor_data::RetentionLimitsV1 {
+                raw_max_age_ns: (!browser).then_some(24 * 60 * 60 * 1_000_000_000),
+                ..Default::default()
+            },
+        )?;
         let store = control
             .analysis_store()
             .ok_or("client fixture data is absent")?;

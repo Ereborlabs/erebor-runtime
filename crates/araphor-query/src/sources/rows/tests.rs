@@ -745,7 +745,14 @@ fn retirement_map_charges_once() -> TestResult {
     };
 
     let directory = tempfile::tempdir()?;
-    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let store = Arc::new(AnalysisStore::open_with_limits(
+        directory.path().join("data"),
+        araphor_data::RetentionLimitsV1 {
+            raw_max_age_ns: Some(24 * 60 * 60 * 1_000_000_000),
+            ..Default::default()
+        },
+        Default::default(),
+    )?);
     let identity = EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],
         node_id: "retirement-budget".into(),

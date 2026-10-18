@@ -236,7 +236,11 @@ impl RawJournal {
 }
 
 impl AnalysisStore {
-    pub(super) fn recover_segments(writer: &mut Connection, root: &Path) -> Result<RawJournal> {
+    pub(super) fn recover_segments(
+        writer: &mut Connection,
+        root: &Path,
+        retention: super::RetentionLimitsV1,
+    ) -> Result<RawJournal> {
         Self::segment_directory(root)?;
         let deleting = {
             let mut statement = writer
@@ -278,7 +282,7 @@ impl AnalysisStore {
         raw.project(writer, None)?;
         raw.project_paths(writer)?;
         Self::validate_state(writer, root)?;
-        raw.refresh_budget(writer)?;
+        raw.refresh_budget(writer, retention)?;
         Ok(raw)
     }
 }
@@ -287,7 +291,7 @@ impl RawJournal {
     pub(super) fn validate_catalog(&self, writer: &Connection) -> Result<()> {
         let revision = AnalysisStore::read_meta_from(writer, &self.root)?.commit_revision;
         {
-            let mut statement = writer.prepare("SELECT segment_id, committed_end, identity_json, cpu_id, file_name, stream_kind FROM segments")
+            let mut statement = writer.prepare("SELECT segment_id, committed_end, identity_json, cpu_id, file_name, stream_kind, first_cursor, last_cursor, last_intake_utc_ns FROM segments")
                 .context(AnalysisDatabaseSnafu { operation: "prepare raw segment catalogue check" })?;
             let rows = statement
                 .query_map([], |row| {
@@ -298,23 +302,35 @@ impl RawJournal {
                         row.get::<_, Option<u32>>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
+                        row.get::<_, u64>(6)?,
+                        row.get::<_, u64>(7)?,
+                        row.get::<_, u64>(8)?,
                     ))
                 })
                 .context(AnalysisDatabaseSnafu {
                     operation: "read raw segment catalogue check",
                 })?;
-            let projected: BTreeMap<u64, _> = self
-                .entries
-                .range(..=revision)
-                .map(|(_, entry)| (entry.reference.id, entry))
-                .collect();
+            let mut projected = BTreeMap::new();
+            for entry in self.entries.range(..=revision).map(|(_, entry)| entry) {
+                let summary =
+                    projected
+                        .entry(entry.reference.id)
+                        .or_insert((entry, u64::MAX, 0, 0));
+                summary.0 = entry;
+                for span in &entry.commit.spans {
+                    summary.1 = summary.1.min(span.first);
+                    summary.2 = summary.2.max(span.last);
+                }
+                summary.3 = summary.3.max(entry.commit.intake);
+            }
             let mut seen = BTreeSet::new();
             for row in rows {
-                let (id, end, json, cpu, name, kind) = row.context(AnalysisDatabaseSnafu {
-                    operation: "decode raw segment catalogue check",
-                })?;
+                let (id, end, json, cpu, name, kind, first, last, intake) =
+                    row.context(AnalysisDatabaseSnafu {
+                        operation: "decode raw segment catalogue check",
+                    })?;
                 seen.insert(id);
-                let entry = projected
+                let (entry, saved_first, saved_last, saved_intake) = projected
                     .get(&id)
                     .ok_or_else(|| self.invalid("a catalogued raw segment is absent"))?;
                 let identity = RawIdentity::parse(&kind, &json, &self.root)?;
@@ -326,7 +342,10 @@ impl RawJournal {
                 let rotated = name.ends_with(".open")
                     && current.ends_with(".seg")
                     && name.split('.').take(2).eq(current.split('.').take(2));
-                if end != entry.reference.offset
+                if first != *saved_first
+                    || last != *saved_last
+                    || intake != *saved_intake
+                    || end != entry.reference.offset
                     || identity != entry.identity
                     || cpu != entry.commit.kind.cpu()
                     || (name != current && !rotated)
@@ -456,11 +475,15 @@ impl RawJournal {
         Ok(())
     }
 
-    pub(super) fn refresh_budget(&mut self, writer: &Connection) -> Result<()> {
+    pub(super) fn refresh_budget(
+        &mut self,
+        writer: &Connection,
+        limits: super::RetentionLimitsV1,
+    ) -> Result<()> {
         self.restore_receipts(writer)?;
         let mut budget = RawBudget::default();
         (budget.trace_reserve, budget.trace_slots) = AnalysisStore::terminal_reserve(writer)?;
-        {
+        if limits.raw_max_age_ns.is_some() || limits.raw_max_bytes.is_some() {
             let mut statement = writer.prepare("SELECT stream_key, MIN(consumed_cursor)::UBIGINT FROM processor_progress WHERE class = 'required' AND NOT retired GROUP BY stream_key")
                 .context(AnalysisDatabaseSnafu { operation: "prepare raw processor floors" })?;
             let rows = statement
@@ -560,29 +583,33 @@ impl RawJournal {
             .filter(|id| !ids.contains(id))
             .collect();
         self.forget_segments(removed)?;
-        for entry in self.entries.values() {
-            let key = entry.identity.key();
-            let Some(&floor) = budget.required.get(&key) else {
-                continue;
-            };
-            let contiguous = self.sources[&key].receipt.cursor();
-            for (index, span) in entry.commit.spans.iter().enumerate() {
-                if span.last <= floor {
+        if !budget.required.is_empty() {
+            for entry in self.entries.values() {
+                let key = entry.identity.key();
+                let Some(&floor) = budget.required.get(&key) else {
                     continue;
-                }
-                let consumed = if floor >= span.first {
-                    self.read_entry(entry)?.spans[index].ends[(floor - span.first) as usize]
-                } else {
-                    0
                 };
-                *budget.protected.entry(entry.identity.tenant()).or_default() +=
-                    u64::from(span.bytes - consumed);
-                if span.first <= contiguous {
-                    budget
-                        .oldest
-                        .entry(key.clone())
-                        .and_modify(|time| *time = (*time).min(entry.commit.intake))
-                        .or_insert(entry.commit.intake);
+                let contiguous = self.sources[&key].receipt.cursor();
+                for (index, span) in entry.commit.spans.iter().enumerate() {
+                    if span.last <= floor {
+                        continue;
+                    }
+                    if limits.raw_max_bytes.is_some() {
+                        let consumed = if floor >= span.first {
+                            self.read_entry(entry)?.spans[index].ends[(floor - span.first) as usize]
+                        } else {
+                            0
+                        };
+                        *budget.protected.entry(entry.identity.tenant()).or_default() +=
+                            u64::from(span.bytes - consumed);
+                    }
+                    if limits.raw_max_age_ns.is_some() && span.first <= contiguous {
+                        budget
+                            .oldest
+                            .entry(key.clone())
+                            .and_modify(|time| *time = (*time).min(entry.commit.intake))
+                            .or_insert(entry.commit.intake);
+                    }
                 }
             }
         }
@@ -649,9 +676,17 @@ impl RawJournal {
         for entry in &pending {
             let key = entry.identity.key();
             sources.entry(key).or_insert(entry.commit.revision);
-            segments.insert(entry.reference.id, *entry);
+            let summary = segments
+                .entry(entry.reference.id)
+                .or_insert((*entry, u64::MAX, 0, 0));
+            summary.0 = *entry;
+            for span in &entry.commit.spans {
+                summary.1 = summary.1.min(span.first);
+                summary.2 = summary.2.max(span.last);
+            }
+            summary.3 = summary.3.max(entry.commit.intake);
         }
-        for (id, entry) in segments {
+        for (id, (entry, first, last, intake)) in segments {
             let key = entry.identity.key();
             let json = entry.identity.json(&self.root)?;
             let prior: Option<u64> = transaction
@@ -671,13 +706,15 @@ impl RawJournal {
                 .ok_or_else(|| self.invalid("the raw segment name is invalid"))?;
             if prior.is_some() {
                 transaction.execute(
-                    "UPDATE segments SET committed_end = ?, file_name = ?, sealed = ? WHERE segment_id = ?",
-                    params![entry.reference.offset, name, !name.ends_with(".open"), id],
+                    "UPDATE segments SET committed_end = ?, file_name = ?, sealed = ?,
+                        first_cursor = LEAST(first_cursor, ?), last_cursor = GREATEST(last_cursor, ?),
+                        last_intake_utc_ns = GREATEST(last_intake_utc_ns, ?) WHERE segment_id = ?",
+                    params![entry.reference.offset, name, !name.ends_with(".open"), first, last, intake, id],
                 ).context(AnalysisDatabaseSnafu { operation: "advance projected raw segment" })?;
             } else {
                 transaction
                     .execute(
-                        "INSERT INTO segments VALUES (?, ?, ?, ?, ?, ?, 'Live', ?, ?, ?)",
+                        "INSERT INTO segments VALUES (?, ?, ?, ?, ?, ?, 'Live', ?, ?, ?, ?, ?, ?)",
                         params![
                             id,
                             key.as_slice(),
@@ -687,7 +724,10 @@ impl RawJournal {
                             entry.identity.kind(),
                             !name.ends_with(".open"),
                             entry.reference.offset,
-                            name
+                            name,
+                            first,
+                            last,
+                            intake,
                         ],
                     )
                     .context(AnalysisDatabaseSnafu {

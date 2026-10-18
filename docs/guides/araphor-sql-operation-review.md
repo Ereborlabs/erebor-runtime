@@ -112,6 +112,59 @@ all targets in Data and Analysis. The unchanged Rust source hashes, commands,
 and verification limits are in `/tmp/araphor-derived-usage-verification1.json`.
 The source count is a net 356 nonblank production Rust deletions.
 
+## Reactive retention
+
+[EvidenceIntakeOwner::run_retention](../../crates/mithril-control/src/evidence.rs) starts with a configured retention or logical pressure quota
+  -> [EvidenceRetentionOwner::step](../../crates/araphor-data/src/analysis/retention.rs) captures one bounded retention operation
+  -> [native selection](../../crates/araphor-data/src/analysis/retention.sql) selects eligible segments and calculates the next deadline
+  -> [RawJournal::segment_entries](../../crates/araphor-data/src/analysis/raw.rs) checks cursor bounds, intake times, and committed bytes
+  -> [retention owner](../../crates/araphor-data/src/analysis/retention.rs) compares the selected catalog identity with each journal identity
+  -> [retention commit](../../crates/araphor-data/src/analysis/retention.rs) records exact expired spans and advances replay and receipt floors
+  -> [remove_segments](../../crates/araphor-data/src/analysis/segments.rs) completes the existing physical deletion protocol
+  -> [Control](../../crates/mithril-control/src/evidence.rs) waits for a Data notice or the exact age or pin deadline
+
+[Retention failure](../../crates/mithril-control/src/evidence.rs) discards the old deadline
+  -> [require_retention](../../crates/araphor-data/src/analysis/mod.rs) rejects intake while health is false and sends a retry notice
+  -> [AnalysisStore::recover](../../crates/araphor-data/src/analysis/connection.rs) can request a pass without a new commit revision
+  -> [successful retention](../../crates/araphor-data/src/analysis/retention.rs) publishes restored health before its notice
+
+Retention age and byte quotas default to None. With no relevant configured
+quota, Control performs no clock read, dispatch, or selection SQL. The worker
+uses native Tokio watch and an exact deadline timer. It has no periodic retry.
+The final captured revision distinguishes concurrent writes from its own
+commit notice. A failure preserves a recovery notice that arrives during work.
+
+[Raw catalog publication](../../crates/araphor-data/src/analysis/raw_catalog.rs)
+maintains cursor bounds and the latest intake time on the existing segments
+table. These columns permit native selection without scanning every source's
+journal. Recovery checks the columns against actual journal entries. Native
+selection checks pins, required progress, and receipt bounds. Physical cleanup
+checks reference absence and exact expiry coverage before file removal.
+The bounded span array uses an existing bound-string SQL cast because the
+installed DuckDB binding cannot bind nested lists. No SQL text comes from the
+span values. No second span table or custom interval algorithm is added.
+
+[Data retention tests](../../crates/araphor-data/src/analysis/retention.rs)
+check optional and zero bounds, deadline overflow, pins, progress, cursor gaps,
+repair notices, continuation, and corrupt metadata. [Control tests](../../crates/mithril-control/src/evidence/tests/retention.rs)
+use native virtual time and completed-pass notices. They check disabled work,
+idle waits, exact expiry, and repair without timer retries.
+
+Selected qualification passes 119 distinct cases across Data, Control, Query,
+Analysis, Observability, and E2E. After the unused pressure helper is removed,
+the final focused Data rerun passes all 23 affected cases. The failed E2E case
+now configures its required finite age and passes with its assertions intact.
+Strict Clippy passes all targets in these six crates. The production check
+also passes with Data fixture features disabled. Scoped formatting, local
+links, and whitespace checks pass. The exact source and command record is
+`/tmp/araphor-reactive-retention-verification1.json`.
+
+The increment removes 29 nonblank production Rust lines, or 28 code lines
+when comments are excluded. The new SQL file adds 39 nonblank lines. The count
+is `/tmp/araphor-reactive-retention-count2.json`. Full workspace CI, benchmarks,
+quota-fill workloads, and physical Kubernetes checks are not run. Other
+polling owners and the complete redesign remain **Not done**.
+
 ## Subscription execution triggers
 
 Read [Progress](../../crates/araphor-query/src/stream/progress.rs) and the

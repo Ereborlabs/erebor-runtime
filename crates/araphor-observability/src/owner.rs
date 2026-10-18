@@ -560,7 +560,7 @@ mod tests {
         let store = Arc::new(AnalysisStore::open_with_limits(
             directory.path().join("data"),
             RetentionLimitsV1 {
-                raw_max_age_ns: 1,
+                raw_max_age_ns: Some(1),
                 ..Default::default()
             },
             Default::default(),

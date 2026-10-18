@@ -39,11 +39,11 @@ impl DataStoreQualification {
         let tls = MtlsFixture::new(false)?;
         let root = tls.path().join("analysis");
         let control = ControlStore::open(tls.path().join("control-store"))?;
-        let data = Arc::new(AnalysisStore::open_with_limits(
-            &root,
-            Default::default(),
-            limits,
-        )?);
+        let retention = araphor_data::RetentionLimitsV1 {
+            raw_max_age_ns: Some(24 * HOUR),
+            ..Default::default()
+        };
+        let data = Arc::new(AnalysisStore::open_with_limits(&root, retention, limits)?);
         let clock = Arc::new(TestClock(AtomicU64::new(START)));
         let intake = EvidenceIntakeOwner::new(control.clone(), data.clone(), clock.clone())?;
         let plane = tls.control_from_intake(intake, 1)?;
@@ -226,10 +226,10 @@ impl DataStoreQualification {
         data.commit_result(&result)?;
         let result_us = maintenance.elapsed().as_micros();
         clock.0.store(START + 25 * HOUR, Ordering::SeqCst);
-        let retention = EvidenceRetentionOwner::new(&data);
+        let owner = EvidenceRetentionOwner::new(&data);
         let maintenance = Instant::now();
         for _ in 0..16 {
-            retention.retain(&identity, START + 25 * HOUR)?;
+            owner.retain(&identity, START + 25 * HOUR)?;
             tokio::task::yield_now().await;
         }
         let retention_us = maintenance.elapsed().as_micros();
@@ -277,7 +277,7 @@ impl DataStoreQualification {
         let final_usage = data.storage_usage()?;
         drop(data);
         let restart = Instant::now();
-        let data = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        let data = AnalysisStore::open_with_limits(&root, retention, limits)?;
         let restart_us = restart.elapsed().as_micros();
         self.check(
             data.meta()? == meta

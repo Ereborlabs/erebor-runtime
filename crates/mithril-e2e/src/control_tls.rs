@@ -552,7 +552,19 @@ fn consumed_events_follow_retention() -> Result<(), Box<dyn StdError>> {
         framed_records: framed_records.into(),
         commit_group_tail: false,
     };
-    let intake = EvidenceIntakeOwner::try_from(store.clone())?;
+    let data = araphor_data::AnalysisStore::open_with_limits(
+        store.root().join("analysis"),
+        araphor_data::RetentionLimitsV1 {
+            raw_max_age_ns: Some(24 * 60 * 60 * 1_000_000_000),
+            ..Default::default()
+        },
+        Default::default(),
+    )?;
+    let intake = EvidenceIntakeOwner::new(
+        store.clone(),
+        Arc::new(data),
+        Arc::new(mithril_control::SystemIntakeClock),
+    )?;
     for cursor in 1..=3 {
         batch.first_cursor = cursor;
         assert_eq!(

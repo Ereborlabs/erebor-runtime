@@ -23,6 +23,7 @@ snafu.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]
+araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
 tempfile = "3.23.0"
 
 [lints]
