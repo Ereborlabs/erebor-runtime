@@ -7,6 +7,7 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 mod context;
 mod crash;
 mod evidence;
+mod image;
 mod input;
 mod lifecycle;
 mod output;

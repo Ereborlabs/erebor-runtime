@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use araphor_analysis_sdk::{DataType, Field, Model, Package, Port, Schema};
 use araphor_data::{
-    PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1, PackageRequestV1,
-    PackageResponseV1, SqlModelV1,
+    AnalysisReadControl, PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1,
+    PackageRequestV1, PackageResponseV1, SqlModelV1,
 };
 
 use super::*;
@@ -149,6 +149,7 @@ async fn package_rpc_authority_trust() -> TestResult {
 #[test]
 fn package_response_encoding() -> TestResult {
     let response = PackageResponseV1 {
+        image: None,
         scope_id: "test".into(),
         package_id: "api.fixture".into(),
         exports: Vec::new(),
@@ -160,5 +161,103 @@ fn package_response_encoding() -> TestResult {
         serde_json::from_slice::<serde_json::Value>(&bytes)?,
         serde_json::to_value(&response)?
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn image_rpc_install_is_not_execution() -> TestResult {
+    let fixture = Fixture::new()?;
+    let bundle = bundle();
+    let operation = PackageRequestV1::InstallImage {
+        bundle: bundle.clone(),
+    };
+    assert_eq!(
+        fixture
+            .package(operation.clone(), true)
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::PermissionDenied)
+    );
+    fixture
+        .service
+        .auth
+        .replace_package_managers(vec![crate::InvestigateGrant {
+            subject: "alice".into(),
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+        }])?;
+    assert_eq!(
+        fixture
+            .package(operation.clone(), false)
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::Unauthenticated)
+    );
+    assert_eq!(
+        fixture
+            .package(operation.clone(), true)
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::PermissionDenied)
+    );
+    fixture
+        .service
+        .auth
+        .replace_package_trust(vec![crate::PackageTrustPinV1 {
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+            bundle_digest: bundle.digest()?,
+        }])?;
+    let data = &fixture.service.data()?.store;
+    let activations = data.package_activation_page(None)?;
+    let selected = fixture.request(
+        proto::PackageOperationRequest {
+            definition: operation.encode()?,
+            selection: Some(proto::InputSelection {
+                node_ids: vec!["node-a".into()],
+                ..Default::default()
+            }),
+        },
+        true,
+    )?;
+    assert_eq!(
+        fixture
+            .service
+            .package_operation(selected)
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::InvalidArgument)
+    );
+    assert!(data
+        .package_image(
+            [1; 16],
+            &bundle.root.package_id,
+            None,
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+    let installed = fixture.package(operation.clone(), true).await?;
+    assert_eq!(installed.image, Some(bundle.metadata()?));
+    assert!(
+        installed.exports.is_empty() && installed.tests.is_empty() && installed.output.is_none()
+    );
+    assert_eq!(data.package_activation_page(None)?, activations);
+    let revision = *data.subscribe_revision().borrow();
+    fixture.package(operation, true).await?;
+    assert_eq!(*data.subscribe_revision().borrow(), revision);
+    fixture.service.auth.replace_package_managers(Vec::new())?;
+    let inspected = fixture
+        .package(
+            PackageRequestV1::InspectImage {
+                package_id: bundle.root.package_id.clone(),
+                revision: Some(bundle.root.revision.clone()),
+            },
+            false,
+        )
+        .await?;
+    assert_eq!(inspected.image, installed.image);
+    assert_eq!(data.package_activation_page(None)?, activations);
     Ok(())
 }

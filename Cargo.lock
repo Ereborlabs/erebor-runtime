@@ -288,6 +288,7 @@ version = "0.1.0"
 dependencies = [
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
+ "araphor-package",
  "arrow-ipc",
  "arrow-json",
  "crc32c",
@@ -297,7 +298,6 @@ dependencies = [
  "futures-core",
  "futures-util",
  "minicbor",
- "object 0.40.0",
  "prost",
  "prost-build",
  "rustix 1.1.4",
@@ -371,6 +371,21 @@ dependencies = [
  "snafu",
  "tempfile",
  "zerocopy",
+]
+
+[[package]]
+name = "araphor-package"
+version = "0.1.0"
+dependencies = [
+ "araphor-analysis-sdk",
+ "erebor-runtime-error",
+ "object 0.40.0",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
+ "tempfile",
 ]
 
 [[package]]

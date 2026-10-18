@@ -27,6 +27,28 @@ source states.
 
 ### Current user requirements
 
+The [feature parity TODO](araphor-feature-parity-todo.md) compares the accepted
+graph, SDK, package, Wasm, and native features with the current source. The
+user now requires three separate TODOs first: 14, the OCI package image;
+15, the Compose definition file; and 16, running Discovery instances. Complete
+them before parity items 1-13. A definition selects a package call,
+PRQL, or SQL with metadata. The
+[first deliverable](araphor-package-jobs.md#first-deliverable-definition-files-and-running-instances)
+records this priority and the common native SQL execution route.
+Existing package and detector code can be reused when it meets this design.
+The Discovery rewrite does not require a second package lifecycle owner.
+
+OCI image content, installation, and inspection: **Done**. The separate
+`araphor-package` crate reuses the existing OCI codec and SDK contracts. Data
+retains each installed image without an activation. Image installation starts
+no Discovery. The
+[review guide](../guides/araphor-binary-package-storage-review.md#image-installation-without-execution)
+records the source route and focused verification. Native Query package
+calls, definition files, and running instances remain **Not done**. This
+delivery adds 615 production Rust lines. The complete redesign adds 4,101
+from `7b7b407a`; the required reduction remains **Not done**. The count record
+is `/tmp/araphor-image-count1.json`. No speed result is claimed.
+
 On 2026-10-18, the user restates simplification, coherence, and real production
 Rust reduction as the main acceptance criteria. Every new execution path,
 including Discovery, must pass through native SQL parsing, native logical
@@ -1829,8 +1851,8 @@ required production reduction remain **Not done**. No speed result is claimed.
 
 Implementation and selected host verification: **Done**. Earlier results remain attached to their recorded source.
 
-[PackageArtifactV1::encode and from_bytes](../../crates/araphor-data/src/package/bundle.rs)
-use the existing [PackageOci](../../crates/araphor-data/src/package/oci.rs)
+[PackageArtifactV1::encode and from_bytes](../../crates/araphor-package/src/bundle.rs)
+use the existing [PackageOci](../../crates/araphor-package/src/oci.rs)
 metadata and raw-layer codec. The separate StoredArtifact CBOR codec is deleted.
 Complete bundle transport and retained artifacts use the same SDK OCI owner.
 The retained artifact contains its descriptor. Install, decode, and recovery

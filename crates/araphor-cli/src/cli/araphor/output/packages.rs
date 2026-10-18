@@ -11,6 +11,30 @@ impl Output {
         &self,
         mut response: PackageResponseV1,
     ) -> Result<Vec<u8>> {
+        if let Some(image) = &response.image {
+            if matches!(self.mode, OutputMode::Jsonl) {
+                return Self::json("image", image);
+            }
+            let mut text = format!(
+                "image\t{}\nrevision\t{}\ndigest\t{}\n",
+                Self::text(&image.root.package_id),
+                Self::text(&image.root.revision),
+                Self::text(&image.digest)
+            );
+            for artifact in &image.artifacts {
+                let descriptor =
+                    serde_json::to_string(&artifact.descriptor).context(EncodeSnafu)?;
+                let _ = writeln!(text, "descriptor\t{}", Self::text(&descriptor));
+                for implementation in &artifact.implementations {
+                    let metadata = serde_json::to_string(implementation).context(EncodeSnafu)?;
+                    let _ = writeln!(text, "implementation\t{}", Self::text(&metadata));
+                }
+                for fixture in &artifact.fixtures {
+                    let _ = writeln!(text, "fixture\t{}", Self::text(fixture));
+                }
+            }
+            return Ok(text.into_bytes());
+        }
         let output = response
             .output
             .take()
@@ -77,5 +101,40 @@ impl Output {
             );
         }
         Ok(text.into_bytes())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn image_output_metadata() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let image = araphor_analysis_back::AnalysisPackageOwner::required_bundles()
+            .into_iter()
+            .next()
+            .ok_or("package fixture absent")?
+            .metadata()?;
+        let response = PackageResponseV1 {
+            image: Some(image.clone()),
+            scope_id: String::new(),
+            package_id: image.root.package_id.clone(),
+            exports: Vec::new(),
+            tests: Vec::new(),
+            output: Some(Default::default()),
+        };
+        let bytes = Output::new(Some(OutputMode::Jsonl), false).package(response.clone())?;
+        let document: serde_json::Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(document["kind"], "image");
+        assert_eq!(document["frame"], serde_json::to_value(&image)?);
+        let bytes = Output::new(Some(OutputMode::Table), false).package(response)?;
+        let text = String::from_utf8(bytes)?;
+        assert!(text.contains(&format!("image\t{}\n", image.root.package_id)));
+        assert!(text.contains(&format!("revision\t{}\n", image.root.revision)));
+        assert!(text.contains(&format!("digest\t{}\n", image.digest)));
+        assert!(text.contains("descriptor\t"));
+        assert!(text.contains("implementation\t"));
+        assert!(!text.contains("\nactive\t"));
+        Ok(())
     }
 }

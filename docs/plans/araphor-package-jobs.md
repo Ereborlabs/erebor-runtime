@@ -48,7 +48,91 @@ The replacement and complete production Rust reduction remain **Not done**.
 The [subscription stream result](araphor-component-redesign.md#subscription-streams-and-shared-validation)
 records the fresh owner, compatible reuse, selected checks, and remaining work.
 
-### Immediate delivery order
+### First deliverable: definition files and running instances
+
+The user requires this work before the earlier feature parity TODOs. Implement
+the package, definition-file, and running-instance model first. The
+[parity TODO](araphor-feature-parity-todo.md#first-priority-todos)
+records three separate items: 14, the OCI package image; 15, the Discovery
+definition file; and 16, running Discovery instances. Complete them in that
+order. Items 1-13 remain later work. Reuse existing code needed
+for this deliverable; this priority does not require the complete earlier
+owner migration first.
+
+Keep three separate objects: the OCI package contains reusable code; the
+Discovery definition describes what to run; the running instance owns the
+subscription lifetime. Installing a package does not start a Discovery.
+
+The user authorizes the OCI image in a separate crate. The current delivery
+uses `araphor-package` for image content and the existing Data store for
+durable installation. Control and CLI image requests do not call a package
+executor. Image content, installation, inspection, and focused qualification
+are **Done**. Definition files and running instances
+remain **Not done**. Read the
+[image review](../guides/araphor-binary-package-storage-review.md#image-installation-without-execution)
+for the source route and verification limits.
+
+| Order | TODO | Result |
+| --- | --- | --- |
+| First | [14. OCI package image](araphor-feature-parity-todo.md#14-oci-package-image) | Reusable code with exact revisions and declared SDK contracts. Installation starts no Discovery. |
+| Next | [15. Compose file](araphor-feature-parity-todo.md#15-discovery-definition-file-compose-file) | Metadata and one package-call, PRQL, or SQL program. |
+| Then | [16. Running Discoveries](araphor-feature-parity-todo.md#16-running-discovery-instances) | Independent managed Query subscriptions with their own lifetime, progress, and saved state. |
+
+A definition contains metadata and selects one program form:
+
+| Program form | Definition input | Route to execution |
+| --- | --- | --- |
+| Package call | OCI package reference, export, input bindings, and parameters. | Resolve the exact installed implementation and form a native SQL call. |
+| PRQL | PRQL source or a referenced PRQL file. | Compile to SQL, then use native SQL admission. |
+| SQL | SQL source or a referenced SQL file. | Use native SQL admission directly. |
+
+All three forms use native SQL parsing, logical planning, optimization,
+physical planning, and execution. Reuse the installed evaluator and Query
+subscriptions. Add no separate execution engine or polling loop.
+
+Metadata can name and describe the definition and attach labels. Call
+bindings and parameters belong to the call site. SQL defines query windows;
+a declared window on a direct package call must reach the same SQL route.
+Execution permission comes from Control, not from metadata in the file.
+Resolve referenced source paths relative to the definition. Read those files
+when the definition is admitted; do not poll them for changes.
+
+An instance runs without a default lifetime cutoff until it is stopped,
+subject to current permission, cancellation, and execution failure. A client
+disconnect does not stop it. Restart restores its admitted definition, exact
+package revisions, and committed state and progress. Check current permission
+again. Missing retained input produces an explicit incomplete or unavailable
+result. Each instance has separate state; stopping one leaves the others
+running. Query supplies all data and window events without polling.
+
+```text
+An operator installs an OCI package
+  -> the package owner validates and retains its exact revision
+  -> no Discovery instance starts
+
+An operator starts a Discovery definition
+  -> the definition owner reads the selected program and metadata
+  -> SQL is admitted directly, PRQL compiles to SQL, or a package call forms SQL
+  -> native DataFusion plans and executes the admitted program
+  -> Query runs the managed subscription until it is stopped
+
+An operator stops one instance
+  -> Query stops that subscription and cancels its active work
+  -> other instances that use the same package continue
+```
+
+Acceptance: load package-call, PRQL, and SQL definitions and preserve their
+metadata. Prove all three reach native Query execution. Install a package
+without starting a Discovery. Start two instances with different inputs or
+parameters; stop one while the other continues. Preserve current permission,
+cancellation, saved-state, and buffer lifetime checks.
+
+This priority, the three separate TODOs, and the three program forms are
+current user requirements.
+They do not approve every controller, storage, checkpoint, or crate proposal
+in the earlier draft. Implementation: **Not done**.
+
+### Earlier native SQL delivery
 
 Add one new observed-effects package. Use native SQL projection, filtering,
 GROUP BY, COUNT, MIN, and MAX over the existing typed events source. Register

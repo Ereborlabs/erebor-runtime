@@ -1,5 +1,5 @@
 use super::*;
-use crate::package::tests::{bundle, TestResult};
+use crate::tests::{bundle, TestResult};
 
 #[test]
 fn raw_code_preserves_native_dependencies() -> TestResult {
@@ -19,13 +19,13 @@ fn raw_code_preserves_native_dependencies() -> TestResult {
         PackageImplementationV1::Native {
             export: "native".into(),
             artifact: vec![9, 8, 0, 255],
-            qualification: Some(crate::package::native::Qualification {
+            qualification: Some(crate::native::Qualification {
                 exports: vec!["native".into()],
                 target: "x86_64-unknown-linux-gnu".into(),
                 cpu_features: Vec::new(),
                 contract_version: 1,
                 system_libraries: Vec::new(),
-                dependencies: vec![crate::package::native::Dependency {
+                dependencies: vec![crate::native::Dependency {
                     name: "helper.so".into(),
                     artifact: (0_u8..=255).cycle().take(16 * 1024).collect(),
                     digest: "retained-exact-digest".into(),

@@ -40,52 +40,7 @@ impl AnalysisStore {
                 operation: "begin package installation",
             })?;
         let revision = self.package_next(&transaction)?;
-        let mut changed = false;
-        for package in revisions {
-            if let Some(existing) =
-                Self::package_from(&transaction, tenant, &package.package_id, &package.revision)?
-            {
-                if existing != *package {
-                    return AnalysisConflictSnafu.fail();
-                }
-                continue;
-            }
-            let dependencies = serde_json::to_string(&package.dependencies).context(JsonSnafu {
-                path: "<package-dependencies>",
-            })?;
-            transaction
-                .execute(
-                    "INSERT INTO package_revisions (tenant_id, package_id, revision, descriptor, artifact, dependencies, commit_revision)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        tenant.as_slice(),
-                        package.package_id,
-                        package.revision,
-                        package.descriptor,
-                        package.artifact,
-                        dependencies,
-                        revision
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert package revision",
-                })?;
-            changed = true;
-        }
-        for package in revisions {
-            for dependency in &package.dependencies {
-                if Self::package_from(
-                    &transaction,
-                    tenant,
-                    &dependency.package_id,
-                    &dependency.revision,
-                )?
-                .is_none()
-                {
-                    return self.reject("the locked package dependency is absent");
-                }
-            }
-        }
+        let changed = self.insert_package_revisions(&transaction, revisions, revision)?;
         let count: u64 = transaction
             .query_row(
                 "SELECT count(*) FROM package_revisions WHERE tenant_id = ?",
@@ -108,6 +63,64 @@ impl AnalysisStore {
         self.commit_metadata(transaction, "commit package installation")?;
         self.revision.send_replace(revision);
         Ok(())
+    }
+
+    pub(super) fn insert_package_revisions(
+        &self,
+        transaction: &Connection,
+        revisions: &[PackageRevisionV1],
+        revision: u64,
+    ) -> Result<bool> {
+        let mut changed = false;
+        for package in revisions {
+            if let Some(existing) = Self::package_from(
+                transaction,
+                package.tenant_id,
+                &package.package_id,
+                &package.revision,
+            )? {
+                if existing != *package {
+                    return AnalysisConflictSnafu.fail();
+                }
+                continue;
+            }
+            let dependencies = serde_json::to_string(&package.dependencies).context(JsonSnafu {
+                path: "<package-dependencies>",
+            })?;
+            transaction
+                .execute(
+                    "INSERT INTO package_revisions (tenant_id, package_id, revision, descriptor, artifact, dependencies, commit_revision)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    params![
+                        package.tenant_id.as_slice(),
+                        package.package_id,
+                        package.revision,
+                        package.descriptor,
+                        package.artifact,
+                        dependencies,
+                        revision
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "insert package revision",
+                })?;
+            changed = true;
+        }
+        for package in revisions {
+            for dependency in &package.dependencies {
+                if Self::package_from(
+                    transaction,
+                    package.tenant_id,
+                    &dependency.package_id,
+                    &dependency.revision,
+                )?
+                .is_none()
+                {
+                    return self.reject("the locked package dependency is absent");
+                }
+            }
+        }
+        Ok(changed)
     }
 
     pub(super) fn package_next(&self, reader: &Connection) -> Result<u64> {

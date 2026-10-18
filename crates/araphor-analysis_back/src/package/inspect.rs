@@ -101,6 +101,7 @@ impl AnalysisPackageOwner {
         }
         self.check(grant, Action::Inspect)?;
         Ok(PackageResponseV1 {
+            image: None,
             scope_id: scope.into(),
             package_id: package.into(),
             exports,
@@ -219,6 +220,7 @@ impl AnalysisPackageOwner {
         let dataset = sdk::wire::Dataset::encode(&query.data, &schema, model.limits)
             .context(crate::AnalysisContractSnafu)?;
         let mut response = PackageResponseV1 {
+            image: None,
             scope_id: scope.into(),
             package_id: package.into(),
             exports: Vec::new(),

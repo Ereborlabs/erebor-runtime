@@ -6,7 +6,7 @@ use tokio::sync::watch;
 
 use crate::{AnalysisSelectionV1, Result};
 
-use super::{PackageBundleRef, PackageBundleV1};
+use super::{PackageArtifactIdentityV1, PackageBundleRef, PackageBundleV1};
 
 mod request;
 
@@ -25,24 +25,6 @@ pub enum PackageErrorCodeV1 {
 impl PackageErrorCodeV1 {
     pub fn error(self, field: &'static str) -> crate::Error {
         crate::PackageSnafu { code: self, field }.build()
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackageArtifactIdentityV1 {
-    pub digest: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub closure_digest: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub platform: Option<String>,
-}
-
-impl PackageArtifactIdentityV1 {
-    pub fn allocated_bytes(&self) -> usize {
-        self.digest.capacity()
-            + self.closure_digest.as_ref().map_or(0, String::capacity)
-            + self.platform.as_ref().map_or(0, String::capacity)
     }
 }
 
@@ -209,6 +191,14 @@ pub trait PackageAuthorization: Send + Sync + 'static {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackageRequestV1 {
+    InstallImage {
+        #[serde(skip_serializing)]
+        bundle: PackageBundleV1,
+    },
+    InspectImage {
+        package_id: String,
+        revision: Option<String>,
+    },
     Install {
         scope_id: String,
         #[serde(skip_serializing)]
@@ -257,8 +247,10 @@ pub enum PackageRequestV1 {
 impl PackageRequestV1 {
     pub fn action(&self) -> PackageActionV1 {
         match self {
-            Self::Install { .. } => PackageActionV1::Install,
-            Self::Inspect { .. } | Self::Query { .. } => PackageActionV1::Inspect,
+            Self::InstallImage { .. } | Self::Install { .. } => PackageActionV1::Install,
+            Self::InspectImage { .. } | Self::Inspect { .. } | Self::Query { .. } => {
+                PackageActionV1::Inspect
+            }
             Self::Run { .. } => PackageActionV1::Run,
             Self::Update { .. } => PackageActionV1::Update,
             Self::Rollback { .. } => PackageActionV1::Rollback,
@@ -271,6 +263,8 @@ impl PackageRequestV1 {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageResponseV1 {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<araphor_package::PackageImageV1>,
     pub scope_id: String,
     pub package_id: String,
     pub exports: Vec<PackageExportStatusV1>,

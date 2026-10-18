@@ -32,7 +32,7 @@ fn package_context_retains_closure() -> TestResult {
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
     let bundle = bundle()?;
-    let revisions = bundle.revisions([1; 16])?;
+    let revisions = PackageRevisionV1::from_bundle(&bundle, [1; 16])?;
     let initial = store.meta()?;
     assert!(store
         .install_package(&revisions, || crate::AnalysisReadDeniedSnafu.fail())
@@ -43,7 +43,10 @@ fn package_context_retains_closure() -> TestResult {
         .is_none());
     store.install_package(&revisions, || Ok(()))?;
     let installed = store.meta()?;
-    store.install_package(&bundle.revisions([1; 16])?, || Ok(()))?;
+    store.install_package(
+        &PackageRevisionV1::from_bundle(&bundle, [1; 16])?,
+        || Ok(()),
+    )?;
     assert_eq!(store.meta()?, installed);
     let context = PackageBundleRef::new(&bundle)?.context([1; 16], "model", "rows")?;
     let reference = store.intern_context(&context)?;
@@ -105,7 +108,10 @@ fn package_context_tenant_scope() -> TestResult {
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let bundle = bundle()?;
     for tenant in [1, 2] {
-        store.install_package(&bundle.revisions([tenant; 16])?, || Ok(()))?;
+        store.install_package(
+            &PackageRevisionV1::from_bundle(&bundle, [tenant; 16])?,
+            || Ok(()),
+        )?;
     }
     let context = PackageBundleRef::new(&bundle)?.context([2; 16], "model", "rows")?;
     store.intern_context(&context)?;
@@ -131,7 +137,10 @@ fn package_context_checks_artifact() -> TestResult {
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
     let bundle = bundle()?;
-    store.install_package(&bundle.revisions([1; 16])?, || Ok(()))?;
+    store.install_package(
+        &PackageRevisionV1::from_bundle(&bundle, [1; 16])?,
+        || Ok(()),
+    )?;
     let context = PackageBundleRef::new(&bundle)?.context([1; 16], "model", "rows")?;
     let original: serde_json::Value = serde_json::from_slice(&context.body)?;
     let initial = store.meta()?;

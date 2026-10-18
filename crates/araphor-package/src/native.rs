@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::IntoError as _;
 
-use super::PackageErrorCodeV1 as Code;
+use super::ErrorCode as Code;
 use crate::Result;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

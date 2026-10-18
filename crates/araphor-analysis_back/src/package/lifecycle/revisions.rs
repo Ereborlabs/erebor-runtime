@@ -14,7 +14,7 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         artifact: &PackageArtifactV1,
     ) -> Result<PackageRevisionV1> {
-        let mut revision = artifact.revision_metadata(grant.selection.tenant_id)?;
+        let mut revision = PackageRevisionV1::from_artifact(artifact, grant.selection.tenant_id)?;
         let saved = self.store.package_revision(
             revision.tenant_id,
             &revision.package_id,
@@ -38,7 +38,7 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         artifact: &PackageArtifactV1,
     ) -> Result<PackageRevisionV1> {
-        let mut revision = artifact.revision_metadata(grant.selection.tenant_id)?;
+        let mut revision = PackageRevisionV1::from_artifact(artifact, grant.selection.tenant_id)?;
         revision.artifact = artifact.encode()?;
         Ok(revision)
     }

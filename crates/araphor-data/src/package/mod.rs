@@ -1,17 +1,18 @@
-mod admission;
 mod bundle;
 mod formats;
 mod model;
-pub mod native;
-mod oci;
 mod parameters;
 mod provenance;
 
-pub use admission::ModelRef;
+pub use araphor_package::{
+    native, Dependency, LibraryRequirement, ModelRef, PackageArtifactIdentityV1, PackageArtifactV1,
+    PackageBundleV1, PackageFixtureV1, PackageImageArtifactV1, PackageImageImplementationV1,
+    PackageImageV1, PackageImplementationV1, PackageRefV1, Qualification, SqlModelV1, SqlReasonV1,
+};
+pub use araphor_package::{Error as PackageImageError, ErrorCode as PackageImageErrorCode};
 pub use bundle::*;
 pub use formats::*;
 pub use model::*;
-pub use native::{Dependency, LibraryRequirement, Qualification};
 pub use parameters::decode_parameters;
 pub(crate) use provenance::NativePackageContext;
 

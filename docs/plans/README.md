@@ -23,9 +23,14 @@ master plan invented for them.
 
 - [Araphor packages and managed jobs](araphor-package-jobs.md) records the
   current native SQL pipeline, reactive execution, new Discovery packages,
-  and code reduction criteria. Earlier controller and storage proposals in
+  and code reduction criteria. Definition files and running instances are the
+  first required work, recorded as three separate TODOs: OCI image, Compose
+  file, and running Discoveries. Definitions support package calls, PRQL, and SQL
+  with metadata. Earlier controller and storage proposals in
   that file remain draft material. The first native SQL package and selected
-  query-RPC proof pass. The complete replacement remains open.
+  query-RPC proof pass. OCI image storage and installation now pass focused
+  qualification. Image installation creates no activation. Definition files,
+  running instances, and the complete replacement remain open.
 - [Araphor performance simplification TODO](araphor-performance-simplification-todo.md) —
   the user approves all 17 source-audit items. The file records implementation
   and verification status for each item.
@@ -33,6 +38,9 @@ master plan invented for them.
   approves one Arrow query operation and retained package admission. DataFusion
   replaces query execution. DuckDB retains durable storage. The source studies
   and coherence review are complete; implementation and parity remain open.
+- [Araphor Query and Analysis feature parity TODO](araphor-feature-parity-todo.md)
+  compares the accepted graph, SDK, package, Wasm, and native features with
+  current callers. It lists preserved behavior and the remaining restorations.
 - [Araphor Data test runtime reduction](araphor-data-test-runtime-reduction.md) —
   the seven approved corrections and final Rust qualification are complete.
   The record preserves the complete inventory and observed timing limits.

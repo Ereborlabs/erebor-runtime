@@ -82,6 +82,12 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl From<araphor_data::PackageImageError> for Error {
+    fn from(source: araphor_data::PackageImageError) -> Self {
+        Self::from(araphor_data::Error::from(source))
+    }
+}
+
 impl Error {
     pub(crate) fn missing_input(&self) -> Option<&'static str> {
         let mut current: Option<&(dyn std::error::Error + 'static)> = Some(self);

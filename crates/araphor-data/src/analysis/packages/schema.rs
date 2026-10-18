@@ -15,6 +15,11 @@ impl AnalysisStore {
             commit_revision UBIGINT NOT NULL,
             PRIMARY KEY (tenant_id, package_id, revision)
         );
+        CREATE TABLE IF NOT EXISTS package_images (
+            tenant_id BLOB NOT NULL, package_id VARCHAR NOT NULL, revision VARCHAR NOT NULL,
+            digest VARCHAR NOT NULL, commit_revision UBIGINT NOT NULL,
+            PRIMARY KEY (tenant_id, package_id, revision)
+        );
         CREATE TABLE IF NOT EXISTS package_activations (
             tenant_id BLOB NOT NULL, scope_id VARCHAR NOT NULL, package_id VARCHAR NOT NULL,
             export_name VARCHAR NOT NULL, revision VARCHAR NOT NULL, generation UBIGINT NOT NULL,
@@ -43,6 +48,8 @@ impl AnalysisStore {
         SELECT tenant_id, 256 + octet_length(encode(package_id)) + octet_length(encode(revision))
             + octet_length(descriptor) + octet_length(artifact) + octet_length(encode(dependencies)) AS bytes
             FROM package_revisions
+        UNION ALL SELECT tenant_id, 256 + octet_length(encode(package_id)) + octet_length(encode(revision))
+            + octet_length(encode(digest)) FROM package_images
         UNION ALL SELECT tenant_id, 256 + octet_length(encode(scope_id)) + octet_length(encode(package_id))
             + octet_length(encode(export_name)) + octet_length(encode(revision))
             + COALESCE(octet_length(encode(result_id)), 0) + octet_length(encode(grant_id)) + octet_length(metadata)
@@ -58,14 +65,19 @@ impl AnalysisStore {
             FROM package_dependencies";
 
     pub(in crate::analysis) fn validate_packages(writer: &Connection, root: &Path) -> Result<()> {
-        let revision_query =
-            "SELECT 1 FROM package_revisions WHERE octet_length(tenant_id) <> 16
-                OR length(package_id) NOT BETWEEN 1 AND 256 OR length(revision) NOT BETWEEN 1 AND 4096
-                OR octet_length(encode(dependencies)) > 1048576 OR octet_length(descriptor) = 0
+        let revision_query = "SELECT 1 FROM package_revisions WHERE octet_length(tenant_id) <> 16
+                OR length(package_id) = 0 OR length(revision) = 0
+                OR octet_length(descriptor) = 0
                 OR octet_length(artifact) = 0 OR commit_revision = 0
                 OR commit_revision > (SELECT commit_revision FROM store_meta)";
         for (reason, query) in [
             ("invalid retained package revision", revision_query),
+            ("invalid retained package image", "SELECT 1 FROM package_images i LEFT JOIN package_revisions p
+                ON p.tenant_id = i.tenant_id AND p.package_id = i.package_id AND p.revision = i.revision
+                WHERE octet_length(i.tenant_id) <> 16 OR p.package_id IS NULL
+                    OR NOT regexp_full_match(i.digest, 'sha256:[0-9a-f]{64}')
+                    OR i.commit_revision = 0 OR i.commit_revision > (SELECT commit_revision FROM store_meta)
+                    OR p.commit_revision > i.commit_revision"),
             ("invalid package activation", "SELECT 1 FROM package_activations a LEFT JOIN package_revisions p
                 ON p.tenant_id = a.tenant_id AND p.package_id = a.package_id AND p.revision = a.revision
                 WHERE octet_length(a.tenant_id) <> 16 OR length(a.scope_id) NOT BETWEEN 1 AND 256

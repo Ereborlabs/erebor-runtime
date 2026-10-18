@@ -589,10 +589,10 @@ Do not attribute this built-in SQL computation to an old installed artifact.
 
 ### Installed SQL with provided inputs
 
-[PackageArtifactV1::prepared](../../crates/araphor-data/src/package/bundle.rs)
+[PackageArtifactV1::prepared](../../crates/araphor-package/src/bundle.rs)
 now accepts SQL when the descriptor declares Provided input mode. The existing
 implementation selector still rejects ambiguous targets and unqualified native
-code. [Bundle admission](../../crates/araphor-data/src/package/admission.rs)
+code. [Bundle admission](../../crates/araphor-package/src/admission.rs)
 no longer rejects this SQL input mode.
 
 ```text

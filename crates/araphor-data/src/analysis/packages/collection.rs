@@ -97,6 +97,8 @@ impl AnalysisStore {
             })?;
         let removed = transaction.execute(
             "DELETE FROM package_revisions p WHERE p.tenant_id = ? AND p.package_id = ? AND p.revision = ?
+            AND NOT EXISTS (SELECT 1 FROM package_images i WHERE i.tenant_id = p.tenant_id
+                AND i.package_id = p.package_id AND i.revision = p.revision)
             AND NOT EXISTS (SELECT 1 FROM package_activations a WHERE a.tenant_id = p.tenant_id
                 AND a.installed AND ((a.package_id = p.package_id AND a.revision = p.revision)
                     OR (json_extract_string(TRY_CAST(decode(a.metadata) AS JSON), '$.root.package_id') = p.package_id

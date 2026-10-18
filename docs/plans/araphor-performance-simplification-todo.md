@@ -56,6 +56,10 @@ records the fresh Analysis owner, shared validation, and selected qualification.
 Complete polling removal, quota defaults, and production reduction remain
 **Not done**.
 
+The [feature parity TODO](araphor-feature-parity-todo.md) records preserved
+features, removed contracts, and remaining work in the Query and Analysis
+redesign. The user requires this parity work before unrelated quota changes.
+
 ### Component redesign
 
 The user accepts the deletion work and requires simpler complete components.

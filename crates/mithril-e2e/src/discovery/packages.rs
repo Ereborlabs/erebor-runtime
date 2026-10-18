@@ -13,6 +13,8 @@ use crate::control_fixture::{oidc::OidcFixture, MtlsFixture};
 
 mod bundle;
 mod fixture;
+#[cfg(test)]
+mod images;
 mod native;
 mod wasm;
 
@@ -96,7 +98,7 @@ impl AnalysisPackageQualification {
             .chain(native_bundles.iter())
             .chain(required.iter())
             .map(|bundle| {
-                Ok(PackageTrustPinV1 {
+                Ok::<_, araphor_data::Error>(PackageTrustPinV1 {
                     tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
                     bundle_digest: bundle.digest()?,
                 })

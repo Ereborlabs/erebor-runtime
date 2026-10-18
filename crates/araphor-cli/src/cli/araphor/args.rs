@@ -30,6 +30,8 @@ pub(crate) struct ConnectionArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AraphorCommand {
+    /// Read or retain OCI package images.
+    Image(super::packages::ImageArgs),
     /// Install, inspect, and run local analysis packages.
     Package(super::packages::PackageArgs),
     /// List query relations, recipe source, or retained policy targets.
@@ -146,6 +148,7 @@ pub(super) enum Prepared {
 impl AraphorCommand {
     pub(super) fn prepare(&self) -> Result<Prepared> {
         match self {
+            AraphorCommand::Image(args) => args.prepare(),
             AraphorCommand::Package(args) => args.prepare(),
             AraphorCommand::Catalog(args) => args.prepare(),
             AraphorCommand::Sql(args) => {
@@ -244,6 +247,7 @@ impl AraphorCommand {
 impl fmt::Display for AraphorCommand {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::Image(_) => "image",
             Self::Package(_) => "package",
             Self::Catalog(_) => "catalog",
             Self::Sql(_) => "sql",

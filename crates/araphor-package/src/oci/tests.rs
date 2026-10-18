@@ -1,5 +1,5 @@
 use super::*;
-use crate::package::tests::{bundle, TestResult};
+use crate::tests::{bundle, TestResult};
 use araphor_analysis_sdk as sdk;
 
 #[test]

@@ -225,6 +225,47 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl From<araphor_package::Error> for Error {
+    fn from(source: araphor_package::Error) -> Self {
+        match source {
+            araphor_package::Error::Package {
+                code,
+                field,
+                location,
+            } => Self::Package {
+                code: match code {
+                    araphor_package::ErrorCode::Invalid => crate::PackageErrorCodeV1::Invalid,
+                    araphor_package::ErrorCode::Limit => crate::PackageErrorCodeV1::Limit,
+                    araphor_package::ErrorCode::Denied => crate::PackageErrorCodeV1::Denied,
+                    araphor_package::ErrorCode::Conflict => crate::PackageErrorCodeV1::Conflict,
+                    araphor_package::ErrorCode::Missing => crate::PackageErrorCodeV1::Missing,
+                    araphor_package::ErrorCode::Unsupported => {
+                        crate::PackageErrorCodeV1::Unsupported
+                    }
+                    araphor_package::ErrorCode::Incomplete => crate::PackageErrorCodeV1::Incomplete,
+                },
+                field,
+                location,
+            },
+            araphor_package::Error::PackageEncoding { source, location } => {
+                Self::PackageEncoding { source, location }
+            }
+            araphor_package::Error::AnalysisContract { source, location } => {
+                Self::AnalysisContract { source, location }
+            }
+            araphor_package::Error::Io {
+                path,
+                source,
+                location,
+            } => Self::Io {
+                path,
+                source,
+                location,
+            },
+        }
+    }
+}
+
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
@@ -298,5 +339,70 @@ impl ErrorExt for Error {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod package_tests {
+    use super::*;
+
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn image_errors_keep_domain() -> TestResult {
+        use crate::PackageErrorCodeV1 as Code;
+        use araphor_package::ErrorCode as ImageCode;
+
+        for (image, code) in [
+            (ImageCode::Invalid, Code::Invalid),
+            (ImageCode::Limit, Code::Limit),
+            (ImageCode::Denied, Code::Denied),
+            (ImageCode::Conflict, Code::Conflict),
+            (ImageCode::Missing, Code::Missing),
+            (ImageCode::Unsupported, Code::Unsupported),
+            (ImageCode::Incomplete, Code::Incomplete),
+        ] {
+            let image = image.error("image field");
+            let status = image.status_code();
+            let retry = image.retry_hint();
+            let error = Error::from(image);
+            assert!(
+                matches!(error, Error::Package { code: actual, field: "image field", .. } if actual == code)
+            );
+            assert_eq!(error.status_code(), status);
+            assert_eq!(error.retry_hint(), retry);
+        }
+        let contract = araphor_analysis_sdk::Error::contract(
+            araphor_analysis_sdk::ErrorCode::Incompatible,
+            "image contract",
+        );
+        let error = Error::from(araphor_package::Error::AnalysisContract {
+            source: contract,
+            location: snafu::location!(),
+        });
+        assert!(matches!(error, Error::AnalysisContract { ref source, .. }
+            if source.code() == araphor_analysis_sdk::ErrorCode::Incompatible));
+        let json = serde_json::from_str::<bool>("invalid")
+            .err()
+            .ok_or("JSON accepted")?;
+        let message = json.to_string();
+        let error = Error::from(araphor_package::Error::PackageEncoding {
+            source: json,
+            location: snafu::location!(),
+        });
+        assert!(
+            matches!(error, Error::PackageEncoding { ref source, .. } if source.to_string() == message)
+        );
+        let image = araphor_package::Error::Io {
+            path: "image.oci".into(),
+            source: std::io::Error::new(std::io::ErrorKind::Interrupted, "image read"),
+            location: snafu::location!(),
+        };
+        let retry = image.retry_hint();
+        let error = Error::from(image);
+        assert_eq!(error.retry_hint(), retry);
+        assert!(matches!(error, Error::Io { ref path, ref source, .. }
+            if path == std::path::Path::new("image.oci") && source.kind() == std::io::ErrorKind::Interrupted));
+        Ok(())
     }
 }

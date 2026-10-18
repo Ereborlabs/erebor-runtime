@@ -3,9 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use araphor_analysis_back::{AnalysisPackageOwner, InstalledAnalysis};
 use araphor_data::PackageAuthorization;
-use araphor_data::{
-    AnalysisReadControl, AnalysisSelectionV1, PackageActionV1, PackageBundleV1, PackageGrantV1,
-};
+use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, PackageActionV1, PackageGrantV1};
 use araphor_query::execution::{Engine, Limits};
 
 use super::ControlPlane;
@@ -71,7 +69,7 @@ impl ControlPlane {
         bundles.push(araphor_discovery_effects::ObservedEffects::live_bundle()?);
         let pins = bundles
             .iter()
-            .map(PackageBundleV1::digest)
+            .map(|bundle| bundle.digest().map_err(araphor_data::Error::from))
             .collect::<araphor_data::Result<BTreeSet<_>>>()?;
         let authority = Arc::new(ControlPackageAuthority {
             tenants,

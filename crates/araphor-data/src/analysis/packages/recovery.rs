@@ -73,6 +73,41 @@ impl AnalysisStore {
             }
         }
         let mut statement = reader
+            .prepare("SELECT tenant_id, package_id, revision FROM package_images")
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare retained package images",
+            })?;
+        let images = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read retained package images",
+            })?;
+        let control = crate::AnalysisReadControl::default();
+        for image in images {
+            let (tenant, package, revision) = image.context(AnalysisDatabaseSnafu {
+                operation: "decode retained package image",
+            })?;
+            let tenant: [u8; 16] = tenant.try_into().map_err(|_| {
+                crate::AnalysisStateSnafu {
+                    path: root,
+                    reason: "the retained image tenant is invalid",
+                }
+                .build()
+            })?;
+            if tenant == [0; 16]
+                || Self::package_image_from(reader, tenant, &package, Some(&revision), &control)?
+                    .is_none()
+            {
+                return Self::reject_path(root, "the retained package image is invalid");
+            }
+        }
+        let mut statement = reader
             .prepare("SELECT r.result_id, r.tenant_id, r.commit_meta FROM package_results r")
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare retained package results",

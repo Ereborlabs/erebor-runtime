@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
+use araphor_data::analysis::PackageRevisionV1;
 use araphor_data::{
     AnalysisContextRefV1, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
     EvidenceIntakeIdentityV1, PackageActionV1, PackageAuthorization, PackageBundleRef,
@@ -80,7 +81,7 @@ impl Package {
         let digest = bundle.digest()?;
         let retained = PackageBundleRef::retained(&bundle, &digest);
         let context = retained.context(grant.selection.tenant_id, export, output)?;
-        let revisions = bundle.revisions(grant.selection.tenant_id)?;
+        let revisions = PackageRevisionV1::from_bundle(&bundle, grant.selection.tenant_id)?;
         grant.remaining()?;
         let mut reference = None;
         authority.commit(&grant, PackageActionV1::Run, &retained, &mut || {

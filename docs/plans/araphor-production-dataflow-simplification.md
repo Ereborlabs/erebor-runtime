@@ -211,9 +211,9 @@ Context batching and further crash-fixture changes are not approved here.
 
 ### Local OCI package format
 
-[PackageBundleV1::read](../../crates/araphor-data/src/package/bundle.rs) The author or client supplies an OCI directory or layout archive
+[PackageBundleV1::read](../../crates/araphor-package/src/bundle.rs) The author or client supplies an OCI directory or layout archive
   -> [Content](../../crates/araphor-analysis-sdk/src/oci.rs) the SDK verifies descriptor sizes, SHA-256 hashes, media types, and the canonical Araphor manifest and config
-  -> [PackageOci::decode](../../crates/araphor-data/src/package/oci.rs) Data fills ordered empty metadata slots from typed raw layers and checks reconstructed identity
+  -> [PackageOci::decode](../../crates/araphor-package/src/oci.rs) Data fills ordered empty metadata slots from typed raw layers and checks reconstructed identity
   -> [PackageRequestV1::encode](../../crates/araphor-data/src/package/model/request.rs) the client encodes request metadata and the OCI archive as separate CBOR byte strings
   -> [ClientGrpcOwner](../../crates/mithril-control/src/client_grpc/packages.rs) Control decodes the binary request from the existing gRPC bytes field
   -> [PackageTrustPinV1](../../crates/mithril-control/src/client_auth/packages.rs) Control requires the selected tenant's exact `sha256:` manifest pin and current grant

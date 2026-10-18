@@ -11,6 +11,55 @@ use super::error::{
 use super::{wire, CommandRun};
 
 #[derive(Debug, Args)]
+pub(crate) struct ImageArgs {
+    #[command(subcommand)]
+    operation: ImageCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ImageCommand {
+    /// Read the digest used in Control package trust pins.
+    Digest { path: PathBuf },
+    /// Retain a local OCI layout or archive for the authenticated tenant.
+    Install { path: PathBuf },
+    /// Read retained image descriptors and artifact identities.
+    Inspect {
+        package: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+}
+
+impl ImageArgs {
+    pub(super) fn prepare(&self) -> Result<Prepared> {
+        let operation = match &self.operation {
+            ImageCommand::Digest { path } => {
+                let digest = PackageBundleV1::read(path)
+                    .map_err(araphor_data::Error::from)
+                    .context(PackageSnafu)?
+                    .digest()
+                    .map_err(araphor_data::Error::from)
+                    .context(PackageSnafu)?;
+                return Ok(Prepared::PackageDigest(digest));
+            }
+            ImageCommand::Install { path } => PackageRequestV1::InstallImage {
+                bundle: PackageBundleV1::read(path)
+                    .map_err(araphor_data::Error::from)
+                    .context(PackageSnafu)?,
+            },
+            ImageCommand::Inspect { package, revision } => PackageRequestV1::InspectImage {
+                package_id: package.clone(),
+                revision: revision.clone(),
+            },
+        };
+        Ok(Prepared::Package(wire::PackageOperationRequest {
+            definition: operation.encode().context(PackageSnafu)?,
+            selection: None,
+        }))
+    }
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct PackageArgs {
     #[arg(long, global = true)]
     scope: Option<String>,
@@ -74,8 +123,10 @@ impl PackageArgs {
                 .fail();
             }
             let digest = PackageBundleV1::read(path)
+                .map_err(araphor_data::Error::from)
                 .context(PackageSnafu)?
                 .digest()
+                .map_err(araphor_data::Error::from)
                 .context(PackageSnafu)?;
             return Ok(Prepared::PackageDigest(digest));
         }
@@ -89,7 +140,9 @@ impl PackageArgs {
         let operation = match &self.operation {
             PackageCommand::Install { path, parameters } => PackageRequestV1::Install {
                 scope_id,
-                bundle: PackageBundleV1::read(path).context(PackageSnafu)?,
+                bundle: PackageBundleV1::read(path)
+                    .map_err(araphor_data::Error::from)
+                    .context(PackageSnafu)?,
                 parameters: Self::parameters(parameters)?,
             },
             PackageCommand::Inspect { package } => PackageRequestV1::Inspect {
@@ -122,7 +175,9 @@ impl PackageArgs {
             },
             PackageCommand::Update { path } => PackageRequestV1::Update {
                 scope_id,
-                bundle: PackageBundleV1::read(path).context(PackageSnafu)?,
+                bundle: PackageBundleV1::read(path)
+                    .map_err(araphor_data::Error::from)
+                    .context(PackageSnafu)?,
             },
             PackageCommand::Rollback { package, revision } => PackageRequestV1::Rollback {
                 scope_id,
@@ -184,6 +239,105 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
     use clap::Parser as _;
+
+    #[test]
+    fn image_cli_incomplete_commands() {
+        for args in [
+            vec!["araphor", "image"],
+            vec!["araphor", "image", "digest"],
+            vec!["araphor", "image", "install"],
+            vec!["araphor", "image", "inspect"],
+            vec!["araphor", "image", "inspect", "example", "--revision"],
+            vec!["araphor", "image", "run", "example"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn image_cli_tenant_scope() {
+        for flag in [
+            "--scope",
+            "--parameters",
+            "--node",
+            "--cluster",
+            "--container",
+            "--target",
+        ] {
+            for operation in ["digest", "install", "inspect"] {
+                assert!(Cli::try_parse_from([
+                    "araphor", "image", operation, "example", flag, "value",
+                ])
+                .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn image_cli_shared_contract() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for revision in [None, Some("2")] {
+            let mut args = vec!["araphor", "image", "inspect", "example"];
+            if let Some(revision) = revision {
+                args.extend(["--revision", revision]);
+            }
+            let cli = Cli::try_parse_from(args)?;
+            let Command::Investigate(command) = cli.command else {
+                return Err("image command absent".into());
+            };
+            assert_eq!(command.to_string(), "image");
+            let Prepared::Package(request) = command.prepare()? else {
+                return Err("image request absent".into());
+            };
+            assert!(request.selection.is_none());
+            assert!(matches!(
+                PackageRequestV1::from_bytes(&request.definition)?,
+                PackageRequestV1::InspectImage { package_id, revision: actual }
+                    if package_id == "example" && actual.as_deref() == revision
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn image_cli_archive_request() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let bundle = araphor_analysis_back::AnalysisPackageOwner::required_bundles()
+            .into_iter()
+            .next()
+            .ok_or("package fixture absent")?;
+        let path =
+            std::env::temp_dir().join(format!("araphor-image-{}.oci.tar", uuid::Uuid::new_v4()));
+        std::fs::write(&path, bundle.encode()?)?;
+        let result = (|| -> std::result::Result<(), Box<dyn std::error::Error>> {
+            for operation in ["digest", "install"] {
+                let cli = Cli::try_parse_from([
+                    std::ffi::OsStr::new("araphor"),
+                    std::ffi::OsStr::new("image"),
+                    std::ffi::OsStr::new(operation),
+                    path.as_os_str(),
+                ])?;
+                let Command::Investigate(command) = cli.command else {
+                    return Err("image command absent".into());
+                };
+                match command.prepare()? {
+                    Prepared::PackageDigest(digest) => assert_eq!(digest, bundle.digest()?),
+                    Prepared::Package(request) => {
+                        assert!(request.selection.is_none());
+                        let PackageRequestV1::InstallImage { bundle: actual } =
+                            PackageRequestV1::from_bytes(&request.definition)?
+                        else {
+                            return Err("image install absent".into());
+                        };
+                        assert_eq!(actual.artifacts, bundle.artifacts);
+                        assert_eq!(actual.digest()?, bundle.digest()?);
+                    }
+                    _ => return Err("image operation changed".into()),
+                }
+            }
+            Ok(())
+        })();
+        std::fs::remove_file(path)?;
+        result
+    }
 
     #[test]
     fn package_cli_incomplete_commands() {

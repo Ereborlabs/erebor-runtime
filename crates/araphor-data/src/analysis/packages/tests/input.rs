@@ -236,7 +236,14 @@ fn input_checks_exact_references() -> TestResult {
 #[test]
 fn input_checks_witness_expiry() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let store = AnalysisStore::open_with_limits(
+        directory.path().join("store"),
+        crate::RetentionLimitsV1 {
+            raw_max_age_ns: Some(1),
+            ..Default::default()
+        },
+        Default::default(),
+    )?;
     let active = start(&store, "first")?;
     let identity = crate::analysis::tests::identity();
     append(&store, identity.clone())?;

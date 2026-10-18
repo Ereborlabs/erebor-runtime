@@ -114,6 +114,9 @@ impl AnalysisPackageOwner {
         };
         control.check()?;
         match request {
+            PackageRequestV1::InstallImage { .. } | PackageRequestV1::InspectImage { .. } => {
+                Err(Code::Unsupported.error("image operation owner").into())
+            }
             PackageRequestV1::Install {
                 scope_id,
                 bundle,

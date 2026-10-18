@@ -4,7 +4,7 @@ use snafu::ResultExt as _;
 
 use crate::{AnalysisContractSnafu, Result};
 
-use super::{PackageArtifactV1, PackageBundleV1, PackageErrorCodeV1 as Code, PackageRefV1};
+use super::{ErrorCode as Code, PackageArtifactV1, PackageBundleV1, PackageRefV1};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ModelRef {
@@ -14,7 +14,7 @@ pub struct ModelRef {
 
 impl PackageBundleV1 {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != 1 || self.artifacts.is_empty() || self.artifacts.len() > 64 {
+        if self.schema_version != 1 || self.artifacts.is_empty() {
             return Err(Code::Invalid.error("bundle version or package count"));
         }
         let mut packages = BTreeSet::new();
@@ -125,50 +125,56 @@ impl PackageBundleV1 {
         states: &mut BTreeMap<ModelRef, bool>,
         order: &mut Vec<ModelRef>,
     ) -> Result<()> {
-        match states.get(&key) {
-            Some(true) => return Ok(()),
-            Some(false) => return Err(Code::Invalid.error("dependency cycle")),
-            None => {}
-        }
-        if states.len() >= 256 {
-            return Err(Code::Limit.error("dependency models"));
-        }
-        let artifact = self.artifact(&key.package)?;
-        let model = artifact
-            .descriptor
-            .exports
-            .iter()
-            .find(|model| model.name == key.export)
-            .ok_or_else(|| Code::Missing.error("dependency export"))?;
-        states.insert(key.clone(), false);
-        for (input, dependency) in model.dependencies() {
-            let upstream = ModelRef {
-                package: PackageRefV1 {
-                    package_id: dependency.package.clone(),
-                    revision: dependency.revision.clone(),
-                },
-                export: dependency.export.clone(),
-            };
-            let output = self
-                .artifact(&upstream.package)?
+        let mut pending = vec![(key, false)];
+        while let Some((key, complete)) = pending.pop() {
+            if complete {
+                states.insert(key.clone(), true);
+                order.push(key);
+                continue;
+            }
+            match states.get(&key) {
+                Some(true) => continue,
+                Some(false) => return Err(Code::Invalid.error("dependency cycle")),
+                None => {}
+            }
+            let artifact = self.artifact(&key.package)?;
+            let model = artifact
                 .descriptor
                 .exports
                 .iter()
-                .find(|export| export.name == upstream.export)
-                .and_then(|export| {
-                    export
-                        .outputs
-                        .iter()
-                        .find(|port| port.name == dependency.output)
-                })
-                .ok_or_else(|| Code::Missing.error("dependency output"))?;
-            if input.schema != output.schema || input.kind != output.kind {
-                return Err(Code::Invalid.error("dependency schema or kind"));
+                .find(|model| model.name == key.export)
+                .ok_or_else(|| Code::Missing.error("dependency export"))?;
+            states.insert(key.clone(), false);
+            pending.push((key, true));
+            let mut dependencies = Vec::new();
+            for (input, dependency) in model.dependencies() {
+                let upstream = ModelRef {
+                    package: PackageRefV1 {
+                        package_id: dependency.package.clone(),
+                        revision: dependency.revision.clone(),
+                    },
+                    export: dependency.export.clone(),
+                };
+                let output = self
+                    .artifact(&upstream.package)?
+                    .descriptor
+                    .exports
+                    .iter()
+                    .find(|export| export.name == upstream.export)
+                    .and_then(|export| {
+                        export
+                            .outputs
+                            .iter()
+                            .find(|port| port.name == dependency.output)
+                    })
+                    .ok_or_else(|| Code::Missing.error("dependency output"))?;
+                if input.schema != output.schema || input.kind != output.kind {
+                    return Err(Code::Invalid.error("dependency schema or kind"));
+                }
+                dependencies.push((upstream, false));
             }
-            self.visit(upstream, states, order)?;
+            pending.extend(dependencies.into_iter().rev());
         }
-        states.insert(key.clone(), true);
-        order.push(key);
         Ok(())
     }
 }
@@ -176,10 +182,7 @@ impl PackageBundleV1 {
 impl PackageArtifactV1 {
     fn validate(&self) -> Result<()> {
         self.descriptor.validate().context(AnalysisContractSnafu)?;
-        if self.implementations.is_empty()
-            || self.implementations.len() > 256
-            || self.fixtures.len() > 64
-        {
+        if self.implementations.is_empty() {
             return Err(Code::Limit.error("implementations or fixtures"));
         }
         let mut implementations = BTreeSet::new();
@@ -194,7 +197,7 @@ impl PackageArtifactV1 {
                     return Err(Code::Invalid.error("native export declaration"));
                 }
             }
-            if implementation.exports().is_empty() || implementation.exports().len() > 256 {
+            if implementation.exports().is_empty() {
                 return Err(Code::Invalid.error("implementation export count"));
             }
             for export in implementation.exports() {
@@ -229,7 +232,6 @@ impl PackageArtifactV1 {
         let mut fixtures = BTreeSet::new();
         for fixture in &self.fixtures {
             if fixture.name.is_empty()
-                || fixture.name.len() > 256
                 || !fixtures.insert(&fixture.name)
                 || !self
                     .descriptor

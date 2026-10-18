@@ -8,6 +8,7 @@ use crate::Result;
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum BundleMetadata {
+    InstallImage {},
     Install {
         scope_id: String,
         parameters: Option<serde_json::Value>,
@@ -27,7 +28,9 @@ impl PackageRequestV1 {
     pub fn encode(&self) -> Result<Vec<u8>> {
         let metadata = serde_json::to_vec(self).context(crate::PackageEncodingSnafu)?;
         let archive = match self {
-            Self::Install { bundle, .. } | Self::Update { bundle, .. } => bundle.encode()?,
+            Self::InstallImage { bundle }
+            | Self::Install { bundle, .. }
+            | Self::Update { bundle, .. } => bundle.encode()?,
             _ => Vec::new(),
         };
         let mut encoder = Encoder::new(Vec::new());
@@ -55,7 +58,7 @@ impl PackageRequestV1 {
         }
         let operation: Operation<'_> =
             serde_json::from_slice(metadata).context(crate::PackageEncodingSnafu)?;
-        if matches!(operation.operation, "install" | "update") {
+        if matches!(operation.operation, "install_image" | "install" | "update") {
             let metadata: BundleMetadata =
                 serde_json::from_slice(metadata).context(crate::PackageEncodingSnafu)?;
             if archive.is_empty() {
@@ -63,6 +66,7 @@ impl PackageRequestV1 {
             }
             let bundle = PackageBundleV1::from_bytes(archive)?;
             Ok(match metadata {
+                BundleMetadata::InstallImage {} => Self::InstallImage { bundle },
                 BundleMetadata::Install {
                     scope_id,
                     parameters,

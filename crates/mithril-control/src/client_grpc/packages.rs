@@ -1,5 +1,6 @@
 use araphor_data::{
-    AnalysisReadControl, PackageActionV1, PackageErrorCodeV1, PackageRequestV1, PackageResponseV1,
+    AnalysisReadControl, AnalysisSelectionV1, PackageActionV1, PackageAuthorization as _,
+    PackageBundleRef, PackageErrorCodeV1, PackageGrantV1, PackageRequestV1, PackageResponseV1,
 };
 
 use super::*;
@@ -33,12 +34,18 @@ impl ClientGrpcOwner {
             AnalysisReadControl::with_timeout(Duration::from_secs(300)).map_err(Self::failure)?,
         );
         let _guard = PackageRunGuard(control.clone());
-        let response = self
-            .data()?
-            .packages
-            .execute(grant, operation, control)
-            .await
-            .map_err(Self::package_failure)?;
+        let response = match operation {
+            image @ (PackageRequestV1::InstallImage { .. }
+            | PackageRequestV1::InspectImage { .. }) => {
+                self.image_request(grant, image, control).await?
+            }
+            operation => self
+                .data()?
+                .packages
+                .execute(grant, operation, control)
+                .await
+                .map_err(Self::package_failure)?,
+        };
         access.check().map_err(Self::auth_failure)?;
         let result_json = Self::package_response(&response)?;
         Ok(proto::PackageOperationReply { result_json })
@@ -47,6 +54,84 @@ impl ClientGrpcOwner {
     pub(super) fn package_response(response: &PackageResponseV1) -> Result<Vec<u8>, Status> {
         serde_json::to_vec(response)
             .map_err(|_| Status::internal("The package response cannot be encoded."))
+    }
+
+    async fn image_request(
+        &self,
+        grant: PackageGrantV1,
+        request: PackageRequestV1,
+        control: Arc<AnalysisReadControl>,
+    ) -> Result<PackageResponseV1, Status> {
+        if grant.selection != AnalysisSelectionV1::tenant(grant.selection.tenant_id) {
+            return Err(Status::invalid_argument(
+                "An image requires tenant selection.",
+            ));
+        }
+        let store = self.data()?.store.clone();
+        let authority = self.auth.clone();
+        tokio::task::spawn_blocking(move || -> araphor_data::Result<PackageResponseV1> {
+            let action = request.action();
+            grant.remaining()?;
+            authority.check(&grant, action)?;
+            control.check()?;
+            let image = match request {
+                PackageRequestV1::InstallImage { bundle } => {
+                    let image = bundle.metadata()?;
+                    let retained = PackageBundleRef::retained(&bundle, &image.digest);
+                    authority.admit(&grant, &retained)?;
+                    authority.commit(&grant, action, &retained, &mut || {
+                        store.install_package_image(grant.selection.tenant_id, &bundle, || {
+                            grant.remaining()?;
+                            control.check()
+                        })?;
+                        Ok(())
+                    })?;
+                    image
+                }
+                PackageRequestV1::InspectImage {
+                    package_id,
+                    revision,
+                } => {
+                    araphor_data::validate_package_name(&package_id)?;
+                    store
+                        .package_image(
+                            grant.selection.tenant_id,
+                            &package_id,
+                            revision.as_deref(),
+                            &control,
+                        )?
+                        .ok_or_else(|| PackageErrorCodeV1::Missing.error("package image"))?
+                        .metadata()?
+                }
+                _ => return Err(PackageErrorCodeV1::Unsupported.error("image operation")),
+            };
+            grant.remaining()?;
+            authority.check(&grant, action)?;
+            control.check()?;
+            Ok(PackageResponseV1 {
+                scope_id: String::new(),
+                package_id: image.root.package_id.clone(),
+                image: Some(image),
+                exports: Vec::new(),
+                tests: Vec::new(),
+                output: None,
+            })
+        })
+        .await
+        .map_err(|_| Status::internal("The image task failed."))?
+        .map_err(Self::image_failure)
+    }
+
+    fn image_failure(error: araphor_data::Error) -> Status {
+        let details = match &error {
+            araphor_data::Error::Package { code, field, .. } => Some((*code, *field)),
+            _ => None,
+        };
+        let status = Self::failure(error);
+        match details {
+            Some((code, field)) => Self::package_status(status, code, field),
+            None => status,
+        }
     }
 
     fn package_failure(error: araphor_analysis_back::Error) -> Status {

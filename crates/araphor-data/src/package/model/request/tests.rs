@@ -16,6 +16,9 @@ fn package_request_archive_roundtrip() -> TestResult {
     let bundle = crate::package::tests::bundle("1", "SELECT 1::BIGINT UNSIGNED AS value");
     let digest = bundle.digest()?;
     for operation in [
+        PackageRequestV1::InstallImage {
+            bundle: bundle.clone(),
+        },
         PackageRequestV1::Install {
             scope_id: "team".into(),
             bundle: bundle.clone(),
@@ -31,6 +34,10 @@ fn package_request_archive_roundtrip() -> TestResult {
         let bytes = operation.encode()?;
         let actual = PackageRequestV1::from_bytes(&bytes)?;
         match actual {
+            PackageRequestV1::InstallImage { bundle } => {
+                assert_eq!(bundle.digest()?, digest);
+                assert_eq!(operation.action(), crate::PackageActionV1::Install);
+            }
             PackageRequestV1::Install {
                 scope_id,
                 bundle,
@@ -53,6 +60,22 @@ fn package_request_archive_roundtrip() -> TestResult {
 #[test]
 fn package_request_archive_mismatch() -> TestResult {
     for (metadata, archive) in [
+        (
+            br#"{"operation":"install_image"}"#.as_slice(),
+            b"".as_slice(),
+        ),
+        (
+            br#"{"operation":"install_image","bundle":{}}"#.as_slice(),
+            b"archive".as_slice(),
+        ),
+        (
+            br#"{"operation":"install_image","scope_id":"team"}"#.as_slice(),
+            b"archive".as_slice(),
+        ),
+        (
+            br#"{"operation":"inspect_image","package_id":"example","revision":null}"#.as_slice(),
+            b"archive".as_slice(),
+        ),
         (
             br#"{"operation":"install","scope_id":"team","parameters":null}"#.as_slice(),
             b"".as_slice(),
@@ -87,6 +110,14 @@ fn package_request_archive_mismatch() -> TestResult {
 #[test]
 fn package_request_metadata_roundtrip() -> TestResult {
     for operation in [
+        PackageRequestV1::InspectImage {
+            package_id: "example".into(),
+            revision: None,
+        },
+        PackageRequestV1::InspectImage {
+            package_id: "example".into(),
+            revision: Some("1".into()),
+        },
         PackageRequestV1::Inspect {
             scope_id: "team".into(),
             package_id: "example".into(),
@@ -134,5 +165,33 @@ fn package_request_metadata_roundtrip() -> TestResult {
         invalid[0] = 0x82;
         assert!(PackageRequestV1::from_bytes(&invalid).is_err());
     }
+    Ok(())
+}
+
+#[test]
+fn image_request_runtime_fields() -> TestResult {
+    let archive =
+        crate::package::tests::bundle("1", "SELECT 1::BIGINT UNSIGNED AS value").encode()?;
+    for metadata in [
+        br#"{"operation":"install_image","scope_id":"team"}"#.as_slice(),
+        br#"{"operation":"install_image","parameters":{}}"#.as_slice(),
+        br#"{"operation":"install_image","bundle":{}}"#.as_slice(),
+    ] {
+        assert!(PackageRequestV1::from_bytes(&envelope(metadata, &archive)?).is_err());
+    }
+    for metadata in [
+        br#"{"operation":"inspect_image","package_id":"example","scope_id":"team"}"#.as_slice(),
+        br#"{"operation":"inspect_image","package_id":"example","parameters":{}}"#.as_slice(),
+    ] {
+        assert!(PackageRequestV1::from_bytes(&envelope(metadata, &[])?).is_err());
+    }
+    assert_eq!(
+        PackageRequestV1::InspectImage {
+            package_id: "example".into(),
+            revision: None,
+        }
+        .action(),
+        crate::PackageActionV1::Inspect
+    );
     Ok(())
 }

@@ -42,7 +42,9 @@ impl InstalledBundle {
                 artifact
                     .implementations
                     .iter()
-                    .map(|implementation| implementation.identity())
+                    .map(|implementation| {
+                        implementation.identity().map_err(araphor_data::Error::from)
+                    })
                     .collect()
             })
             .collect::<araphor_data::Result<Vec<Vec<_>>>>()?;

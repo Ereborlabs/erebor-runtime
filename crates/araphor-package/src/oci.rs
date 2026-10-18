@@ -198,9 +198,7 @@ impl PackageOci {
         let mut bundle: PackageBundleV1 = content.package().context(AnalysisContractSnafu)?;
         Self::fill_artifacts(&mut bundle.artifacts, &mut content)?;
         if !Self::layout(&bundle)?.matches(&content) {
-            return Err(
-                super::PackageErrorCodeV1::Invalid.error("noncanonical Araphor OCI package")
-            );
+            return Err(super::ErrorCode::Invalid.error("noncanonical Araphor OCI package"));
         }
         bundle.validate()?;
         Ok(bundle)
@@ -210,9 +208,7 @@ impl PackageOci {
         let mut artifact = content.package().context(AnalysisContractSnafu)?;
         Self::fill_artifacts(std::slice::from_mut(&mut artifact), &mut content)?;
         if !Self::artifact_layout(&artifact)?.matches(&content) {
-            return Err(
-                super::PackageErrorCodeV1::Invalid.error("noncanonical Araphor OCI artifact")
-            );
+            return Err(super::ErrorCode::Invalid.error("noncanonical Araphor OCI artifact"));
         }
         Ok(artifact)
     }
@@ -269,7 +265,7 @@ impl PackageOci {
             }
         }
         if layers.next().is_some() {
-            return Err(super::PackageErrorCodeV1::Invalid.error("unreferenced OCI layer"));
+            return Err(super::ErrorCode::Invalid.error("unreferenced OCI layer"));
         }
         Ok(())
     }
@@ -282,7 +278,7 @@ impl PackageOci {
         let layer = layers
             .next()
             .filter(|layer| layer.media_type == media && bytes.is_empty())
-            .ok_or_else(|| super::PackageErrorCodeV1::Invalid.error("OCI raw buffer reference"))?;
+            .ok_or_else(|| super::ErrorCode::Invalid.error("OCI raw buffer reference"))?;
         *bytes = layer.bytes;
         Ok(())
     }
