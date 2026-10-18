@@ -1,6 +1,10 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use araphor_data::{
+    AnalysisContextKeyV1, AnalysisContextVersionV1, ContainerKindV1, ContextSensitivityV1,
+    KubernetesWorkloadIdentityV1, TargetContextV1, WorkloadTargetFactV1,
+};
 use araphor_discovery_effects::ObservedEffects;
 use datafusion::common::ScalarValue;
 use futures_util::StreamExt as _;
@@ -146,6 +150,229 @@ fn assert_released(fixture: &Fixture) {
             .reserve_output(fixture.engine.limits().output_capacity)
             .unwrap(),
     );
+}
+
+fn target_context(
+    fixture: &Fixture,
+    snapshot: &str,
+    policy: &str,
+    signature: &str,
+) -> AnalysisContextVersionV1 {
+    let target = TargetContextV1 {
+        workload: WorkloadTargetFactV1 {
+            node_id: fixture.source.node_id.clone(),
+            workload_binding_generation_digest: "f".repeat(64),
+            execution_set_id: uuid::Uuid::from_bytes([4; 16]).to_string(),
+            cluster_uid: "cluster".into(),
+            namespace_uid: "namespace".into(),
+            controller_uid: "controller".into(),
+            service_account_uid: "account".into(),
+            pod_uid: "pod".into(),
+            container_id: "containerd://worker".into(),
+            container_name: "worker".into(),
+            container_kind: ContainerKindV1::Application,
+            image_digest: "sha256:image".into(),
+            pod_labels: std::collections::BTreeMap::from([("app".into(), "worker".into())]),
+            kubernetes: Some(KubernetesWorkloadIdentityV1 {
+                namespace_name: "default".into(),
+                pod_name: "worker-pod".into(),
+                profile_id: "profile".into(),
+                policy_source_revision_id: "workload-policy".into(),
+                binding_id: uuid::Uuid::from_bytes([10; 16]).to_string(),
+                protected_scope_id: "scope".into(),
+                workload_selector_id: "selector".into(),
+                kubernetes_node_name: "node".into(),
+                kubernetes_node_uid: "node-uid".into(),
+                node_boot_id: uuid::Uuid::from_bytes(fixture.source.node_boot_id).to_string(),
+                label_epoch: fixture.source.label_epoch,
+            }),
+        },
+        policy_source_revision_id: policy.into(),
+        target_snapshot_digest: snapshot.into(),
+        signed_profile_digest: signature.into(),
+    };
+    AnalysisContextVersionV1 {
+        key: AnalysisContextKeyV1 {
+            tenant_id: fixture.source.tenant_id,
+            owner_id: "mithril-control/target".into(),
+            entity_key: vec![10; 16],
+            lifetime_key: snapshot.as_bytes().to_vec(),
+            owner_revision: 1,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: ContextSensitivityV1::Tenant,
+        body: serde_json::to_vec(&target).unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn targets_keep_snapshot_metadata() {
+    let fixture = Fixture::new(Limits {
+        tenant_streams: 1,
+        ..Default::default()
+    });
+    let first_context = target_context(
+        &fixture,
+        &"a".repeat(64),
+        "snapshot-policy-1",
+        &"c".repeat(64),
+    );
+    let second_context = target_context(
+        &fixture,
+        &"b".repeat(64),
+        "snapshot-policy-2",
+        &"d".repeat(64),
+    );
+    let mut foreign = target_context(&fixture, &"e".repeat(64), "foreign-policy", &"f".repeat(64));
+    foreign.key.tenant_id = [9; 16];
+    let first_target: TargetContextV1 = serde_json::from_slice(&first_context.body).unwrap();
+    let second_target: TargetContextV1 = serde_json::from_slice(&second_context.body).unwrap();
+    assert_eq!(first_target.workload, second_target.workload);
+    assert_ne!(
+        first_context.key.lifetime_key,
+        second_context.key.lifetime_key
+    );
+    let published = fixture
+        .store
+        .commit_contexts(&[first_context.clone(), foreign])
+        .unwrap();
+    let sql = "SELECT entity_key, lifetime_key, source_revision_id, policy_source_revision_id,
+            target_snapshot_digest, signed_profile_digest, binding_id, node_id,
+            workload_binding_generation_digest, image_digest
+        FROM targets WHERE source_revision_id <> policy_source_revision_id
+        ORDER BY lifetime_key";
+    let (_, sources) = fixture.engine.prepare(sql, vec![]).await.unwrap();
+    assert_eq!(
+        sources.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["targets"]
+    );
+    let mut subscription = fixture
+        .engine
+        .subscribe(
+            sql,
+            vec![],
+            AnalysisSelectionV1::tenant(fixture.source.tenant_id),
+            Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap()),
+            b"target snapshots",
+            None,
+            TestClock::new(2_000_000_000),
+            true,
+        )
+        .await
+        .unwrap();
+    for name in [
+        "source_revision_id",
+        "target_snapshot_digest",
+        "signed_profile_digest",
+    ] {
+        assert!(!subscription
+            .schema()
+            .field_with_name(name)
+            .unwrap()
+            .is_nullable());
+    }
+    let first = next(&mut subscription).await;
+    assert_eq!(first.operation, Operation::Replace);
+    assert_eq!(
+        first.snapshot.contexts().cloned().collect::<Vec<_>>(),
+        vec![published[0].clone()]
+    );
+    assert_eq!(first.cursor.read_revision(), published[0].commit_revision);
+    let committed = fixture
+        .store
+        .commit_contexts(std::slice::from_ref(&second_context))
+        .unwrap();
+    let second = next(&mut subscription).await;
+    assert_eq!(second.operation, Operation::Replace);
+    assert_eq!(second.cursor.read_revision(), committed[0].commit_revision);
+    assert!(second.cursor.read_revision() > first.cursor.read_revision());
+    assert_eq!(
+        second.snapshot.contexts().cloned().collect::<Vec<_>>(),
+        vec![published[0].clone(), committed[0].clone()]
+    );
+    for (update, targets) in [
+        (&first, vec![&first_target]),
+        (&second, vec![&first_target, &second_target]),
+    ] {
+        let count = targets.len();
+        assert_eq!(
+            values(update, 0),
+            vec![ScalarValue::Binary(Some(vec![10; 16])); count]
+        );
+        assert_eq!(
+            values(update, 1),
+            targets
+                .iter()
+                .map(|target| ScalarValue::Binary(Some(
+                    target.target_snapshot_digest.as_bytes().to_vec()
+                )))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            values(update, 2),
+            targets
+                .iter()
+                .map(|target| ScalarValue::Utf8(Some(target.policy_source_revision_id.clone())))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            values(update, 3),
+            vec![ScalarValue::Utf8(Some("workload-policy".into())); count]
+        );
+        assert_eq!(
+            values(update, 4),
+            targets
+                .iter()
+                .map(|target| ScalarValue::Utf8(Some(target.target_snapshot_digest.clone())))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            values(update, 5),
+            targets
+                .iter()
+                .map(|target| ScalarValue::Utf8(Some(target.signed_profile_digest.clone())))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            values(update, 6),
+            vec![ScalarValue::Binary(Some(vec![10; 16])); count]
+        );
+        assert_eq!(
+            values(update, 7),
+            vec![ScalarValue::Utf8(Some(fixture.source.node_id.clone())); count]
+        );
+        assert_eq!(
+            values(update, 8),
+            vec![ScalarValue::Utf8(Some("f".repeat(64))); count]
+        );
+        assert_eq!(
+            values(update, 9),
+            vec![ScalarValue::Utf8(Some("sha256:image".into())); count]
+        );
+        assert!(update
+            .snapshot
+            .contexts()
+            .all(|reference| reference.key.tenant_id == fixture.source.tenant_id));
+        assert!(update.snapshot.witnesses.is_empty());
+    }
+    assert_eq!(
+        first.snapshot.contexts().cloned().collect::<Vec<_>>(),
+        vec![published[0].clone()]
+    );
+    assert_eq!(
+        fixture.store.context_version(&first_context.key).unwrap(),
+        Some(first_context)
+    );
+    {
+        let waiting = subscription.next();
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+    }
+    subscription.cancel().unwrap();
+    assert!(subscription.next().await.is_none());
+    drop((subscription, first, second));
+    assert_released(&fixture);
 }
 
 #[tokio::test]

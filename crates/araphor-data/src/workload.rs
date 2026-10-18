@@ -35,6 +35,15 @@ pub struct WorkloadTargetFactV1 {
     pub kubernetes: Option<KubernetesWorkloadIdentityV1>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetContextV1 {
+    pub workload: WorkloadTargetFactV1,
+    pub policy_source_revision_id: String,
+    pub target_snapshot_digest: String,
+    pub signed_profile_digest: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct KubernetesWorkloadIdentityV1 {

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisStore, ContextSensitivityV1,
+    TargetContextV1,
 };
 use serde::Serialize;
 use snafu::ResultExt as _;
@@ -272,13 +273,20 @@ impl ContextSource {
                             tenant_id: tenant,
                             owner_id: "mithril-control/target".into(),
                             entity_key: entity.as_bytes().to_vec(),
-                            lifetime_key: fact
-                                .workload_binding_generation_digest
-                                .as_bytes()
-                                .to_vec(),
+                            lifetime_key: format!(
+                                "{}:{}",
+                                snapshot.target_snapshot_digest,
+                                fact.workload_binding_generation_digest
+                            )
+                            .into_bytes(),
                             owner_revision: 1,
                         },
-                        fact,
+                        &TargetContextV1 {
+                            workload: fact.clone(),
+                            policy_source_revision_id: snapshot.policy_source_revision_id.clone(),
+                            target_snapshot_digest: snapshot.target_snapshot_digest.clone(),
+                            signed_profile_digest: snapshot.signed_profile_digest.clone(),
+                        },
                     )
                 })
             }
@@ -504,12 +512,55 @@ mod tests {
         let rollout = rollout_transaction(
             &source,
             &artifact,
-            vec![(target, None)],
+            vec![(target.clone(), None)],
             crate::PolicyDeliveryOperationV1::Activate,
             1,
             1,
             &ed25519_dalek::SigningKey::from_bytes(&[7; 32]),
         )?;
+        let first = rollout.target_snapshot.clone();
+        let predecessor = rollout
+            .bundles
+            .first()
+            .ok_or("missing first candidate")?
+            .candidate
+            .candidate_content_id
+            .clone();
+        store.create_rollout(
+            rollout.target_snapshot,
+            rollout.bundles,
+            rollout.rollout_states,
+        )?;
+        let second = source_revision(&document, crate::PolicySourceStateV1::Accepted, 2, '9')?;
+        let artifact = signed_artifact(&document, 2)?;
+        store.accept_compiled_source_revision(
+            second.clone(),
+            document.clone(),
+            artifact.clone(),
+        )?;
+        let rollout = rollout_transaction(
+            &second,
+            &artifact,
+            vec![(target, Some(predecessor))],
+            crate::PolicyDeliveryOperationV1::Replace,
+            2,
+            2,
+            &ed25519_dalek::SigningKey::from_bytes(&[7; 32]),
+        )?;
+        let snapshots = [first, rollout.target_snapshot.clone()];
+        assert_eq!(snapshots[0].targets, snapshots[1].targets);
+        assert_ne!(
+            snapshots[0].policy_source_revision_id,
+            snapshots[1].policy_source_revision_id
+        );
+        assert_ne!(
+            snapshots[0].signed_profile_digest,
+            snapshots[1].signed_profile_digest
+        );
+        assert_ne!(
+            snapshots[0].target_snapshot_digest,
+            snapshots[1].target_snapshot_digest
+        );
         store.create_rollout(
             rollout.target_snapshot,
             rollout.bundles,
@@ -523,7 +574,7 @@ mod tests {
                 .keys()
                 .filter(|source| matches!(source, ContextSource::Target(_)))
                 .count(),
-            1
+            2
         );
         let authority = store.commit_index();
         let tenant = uuid::Uuid::parse_str(&source.tenant_id)?.into_bytes();
@@ -532,33 +583,58 @@ mod tests {
             certificate_sha256: "a".repeat(64),
             tenant_id: source.tenant_id,
         }];
-        let key = |fact: &crate::WorkloadTargetFactV1| -> std::result::Result<AnalysisContextKeyV1, Box<dyn std::error::Error>> {
-            Ok(AnalysisContextKeyV1 {
-                tenant_id: tenant,
-                owner_id: "mithril-control/target".into(),
-                entity_key: fact.kubernetes.as_ref().ok_or("missing identity")?.binding_id.as_bytes().to_vec(),
-                lifetime_key: fact.workload_binding_generation_digest.as_bytes().to_vec(),
-                owner_revision: 1,
-            })
-        };
+        let key =
+            |snapshot: &crate::PolicyTargetSnapshotV1,
+             fact: &crate::WorkloadTargetFactV1|
+             -> std::result::Result<AnalysisContextKeyV1, Box<dyn std::error::Error>> {
+                Ok(AnalysisContextKeyV1 {
+                    tenant_id: tenant,
+                    owner_id: "mithril-control/target".into(),
+                    entity_key: fact
+                        .kubernetes
+                        .as_ref()
+                        .ok_or("missing identity")?
+                        .binding_id
+                        .as_bytes()
+                        .to_vec(),
+                    lifetime_key: format!(
+                        "{}:{}",
+                        snapshot.target_snapshot_digest, fact.workload_binding_generation_digest
+                    )
+                    .into_bytes(),
+                    owner_revision: 1,
+                })
+            };
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
-        assert_eq!(owner.reconcile()?, facts.len() + 2);
+        assert_eq!(owner.reconcile()?, snapshots.len() * (facts.len() + 2));
         assert_eq!(data.meta()?.commit_revision, 1);
         assert_eq!(owner.revision, Some(authority));
-        for fact in &facts {
-            let context = data
-                .context_version(&key(fact)?)?
-                .ok_or("missing retained target")?;
-            assert_eq!(
-                serde_json::from_slice::<crate::WorkloadTargetFactV1>(&context.body)?,
-                *fact
-            );
-            assert_eq!(context.sensitivity, ContextSensitivityV1::Tenant);
-            assert_eq!(context.valid_from_utc_ns, None);
-            assert_eq!(context.valid_until_utc_ns, None);
-            let mut foreign = context.key.clone();
-            foreign.tenant_id = [9; 16];
-            assert!(data.context_version(&foreign)?.is_none());
+        for snapshot in &snapshots {
+            for fact in &facts {
+                let context = data
+                    .context_version(&key(snapshot, fact)?)?
+                    .ok_or("missing retained target")?;
+                let retained: TargetContextV1 = serde_json::from_slice(&context.body)?;
+                assert_eq!(retained.workload, *fact);
+                assert_eq!(
+                    retained.policy_source_revision_id,
+                    snapshot.policy_source_revision_id
+                );
+                assert_eq!(
+                    retained.target_snapshot_digest,
+                    snapshot.target_snapshot_digest
+                );
+                assert_eq!(
+                    retained.signed_profile_digest,
+                    snapshot.signed_profile_digest
+                );
+                assert_eq!(context.sensitivity, ContextSensitivityV1::Tenant);
+                assert_eq!(context.valid_from_utc_ns, None);
+                assert_eq!(context.valid_until_utc_ns, None);
+                let mut foreign = context.key.clone();
+                foreign.tenant_id = [9; 16];
+                assert!(data.context_version(&foreign)?.is_none());
+            }
         }
         let before = data.meta()?;
         assert_eq!(store.commit_index(), authority);
@@ -568,12 +644,14 @@ mod tests {
         let store = ControlStore::open(store_path)?;
         let data = Arc::new(AnalysisStore::open(data_path)?);
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
-        assert_eq!(owner.reconcile()?, facts.len() + 2);
+        assert_eq!(owner.reconcile()?, snapshots.len() * (facts.len() + 2));
         assert_eq!(owner.reconcile()?, 0);
         assert_eq!(data.meta()?, before);
         assert_eq!(store.commit_index(), authority);
-        for fact in &facts {
-            assert!(data.context_version(&key(fact)?)?.is_some());
+        for snapshot in &snapshots {
+            for fact in &facts {
+                assert!(data.context_version(&key(snapshot, fact)?)?.is_some());
+            }
         }
         Ok(())
     }

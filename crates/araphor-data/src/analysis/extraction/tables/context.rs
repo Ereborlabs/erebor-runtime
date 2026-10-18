@@ -1,7 +1,6 @@
 use super::*;
 use crate::{
-    AnalysisContextVersionV1, DiscoveryContextKindV1, DiscoveryContextRevisionV1,
-    WorkloadTargetFactV1,
+    AnalysisContextVersionV1, DiscoveryContextKindV1, DiscoveryContextRevisionV1, TargetContextV1,
 };
 
 impl Capture<'_> {
@@ -27,14 +26,14 @@ impl Capture<'_> {
             && context.key.owner_id == "mithril-control/target"
         {
             budget.charge(context.body.len().saturating_mul(2))?;
-            let fact: WorkloadTargetFactV1 =
+            let target: TargetContextV1 =
                 serde_json::from_slice(&context.body).map_err(|source| {
                     crate::Error::PackageEncoding {
                         source,
                         location: snafu::location!(),
                     }
                 })?;
-            self.target(context, &fact, budget)
+            self.target(context, &target, budget)
         } else {
             Ok(true)
         }
@@ -44,12 +43,13 @@ impl Capture<'_> {
         fn target(
             &mut self,
             context: &AnalysisContextVersionV1,
-            fact: &WorkloadTargetFactV1,
+            target: &TargetContextV1,
             budget: &mut ReadBudget<'_>,
         );
         schema target_fields;
         row(self, "targets", budget);
         setup {
+            let fact = &target.workload;
             let kube = fact.kubernetes.as_ref();
             let boot = kube.and_then(|value| uuid::Uuid::parse_str(&value.node_boot_id).ok());
             let binding = kube.and_then(|value| uuid::Uuid::parse_str(&value.binding_id).ok());
@@ -87,6 +87,9 @@ impl Capture<'_> {
             pod_name => Utf8(true):kube.map(|value|value.pod_name.as_str()),
             profile_id => Utf8(true):kube.map(|value|value.profile_id.as_str()),
             policy_source_revision_id => Utf8(true):kube.map(|value|value.policy_source_revision_id.as_str()),
+            source_revision_id => Utf8(false):Some(&target.policy_source_revision_id),
+            target_snapshot_digest => Utf8(false):Some(&target.target_snapshot_digest),
+            signed_profile_digest => Utf8(false):Some(&target.signed_profile_digest),
             protected_scope_id => Utf8(true):kube.map(|value|value.protected_scope_id.as_str()),
             workload_selector_id => Utf8(true):kube.map(|value|value.workload_selector_id.as_str()),
             kubernetes_node_name => Utf8(true):kube.map(|value|value.kubernetes_node_name.as_str()),

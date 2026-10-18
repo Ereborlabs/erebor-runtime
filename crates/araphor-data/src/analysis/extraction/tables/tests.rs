@@ -80,7 +80,7 @@ fn schema_contract() -> TestResult {
         ),
         (
             "targets",
-            "da55132a187680344db38a1760db3e1473cf0fa09970ec4ff813d8913e054224",
+            "2ae4c9be5878e2d6ae1e0a7dce00cfbe17451af189f7175815b711d38cb92349",
         ),
         (
             "trace_measurements",

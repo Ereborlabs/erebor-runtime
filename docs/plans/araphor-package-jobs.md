@@ -195,6 +195,25 @@ and physical Kubernetes qualification are not run.
 The delivery removes 12 production Rust code lines. The complete redesign
 still adds 875 against `7b7b407a`. The required reduction is **Not done**.
 
+### Snapshot-qualified target context
+
+Implementation and selected functional qualification: **Done**. The shared
+TargetContextV1 retains each workload with its parent source, snapshot, and
+signed-profile identities. Snapshot-qualified lifetime keys preserve identical
+workloads from distinct signed snapshots. Native targets exposes all three
+parent identities without replacing the workload's own source identity.
+The existing publisher, Data transaction, table provider, and Query stream
+supply the path. Authoritative binding resolution and live Discovery cutover
+remain **Not done**.
+
+The selected 16 Data cases, one Control case, and one Query follow case pass.
+Strict Clippy passes all targets in the six affected crates. Scoped formatting,
+local links, and whitespace checks pass. The source and command record is
+`/tmp/araphor-target-proof-verification1.json`. Full workspace CI, benchmarks,
+and physical Kubernetes qualification are not run. The delivery adds 21
+production Rust code lines. The complete redesign adds 896 against `7b7b407a`;
+the required reduction remains **Not done**.
+
 ## Earlier design draft
 
 The sections below retain the earlier design for review. Their controller,

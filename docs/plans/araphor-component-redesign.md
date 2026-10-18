@@ -140,6 +140,56 @@ redesign still adds 875 production code lines against `7b7b407a`. The required
 6,000-line reduction needs 6,875 more net code deletions. The count is
 `/tmp/araphor-context-cut-count1.json`. No performance result is claimed.
 
+### Snapshot-qualified target context
+
+Implementation and selected functional qualification: **Done**. TargetContextV1
+retains the existing WorkloadTargetFactV1 with its parent policy source,
+target snapshot, and signed-profile identities. The existing Control context
+publisher writes this shared format. The target lifetime key contains both
+the snapshot digest and workload digest. Equal facts in different signed
+snapshots therefore remain distinct retained proofs.
+
+```text
+Control commits a target snapshot
+  -> the existing context owner publishes its workload and parent identities
+  -> Data captures the retained target envelope in the existing read transaction
+  -> targets exposes source_revision_id, target_snapshot_digest, and signed_profile_digest
+  -> native SQL plans and executes target queries through the existing provider
+  -> a Query subscription returns the batches and exact captured references
+```
+
+The existing policy_source_revision_id column still contains the workload's
+Kubernetes source. The new source_revision_id contains the snapshot's source.
+A difference remains visible to SQL. Node and binding selection retain their
+existing behavior. The original workload strings remain in the retained body.
+The current format requires the envelope and has no old-format fallback.
+
+No source reader, relation planner, execution operator, controller, or store
+is added. Complete catalog and compiled-policy proof, authoritative binding
+resolution, live package cutover, and atomic profile publication remain
+**Not done**. The later resolver must preserve the old exact string rules.
+
+Selected checks pass 18 distinct cases: 16 Data table cases, the Control
+retained-target case, and the Query target subscription case. Control retains
+36 workload proofs from two validated signed snapshots in one Data revision.
+Native follow preserves exact parent fields, workload fields, tenant scope,
+captured references, earlier output, and cancellation cleanup. The schema
+contract first detects the three new target columns. Its exact rerun passes
+after only the target fingerprint changes. All other fingerprints are unchanged.
+
+Strict Clippy passes all targets in Data, Discovery Effects, Query, Analysis,
+Control, and E2E. Scoped formatting, local links, and whitespace checks pass.
+The source and command record is
+`/tmp/araphor-target-proof-verification1.json`. Full workspace CI, benchmarks,
+and physical Kubernetes qualification are not run. The earlier TLS E2E result
+retains its separate source receipt; that case is not rerun for this delivery.
+
+This delivery adds 21 production Rust code lines. The complete redesign adds
+896 against `7b7b407a`. The required reduction needs 6,896 more net code
+deletions. Tests, comments, blank lines, documents, and moves do not count.
+The count is `/tmp/araphor-target-proof-count1.json`. The reduction target is
+**Not done**.
+
 ### SQL artifacts with provided inputs
 
 Implementation and selected functional qualification: **Done**. SQL packages

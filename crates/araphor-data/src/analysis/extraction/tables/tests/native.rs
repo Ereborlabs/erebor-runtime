@@ -353,7 +353,12 @@ fn context_notification_fields() -> TestResult {
         valid_from_utc_ns: Some(10),
         valid_until_utc_ns: None,
         sensitivity: ContextSensitivityV1::Tenant,
-        body: serde_json::to_vec(&target)?,
+        body: serde_json::to_vec(&TargetContextV1 {
+            workload: target.clone(),
+            policy_source_revision_id: "snapshot-policy".into(),
+            target_snapshot_digest: "a".repeat(64),
+            signed_profile_digest: "b".repeat(64),
+        })?,
     };
     fixture.store.commit_context(&target_context)?;
     let obligation = NotificationObligationV1 {
@@ -503,6 +508,22 @@ fn context_notification_fields() -> TestResult {
     );
     assert!(column::<StringArray>(&target_row, "kind")?.is_null(0));
     let targets = &page.tables["targets"][0];
+    assert_eq!(
+        column::<StringArray>(targets, "source_revision_id")?.value(0),
+        "snapshot-policy"
+    );
+    assert_eq!(
+        column::<StringArray>(targets, "policy_source_revision_id")?.value(0),
+        "policy"
+    );
+    assert_eq!(
+        column::<StringArray>(targets, "target_snapshot_digest")?.value(0),
+        "a".repeat(64)
+    );
+    assert_eq!(
+        column::<StringArray>(targets, "signed_profile_digest")?.value(0),
+        "b".repeat(64)
+    );
     assert_eq!(
         column::<BinaryArray>(targets, "binding_id")?.value(0),
         [10; 16]

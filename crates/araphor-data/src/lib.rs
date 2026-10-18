@@ -36,7 +36,9 @@ pub use trace::{
     TraceTerminalV1, MAX_TRACE_FRAME_BYTES, MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES,
     MAX_TRACE_TARGETS,
 };
-pub use workload::{ContainerKindV1, KubernetesWorkloadIdentityV1, WorkloadTargetFactV1};
+pub use workload::{
+    ContainerKindV1, KubernetesWorkloadIdentityV1, TargetContextV1, WorkloadTargetFactV1,
+};
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use analysis::RetentionResultV1;

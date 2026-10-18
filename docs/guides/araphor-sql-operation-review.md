@@ -218,6 +218,44 @@ Control facts. Authoritative normalized Discovery context proof remains
 **Not done**. The native Discovery producer cutover, new package pins, and
 atomic profile publication remain **Not done**.
 
+## Snapshot-qualified target context
+
+[ContextSource::record](../../crates/mithril-control/src/store/context.rs) reads a committed target snapshot
+  -> [TargetContextV1](../../crates/araphor-data/src/workload.rs) retains the workload and its parent source, snapshot, and signed-profile identities
+  -> [ControlContextOwner::reconcile](../../crates/mithril-control/src/store/context.rs) publishes all changed envelopes through the existing atomic batch
+  -> [Capture::context](../../crates/araphor-data/src/analysis/extraction/tables/context.rs) decodes the shared format within the captured Data read
+  -> [Capture::target](../../crates/araphor-data/src/analysis/extraction/tables/context.rs) exposes the three parent identities through the existing native Arrow table
+  -> [Engine::subscribe](../../crates/araphor-query/src/execution/admission.rs) executes native SQL and returns batches with captured references
+
+The target lifetime key is snapshot_digest:workload_digest. The same workload
+can therefore retain two signed snapshot proofs. source_revision_id contains
+the parent snapshot source. policy_source_revision_id retains the workload's
+Kubernetes source. Neither field replaces the other. The retained body keeps
+the original workload strings. Existing node and binding selection is unchanged.
+The shared format requires the envelope. No fallback reader is added.
+
+Read [control_context_retained_targets](../../crates/mithril-control/src/store/context.rs),
+[context_notification_fields](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs),
+and [targets_keep_snapshot_metadata](../../crates/araphor-query/src/follow/tests/discovery.rs).
+The Control case creates two validated signed snapshots with identical facts.
+The Query case uses native SQL filtering and sorting, observes a second
+publication through follow, and checks exact metadata, tenant scope, captured
+references, unchanged earlier output, and cancellation cleanup.
+
+This change supplies target provenance. Complete authoritative binding
+resolution and native Discovery producer cutover remain **Not done**.
+The future resolver must preserve exact raw-string matching.
+
+Selected qualification passes 18 distinct cases: 16 Data table cases, one
+Control target case, and one native Query follow case. Only the target schema
+fingerprint changes. Strict Clippy passes all targets in the six affected
+crates. Scoped formatting, local links, and whitespace checks pass. The source
+and command record is `/tmp/araphor-target-proof-verification1.json`. Full
+workspace CI, benchmarks, physical Kubernetes checks, and the earlier TLS E2E
+case are not run for this delivery. The new target path adds 21 production
+code lines. The complete redesign adds 896 against `7b7b407a`; the required
+reduction remains **Not done**.
+
 ## Reactive retention
 
 [EvidenceIntakeOwner::run_retention](../../crates/mithril-control/src/evidence.rs) starts with a configured retention or logical pressure quota
