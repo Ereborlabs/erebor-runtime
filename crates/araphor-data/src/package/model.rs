@@ -191,6 +191,13 @@ pub trait PackageAuthorization: Send + Sync + 'static {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackageRequestV1 {
+    AdmitDefinition {
+        definition: araphor_discovery_definition::Definition,
+    },
+    InspectDefinition {
+        name: String,
+        revision: Option<String>,
+    },
     InstallImage {
         #[serde(skip_serializing)]
         bundle: PackageBundleV1,
@@ -247,10 +254,13 @@ pub enum PackageRequestV1 {
 impl PackageRequestV1 {
     pub fn action(&self) -> PackageActionV1 {
         match self {
-            Self::InstallImage { .. } | Self::Install { .. } => PackageActionV1::Install,
-            Self::InspectImage { .. } | Self::Inspect { .. } | Self::Query { .. } => {
-                PackageActionV1::Inspect
+            Self::AdmitDefinition { .. } | Self::InstallImage { .. } | Self::Install { .. } => {
+                PackageActionV1::Install
             }
+            Self::InspectDefinition { .. }
+            | Self::InspectImage { .. }
+            | Self::Inspect { .. }
+            | Self::Query { .. } => PackageActionV1::Inspect,
             Self::Run { .. } => PackageActionV1::Run,
             Self::Update { .. } => PackageActionV1::Update,
             Self::Rollback { .. } => PackageActionV1::Rollback,
@@ -263,6 +273,8 @@ impl PackageRequestV1 {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageResponseV1 {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<araphor_discovery_definition::ResolvedDefinition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<araphor_package::PackageImageV1>,
     pub scope_id: String,

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+araphor-discovery-definition = { path = "../araphor-discovery-definition" }
 araphor-data = { path = "../araphor-data" }
 araphor-analysis_back = { path = "../araphor-analysis_back" }
 clap.workspace = true

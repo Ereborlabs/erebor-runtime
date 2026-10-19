@@ -1,5 +1,8 @@
 use super::*;
 use araphor_data::PackageBundleV1;
+use araphor_discovery_definition::{
+    Definition, ImagePin, PackageCall, Program, ResolvedDefinition, Source,
+};
 
 fn managers() -> Vec<InvestigateGrant> {
     vec![InvestigateGrant {
@@ -181,5 +184,245 @@ fn package_commit_holds_authority() -> std::result::Result<(), Box<dyn std::erro
     assert!(owner
         .commit(&grant, PackageActionV1::Remove, &admitted, &mut || Ok(()))
         .is_err());
+    Ok(())
+}
+
+fn definition() -> std::result::Result<ResolvedDefinition, Box<dyn std::error::Error>> {
+    Ok(ResolvedDefinition::new(
+        Definition {
+            name: "auth-fixture".into(),
+            description: String::new(),
+            labels: Default::default(),
+            program: Program::Sql {
+                source: Source::Inline {
+                    inline: "SELECT 1".into(),
+                },
+            },
+        },
+        "SELECT 1".into(),
+        Vec::new(),
+    )?)
+}
+
+#[test]
+fn definition_commit_holds_authority() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let owner = super::super::tests::owner()?;
+    let session = super::super::tests::session(&owner)?;
+    let access = owner.browser(&session.token, [1; 16], &owner.origin, None, false)?;
+    let definition = definition()?;
+    assert!(definition.images.is_empty());
+    let inspect = access.package_grant(
+        AnalysisSelectionV1::tenant([1; 16]),
+        PackageActionV1::Inspect,
+    )?;
+    let mut committed = false;
+    assert!(owner
+        .commit_definition(&inspect, &definition, || {
+            committed = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!committed);
+    owner.replace_package_managers(managers())?;
+    let grant = access.package_grant(
+        AnalysisSelectionV1::tenant([1; 16]),
+        PackageActionV1::Install,
+    )?;
+    let result = owner.commit_definition(&grant, &definition, || {
+        assert!(matches!(
+            owner.state.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        committed = true;
+        Ok(37_u64)
+    })?;
+    assert!(committed);
+    assert_eq!(result, 37);
+    Ok(())
+}
+
+#[test]
+fn definition_commit_revocation() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let definition = definition()?;
+    for revocation in ["manager", "grant", "session"] {
+        let owner = super::super::tests::owner()?;
+        owner.replace_package_managers(managers())?;
+        let session = super::super::tests::session(&owner)?;
+        let access = owner.browser(&session.token, [1; 16], &owner.origin, None, false)?;
+        let grant = access.package_grant(
+            AnalysisSelectionV1::tenant([1; 16]),
+            PackageActionV1::Install,
+        )?;
+        owner.check_package(&grant, PackageActionV1::Install)?;
+        match revocation {
+            "manager" => owner.replace_package_managers(Vec::new())?,
+            "grant" => owner.replace_grants(Vec::new())?,
+            _ => assert!(owner.revoke_session(&session.token)?),
+        }
+        let mut committed = false;
+        assert!(matches!(
+            owner.commit_definition(&grant, &definition, || {
+                committed = true;
+                Ok(())
+            }),
+            Err(araphor_data::Error::Package {
+                code: araphor_data::PackageErrorCodeV1::Denied,
+                ..
+            })
+        ));
+        assert!(!committed, "{revocation}");
+        match revocation {
+            "manager" => owner.replace_package_managers(managers())?,
+            "grant" => owner.replace_grants(managers())?,
+            _ => continue,
+        }
+        assert!(owner
+            .commit_definition(&grant, &definition, || {
+                committed = true;
+                Ok(())
+            })
+            .is_err());
+        assert!(!committed, "{revocation}");
+    }
+    Ok(())
+}
+
+#[test]
+fn definition_commit_expiry() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let owner = super::super::tests::owner()?;
+    owner.replace_package_managers(managers())?;
+    let session = super::super::tests::session(&owner)?;
+    let access = owner.browser(&session.token, [1; 16], &owner.origin, None, false)?;
+    let grant = access.package_grant(
+        AnalysisSelectionV1::tenant([1; 16]),
+        PackageActionV1::Install,
+    )?;
+    owner.check_package(&grant, PackageActionV1::Install)?;
+    let definition = definition()?;
+    for expiry in [None, Some(0)] {
+        let mut expired = grant.clone();
+        expired.expires_utc_ns = expiry;
+        let mut committed = false;
+        assert!(matches!(
+            owner.commit_definition(&expired, &definition, || {
+                committed = true;
+                Ok(())
+            }),
+            Err(araphor_data::Error::Package {
+                code: araphor_data::PackageErrorCodeV1::Denied,
+                ..
+            })
+        ));
+        assert!(!committed);
+    }
+    Ok(())
+}
+
+#[test]
+fn definition_commit_image_trust() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let owner = super::super::tests::owner()?;
+    owner.replace_package_managers(managers())?;
+    let session = super::super::tests::session(&owner)?;
+    let access = owner.browser(&session.token, [1; 16], &owner.origin, None, false)?;
+    let grant = access.package_grant(
+        AnalysisSelectionV1::tenant([1; 16]),
+        PackageActionV1::Install,
+    )?;
+    let first = bundle("SELECT 1::BIGINT UNSIGNED AS count");
+    let mut second = first.clone();
+    second.root.revision = "2".into();
+    second.artifacts[0].descriptor.revision = "2".into();
+    let first_pin = ImagePin {
+        image: first.root.clone(),
+        digest: first.digest()?,
+    };
+    let second_pin = ImagePin {
+        image: second.root.clone(),
+        digest: second.digest()?,
+    };
+    assert_eq!(first_pin.image.package_id, second_pin.image.package_id);
+    assert_ne!(first_pin.image.revision, second_pin.image.revision);
+    assert_ne!(first_pin.digest, second_pin.digest);
+    let trust = |tenant: [u8; 16], pin: &ImagePin| PackageTrustPinV1 {
+        tenant_id: Uuid::from_bytes(tenant).to_string(),
+        bundle_digest: pin.digest.clone(),
+    };
+    let mut definition = definition()?;
+    definition.definition.program = Program::Package {
+        call: PackageCall {
+            image: first.root,
+            export: "count".into(),
+            inputs: Default::default(),
+            parameters: serde_json::json!({}),
+            window: None,
+            output: None,
+        },
+    };
+    definition.images = vec![first_pin.clone()];
+    definition.validate()?;
+    for pins in [Vec::new(), vec![trust([2; 16], &first_pin)]] {
+        owner.replace_package_trust(pins)?;
+        let mut committed = false;
+        assert!(owner
+            .commit_definition(&grant, &definition, || {
+                committed = true;
+                Ok(())
+            })
+            .is_err());
+        assert!(!committed);
+    }
+    owner.replace_package_trust(vec![trust([1; 16], &first_pin)])?;
+    let mut committed = false;
+    owner.commit_definition(&grant, &definition, || {
+        assert!(matches!(
+            owner.state.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        committed = true;
+        Ok(())
+    })?;
+    assert!(committed);
+    let mut changed = definition.clone();
+    let Program::Package { call } = &mut changed.definition.program else {
+        return Err("package call is absent".into());
+    };
+    call.image = second_pin.image.clone();
+    changed.images = vec![second_pin.clone()];
+    changed.validate()?;
+    committed = false;
+    assert!(owner
+        .commit_definition(&grant, &changed, || {
+            committed = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!committed);
+    definition.images.push(second_pin.clone());
+    definition.validate()?;
+    assert!(owner
+        .commit_definition(&grant, &definition, || {
+            committed = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!committed);
+    owner.replace_package_trust(vec![
+        trust([1; 16], &first_pin),
+        trust([1; 16], &second_pin),
+    ])?;
+    owner.commit_definition(&grant, &definition, || {
+        committed = true;
+        Ok(())
+    })?;
+    assert!(committed);
+    owner.replace_package_trust(Vec::new())?;
+    committed = false;
+    assert!(owner
+        .commit_definition(&grant, &definition, || {
+            committed = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!committed);
     Ok(())
 }

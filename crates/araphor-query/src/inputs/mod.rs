@@ -152,7 +152,7 @@ impl Inputs {
         })
     }
 
-    fn scan(
+    pub(crate) fn scan(
         name: &str,
         provider: Arc<dyn TableProvider>,
         schema: &sdk::Schema,

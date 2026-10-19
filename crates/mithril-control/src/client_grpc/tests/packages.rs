@@ -66,6 +66,228 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn definition_rpc_admission_is_not_execution() -> TestResult {
+    use araphor_discovery_definition::{Definition, PackageCall, Program, Source};
+
+    let fixture = Fixture::new()?;
+    let definition = |name: &str, program| Definition {
+        name: name.into(),
+        description: "Count retained events.".into(),
+        labels: BTreeMap::from([("team".into(), "security".into())]),
+        program,
+    };
+    let sql = definition(
+        "sql-counts",
+        Program::Sql {
+            source: Source::Inline {
+                inline: "SELECT count(*) AS count FROM events".into(),
+            },
+        },
+    );
+    assert_eq!(
+        fixture
+            .package(
+                PackageRequestV1::AdmitDefinition {
+                    definition: sql.clone()
+                },
+                true
+            )
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::PermissionDenied)
+    );
+    fixture
+        .service
+        .auth
+        .replace_package_managers(vec![crate::InvestigateGrant {
+            subject: "alice".into(),
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+        }])?;
+    let store = &fixture.service.data()?.store;
+    let activations = store.package_activation_page(None)?;
+    for definition in [
+        sql,
+        definition(
+            "prql-counts",
+            Program::Prql {
+                source: Source::Inline {
+                    inline: "from events\naggregate {count = count this}".into(),
+                },
+            },
+        ),
+    ] {
+        let name = definition.name.clone();
+        let admitted = fixture
+            .package(
+                PackageRequestV1::AdmitDefinition {
+                    definition: definition.clone(),
+                },
+                true,
+            )
+            .await?
+            .definition
+            .ok_or("definition absent")?;
+        assert_eq!(admitted.definition, definition);
+        assert!(admitted.images.is_empty());
+        let before = store.meta()?.commit_revision;
+        assert_eq!(
+            fixture
+                .package(PackageRequestV1::AdmitDefinition { definition }, true)
+                .await?
+                .definition,
+            Some(admitted.clone())
+        );
+        assert_eq!(store.meta()?.commit_revision, before);
+        assert_eq!(
+            fixture
+                .package(
+                    PackageRequestV1::InspectDefinition {
+                        name,
+                        revision: Some(admitted.digest()?),
+                    },
+                    false
+                )
+                .await?
+                .definition,
+            Some(admitted)
+        );
+    }
+    let invalid = definition(
+        "invalid",
+        Program::Sql {
+            source: Source::Inline {
+                inline: "DELETE FROM events".into(),
+            },
+        },
+    );
+    assert_eq!(
+        fixture
+            .package(
+                PackageRequestV1::AdmitDefinition {
+                    definition: invalid
+                },
+                true
+            )
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::InvalidArgument)
+    );
+    assert!(store
+        .definition([1; 16], "invalid", None, &AnalysisReadControl::default())?
+        .is_none());
+    let invalid = definition(
+        "invalid-prql",
+        Program::Prql {
+            source: Source::Inline {
+                inline: "from (".into(),
+            },
+        },
+    );
+    assert_eq!(
+        fixture
+            .package(
+                PackageRequestV1::AdmitDefinition {
+                    definition: invalid
+                },
+                true
+            )
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::InvalidArgument)
+    );
+    assert!(store
+        .definition(
+            [1; 16],
+            "invalid-prql",
+            None,
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+    let uncaptured = definition(
+        "uncaptured",
+        Program::Sql {
+            source: Source::File {
+                file: "/server/must/not/read.sql".into(),
+            },
+        },
+    );
+    assert_eq!(
+        fixture
+            .package(
+                PackageRequestV1::AdmitDefinition {
+                    definition: uncaptured
+                },
+                true
+            )
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::InvalidArgument)
+    );
+    let image = bundle();
+    fixture
+        .service
+        .auth
+        .replace_package_trust(vec![crate::PackageTrustPinV1 {
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+            bundle_digest: image.digest()?,
+        }])?;
+    fixture
+        .package(
+            PackageRequestV1::InstallImage {
+                bundle: image.clone(),
+            },
+            true,
+        )
+        .await?;
+    let call = definition(
+        "package-counts",
+        Program::Package {
+            call: PackageCall {
+                image: image.root.clone(),
+                export: "count".into(),
+                inputs: BTreeMap::new(),
+                parameters: serde_json::json!({}),
+                window: None,
+                output: None,
+            },
+        },
+    );
+    let admitted = fixture
+        .package(
+            PackageRequestV1::AdmitDefinition {
+                definition: call.clone(),
+            },
+            true,
+        )
+        .await?
+        .definition
+        .ok_or("call definition absent")?;
+    assert_eq!(admitted.definition, call);
+    assert_eq!(admitted.images[0].image, image.root);
+    assert_eq!(admitted.images[0].digest, image.digest()?);
+    assert_eq!(store.package_activation_page(None)?, activations);
+    fixture.service.auth.replace_package_managers(Vec::new())?;
+    assert_eq!(
+        fixture
+            .package(
+                PackageRequestV1::InspectDefinition {
+                    name: "package-counts".into(),
+                    revision: None,
+                },
+                false
+            )
+            .await?
+            .definition,
+        Some(admitted)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn package_rpc_authority_trust() -> TestResult {
     let fixture = Fixture::new()?;
     let bundle = bundle();
@@ -149,6 +371,7 @@ async fn package_rpc_authority_trust() -> TestResult {
 #[test]
 fn package_response_encoding() -> TestResult {
     let response = PackageResponseV1 {
+        definition: None,
         image: None,
         scope_id: "test".into(),
         package_id: "api.fixture".into(),

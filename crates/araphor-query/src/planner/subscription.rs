@@ -233,6 +233,11 @@ impl ExtensionPlanner for SubscriptionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if node.as_any().is::<crate::definition::PackageCall>() {
+            return Err(DataFusionError::NotImplemented(
+                "package definition execution".into(),
+            ));
+        }
         let Some(subscription) = node.as_any().downcast_ref::<Subscribe>() else {
             return Ok(None);
         };

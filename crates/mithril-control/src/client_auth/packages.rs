@@ -54,6 +54,30 @@ impl PackageTrustPinV1 {
 }
 
 impl ClientAuth {
+    pub(crate) fn commit_definition<T>(
+        &self,
+        grant: &PackageGrantV1,
+        definition: &araphor_discovery_definition::ResolvedDefinition,
+        operation: impl FnOnce() -> araphor_data::Result<T>,
+    ) -> araphor_data::Result<T> {
+        let state = self.state().map_err(Self::package_denied)?;
+        let now = Self::now().map_err(Self::package_denied)?;
+        state
+            .check_package(grant, PackageActionV1::Install, now)
+            .map_err(Self::package_denied)?;
+        for pin in &definition.images {
+            if !state
+                .package_trust
+                .contains(&(grant.selection.tenant_id, pin.digest.clone()))
+            {
+                return Err(araphor_data::PackageErrorCodeV1::Denied.error("package authority"));
+            }
+        }
+        let result = operation();
+        drop(state);
+        result
+    }
+
     pub fn replace_package_managers(&self, grants: Vec<InvestigateGrant>) -> Result<()> {
         let mut grants = ClientState::grants(&grants)?;
         let mut state = self.state()?;

@@ -35,6 +35,10 @@ impl ClientGrpcOwner {
         );
         let _guard = PackageRunGuard(control.clone());
         let response = match operation {
+            definition @ (PackageRequestV1::AdmitDefinition { .. }
+            | PackageRequestV1::InspectDefinition { .. }) => {
+                self.definition_request(grant, definition, control).await?
+            }
             image @ (PackageRequestV1::InstallImage { .. }
             | PackageRequestV1::InspectImage { .. }) => {
                 self.image_request(grant, image, control).await?
@@ -54,6 +58,126 @@ impl ClientGrpcOwner {
     pub(super) fn package_response(response: &PackageResponseV1) -> Result<Vec<u8>, Status> {
         serde_json::to_vec(response)
             .map_err(|_| Status::internal("The package response cannot be encoded."))
+    }
+
+    async fn definition_request(
+        &self,
+        grant: PackageGrantV1,
+        request: PackageRequestV1,
+        control: Arc<AnalysisReadControl>,
+    ) -> Result<PackageResponseV1, Status> {
+        if grant.selection != AnalysisSelectionV1::tenant(grant.selection.tenant_id) {
+            return Err(Status::invalid_argument(
+                "A definition requires tenant selection.",
+            ));
+        }
+        let store = self.data()?.store.clone();
+        let query = self.data()?.query.clone();
+        let authority = self.auth.clone();
+        let action = request.action();
+        grant.remaining().map_err(Self::image_failure)?;
+        authority
+            .check(&grant, action)
+            .map_err(Self::image_failure)?;
+        control.check().map_err(Self::failure)?;
+        let definition = match request {
+            PackageRequestV1::AdmitDefinition { definition } => {
+                definition
+                    .validate_captured()
+                    .map_err(araphor_data::Error::from)
+                    .map_err(Self::image_failure)?;
+                let lookup = store.clone();
+                let tenant = grant.selection.tenant_id;
+                let read = control.clone();
+                let image = match &definition.program {
+                    araphor_discovery_definition::Program::Package { call } => {
+                        Some(call.image.clone())
+                    }
+                    _ => None,
+                };
+                let bundles = tokio::task::spawn_blocking(
+                    move || -> araphor_data::Result<Vec<araphor_data::PackageBundleV1>> {
+                        image
+                            .map(|image| {
+                                lookup
+                                    .package_image(
+                                        tenant,
+                                        &image.package_id,
+                                        Some(&image.revision),
+                                        &read,
+                                    )?
+                                    .ok_or_else(|| {
+                                        PackageErrorCodeV1::Missing.error("definition image")
+                                    })
+                            })
+                            .transpose()
+                            .map(|bundle| bundle.into_iter().collect())
+                    },
+                )
+                .await
+                .map_err(|_| Status::internal("The definition lookup failed."))?
+                .map_err(Self::image_failure)?;
+                for bundle in &bundles {
+                    let digest = bundle
+                        .digest()
+                        .map_err(araphor_data::Error::from)
+                        .map_err(Self::image_failure)?;
+                    authority
+                        .admit(&grant, &PackageBundleRef::retained(bundle, &digest))
+                        .map_err(Self::image_failure)?;
+                }
+                let admitted = control
+                    .query_async(query.admit_definition(definition, &bundles))
+                    .await
+                    .map_err(Self::failure)?;
+                let check = control.clone();
+                let grant = grant.clone();
+                let authority = authority.clone();
+                tokio::task::spawn_blocking(move || -> araphor_data::Result<_> {
+                    authority.commit_definition(&grant, &admitted, || {
+                        store.admit_definition(grant.selection.tenant_id, &admitted, || {
+                            grant.remaining()?;
+                            check.check()
+                        })
+                    })?;
+                    Ok(admitted)
+                })
+                .await
+                .map_err(|_| Status::internal("The definition admission failed."))?
+                .map_err(Self::image_failure)?
+            }
+            PackageRequestV1::InspectDefinition { name, revision } => {
+                let check = control.clone();
+                let tenant = grant.selection.tenant_id;
+                tokio::task::spawn_blocking(move || {
+                    store
+                        .definition(tenant, &name, revision.as_deref(), &check)?
+                        .ok_or_else(|| PackageErrorCodeV1::Missing.error("discovery definition"))
+                })
+                .await
+                .map_err(|_| Status::internal("The definition inspection failed."))?
+                .map_err(Self::image_failure)?
+            }
+            _ => {
+                return Err(Status::invalid_argument(
+                    "The definition operation is invalid.",
+                ))
+            }
+        };
+        grant.remaining().map_err(Self::image_failure)?;
+        authority
+            .check(&grant, action)
+            .map_err(Self::image_failure)?;
+        control.check().map_err(Self::failure)?;
+        Ok(PackageResponseV1 {
+            package_id: String::new(),
+            scope_id: String::new(),
+            image: None,
+            definition: Some(definition),
+            exports: Vec::new(),
+            tests: Vec::new(),
+            output: None,
+        })
     }
 
     async fn image_request(
@@ -109,6 +233,7 @@ impl ClientGrpcOwner {
             authority.check(&grant, action)?;
             control.check()?;
             Ok(PackageResponseV1 {
+                definition: None,
                 scope_id: String::new(),
                 package_id: image.root.package_id.clone(),
                 image: Some(image),

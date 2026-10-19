@@ -1,6 +1,7 @@
 //! SQL parsing, planning, and execution through DataFusion.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod definition;
 mod error;
 pub mod execution;
 pub mod follow;

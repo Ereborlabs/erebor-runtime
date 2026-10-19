@@ -11,6 +11,44 @@ use super::error::{
 use super::{wire, CommandRun};
 
 #[derive(Debug, Args)]
+pub(crate) struct DefinitionArgs {
+    #[command(subcommand)]
+    operation: DefinitionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum DefinitionCommand {
+    /// Capture local source files and admit the definition without starting it.
+    Admit { path: PathBuf },
+    /// Read an admitted definition and its exact image references.
+    Inspect {
+        name: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+}
+
+impl DefinitionArgs {
+    pub(super) fn prepare(&self) -> Result<Prepared> {
+        let operation = match &self.operation {
+            DefinitionCommand::Admit { path } => PackageRequestV1::AdmitDefinition {
+                definition: araphor_discovery_definition::Definition::read(path)
+                    .map_err(araphor_data::Error::from)
+                    .context(PackageSnafu)?,
+            },
+            DefinitionCommand::Inspect { name, revision } => PackageRequestV1::InspectDefinition {
+                name: name.clone(),
+                revision: revision.clone(),
+            },
+        };
+        Ok(Prepared::Package(wire::PackageOperationRequest {
+            definition: operation.encode().context(PackageSnafu)?,
+            selection: None,
+        }))
+    }
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct ImageArgs {
     #[command(subcommand)]
     operation: ImageCommand,
@@ -239,6 +277,83 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
     use clap::Parser as _;
+
+    #[test]
+    fn definition_cli_contract() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for args in [
+            vec!["araphor", "definition"],
+            vec!["araphor", "definition", "admit"],
+            vec!["araphor", "definition", "start", "counts"],
+            vec![
+                "araphor",
+                "definition",
+                "inspect",
+                "counts",
+                "--scope",
+                "team",
+            ],
+            vec![
+                "araphor",
+                "definition",
+                "inspect",
+                "counts",
+                "--node",
+                "node-a",
+            ],
+            vec!["araphor", "definition", "inspect", "counts", "--unknown"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        let cli = Cli::try_parse_from([
+            "araphor",
+            "definition",
+            "inspect",
+            "counts",
+            "--revision",
+            "exact",
+        ])?;
+        let Command::Investigate(command) = cli.command else {
+            return Err("definition command absent".into());
+        };
+        assert_eq!(command.to_string(), "definition");
+        let Prepared::Package(request) = command.prepare()? else {
+            return Err("definition request absent".into());
+        };
+        assert!(request.selection.is_none());
+        assert!(matches!(PackageRequestV1::from_bytes(&request.definition)?,
+            PackageRequestV1::InspectDefinition { name, revision }
+                if name == "counts" && revision.as_deref() == Some("exact")));
+        Ok(())
+    }
+
+    #[test]
+    fn definition_cli_captures_source() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let file = crate::cli::test_support::TempJsonFile::write(
+            r#"{"name":"counts","program":{"kind":"sql","source":{"inline":"SELECT 1"}}}"#,
+        )?;
+        let cli = Cli::try_parse_from([
+            std::ffi::OsStr::new("araphor"),
+            std::ffi::OsStr::new("definition"),
+            std::ffi::OsStr::new("admit"),
+            file.path().as_os_str(),
+        ])?;
+        let Command::Investigate(command) = cli.command else {
+            return Err("definition command absent".into());
+        };
+        let Prepared::Package(request) = command.prepare()? else {
+            return Err("definition request absent".into());
+        };
+        std::fs::write(file.path(), "changed")?;
+        let PackageRequestV1::AdmitDefinition { definition } =
+            PackageRequestV1::from_bytes(&request.definition)?
+        else {
+            return Err("definition admission absent".into());
+        };
+        assert_eq!(definition.name, "counts");
+        assert_eq!(definition.program.sql()?.as_deref(), Some("SELECT 1"));
+        assert!(request.selection.is_none());
+        Ok(())
+    }
 
     #[test]
     fn image_cli_incomplete_commands() {

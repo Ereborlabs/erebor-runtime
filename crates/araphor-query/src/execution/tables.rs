@@ -14,11 +14,10 @@ use crate::{InvalidSnafu, Result, SqlSnafu};
 impl Session {
     pub fn indexed_schema(schema: &Schema) -> Result<SchemaRef> {
         let mut names = BTreeSet::new();
-        if schema.fields().is_empty()
-            || schema
-                .fields()
-                .iter()
-                .any(|field| field.name() == "__row_index" || !names.insert(field.name()))
+        if schema
+            .fields()
+            .iter()
+            .any(|field| field.name() == "__row_index" || !names.insert(field.name()))
         {
             return InvalidSnafu {
                 field: "indexed table schema",

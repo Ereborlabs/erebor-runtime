@@ -68,7 +68,15 @@ fn indexed_schema_keeps_metadata() -> TestResult {
         actual.field(1),
         &Field::new("__row_index", DataType::UInt64, false)
     );
-    for names in [vec![], vec!["value", "value"], vec!["__row_index"]] {
+    let empty = Schema::new_with_metadata(Vec::<Field>::new(), schema.metadata().clone());
+    let actual = Session::indexed_schema(&empty)?;
+    assert_eq!(actual.metadata(), empty.metadata());
+    assert_eq!(actual.fields().len(), 1);
+    assert_eq!(
+        actual.field(0),
+        &Field::new("__row_index", DataType::UInt64, false)
+    );
+    for names in [vec!["value", "value"], vec!["__row_index"]] {
         let schema = Schema::new(
             names
                 .into_iter()
@@ -253,5 +261,46 @@ fn empty_index_keeps_schema() -> TestResult {
     let output = session.collect_local(Arc::new(plan))?;
     assert!(output.iter().all(|batch| batch.num_rows() == 0));
     assert_eq!(schema.fields().len(), 2);
+    Ok(())
+}
+
+#[test]
+fn zero_columns_keep_indices() -> TestResult {
+    let fixture = Fixture::new()?;
+    let session = fixture.session()?;
+    let source = Arc::new(Schema::new_with_metadata(
+        Vec::<Field>::new(),
+        HashMap::from([("owner".into(), "model".into())]),
+    ));
+    let schema = Session::indexed_schema(&source)?;
+    let batches = [0, 2, 1]
+        .into_iter()
+        .map(|rows| {
+            RecordBatch::try_new_with_options(
+                Arc::clone(&source),
+                Vec::new(),
+                &datafusion::arrow::array::RecordBatchOptions::new().with_row_count(Some(rows)),
+            )
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let memory = fixture.engine.memory().reserve_input(128)?;
+    let indexed = session.index_batches(Arc::clone(&schema), &batches, &memory, 128)?;
+    assert_eq!(indexed.len(), 3);
+    let mut offset = 0;
+    for (batch, rows) in indexed.iter().zip([0, 2, 1]) {
+        assert_eq!(batch.schema(), schema);
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), rows);
+        let indices = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or("row indices")?;
+        for row in 0..rows {
+            assert_eq!(indices.value(row), offset);
+            offset += 1;
+        }
+    }
+    assert_eq!(offset, 3);
     Ok(())
 }

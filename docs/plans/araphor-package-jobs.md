@@ -67,10 +67,19 @@ The user authorizes the OCI image in a separate crate. The current delivery
 uses `araphor-package` for image content and the existing Data store for
 durable installation. Control and CLI image requests do not call a package
 executor. Image content, installation, inspection, and focused qualification
-are **Done**. Definition files and running instances
-remain **Not done**. Read the
+are **Done**. Definition-file admission and inspection are implemented in
+`araphor-discovery-definition`, Query, Data, Control, and CLI. Running instances
+and the physical package-call executor remain **Not done**. Read the
 [image review](../guides/araphor-binary-package-storage-review.md#image-installation-without-execution)
 for the source route and verification limits.
+
+The [definition review](../guides/araphor-discovery-definition-review.md)
+records the JSON file schema and admission route. Admission captures source
+files once, binds exact installed images, validates native query plans, and
+retains an immutable snapshot. Admission starts no Discovery. SQL and PRQL
+reach native physical planning. A package call reaches a typed logical node;
+the physical executor and instance lifecycle remain open. The complete native
+execution acceptance criterion below remains **Not done**.
 
 | Order | TODO | Result |
 | --- | --- | --- |

@@ -12,6 +12,8 @@ use serde_json::json;
 use crate::control_fixture::{oidc::OidcFixture, MtlsFixture};
 
 mod bundle;
+#[cfg(test)]
+mod definitions;
 mod fixture;
 #[cfg(test)]
 mod images;

@@ -9,6 +9,8 @@ repository.workspace = true
 test-fixtures = ["araphor-data/test-fixtures"]
 
 [dependencies]
+araphor-discovery-definition = { path = "../araphor-discovery-definition" }
+araphor-package = { path = "../araphor-package" }
 araphor-data = { path = "../araphor-data" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 async-trait = "0.1"

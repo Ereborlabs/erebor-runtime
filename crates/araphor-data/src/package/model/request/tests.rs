@@ -110,6 +110,26 @@ fn package_request_archive_mismatch() -> TestResult {
 #[test]
 fn package_request_metadata_roundtrip() -> TestResult {
     for operation in [
+        PackageRequestV1::AdmitDefinition {
+            definition: araphor_discovery_definition::Definition {
+                name: "counts".into(),
+                description: "Count selected records.".into(),
+                labels: std::collections::BTreeMap::from([("team".into(), "security".into())]),
+                program: araphor_discovery_definition::Program::Sql {
+                    source: araphor_discovery_definition::Source::Inline {
+                        inline: "SELECT 1 AS count".into(),
+                    },
+                },
+            },
+        },
+        PackageRequestV1::InspectDefinition {
+            name: "counts".into(),
+            revision: None,
+        },
+        PackageRequestV1::InspectDefinition {
+            name: "counts".into(),
+            revision: Some(format!("sha256:{}", "1".repeat(64))),
+        },
         PackageRequestV1::InspectImage {
             package_id: "example".into(),
             revision: None,

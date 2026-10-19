@@ -58,9 +58,9 @@ retained data that supports a result.
 
 Complete items 14, 15, and 16 in that order, before items 1-13. These are
 separate deliverables. Reuse the compatible old code needed for each one.
-The user authorizes the OCI image as a separate crate. The current delivery
-covers image content, installation, and inspection. Definition files, running
-instances, and package-call execution remain **Not done**.
+The user authorized the OCI image as a separate crate, then the definition
+file. Image content, installation, inspection, and definition admission are
+**Done**. Running instances and package-call execution remain **Not done**.
 
 ### 14. OCI package image
 
@@ -118,8 +118,9 @@ redesign: **Not done**. The count record is `/tmp/araphor-image-count1.json`.
 
 - **Before:** Control configuration enabled a fixed Discovery implementation.
   Packages also carried input declarations.
-- **Now:** Control selects the live SQL bundle, export, and output in code.
-  There is no general Discovery definition file or loader.
+- **Now:** `araphor-discovery-definition` owns the JSON file, source capture,
+  PRQL compilation, and admitted snapshot. Control admits and inspects that
+  snapshot. The fixed live Discovery remains separate.
 - **Required:** A reusable definition contains metadata and selects a package
   call, PRQL, or SQL. Starting it creates a separate running instance.
 - **Reuse:** Existing OCI resolution, native Query admission, schemas, and
@@ -128,28 +129,59 @@ redesign: **Not done**. The count record is `/tmp/araphor-image-count1.json`.
 
 Recorded specifications:
 
-- [ ] Select exactly one program form: a package call, PRQL, or SQL. SQL and
+- [x] Select exactly one program form: a package call, PRQL, or SQL. SQL and
   PRQL can be inline source or referenced source files.
-- [ ] Include definition metadata such as name, description, and labels.
+- [x] Include definition metadata such as name, description, and labels.
   Preserve that metadata when the definition is admitted and inspected.
-- [ ] A package call identifies the OCI package and export and supplies input
+- [x] A package call identifies the OCI package and export and supplies input
   bindings, parameters, and a declared window when required.
 - [ ] SQL defines its filters, joins, grouping, and windows. PRQL compiles to
   SQL. A direct package call forms SQL. All three forms reach native SQL
   parsing, logical planning, optimization, physical planning, and execution.
-- [ ] Use native DataFusion and existing dependencies wherever they supply
+- [x] Use native DataFusion and existing dependencies wherever they supply
   the required operation. Qualify generated PRQL SQL with the actual native
   planner. Do not assume complete dialect compatibility.
-- [ ] Resolve relative source paths from the definition directory. Read the
+- [x] Resolve relative source paths from the definition directory. Read the
   source files at admission and retain the admitted bytes and package
   revisions. Later file changes require an explicit update; do not poll files.
-- [ ] Keep running-instance identity, current permission, progress, and saved
+- [x] Keep running-instance identity, current permission, progress, and saved
   state outside the reusable definition. Metadata in the file grants no
   permission.
-- [ ] Keep the definition separate from image installation. One image can
+- [x] Keep the definition separate from image installation. One image can
   serve several definitions and instances with different inputs or parameters.
-- [ ] Add no second scheduling language. Query subscriptions supply data
+- [x] Add no second scheduling language. Query subscriptions supply data
   changes and declared SQL window events.
+
+Definition admission: **Done**. The file selects one program with the `kind`
+field. SQL and PRQL use either `source.inline` or `source.file`. The CLI
+captures referenced files before the request. The server rejects uncaptured
+file references. Data retains exact source text, generated SQL, image pins,
+and metadata under an immutable content revision. An explicit admission of
+changed content creates another revision. Admission starts no Discovery.
+
+Complete package execution: **Not done**. SQL and PRQL reach native physical
+planning during admission. Query binds package inputs, parameters, output,
+and dependency contracts into a native `PackageCall` logical node. SQL
+package bodies also reach native physical planning. The package-call node
+has no physical executor. An execution attempt returns `Unsupported`; it
+does not return empty output. The unchecked execution requirement above
+remains open with running instances. Read the
+[definition review](../guides/araphor-discovery-definition-review.md).
+
+Focused tests: **Done**. All 73 distinct cases passed. These cases cover the
+definition format, PRQL, native planning, typed inputs and saved state,
+immutable storage, request encoding, permission, CLI output, and the real TLS
+client route. Empty schemas retain their row count and continuous row
+indices. The existing duplicate-column and reserved-column checks remain.
+Formatting and affected-crate Clippy with warnings denied passed. The exact
+commands and log hashes are in `/tmp/araphor-definition-verification1.json`.
+Full workspace CI, benchmarks, and physical Kubernetes checks did not run.
+
+This delivery adds 1,653 production Rust code lines from `a03e5daa`. The
+complete redesign adds 5,754 from `7b7b407a`. The 6,000-line reduction requires
+another 11,754 net deletions. Tests, comments, documents, blank lines, and
+moves do not count as reduction. The record is
+`/tmp/araphor-definition-count1.json`. Complete redesign: **Not done**.
 
 ### 16. Running Discovery instances
 
@@ -203,10 +235,11 @@ isolation or another process for native calls.
 
 These TODOs record behavior. They do not approve the earlier draft's new
 crate names, root-packet/head storage, all-call transaction model, or
-partitioned-call state design. The exact file schema and command syntax are
-not selected here. A package-issued internal-query SDK capability is also
-not defined; the current ABI does not supply that capability. Any such API
-must preserve the same captured view and requires a separate concrete design.
+partitioned-call state design. The definition review records the implemented
+file schema and admission commands. A package-issued internal-query SDK
+capability is not defined; the current ABI does not supply that capability.
+Any such API must preserve the same captured view and requires a separate
+concrete design.
 
 ## Earlier parity TODOs
 

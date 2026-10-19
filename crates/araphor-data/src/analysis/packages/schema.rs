@@ -20,6 +20,11 @@ impl AnalysisStore {
             digest VARCHAR NOT NULL, commit_revision UBIGINT NOT NULL,
             PRIMARY KEY (tenant_id, package_id, revision)
         );
+        CREATE TABLE IF NOT EXISTS discovery_definitions (
+            tenant_id BLOB NOT NULL, name VARCHAR NOT NULL, revision VARCHAR NOT NULL,
+            definition BLOB NOT NULL, commit_revision UBIGINT NOT NULL,
+            PRIMARY KEY (tenant_id, name, revision)
+        );
         CREATE TABLE IF NOT EXISTS package_activations (
             tenant_id BLOB NOT NULL, scope_id VARCHAR NOT NULL, package_id VARCHAR NOT NULL,
             export_name VARCHAR NOT NULL, revision VARCHAR NOT NULL, generation UBIGINT NOT NULL,
@@ -50,6 +55,8 @@ impl AnalysisStore {
             FROM package_revisions
         UNION ALL SELECT tenant_id, 256 + octet_length(encode(package_id)) + octet_length(encode(revision))
             + octet_length(encode(digest)) FROM package_images
+        UNION ALL SELECT tenant_id, 256 + octet_length(encode(name)) + octet_length(encode(revision))
+            + octet_length(definition) FROM discovery_definitions
         UNION ALL SELECT tenant_id, 256 + octet_length(encode(scope_id)) + octet_length(encode(package_id))
             + octet_length(encode(export_name)) + octet_length(encode(revision))
             + COALESCE(octet_length(encode(result_id)), 0) + octet_length(encode(grant_id)) + octet_length(metadata)
@@ -114,6 +121,7 @@ impl AnalysisStore {
                 return Self::reject_path(root, reason);
             }
         }
-        Self::validate_package_contracts(writer, root)
+        Self::validate_package_contracts(writer, root)?;
+        Self::validate_definitions(writer, root)
     }
 }

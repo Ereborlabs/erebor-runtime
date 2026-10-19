@@ -4,13 +4,24 @@ use araphor_data::PackageResponseV1;
 use snafu::ResultExt as _;
 
 use super::*;
-use crate::cli::araphor::error::AnalysisSnafu;
+use crate::cli::araphor::error::{AnalysisSnafu, PackageSnafu};
 
 impl Output {
     pub(in crate::cli::araphor) fn package(
         &self,
         mut response: PackageResponseV1,
     ) -> Result<Vec<u8>> {
+        if let Some(definition) = &response.definition {
+            let revision = definition
+                .digest()
+                .map_err(araphor_data::Error::from)
+                .context(PackageSnafu)?;
+            let document = serde_json::json!({"revision": revision, "snapshot": definition});
+            if matches!(self.mode, OutputMode::Jsonl) {
+                return Self::json("definition", &document);
+            }
+            return serde_json::to_vec_pretty(&document).context(EncodeSnafu);
+        }
         if let Some(image) = &response.image {
             if matches!(self.mode, OutputMode::Jsonl) {
                 return Self::json("image", image);
@@ -108,6 +119,33 @@ impl Output {
 mod tests {
     use super::*;
 
+    #[test]
+    fn definition_output_revision() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use araphor_discovery_definition::{Definition, ResolvedDefinition};
+        let definition: Definition = serde_json::from_value(serde_json::json!({
+            "name":"counts", "labels":{"team":"security"},
+            "program":{"kind":"sql", "source":{"inline":"SELECT 1"}}
+        }))?;
+        let definition = ResolvedDefinition::new(definition, "SELECT 1".into(), Vec::new())?;
+        let response = PackageResponseV1 {
+            definition: Some(definition.clone()),
+            image: None,
+            scope_id: String::new(),
+            package_id: String::new(),
+            exports: Vec::new(),
+            tests: Vec::new(),
+            output: None,
+        };
+        for mode in [OutputMode::Jsonl, OutputMode::Table] {
+            let bytes = Output::new(Some(mode), false).package(response.clone())?;
+            let document: serde_json::Value = serde_json::from_slice(&bytes)?;
+            let frame = document.get("frame").unwrap_or(&document);
+            assert_eq!(frame["revision"], definition.digest()?);
+            assert_eq!(frame["snapshot"], serde_json::to_value(&definition)?);
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn image_output_metadata() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let image = araphor_analysis_back::AnalysisPackageOwner::required_bundles()
@@ -116,6 +154,7 @@ mod tests {
             .ok_or("package fixture absent")?
             .metadata()?;
         let response = PackageResponseV1 {
+            definition: None,
             image: Some(image.clone()),
             scope_id: String::new(),
             package_id: image.root.package_id.clone(),

@@ -23,6 +23,7 @@ members = [
     "crates/mithril-control",
     "crates/araphor-data",
     "crates/araphor-package",
+    "crates/araphor-discovery-definition",
     "crates/araphor-query",
     "crates/araphor-analysis",
     "crates/araphor-discovery-effects",

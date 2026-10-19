@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray as _;
 use arrow_array::{
-    make_array, new_null_array, Array, ArrayRef, FixedSizeListArray, ListArray, StructArray,
+    make_array, new_null_array, Array, ArrayRef, FixedSizeListArray, ListArray, RecordBatchOptions,
+    StructArray,
 };
 use arrow_cast::{can_cast_types, cast_with_options, CastOptions};
 use arrow_data::ByteView;
@@ -44,7 +45,11 @@ impl Dataset {
                 Self::cast_array(array, expected.data_type())
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(RecordBatch::try_new(schema, columns)?)
+        Ok(RecordBatch::try_new_with_options(
+            schema,
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+        )?)
     }
 
     fn compatible(actual: &DataType, expected: &DataType) -> bool {

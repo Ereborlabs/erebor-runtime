@@ -16,6 +16,7 @@ tree contains only named, no-clobber copies selected during triage.
 - [Guides](guides/), [How-to documents](how-to/), [examples](examples/), and
   [integrations](integrations/) contain recovered product-facing material.
 - [OCI image and binary package storage review](guides/araphor-binary-package-storage-review.md),
+  [Discovery definition review](guides/araphor-discovery-definition-review.md),
   [SQL operation review](guides/araphor-sql-operation-review.md), and
   [graph commit review](guides/araphor-graph-commit-review.md) give the source
   reading routes for the approved production changes.

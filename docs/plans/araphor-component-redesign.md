@@ -44,10 +44,22 @@ retains each installed image without an activation. Image installation starts
 no Discovery. The
 [review guide](../guides/araphor-binary-package-storage-review.md#image-installation-without-execution)
 records the source route and focused verification. Native Query package
-calls, definition files, and running instances remain **Not done**. This
+call execution and running instances remain **Not done**. This
 delivery adds 615 production Rust lines. The complete redesign adds 4,101
 from `7b7b407a`; the required reduction remains **Not done**. The count record
 is `/tmp/araphor-image-count1.json`. No speed result is claimed.
+
+Definition-file admission and inspection are implemented in
+`araphor-discovery-definition`, Query, Data, Control, and CLI. The
+[definition review](../guides/araphor-discovery-definition-review.md) records
+the JSON schema and owners. Admission starts no Discovery. SQL and PRQL reach
+native physical planning. Package calls reach typed logical plans; their
+physical executor and managed instances remain **Not done**. This delivery
+adds 1,653 production Rust code lines from `a03e5daa`. The complete redesign
+adds 5,754 from `7b7b407a`; another 11,754 must be removed for the 6,000-line
+reduction target. Tests, comments, documents, blank lines, and moves do not
+count as reduction. The count record is
+`/tmp/araphor-definition-count1.json`. No speed result is claimed.
 
 On 2026-10-18, the user restates simplification, coherence, and real production
 Rust reduction as the main acceptance criteria. Every new execution path,

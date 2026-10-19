@@ -66,6 +66,10 @@ impl Failure {
     fn data(error: &araphor_data::Error) -> Self {
         use araphor_data::Error;
         match error {
+            Error::Definition { source } => match source {
+                araphor_discovery_definition::Error::Io { .. } => Self::StorageUnavailable,
+                _ => Self::InvalidQuery,
+            },
             Error::AnalysisContract { source, .. } => Self::contract(source),
             Error::AnalysisInputTooLarge { .. } => Self::InputTooLarge,
             Error::AnalysisReadDenied { .. } => Self::Denied,

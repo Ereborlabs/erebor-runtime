@@ -6,6 +6,10 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(transparent)]
+    Definition {
+        source: araphor_discovery_definition::Error,
+    },
     #[snafu(display("Package {code:?} rejects {field}"), visibility(pub))]
     Package {
         code: crate::PackageErrorCodeV1,
@@ -269,6 +273,7 @@ impl From<araphor_package::Error> for Error {
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::Definition { source } => source.status_code(),
             Self::Package { code, .. } => match code {
                 crate::PackageErrorCodeV1::Invalid | crate::PackageErrorCodeV1::Limit => {
                     StatusCode::InvalidArguments
@@ -327,6 +332,7 @@ impl ErrorExt for Error {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
+            Self::Definition { source } => source.retry_hint(),
             Self::AnalysisContract { source, .. } => source.retry_hint(),
             Self::AnalysisBusy { .. }
             | Self::StorageCapacity { .. }

@@ -11,6 +11,23 @@ use super::*;
 use crate::Field;
 
 #[test]
+fn normalize_zero_columns() -> Result<()> {
+    let schema = Arc::new(Schema::empty());
+    for rows in [0, 3] {
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            Vec::new(),
+            &RecordBatchOptions::new().with_row_count(Some(rows)),
+        )?;
+        let normalized = Dataset::normalize_batch(batch, Arc::clone(&schema))?;
+        assert_eq!(normalized.num_rows(), rows);
+        assert_eq!(normalized.num_columns(), 0);
+        assert_eq!(normalized.schema(), schema);
+    }
+    Ok(())
+}
+
+#[test]
 fn fixed_binary_cast_reservation() -> Result<()> {
     let value = vec![7; 1024];
     let values: ArrayRef = Arc::new(BinaryArray::from(vec![

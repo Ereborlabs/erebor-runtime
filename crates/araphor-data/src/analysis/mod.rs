@@ -21,6 +21,7 @@ mod connection;
 mod context;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod crash;
+mod definitions;
 mod dependencies;
 mod extraction;
 mod graph;
@@ -73,7 +74,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceReadPermi
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
 pub(crate) const NATIVE_MEMORY_BYTES: usize = 128 * 1024 * 1024;
-pub const ANALYSIS_SCHEMA_VERSION: i64 = 25;
+pub const ANALYSIS_SCHEMA_VERSION: i64 = 26;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 

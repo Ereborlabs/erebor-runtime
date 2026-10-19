@@ -123,7 +123,7 @@ impl AnalysisStore {
         Ok(changed)
     }
 
-    pub(super) fn package_next(&self, reader: &Connection) -> Result<u64> {
+    pub(in crate::analysis) fn package_next(&self, reader: &Connection) -> Result<u64> {
         Self::read_meta_from(reader, &self.root)?
             .commit_revision
             .checked_add(1)

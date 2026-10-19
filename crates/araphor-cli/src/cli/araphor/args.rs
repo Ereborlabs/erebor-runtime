@@ -30,6 +30,8 @@ pub(crate) struct ConnectionArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AraphorCommand {
+    /// Admit or inspect a reusable Discovery definition.
+    Definition(super::packages::DefinitionArgs),
     /// Read or retain OCI package images.
     Image(super::packages::ImageArgs),
     /// Install, inspect, and run local analysis packages.
@@ -148,6 +150,7 @@ pub(super) enum Prepared {
 impl AraphorCommand {
     pub(super) fn prepare(&self) -> Result<Prepared> {
         match self {
+            AraphorCommand::Definition(args) => args.prepare(),
             AraphorCommand::Image(args) => args.prepare(),
             AraphorCommand::Package(args) => args.prepare(),
             AraphorCommand::Catalog(args) => args.prepare(),
@@ -247,6 +250,7 @@ impl AraphorCommand {
 impl fmt::Display for AraphorCommand {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::Definition(_) => "definition",
             Self::Image(_) => "image",
             Self::Package(_) => "package",
             Self::Catalog(_) => "catalog",
