@@ -18,6 +18,26 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Definition YAML failed: {source}"))]
+    Yaml {
+        #[snafu(source(from(serde_saphyr::Error, Box::new)))]
+        source: Box<serde_saphyr::Error>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Definition YAML scan failed: {source}"))]
+    YamlScan {
+        #[snafu(source(from(serde_saphyr::granit_parser::ScanError, Box::new)))]
+        source: Box<serde_saphyr::granit_parser::ScanError>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Definition SQL failed: {source}"))]
+    Sql {
+        source: sqlparser::parser::ParserError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Definition file `{}` failed: {source}", path.display()))]
     Io {
         path: PathBuf,
@@ -38,9 +58,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::Invalid { .. } | Self::Json { .. } | Self::Prql { .. } => {
-                StatusCode::InvalidArguments
-            }
+            Self::Invalid { .. }
+            | Self::Json { .. }
+            | Self::Yaml { .. }
+            | Self::YamlScan { .. }
+            | Self::Sql { .. }
+            | Self::Prql { .. } => StatusCode::InvalidArguments,
             Self::Io { .. } => StatusCode::External,
         }
     }

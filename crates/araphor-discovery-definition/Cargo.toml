@@ -8,11 +8,14 @@ repository.workspace = true
 [dependencies]
 araphor-package = { path = "../araphor-package" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+num-bigint = { version = "0.4.8", default-features = false, features = ["std"] }
 prqlc = { version = "=0.13.13", default-features = false }
 serde.workspace = true
+serde-saphyr.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 snafu.workspace = true
+sqlparser = { version = "=0.61.0", default-features = false, features = ["std", "recursive-protection"] }
 
 [dev-dependencies]
 tempfile = "3.23.0"

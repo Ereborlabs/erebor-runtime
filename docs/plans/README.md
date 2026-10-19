@@ -29,8 +29,11 @@ master plan invented for them.
   with metadata. Earlier controller and storage proposals in
   that file remain draft material. The first native SQL package and selected
   query-RPC proof pass. OCI image storage and installation now pass focused
-  qualification. Image installation creates no activation. Definition files,
-  running instances, and the complete replacement remain open.
+  qualification. Image installation creates no activation. Definition
+  admission and inspection also pass focused qualification. The current YAML
+  authoring design keeps metadata for SQL, PRQL, and direct calls. Package-call
+  physical execution, running instances, and the complete replacement remain
+  open.
 - [Araphor performance simplification TODO](araphor-performance-simplification-todo.md) —
   the user approves all 17 source-audit items. The file records implementation
   and verification status for each item.

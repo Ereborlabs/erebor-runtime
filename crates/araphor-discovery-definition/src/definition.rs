@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use crate::error::{InvalidSnafu, IoSnafu, JsonSnafu};
+use crate::error::{InvalidSnafu, JsonSnafu};
 use crate::Result;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -51,15 +51,7 @@ pub struct ResolvedDefinition {
 
 impl Definition {
     pub fn read(path: &Path) -> Result<Self> {
-        let bytes = std::fs::read(path).context(IoSnafu { path })?;
-        let mut definition: Self = serde_json::from_slice(&bytes).context(JsonSnafu)?;
-        definition.validate()?;
-        definition
-            .program
-            .source_mut()
-            .capture(path.parent().unwrap_or(Path::new(".")))?;
-        definition.validate_captured()?;
-        Ok(definition)
+        crate::file::YamlDefinition::read(path)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -86,12 +78,6 @@ impl Program {
     pub fn validate(&self) -> Result<()> {
         self.source().validate()
     }
-
-    fn source_mut(&mut self) -> &mut Source {
-        match self {
-            Self::Sql { source } | Self::Prql { source } => source,
-        }
-    }
 }
 
 impl Source {
@@ -112,15 +98,6 @@ impl Source {
             Self::File { file } if !file.as_os_str().is_empty() => Ok(()),
             _ => InvalidSnafu { field: "source" }.fail(),
         }
-    }
-
-    fn capture(&mut self, directory: &Path) -> Result<()> {
-        if let Self::File { file } = self {
-            let path = directory.join(&*file);
-            let inline = std::fs::read_to_string(&path).context(IoSnafu { path })?;
-            *self = Self::Inline { inline };
-        }
-        self.validate()
     }
 }
 

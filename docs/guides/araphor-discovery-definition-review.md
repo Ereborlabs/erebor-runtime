@@ -5,16 +5,17 @@ definition selects reusable code and inputs. Admission starts no Discovery.
 
 ## Intended end state
 
-A definition contains metadata and one SQL or PRQL program. Package calls
-are relations inside that program. Every program uses the native DataFusion
-pipeline. A separate running instance owns permission, progress, saved state,
-and subscription lifetime.
+A YAML definition contains metadata and exactly one SQL, PRQL, or package-call
+form. The package-call form produces a native SQL relation. Every program uses
+the native DataFusion pipeline. A separate running instance owns permission,
+progress, saved state, and subscription lifetime.
 
 ## Review flow
 
 ```text
 An operator admits a definition file
-  -> the CLI captures the definition and referenced source files
+  -> the file owner captures source files and converts a YAML call to SQL
+  -> the CLI sends metadata and captured SQL or PRQL
   -> Control checks the current tenant and manager permission
   -> Query admits SQL or compiled PRQL and resolves package calls in that SQL
   -> Control holds permission and image trust through the final write
@@ -32,9 +33,20 @@ accepts `araphor definition admit FILE` and
 `araphor definition inspect NAME --revision REVISION`.
 
 -> [Definition::read](../../crates/araphor-discovery-definition/src/definition.rs)
-reads the JSON definition and resolves relative source files from its
-directory. The owner replaces each file reference with captured UTF-8 text.
-No owner watches or polls the files.
+delegates YAML parsing to
+[YamlDefinition::read](../../crates/araphor-discovery-definition/src/file.rs).
+The file owner checks metadata and the single program selection. It resolves
+relative paths from the YAML directory and captures UTF-8 source text once.
+The native YAML parser rejects duplicate keys and unknown fields. No owner
+watches or polls the files.
+
+-> [Call::sql](../../crates/araphor-discovery-definition/src/file.rs)
+converts the structured call to native SQL. The existing SQL parser checks
+each input query. Native syntax-tree values quote names and literal
+parameters. This owner does not evaluate parameter strings as SQL. The
+result uses the existing `Program::Sql` type. SQL and PRQL text use the
+existing source types. The JSON request and saved snapshot formats do not
+change.
 
 -> [ClientGrpcOwner::definition_request](../../crates/mithril-control/src/client_grpc/packages.rs)
 accepts captured definitions only. The server does not open client paths.
@@ -112,30 +124,49 @@ activation or result.
 
 ## File schema
 
-The file uses JSON. Unknown fields, the removed package program form,
-duplicate program forms, and combined inline/file source objects are invalid.
-No definition-specific size quota is added. The existing optional Query and
-Data limits still apply.
+All three forms use YAML metadata. `name` is required. `description` and
+`labels` are optional. Select exactly one top-level `sql`, `prql`, or `call`.
+A raw SQL or PRQL file is source for a definition, not a complete definition.
+Unknown fields, explicit null program forms, duplicate keys, merge keys, and
+multiple YAML documents are invalid. Metadata and call names require strings.
+Quote a numeric image revision, for example `revision: "1"`.
 
-```json
-{
-  "name": "event-counts",
-  "description": "Count retained events.",
-  "labels": {"team": "security"},
-  "program": {
-    "kind": "sql",
-    "source": {"file": "queries/counts.sql"}
-  }
-}
+SQL supports the full native query:
+
+```yaml
+name: event-counts
+description: Count retained events.
+labels:
+  team: security
+sql: |
+  SELECT count(*) FROM events
 ```
 
-Replace `source` with `{"inline":"SELECT count(*) FROM events"}` for inline
-SQL. Use `kind: "prql"` with the same source forms for PRQL. The
+For a separate source file, use `sql: {file: queries/counts.sql}`. PRQL has
+the same inline and file forms:
+
+```yaml
+name: selected-events
+description: Select event cursors.
+labels:
+  team: security
+prql:
+  file: queries/selected-events.prql
+```
+
+The referenced file contains:
+
+```prql
+from events
+select {value = source_cursor}
+```
+
+The
 [compiler](../../crates/araphor-discovery-definition/src/compile.rs) uses
 `prqlc` 0.13.13 with the Generic SQL target. DataFusion admits the generated
 SQL. This route does not promise every PRQL expression is compatible.
 
-Put package calls in the SQL source:
+Put package calls in SQL when the definition needs query composition:
 
 ```sql
 SELECT *
@@ -157,8 +188,44 @@ such as `count('result', source => (SELECT ...), increment => 2)`.
 
 Inputs are native subqueries. Filters, joins, grouping, and windows stay in
 those queries. Scalar arguments use the declared parameter names and types.
-There is no separate JSON input, parameter, or window language. Calls can
+Calls can
 appear in joins, nested inputs, or queries that use common table expressions.
+
+For one direct package call, use the structured YAML form:
+
+```yaml
+name: selected-event-counts
+description: Count selected event cursors.
+labels:
+  team: security
+call:
+  package: fixture
+  revision: r1
+  export: count
+  inputs:
+    source: |
+      SELECT source_cursor AS value FROM events
+  parameters:
+    increment: 2
+```
+
+The file owner converts this form to the SQL relation above without the
+time filter. Inputs accept inline SQL or `{file: queries/input.sql}`. Optional
+`output` selects a named output. Query checks the exact installed image,
+declared bindings, parameter types, defaults, and selected output. There is
+no second parameter evaluator or YAML window language. Put filters and
+windows in input SQL.
+
+Parameters use literal strings, numbers, booleans, nulls, lists, or objects.
+The reader rejects nonfinite numbers, unsupported scalar tags, and integers
+outside the existing signed 64-bit or unsigned 64-bit representation. It
+preserves `18446744073709551615` exactly. The reader adds no resource quota.
+Parser budgets and alias quotas are disabled. Existing Query and Data limits
+still apply.
+
+SQL and PRQL source text is retained exactly. A YAML call retains metadata
+and normalized SQL. It does not retain the original YAML mapping, formatting,
+or source paths. JSON remains the request and saved snapshot encoding.
 
 PRQL uses its existing SQL relation syntax and then compiles to native SQL:
 
@@ -177,6 +244,7 @@ CLI owns command parsing and output. No new owner depends on
 `araphor-analysis_back`. The old package route remains available separately.
 
 Read the [definition tests](../../crates/araphor-discovery-definition/src/tests.rs),
+[YAML tests](../../crates/araphor-discovery-definition/src/file/tests.rs),
 [Query tests](../../crates/araphor-query/src/definition/tests.rs),
 [Data tests](../../crates/araphor-data/src/analysis/definitions/tests.rs),
 [authority tests](../../crates/mithril-control/src/client_auth/packages/tests.rs),
@@ -184,8 +252,10 @@ and [RPC tests](../../crates/mithril-control/src/client_grpc/tests/packages.rs).
 The tests cover source capture, strict forms, native planning, typed calls,
 permission revocation, exact pins, immutable retries, and definition recovery.
 The [TLS case](../../crates/mithril-e2e/src/discovery/packages/definitions.rs)
-uses the real client to admit and inspect SQL and PRQL. Its native package
-calls also check the locked SQL dependency and unchanged activation state.
+uses the real client to admit and inspect all three YAML forms. Its native
+package calls also check the locked SQL dependency and unchanged activation
+state. The Query YAML case checks exact unsigned parameter values through
+the native parameter plan and rejects expression strings as numeric values.
 
 [Dataset::normalize_batch](../../crates/araphor-analysis-sdk/src/batch.rs)
 retains the explicit Arrow row count when a valid SDK input has no columns.
@@ -198,16 +268,17 @@ accepts the same empty schema and retains metadata. The
 continuous row indices across empty and nonempty zero-column batches.
 The changes retain the existing column and schema checks.
 
-The native-call replacement passes the following 50 distinct focused tests:
+The previous native-call replacement passes 50 distinct focused tests. The
+YAML authoring delivery passes 60 distinct focused tests:
 
-| Owner | Passed cases |
-| --- | --- |
-| Definition format and PRQL | 12 |
-| Query definitions and package calls | 20 |
-| Data definitions and request encoding | 9 |
-| Control permission and RPC admission | 5 |
-| CLI admission, inspection, and output | 3 |
-| TLS client admission and inspection | 1 |
+| Owner | Native-call replacement | YAML authoring |
+| --- | --- | --- |
+| Definition format and PRQL | 12 | 21 |
+| Query definitions and package calls | 20 | 21 |
+| Data definitions and request encoding | 9 | 9 |
+| Control permission and RPC admission | 5 | 5 |
+| CLI admission, inspection, and output | 3 | 3 |
+| TLS client admission and inspection | 1 | 1 |
 
 Formatting and affected-crate Clippy with warnings denied passed. The
 verification record is `/tmp/araphor-sql-call-verification1.json`.
@@ -226,3 +297,17 @@ blank lines, and moves do not count as reduction. The count record is
 **Not done**.
 Complete package execution and running-instance acceptance remain open.
 Full workspace CI, benchmarks, and physical Kubernetes checks did not run.
+
+YAML implementation and selected functional qualification: **Done**. The
+new tests reject null maps, duplicate keys, and integer rounding. The Query
+case executes the native parameter plan and checks the exact unsigned value.
+The TLS case admits SQL, PRQL, and a direct YAML call through the real client.
+The source and command record is `/tmp/araphor-yaml-verification1.json`.
+Formatting and affected-crate Clippy with warnings denied pass.
+
+The YAML delivery adds 261 production Rust code lines from `d49e6bd5`:
+282 additions and 21 deletions by file size. The complete redesign adds
+6,180 from `7b7b407a`; another 12,180 must be removed for the 6,000-line
+reduction target. The count excludes tests, comments, documents, blank lines,
+and moves. The record is `/tmp/araphor-yaml-count1.json`. The complete
+reduction remains **Not done**. No speed result is claimed.

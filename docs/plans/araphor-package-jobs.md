@@ -63,8 +63,9 @@ Keep three separate objects: the OCI package contains reusable code; the
 Discovery definition contains SQL or PRQL; the running instance owns the
 subscription lifetime. Installing a package does not start a Discovery.
 
-The user replaces the separate package-call program form with calls inside
-SQL or PRQL. Remove the JSON call, input bindings, parameters, output
+The previous native-call delivery replaces the separate package-call program
+form with calls inside SQL or PRQL. It removes the JSON call, input bindings,
+parameters, output
 selector, and window fields. Native SQL supplies those operations. Use an
 exact function name such as `"fixture"."r1".count(...)`: the parts identify
 the image, revision, and export. Named subquery arguments supply input
@@ -79,6 +80,107 @@ the existing immutable snapshot, permission, and trust checks. Admission
 starts no Discovery. This change does not implement the running-instance
 lifecycle or the physical package-call executor.
 
+### Approved YAML authoring design
+
+The user requires YAML metadata for all three program forms: full SQL, PRQL,
+and a structured package call. A SQL or PRQL source file is referenced from
+the YAML definition. It is not a complete definition without metadata.
+The YAML definition requires a name. Description and labels are optional.
+The definition selects exactly one of `sql`, `prql`, or `call`.
+
+```yaml
+name: selected-events
+description: Process selected event cursors.
+labels:
+  team: security
+sql: |
+  SELECT *
+  FROM "fixture"."r1".count(
+    source => (SELECT source_cursor AS value FROM events),
+    increment => 2
+  )
+```
+
+SQL and PRQL accept inline text or a source file:
+
+```yaml
+name: selected-events
+prql:
+  file: queries/selected-events.prql
+```
+
+A structured call selects an installed image and one export:
+
+```yaml
+name: selected-events
+call:
+  package: fixture
+  revision: r1
+  export: count
+  inputs:
+    source: |
+      SELECT source_cursor AS value FROM events
+  parameters:
+    increment: 2
+```
+
+An input can use `{file: queries/input.sql}` instead of inline SQL. The
+optional `output` field selects an output when the export has several
+outputs. Omitted inputs use the image's declared defaults. The package
+interface still determines required parameters and valid input schemas.
+Parameter values are literals. Filters and time windows stay in input SQL.
+The definition adds no separate window or scheduling language.
+
+```text
+An operator admits a YAML definition
+  -> the file owner validates metadata and exactly one program
+  -> the file owner captures each referenced source once
+  -> the file owner converts a structured call to native SQL syntax
+  -> Query parses SQL or the existing PRQL compiler's SQL output
+  -> Query uses native logical planning and optimization
+  -> Query validates physical plans that need no package-call executor
+  -> Control checks current permission and every image pin at commit
+  -> Data retains the immutable definition
+  -> no Discovery starts
+
+The YAML, query, image, permission, or commit check fails
+  -> the request returns a typed error
+  -> Data commits no new definition
+  -> a retry checks current permission again
+```
+
+The file crate owns YAML parsing and call conversion. Reuse the workspace
+YAML parser and DataFusion's pinned SQL parser. Construct identifiers and
+literals through the native SQL syntax types. Do not substitute unescaped
+text. The normalized request keeps the existing SQL and PRQL program types.
+Query, Control, and Data need no third execution route or program variant.
+SQL and PRQL retain captured source text. A structured call retains its
+metadata and normalized SQL; it does not retain YAML formatting or source
+paths. Native Query admission derives the exact image pins from that SQL.
+
+Keep the existing JSON request and snapshot encoding. Reject duplicate
+keys, unknown fields, missing programs, combined programs, and uncaptured
+server-side paths. Add no mandatory file-size, depth, or alias-count quota.
+Do not add package aliases, raw SQL/PRQL definition admission, a source
+watcher, or a polling loop. Package-call physical execution and running
+instances remain outside this authoring change.
+
+Implementation and selected functional qualification: **Done**. All 60
+distinct focused tests pass. They cover YAML forms, source capture, native
+plans, literal values, current permission and trust, immutable storage,
+recovery, request encoding, and the real TLS client. Admission starts no
+Discovery. The source and command record is
+`/tmp/araphor-yaml-verification1.json`. Formatting and affected-crate Clippy
+with warnings denied pass.
+
+This delivery adds 261 production Rust code lines from `d49e6bd5`: 282
+additions and 21 deletions by file size. The complete redesign adds 6,180
+from `7b7b407a`; another 12,180 must be removed for the 6,000-line reduction
+target. Tests, comments, documents, blank lines, and moves do not count as
+reduction. The record is `/tmp/araphor-yaml-count1.json`. Complete reduction:
+**Not done**. Full workspace CI, benchmarks, and physical Kubernetes checks
+did not run. No speed result is claimed.
+
 The user authorizes the OCI image in a separate crate. The current delivery
 uses `araphor-package` for image content and the existing Data store for
 durable installation. Control and CLI image requests do not call a package
@@ -90,7 +192,7 @@ and the physical package-call executor remain **Not done**. Read the
 for the source route and verification limits.
 
 The [definition review](../guides/araphor-discovery-definition-review.md)
-records the JSON file schema and admission route. Admission captures source
+records the YAML file schema and admission route. Admission captures source
 files once, binds exact installed images, validates native query plans, and
 retains an immutable snapshot. Admission starts no Discovery. SQL and PRQL
 reach native physical planning. A package call reaches a typed logical node;
@@ -100,7 +202,7 @@ execution acceptance criterion below remains **Not done**.
 | Order | TODO | Result |
 | --- | --- | --- |
 | First | [14. OCI package image](araphor-feature-parity-todo.md#14-oci-package-image) | Reusable code with exact revisions and declared SDK contracts. Installation starts no Discovery. |
-| Next | [15. Compose file](araphor-feature-parity-todo.md#15-discovery-definition-file-compose-file) | Metadata and one SQL or PRQL program. Package calls belong in that program. |
+| Next | [15. Compose file](araphor-feature-parity-todo.md#15-discovery-definition-file-compose-file) | YAML metadata and one SQL, PRQL, or structured call form. Calls produce native SQL. |
 | Then | [16. Running Discoveries](araphor-feature-parity-todo.md#16-running-discovery-instances) | Independent managed Query subscriptions with their own lifetime, progress, and saved state. |
 
 A definition contains metadata and selects one program form:
@@ -109,13 +211,15 @@ A definition contains metadata and selects one program form:
 | --- | --- | --- |
 | PRQL | PRQL source or a referenced PRQL file, with package calls when required. | Compile to SQL, then use native SQL admission. |
 | SQL | SQL source or a referenced SQL file, with package calls when required. | Use native SQL admission directly. |
+| YAML call | Exact image, export, input queries, and literal parameters. | Construct native SQL syntax, then use native SQL admission. |
 
-Both forms use native SQL parsing, logical planning, optimization,
+All three forms use native SQL parsing, logical planning, optimization,
 physical planning, and execution. Reuse the installed evaluator and Query
 subscriptions. Add no separate execution engine or polling loop.
 
-Metadata can name and describe the definition and attach labels. Call
-bindings and parameters belong to the SQL call site. SQL defines query windows.
+YAML metadata names and describes the definition and attaches labels. Call
+bindings and parameters use SQL syntax or the structured YAML call form. SQL
+defines query windows.
 Execution permission comes from Control, not from metadata in the file.
 Resolve referenced source paths relative to the definition. Read those files
 when the definition is admitted; do not poll them for changes.
@@ -151,8 +255,9 @@ without starting a Discovery. Start two instances with different inputs or
 parameters; stop one while the other continues. Preserve current permission,
 cancellation, saved-state, and buffer lifetime checks.
 
-This priority, the three separate TODOs, and the two program forms are
-current user requirements.
+This priority and the three separate TODOs are current user requirements.
+The approved YAML design above supplies three authoring forms. The retained
+program types remain SQL and PRQL.
 They do not approve every controller, storage, checkpoint, or crate proposal
 in the earlier draft. Implementation: **Not done**.
 

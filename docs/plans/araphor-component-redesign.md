@@ -31,8 +31,9 @@ The [feature parity TODO](araphor-feature-parity-todo.md) compares the accepted
 graph, SDK, package, Wasm, and native features with the current source. The
 user now requires three separate TODOs first: 14, the OCI package image;
 15, the Compose definition file; and 16, running Discovery instances. Complete
-them before parity items 1-13. A definition contains metadata and one SQL or
-PRQL source. Package calls belong in that source. The
+them before parity items 1-13. A YAML definition contains metadata and one
+SQL, PRQL, or structured package-call form. The call form produces native SQL.
+The
 [first deliverable](araphor-package-jobs.md#first-deliverable-definition-files-and-running-instances)
 records this priority and the common native SQL execution route.
 Existing package and detector code can be reused when it meets this design.
@@ -49,10 +50,10 @@ delivery adds 615 production Rust lines. The complete redesign adds 4,101
 from `7b7b407a`; the required reduction remains **Not done**. The count record
 is `/tmp/araphor-image-count1.json`. No speed result is claimed.
 
-The first definition-file admission and inspection delivery is implemented in
+The first definition-file admission and inspection delivery was implemented in
 `araphor-discovery-definition`, Query, Data, Control, and CLI. The
 [definition review](../guides/araphor-discovery-definition-review.md) records
-the JSON schema and owners. Admission starts no Discovery. SQL and PRQL reach
+the current YAML schema and owners. Admission starts no Discovery. SQL and PRQL reach
 native physical planning. Package calls reach typed logical plans; their
 physical executor and managed instances remain **Not done**. This delivery
 adds 1,653 production Rust code lines from `a03e5daa`. The complete redesign
@@ -61,7 +62,7 @@ reduction target. Tests, comments, documents, blank lines, and moves do not
 count as reduction. The count record is
 `/tmp/araphor-definition-count1.json`. No speed result is claimed.
 
-The user replaces the separate JSON package form with native package calls
+The previous delivery replaces the separate JSON package form with native package calls
 inside SQL or PRQL. A three-part function name selects the image, exact
 revision, and export. Native subquery arguments supply inputs. Native scalar
 arguments supply parameters. Query loads the exact installed images and
@@ -82,6 +83,26 @@ redesign adds 5,919 from `7b7b407a`; another 11,919 must be removed for the
 moves do not count as reduction. The record is
 `/tmp/araphor-sql-call-count1.json`. A simpler file interface does not prove
 production code reduction. No speed result is claimed.
+
+The user approves YAML metadata for all three authoring forms: SQL, PRQL,
+and one structured package call. `araphor-discovery-definition` captures
+source files and converts a structured call to native SQL syntax. The
+existing Query planner admits every form. The JSON request and snapshot
+types do not change. No executor, subscription, or timer is added.
+Implementation and selected functional qualification: **Done**. All 60
+distinct focused tests pass. Formatting and affected-crate Clippy with
+warnings denied pass. Read the
+[approved file design](araphor-package-jobs.md#approved-yaml-authoring-design)
+and [review guide](../guides/araphor-discovery-definition-review.md).
+The source and command record is `/tmp/araphor-yaml-verification1.json`.
+
+This YAML delivery adds 261 production Rust code lines from `d49e6bd5`:
+282 additions and 21 deletions by file size. The complete redesign adds
+6,180 from `7b7b407a`; another 12,180 must be removed for the 6,000-line
+reduction target. Tests, comments, documents, blank lines, and moves do not
+count as reduction. The record is `/tmp/araphor-yaml-count1.json`. Complete
+reduction: **Not done**. Full workspace CI, benchmarks, and physical
+Kubernetes checks did not run. No speed result is claimed.
 
 On 2026-10-18, the user restates simplification, coherence, and real production
 Rust reduction as the main acceptance criteria. Every new execution path,

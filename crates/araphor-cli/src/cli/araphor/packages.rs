@@ -328,30 +328,83 @@ mod tests {
 
     #[test]
     fn definition_cli_captures_source() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let file = crate::cli::test_support::TempJsonFile::write(
-            r#"{"name":"counts","program":{"kind":"sql","source":{"inline":"SELECT 1"}}}"#,
-        )?;
-        let cli = Cli::try_parse_from([
-            std::ffi::OsStr::new("araphor"),
-            std::ffi::OsStr::new("definition"),
-            std::ffi::OsStr::new("admit"),
-            file.path().as_os_str(),
-        ])?;
-        let Command::Investigate(command) = cli.command else {
-            return Err("definition command absent".into());
-        };
-        let Prepared::Package(request) = command.prepare()? else {
-            return Err("definition request absent".into());
-        };
-        std::fs::write(file.path(), "changed")?;
-        let PackageRequestV1::AdmitDefinition { definition } =
-            PackageRequestV1::from_bytes(&request.definition)?
-        else {
-            return Err("definition admission absent".into());
-        };
-        assert_eq!(definition.name, "counts");
-        assert_eq!(definition.program.sql()?, "SELECT 1");
-        assert!(request.selection.is_none());
+        for (kind, text) in [
+            ("sql", "SELECT 1"),
+            ("prql", "from events"),
+            ("call", "SELECT source_cursor AS value FROM events"),
+        ] {
+            let file = crate::cli::test_support::TempJsonFile::write("")?;
+            let path = file.path().with_extension("yaml");
+            let source = file.path().with_extension("source");
+            let filename = source
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .ok_or("source filename absent")?;
+            let program = if kind == "call" {
+                format!("call:\n  package: fixture\n  revision: r1\n  export: count\n  inputs:\n    source:\n      file: {filename}\n  parameters:\n    increment: 2\n  output: result\n")
+            } else {
+                format!("{kind}:\n  file: {filename}\n")
+            };
+            std::fs::write(&source, text)?;
+            std::fs::write(&path, format!("name: counts-{kind}\ndescription: Count retained events.\nlabels:\n  owner: analysis\n  team: security\n{program}"))?;
+            let cli = Cli::try_parse_from([
+                std::ffi::OsStr::new("araphor"),
+                std::ffi::OsStr::new("definition"),
+                std::ffi::OsStr::new("admit"),
+                path.as_os_str(),
+            ])?;
+            let Command::Investigate(command) = cli.command else {
+                return Err("definition command absent".into());
+            };
+            let Prepared::Package(request) = command.prepare()? else {
+                return Err("definition request absent".into());
+            };
+            std::fs::write(&source, "changed")?;
+            std::fs::remove_file(&source)?;
+            std::fs::remove_file(&path)?;
+            let PackageRequestV1::AdmitDefinition { definition } =
+                PackageRequestV1::from_bytes(&request.definition)?
+            else {
+                return Err("definition admission absent".into());
+            };
+            assert_eq!(definition.name, format!("counts-{kind}"));
+            assert_eq!(definition.description, "Count retained events.");
+            assert_eq!(
+                definition.labels,
+                std::collections::BTreeMap::from([
+                    ("owner".into(), "analysis".into()),
+                    ("team".into(), "security".into()),
+                ])
+            );
+            let captured = definition.program.source().inline()?;
+            if kind == "call" {
+                assert!(matches!(
+                    &definition.program,
+                    araphor_discovery_definition::Program::Sql { .. }
+                ));
+                for fragment in [
+                    "fixture",
+                    "r1",
+                    "count",
+                    "source_cursor",
+                    "increment",
+                    "result",
+                ] {
+                    assert!(captured.contains(fragment), "{captured}");
+                }
+                assert!(!captured.contains("changed"));
+            } else {
+                assert_eq!(captured, text);
+                assert_eq!(
+                    matches!(
+                        &definition.program,
+                        araphor_discovery_definition::Program::Prql { .. }
+                    ),
+                    kind == "prql"
+                );
+            }
+            assert!(request.selection.is_none());
+        }
         Ok(())
     }
 

@@ -340,11 +340,14 @@ version = "0.1.0"
 dependencies = [
  "araphor-package",
  "erebor-runtime-error",
+ "num-bigint",
  "prqlc",
  "serde",
+ "serde-saphyr 1.0.1",
  "serde_json",
  "sha2 0.10.9",
  "snafu",
+ "sqlparser 0.61.0",
  "tempfile",
 ]
 

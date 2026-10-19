@@ -89,15 +89,12 @@ fn package_syntax_is_rejected() {
 fn source_file_is_captured() -> TestResult {
     let directory = tempfile::tempdir()?;
     let source = directory.path().join("query.sql");
-    let path = directory.path().join("definition.json");
+    let path = directory.path().join("definition.yaml");
     let text = "SELECT source_cursor\nFROM events\n";
     std::fs::write(&source, text)?;
     std::fs::write(
         &path,
-        serde_json::to_vec(&json!({
-            "name":"sample","description":"retained metadata","labels":{"team":"security"},
-            "program":{"kind":"sql","source":{"file":"query.sql"}}
-        }))?,
+        "name: sample\ndescription: retained metadata\nlabels:\n  team: security\nsql:\n  file: query.sql\n",
     )?;
     let captured = Definition::read(&path)?;
     assert_eq!(captured.program.source().inline()?, text);
@@ -118,9 +115,10 @@ fn source_file_is_captured() -> TestResult {
     std::fs::write(&source, "from events")?;
     std::fs::write(
         &path,
-        serde_json::to_vec(&json!({
-            "name":"sample","program":{"kind":"prql","source":{"file":source}}
-        }))?,
+        format!(
+            "name: sample\nprql:\n  file: {}\n",
+            serde_json::to_string(&source)?
+        ),
     )?;
     let absolute = Definition::read(&path)?;
     assert_eq!(absolute.program.source().inline()?, "from events");
@@ -130,20 +128,15 @@ fn source_file_is_captured() -> TestResult {
 #[test]
 fn source_errors_are_structured() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let path = directory.path().join("definition.json");
+    let path = directory.path().join("definition.yaml");
     std::fs::write(&path, "{")?;
     let Err(error) = Definition::read(&path) else {
-        return Err("invalid JSON must fail".into());
+        return Err("invalid YAML must fail".into());
     };
-    assert!(matches!(error, Error::Json { .. }));
+    assert!(matches!(error, Error::YamlScan { .. }));
     assert_eq!(error.status_code(), StatusCode::InvalidArguments);
     assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
-    std::fs::write(
-        &path,
-        serde_json::to_vec(&json!({
-            "name":"sample","program":{"kind":"sql","source":{"file":"query.sql"}}
-        }))?,
-    )?;
+    std::fs::write(&path, "name: sample\nsql:\n  file: query.sql\n")?;
     let Err(error) = Definition::read(&path) else {
         return Err("absent source must fail".into());
     };

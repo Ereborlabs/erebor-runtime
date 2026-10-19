@@ -90,7 +90,7 @@ fn definition_retains_captured_source() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let source = directory.path().join("query.sql");
-    let path = directory.path().join("definition.json");
+    let path = directory.path().join("definition.yaml");
     let sql = "SELECT 1 AS count\n";
     std::fs::write(&source, sql)?;
     let definition = Definition {
@@ -106,11 +106,12 @@ fn definition_retains_captured_source() -> TestResult {
             },
         },
     };
-    std::fs::write(&path, serde_json::to_vec(&definition)?)?;
+    std::fs::write(&path, "name: observed\ndescription: Count retained records.\nlabels:\n  owner: analysis\n  team: security\nsql:\n  file: query.sql\n")?;
     let captured = Definition::read(&path)?;
     let compiled = captured.program.sql()?;
     let captured = ResolvedDefinition::new(captured, compiled, Vec::new())?;
     std::fs::write(&source, "SELECT 99 AS count")?;
+    std::fs::remove_file(&source)?;
     let store = AnalysisStore::open(&root)?;
     let committed = store.admit_definition([1; 16], &captured, || Ok(()))?;
     assert_eq!(committed, store.meta()?.commit_revision);
@@ -143,7 +144,6 @@ fn definition_retains_captured_source() -> TestResult {
     );
     assert_no_execution(&store)?;
     drop(store);
-    std::fs::remove_file(source)?;
     let reopened = AnalysisStore::open(&root)?;
     assert_eq!(reopened.meta()?, saved);
     assert_eq!(

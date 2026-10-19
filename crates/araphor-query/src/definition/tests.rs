@@ -359,16 +359,10 @@ async fn native_definition_sql_prql() -> TestResult {
 #[tokio::test]
 async fn native_definition_captured_file() -> TestResult {
     let fixture = Fixture::new()?;
-    let path = fixture._directory.path().join("definition.json");
+    let path = fixture._directory.path().join("definition.yaml");
     let source = fixture._directory.path().join("query.sql");
     std::fs::write(&source, "SELECT source_cursor FROM events")?;
-    let mut definition = Fixture::definition();
-    definition.program = Program::Sql {
-        source: Source::File {
-            file: "query.sql".into(),
-        },
-    };
-    std::fs::write(&path, serde_json::to_vec(&definition)?)?;
+    std::fs::write(&path, "name: count-events\ndescription: Count selected events.\nlabels:\n  team: security\nsql:\n  file: query.sql\n")?;
     let captured = Definition::read(&path)?;
     let admitted = fixture
         .engine
@@ -395,6 +389,66 @@ async fn native_definition_captured_file() -> TestResult {
         )
         .await
         .is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_definition_call_file() -> TestResult {
+    let bundle = Fixture::bundle();
+    let fixture = Fixture::installed(&bundle)?;
+    let path = fixture._directory.path().join("definition.yaml");
+    let source = fixture._directory.path().join("query.sql");
+    std::fs::write(
+        &source,
+        "SELECT source_cursor AS value FROM events WHERE source_cursor > 100",
+    )?;
+    std::fs::write(&path, "name: count-events\ndescription: Count selected events.\nlabels:\n  team: security\ncall:\n  package: fixture\n  revision: r1\n  export: count\n  inputs:\n    source:\n      file: query.sql\n  parameters:\n    increment: 18446744073709551615\n  output: result\n")?;
+    let captured = Definition::read(&path)?;
+    assert_eq!(captured.name, "count-events");
+    assert_eq!(captured.description, "Count selected events.");
+    assert_eq!(
+        captured.labels,
+        BTreeMap::from([("team".into(), "security".into())])
+    );
+    assert!(matches!(&captured.program, Program::Sql { .. }));
+    std::fs::write(&source, "SELECT absent FROM events")?;
+    std::fs::remove_file(&source)?;
+    std::fs::remove_file(&path)?;
+    let prepared = fixture.prepare(&captured).await?;
+    assert_eq!(prepared.resolved.definition, captured);
+    assert_eq!(prepared.resolved.images.len(), 1);
+    assert_eq!(prepared.resolved.images[0].image, bundle.root);
+    assert_eq!(prepared.resolved.images[0].digest, bundle.digest()?);
+    let calls = Fixture::calls(&prepared.plan)?;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].output(), "result");
+    assert_eq!(calls[0].schema().as_arrow(), &Fixture::schema("value"));
+    assert_eq!(calls[0].inputs().len(), 2);
+    let display = calls[0].inputs()[0].display_indent().to_string();
+    assert!(display.contains("100"), "{display}");
+    assert!(!display.contains("absent"), "{display}");
+    let state = fixture
+        .engine
+        .catalog(crate::sources::SourceSnapshot::providers())?;
+    let inputs = calls[0].inputs();
+    let parameters = collect(
+        state.create_physical_plan(inputs[1]).await?,
+        state.task_ctx(),
+    )
+    .await?;
+    assert_eq!(parameters.len(), 1);
+    assert_eq!(parameters[0].num_rows(), 1);
+    let increment = parameters[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<sdk::arrow_array::UInt64Array>()
+        .ok_or("UInt64 parameter required")?;
+    assert_eq!(increment.value(0), u64::MAX);
+    for value in ["'2 + 1'", "null"] {
+        std::fs::write(&path, format!("name: count-events\ncall:\n  package: fixture\n  revision: r1\n  export: count\n  inputs:\n    source: SELECT source_cursor AS value FROM events\n  parameters:\n    increment: {value}\n"))?;
+        let definition = Definition::read(&path)?;
+        assert!(fixture.prepare(&definition).await.is_err(), "{value}");
+    }
     Ok(())
 }
 

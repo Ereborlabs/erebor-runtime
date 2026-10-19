@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use araphor_discovery_definition::{Definition, ImagePin, Program, Source};
+use araphor_discovery_definition::{Definition, ImagePin};
 use erebor_runtime_ipc::araphor::PackageOperationRequest;
 
 use super::*;
@@ -39,69 +39,79 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
         .ok_or("definition store absent")?;
     let activations = data.package_activation_page(None)?;
     let discovery = data.discovery_enabled();
-    let source = root.join("captured.sql");
-    let path = root.join("definition.json");
     let sql = "SELECT count(*) AS count FROM events\n";
-    fs::write(&source, sql)?;
-    fs::write(
-        &path,
-        serde_json::to_vec(&json!({
-            "name":"captured-sql", "description":"Count retained events.",
-            "labels":{"owner":"analysis","team":"security"},
-            "program":{"kind":"sql","source":{"file":"captured.sql"}}
-        }))?,
-    )?;
-    let captured = Definition::read(&path)?;
-    fs::write(&source, "SELECT 99 AS count\n")?;
-    assert_eq!(captured.program.sql()?, sql);
-    fs::remove_file(&source)?;
-    let labels = BTreeMap::from([("team".into(), "security".into())]);
+    let prql = "from events\naggregate {count = count this}\n";
+    let counts = "SELECT lifetime_key AS subject, body AS resource, CAST(2 AS BIGINT UNSIGNED) AS count FROM context_versions\n";
     let call_sql = "SELECT * FROM \"denials.repeated\".\"definition-1\".repeated()";
     let call_prql = format!("from s\"{}\"", call_sql.replace('"', "\\\""));
     let image_pin = ImagePin {
         image: bundle.root.clone(),
         digest: bundle.digest()?,
     };
-    let definitions = [
-        (captured, Vec::new()),
+    let files = [
         (
-            Definition {
-                name: "inline-prql".into(),
-                description: "Count retained events with PRQL.".into(),
-                labels: labels.clone(),
-                program: Program::Prql {
-                    source: araphor_discovery_definition::Source::Inline {
-                        inline: "from events\naggregate {count = count this}".into(),
-                    },
-                },
-            },
+            "captured-sql",
+            "Count retained events.",
+            "sql:\n  file: captured.sql\n".into(),
+            Some(("captured.sql", sql)),
             Vec::new(),
         ),
         (
-            Definition {
-                name: "package-call".into(),
-                description: "Select the repeated denial output.".into(),
-                labels: labels.clone(),
-                program: Program::Sql {
-                    source: Source::Inline {
-                        inline: call_sql.into(),
-                    },
-                },
-            },
+            "captured-prql",
+            "Count retained events with PRQL.",
+            "prql:\n  file: captured.prql\n".into(),
+            Some(("captured.prql", prql)),
+            Vec::new(),
+        ),
+        (
+            "package-call",
+            "Select the repeated denial output.",
+            format!("sql: |\n  {call_sql}\n"),
+            None,
             vec![image_pin.clone()],
         ),
         (
-            Definition {
-                name: "prql-package-call".into(),
-                description: "Select the repeated denial output through PRQL.".into(),
-                labels,
-                program: Program::Prql {
-                    source: Source::Inline { inline: call_prql },
-                },
-            },
+            "prql-package-call",
+            "Select the repeated denial output through PRQL.",
+            format!("prql: |\n  {call_prql}\n"),
+            None,
+            vec![image_pin.clone()],
+        ),
+        (
+            "direct-package-call",
+            "Select the bound denial counts.",
+            "call:\n  package: denials.repeated\n  revision: definition-1\n  export: repeated\n  inputs:\n    counts:\n      file: captured-counts.sql\n  output: rows\n".into(),
+            Some(("captured-counts.sql", counts)),
             vec![image_pin],
         ),
     ];
+    let labels = BTreeMap::from([
+        ("owner".into(), "analysis".into()),
+        ("team".into(), "security".into()),
+    ]);
+    let mut definitions = Vec::new();
+    for (name, description, program, source, images) in files {
+        let path = root.join(format!("{name}.yaml"));
+        if let Some((filename, text)) = source {
+            fs::write(root.join(filename), text)?;
+        }
+        fs::write(&path, format!("name: {name}\ndescription: {description}\nlabels:\n  owner: analysis\n  team: security\n{program}"))?;
+        let captured = Definition::read(&path)?;
+        assert_eq!(captured.name, name);
+        assert_eq!(captured.description, description);
+        assert_eq!(captured.labels, labels);
+        if let Some((filename, text)) = source {
+            if name != "direct-package-call" {
+                assert_eq!(captured.program.source().inline()?, text);
+            }
+            let source = root.join(filename);
+            fs::write(&source, "SELECT absent FROM events\n")?;
+            fs::remove_file(&source)?;
+            assert!(!captured.program.source().inline()?.contains(filename));
+        }
+        fs::remove_file(&path)?;
+        definitions.push((captured, images));
+    }
     let credential = root.join("definition-token");
     fs::write(&credential, b"fixture-access")?;
     let (client, server) = fixture.client(&tls, &config, &credential).await?;
