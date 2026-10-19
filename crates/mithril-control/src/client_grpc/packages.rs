@@ -86,48 +86,9 @@ impl ClientGrpcOwner {
                     .validate_captured()
                     .map_err(araphor_data::Error::from)
                     .map_err(Self::image_failure)?;
-                let lookup = store.clone();
                 let tenant = grant.selection.tenant_id;
-                let read = control.clone();
-                let image = match &definition.program {
-                    araphor_discovery_definition::Program::Package { call } => {
-                        Some(call.image.clone())
-                    }
-                    _ => None,
-                };
-                let bundles = tokio::task::spawn_blocking(
-                    move || -> araphor_data::Result<Vec<araphor_data::PackageBundleV1>> {
-                        image
-                            .map(|image| {
-                                lookup
-                                    .package_image(
-                                        tenant,
-                                        &image.package_id,
-                                        Some(&image.revision),
-                                        &read,
-                                    )?
-                                    .ok_or_else(|| {
-                                        PackageErrorCodeV1::Missing.error("definition image")
-                                    })
-                            })
-                            .transpose()
-                            .map(|bundle| bundle.into_iter().collect())
-                    },
-                )
-                .await
-                .map_err(|_| Status::internal("The definition lookup failed."))?
-                .map_err(Self::image_failure)?;
-                for bundle in &bundles {
-                    let digest = bundle
-                        .digest()
-                        .map_err(araphor_data::Error::from)
-                        .map_err(Self::image_failure)?;
-                    authority
-                        .admit(&grant, &PackageBundleRef::retained(bundle, &digest))
-                        .map_err(Self::image_failure)?;
-                }
                 let admitted = control
-                    .query_async(query.admit_definition(definition, &bundles))
+                    .query_async(query.admit_definition(tenant, definition, Arc::clone(&control)))
                     .await
                     .map_err(Self::failure)?;
                 let check = control.clone();

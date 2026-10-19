@@ -6,8 +6,8 @@ and the old code that can be reused.
 
 The user requires three TODOs first: 14, the OCI package image; 15, the
 Discovery definition file; and 16, running Discovery instances. Complete them
-before items 1-13. Definitions support package calls, PRQL, or SQL with
-metadata. The
+before items 1-13. Definitions contain SQL or PRQL with metadata. Package
+calls belong inside those queries. The
 [active package and job plan](araphor-package-jobs.md#first-deliverable-definition-files-and-running-instances)
 records that priority. Items 1-13 remain recorded TODOs. Existing uncommitted
 code from the stopped attempts is an unverified draft. The local backup is
@@ -121,22 +121,24 @@ redesign: **Not done**. The count record is `/tmp/araphor-image-count1.json`.
 - **Now:** `araphor-discovery-definition` owns the JSON file, source capture,
   PRQL compilation, and admitted snapshot. Control admits and inspects that
   snapshot. The fixed live Discovery remains separate.
-- **Required:** A reusable definition contains metadata and selects a package
-  call, PRQL, or SQL. Starting it creates a separate running instance.
+- **Required:** A reusable definition contains metadata and selects SQL or
+  PRQL. Those queries can call installed packages. Starting a definition
+  creates a separate running instance.
 - **Reuse:** Existing OCI resolution, native Query admission, schemas, and
   compatible package validation. Use an existing PRQL compiler. Do not add
   another SQL parser, planner, or execution engine.
 
 Recorded specifications:
 
-- [x] Select exactly one program form: a package call, PRQL, or SQL. SQL and
-  PRQL can be inline source or referenced source files.
+- [x] Select exactly one program form: SQL or PRQL. Either form can use inline
+  source or a referenced source file. Package calls belong in the query.
 - [x] Include definition metadata such as name, description, and labels.
   Preserve that metadata when the definition is admitted and inspected.
-- [x] A package call identifies the OCI package and export and supplies input
-  bindings, parameters, and a declared window when required.
+- [x] A native SQL package function identifies the image, exact revision, and
+  export. Native subquery arguments supply inputs. Native scalar arguments
+  supply parameters. SQL supplies filters and windows.
 - [ ] SQL defines its filters, joins, grouping, and windows. PRQL compiles to
-  SQL. A direct package call forms SQL. All three forms reach native SQL
+  SQL. Package calls stay inside that SQL. Both forms reach native SQL
   parsing, logical planning, optimization, physical planning, and execution.
 - [x] Use native DataFusion and existing dependencies wherever they supply
   the required operation. Qualify generated PRQL SQL with the actual native
@@ -159,16 +161,35 @@ file references. Data retains exact source text, generated SQL, image pins,
 and metadata under an immutable content revision. An explicit admission of
 changed content creates another revision. Admission starts no Discovery.
 
+The user replaces the separate JSON package form with native SQL and PRQL
+calls. The function name has three parts: image, exact revision, and export.
+For example, `"fixture"."r1".count(source => (SELECT ...), increment => 2)`.
+Use the first string argument to select an output when necessary. Remove
+the JSON call, input binding, parameter, and window fields. Query owns
+resolution of all exact image references in the native syntax tree. Keep
+the existing Data transaction and final Control permission checks.
+Native-call definition admission and selected qualification: **Done**.
+All 50 distinct focused tests pass. They cover both source forms, native
+arguments, nested calls, recursion, lexical scope, body optimization, exact
+image pins, permission, immutable storage, request encoding, and TLS client
+admission. Every SQL body plan uses native analysis and optimization.
+Plans with no package-call node also use native physical planning.
+Formatting and affected-crate Clippy with warnings denied pass. The source
+and command record is `/tmp/araphor-sql-call-verification1.json`.
+Full workspace CI, benchmarks, and physical Kubernetes checks did not run.
+
 Complete package execution: **Not done**. SQL and PRQL reach native physical
 planning during admission. Query binds package inputs, parameters, output,
 and dependency contracts into a native `PackageCall` logical node. SQL
-package bodies also reach native physical planning. The package-call node
+body plans with no package-call node also reach native physical planning.
+The package-call node
 has no physical executor. An execution attempt returns `Unsupported`; it
 does not return empty output. The unchecked execution requirement above
 remains open with running instances. Read the
 [definition review](../guides/araphor-discovery-definition-review.md).
 
-Focused tests: **Done**. All 73 distinct cases passed. These cases cover the
+Previous qualification at `318a3259`: **Done**. All 73 distinct cases passed.
+These cases cover the
 definition format, PRQL, native planning, typed inputs and saved state,
 immutable storage, request encoding, permission, CLI output, and the real TLS
 client route. Empty schemas retain their row count and continuous row
@@ -177,11 +198,17 @@ Formatting and affected-crate Clippy with warnings denied passed. The exact
 commands and log hashes are in `/tmp/araphor-definition-verification1.json`.
 Full workspace CI, benchmarks, and physical Kubernetes checks did not run.
 
-This delivery adds 1,653 production Rust code lines from `a03e5daa`. The
+The previous delivery adds 1,653 production Rust code lines from `a03e5daa`. The
 complete redesign adds 5,754 from `7b7b407a`. The 6,000-line reduction requires
 another 11,754 net deletions. Tests, comments, documents, blank lines, and
 moves do not count as reduction. The record is
 `/tmp/araphor-definition-count1.json`. Complete redesign: **Not done**.
+
+The native-call replacement adds 165 production Rust code lines from
+`318a3259`: 327 additions and 162 deletions by file size. The complete
+redesign adds 5,919 from `7b7b407a`; the required reduction still needs
+11,919 net deletions. The simpler file interface is not a production code
+reduction. The record is `/tmp/araphor-sql-call-count1.json`.
 
 ### 16. Running Discovery instances
 

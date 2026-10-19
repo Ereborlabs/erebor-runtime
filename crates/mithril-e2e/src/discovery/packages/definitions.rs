@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use araphor_discovery_definition::{Definition, ImagePin, PackageCall, Program};
+use araphor_discovery_definition::{Definition, ImagePin, Program, Source};
 use erebor_runtime_ipc::araphor::PackageOperationRequest;
 
 use super::*;
@@ -53,36 +53,54 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
     )?;
     let captured = Definition::read(&path)?;
     fs::write(&source, "SELECT 99 AS count\n")?;
-    assert_eq!(captured.program.sql()?.as_deref(), Some(sql));
+    assert_eq!(captured.program.sql()?, sql);
     fs::remove_file(&source)?;
     let labels = BTreeMap::from([("team".into(), "security".into())]);
+    let call_sql = "SELECT * FROM \"denials.repeated\".\"definition-1\".repeated()";
+    let call_prql = format!("from s\"{}\"", call_sql.replace('"', "\\\""));
+    let image_pin = ImagePin {
+        image: bundle.root.clone(),
+        digest: bundle.digest()?,
+    };
     let definitions = [
-        captured,
-        Definition {
-            name: "inline-prql".into(),
-            description: "Count retained events with PRQL.".into(),
-            labels: labels.clone(),
-            program: Program::Prql {
-                source: araphor_discovery_definition::Source::Inline {
-                    inline: "from events\naggregate {count = count this}".into(),
+        (captured, Vec::new()),
+        (
+            Definition {
+                name: "inline-prql".into(),
+                description: "Count retained events with PRQL.".into(),
+                labels: labels.clone(),
+                program: Program::Prql {
+                    source: araphor_discovery_definition::Source::Inline {
+                        inline: "from events\naggregate {count = count this}".into(),
+                    },
                 },
             },
-        },
-        Definition {
-            name: "package-call".into(),
-            description: "Select the repeated denial output.".into(),
-            labels,
-            program: Program::Package {
-                call: PackageCall {
-                    image: bundle.root.clone(),
-                    export: "repeated".into(),
-                    inputs: BTreeMap::new(),
-                    parameters: json!({}),
-                    window: None,
-                    output: Some("rows".into()),
+            Vec::new(),
+        ),
+        (
+            Definition {
+                name: "package-call".into(),
+                description: "Select the repeated denial output.".into(),
+                labels: labels.clone(),
+                program: Program::Sql {
+                    source: Source::Inline {
+                        inline: call_sql.into(),
+                    },
                 },
             },
-        },
+            vec![image_pin.clone()],
+        ),
+        (
+            Definition {
+                name: "prql-package-call".into(),
+                description: "Select the repeated denial output through PRQL.".into(),
+                labels,
+                program: Program::Prql {
+                    source: Source::Inline { inline: call_prql },
+                },
+            },
+            vec![image_pin],
+        ),
     ];
     let credential = root.join("definition-token");
     fs::write(&credential, b"fixture-access")?;
@@ -103,7 +121,7 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
     );
     assert_eq!(data.package_activation_page(None)?, activations);
     assert_eq!(data.discovery_enabled(), discovery);
-    for definition in definitions {
+    for (definition, images) in definitions {
         let expected = definition.clone();
         let reply = client
             .package_operation(PackageOperationRequest {
@@ -120,19 +138,8 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
         );
         let admitted = response.definition.ok_or("admitted definition absent")?;
         assert_eq!(admitted.definition, expected);
-        match &expected.program {
-            Program::Sql { .. } | Program::Prql { .. } => {
-                assert_eq!(Some(admitted.sql.clone()), expected.program.sql()?);
-                assert!(admitted.images.is_empty());
-            }
-            Program::Package { .. } => assert_eq!(
-                admitted.images,
-                vec![ImagePin {
-                    image: bundle.root.clone(),
-                    digest: bundle.digest()?,
-                }]
-            ),
-        }
+        assert_eq!(admitted.sql, expected.program.sql()?);
+        assert_eq!(admitted.images, images);
         let revision = admitted.digest()?;
         let reply = client
             .package_operation(PackageOperationRequest {

@@ -1,67 +1,339 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::fmt;
+use std::ops::ControlFlow;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use araphor_analysis_sdk as sdk;
-use araphor_discovery_definition::{ImagePin, PackageCall as DefinitionCall};
+use araphor_discovery_definition::ImagePin;
 use araphor_package::{
     ModelRef, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
 };
 use datafusion::catalog::TableProvider;
 use datafusion::common::tree_node::TreeNodeRecursion;
-use datafusion::common::{DFSchema, DataFusionError};
-use datafusion::datasource::{MemTable, ViewTable};
+use datafusion::common::{DFSchema, DataFusionError, ScalarValue};
+use datafusion::datasource::{source_as_provider, ViewTable};
+use datafusion::execution::context::SQLOptions;
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::planner::{
+    ContextProvider, PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
+};
+use datafusion::logical_expr::{Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder};
+use datafusion::sql::parser::Statement;
+use datafusion::sql::planner::{object_name_to_table_reference, SqlToRel};
+use datafusion::sql::sqlparser::ast::{
+    Expr as SqlExpr, FunctionArg, FunctionArgExpr, FunctionArgOperator, ObjectName, TableFactor,
+    Value, Visit, Visitor,
+};
 use snafu::ResultExt as _;
 
 use super::PackageCall;
 use crate::execution::{Engine, Session};
-use crate::follow::Window;
 use crate::inputs::Inputs;
 use crate::sources::{SourceOrigin, SourceProvider, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
-pub(super) struct PackagePlanner<'a> {
-    engine: &'a Engine,
-    bundle: &'a PackageBundleV1,
-    pin: ImagePin,
+mod scope;
+use scope::Scope;
+
+type Exports = BTreeMap<ModelRef, BTreeMap<String, LogicalPlan>>;
+
+pub(super) struct Packages {
+    state: SessionState,
+    parser: crate::parser::Parser,
+    bundles: BTreeMap<PackageRefV1, (PackageBundleV1, String)>,
+    sources: BTreeMap<String, Arc<dyn TableProvider>>,
+    planning: Mutex<Planning>,
 }
 
-pub(super) struct CallPlan {
-    pub call: PackageCall,
-    pub sql: Option<LogicalPlan>,
+#[derive(Default)]
+struct Planning {
+    pins: BTreeMap<PackageRefV1, String>,
+    plans: Vec<LogicalPlan>,
+    active: BTreeSet<ModelRef>,
 }
 
-struct ExportPlans {
-    calls: BTreeMap<String, PackageCall>,
-    sql: BTreeMap<String, LogicalPlan>,
+struct Active<'a> {
+    owner: &'a Packages,
+    key: ModelRef,
 }
 
-impl<'a> PackagePlanner<'a> {
-    pub(super) fn new(engine: &'a Engine, bundle: &'a PackageBundleV1, pin: ImagePin) -> Self {
-        Self {
-            engine,
-            bundle,
-            pin,
+impl Drop for Active<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.owner.state() {
+            state.active.remove(&self.key);
         }
     }
+}
 
-    pub(super) async fn admit(&self, call: &DefinitionCall) -> Result<CallPlan> {
-        let root = ModelRef {
-            package: call.image.clone(),
-            export: call.export.clone(),
+struct References(BTreeSet<PackageRefV1>);
+
+impl Visitor for References {
+    type Break = DataFusionError;
+    fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
+        if let TableFactor::Table {
+            name,
+            args: Some(_),
+            ..
+        } = factor
+        {
+            match Packages::reference(name) {
+                Ok(Some((image, _))) => {
+                    self.0.insert(image);
+                }
+                Ok(None) => {}
+                Err(error) => return ControlFlow::Break(error),
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl fmt::Debug for Packages {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter
+            .debug_struct("Packages")
+            .field("images", &self.bundles.keys())
+            .finish()
+    }
+}
+
+impl Packages {
+    pub(super) fn new(engine: &Engine, bundles: Vec<PackageBundleV1>) -> Result<Self> {
+        let mut images = BTreeMap::new();
+        for bundle in bundles {
+            bundle.validate().map_err(araphor_data::Error::from)?;
+            let digest = bundle.digest().map_err(araphor_data::Error::from)?;
+            if images
+                .insert(bundle.root.clone(), (bundle, digest))
+                .is_some()
+            {
+                return InvalidSnafu {
+                    field: "duplicate definition image",
+                }
+                .fail();
+            }
+        }
+        Ok(Self {
+            state: engine.catalog(SourceSnapshot::providers())?,
+            parser: engine.limits().parser,
+            bundles: images,
+            sources: SourceSnapshot::providers(),
+            planning: Mutex::default(),
+        })
+    }
+
+    pub(super) fn references(statement: &Statement) -> Result<BTreeSet<PackageRefV1>> {
+        let mut references = References(BTreeSet::new());
+        if let Statement::Statement(statement) = statement {
+            if let ControlFlow::Break(error) = statement.visit(&mut references) {
+                return Err(error).context(SqlSnafu);
+            }
+        }
+        Ok(references.0)
+    }
+
+    fn state(&self) -> Result<MutexGuard<'_, Planning>> {
+        self.planning.lock().map_err(|_| {
+            InvalidSnafu {
+                field: "package planning state",
+            }
+            .build()
+        })
+    }
+
+    pub(super) fn pins(&self) -> Result<Vec<ImagePin>> {
+        Ok(self
+            .state()?
+            .pins
+            .iter()
+            .map(|(image, digest)| ImagePin {
+                image: image.clone(),
+                digest: digest.clone(),
+            })
+            .collect())
+    }
+
+    pub(super) async fn validate(&self) -> Result<()> {
+        let plans = std::mem::take(&mut self.state()?.plans);
+        for plan in plans {
+            let plan = self.state.optimize(&plan).context(SqlSnafu)?;
+            if !Self::contains_call(&plan)? {
+                self.state
+                    .query_planner()
+                    .create_physical_plan(&plan, &self.state)
+                    .await
+                    .context(SqlSnafu)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn reference(name: &ObjectName) -> datafusion::common::Result<Option<(PackageRefV1, String)>> {
+        if name.0.len() != 3 {
+            return Ok(None);
+        }
+        let reference = object_name_to_table_reference(name.clone(), true)?;
+        Ok(Some((
+            PackageRefV1 {
+                package_id: reference
+                    .catalog()
+                    .ok_or_else(|| DataFusionError::Plan("Package image is absent".into()))?
+                    .into(),
+                revision: reference
+                    .schema()
+                    .ok_or_else(|| DataFusionError::Plan("Package revision is absent".into()))?
+                    .into(),
+            },
+            reference.table().into(),
+        )))
+    }
+
+    fn admit(
+        &self,
+        context: &mut dyn RelationPlannerContext,
+        image: PackageRefV1,
+        export: String,
+        arguments: Vec<FunctionArg>,
+    ) -> Result<LogicalPlan> {
+        let (bundle, digest) = self.bundles.get(&image).ok_or_else(|| {
+            InvalidSnafu {
+                field: "installed package image",
+            }
+            .build()
+        })?;
+        let pin = ImagePin {
+            image: image.clone(),
+            digest: digest.clone(),
         };
-        let order = self
-            .bundle
-            .order_for(&call.image, Some(&call.export))
+        self.state()?.pins.insert(image.clone(), pin.digest.clone());
+        let root = ModelRef {
+            package: image,
+            export,
+        };
+        let model = bundle
+            .artifact(&root.package)
+            .map_err(araphor_data::Error::from)?
+            .descriptor
+            .exports
+            .iter()
+            .find(|model| model.name == root.export)
+            .ok_or_else(|| {
+                InvalidSnafu {
+                    field: "package export",
+                }
+                .build()
+            })?;
+        let mut output = None;
+        let mut supplied = BTreeMap::new();
+        let mut parameters = BTreeMap::new();
+        for (index, argument) in arguments.into_iter().enumerate() {
+            match argument {
+                FunctionArg::Unnamed(FunctionArgExpr::Expr(SqlExpr::Value(value)))
+                    if index == 0 =>
+                {
+                    let Value::SingleQuotedString(value) = value.value else {
+                        return InvalidSnafu {
+                            field: "package output selector",
+                        }
+                        .fail();
+                    };
+                    output = Some(value);
+                }
+                FunctionArg::Named {
+                    name,
+                    arg: FunctionArgExpr::Expr(SqlExpr::Subquery(subquery)),
+                    operator: FunctionArgOperator::RightArrow,
+                } if model
+                    .inputs
+                    .iter()
+                    .any(|input| input.port.name == context.normalize_ident(name.clone())) =>
+                {
+                    let name = context.normalize_ident(name);
+                    let plan = context
+                        .plan(TableFactor::Derived {
+                            lateral: false,
+                            subquery,
+                            alias: None,
+                            sample: None,
+                        })
+                        .context(SqlSnafu)?;
+                    if supplied.insert(name, plan).is_some() {
+                        return InvalidSnafu {
+                            field: "duplicate package input",
+                        }
+                        .fail();
+                    }
+                }
+                FunctionArg::Named {
+                    name,
+                    arg: FunctionArgExpr::Expr(expression),
+                    operator: FunctionArgOperator::RightArrow,
+                } => {
+                    let name = context.normalize_ident(name);
+                    if !model
+                        .parameters
+                        .fields()
+                        .iter()
+                        .any(|field| field.name() == &name)
+                    {
+                        return InvalidSnafu {
+                            field: "package parameter",
+                        }
+                        .fail();
+                    }
+                    let expression = context
+                        .sql_to_expr(expression, &DFSchema::empty())
+                        .context(SqlSnafu)?;
+                    if parameters.insert(name, expression).is_some() {
+                        return InvalidSnafu {
+                            field: "duplicate package parameter",
+                        }
+                        .fail();
+                    }
+                }
+                _ => {
+                    return InvalidSnafu {
+                        field: "package argument",
+                    }
+                    .fail()
+                }
+            }
+        }
+        let output = match output {
+            Some(output) if model.outputs.iter().any(|port| port.name == output) => output,
+            Some(_) => {
+                return InvalidSnafu {
+                    field: "package output",
+                }
+                .fail()
+            }
+            None if model.outputs.len() == 1 => model.outputs[0].name.clone(),
+            None => {
+                return InvalidSnafu {
+                    field: "package output selector",
+                }
+                .fail()
+            }
+        };
+        if !self.state()?.active.insert(root.clone()) {
+            return InvalidSnafu {
+                field: "package SQL cycle",
+            }
+            .fail();
+        }
+        let _active = Active {
+            owner: self,
+            key: root.clone(),
+        };
+        let order = bundle
+            .order_for(&root.package, Some(&root.export))
             .map_err(araphor_data::Error::from)?;
         let mut needed = BTreeSet::from([root.clone()]);
         for key in order.iter().rev() {
             if !needed.contains(key) {
                 continue;
             }
-            let artifact = self
-                .bundle
+            let artifact = bundle
                 .artifact(&key.package)
                 .map_err(araphor_data::Error::from)?;
             let model = artifact
@@ -76,7 +348,7 @@ impl<'a> PackagePlanner<'a> {
                     .build()
                 })?;
             for (port, dependency) in model.dependencies() {
-                if key == &root && call.inputs.contains_key(&port.name) {
+                if key == &root && supplied.contains_key(&port.name) {
                     continue;
                 }
                 needed.insert(ModelRef {
@@ -88,10 +360,11 @@ impl<'a> PackagePlanner<'a> {
                 });
             }
         }
-        let mut exports = BTreeMap::<ModelRef, ExportPlans>::new();
+        let empty_inputs = BTreeMap::new();
+        let empty_parameters = BTreeMap::new();
+        let mut exports = Exports::new();
         for key in order.into_iter().filter(|key| needed.contains(key)) {
-            let artifact = self
-                .bundle
+            let artifact = bundle
                 .artifact(&key.package)
                 .map_err(araphor_data::Error::from)?;
             let model = artifact
@@ -105,185 +378,145 @@ impl<'a> PackagePlanner<'a> {
                     }
                     .build()
                 })?;
-            let selected = artifact
+            let inputs = self.inputs(
+                context.context_provider(),
+                model,
+                if key == root {
+                    &supplied
+                } else {
+                    &empty_inputs
+                },
+                &exports,
+            )?;
+            let params = self.parameters(
+                model,
+                if key == root {
+                    &parameters
+                } else {
+                    &empty_parameters
+                },
+            )?;
+            if let PackageImplementationV1::Sql { program, .. } = artifact
                 .implementation(&key.export)
-                .map_err(araphor_data::Error::from)?;
-            let effective = if key == root {
-                call.clone()
-            } else {
-                DefinitionCall {
-                    image: key.package.clone(),
-                    export: key.export.clone(),
-                    inputs: BTreeMap::new(),
-                    parameters: serde_json::json!({}),
-                    window: None,
-                    output: None,
-                }
-            };
-            if effective
-                .inputs
-                .keys()
-                .any(|name| !model.inputs.iter().any(|input| input.port.name == *name))
+                .map_err(araphor_data::Error::from)?
             {
-                return InvalidSnafu {
-                    field: "undeclared package input",
-                }
-                .fail();
+                self.sql(
+                    context.context_provider(),
+                    model,
+                    program,
+                    &inputs,
+                    params.as_ref(),
+                )?;
             }
-            let parameters =
-                araphor_data::decode_parameters(&model.parameters, Some(&effective.parameters))?;
-            let inputs = self.inputs(model, &effective, &exports).await?;
-            let sql = match selected {
-                PackageImplementationV1::Sql { program, .. } => {
-                    self.sql(model, program, &inputs, parameters).await?
-                }
-                _ => BTreeMap::new(),
-            };
-            let identity = serde_json::to_string(&(&effective, &self.pin, &artifact.descriptor))
-                .map_err(|source| crate::Error::Sql {
-                    source: DataFusionError::External(Box::new(source)),
-                })?;
+            let mut children = inputs;
+            children.extend(params);
             let descriptor = Arc::new(artifact.descriptor.clone());
-            let mut calls = BTreeMap::new();
-            for output in &model.outputs {
-                calls.insert(
-                    output.name.clone(),
-                    PackageCall {
-                        call: effective.clone(),
-                        pin: self.pin.clone(),
-                        descriptor: Arc::clone(&descriptor),
-                        output: output.name.clone(),
-                        identity: format!("{identity}:{}", output.name),
-                        children: inputs.clone(),
-                        schema: Arc::new(
-                            DFSchema::try_from(output.schema.clone()).context(SqlSnafu)?,
-                        ),
-                    },
+            let mut outputs = BTreeMap::new();
+            for port in &model.outputs {
+                let node = PackageCall {
+                    pin: pin.clone(),
+                    package: key.package.clone(),
+                    export: key.export.clone(),
+                    output: port.name.clone(),
+                    descriptor: Arc::clone(&descriptor),
+                    children: children.clone(),
+                    schema: Arc::new(DFSchema::try_from(port.schema.clone()).context(SqlSnafu)?),
+                };
+                outputs.insert(
+                    port.name.clone(),
+                    LogicalPlan::Extension(Extension {
+                        node: Arc::new(node),
+                    }),
                 );
             }
-            exports.insert(key, ExportPlans { calls, sql });
+            exports.insert(key, outputs);
         }
-        let mut export = exports.remove(&root).ok_or_else(|| {
-            InvalidSnafu {
-                field: "package export",
-            }
-            .build()
-        })?;
-        let output = match &call.output {
-            Some(output) => output.clone(),
-            None if export.calls.len() == 1 => {
-                export.calls.keys().next().cloned().ok_or_else(|| {
-                    InvalidSnafu {
-                        field: "package output",
-                    }
-                    .build()
-                })?
-            }
-            None => {
-                return InvalidSnafu {
-                    field: "package output selector",
-                }
-                .fail()
-            }
-        };
-        let sql = export.sql.remove(&output);
-        let sql = match sql {
-            Some(plan) if !Self::contains_call(&plan)? => Some(plan),
-            _ => None,
-        };
-        Ok(CallPlan {
-            call: export.calls.remove(&output).ok_or_else(|| {
+        exports
+            .remove(&root)
+            .and_then(|mut outputs| outputs.remove(&output))
+            .ok_or_else(|| {
                 InvalidSnafu {
                     field: "package output",
                 }
                 .build()
-            })?,
-            sql,
-        })
+            })
     }
 
-    async fn inputs(
+    fn inputs(
         &self,
+        provider: &dyn ContextProvider,
         model: &sdk::Model,
-        call: &DefinitionCall,
-        exports: &BTreeMap<ModelRef, ExportPlans>,
+        supplied: &BTreeMap<String, LogicalPlan>,
+        exports: &Exports,
     ) -> Result<Vec<LogicalPlan>> {
-        if model.inputs.is_empty() && call.window.is_some() {
-            return InvalidSnafu {
-                field: "package window input",
-            }
-            .fail();
-        }
-        let mut tables = SourceSnapshot::providers();
+        let mut tables = self.sources.clone();
         for (slot, input) in model.inputs.iter().enumerate() {
             let schema = Session::indexed_schema(&input.port.schema)?;
             tables
                 .entry(input.port.name.clone())
                 .or_insert_with(|| SourceProvider::port(slot, schema));
         }
-        let state = self.engine.catalog(tables.clone())?;
         let mut pending = Vec::new();
         for (slot, input) in model.inputs.iter().enumerate() {
-            if let Some((plan, dependencies)) = Self::named(input, call, &tables)? {
-                pending.push((slot, plan, dependencies));
-                continue;
-            }
-            let sql = match Self::binding(input, call) {
-                Some(sql) => sql,
-                None => {
-                    let sdk::InputSource::Table(sdk::TableRef::Output(reference)) = &input.source
-                    else {
-                        return InvalidSnafu {
-                            field: "package input source",
-                        }
-                        .fail();
-                    };
-                    let key = ModelRef {
-                        package: PackageRefV1 {
-                            package_id: reference.package.clone(),
-                            revision: reference.revision.clone(),
-                        },
-                        export: reference.export.clone(),
-                    };
-                    let export = exports.get(&key).ok_or_else(|| {
-                        InvalidSnafu {
-                            field: "package dependency",
-                        }
-                        .build()
-                    })?;
-                    let plan = export
-                        .sql
-                        .get(&reference.output)
-                        .cloned()
-                        .or_else(|| export.calls.get(&reference.output).map(PackageCall::plan))
-                        .ok_or_else(|| {
+            let local = !supplied.contains_key(&input.port.name)
+                && !matches!(
+                    &input.source,
+                    sdk::InputSource::Table(sdk::TableRef::Output(_))
+                );
+            let plan = if let Some(plan) = supplied.get(&input.port.name) {
+                plan.clone()
+            } else {
+                match &input.source {
+                    sdk::InputSource::Query(sql) => self.plan(provider, &tables, sql)?,
+                    sdk::InputSource::Table(sdk::TableRef::Named(name)) => {
+                        let source = tables.get(name).cloned().ok_or_else(|| {
                             InvalidSnafu {
-                                field: "dependency output",
+                                field: "package input table",
                             }
                             .build()
                         })?;
-                    pending.push((slot, plan, BTreeSet::new()));
-                    continue;
+                        Inputs::scan(name, source, &input.port.schema)?
+                    }
+                    sdk::InputSource::Table(sdk::TableRef::Output(reference)) => {
+                        let key = ModelRef {
+                            package: PackageRefV1 {
+                                package_id: reference.package.clone(),
+                                revision: reference.revision.clone(),
+                            },
+                            export: reference.export.clone(),
+                        };
+                        exports
+                            .get(&key)
+                            .and_then(|outputs| outputs.get(&reference.output))
+                            .cloned()
+                            .ok_or_else(|| {
+                                InvalidSnafu {
+                                    field: "package dependency",
+                                }
+                                .build()
+                            })?
+                    }
                 }
             };
-            let statement = self.engine.limits().parser.parse(&sql)?;
-            let planner = crate::planner::Planner::new(&state);
-            let dependencies = planner
-                .sources(&statement)
-                .await?
-                .into_iter()
-                .filter_map(|origin| {
-                    if let SourceOrigin::Port(slot) = origin {
-                        Some(slot)
-                    } else {
-                        None
+            let mut dependencies = BTreeSet::new();
+            if local {
+                plan.apply_with_subqueries(|plan| {
+                    if let LogicalPlan::TableScan(scan) = plan {
+                        if let Ok(source) = source_as_provider(&scan.source) {
+                            if let Some(source) = source.as_any().downcast_ref::<SourceProvider>() {
+                                if let SourceOrigin::Port(slot) = source.origin {
+                                    dependencies.insert(slot);
+                                }
+                            }
+                        }
                     }
+                    Ok(TreeNodeRecursion::Continue)
                 })
-                .collect();
-            let plan = planner.build(statement, Vec::new()).await?;
+                .context(SqlSnafu)?;
+            }
             pending.push((slot, plan, dependencies));
         }
-        let mut plans = BTreeMap::<usize, LogicalPlan>::new();
+        let mut plans = BTreeMap::new();
         while !pending.is_empty() {
             let next = pending
                 .iter()
@@ -296,133 +529,114 @@ impl<'a> PackagePlanner<'a> {
                     }
                     .build()
                 })?;
-            let (slot, plan, dependencies) = pending.remove(next);
-            let mut bindings = tables.clone();
-            for dependency in &dependencies {
-                let name = &model.inputs[*dependency].port.name;
-                bindings.insert(
-                    name.clone(),
-                    Arc::new(ViewTable::new(
-                        self.indexed(name, &plans[dependency]).await?,
-                        None,
-                    )),
-                );
-            }
+            let (slot, mut plan, dependencies) = pending.remove(next);
             let input = &model.inputs[slot];
-            let named = if dependencies.is_empty() {
-                None
-            } else {
-                Self::named(input, call, &bindings)?.map(|(plan, _)| plan)
-            };
-            let state = self.engine.catalog(bindings)?;
-            let sql = if dependencies.is_empty() {
-                None
-            } else {
-                Self::binding(input, call)
-            };
-            let mut plan = match (named, sql) {
-                (Some(plan), _) => plan,
-                (_, Some(sql)) => {
-                    crate::planner::Planner::new(&state)
-                        .build(self.engine.limits().parser.parse(&sql)?, Vec::new())
-                        .await?
+            if !dependencies.is_empty() {
+                let mut bindings = tables.clone();
+                for dependency in dependencies {
+                    let name = &model.inputs[dependency].port.name;
+                    bindings.insert(
+                        name.clone(),
+                        Arc::new(ViewTable::new(
+                            self.indexed(provider, name, &plans[&dependency])?,
+                            None,
+                        )),
+                    );
                 }
-                _ => plan,
-            };
-            if let Some(window) = &call.window {
-                plan = self.window(&state, plan, window)?;
+                plan = match &input.source {
+                    sdk::InputSource::Query(sql) => self.plan(provider, &bindings, sql)?,
+                    sdk::InputSource::Table(sdk::TableRef::Named(name)) => {
+                        Inputs::scan(name, Arc::clone(&bindings[name]), &input.port.schema)?
+                    }
+                    _ => {
+                        return InvalidSnafu {
+                            field: "package input dependency",
+                        }
+                        .fail()
+                    }
+                };
             }
-            Window::from_plan(&plan)?;
-            plan = state.optimize(&plan).context(SqlSnafu)?;
             Self::schema(&plan, &input.port.schema)?;
-            if !Self::contains_call(&plan)? {
-                state
-                    .query_planner()
-                    .create_physical_plan(&plan, &state)
-                    .await
-                    .context(SqlSnafu)?;
-            }
+            self.retain(&plan)?;
             plans.insert(slot, plan);
         }
         Ok(plans.into_values().collect())
     }
 
-    fn window(&self, state: &SessionState, plan: LogicalPlan, window: &str) -> Result<LogicalPlan> {
-        use datafusion::logical_expr::{Expr, LogicalPlanBuilder, Projection};
-
-        self.engine
-            .limits()
-            .parser
-            .parse(&format!("SELECT ({window})"))?;
-        let filter = |input: LogicalPlan| -> Result<LogicalPlan> {
-            let expression = state
-                .create_logical_expr(window, input.schema())
-                .context(SqlSnafu)?;
-            let plan = LogicalPlanBuilder::from(input)
-                .filter(expression)
-                .and_then(LogicalPlanBuilder::build)
-                .context(SqlSnafu)?;
-            Window::from_plan(&plan)?;
-            Ok(plan)
-        };
-        let error = match filter(plan.clone()) {
-            Ok(plan) => return Ok(plan),
-            Err(error) => error,
-        };
-        match plan {
-            LogicalPlan::Projection(projection) => {
-                let input = filter((*projection.input).clone())?;
-                Ok(LogicalPlan::Projection(
-                    Projection::try_new(projection.expr, Arc::new(input)).context(SqlSnafu)?,
-                ))
-            }
-            LogicalPlan::TableScan(scan) if scan.projection.is_some() && scan.fetch.is_none() => {
-                let columns = scan
-                    .projected_schema
-                    .columns()
-                    .into_iter()
-                    .map(Expr::Column)
-                    .collect::<Vec<_>>();
-                let input = LogicalPlanBuilder::scan_with_filters(
-                    scan.table_name,
-                    scan.source,
-                    None,
-                    scan.filters,
-                )
-                .and_then(LogicalPlanBuilder::build)
-                .context(SqlSnafu)?;
-                LogicalPlanBuilder::from(filter(input)?)
-                    .project(columns)
-                    .and_then(LogicalPlanBuilder::build)
-                    .context(SqlSnafu)
-            }
-            _ => Err(error),
+    fn parameters(
+        &self,
+        model: &sdk::Model,
+        parameters: &BTreeMap<String, Expr>,
+    ) -> Result<Option<LogicalPlan>> {
+        if model.parameters.fields().is_empty() {
+            return Ok(None);
         }
+        let schema = DFSchema::empty();
+        let mut values = Vec::new();
+        for field in model.parameters.fields() {
+            let value = match parameters.get(field.name()) {
+                Some(value) => value.clone(),
+                None if field.is_nullable() => Expr::Literal(
+                    ScalarValue::try_from(field.data_type()).context(SqlSnafu)?,
+                    None,
+                ),
+                None => {
+                    return InvalidSnafu {
+                        field: "missing package parameter",
+                    }
+                    .fail()
+                }
+            };
+            let value = value
+                .cast_to(field.data_type(), &schema)
+                .context(SqlSnafu)?;
+            values.push(value.alias(field.name()));
+        }
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(values)
+            .and_then(LogicalPlanBuilder::build)
+            .context(SqlSnafu)?;
+        let plan = self.state.optimize(&plan).context(SqlSnafu)?;
+        Self::schema(&plan, &model.parameters)?;
+        if plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(model.parameters.fields())
+            .any(|(actual, expected)| !expected.is_nullable() && actual.is_nullable())
+        {
+            return InvalidSnafu {
+                field: "null package parameter",
+            }
+            .fail();
+        }
+        self.retain(&plan)?;
+        Ok(Some(plan))
     }
 
-    async fn sql(
+    fn sql(
         &self,
+        provider: &dyn ContextProvider,
         model: &sdk::Model,
         program: &SqlModelV1,
         inputs: &[LogicalPlan],
-        parameters: Option<sdk::RecordBatch>,
-    ) -> Result<BTreeMap<String, LogicalPlan>> {
+        parameters: Option<&LogicalPlan>,
+    ) -> Result<()> {
         let mut tables = BTreeMap::<String, Arc<dyn TableProvider>>::new();
         for (input, plan) in model.inputs.iter().zip(inputs) {
-            let plan = self.indexed(&input.port.name, plan).await?;
             tables.insert(
                 input.port.name.clone(),
-                Arc::new(ViewTable::new(plan, None)),
+                Arc::new(ViewTable::new(
+                    self.indexed(provider, &input.port.name, plan)?,
+                    None,
+                )),
             );
         }
         if let Some(parameters) = parameters {
             if tables
                 .insert(
                     "parameters".into(),
-                    Arc::new(
-                        MemTable::try_new(parameters.schema(), vec![vec![parameters]])
-                            .context(SqlSnafu)?,
-                    ),
+                    Arc::new(ViewTable::new(parameters.clone(), None)),
                 )
                 .is_some()
             {
@@ -434,10 +648,9 @@ impl<'a> PackagePlanner<'a> {
         }
         if let Some(checkpoint) = &model.checkpoint {
             for (slot, port) in checkpoint.datasets.iter().enumerate() {
-                let name = format!("prior_{}", port.name);
                 if tables
                     .insert(
-                        name,
+                        format!("prior_{}", port.name),
                         SourceProvider::port(
                             model.inputs.len() + slot,
                             Session::indexed_schema(&port.schema)?,
@@ -452,15 +665,15 @@ impl<'a> PackagePlanner<'a> {
                 }
             }
         }
-        let state = self.engine.catalog(tables.clone())?;
-        let outputs = self
-            .datasets(&state, &model.outputs, &program.outputs)
-            .await?;
+        let outputs = self.datasets(provider, &tables, &model.outputs, &program.outputs)?;
         for (name, plan) in &outputs {
             if tables
                 .insert(
                     format!("output_{name}"),
-                    Arc::new(ViewTable::new(plan.clone(), None)),
+                    Arc::new(ViewTable::new(
+                        self.indexed(provider, &format!("output_{name}"), plan)?,
+                        None,
+                    )),
                 )
                 .is_some()
             {
@@ -470,18 +683,17 @@ impl<'a> PackagePlanner<'a> {
                 .fail();
             }
         }
-        let state = self.engine.catalog(tables)?;
         self.datasets(
-            &state,
+            provider,
+            &tables,
             model
                 .checkpoint
                 .as_ref()
                 .map_or(&[], |spec| spec.datasets.as_slice()),
             &program.checkpoint,
-        )
-        .await?;
+        )?;
         if let Some(sql) = &program.evidence {
-            let plan = self.engine.definition_sql(&state, sql).await?;
+            let plan = self.plan(provider, &tables, sql)?;
             Self::schema(
                 &plan,
                 &sdk::Schema::new(vec![
@@ -491,6 +703,7 @@ impl<'a> PackagePlanner<'a> {
                     sdk::Field::new("input_row", sdk::DataType::UInt64, false),
                 ]),
             )?;
+            self.retain(&plan)?;
         }
         for reason in &program.reasons {
             if !model.outputs.iter().any(|port| port.name == reason.output) {
@@ -525,17 +738,17 @@ impl<'a> PackagePlanner<'a> {
                     )
                     .collect::<Vec<_>>(),
             );
-            Self::schema(
-                &self.engine.definition_sql(&state, &reason.sql).await?,
-                &schema,
-            )?;
+            let plan = self.plan(provider, &tables, &reason.sql)?;
+            Self::schema(&plan, &schema)?;
+            self.retain(&plan)?;
         }
-        Ok(outputs)
+        Ok(())
     }
 
-    async fn datasets(
+    fn datasets(
         &self,
-        state: &SessionState,
+        provider: &dyn ContextProvider,
+        tables: &BTreeMap<String, Arc<dyn TableProvider>>,
         ports: &[sdk::Port],
         queries: &BTreeMap<String, String>,
     ) -> Result<BTreeMap<String, LogicalPlan>> {
@@ -553,18 +766,63 @@ impl<'a> PackagePlanner<'a> {
                 }
                 .build()
             })?;
-            let plan = self.engine.definition_sql(state, sql).await?;
+            let plan = self.plan(provider, tables, sql)?;
             Self::schema(&plan, &port.schema)?;
-            if !Self::contains_call(&plan)? {
-                state
-                    .query_planner()
-                    .create_physical_plan(&plan, state)
-                    .await
-                    .context(SqlSnafu)?;
-            }
+            self.retain(&plan)?;
             plans.insert(port.name.clone(), plan);
         }
         Ok(plans)
+    }
+
+    fn plan(
+        &self,
+        provider: &dyn ContextProvider,
+        tables: &BTreeMap<String, Arc<dyn TableProvider>>,
+        sql: &str,
+    ) -> Result<LogicalPlan> {
+        let statement = self.parser.parse(sql)?;
+        if !matches!(&statement, Statement::Statement(statement) if matches!(statement.as_ref(), datafusion::sql::sqlparser::ast::Statement::Query(_)))
+        {
+            return InvalidSnafu {
+                field: "SQL statement",
+            }
+            .fail();
+        }
+        let scope = Scope {
+            provider,
+            tables,
+            sources: &self.sources,
+        };
+        let plan = SqlToRel::new(&scope)
+            .statement_to_plan(statement)
+            .context(SqlSnafu)?;
+        SQLOptions::new()
+            .with_allow_ddl(false)
+            .with_allow_dml(false)
+            .with_allow_statements(false)
+            .verify_plan(&plan)
+            .context(SqlSnafu)?;
+        if let Some(limits) = self
+            .state
+            .config()
+            .get_extension::<crate::execution::Limits>()
+        {
+            crate::planner::Planner::quotas(&plan, &limits)?;
+        }
+        Ok(plan)
+    }
+
+    fn indexed(
+        &self,
+        provider: &dyn ContextProvider,
+        name: &str,
+        plan: &LogicalPlan,
+    ) -> Result<LogicalPlan> {
+        let tables = BTreeMap::from([(
+            name.into(),
+            Arc::new(ViewTable::new(plan.clone(), None)) as Arc<dyn TableProvider>,
+        )]);
+        self.plan(provider, &tables, &format!("SELECT *, CAST(row_number() OVER () - 1 AS BIGINT UNSIGNED) AS __row_index FROM \"{}\"", name.replace('"', "\"\"")))
     }
 
     fn schema(plan: &LogicalPlan, schema: &sdk::Schema) -> Result<()> {
@@ -575,77 +833,66 @@ impl<'a> PackagePlanner<'a> {
         Ok(())
     }
 
-    fn binding(input: &sdk::InputPort, call: &DefinitionCall) -> Option<String> {
-        call.inputs
-            .get(&input.port.name)
-            .cloned()
-            .or_else(|| match &input.source {
-                sdk::InputSource::Query(sql) => Some(sql.clone()),
-                _ => None,
-            })
-    }
-
-    pub(super) fn named(
-        input: &sdk::InputPort,
-        call: &DefinitionCall,
-        tables: &BTreeMap<String, Arc<dyn TableProvider>>,
-    ) -> Result<Option<(LogicalPlan, BTreeSet<usize>)>> {
-        if call.inputs.contains_key(&input.port.name) {
-            return Ok(None);
-        }
-        let sdk::InputSource::Table(sdk::TableRef::Named(name)) = &input.source else {
-            return Ok(None);
-        };
-        let provider = tables.get(name).cloned().ok_or_else(|| {
-            InvalidSnafu {
-                field: "package input table",
-            }
-            .build()
-        })?;
-        let dependencies = provider
-            .as_any()
-            .downcast_ref::<SourceProvider>()
-            .and_then(|source| {
-                if let SourceOrigin::Port(slot) = source.origin {
-                    Some(slot)
-                } else {
-                    None
-                }
-            })
-            .into_iter()
-            .collect();
-        Ok(Some((
-            Inputs::scan(name, provider, &input.port.schema)?,
-            dependencies,
-        )))
-    }
-
-    async fn indexed(&self, name: &str, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let mut tables = BTreeMap::<String, Arc<dyn TableProvider>>::new();
-        tables.insert(
-            name.to_owned(),
-            Arc::new(ViewTable::new(plan.clone(), None)),
-        );
-        let state = self.engine.catalog(tables)?;
-        let sql = format!(
-            "SELECT *, CAST(row_number() OVER () - 1 AS BIGINT UNSIGNED) AS __row_index FROM {}",
-            Self::quote(name)
-        );
-        self.engine.definition_sql(&state, &sql).await
+    fn retain(&self, plan: &LogicalPlan) -> Result<()> {
+        self.state()?.plans.push(plan.clone());
+        Ok(())
     }
 
     fn contains_call(plan: &LogicalPlan) -> Result<bool> {
         let mut found = false;
-        plan.apply_with_subqueries(|node| {
-            if matches!(node, LogicalPlan::Extension(extension) if extension.node.as_any().is::<PackageCall>()) {
-                found = true;
-            }
-            Ok(TreeNodeRecursion::Continue)
-        }).context(SqlSnafu)?;
+        plan.apply_with_subqueries(|node| { found |= matches!(node, LogicalPlan::Extension(extension) if extension.node.as_any().is::<PackageCall>()); Ok(TreeNodeRecursion::Continue) }).context(SqlSnafu)?;
         Ok(found)
     }
+}
 
-    fn quote(name: &str) -> String {
-        format!("\"{}\"", name.replace('"', "\"\""))
+impl RelationPlanner for Packages {
+    fn plan_relation(
+        &self,
+        relation: TableFactor,
+        context: &mut dyn RelationPlannerContext,
+    ) -> datafusion::common::Result<RelationPlanning> {
+        let TableFactor::Table {
+            name,
+            args: Some(_),
+            ..
+        } = &relation
+        else {
+            return Ok(RelationPlanning::Original(Box::new(relation)));
+        };
+        let Some((image, export)) = Self::reference(name)? else {
+            return Ok(RelationPlanning::Original(Box::new(relation)));
+        };
+        let TableFactor::Table {
+            alias,
+            args: Some(args),
+            with_hints,
+            version,
+            with_ordinality,
+            partitions,
+            json_path,
+            sample,
+            index_hints,
+            ..
+        } = relation
+        else {
+            return datafusion::common::internal_err!("Package relation changed");
+        };
+        if args.settings.is_some()
+            || !with_hints.is_empty()
+            || version.is_some()
+            || with_ordinality
+            || !partitions.is_empty()
+            || json_path.is_some()
+            || sample.is_some()
+            || !index_hints.is_empty()
+        {
+            return datafusion::common::plan_err!("Package relation modifiers are invalid");
+        }
+        let plan = self
+            .admit(context, image, export, args.args)
+            .map_err(|source| DataFusionError::External(Box::new(source)))?;
+        Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+            plan, alias,
+        ))))
     }
 }

@@ -37,19 +37,12 @@ fn definition_forms_are_strict() -> TestResult {
     for program in [
         json!({"kind":"sql","source":{"inline":"SELECT 1"}}),
         json!({"kind":"prql","source":{"inline":"from events"}}),
-        json!({"kind":"package","call":{"image":{"package_id":"example","revision":"1"},"export":"detect"}}),
     ] {
         let parsed: Definition =
             serde_json::from_value(json!({"name":"sample","program":program}))?;
         parsed.validate_captured()?;
         assert!(parsed.description.is_empty());
         assert!(parsed.labels.is_empty());
-        if let Program::Package { call } = parsed.program {
-            assert_eq!(call.parameters, json!({}));
-            assert!(call.inputs.is_empty());
-            assert_eq!(call.window, None);
-            assert_eq!(call.output, None);
-        }
     }
     for value in [
         json!({"name":"sample","extra":true,"program":{"kind":"sql","source":{"inline":"SELECT 1"}}}),
@@ -57,8 +50,6 @@ fn definition_forms_are_strict() -> TestResult {
         json!({"name":"sample","program":{"kind":"sql","source":{"inline":"SELECT 1","file":"query.sql"}}}),
         json!({"name":"sample","program":{"kind":"sql","source":{"inline":"SELECT 1","extra":true}}}),
         json!({"name":"sample","program":{"kind":"sql","source":{}}}),
-        json!({"name":"sample","program":{"kind":"package","call":{"image":{"package_id":"example","revision":"1"},"export":"detect","extra":true}}}),
-        json!({"name":"sample","program":{"kind":"package","call":{"image":{"package_id":"example","revision":"1","latest":true},"export":"detect"}}}),
         json!({"name":"sample","program":{"kind":"sql","source":{"inline":"SELECT 1"}},"sql":"SELECT 2","images":[]}),
     ] {
         assert!(
@@ -67,6 +58,31 @@ fn definition_forms_are_strict() -> TestResult {
         );
     }
     Ok(())
+}
+
+#[test]
+fn package_syntax_is_rejected() {
+    for program in [
+        json!({"kind":"package","call":{
+            "image":{"package_id":"example","revision":"1"},"export":"detect"
+        }}),
+        json!({"kind":"package","call":{
+            "image":{"package_id":"example","revision":"1"},"export":"detect",
+            "inputs":{"events":"SELECT * FROM events"},"parameters":{"threshold":2},
+            "window":"received_at > now() - interval '1 minute'","output":"findings"
+        }}),
+        json!({"kind":"package","source":{"inline":"SELECT 1"}}),
+        json!({"kind":"sql","source":{"inline":"SELECT 1"},"inputs":{}}),
+        json!({"kind":"sql","source":{"inline":"SELECT 1"},"parameters":{}}),
+        json!({"kind":"sql","source":{"inline":"SELECT 1"},"window":"received_at > now()"}),
+        json!({"kind":"sql","source":{"inline":"SELECT 1"},"output":"findings"}),
+    ] {
+        assert!(
+            serde_json::from_value::<Definition>(json!({"name":"sample","program":program}))
+                .is_err(),
+            "{program}"
+        );
+    }
 }
 
 #[test]
@@ -84,47 +100,19 @@ fn source_file_is_captured() -> TestResult {
         }))?,
     )?;
     let captured = Definition::read(&path)?;
-    assert_eq!(
-        captured
-            .program
-            .source()
-            .ok_or("source is absent")?
-            .inline()?,
-        text
-    );
+    assert_eq!(captured.program.source().inline()?, text);
     assert_eq!(captured.description, "retained metadata");
     assert_eq!(
         captured.labels.get("team").map(String::as_str),
         Some("security")
     );
     std::fs::write(&source, "SELECT 2")?;
-    assert_eq!(
-        captured
-            .program
-            .source()
-            .ok_or("source is absent")?
-            .inline()?,
-        text
-    );
+    assert_eq!(captured.program.source().inline()?, text);
     let updated = Definition::read(&path)?;
-    assert_eq!(
-        updated
-            .program
-            .source()
-            .ok_or("source is absent")?
-            .inline()?,
-        "SELECT 2"
-    );
+    assert_eq!(updated.program.source().inline()?, "SELECT 2");
     std::fs::remove_file(&source)?;
     captured.validate_captured()?;
-    assert_eq!(
-        captured
-            .program
-            .source()
-            .ok_or("source is absent")?
-            .inline()?,
-        text
-    );
+    assert_eq!(captured.program.source().inline()?, text);
     assert!(matches!(Definition::read(&path), Err(Error::Io { .. })));
 
     std::fs::write(&source, "from events")?;
@@ -135,14 +123,7 @@ fn source_file_is_captured() -> TestResult {
         }))?,
     )?;
     let absolute = Definition::read(&path)?;
-    assert_eq!(
-        absolute
-            .program
-            .source()
-            .ok_or("source is absent")?
-            .inline()?,
-        "from events"
-    );
+    assert_eq!(absolute.program.source().inline()?, "from events");
     Ok(())
 }
 
@@ -208,43 +189,7 @@ fn definition_values_are_checked() -> TestResult {
     };
     value.validate()?;
     assert!(value.validate_captured().is_err());
-    assert!(value
-        .program
-        .source()
-        .ok_or("source is absent")?
-        .inline()
-        .is_err());
-    for change in [
-        json!({"image":{"package_id":"","revision":"1"}}),
-        json!({"image":{"package_id":"example","revision":""}}),
-        json!({"export":" "}),
-        json!({"inputs":{"":"SELECT 1"}}),
-        json!({"inputs":{"events":" "}}),
-        json!({"window":" "}),
-        json!({"output":" "}),
-    ] {
-        let mut call = json!({"image":{"package_id":"example","revision":"1"},"export":"detect"});
-        call.as_object_mut()
-            .ok_or("call is not an object")?
-            .extend(change.as_object().ok_or("change is not an object")?.clone());
-        let parsed: Definition = serde_json::from_value(
-            json!({"name":"sample","program":{"kind":"package","call":call}}),
-        )?;
-        assert!(parsed.validate().is_err(), "{change}");
-    }
-    for parameters in [json!(null), json!([]), json!({"threshold": 2})] {
-        let parsed: Definition = serde_json::from_value(json!({
-            "name":"sample","program":{"kind":"package","call":{
-                "image":{"package_id":"example","revision":"1"},
-                "export":"detect","parameters":parameters
-            }}
-        }))?;
-        parsed.validate()?;
-        let Program::Package { call } = parsed.program else {
-            return Err("package call is absent".into());
-        };
-        assert_eq!(call.parameters, parameters);
-    }
+    assert!(value.program.source().inline().is_err());
     Ok(())
 }
 
@@ -285,6 +230,10 @@ fn snapshot_digest_covers_content() -> TestResult {
     assert_eq!(ordered.digest()?, reversed.digest()?);
     let retained: ResolvedDefinition = serde_json::from_slice(&serde_json::to_vec(&ordered)?)?;
     assert_eq!(retained.digest()?, ordered.digest()?);
+    let mut unordered = retained;
+    unordered.images.reverse();
+    assert!(unordered.validate().is_err());
+    assert!(unordered.digest().is_err());
     Ok(())
 }
 
@@ -310,15 +259,21 @@ fn snapshot_requires_captured_sources() -> TestResult {
         image.digest = digest;
         assert!(image.validate().is_err());
     }
-    let package: Definition = serde_json::from_value(json!({
-        "name":"sample","program":{"kind":"package","call":{
-            "image":{"package_id":"example","revision":"1"},"export":"detect",
-            "inputs":{"events":"SELECT * FROM events"},"parameters":{"threshold":2},
-            "window":"received_at > now() - interval '1 minute'","output":"findings"
-        }}
-    }))?;
-    assert!(ResolvedDefinition::new(package.clone(), "SELECT 1".into(), Vec::new()).is_err());
-    let resolved = ResolvedDefinition::new(package, "SELECT 1".into(), vec![pin("example")])?;
+    for image in [
+        PackageRefV1 {
+            package_id: " ".into(),
+            revision: "1".into(),
+        },
+        PackageRefV1 {
+            package_id: "example".into(),
+            revision: "\t".into(),
+        },
+    ] {
+        let mut invalid = pin("example");
+        invalid.image = image;
+        assert!(invalid.validate().is_err());
+    }
+    let resolved = ResolvedDefinition::new(definition(), "SELECT 1".into(), vec![pin("example")])?;
     resolved.validate()?;
     let original = resolved.digest()?;
     let mut changed = resolved.clone();

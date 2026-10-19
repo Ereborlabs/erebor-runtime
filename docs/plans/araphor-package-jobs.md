@@ -23,7 +23,7 @@ The user directs implementation under these criteria on 2026-10-18:
    required reduction.
 2. Every new execution path, including Discovery, uses native SQL parsing,
    native logical planning, native optimization, physical planning, and
-   execution. A direct call or PRQL source must reach that same SQL route.
+   execution. SQL package calls and PRQL source use that same SQL route.
 3. Move the existing Discovery owner and packages into the real
    `araphor-analysis_back` crate. Create `araphor-analysis` from scratch.
    The new crate consumes actual Query subscription output. It must not call
@@ -60,8 +60,24 @@ for this deliverable; this priority does not require the complete earlier
 owner migration first.
 
 Keep three separate objects: the OCI package contains reusable code; the
-Discovery definition describes what to run; the running instance owns the
+Discovery definition contains SQL or PRQL; the running instance owns the
 subscription lifetime. Installing a package does not start a Discovery.
+
+The user replaces the separate package-call program form with calls inside
+SQL or PRQL. Remove the JSON call, input bindings, parameters, output
+selector, and window fields. Native SQL supplies those operations. Use an
+exact function name such as `"fixture"."r1".count(...)`: the parts identify
+the image, revision, and export. Named subquery arguments supply input
+relations. Named scalar arguments supply parameters. An optional first string
+argument selects an output relation when the export has several outputs.
+Filters and time windows belong in the SQL input query. PRQL uses its
+existing SQL relation expressions; add no PRQL parser or extension language.
+
+Query resolves image references from the native SQL syntax tree. It loads
+each exact installed image once for the admission. Data and Control retain
+the existing immutable snapshot, permission, and trust checks. Admission
+starts no Discovery. This change does not implement the running-instance
+lifecycle or the physical package-call executor.
 
 The user authorizes the OCI image in a separate crate. The current delivery
 uses `araphor-package` for image content and the existing Data store for
@@ -84,24 +100,22 @@ execution acceptance criterion below remains **Not done**.
 | Order | TODO | Result |
 | --- | --- | --- |
 | First | [14. OCI package image](araphor-feature-parity-todo.md#14-oci-package-image) | Reusable code with exact revisions and declared SDK contracts. Installation starts no Discovery. |
-| Next | [15. Compose file](araphor-feature-parity-todo.md#15-discovery-definition-file-compose-file) | Metadata and one package-call, PRQL, or SQL program. |
+| Next | [15. Compose file](araphor-feature-parity-todo.md#15-discovery-definition-file-compose-file) | Metadata and one SQL or PRQL program. Package calls belong in that program. |
 | Then | [16. Running Discoveries](araphor-feature-parity-todo.md#16-running-discovery-instances) | Independent managed Query subscriptions with their own lifetime, progress, and saved state. |
 
 A definition contains metadata and selects one program form:
 
 | Program form | Definition input | Route to execution |
 | --- | --- | --- |
-| Package call | OCI package reference, export, input bindings, and parameters. | Resolve the exact installed implementation and form a native SQL call. |
-| PRQL | PRQL source or a referenced PRQL file. | Compile to SQL, then use native SQL admission. |
-| SQL | SQL source or a referenced SQL file. | Use native SQL admission directly. |
+| PRQL | PRQL source or a referenced PRQL file, with package calls when required. | Compile to SQL, then use native SQL admission. |
+| SQL | SQL source or a referenced SQL file, with package calls when required. | Use native SQL admission directly. |
 
-All three forms use native SQL parsing, logical planning, optimization,
+Both forms use native SQL parsing, logical planning, optimization,
 physical planning, and execution. Reuse the installed evaluator and Query
 subscriptions. Add no separate execution engine or polling loop.
 
 Metadata can name and describe the definition and attach labels. Call
-bindings and parameters belong to the call site. SQL defines query windows;
-a declared window on a direct package call must reach the same SQL route.
+bindings and parameters belong to the SQL call site. SQL defines query windows.
 Execution permission comes from Control, not from metadata in the file.
 Resolve referenced source paths relative to the definition. Read those files
 when the definition is admitted; do not poll them for changes.
@@ -121,7 +135,8 @@ An operator installs an OCI package
 
 An operator starts a Discovery definition
   -> the definition owner reads the selected program and metadata
-  -> SQL is admitted directly, PRQL compiles to SQL, or a package call forms SQL
+  -> SQL is admitted directly or PRQL compiles to SQL
+  -> native relation planning resolves package calls in that SQL
   -> native DataFusion plans and executes the admitted program
   -> Query runs the managed subscription until it is stopped
 
@@ -130,13 +145,13 @@ An operator stops one instance
   -> other instances that use the same package continue
 ```
 
-Acceptance: load package-call, PRQL, and SQL definitions and preserve their
-metadata. Prove all three reach native Query execution. Install a package
+Acceptance: load SQL and PRQL definitions with package calls and preserve
+their metadata. Prove both forms reach native Query execution. Install a package
 without starting a Discovery. Start two instances with different inputs or
 parameters; stop one while the other continues. Preserve current permission,
 cancellation, saved-state, and buffer lifetime checks.
 
-This priority, the three separate TODOs, and the three program forms are
+This priority, the three separate TODOs, and the two program forms are
 current user requirements.
 They do not approve every controller, storage, checkpoint, or crate proposal
 in the earlier draft. Implementation: **Not done**.

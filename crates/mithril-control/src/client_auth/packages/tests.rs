@@ -1,8 +1,6 @@
 use super::*;
 use araphor_data::PackageBundleV1;
-use araphor_discovery_definition::{
-    Definition, ImagePin, PackageCall, Program, ResolvedDefinition, Source,
-};
+use araphor_discovery_definition::{Definition, ImagePin, Program, ResolvedDefinition, Source};
 
 fn managers() -> Vec<InvestigateGrant> {
     vec![InvestigateGrant {
@@ -348,16 +346,20 @@ fn definition_commit_image_trust() -> std::result::Result<(), Box<dyn std::error
         bundle_digest: pin.digest.clone(),
     };
     let mut definition = definition()?;
-    definition.definition.program = Program::Package {
-        call: PackageCall {
-            image: first.root,
-            export: "count".into(),
-            inputs: Default::default(),
-            parameters: serde_json::json!({}),
-            window: None,
-            output: None,
+    let first_sql = format!(
+        "SELECT * FROM \"{}\".\"{}\".count()",
+        first_pin.image.package_id, first_pin.image.revision
+    );
+    let second_sql = format!(
+        "SELECT * FROM \"{}\".\"{}\".count()",
+        second_pin.image.package_id, second_pin.image.revision
+    );
+    definition.definition.program = Program::Sql {
+        source: Source::Inline {
+            inline: first_sql.clone(),
         },
     };
+    definition.sql = first_sql.clone();
     definition.images = vec![first_pin.clone()];
     definition.validate()?;
     for pins in [Vec::new(), vec![trust([2; 16], &first_pin)]] {
@@ -383,10 +385,12 @@ fn definition_commit_image_trust() -> std::result::Result<(), Box<dyn std::error
     })?;
     assert!(committed);
     let mut changed = definition.clone();
-    let Program::Package { call } = &mut changed.definition.program else {
-        return Err("package call is absent".into());
+    changed.definition.program = Program::Sql {
+        source: Source::Inline {
+            inline: second_sql.clone(),
+        },
     };
-    call.image = second_pin.image.clone();
+    changed.sql = second_sql.clone();
     changed.images = vec![second_pin.clone()];
     changed.validate()?;
     committed = false;
@@ -397,6 +401,13 @@ fn definition_commit_image_trust() -> std::result::Result<(), Box<dyn std::error
         })
         .is_err());
     assert!(!committed);
+    let both = format!("SELECT a.count AS first_count, b.count AS second_count FROM ({first_sql}) a CROSS JOIN ({second_sql}) b");
+    definition.definition.program = Program::Sql {
+        source: Source::Inline {
+            inline: both.clone(),
+        },
+    };
+    definition.sql = both;
     definition.images.push(second_pin.clone());
     definition.validate()?;
     assert!(owner

@@ -139,7 +139,7 @@ impl<'a> Planner<'a> {
         Ok(plan)
     }
 
-    fn quotas(plan: &LogicalPlan, limits: &Limits) -> Result<()> {
+    pub(crate) fn quotas(plan: &LogicalPlan, limits: &Limits) -> Result<()> {
         if limits.projection_columns.is_none() && limits.window_bound.is_none() {
             return Ok(());
         }

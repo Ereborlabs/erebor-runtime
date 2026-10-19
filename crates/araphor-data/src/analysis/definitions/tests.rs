@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use araphor_discovery_definition::{Definition, ImagePin, PackageCall, Program, Source};
+use araphor_discovery_definition::{Definition, ImagePin, Program, Source};
 use duckdb::params;
 use snafu::ResultExt as _;
 
@@ -108,7 +108,7 @@ fn definition_retains_captured_source() -> TestResult {
     };
     std::fs::write(&path, serde_json::to_vec(&definition)?)?;
     let captured = Definition::read(&path)?;
-    let compiled = captured.program.sql()?.ok_or("SQL is absent")?;
+    let compiled = captured.program.sql()?;
     let captured = ResolvedDefinition::new(captured, compiled, Vec::new())?;
     std::fs::write(&source, "SELECT 99 AS count")?;
     let store = AnalysisStore::open(&root)?;
@@ -249,24 +249,18 @@ fn definition_requires_exact_image() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let image = sql_image();
+    let sql = "SELECT * FROM \"definition-image\".\"1\".count()";
     let definition = Definition {
         name: "package-counts".into(),
         description: String::new(),
         labels: BTreeMap::new(),
-        program: Program::Package {
-            call: PackageCall {
-                image: image.root.clone(),
-                export: "count".into(),
-                inputs: BTreeMap::new(),
-                parameters: serde_json::json!({}),
-                window: None,
-                output: Some("rows".into()),
-            },
+        program: Program::Sql {
+            source: Source::Inline { inline: sql.into() },
         },
     };
     let resolved = ResolvedDefinition::new(
         definition,
-        "SELECT 1 AS count".into(),
+        sql.into(),
         vec![ImagePin {
             image: image.root.clone(),
             digest: image.digest()?,

@@ -25,7 +25,6 @@ pub struct Definition {
 pub enum Program {
     Sql { source: Source },
     Prql { source: Source },
-    Package { call: PackageCall },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,21 +32,6 @@ pub enum Program {
 pub enum Source {
     Inline { inline: String },
     File { file: PathBuf },
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackageCall {
-    pub image: PackageRefV1,
-    pub export: String,
-    #[serde(default)]
-    pub inputs: BTreeMap<String, String>,
-    #[serde(default = "PackageCall::default_parameters")]
-    pub parameters: serde_json::Value,
-    #[serde(default)]
-    pub window: Option<String>,
-    #[serde(default)]
-    pub output: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -70,9 +54,10 @@ impl Definition {
         let bytes = std::fs::read(path).context(IoSnafu { path })?;
         let mut definition: Self = serde_json::from_slice(&bytes).context(JsonSnafu)?;
         definition.validate()?;
-        if let Some(source) = definition.program.source_mut() {
-            source.capture(path.parent().unwrap_or(Path::new(".")))?;
-        }
+        definition
+            .program
+            .source_mut()
+            .capture(path.parent().unwrap_or(Path::new(".")))?;
         definition.validate_captured()?;
         Ok(definition)
     }
@@ -86,32 +71,25 @@ impl Definition {
 
     pub fn validate_captured(&self) -> Result<()> {
         self.validate()?;
-        if let Some(source) = self.program.source() {
-            source.inline()?;
-        }
+        self.program.source().inline()?;
         Ok(())
     }
 }
 
 impl Program {
-    pub fn source(&self) -> Option<&Source> {
+    pub fn source(&self) -> &Source {
         match self {
-            Self::Sql { source } | Self::Prql { source } => Some(source),
-            Self::Package { .. } => None,
+            Self::Sql { source } | Self::Prql { source } => source,
         }
     }
 
     pub fn validate(&self) -> Result<()> {
-        match self {
-            Self::Sql { source } | Self::Prql { source } => source.validate(),
-            Self::Package { call } => call.validate(),
-        }
+        self.source().validate()
     }
 
-    fn source_mut(&mut self) -> Option<&mut Source> {
+    fn source_mut(&mut self) -> &mut Source {
         match self {
-            Self::Sql { source } | Self::Prql { source } => Some(source),
-            Self::Package { .. } => None,
+            Self::Sql { source } | Self::Prql { source } => source,
         }
     }
 }
@@ -143,43 +121,6 @@ impl Source {
             *self = Self::Inline { inline };
         }
         self.validate()
-    }
-}
-
-impl PackageCall {
-    pub fn validate(&self) -> Result<()> {
-        if self.image.package_id.trim().is_empty() || self.image.revision.trim().is_empty() {
-            return InvalidSnafu { field: "image" }.fail();
-        }
-        if self.export.trim().is_empty() {
-            return InvalidSnafu { field: "export" }.fail();
-        }
-        if self
-            .inputs
-            .iter()
-            .any(|(name, sql)| name.trim().is_empty() || sql.trim().is_empty())
-        {
-            return InvalidSnafu { field: "inputs" }.fail();
-        }
-        if self
-            .window
-            .as_ref()
-            .is_some_and(|sql| sql.trim().is_empty())
-        {
-            return InvalidSnafu { field: "window" }.fail();
-        }
-        if self
-            .output
-            .as_ref()
-            .is_some_and(|name| name.trim().is_empty())
-        {
-            return InvalidSnafu { field: "output" }.fail();
-        }
-        Ok(())
-    }
-
-    fn default_parameters() -> serde_json::Value {
-        serde_json::Value::Object(serde_json::Map::default())
     }
 }
 
@@ -232,11 +173,6 @@ impl ResolvedDefinition {
                 field: "image order",
             }
             .fail();
-        }
-        if let Program::Package { call } = &self.definition.program {
-            if !self.images.iter().any(|pin| pin.image == call.image) {
-                return InvalidSnafu { field: "image pin" }.fail();
-            }
         }
         Ok(())
     }

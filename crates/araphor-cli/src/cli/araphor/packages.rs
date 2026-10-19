@@ -350,7 +350,7 @@ mod tests {
             return Err("definition admission absent".into());
         };
         assert_eq!(definition.name, "counts");
-        assert_eq!(definition.program.sql()?.as_deref(), Some("SELECT 1"));
+        assert_eq!(definition.program.sql()?, "SELECT 1");
         assert!(request.selection.is_none());
         Ok(())
     }

@@ -5,9 +5,10 @@ definition selects reusable code and inputs. Admission starts no Discovery.
 
 ## Intended end state
 
-A definition contains metadata and one SQL, PRQL, or package-call program.
-Every program uses the native DataFusion pipeline. A separate running
-instance owns permission, progress, saved state, and subscription lifetime.
+A definition contains metadata and one SQL or PRQL program. Package calls
+are relations inside that program. Every program uses the native DataFusion
+pipeline. A separate running instance owns permission, progress, saved state,
+and subscription lifetime.
 
 ## Review flow
 
@@ -15,7 +16,7 @@ instance owns permission, progress, saved state, and subscription lifetime.
 An operator admits a definition file
   -> the CLI captures the definition and referenced source files
   -> Control checks the current tenant and manager permission
-  -> Query admits SQL, compiled PRQL, or an exact package call
+  -> Query admits SQL or compiled PRQL and resolves package calls in that SQL
   -> Control holds permission and image trust through the final write
   -> Data retains one immutable definition revision
   -> no Discovery starts
@@ -42,17 +43,30 @@ tenant read permission. File metadata grants no permission.
 
 -> [Engine::prepare_definition](../../crates/araphor-query/src/definition.rs)
 uses native SQL parsing, logical planning, and optimization. SQL and generated
-PRQL SQL also pass native physical planning. Admission executes no data query.
+PRQL SQL use the same route. Query loads each exact installed image referenced
+by a package function. Admission executes no input query or package.
 
--> [PackagePlanner](../../crates/araphor-query/src/definition/package.rs)
-binds exact installed image content, the export, input plans, typed
-parameters, output selection, and declared dependency contracts. A call with
-several output relations requires an explicit output name. SQL package
-output, checkpoint, evidence, and reason queries retain their schema checks.
+-> [Packages](../../crates/araphor-query/src/definition/package.rs)
+extends native relation planning for installed package functions. Native
+subquery arguments supply input plans. Native scalar expressions supply
+parameters. Exact image content supplies the declared interface and locked
+dependencies. A call with several output relations requires an output name
+as its first string argument. SQL package output, checkpoint, evidence, and
+reason queries retain their schema checks. Native analysis and optimization
+check every SQL body plan, including plans that contain other package calls.
+
+The native SQL body planner needs a separate table scope for each call.
+[Scope](../../crates/araphor-query/src/definition/package/scope.rs) supplies
+the actual input, parameter, output, and prior-state tables through
+DataFusion's `ContextProvider`. It delegates function, type, configuration,
+and other metadata to the native provider. A package body cannot inherit
+undeclared tables from its caller. Caller subqueries and common table
+expressions are planned by DataFusion before this body scope is used.
 
 -> [PackageCall](../../crates/araphor-query/src/definition/call.rs)
-uses the native relation-planning extension. Its logical children are the
-actual admitted input plans. Its schema is the selected SDK output schema.
+retains the exact image, export, selected output, and SDK descriptor. Its
+logical children are the actual input plans and the native parameter plan.
+Its schema is the selected SDK output schema.
 Partial: the node has no physical executor. Native physical planning returns
 an explicit unsupported error for a package-call execution attempt.
 
@@ -84,8 +98,8 @@ sequenceDiagram
     participant Data
     CLI->>CLI: Capture definition and source
     CLI->>Control: Admit captured definition
-    Control->>Data: Read exact installed image
     Control->>Query: Prepare native plans
+    Query->>Data: Read exact images referenced by SQL
     Query-->>Control: Return admitted snapshot
     Control->>Control: Hold permission and trust
     Control->>Data: Commit immutable definition
@@ -93,13 +107,15 @@ sequenceDiagram
     Control-->>CLI: Return the admitted snapshot
 ```
 
-SQL and PRQL require no image lookup. Data commits no activation or result.
+Queries with no package calls require no image lookup. Data commits no
+activation or result.
 
 ## File schema
 
-The file uses JSON. Unknown fields, duplicate program forms, and combined
-inline/file source objects are invalid. No definition-specific size quota is
-added. The existing optional Query and Data limits still apply.
+The file uses JSON. Unknown fields, the removed package program form,
+duplicate program forms, and combined inline/file source objects are invalid.
+No definition-specific size quota is added. The existing optional Query and
+Data limits still apply.
 
 ```json
 {
@@ -119,33 +135,39 @@ SQL. Use `kind: "prql"` with the same source forms for PRQL. The
 `prqlc` 0.13.13 with the Generic SQL target. DataFusion admits the generated
 SQL. This route does not promise every PRQL expression is compatible.
 
-```json
-{
-  "name": "selected-detector",
-  "program": {
-    "kind": "package",
-    "call": {
-      "image": {"package_id": "example.detectors", "revision": "1"},
-      "export": "detect",
-      "output": "findings",
-      "inputs": {"events": "SELECT source_cursor AS value FROM events"},
-      "parameters": {},
-      "window": "received_at >= now() - INTERVAL '60 seconds'"
-    }
-  }
-}
+Put package calls in the SQL source:
+
+```sql
+SELECT *
+FROM "fixture"."r1".count(
+  source => (
+    SELECT source_cursor AS value
+    FROM events
+    WHERE received_at >= now() - INTERVAL '5 minutes'
+  ),
+  increment => 2
+)
 ```
 
-Each input binding is native SQL. The optional window is a native SQL
-predicate. Query binds the predicate to the input. A native source-time
-predicate can precede the final input projection. This position keeps the
-source timestamp available when the SDK input does not contain that column.
-Query does not move the predicate through aggregation or a limit. Put such
-source filters in the binding SQL. Query validates clock-dependent predicates
-against its existing window rules. The definition adds no scheduling language
-or timer.
-The example package must already be installed with that exact revision and
-must declare compatible inputs, parameters, and output.
+The function name identifies the image, exact revision, and export. The
+example uses the Query test image. Install the selected image before
+admission. Its interface must declare the supplied inputs and parameters.
+For an export with several outputs, use an explicit first string argument,
+such as `count('result', source => (SELECT ...), increment => 2)`.
+
+Inputs are native subqueries. Filters, joins, grouping, and windows stay in
+those queries. Scalar arguments use the declared parameter names and types.
+There is no separate JSON input, parameter, or window language. Calls can
+appear in joins, nested inputs, or queries that use common table expressions.
+
+PRQL uses its existing SQL relation syntax and then compiles to native SQL:
+
+```prql
+from s"""SELECT * FROM "fixture"."r1".count(
+  source => (SELECT source_cursor AS value FROM events), increment => 2
+)"""
+filter value >= 2
+```
 
 ## Ownership and verification
 
@@ -162,8 +184,8 @@ and [RPC tests](../../crates/mithril-control/src/client_grpc/tests/packages.rs).
 The tests cover source capture, strict forms, native planning, typed calls,
 permission revocation, exact pins, immutable retries, and definition recovery.
 The [TLS case](../../crates/mithril-e2e/src/discovery/packages/definitions.rs)
-uses the real client to admit and inspect all three forms. The case also
-checks the locked SQL dependency and unchanged activation state.
+uses the real client to admit and inspect SQL and PRQL. Its native package
+calls also check the locked SQL dependency and unchanged activation state.
 
 [Dataset::normalize_batch](../../crates/araphor-analysis-sdk/src/batch.rs)
 retains the explicit Arrow row count when a valid SDK input has no columns.
@@ -176,20 +198,31 @@ accepts the same empty schema and retains metadata. The
 continuous row indices across empty and nonempty zero-column batches.
 The changes retain the existing column and schema checks.
 
-This guide covers the working tree after `a03e5daa`. The following 73 distinct
-focused tests passed:
+The native-call replacement passes the following 50 distinct focused tests:
 
 | Owner | Passed cases |
 | --- | --- |
-| Definition format and PRQL | 10 |
-| Query definitions, indexing, and inputs | 38 |
+| Definition format and PRQL | 12 |
+| Query definitions and package calls | 20 |
 | Data definitions and request encoding | 9 |
 | Control permission and RPC admission | 5 |
 | CLI admission, inspection, and output | 3 |
-| SDK batch normalization | 7 |
 | TLS client admission and inspection | 1 |
 
 Formatting and affected-crate Clippy with warnings denied passed. The
-verification record is `/tmp/araphor-definition-verification1.json`.
+verification record is `/tmp/araphor-sql-call-verification1.json`.
+The tests also reject an invalid constant cast in a body that contains a
+nested package call. They accept the corrected body. Native analysis and
+optimization apply before the physical-execution boundary.
+
+The SDK batch and Query index owners are unchanged from `318a3259`. Their
+earlier checks above are not repeated. The focused Query zero-column case
+runs again in this delivery.
+
+The replacement adds 165 production Rust code lines from `318a3259`:
+327 additions and 162 deletions by file size. Tests, comments, documents,
+blank lines, and moves do not count as reduction. The count record is
+`/tmp/araphor-sql-call-count1.json`. The complete reduction target remains
+**Not done**.
 Complete package execution and running-instance acceptance remain open.
 Full workspace CI, benchmarks, and physical Kubernetes checks did not run.

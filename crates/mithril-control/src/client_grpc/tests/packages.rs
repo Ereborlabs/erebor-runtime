@@ -67,7 +67,7 @@ impl Fixture {
 
 #[tokio::test]
 async fn definition_rpc_admission_is_not_execution() -> TestResult {
-    use araphor_discovery_definition::{Definition, PackageCall, Program, Source};
+    use araphor_discovery_definition::{Definition, ImagePin, Program, Source};
 
     let fixture = Fixture::new()?;
     let definition = |name: &str, program| Definition {
@@ -245,14 +245,9 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
         .await?;
     let call = definition(
         "package-counts",
-        Program::Package {
-            call: PackageCall {
-                image: image.root.clone(),
-                export: "count".into(),
-                inputs: BTreeMap::new(),
-                parameters: serde_json::json!({}),
-                window: None,
-                output: None,
+        Program::Sql {
+            source: Source::Inline {
+                inline: "SELECT * FROM \"api.fixture\".\"1\".count()".into(),
             },
         },
     );
@@ -269,6 +264,130 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
     assert_eq!(admitted.definition, call);
     assert_eq!(admitted.images[0].image, image.root);
     assert_eq!(admitted.images[0].digest, image.digest()?);
+    assert_eq!(store.package_activation_page(None)?, activations);
+    let mut second = image.clone();
+    second.root.package_id = "api.second".into();
+    second.artifacts[0].descriptor.id = "api.second".into();
+    let first_pin = ImagePin {
+        image: image.root.clone(),
+        digest: image.digest()?,
+    };
+    let second_pin = ImagePin {
+        image: second.root.clone(),
+        digest: second.digest()?,
+    };
+    let trust = |pins: &[ImagePin]| {
+        pins.iter()
+            .map(|pin| crate::PackageTrustPinV1 {
+                tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+                bundle_digest: pin.digest.clone(),
+            })
+            .collect::<Vec<_>>()
+    };
+    fixture
+        .service
+        .auth
+        .replace_package_trust(trust(&[first_pin.clone(), second_pin.clone()]))?;
+    fixture
+        .package(PackageRequestV1::InstallImage { bundle: second }, true)
+        .await?;
+    let multiple = "SELECT a.count AS first_count, b.count AS second_count FROM \"api.fixture\".\"1\".count() a CROSS JOIN \"api.second\".\"1\".count() b";
+    let sql_call = definition(
+        "multiple-sql",
+        Program::Sql {
+            source: Source::Inline {
+                inline: multiple.into(),
+            },
+        },
+    );
+    fixture
+        .service
+        .auth
+        .replace_package_trust(trust(std::slice::from_ref(&first_pin)))?;
+    let before = store.meta()?;
+    assert_eq!(
+        fixture
+            .package(
+                PackageRequestV1::AdmitDefinition {
+                    definition: sql_call.clone()
+                },
+                true
+            )
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::PermissionDenied)
+    );
+    assert_eq!(store.meta()?, before);
+    assert!(store
+        .definition(
+            [1; 16],
+            "multiple-sql",
+            None,
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+    fixture
+        .service
+        .auth
+        .replace_package_trust(trust(&[first_pin.clone(), second_pin.clone()]))?;
+    for definition in [
+        sql_call.clone(),
+        definition(
+            "multiple-prql",
+            Program::Prql {
+                source: Source::Inline {
+                    inline: format!("from s\"{}\"", multiple.replace('"', "\\\"")),
+                },
+            },
+        ),
+    ] {
+        let admitted = fixture
+            .package(
+                PackageRequestV1::AdmitDefinition {
+                    definition: definition.clone(),
+                },
+                true,
+            )
+            .await?
+            .definition
+            .ok_or("multiple call definition absent")?;
+        assert_eq!(admitted.definition, definition);
+        assert_eq!(admitted.images, vec![first_pin.clone(), second_pin.clone()]);
+    }
+    let repeated = definition("repeated-image", Program::Sql { source: Source::Inline {
+        inline: "SELECT a.count AS first_count, b.count AS second_count FROM \"api.fixture\".\"1\".count() a CROSS JOIN \"api.fixture\".\"1\".count() b".into(),
+    } });
+    let repeated = fixture
+        .package(
+            PackageRequestV1::AdmitDefinition {
+                definition: repeated,
+            },
+            true,
+        )
+        .await?
+        .definition
+        .ok_or("repeated image definition absent")?;
+    assert_eq!(repeated.images, vec![first_pin.clone()]);
+    fixture
+        .service
+        .auth
+        .replace_package_trust(trust(std::slice::from_ref(&first_pin)))?;
+    let before = store.meta()?;
+    assert_eq!(
+        fixture
+            .package(
+                PackageRequestV1::AdmitDefinition {
+                    definition: sql_call
+                },
+                true
+            )
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::PermissionDenied)
+    );
+    assert_eq!(store.meta()?, before);
     assert_eq!(store.package_activation_page(None)?, activations);
     fixture.service.auth.replace_package_managers(Vec::new())?;
     assert_eq!(
