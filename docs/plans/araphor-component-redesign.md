@@ -104,6 +104,18 @@ count as reduction. The record is `/tmp/araphor-yaml-count1.json`. Complete
 reduction: **Not done**. Full workspace CI, benchmarks, and physical
 Kubernetes checks did not run. No speed result is claimed.
 
+The native admission change uses DataFrame window operations and native
+logical-plan binding. It removes index SQL generation, repeated input
+parsing, duplicate catalog construction, and repeated retained-plan checks.
+The [admission design](araphor-package-jobs.md#native-admission-simplification)
+records the reason for the native relation-planner extension. Physical
+package execution and running instances remain **Not done**. Admission
+simplification and selected qualification: **Done**. All 61 distinct focused
+tests pass. Formatting and affected-crate Clippy with warnings denied pass.
+This change removes 27 production Rust code lines from `b637c05a`. The
+complete reduction remains **Not done**. The linked admission design records
+the exact counts, source record, and remaining built-in consolidation.
+
 On 2026-10-18, the user restates simplification, coherence, and real production
 Rust reduction as the main acceptance criteria. Every new execution path,
 including Discovery, must pass through native SQL parsing, native logical

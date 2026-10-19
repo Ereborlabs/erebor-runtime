@@ -2,13 +2,11 @@ use std::sync::Arc;
 
 use araphor_data::{AnalysisReadControl, PackageErrorCodeV1};
 use araphor_discovery_definition::{Definition, ResolvedDefinition};
-use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::logical_expr::LogicalPlan;
 use snafu::ResultExt as _;
 
 use crate::execution::Engine;
 use crate::planner::Planner;
-use crate::sources::SourceSnapshot;
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
 mod call;
@@ -79,7 +77,7 @@ impl Engine {
             .await?
         };
         let packages = Arc::new(package::Packages::new(self, bundles)?);
-        let mut state = self.catalog(SourceSnapshot::providers())?;
+        let mut state = packages.state.clone();
         state
             .register_relation_planner(packages.clone())
             .context(SqlSnafu)?;
@@ -87,14 +85,7 @@ impl Engine {
         let images = packages.pins()?;
         let plan = state.optimize(&plan).context(SqlSnafu)?;
         packages.validate().await?;
-        let mut calls = false;
-        plan.apply_with_subqueries(|plan| {
-            calls |= matches!(plan, LogicalPlan::Extension(extension)
-                if extension.node.as_any().is::<PackageCall>());
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .context(SqlSnafu)?;
-        if !calls {
+        if !package::Packages::contains_call(&plan)? {
             state
                 .query_planner()
                 .create_physical_plan(&plan, &state)

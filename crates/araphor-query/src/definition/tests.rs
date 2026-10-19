@@ -585,6 +585,120 @@ async fn native_package_locked_dependency() -> TestResult {
 }
 
 #[tokio::test]
+async fn native_package_bound_inputs() -> TestResult {
+    use sdk::arrow_array::UInt64Array;
+
+    let mut bundle = Fixture::bundle();
+    let model = &mut bundle.artifacts[0].descriptor.exports[0];
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs = vec![
+        sdk::InputPort {
+            port: sdk::Port::new("source", Fixture::schema("value")),
+            source: sdk::InputSource::Query(
+                "SELECT value + CAST(1 AS BIGINT UNSIGNED) AS value FROM middle WHERE row_index IN (SELECT row_index FROM middle WHERE row_index = 1)".into(),
+            ),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new(
+                "middle",
+                sdk::Schema::new(vec![
+                    sdk::Field::new("value", sdk::DataType::UInt64, false),
+                    sdk::Field::new("tag", sdk::DataType::Utf8, false),
+                    sdk::Field::new("row_index", sdk::DataType::UInt64, false),
+                ]),
+            ),
+            source: sdk::InputSource::Query(
+                "SELECT value + CAST(1 AS BIGINT UNSIGNED) AS value, tag, __row_index AS row_index FROM base".into(),
+            ),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new(
+                "base",
+                sdk::Schema::new(vec![
+                    sdk::Field::new("value", sdk::DataType::UInt64, false),
+                    sdk::Field::new("tag", sdk::DataType::Utf8, false),
+                ]),
+            ),
+            source: sdk::InputSource::Query(
+                "SELECT source_cursor AS value, 'sample' AS tag FROM events".into(),
+            ),
+        },
+    ];
+    let definition = Fixture::sql(
+        r#"SELECT * FROM "fixture"."r1".count(base => (SELECT value, arrow_cast('sample', 'Utf8View') AS tag FROM (VALUES (CAST(10 AS BIGINT UNSIGNED)), (CAST(20 AS BIGINT UNSIGNED)), (CAST(30 AS BIGINT UNSIGNED))) AS supplied(value) ORDER BY value), increment => 2)"#,
+    );
+    for _ in 0..2 {
+        let mut fixture = Fixture::installed(&bundle)?;
+        let prepared = fixture.prepare(&definition).await?;
+        let calls = Fixture::calls(&prepared.plan)?;
+        assert_eq!(calls.len(), 1);
+        let slot = bundle.artifacts[0].descriptor.exports[0]
+            .inputs
+            .iter()
+            .position(|input| input.port.name == "source")
+            .ok_or("source input absent")?;
+        let inputs = calls[0].inputs();
+        let middle = bundle.artifacts[0].descriptor.exports[0]
+            .inputs
+            .iter()
+            .position(|input| input.port.name == "middle")
+            .ok_or("middle input absent")?;
+        assert_eq!(
+            inputs[middle]
+                .schema()
+                .as_arrow()
+                .field_with_name("tag")?
+                .data_type(),
+            &sdk::DataType::Utf8View
+        );
+        let state = fixture
+            .engine
+            .catalog(crate::sources::SourceSnapshot::providers())?;
+        let batches = collect(
+            state.create_physical_plan(inputs[slot]).await?,
+            state.task_ctx(),
+        )
+        .await?;
+        let values = batches
+            .iter()
+            .map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or("UInt64 input required")
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(
+            values
+                .into_iter()
+                .flat_map(|array| array.iter())
+                .collect::<Vec<_>>(),
+            vec![Some(22)]
+        );
+        fixture.engine = Engine::new(
+            Arc::clone(fixture.engine.store()),
+            Limits {
+                projection_columns: Some(3),
+                ..Limits::default()
+            },
+        )?;
+        let error = fixture
+            .prepare(&definition)
+            .await
+            .err()
+            .ok_or("projection quota ignored")?;
+        assert!(snafu::ChainCompat::new(&error).any(|cause| matches!(
+            cause.downcast_ref::<datafusion::common::DataFusionError>(),
+            Some(datafusion::common::DataFusionError::Plan(message))
+                if message == "SQL projection is too wide"
+        )));
+        bundle.artifacts[0].descriptor.exports[0].inputs.reverse();
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_package_input_order() -> TestResult {
     let mut bundle = Fixture::bundle();
     let model = &mut bundle.artifacts[0].descriptor.exports[0];

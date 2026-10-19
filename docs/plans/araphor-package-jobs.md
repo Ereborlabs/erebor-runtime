@@ -181,6 +181,35 @@ reduction. The record is `/tmp/araphor-yaml-count1.json`. Complete reduction:
 **Not done**. Full workspace CI, benchmarks, and physical Kubernetes checks
 did not run. No speed result is claimed.
 
+### Native admission simplification
+
+The package planner now uses native DataFrame window operations for row
+indices. It binds default input dependencies with native plan transformation
+and schema recomputation. It does not generate index SQL or parse an input
+query again after binding. One admission shares one catalog and source map.
+The planner validates each distinct retained plan once. Existing configured
+quotas and trust checks remain. YAML uses one shared field-presence check.
+
+Calls use DataFusion's `RelationPlanner`, because package inputs are complete
+relations. The native `TableFunctionImpl` accepts scalar expressions. The
+package call is not a registered scalar UDF. The native logical extension
+retains exact image identity and the typed execution contract. Physical
+package execution and running instances remain **Not done**. Read the
+[definition review](../guides/araphor-discovery-definition-review.md).
+
+Native admission simplification and selected qualification: **Done**. All
+61 distinct focused tests pass. Formatting and affected-crate Clippy with
+warnings denied pass. The source and command record is
+`/tmp/araphor-native-simplify-verification1.json`. This change removes 27
+production Rust code lines from `b637c05a`: 15 additions and 42 deletions
+by file size. The complete redesign adds 6,153 from `7b7b407a`; another
+12,153 must be removed for the 6,000-line reduction target. Tests, comments,
+documents, blank lines, and moves do not count. The count record is
+`/tmp/araphor-native-simplify-count1.json`. Complete reduction: **Not done**.
+The separate hardcoded Effects function resolver remains **Not done** for
+consolidation. Full workspace CI, benchmarks, and physical Kubernetes checks
+did not run. No speed result is claimed.
+
 The user authorizes the OCI image in a separate crate. The current delivery
 uses `araphor-package` for image content and the existing Data store for
 durable installation. Control and CLI image requests do not call a package

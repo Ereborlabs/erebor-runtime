@@ -24,11 +24,11 @@ pub(crate) struct YamlDefinition {
     description: String,
     #[serde(default, deserialize_with = "non_null_map")]
     labels: BTreeMap<String, String>,
-    #[serde(default, deserialize_with = "FileSource::present")]
+    #[serde(default, deserialize_with = "present")]
     sql: Option<FileSource>,
-    #[serde(default, deserialize_with = "FileSource::present")]
+    #[serde(default, deserialize_with = "present")]
     prql: Option<FileSource>,
-    #[serde(default, deserialize_with = "Call::present")]
+    #[serde(default, deserialize_with = "present")]
     call: Option<Call>,
 }
 
@@ -49,8 +49,14 @@ struct Call {
     inputs: BTreeMap<String, FileSource>,
     #[serde(default, deserialize_with = "non_null_map")]
     parameters: BTreeMap<String, Value>,
-    #[serde(default, deserialize_with = "Call::output")]
+    #[serde(default, deserialize_with = "present")]
     output: Option<String>,
+}
+
+fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
 }
 
 fn non_null_map<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
@@ -132,24 +138,16 @@ impl YamlDefinition {
             },
             _ => return InvalidSnafu { field: "program" }.fail(),
         };
-        let definition = Definition {
+        Ok(Definition {
             name: self.name,
             description: self.description,
             labels: self.labels,
             program,
-        };
-        definition.validate_captured()?;
-        Ok(definition)
+        })
     }
 }
 
 impl FileSource {
-    fn present<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Option<Self>, D::Error> {
-        Self::deserialize(deserializer).map(Some)
-    }
-
     fn capture(self, directory: &Path) -> Result<String> {
         let text = match self {
             Self::Text(text) => text,
@@ -169,18 +167,6 @@ impl FileSource {
 }
 
 impl Call {
-    fn present<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Option<Self>, D::Error> {
-        Self::deserialize(deserializer).map(Some)
-    }
-
-    fn output<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Option<String>, D::Error> {
-        String::deserialize(deserializer).map(Some)
-    }
-
     fn sql(self, directory: &Path) -> Result<String> {
         let name = ObjectName::from(vec![
             Self::ident(self.package)?,

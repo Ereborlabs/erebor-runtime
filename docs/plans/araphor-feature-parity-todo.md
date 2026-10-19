@@ -178,6 +178,19 @@ documents, blank lines, and moves do not count as reduction. The record is
 workspace CI, benchmarks, and physical Kubernetes checks did not run.
 Package-call physical execution and running instances remain open.
 
+The [native admission simplification](araphor-package-jobs.md#native-admission-simplification)
+uses native DataFrame indexing and plan transformation. Default input SQL is
+parsed once. The same traversal binds dependent inputs and updates schemas.
+Configured quotas still apply. Package calls use the native `RelationPlanner`
+for relation arguments; they are not scalar UDFs. Physical package execution
+and running instances remain **Not done**.
+
+Native admission simplification and selected qualification: **Done**. All
+61 distinct focused tests pass. Formatting and affected-crate Clippy with
+warnings denied pass. This change removes 27 production Rust code lines
+from `b637c05a`. Read the linked design for the count and verification
+records. The separate Effects function resolver still requires consolidation.
+
 The previous delivery replaces the separate JSON package form with native SQL and PRQL
 calls. The function name has three parts: image, exact revision, and export.
 For example, `"fixture"."r1".count(source => (SELECT ...), increment => 2)`.

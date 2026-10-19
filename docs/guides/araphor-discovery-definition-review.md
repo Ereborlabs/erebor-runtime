@@ -67,6 +67,30 @@ as its first string argument. SQL package output, checkpoint, evidence, and
 reason queries retain their schema checks. Native analysis and optimization
 check every SQL body plan, including plans that contain other package calls.
 
+Package calls use DataFusion's `RelationPlanner` extension. They are not
+registered scalar user-defined functions (UDFs) or `TableFunctionImpl`
+functions. The native table-function interface accepts scalar expressions.
+A package input accepts a complete relation. The relation planner gives
+DataFusion each input subquery in its caller scope. DataFusion plans scalar
+parameters through its existing expression planner.
+
+The relation hook returns ordinary table references to DataFusion unchanged.
+[SourceProvider](../../crates/araphor-query/src/sources/mod.rs) implements
+native `TableProvider` for Araphor tables. Package input and output relations
+use native `ViewTable`. The table scope returns those providers through
+`provider_as_source`; the relation hook does not implement table scans.
+
+One admission shares one native catalog and source-provider map. The package
+planner parses each default input query once. Native `transform_up_with_subqueries` binds each
+declared dependency to its resolved plan. Native `recompute_schema` updates
+the parent schemas in that same traversal. Native `ViewTable` and
+`LogicalPlanBuilder::scan` preserve the input name and projection. Binding
+occurs before optimization; an unexpected scan filter or fetch is an error.
+`DataFrame::with_column` adds the zero-based index with native `row_number`.
+This operation generates no SQL. Existing configured Query quotas still
+apply to indexed and bound plans. The package planner retains each distinct
+native plan once for analysis, optimization, and physical validation.
+
 The native SQL body planner needs a separate table scope for each call.
 [Scope](../../crates/araphor-query/src/definition/package/scope.rs) supplies
 the actual input, parameter, output, and prior-state tables through
@@ -74,13 +98,29 @@ DataFusion's `ContextProvider`. It delegates function, type, configuration,
 and other metadata to the native provider. A package body cannot inherit
 undeclared tables from its caller. Caller subqueries and common table
 expressions are planned by DataFusion before this body scope is used.
+DataFusion's native session context provider is private. This adapter supplies
+the required package table scope to the native SQL planner.
 
 -> [PackageCall](../../crates/araphor-query/src/definition/call.rs)
 retains the exact image, export, selected output, and SDK descriptor. Its
 logical children are the actual input plans and the native parameter plan.
 Its schema is the selected SDK output schema.
+One identity key supplies equality, ordering, and hashing for native plan
+operations. The key includes the root image digest and the selected export.
+The node preserves the package execution contract for typed output, saved
+state, and evidence. A scalar UDF does not supply that contract.
 Partial: the node has no physical executor. Native physical planning returns
 an explicit unsupported error for a package-call execution attempt.
+
+The existing
+[ObservedEffects planner](../../crates/araphor-discovery-effects/src/effects.rs)
+is a separate route. It selects six embedded SQL bodies by fixed function
+names under `discovery`. These names are computations, not stored tables.
+[Control](../../crates/mithril-control/src/service/packages.rs) still registers
+this planner. The
+[live bundle](../../crates/araphor-discovery-effects/src/live.rs) already
+contains expanded SQL and runs that SQL directly. Consolidation of these
+built-ins into the common installed-package route is **Not done**.
 
 -> [ClientAuth::commit_definition](../../crates/mithril-control/src/client_auth/packages.rs)
 holds the current permission lock through the Data write. This owner checks
@@ -256,6 +296,10 @@ uses the real client to admit and inspect all three YAML forms. Its native
 package calls also check the locked SQL dependency and unchanged activation
 state. The Query YAML case checks exact unsigned parameter values through
 the native parameter plan and rejects expression strings as numeric values.
+`native_package_bound_inputs` checks dependent inputs in both declaration
+orders. The test uses native physical execution to check the result and row
+index. It also checks a compatible Arrow string representation and an
+explicit projection quota. The default quota remains disabled.
 
 [Dataset::normalize_batch](../../crates/araphor-analysis-sdk/src/batch.rs)
 retains the explicit Arrow row count when a valid SDK input has no columns.
@@ -269,16 +313,16 @@ continuous row indices across empty and nonempty zero-column batches.
 The changes retain the existing column and schema checks.
 
 The previous native-call replacement passes 50 distinct focused tests. The
-YAML authoring delivery passes 60 distinct focused tests:
+YAML authoring delivery passes 60. Native admission simplification passes 61:
 
-| Owner | Native-call replacement | YAML authoring |
-| --- | --- | --- |
-| Definition format and PRQL | 12 | 21 |
-| Query definitions and package calls | 20 | 21 |
-| Data definitions and request encoding | 9 | 9 |
-| Control permission and RPC admission | 5 | 5 |
-| CLI admission, inspection, and output | 3 | 3 |
-| TLS client admission and inspection | 1 | 1 |
+| Owner | Native-call replacement | YAML authoring | Native admission |
+| --- | --- | --- | --- |
+| Definition format and PRQL | 12 | 21 | 21 |
+| Query definitions and package calls | 20 | 21 | 22 |
+| Data definitions and request encoding | 9 | 9 | 9 |
+| Control permission and RPC admission | 5 | 5 | 5 |
+| CLI admission, inspection, and output | 3 | 3 | 3 |
+| TLS client admission and inspection | 1 | 1 | 1 |
 
 Formatting and affected-crate Clippy with warnings denied passed. The
 verification record is `/tmp/araphor-sql-call-verification1.json`.
@@ -311,3 +355,14 @@ The YAML delivery adds 261 production Rust code lines from `d49e6bd5`:
 reduction target. The count excludes tests, comments, documents, blank lines,
 and moves. The record is `/tmp/araphor-yaml-count1.json`. The complete
 reduction remains **Not done**. No speed result is claimed.
+
+Native admission simplification and selected qualification: **Done**. The
+review covers the change from `b637c05a`. All 61 distinct focused tests pass.
+Formatting and affected-crate Clippy with warnings denied pass. The source
+and command record is `/tmp/araphor-native-simplify-verification1.json`.
+The change removes 27 production Rust code lines: 15 additions and 42
+deletions by file size. The count excludes tests, comments, documents, blank
+lines, and moves. The record is `/tmp/araphor-native-simplify-count1.json`.
+Full workspace CI, benchmarks, and physical Kubernetes checks did not run.
+Physical package execution, built-in consolidation, running instances, and
+the complete reduction target remain **Not done**.

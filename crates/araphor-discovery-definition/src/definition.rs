@@ -58,7 +58,7 @@ impl Definition {
         if self.name.trim().is_empty() {
             return InvalidSnafu { field: "name" }.fail();
         }
-        self.program.validate()
+        self.program.source().validate()
     }
 
     pub fn validate_captured(&self) -> Result<()> {
@@ -73,10 +73,6 @@ impl Program {
         match self {
             Self::Sql { source } | Self::Prql { source } => source,
         }
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        self.source().validate()
     }
 }
 

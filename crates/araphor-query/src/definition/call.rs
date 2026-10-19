@@ -36,37 +36,9 @@ impl PackageCall {
     pub fn output(&self) -> &str {
         &self.output
     }
-}
 
-impl PartialEq for PackageCall {
-    fn eq(&self, other: &Self) -> bool {
-        self.pin == other.pin
-            && self.package == other.package
-            && self.export == other.export
-            && self.output == other.output
-            && self.children == other.children
-            && self.schema == other.schema
-    }
-}
-impl Eq for PackageCall {}
-
-impl Hash for PackageCall {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.pin.image.package_id.hash(state);
-        self.pin.image.revision.hash(state);
-        self.pin.digest.hash(state);
-        self.package.package_id.hash(state);
-        self.package.revision.hash(state);
-        self.export.hash(state);
-        self.output.hash(state);
-        self.children.hash(state);
-        self.schema.hash(state);
-    }
-}
-
-impl PartialOrd for PackageCall {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        let identity = (
+    fn key(&self) -> (&str, &str, &str, &str, &str, &str, &str) {
+        (
             &self.pin.image.package_id,
             &self.pin.image.revision,
             &self.pin.digest,
@@ -74,17 +46,28 @@ impl PartialOrd for PackageCall {
             &self.package.revision,
             &self.export,
             &self.output,
-        );
-        let compared = (
-            &other.pin.image.package_id,
-            &other.pin.image.revision,
-            &other.pin.digest,
-            &other.package.package_id,
-            &other.package.revision,
-            &other.export,
-            &other.output,
-        );
-        match identity.cmp(&compared) {
+        )
+    }
+}
+
+impl PartialEq for PackageCall {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key() && self.children == other.children && self.schema == other.schema
+    }
+}
+impl Eq for PackageCall {}
+
+impl Hash for PackageCall {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key().hash(state);
+        self.children.hash(state);
+        self.schema.hash(state);
+    }
+}
+
+impl PartialOrd for PackageCall {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.key().cmp(&other.key()) {
             Ordering::Equal => self.children.partial_cmp(&other.children),
             ordering => Some(ordering),
         }

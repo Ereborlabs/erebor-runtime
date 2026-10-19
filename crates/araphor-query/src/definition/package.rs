@@ -9,15 +9,19 @@ use araphor_package::{
     ModelRef, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
 };
 use datafusion::catalog::TableProvider;
-use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion::common::{DFSchema, DataFusionError, ScalarValue};
-use datafusion::datasource::{source_as_provider, ViewTable};
+use datafusion::dataframe::DataFrame;
+use datafusion::datasource::{provider_as_source, source_as_provider, ViewTable};
 use datafusion::execution::context::SQLOptions;
 use datafusion::execution::SessionState;
+use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::planner::{
     ContextProvider, PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
-use datafusion::logical_expr::{Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_expr::{
+    lit, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
+};
 use datafusion::sql::parser::Statement;
 use datafusion::sql::planner::{object_name_to_table_reference, SqlToRel};
 use datafusion::sql::sqlparser::ast::{
@@ -38,8 +42,8 @@ use scope::Scope;
 type Exports = BTreeMap<ModelRef, BTreeMap<String, LogicalPlan>>;
 
 pub(super) struct Packages {
-    state: SessionState,
-    parser: crate::parser::Parser,
+    pub(super) state: SessionState,
+    limits: crate::execution::Limits,
     bundles: BTreeMap<PackageRefV1, (PackageBundleV1, String)>,
     sources: BTreeMap<String, Arc<dyn TableProvider>>,
     planning: Mutex<Planning>,
@@ -113,11 +117,12 @@ impl Packages {
                 .fail();
             }
         }
+        let sources = SourceSnapshot::providers();
         Ok(Self {
-            state: engine.catalog(SourceSnapshot::providers())?,
-            parser: engine.limits().parser,
+            state: engine.catalog(sources.clone())?,
+            limits: engine.limits().clone(),
             bundles: images,
-            sources: SourceSnapshot::providers(),
+            sources,
             planning: Mutex::default(),
         })
     }
@@ -501,14 +506,8 @@ impl Packages {
             let mut dependencies = BTreeSet::new();
             if local {
                 plan.apply_with_subqueries(|plan| {
-                    if let LogicalPlan::TableScan(scan) = plan {
-                        if let Ok(source) = source_as_provider(&scan.source) {
-                            if let Some(source) = source.as_any().downcast_ref::<SourceProvider>() {
-                                if let SourceOrigin::Port(slot) = source.origin {
-                                    dependencies.insert(slot);
-                                }
-                            }
-                        }
+                    if let Some(slot) = Self::input_slot(plan) {
+                        dependencies.insert(slot);
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
@@ -532,35 +531,58 @@ impl Packages {
             let (slot, mut plan, dependencies) = pending.remove(next);
             let input = &model.inputs[slot];
             if !dependencies.is_empty() {
-                let mut bindings = tables.clone();
+                let mut bindings = BTreeMap::new();
                 for dependency in dependencies {
-                    let name = &model.inputs[dependency].port.name;
                     bindings.insert(
-                        name.clone(),
-                        Arc::new(ViewTable::new(
-                            self.indexed(provider, name, &plans[&dependency])?,
+                        dependency,
+                        provider_as_source(Arc::new(ViewTable::new(
+                            self.indexed(&plans[&dependency])?,
                             None,
-                        )),
+                        ))),
                     );
                 }
-                plan = match &input.source {
-                    sdk::InputSource::Query(sql) => self.plan(provider, &bindings, sql)?,
-                    sdk::InputSource::Table(sdk::TableRef::Named(name)) => {
-                        Inputs::scan(name, Arc::clone(&bindings[name]), &input.port.schema)?
-                    }
-                    _ => {
-                        return InvalidSnafu {
-                            field: "package input dependency",
-                        }
-                        .fail()
-                    }
-                };
+                plan = plan
+                    .transform_up_with_subqueries(|node| {
+                        let source = Self::input_slot(&node).and_then(|slot| bindings.get(&slot));
+                        match (node, source) {
+                            (LogicalPlan::TableScan(scan), Some(source)) => {
+                                if !scan.filters.is_empty() || scan.fetch.is_some() {
+                                    return datafusion::common::internal_err!(
+                                        "Package input binding must precede optimization"
+                                    );
+                                }
+                                LogicalPlanBuilder::scan(
+                                    scan.table_name,
+                                    Arc::clone(source),
+                                    scan.projection,
+                                )
+                                .and_then(LogicalPlanBuilder::build)
+                                .map(Transformed::yes)
+                            }
+                            (node, _) => Ok(Transformed::no(node)),
+                        }?
+                        .map_data(LogicalPlan::recompute_schema)
+                    })
+                    .context(SqlSnafu)?
+                    .data;
+                crate::planner::Planner::quotas(&plan, &self.limits)?;
             }
             Self::schema(&plan, &input.port.schema)?;
             self.retain(&plan)?;
             plans.insert(slot, plan);
         }
         Ok(plans.into_values().collect())
+    }
+
+    fn input_slot(plan: &LogicalPlan) -> Option<usize> {
+        let LogicalPlan::TableScan(scan) = plan else {
+            return None;
+        };
+        let provider = source_as_provider(&scan.source).ok()?;
+        match provider.as_any().downcast_ref::<SourceProvider>()?.origin {
+            SourceOrigin::Port(slot) => Some(slot),
+            _ => None,
+        }
     }
 
     fn parameters(
@@ -626,10 +648,7 @@ impl Packages {
         for (input, plan) in model.inputs.iter().zip(inputs) {
             tables.insert(
                 input.port.name.clone(),
-                Arc::new(ViewTable::new(
-                    self.indexed(provider, &input.port.name, plan)?,
-                    None,
-                )),
+                Arc::new(ViewTable::new(self.indexed(plan)?, None)),
             );
         }
         if let Some(parameters) = parameters {
@@ -670,10 +689,7 @@ impl Packages {
             if tables
                 .insert(
                     format!("output_{name}"),
-                    Arc::new(ViewTable::new(
-                        self.indexed(provider, &format!("output_{name}"), plan)?,
-                        None,
-                    )),
+                    Arc::new(ViewTable::new(self.indexed(plan)?, None)),
                 )
                 .is_some()
             {
@@ -780,7 +796,7 @@ impl Packages {
         tables: &BTreeMap<String, Arc<dyn TableProvider>>,
         sql: &str,
     ) -> Result<LogicalPlan> {
-        let statement = self.parser.parse(sql)?;
+        let statement = self.limits.parser.parse(sql)?;
         if !matches!(&statement, Statement::Statement(statement) if matches!(statement.as_ref(), datafusion::sql::sqlparser::ast::Statement::Query(_)))
         {
             return InvalidSnafu {
@@ -802,27 +818,18 @@ impl Packages {
             .with_allow_statements(false)
             .verify_plan(&plan)
             .context(SqlSnafu)?;
-        if let Some(limits) = self
-            .state
-            .config()
-            .get_extension::<crate::execution::Limits>()
-        {
-            crate::planner::Planner::quotas(&plan, &limits)?;
-        }
+        crate::planner::Planner::quotas(&plan, &self.limits)?;
         Ok(plan)
     }
 
-    fn indexed(
-        &self,
-        provider: &dyn ContextProvider,
-        name: &str,
-        plan: &LogicalPlan,
-    ) -> Result<LogicalPlan> {
-        let tables = BTreeMap::from([(
-            name.into(),
-            Arc::new(ViewTable::new(plan.clone(), None)) as Arc<dyn TableProvider>,
-        )]);
-        self.plan(provider, &tables, &format!("SELECT *, CAST(row_number() OVER () - 1 AS BIGINT UNSIGNED) AS __row_index FROM \"{}\"", name.replace('"', "\"\"")))
+    fn indexed(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        Session::indexed_schema(plan.schema().as_arrow())?;
+        let plan = DataFrame::new(self.state.clone(), plan.clone())
+            .with_column("__row_index", row_number() - lit(1u64))
+            .context(SqlSnafu)?
+            .into_unoptimized_plan();
+        crate::planner::Planner::quotas(&plan, &self.limits)?;
+        Ok(plan)
     }
 
     fn schema(plan: &LogicalPlan, schema: &sdk::Schema) -> Result<()> {
@@ -834,14 +841,23 @@ impl Packages {
     }
 
     fn retain(&self, plan: &LogicalPlan) -> Result<()> {
-        self.state()?.plans.push(plan.clone());
+        let mut state = self.state()?;
+        if !state.plans.contains(plan) {
+            state.plans.push(plan.clone());
+        }
         Ok(())
     }
 
-    fn contains_call(plan: &LogicalPlan) -> Result<bool> {
-        let mut found = false;
-        plan.apply_with_subqueries(|node| { found |= matches!(node, LogicalPlan::Extension(extension) if extension.node.as_any().is::<PackageCall>()); Ok(TreeNodeRecursion::Continue) }).context(SqlSnafu)?;
-        Ok(found)
+    pub(super) fn contains_call(plan: &LogicalPlan) -> Result<bool> {
+        Ok(plan
+            .apply_with_subqueries(|node| {
+                Ok(if matches!(node, LogicalPlan::Extension(extension) if extension.node.as_any().is::<PackageCall>()) {
+                    TreeNodeRecursion::Stop
+                } else {
+                    TreeNodeRecursion::Continue
+                })
+            })
+            .context(SqlSnafu)? == TreeNodeRecursion::Stop)
     }
 }
 
