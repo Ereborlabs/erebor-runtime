@@ -18,13 +18,11 @@ impl Engine {
         let state = self.catalog(SourceSnapshot::providers())?;
         let statement = self.limits.parser.parse(sql)?;
         let planner = Planner::new(&state);
-        let sources = planner
-            .sources(&statement)
-            .await?
+        let (plan, origins) = planner.build_with_sources(statement, parameters).await?;
+        let sources = origins
             .into_iter()
             .filter_map(|source| source.durable().map(|name| (name.to_owned(), None)))
             .collect();
-        let plan = planner.build(statement, parameters).await?;
         Ok((plan, sources))
     }
 

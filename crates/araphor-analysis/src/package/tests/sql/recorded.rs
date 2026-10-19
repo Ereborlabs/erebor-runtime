@@ -41,10 +41,7 @@ async fn native_frame(
 
 #[test]
 fn templates_use_native_parser() -> TestResult {
-    for sql in [
-        ObservedEffects::MERGE_SQL,
-        ObservedEffects::LIVE_SQL.as_str(),
-    ] {
+    for sql in [MERGE_SQL, LIVE_SQL.as_str()] {
         assert!(matches!(
             native_statement(sql)?,
             datafusion::sql::parser::Statement::Statement(_)
@@ -636,9 +633,32 @@ impl Recorded {
         contexts: &str,
     ) -> TestResult<RecordBatch> {
         let fixture = self.fixture(split)?;
-        let dataframe = fixture.context.sql(&format!("{outer} SELECT * FROM discovery.recorded_snapshot(
-            ({records}), ({contexts}), (SELECT * FROM input_ranges),
-            (SELECT * FROM input_exclusions), (SELECT * FROM input_lifecycle), (SELECT * FROM input_metadata))")).await?;
+        let records = native_frame(
+            &fixture.context,
+            &format!("{outer} SELECT * FROM ({records}) AS input_records"),
+        )
+        .await?;
+        let contexts = native_frame(
+            &fixture.context,
+            &format!("{outer} SELECT * FROM ({contexts}) AS input_contexts"),
+        )
+        .await?;
+        fixture
+            .context
+            .register_table("records", records.into_view())?;
+        fixture
+            .context
+            .register_table("contexts", contexts.into_view())?;
+        for (name, source) in [
+            ("ranges", "input_ranges"),
+            ("exclusions", "input_exclusions"),
+            ("lifecycle", "input_lifecycle"),
+            ("metadata", "input_metadata"),
+        ] {
+            let frame = native_frame(&fixture.context, &format!("SELECT * FROM {source}")).await?;
+            fixture.context.register_table(name, frame.into_view())?;
+        }
+        let dataframe = native_frame(&fixture.context, RECORDED_SNAPSHOT_SQL).await?;
         dataframe.logical_plan().apply(|plan| {
             assert!(!matches!(plan, LogicalPlan::Extension(_)));
             Ok(TreeNodeRecursion::Continue)
@@ -694,7 +714,7 @@ async fn recorded_oci_is_native() -> TestResult {
                 lifecycle AS (SELECT * FROM input_lifecycle), \
                 metadata AS (SELECT * FROM input_metadata) \
             SELECT * FROM ({}) AS snapshot",
-            ObservedEffects::RECORDED_SNAPSHOT_SQL
+            RECORDED_SNAPSHOT_SQL
         );
         let frame = native.sql(&sql).await?;
         let schema = Arc::new(frame.schema().as_arrow().clone());

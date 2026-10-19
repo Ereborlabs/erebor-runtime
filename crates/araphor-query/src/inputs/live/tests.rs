@@ -21,6 +21,7 @@ const NOW: u64 = 1_700_000_000_000_000_000;
 struct TestClock {
     now: std::sync::atomic::AtomicU64,
     reads: std::sync::atomic::AtomicUsize,
+    on_read: std::sync::Mutex<Option<(usize, tokio::sync::oneshot::Sender<()>)>>,
     changes: watch::Sender<u64>,
 }
 
@@ -29,6 +30,7 @@ impl TestClock {
         Arc::new(Self {
             now: std::sync::atomic::AtomicU64::new(NOW),
             reads: std::sync::atomic::AtomicUsize::new(0),
+            on_read: std::sync::Mutex::new(None),
             changes: watch::channel(NOW).0,
         })
     }
@@ -37,11 +39,26 @@ impl TestClock {
         self.now.store(now, std::sync::atomic::Ordering::SeqCst);
         self.changes.send_replace(now);
     }
+
+    fn after_reads(&self, count: usize) -> tokio::sync::oneshot::Receiver<()> {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let target = self.reads.load(std::sync::atomic::Ordering::SeqCst) + count;
+        *self.on_read.lock().unwrap() = Some((target, send));
+        receive
+    }
 }
 
 impl Clock for TestClock {
     fn now_ns(&self) -> Result<u64> {
-        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let read = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        if let Some((_, send)) = self
+            .on_read
+            .lock()
+            .unwrap()
+            .take_if(|(target, _)| *target == read)
+        {
+            let _sent = send.send(());
+        }
         Ok(self.now.load(std::sync::atomic::Ordering::SeqCst))
     }
 
@@ -815,11 +832,13 @@ async fn idle_clock_waits_for_data() -> TestResult {
         let receipt = fixture.commit(&operation, &first, "idle-first", operation.now())?;
         operation.complete(&receipt).await?;
         let control = Arc::clone(operation.control());
+        // Wait for the operation, validation, and idle clock reads.
+        let idle = fixture.clock.after_reads(3);
         let pending = operation.next();
         tokio::pin!(pending);
         tokio::select! {
             value = &mut pending => panic!("completion repeated an offer: {}", value?.is_some()),
-            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            ready = tokio::time::timeout(Duration::from_secs(5), idle) => { ready??; }
         }
         let clock_reads = fixture
             .clock

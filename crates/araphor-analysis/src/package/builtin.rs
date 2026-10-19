@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::ops::ControlFlow;
 use std::sync::{Arc, LazyLock};
 
 use araphor_analysis_sdk as sdk;
@@ -8,31 +7,28 @@ use araphor_data::{
     PackageErrorCodeV1, PackageImplementationV1, SqlModelV1,
 };
 
-use datafusion::sql::sqlparser::ast::{
-    Ident, ObjectName, TableAlias, TableFactor, VisitMut, VisitorMut,
-};
+use araphor_analysis_builtins::discovery::sql::{CONTEXT_BINDINGS_SQL, COVERAGE_RANGES_SQL};
+use datafusion::common::{DataFusionError, Result};
+use datafusion::sql::parser::{DFParserBuilder, Statement};
+use datafusion::sql::sqlparser::ast::Statement as SqlStatement;
 
-use crate::ObservedEffects;
-
-struct Bindings<'a>(&'a [(&'a str, &'a str)]);
-
-impl VisitorMut for Bindings<'_> {
-    type Break = ();
-
-    fn post_visit_table_factor(&mut self, factor: &mut TableFactor) -> ControlFlow<()> {
-        let TableFactor::Table { name, alias, .. } = factor else {
-            return ControlFlow::Continue(());
-        };
-        let original = name.to_string();
-        if let Some((_, target)) = self.0.iter().find(|(port, _)| *port == original) {
-            *name = ObjectName::from(vec![Ident::new(*target)]);
-            alias.get_or_insert_with(|| TableAlias {
-                explicit: true,
-                name: Ident::new(original),
-                columns: Vec::new(),
-            });
-        }
-        ControlFlow::Continue(())
+pub(crate) fn query(sql: &str) -> Result<SqlStatement> {
+    let mut statements = DFParserBuilder::new(sql)
+        .with_recursion_limit(usize::MAX)
+        .build()?
+        .parse_statements()?;
+    if statements.len() != 1 {
+        return datafusion::common::internal_err!("Discovery SQL requires one statement");
+    }
+    let Some(Statement::Statement(statement)) = statements.pop_front() else {
+        return datafusion::common::internal_err!("Discovery SQL is absent");
+    };
+    match *statement {
+        SqlStatement::Query(query) => Ok(SqlStatement::Query(query)),
+        SqlStatement::CreateView(view) => Ok(SqlStatement::Query(view.query)),
+        _ => Err(DataFusionError::Internal(
+            "Discovery SQL is not a query or view".into(),
+        )),
     }
 }
 
@@ -223,77 +219,26 @@ const INPUTS: &[(&str, &[&str])] = &[
     reason = "The fixed native SQL fragments are qualified by package execution tests."
 )]
 static LIVE_BODY: LazyLock<String> = LazyLock::new(|| {
-    let fragments = [
-        (
-            "@@CONTEXT_SQL@@",
-            ObservedEffects::CONTEXT_BINDINGS_SQL,
-            vec![("records", "__live_candidates")],
-        ),
-        (
-            "@@DELTA_COVERAGE_SQL@@",
-            include_str!("coverage_ranges.sql"),
-            vec![("records", "__live_selected")],
-        ),
-        (
-            "@@APPEND_COVERAGE_SQL@@",
-            include_str!("coverage_ranges.sql"),
-            vec![("records", "__live_append")],
-        ),
-        (
-            "@@REFRESH_COVERAGE_SQL@@",
-            include_str!("coverage_ranges.sql"),
-            vec![("records", "__live_refresh_records")],
-        ),
-        (
-            "@@RECORDED_SQL@@",
-            ObservedEffects::RECORDED_SNAPSHOT_SQL,
-            vec![
-                ("records", "__live_selected"),
-                ("contexts", "__live_bindings"),
-                ("ranges", "__live_ranges"),
-                ("exclusions", "__live_exclusions"),
-                ("lifecycle", "__live_empty_lifecycle"),
-            ],
-        ),
-        (
-            "@@APPEND_QUALIFY_SQL@@",
-            include_str!("qualify_ranges.sql"),
-            vec![
-                ("records", "__live_append"),
-                ("ranges", "__live_append_ranges"),
-            ],
-        ),
-        (
-            "@@REFRESH_QUALIFY_SQL@@",
-            include_str!("qualify_ranges.sql"),
-            vec![
-                ("records", "__live_refresh_records"),
-                ("ranges", "__live_refresh_ranges"),
-            ],
-        ),
-        (
-            "@@MERGE_SQL@@",
-            ObservedEffects::MERGE_SQL,
-            vec![
-                ("left_snapshot", "__live_left"),
-                ("right_snapshot", "__live_right"),
-            ],
-        ),
-    ];
-    let mut body = include_str!("live.sql").to_owned();
-    for (marker, sql, bindings) in fragments {
-        let mut statement =
-            ObservedEffects::query(sql).expect("the fixed Discovery SQL is a native query");
-        let _flow = statement.visit(&mut Bindings(&bindings));
-        body = body.replace(marker, &statement.to_string());
-    }
-    body
+    araphor_analysis_builtins::discovery::Discovery::live_program(
+        &query(CONTEXT_BINDINGS_SQL)
+            .expect("the context view is native SQL")
+            .to_string(),
+        &query(COVERAGE_RANGES_SQL)
+            .expect("the coverage view is native SQL")
+            .to_string(),
+    )
 });
 
-static LIVE_QUERY: LazyLock<String> = LazyLock::new(|| {
+pub(crate) static LIVE_SQL: LazyLock<String> = LazyLock::new(|| {
     let inputs = INPUTS
         .iter()
-        .zip(["records", "targets", "policies", "reports", "state"])
+        .zip([
+            "__live_input_records",
+            "targets",
+            "policies",
+            "reports",
+            "state",
+        ])
         .map(|((table, columns), alias)| {
             format!("{alias} AS (SELECT {} FROM {table})", columns.join(", "))
         })
@@ -301,14 +246,14 @@ static LIVE_QUERY: LazyLock<String> = LazyLock::new(|| {
         .join(", ");
     format!(
         "WITH {inputs}, \
-            exclusions AS (SELECT named_struct('stream', named_struct(\
+            __live_input_exclusions AS (SELECT named_struct('stream', named_struct(\
                 'tenant_id', tenant_id, 'node_id', node_id, 'node_boot_id', node_boot_id, \
                 'label_epoch', label_epoch, 'source_id', source_id, 'source_epoch', source_epoch), \
                 'cpu_id', cpu_id, 'durable_cursor', source_cursor) AS record_id, \
-                arrow_cast(NULL, 'Utf8') AS reason FROM records WHERE FALSE), \
-            lifecycle AS (SELECT arrow_cast(NULL, 'Utf8') AS \"case\", \
+                arrow_cast(NULL, 'Utf8') AS reason FROM __live_input_records WHERE FALSE), \
+            __live_input_lifecycle AS (SELECT arrow_cast(NULL, 'Utf8') AS \"case\", \
                 arrow_cast(NULL, 'Utf8') AS state, [record_id] AS records, reason \
-                FROM exclusions WHERE FALSE), \
+                FROM __live_input_exclusions WHERE FALSE), \
             metadata AS (SELECT tenant_id, \
                 CASE WHEN snapshot IS NULL OR COALESCE(sealed, FALSE) THEN 'native-live-v1' \
                     ELSE COALESCE(snapshot['source_revision'], 'native-live-v1') END AS source_revision, \
@@ -318,12 +263,8 @@ static LIVE_QUERY: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-impl ObservedEffects {
-    pub const LIVE_SQL: &'static LazyLock<String> = &LIVE_QUERY;
-    pub(crate) const LIVE_BODY: &'static LazyLock<String> = &LIVE_BODY;
-    pub const MERGE_SQL: &'static str = include_str!("merge_snapshot.sql");
-
-    pub fn live_bundle() -> araphor_data::Result<PackageBundleV1> {
+impl super::Package {
+    pub fn discovery_bundle() -> araphor_data::Result<PackageBundleV1> {
         let tables = AnalysisStore::table_schemas();
         let inputs = INPUTS
             .iter()
@@ -425,10 +366,7 @@ impl ObservedEffects {
             implementations: vec![PackageImplementationV1::Sql {
                 export: "live".into(),
                 program: SqlModelV1 {
-                    outputs: BTreeMap::from([(
-                        "snapshot".into(),
-                        Self::LIVE_SQL.as_str().to_owned(),
-                    )]),
+                    outputs: BTreeMap::from([("snapshot".into(), LIVE_SQL.as_str().to_owned())]),
                     ..Default::default()
                 },
             }],

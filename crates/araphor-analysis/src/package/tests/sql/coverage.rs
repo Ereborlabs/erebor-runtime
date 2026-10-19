@@ -275,7 +275,8 @@ impl Fixture {
         split: bool,
     ) -> Result<RecordBatch> {
         self.coverage_tables(events, reports, split)?;
-        self.coverage_query("SELECT * FROM discovery.coverage_ranges((SELECT * FROM events), (SELECT * FROM coverage)) ORDER BY tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,cpu_id,first_cursor").await
+        self.view("coverage_ranges", COVERAGE_RANGES_SQL).await?;
+        self.coverage_query("SELECT * FROM discovery.coverage_ranges ORDER BY tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,cpu_id,first_cursor").await
     }
 }
 
@@ -304,9 +305,12 @@ async fn boundary_operands_are_boolean() -> Result<()> {
     let fixture = Fixture::new()?;
     let event = Event::default();
     fixture.coverage_tables(std::slice::from_ref(&event), &[Report::new(&event)], false)?;
-    let plan = fixture.context.state().create_logical_plan(
-        "SELECT * FROM discovery.coverage_ranges((SELECT * FROM events), (SELECT * FROM coverage))",
-    ).await?;
+    fixture.view("coverage_ranges", COVERAGE_RANGES_SQL).await?;
+    let plan = fixture
+        .context
+        .state()
+        .create_logical_plan("SELECT * FROM discovery.coverage_ranges")
+        .await?;
     let mut disjunctions = 0;
     plan.apply(|plan| {
         for expression in plan.expressions() {
@@ -579,22 +583,20 @@ async fn interval_bytes_keep_fallback() -> Result<()> {
 }
 
 #[tokio::test]
-async fn arguments_keep_cte_scope() -> Result<()> {
+async fn sql_keeps_cte_scope() -> Result<()> {
     let fixture = Fixture::new()?;
     let event = Event::default();
     fixture.coverage_tables(std::slice::from_ref(&event), &[Report::new(&event)], true)?;
-    let sql = "WITH records AS (SELECT * FROM events), reports AS (SELECT * FROM coverage), qualified AS (SELECT * FROM records), previous AS (SELECT * FROM reports), marked AS (SELECT * FROM qualified), ranges AS (SELECT * FROM previous) SELECT * FROM discovery.coverage_ranges((SELECT * FROM marked), (SELECT * FROM ranges)) AS result";
-    let result = fixture.coverage_query(sql).await?;
+    let sql = format!(
+        "WITH records AS (SELECT * FROM events), reports AS (SELECT * FROM coverage), \
+        qualified AS (SELECT * FROM records), previous AS (SELECT * FROM reports), \
+        marked AS (SELECT * FROM qualified), ranges AS (SELECT * FROM previous) \
+        SELECT * FROM (WITH events AS (SELECT * FROM marked), coverage AS (SELECT * FROM ranges) \
+        {}) AS result",
+        query(COVERAGE_RANGES_SQL)?
+    );
+    let result = fixture.coverage_query(&sql).await?;
     assert_eq!(cells(&result, "state")?, ["HEALTHY"]);
     assert_eq!(cells(&result, "expected_records")?, ["1"]);
-    for sql in [
-        "SELECT * FROM discovery.coverage_ranges()",
-        "SELECT * FROM discovery.coverage_ranges((SELECT * FROM events))",
-        "SELECT * FROM discovery.coverage_ranges((SELECT * FROM events), 1)",
-        "SELECT * FROM discovery.coverage_ranges((SELECT * FROM events), (SELECT * FROM coverage), (SELECT * FROM coverage))",
-        "SELECT * FROM discovery.coverage_ranges((SELECT 1), (SELECT * FROM coverage))",
-    ] {
-        assert!(fixture.context.sql(sql).await.is_err(), "{sql}");
-    }
     Ok(())
 }

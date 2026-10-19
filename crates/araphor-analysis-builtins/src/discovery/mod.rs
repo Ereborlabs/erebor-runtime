@@ -14,6 +14,7 @@ mod model;
 mod ranges;
 mod record;
 mod source;
+pub mod sql;
 #[cfg(test)]
 mod tests;
 

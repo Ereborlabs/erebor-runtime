@@ -24,6 +24,8 @@ use crate::planner::Planner;
 use crate::sources::SourceSnapshot;
 use crate::Error;
 
+mod views;
+
 struct Fixture {
     engine: Arc<Engine>,
     _directory: tempfile::TempDir,

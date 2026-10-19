@@ -116,6 +116,20 @@ This change removes 27 production Rust code lines from `b637c05a`. The
 complete reduction remains **Not done**. The linked admission design records
 the exact counts, source record, and remaining built-in consolidation.
 
+The user now requires removal of the complete Discovery effects crate and
+its hardcoded function resolver. Derived tables use native SQL declarations,
+`ViewTable`, and native catalog registration. The
+[crate-removal design](araphor-package-jobs.md#native-derived-relations-and-crate-removal)
+records the source-origin, window, ownership, and qualification requirements.
+Crate removal and selected qualification: **Done**. All 354 distinct focused
+tests pass. Scoped formatting and affected-crate Clippy with warnings denied
+pass. The source and command record is
+`/tmp/araphor-native-views-verification1.json`. This change removes 157
+production Rust code lines from `5c9e2fb7`. The linked result gives the exact
+count method, exclusions, and remaining reduction. Full workspace CI,
+benchmarks, and physical Kubernetes checks did not run. The complete redesign
+remains **Not done**. The earlier sections below describe their recorded revisions.
+
 On 2026-10-18, the user restates simplification, coherence, and real production
 Rust reduction as the main acceptance criteria. Every new execution path,
 including Discovery, must pass through native SQL parsing, native logical
@@ -436,7 +450,7 @@ The recorded snapshot body now includes its native validation Filter and private
 column removal. A present error receives a prefix that cannot be converted to
 Boolean. Native CAST therefore fails; a NULL error passes. The custom scalar
 function and host Filter construction are deleted. The complete body is
-ObservedEffects::RECORDED_SNAPSHOT_SQL, so an OCI program can retain the actual
+araphor_analysis_builtins::discovery::sql::RECORDED_SNAPSHOT_SQL, so an OCI program can retain the actual
 SQL rather than a call to a mutable built-in template.
 
 Selected tests pass 59 distinct cases: 21 Discovery Effects, 16 installed
@@ -475,6 +489,9 @@ signature authority in Control. Do not add a second policy compiler, store,
 reader, or execution operator.
 
 ### Native recorded Discovery computation
+
+This section records the removed implementation. The crate-removal result
+above describes the current native views and package SQL programs.
 
 Implementation and selected functional qualification: **Done**. The new
 discovery.recorded_snapshot call belongs to araphor-discovery-effects. It
@@ -771,6 +788,9 @@ change is excluded from this increment. The complete redesign and the
 6,000-line production reduction remain **Not done**.
 
 ### Discovery package subscriptions
+
+This section records the removed function resolver and its earlier checks.
+The crate-removal result above describes the current implementation.
 
 Result: **Not done**. The new `araphor-discovery-effects` crate provides the
 native SQL call `discovery.observed_effects((SELECT * FROM events))`. Native

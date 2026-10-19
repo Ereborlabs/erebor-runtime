@@ -24,7 +24,7 @@ __live_unresolved AS (
 ),
 __live_ids AS (
     SELECT record.*, named_struct('stream', named_struct('tenant_id', record.tenant_id, 'node_id', record.node_id, 'node_boot_id', record.node_boot_id, 'label_epoch', record.label_epoch, 'source_id', record.source_id, 'source_epoch', record.source_epoch), 'cpu_id', record.cpu_id, 'durable_cursor', record.source_cursor) AS record_id
-    FROM records AS record
+    FROM __live_input_records AS record
 ),
 __live_candidates AS (
     SELECT record.* EXCLUDE (record_id)
@@ -34,7 +34,8 @@ __live_candidates AS (
 ),
 __live_bindings AS (
     SELECT * FROM (
-@@CONTEXT_SQL@@
+WITH events AS (SELECT * FROM __live_candidates), compiled_policies AS (SELECT * FROM policies)
+SELECT * FROM ({context_sql}) AS selected_bindings
     ) AS bindings
 ),
 __live_selected AS (
@@ -63,33 +64,37 @@ __live_unresolved_kept AS (
 ),
 __live_ranges AS (
     SELECT * FROM (
-@@DELTA_COVERAGE_SQL@@
+WITH events AS (SELECT * FROM __live_selected), coverage AS (SELECT * FROM reports)
+SELECT * FROM ({coverage_sql}) AS selected_ranges
     ) AS ranges
 ),
 __live_exclusions AS (
-    SELECT exclusion.* FROM exclusions AS exclusion
+    SELECT exclusion.* FROM __live_input_exclusions AS exclusion
     JOIN __live_selected_ids AS selected ON exclusion.record_id = selected.record_id
 ),
 __live_empty_lifecycle AS (
-    SELECT * FROM lifecycle WHERE FALSE
+    SELECT * FROM __live_input_lifecycle WHERE FALSE
 ),
 __live_delta AS (
     SELECT * FROM (
-@@RECORDED_SQL@@
+WITH records AS (SELECT * FROM __live_selected), contexts AS (SELECT * FROM __live_bindings), ranges AS (SELECT * FROM __live_ranges), exclusions AS (SELECT * FROM __live_exclusions), lifecycle AS (SELECT * FROM __live_empty_lifecycle)
+SELECT * FROM ({recorded_sql}) AS selected_snapshot
     ) AS delta
 ),
 __live_append AS (
-    SELECT record.* FROM records AS record CROSS JOIN __live_state AS state
+    SELECT record.* FROM __live_input_records AS record CROSS JOIN __live_state AS state
     WHERE record.source_cursor > state.frontier
 ),
 __live_append_ranges AS (
     SELECT * FROM (
-@@APPEND_COVERAGE_SQL@@
+WITH events AS (SELECT * FROM __live_append), coverage AS (SELECT * FROM reports)
+SELECT * FROM ({coverage_sql}) AS selected_ranges
     ) AS ranges
 ),
 __live_append_qualified AS (
     SELECT * FROM (
-@@APPEND_QUALIFY_SQL@@
+WITH records AS (SELECT * FROM __live_append), ranges AS (SELECT * FROM __live_append_ranges)
+SELECT * FROM ({qualify_sql}) AS selected_qualified
     ) AS qualified
 ),
 __live_old_ranges AS (
@@ -111,7 +116,7 @@ __live_old_flat AS (
 ),
 __live_complete AS (
     SELECT range.*, COUNT(record.source_cursor) AS retained_records
-    FROM __live_old_flat AS range LEFT JOIN records AS record
+    FROM __live_old_flat AS range LEFT JOIN __live_input_records AS record
         ON range.tenant_id = record.tenant_id AND range.node_id = record.node_id AND range.node_boot_id = record.node_boot_id AND range.label_epoch = record.label_epoch AND range.source_id = record.source_id AND range.source_epoch = record.source_epoch AND range.cpu_id = record.cpu_id
         AND record.source_cursor BETWEEN range.first_cursor AND range.last_cursor
         AND range.coverage_interval_id = CASE
@@ -120,19 +125,21 @@ __live_complete AS (
     GROUP BY range.tenant_id, range.node_id, range.node_boot_id, range.label_epoch, range.source_id, range.source_epoch, range.cpu_id, range.first_cursor, range.last_cursor, range.expected_records, range.coverage_revision, range.coverage_interval_id, range.state, range.gap_reasons
 ),
 __live_refresh_records AS (
-    SELECT record.* FROM records AS record JOIN __live_complete AS range
+    SELECT record.* FROM __live_input_records AS record JOIN __live_complete AS range
         ON range.tenant_id = record.tenant_id AND range.node_id = record.node_id AND range.node_boot_id = record.node_boot_id AND range.label_epoch = record.label_epoch AND range.source_id = record.source_id AND range.source_epoch = record.source_epoch AND range.cpu_id = record.cpu_id
         AND record.source_cursor BETWEEN range.first_cursor AND range.last_cursor
         AND range.expected_records > 0 AND range.retained_records = range.expected_records
 ),
 __live_refresh_ranges AS (
     SELECT * FROM (
-@@REFRESH_COVERAGE_SQL@@
+WITH events AS (SELECT * FROM __live_refresh_records), coverage AS (SELECT * FROM reports)
+SELECT * FROM ({coverage_sql}) AS selected_ranges
     ) AS ranges
 ),
 __live_refresh_qualified AS (
     SELECT * FROM (
-@@REFRESH_QUALIFY_SQL@@
+WITH records AS (SELECT * FROM __live_refresh_records), ranges AS (SELECT * FROM __live_refresh_ranges)
+SELECT * FROM ({qualify_sql}) AS selected_qualified
     ) AS qualified
 ),
 __live_prior_ranges AS (
@@ -165,10 +172,10 @@ __live_lifecycle_states AS (
             WHEN state IN ('DECLARED', 'NOT_APPLICABLE', 'UNSUPPORTED')
                 AND (reason IS NULL OR reason = '') THEN 'lifecycle reason'
             ELSE NULL END) END AS relational_error
-    FROM lifecycle GROUP BY "case"
+    FROM __live_input_lifecycle GROUP BY "case"
 ),
 __live_lifecycle_ids AS (
-    SELECT "case", UNNEST(records) AS record_id FROM lifecycle WHERE state = 'RECORDED'
+    SELECT "case", UNNEST(records) AS record_id FROM __live_input_lifecycle WHERE state = 'RECORDED'
 ),
 __live_lifecycle_records AS (
     SELECT "case", array_agg(record_id ORDER BY record_id) AS records,
@@ -212,7 +219,8 @@ __live_right AS (
 ),
 __live_merged AS (
     SELECT * FROM (
-@@MERGE_SQL@@
+WITH left_snapshot AS (SELECT * FROM __live_left), right_snapshot AS (SELECT * FROM __live_right)
+SELECT * FROM ({merge_sql}) AS selected_merge
     ) AS merged
 ),
 __live_facts AS (

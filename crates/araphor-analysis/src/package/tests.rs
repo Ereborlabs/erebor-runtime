@@ -2,6 +2,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
 
+mod sql;
+
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 struct Authority(tokio::sync::watch::Sender<u64>);
@@ -42,7 +44,7 @@ fn fixture() -> TestResult<(tempfile::TempDir, Package)> {
         query,
         Arc::new(Authority(tokio::sync::watch::channel(0).0)),
         grant,
-        araphor_discovery_effects::ObservedEffects::live_bundle()?,
+        crate::Package::discovery_bundle()?,
         "live",
         "snapshot",
     )?;

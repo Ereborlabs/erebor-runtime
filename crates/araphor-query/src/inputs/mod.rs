@@ -58,16 +58,18 @@ impl Inputs {
         let mut packages = Vec::new();
         if model.input_mode == sdk::InputMode::Resolved {
             for (slot, input) in model.inputs.iter().enumerate() {
-                let (plan, origins) = match &input.source {
+                let mut origins = BTreeSet::new();
+                let plan = match &input.source {
                     sdk::InputSource::Query(sql) => {
                         let statement = engine.limits().parser.parse(sql)?;
                         let state = state.clone();
-                        engine.wait(async move {
-                            let planner = crate::planner::Planner::new(&state);
-                            let origins = planner.sources(&statement).await?;
-                            let plan = planner.build(statement, Vec::new()).await?;
-                            Ok((plan, origins))
-                        })?
+                        let (plan, sources) = engine.wait(async move {
+                            crate::planner::Planner::new(&state)
+                                .build_with_sources(statement, Vec::new())
+                                .await
+                        })?;
+                        origins = sources;
+                        plan
                     }
                     sdk::InputSource::Table(sdk::TableRef::Named(name)) => {
                         let provider = tables.get(name).cloned().ok_or_else(|| {
@@ -76,26 +78,16 @@ impl Inputs {
                             }
                             .build()
                         })?;
-                        let source = provider
-                            .as_any()
-                            .downcast_ref::<SourceProvider>()
-                            .ok_or_else(|| {
-                                InvalidSnafu {
-                                    field: "input provider",
-                                }
-                                .build()
-                            })?;
-                        let origins = BTreeSet::from([source.origin.clone()]);
-                        (Self::scan(name, provider, &input.port.schema)?, origins)
+                        Self::scan(name, provider, &input.port.schema)?
                     }
                     sdk::InputSource::Table(sdk::TableRef::Output(reference)) => {
                         packages.push((slot, reference.clone()));
                         let schema = Arc::new(input.port.schema.clone());
                         let provider = SourceProvider::package(slot, schema);
-                        let plan = Self::scan(&input.port.name, provider, &input.port.schema)?;
-                        (plan, BTreeSet::from([SourceOrigin::Package(slot)]))
+                        Self::scan(&input.port.name, provider, &input.port.schema)?
                     }
                 };
+                origins.extend(crate::planner::Planner::sources(&plan)?);
                 let window = Window::infer(&plan)?;
                 plans.push(PortPlan {
                     slot,

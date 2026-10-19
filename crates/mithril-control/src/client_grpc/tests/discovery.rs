@@ -5,7 +5,7 @@ use super::*;
 
 const SQL: &str = "SELECT tenant_id, source_id, event_count, first_cursor, last_cursor,
         effect_family, operation, binding_id
-    FROM discovery.observed_effects((SELECT * FROM events))";
+    FROM discovery.observed_effects";
 
 const RECORDED_COUNTS: &str = "SELECT accepted_records, included_records,
     unresolved_records, excluded_records, duplicate_deliveries,
@@ -13,6 +13,7 @@ const RECORDED_COUNTS: &str = "SELECT accepted_records, included_records,
     array_length(excluded), array_length(lifecycle) FROM snapshot";
 
 fn recorded_sql(projection: &str) -> String {
+    let recorded = araphor_analysis_builtins::discovery::sql::RECORDED_SNAPSHOT_SQL;
     format!(
         "WITH identified AS (
             SELECT events.*, named_struct('stream', named_struct(
@@ -38,16 +39,22 @@ fn recorded_sql(projection: &str) -> String {
             FROM identified WHERE FALSE
         ),
         snapshot AS (
-            SELECT * FROM discovery.recorded_snapshot(
-                (SELECT * FROM events), (SELECT * FROM empty_contexts),
-                (SELECT * FROM discovery.coverage_ranges(
-                    (SELECT * FROM events), (SELECT * FROM coverage))),
-                (SELECT record_id, CAST(NULL AS VARCHAR) AS reason FROM identified WHERE FALSE),
-                (SELECT CAST(NULL AS VARCHAR) AS \"case\", CAST(NULL AS VARCHAR) AS state,
+            WITH records AS (SELECT * FROM events),
+            contexts AS (SELECT * FROM empty_contexts),
+            ranges AS (SELECT * FROM discovery.coverage_ranges),
+            exclusions AS (
+                SELECT record_id, CAST(NULL AS VARCHAR) AS reason FROM identified WHERE FALSE
+            ),
+            lifecycle AS (
+                SELECT CAST(NULL AS VARCHAR) AS \"case\", CAST(NULL AS VARCHAR) AS state,
                     [record_id] AS records, CAST(NULL AS VARCHAR) AS reason
-                    FROM identified WHERE FALSE),
-                (SELECT decode('01010101010101010101010101010101', 'hex') AS tenant_id,
-                    'retained-cut' AS source_revision, 'OBSERVED_RUNTIME' AS proof_kind))
+                FROM identified WHERE FALSE
+            ),
+            metadata AS (
+                SELECT decode('01010101010101010101010101010101', 'hex') AS tenant_id,
+                    'retained-cut' AS source_revision, 'OBSERVED_RUNTIME' AS proof_kind
+            )
+            SELECT * FROM ({recorded}) AS recorded
         )
         {projection}"
     )
@@ -282,8 +289,7 @@ async fn discovery_rpc_coverage() -> TestResult {
                 proto::QueryRequest {
                     sql: "SELECT state, expected_records, coverage_revision,
                         array_to_string(gap_reasons, ',') AS reasons
-                    FROM discovery.coverage_ranges(
-                        (SELECT * FROM events), (SELECT * FROM coverage))"
+                    FROM discovery.coverage_ranges"
                         .into(),
                     follow: true,
                     ..Default::default()

@@ -17,6 +17,7 @@ use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider, 
 use datafusion::common::DataFusionError;
 use datafusion::datasource::MemTable;
 use datafusion::execution::config::SessionConfig;
+use datafusion::execution::context::SessionContext;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -24,11 +25,14 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::{SessionState, TaskContext};
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::interval_arithmetic::Interval;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{LogicalPlan, TableType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     execute_stream, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
+use datafusion::sql::parser::{DFParserBuilder, Statement};
+use datafusion::sql::planner::object_name_to_table_reference;
+use datafusion::sql::sqlparser::ast::Statement as SqlStatement;
 use futures_util::{StreamExt as _, TryStreamExt};
 use snafu::ResultExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -153,6 +157,7 @@ impl Drop for PendingRead {
 pub struct Engine {
     store: Arc<AnalysisStore>,
     state: SessionState,
+    default_views: BTreeMap<String, Arc<dyn TableProvider>>,
     memory: Arc<Memory>,
     limits: Arc<Limits>,
     evaluations: Arc<Semaphore>,
@@ -202,6 +207,7 @@ impl Engine {
         Ok(Arc::new(Self {
             store,
             state,
+            default_views: BTreeMap::new(),
             memory: Memory::new(limits.input_capacity, limits.output_capacity),
             evaluations: Arc::new(Semaphore::new(limits.global_evaluations)),
             streams: limits
@@ -224,13 +230,72 @@ impl Engine {
         &self.store
     }
 
-    pub fn register_relation_planner(
-        &mut self,
-        planner: Arc<dyn datafusion::logical_expr::planner::RelationPlanner>,
-    ) -> Result<()> {
-        self.state
-            .register_relation_planner(planner)
-            .context(SqlSnafu)
+    pub fn register_views(&mut self, sql: &str) -> Result<()> {
+        let statements = DFParserBuilder::new(sql)
+            .with_recursion_limit(usize::MAX)
+            .build()
+            .and_then(|mut parser| parser.parse_statements())
+            .context(SqlSnafu)?;
+        if statements.iter().any(|statement| {
+            !matches!(statement, Statement::Statement(statement)
+                if matches!(statement.as_ref(), SqlStatement::CreateSchema { .. } | SqlStatement::CreateView(_)))
+        }) {
+            return InvalidSnafu {
+                field: "view registration statement",
+            }
+            .fail();
+        }
+        let context = SessionContext::new_with_state(self.catalog(SourceSnapshot::providers())?);
+        let (state, views) = self.wait(async move {
+            for statement in statements {
+                if let Statement::Statement(statement) = &statement {
+                    if let SqlStatement::CreateView(view) = statement.as_ref() {
+                        let state = context.state();
+                        let name = object_name_to_table_reference(
+                            view.name.clone(),
+                            state.config_options().sql_parser.enable_ident_normalization,
+                        )
+                        .context(SqlSnafu)?;
+                        let config = &state.config_options().catalog;
+                        if let Some(catalog) =
+                            context.catalog(name.catalog().unwrap_or(&config.default_catalog))
+                        {
+                            let schema = name.schema().unwrap_or(&config.default_schema);
+                            if catalog.schema(schema).is_none() {
+                                catalog
+                                    .register_schema(schema, Arc::new(MemorySchemaProvider::new()))
+                                    .context(SqlSnafu)?;
+                            }
+                        }
+                    }
+                }
+                let plan = context
+                    .state()
+                    .statement_to_plan(statement)
+                    .await
+                    .context(SqlSnafu)?;
+                let _frame = context.execute_logical_plan(plan).await.context(SqlSnafu)?;
+            }
+            let state = context.state();
+            let config = &state.config_options().catalog;
+            let mut views = BTreeMap::new();
+            if let Some(schema) = context
+                .catalog(&config.default_catalog)
+                .and_then(|catalog| catalog.schema(&config.default_schema))
+            {
+                for name in schema.table_names() {
+                    if let Some(table) = schema.table(&name).await.context(SqlSnafu)? {
+                        if table.table_type() == TableType::View {
+                            views.insert(name, table);
+                        }
+                    }
+                }
+            }
+            Ok((state, views))
+        })?;
+        self.state = state;
+        self.default_views = views;
+        Ok(())
     }
 
     pub async fn check_read(self: &Arc<Self>, snapshot: &Arc<ArrowSnapshot>) -> Result<()> {
@@ -286,18 +351,34 @@ impl Engine {
         tables: BTreeMap<String, Arc<dyn TableProvider>>,
     ) -> Result<SessionState> {
         let schema = Arc::new(MemorySchemaProvider::new());
-        for (name, table) in tables {
+        let mut bindings = self.default_views.clone();
+        bindings.extend(tables);
+        for (name, table) in bindings {
             schema.register_table(name, table).context(SqlSnafu)?;
         }
         let catalog = Arc::new(MemoryCatalogProvider::new());
+        let config = &self.state.config_options().catalog;
         catalog
-            .register_schema(&self.state.config_options().catalog.default_schema, schema)
+            .register_schema(&config.default_schema, schema)
             .context(SqlSnafu)?;
         let catalogs = Arc::new(MemoryCatalogProviderList::new());
-        catalogs.register_catalog(
-            self.state.config_options().catalog.default_catalog.clone(),
-            catalog,
-        );
+        for name in self.state.catalog_list().catalog_names() {
+            let Some(existing) = self.state.catalog_list().catalog(&name) else {
+                continue;
+            };
+            if name == config.default_catalog {
+                for name in existing.schema_names() {
+                    if name != config.default_schema {
+                        if let Some(schema) = existing.schema(&name) {
+                            catalog.register_schema(&name, schema).context(SqlSnafu)?;
+                        }
+                    }
+                }
+            } else {
+                catalogs.register_catalog(name, existing);
+            }
+        }
+        catalogs.register_catalog(config.default_catalog.clone(), catalog);
         let mut state = self.state.clone();
         state.register_catalog_list(catalogs);
         Ok(state)

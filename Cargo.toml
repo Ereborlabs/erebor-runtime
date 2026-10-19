@@ -26,7 +26,6 @@ members = [
     "crates/araphor-discovery-definition",
     "crates/araphor-query",
     "crates/araphor-analysis",
-    "crates/araphor-discovery-effects",
     "crates/araphor-analysis_back",
     "crates/araphor-analysis-sdk",
     "crates/araphor-analysis-builtins",

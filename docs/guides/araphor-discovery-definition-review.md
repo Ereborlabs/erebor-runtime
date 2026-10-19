@@ -112,15 +112,18 @@ state, and evidence. A scalar UDF does not supply that contract.
 Partial: the node has no physical executor. Native physical planning returns
 an explicit unsupported error for a package-call execution attempt.
 
-The existing
-[ObservedEffects planner](../../crates/araphor-discovery-effects/src/effects.rs)
-is a separate route. It selects six embedded SQL bodies by fixed function
-names under `discovery`. These names are computations, not stored tables.
-[Control](../../crates/mithril-control/src/service/packages.rs) still registers
-this planner. The
-[live bundle](../../crates/araphor-discovery-effects/src/live.rs) already
-contains expanded SQL and runs that SQL directly. Consolidation of these
-built-ins into the common installed-package route is **Not done**.
+The former Discovery function resolver and its crate are removed. Native
+[SQL view declarations](../../crates/araphor-analysis-builtins/src/discovery/sql.rs)
+define the derived relations. Query registers native `ViewTable` providers
+through [Engine::register_views](../../crates/araphor-query/src/execution.rs).
+The SQL query uses `FROM discovery.observed_effects` without call arguments.
+The Query planner contains no Discovery-name dispatch. Package calls still
+use the generic relation planner described above.
+
+[Discovery image assembly](../../crates/araphor-analysis/src/package/builtin.rs)
+retains the complete live SQL program in the existing package format. Native
+SQL CTE scopes bind its input relations. Image assembly adds no executor,
+subscription, or source reader.
 
 -> [ClientAuth::commit_definition](../../crates/mithril-control/src/client_auth/packages.rs)
 holds the current permission lock through the Data write. This owner checks
@@ -364,5 +367,18 @@ The change removes 27 production Rust code lines: 15 additions and 42
 deletions by file size. The count excludes tests, comments, documents, blank
 lines, and moves. The record is `/tmp/araphor-native-simplify-count1.json`.
 Full workspace CI, benchmarks, and physical Kubernetes checks did not run.
-Physical package execution, built-in consolidation, running instances, and
-the complete reduction target remain **Not done**.
+At this revision, physical package execution, built-in consolidation,
+running instances, and the complete reduction target remained **Not done**.
+
+Discovery effects crate removal and selected qualification: **Done**. The
+complete crate, dependency entries, and function resolver are removed. Native
+view declarations belong to the existing built-in package. The existing
+Analysis Package owner constructs the immutable image. All 354 distinct
+focused tests pass, including 36 SQL cases and 268 Query cases. Scoped
+formatting and affected-crate Clippy with warnings denied pass. The source and
+command record is `/tmp/araphor-native-views-verification1.json`. The change
+removes 157 production Rust code lines from `5c9e2fb7`; tests, comments,
+documents, blank lines, and moves are excluded. Read the
+[crate-removal result](../plans/araphor-package-jobs.md#native-derived-relations-and-crate-removal)
+for the count record and remaining work. Full workspace CI, benchmarks, and
+physical Kubernetes checks did not run.

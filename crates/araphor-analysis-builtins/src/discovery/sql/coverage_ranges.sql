@@ -1,3 +1,4 @@
+CREATE VIEW discovery.coverage_ranges AS
 SELECT
     tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id,
     MIN(source_cursor) AS first_cursor,
@@ -58,9 +59,9 @@ FROM (
                             cpu_id, source_cursor, temporal_coverage, kernel_sequence,
                             CASE WHEN octet_length(encode(coverage_interval_id, 'hex')) = 32
                                 THEN coverage_interval_id ELSE source_id END AS coverage_interval_id
-                        FROM records
+                        FROM events
                     ) AS event
-                    LEFT JOIN (SELECT * FROM reports WHERE kind = 'receipt') AS receipt
+                    LEFT JOIN (SELECT * FROM coverage WHERE kind = 'receipt') AS receipt
                         ON event.tenant_id = receipt.tenant_id
                         AND event.node_id = receipt.node_id
                         AND event.node_boot_id = receipt.node_boot_id
@@ -86,7 +87,7 @@ FROM (
                                 AND opening_next_sequence <= first_sequence
                                 AND closing_next_sequence > last_sequence) AS complete
                         FROM (
-                            SELECT reports.*,
+                            SELECT coverage.*,
                                 (state = 'GAPPED' OR gap_reasons <> ''
                                     OR (opening_attempted IS NOT NULL AND closing_attempted IS NOT NULL
                                         AND (closing_lost <> opening_lost
@@ -97,7 +98,7 @@ FROM (
                                             OR closing_requested < opening_requested
                                             OR closing_emitted < opening_emitted
                                             OR closing_next_sequence < opening_next_sequence))) AS has_gap
-                            FROM reports
+                            FROM coverage
                             WHERE kind = 'interval'
                         ) AS checked
                     ) AS proof
@@ -121,4 +122,4 @@ FROM (
     ) AS marked
 ) AS ranges
 GROUP BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id,
-    coverage_revision, coverage_interval_id, state, gap_reasons, range_id
+    coverage_revision, coverage_interval_id, state, gap_reasons, range_id;

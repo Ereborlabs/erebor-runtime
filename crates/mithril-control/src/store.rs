@@ -4495,15 +4495,13 @@ mod tests {
         )?;
         Arc::get_mut(&mut engine)
             .ok_or("native context engine is already shared")?
-            .register_relation_planner(Arc::new(araphor_discovery_effects::ObservedEffects))?;
+            .register_views(araphor_analysis_builtins::discovery::sql::VIEWS_SQL)?;
         let runtime = Arc::clone(&engine);
         let tenant = record.id.stream.tenant_id;
         let update = runtime.wait(async move {
             let mut subscription = engine
                 .subscribe(
-                    "SELECT * FROM discovery.context_bindings(\
-                        (SELECT * FROM events), (SELECT * FROM targets),\
-                        (SELECT * FROM compiled_policies))",
+                    "SELECT * FROM discovery.context_bindings",
                     Vec::new(),
                     AnalysisSelectionV1::tenant(tenant),
                     Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(60))?),

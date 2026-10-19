@@ -9,7 +9,6 @@ use araphor_data::{
     ProcessorClassV1, ProcessorRetirementV1, ProcessorScopeV1, ValidatedEvidenceBatchV1,
     DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
 };
-use araphor_discovery_effects::ObservedEffects;
 use araphor_query::execution::{Engine, Limits};
 use araphor_query::follow::Operation;
 
@@ -78,7 +77,7 @@ impl Fixture {
         )?;
         Arc::get_mut(&mut query)
             .ok_or("query already shared")?
-            .register_relation_planner(Arc::new(ObservedEffects))?;
+            .register_views(araphor_analysis_builtins::discovery::sql::VIEWS_SQL)?;
         Ok(Self {
             store,
             query,
@@ -99,7 +98,7 @@ impl Fixture {
                 expires_utc_ns: None,
                 authorization_id: None,
             },
-            ObservedEffects::live_bundle()?,
+            crate::Package::discovery_bundle()?,
             "live",
             "snapshot",
         )?])?)

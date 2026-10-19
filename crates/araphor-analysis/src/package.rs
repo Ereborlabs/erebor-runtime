@@ -13,6 +13,8 @@ use araphor_query::follow::Subscription;
 
 use crate::Result;
 
+pub(crate) mod builtin;
+
 pub struct Package {
     pub(crate) query: Arc<Engine>,
     pub(crate) grant: PackageGrantV1,

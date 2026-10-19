@@ -160,7 +160,7 @@ async fn query(
             Arc::new(MemTable::try_new(schema.clone(), vec![vec![batch]])?),
         )?;
     }
-    let frame = native_frame(&context, ObservedEffects::MERGE_SQL).await?;
+    let frame = native_frame(&context, MERGE_SQL).await?;
     frame.logical_plan().apply_with_subqueries(|plan| {
         assert!(!matches!(plan, LogicalPlan::Extension(_)));
         Ok(TreeNodeRecursion::Continue)

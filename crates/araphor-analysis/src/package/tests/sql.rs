@@ -2,6 +2,9 @@
 
 use std::sync::Arc;
 
+use araphor_analysis_builtins::discovery::sql::{
+    COVERAGE_RANGES_SQL, MERGE_SQL, OBSERVED_EFFECTS_SQL, RECORDED_SNAPSHOT_SQL, VIEWS_SQL,
+};
 use datafusion::arrow::array::{
     Array, ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatch, StringArray,
     TimestampMicrosecondArray, UInt32Array, UInt64Array,
@@ -9,14 +12,13 @@ use datafusion::arrow::array::{
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::Result;
 use datafusion::datasource::MemTable;
 use datafusion::execution::config::SessionConfig;
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::LogicalPlan;
 
-use crate::ObservedEffects;
+use crate::package::builtin::{query, LIVE_SQL};
 
 mod coverage;
 mod recorded;
@@ -49,18 +51,15 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Result<Self> {
-        let state = SessionStateBuilder::new()
-            .with_default_features()
-            .with_config(SessionConfig::new().with_target_partitions(1))
-            .with_relation_planners(vec![Arc::new(ObservedEffects)])
-            .build();
         let canonical = &araphor_data::AnalysisStore::table_schemas()["events"];
         let fields = INPUTS
             .iter()
             .map(|name| canonical.field_with_name(name).cloned())
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(Self {
-            context: SessionContext::new_with_state(state),
+            context: SessionContext::new_with_config(
+                SessionConfig::new().with_target_partitions(1),
+            ),
             schema: Arc::new(Schema::new(fields)),
         })
     }
@@ -113,8 +112,17 @@ impl Fixture {
     }
 
     async fn query(&self, input: &str) -> Result<RecordBatch> {
+        let relation = if input == "SELECT * FROM events" {
+            self.view("observed_effects", OBSERVED_EFFECTS_SQL).await?;
+            "discovery.observed_effects".to_owned()
+        } else {
+            format!(
+                "(WITH events AS ({input}) {})",
+                query(OBSERVED_EFFECTS_SQL)?
+            )
+        };
         let sql = format!(
-            "SELECT * FROM discovery.observed_effects(({input})) AS effects \
+            "SELECT * FROM {relation} AS effects \
             ORDER BY source_id, binding_id NULLS FIRST, effect_family NULLS FIRST"
         );
         let dataframe = self.context.sql(&sql).await?;
@@ -133,6 +141,19 @@ impl Fixture {
         assert!(aggregate);
         let batches = datafusion::physical_plan::collect(physical, self.context.task_ctx()).await?;
         Ok(concat_batches(&schema, &batches)?)
+    }
+
+    async fn view(&self, name: &str, sql: &str) -> Result<()> {
+        self.context
+            .sql("CREATE SCHEMA IF NOT EXISTS discovery")
+            .await?;
+        self.context
+            .sql(&format!(
+                "CREATE OR REPLACE VIEW discovery.{name} AS {}",
+                query(sql)?
+            ))
+            .await?;
+        Ok(())
     }
 }
 
@@ -258,23 +279,65 @@ async fn empty_and_null_effects() -> Result<()> {
 }
 
 #[tokio::test]
+async fn sql_filters_before_aggregation() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.replace(vec![vec![fixture.batch(&[
+        (9, None, 2, 3, 30),
+        (9, None, 2, 1, 10),
+        (9, None, 2, 2, 20),
+    ])?]])?;
+    for input in [
+        "SELECT * FROM events WHERE source_cursor <= 2",
+        "SELECT * EXCLUDE (position) FROM (SELECT *, ROW_NUMBER() OVER \
+            (PARTITION BY source_id ORDER BY source_cursor) AS position FROM events) \
+            WHERE position <= 2",
+    ] {
+        let result = fixture.query(input).await?;
+        assert_eq!(result.num_rows(), 1);
+        assert_eq!(
+            result
+                .column_by_name("event_count")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            2
+        );
+        assert_eq!(
+            result
+                .column_by_name("last_cursor")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .value(0),
+            2
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_cte_scope_and_admission() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.replace(vec![vec![fixture.batch(&[(9, None, 2, 1, 10)])?]])?;
-    let sql = "WITH records AS (SELECT * FROM events) \
-        SELECT result.event_count FROM discovery.observed_effects((SELECT * FROM records)) AS result";
+    fixture
+        .view("observed_effects", OBSERVED_EFFECTS_SQL)
+        .await?;
+    let sql = "WITH records AS (SELECT 42 AS unused), events AS (SELECT 42 AS unused) \
+        SELECT result.event_count FROM discovery.observed_effects AS result";
     assert_eq!(
         fixture.context.sql(sql).await?.collect().await?[0].num_rows(),
         1
     );
-    for sql in [
-        "SELECT * FROM discovery.observed_effects()",
-        "SELECT * FROM discovery.observed_effects(1)",
-        "SELECT * FROM discovery.observed_effects((SELECT * FROM events), (SELECT * FROM events))",
-        "SELECT * FROM discovery.observed_effects((SELECT 1))",
-    ] {
-        assert!(fixture.context.sql(sql).await.is_err(), "{sql}");
-    }
+    let provider = fixture
+        .context
+        .table_provider("discovery.observed_effects")
+        .await?;
+    assert!(provider
+        .as_any()
+        .is::<datafusion::datasource::view::ViewTable>());
     let ordinary = fixture
         .context
         .sql("SELECT COUNT(*) FROM events")
@@ -290,12 +353,49 @@ async fn native_cte_scope_and_admission() -> Result<()> {
             .value(0),
         1
     );
-    assert!(matches!(
-        fixture
-            .context
-            .sql("SELECT * FROM discovery.other((SELECT * FROM events))")
-            .await,
-        Err(DataFusionError::Plan(_)) | Err(DataFusionError::NotImplemented(_))
-    ));
+    assert!(fixture
+        .context
+        .sql("SELECT * FROM discovery.observed_effects((SELECT * FROM events))")
+        .await
+        .is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn catalog_views_use_providers() -> Result<()> {
+    let context = SessionContext::new();
+    for (name, schema) in araphor_data::AnalysisStore::table_schemas() {
+        let schema = Arc::clone(schema);
+        context.register_table(
+            name.as_str(),
+            Arc::new(MemTable::try_new(
+                Arc::clone(&schema),
+                vec![vec![RecordBatch::new_empty(schema)]],
+            )?),
+        )?;
+    }
+    context.sql("CREATE SCHEMA discovery").await?;
+    let statements = datafusion::sql::parser::DFParserBuilder::new(VIEWS_SQL)
+        .with_recursion_limit(usize::MAX)
+        .build()?
+        .parse_statements()?;
+    for statement in statements {
+        let plan = context.state().statement_to_plan(statement).await?;
+        context.execute_logical_plan(plan).await?;
+    }
+    for name in ["observed_effects", "coverage_ranges", "context_bindings"] {
+        let name = format!("discovery.{name}");
+        let provider = context.table_provider(name.as_str()).await?;
+        assert!(provider
+            .as_any()
+            .is::<datafusion::datasource::view::ViewTable>());
+        assert!(context
+            .sql(&format!("SELECT * FROM {name}"))
+            .await?
+            .collect()
+            .await?
+            .iter()
+            .all(|batch| batch.num_rows() == 0));
+    }
     Ok(())
 }

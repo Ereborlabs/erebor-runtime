@@ -189,7 +189,18 @@ Native admission simplification and selected qualification: **Done**. All
 61 distinct focused tests pass. Formatting and affected-crate Clippy with
 warnings denied pass. This change removes 27 production Rust code lines
 from `b637c05a`. Read the linked design for the count and verification
-records. The separate Effects function resolver still requires consolidation.
+records. At this revision, the separate Effects function resolver still
+required consolidation. The later
+[native derived relation change](araphor-package-jobs.md#native-derived-relations-and-crate-removal)
+removes the complete Effects crate. Query registers native views from SQL
+metadata. The required SQL computations and tests belong to the existing
+built-in and Analysis package owners. Crate removal and selected qualification:
+**Done**. All 354 distinct focused tests pass. Scoped formatting and
+affected-crate Clippy with warnings denied pass. The source and command record
+is `/tmp/araphor-native-views-verification1.json`. The change removes 157
+production Rust code lines from `5c9e2fb7`. Read the linked result for the count
+method and exclusions. Physical package-call execution, managed instances,
+and the complete reduction remain **Not done**.
 
 The previous delivery replaces the separate JSON package form with native SQL and PRQL
 calls. The function name has three parts: image, exact revision, and export.

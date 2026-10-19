@@ -66,7 +66,7 @@ impl ControlPlane {
             })
             .collect::<crate::Result<BTreeSet<_>>>()?;
         let mut bundles = AnalysisPackageOwner::required_bundles();
-        bundles.push(araphor_discovery_effects::ObservedEffects::live_bundle()?);
+        bundles.push(araphor_analysis::Package::discovery_bundle()?);
         let pins = bundles
             .iter()
             .map(|bundle| bundle.digest().map_err(araphor_data::Error::from))
@@ -86,7 +86,7 @@ impl ControlPlane {
                 }
                 .build()
             })?
-            .register_relation_planner(Arc::new(araphor_discovery_effects::ObservedEffects))?;
+            .register_views(araphor_analysis_builtins::discovery::sql::VIEWS_SQL)?;
         let owner = AnalysisPackageOwner::new(query.clone(), authority.clone())?;
         #[cfg(test)]
         let owner = {
@@ -122,7 +122,7 @@ impl ControlPlane {
 
 impl ControlPackages {
     pub(crate) fn discovery(&self) -> crate::Result<araphor_analysis::DiscoveryOwner> {
-        let bundle = araphor_discovery_effects::ObservedEffects::live_bundle()?;
+        let bundle = araphor_analysis::Package::discovery_bundle()?;
         let packages = self
             .authority
             .tenants

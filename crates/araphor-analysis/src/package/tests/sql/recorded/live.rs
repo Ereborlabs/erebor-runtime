@@ -171,7 +171,7 @@ impl Live {
 
     async fn query(&self, split: bool) -> TestResult<Vec<Output>> {
         let fixture = self.fixture(split)?;
-        let sql = ObservedEffects::LIVE_SQL.as_str();
+        let sql = LIVE_SQL.as_str();
         let frame = native_frame(&fixture.context, sql).await?;
         frame.logical_plan().apply_with_subqueries(|plan| {
             assert!(!matches!(plan, LogicalPlan::Extension(_)));
@@ -471,7 +471,7 @@ async fn live_sealed_starts_fresh() -> TestResult {
 
 #[test]
 fn live_bundle_pins_body() -> TestResult {
-    let bundle = ObservedEffects::live_bundle()?;
+    let bundle = crate::Package::discovery_bundle()?;
     bundle.validate()?;
     let restored = araphor_data::PackageBundleV1::from_bytes(&bundle.encode()?)?;
     assert_eq!(restored.root, bundle.root);
@@ -487,10 +487,7 @@ fn live_bundle_pins_body() -> TestResult {
     else {
         return Err("SQL implementation absent".into());
     };
-    assert_eq!(
-        program.outputs["snapshot"],
-        ObservedEffects::LIVE_SQL.as_str()
-    );
+    assert_eq!(program.outputs["snapshot"], LIVE_SQL.as_str());
     assert!(!program.outputs["snapshot"].contains("@@"));
     assert!(!program.outputs["snapshot"].contains("discovery."));
     for input in &artifact.descriptor.exports[0].inputs {

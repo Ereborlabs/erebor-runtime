@@ -58,8 +58,7 @@ impl Subscribe {
                 LogicalPlan::Filter(filter) => &filter.input,
                 LogicalPlan::SubqueryAlias(alias) => &alias.input,
                 LogicalPlan::TableScan(scan) => {
-                    return Ok(matches!(scan.table_name.table(), "events" | "trace_output")
-                        && scan.fetch.is_none()
+                    return Ok(scan.fetch.is_none()
                         && source_as_provider(&scan.source).is_ok_and(|provider| {
                             provider
                                 .as_any()

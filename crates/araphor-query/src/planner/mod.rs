@@ -1,14 +1,19 @@
 use std::collections::BTreeSet;
-use std::ops::ControlFlow;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{DataFusionError, ScalarValue, TableReference};
+use datafusion::common::{DataFusionError, Result as NativeResult, ScalarValue};
+use datafusion::datasource::source_as_provider;
 use datafusion::execution::context::SQLOptions;
 use datafusion::execution::SessionState;
+use datafusion::functions_window::lead_lag::WindowShift;
+use datafusion::logical_expr::planner::{
+    PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
+};
 use datafusion::logical_expr::{Expr, LogicalPlan, WindowFrameBound, WindowFrameUnits};
 use datafusion::sql::parser::Statement;
-use datafusion::sql::planner::object_name_to_table_reference;
-use datafusion::sql::sqlparser::ast::{TableFactor, Visit, Visitor};
+use datafusion::sql::sqlparser::ast::TableFactor;
 use snafu::ResultExt as _;
 
 use crate::execution::Limits;
@@ -24,27 +29,50 @@ pub struct Planner<'a> {
     state: &'a SessionState,
 }
 
-struct Relations {
-    tables: BTreeSet<TableReference>,
-    normalize: bool,
+#[derive(Debug, Default)]
+struct SourceDemand {
+    origins: Mutex<BTreeSet<SourceOrigin>>,
+    active: AtomicBool,
 }
 
-impl Visitor for Relations {
-    type Break = DataFusionError;
-
-    fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
-        if let TableFactor::Table {
-            name, args: None, ..
-        } = factor
-        {
-            match object_name_to_table_reference(name.clone(), self.normalize) {
-                Ok(name) => {
-                    self.tables.insert(name);
+impl SourceDemand {
+    fn collect(plan: &LogicalPlan) -> NativeResult<BTreeSet<SourceOrigin>> {
+        let mut origins = BTreeSet::new();
+        plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan {
+                if let Ok(provider) = source_as_provider(&scan.source) {
+                    if let Some(source) = provider.as_any().downcast_ref::<SourceProvider>() {
+                        origins.insert(source.origin.clone());
+                    }
                 }
-                Err(error) => return ControlFlow::Break(error),
             }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(origins)
+    }
+}
+
+impl RelationPlanner for SourceDemand {
+    fn plan_relation(
+        &self,
+        relation: TableFactor,
+        context: &mut dyn RelationPlannerContext,
+    ) -> NativeResult<RelationPlanning> {
+        if !matches!(&relation, TableFactor::Table { args: None, .. })
+            || self.active.swap(true, Ordering::Relaxed)
+        {
+            return Ok(RelationPlanning::Original(Box::new(relation)));
         }
-        ControlFlow::Continue(())
+        let plan = context.plan(relation);
+        self.active.store(false, Ordering::Relaxed);
+        let plan = plan?;
+        self.origins
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source demand lock is poisoned".into()))?
+            .extend(Self::collect(&plan)?);
+        Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+            plan, None,
+        ))))
     }
 }
 
@@ -53,43 +81,8 @@ impl<'a> Planner<'a> {
         Self { state }
     }
 
-    pub(crate) async fn sources(&self, statement: &Statement) -> Result<BTreeSet<SourceOrigin>> {
-        let mut relations = Relations {
-            tables: BTreeSet::new(),
-            normalize: self
-                .state
-                .config_options()
-                .sql_parser
-                .enable_ident_normalization,
-        };
-        if let Statement::Statement(statement) = statement {
-            if let ControlFlow::Break(error) = statement.visit(&mut relations) {
-                return Err(error).context(crate::SqlSnafu);
-            }
-        }
-        let mut origins = BTreeSet::new();
-        for name in self
-            .state
-            .resolve_table_references(statement)
-            .context(crate::SqlSnafu)?
-        {
-            // The native resolver also returns table function names.
-            if !relations.tables.contains(&name) {
-                continue;
-            }
-            let schema = self
-                .state
-                .schema_for_ref(name.clone())
-                .context(crate::SqlSnafu)?;
-            let provider = schema.table(name.table()).await.context(crate::SqlSnafu)?;
-            if let Some(source) = provider
-                .as_ref()
-                .and_then(|provider| provider.as_any().downcast_ref::<SourceProvider>())
-            {
-                origins.insert(source.origin.clone());
-            }
-        }
-        Ok(origins)
+    pub(crate) fn sources(plan: &LogicalPlan) -> Result<BTreeSet<SourceOrigin>> {
+        SourceDemand::collect(plan).context(crate::SqlSnafu)
     }
 
     pub async fn build(
@@ -97,6 +90,16 @@ impl<'a> Planner<'a> {
         statement: Statement,
         parameters: Vec<ScalarValue>,
     ) -> Result<LogicalPlan> {
+        self.build_with_sources(statement, parameters)
+            .await
+            .map(|(plan, _)| plan)
+    }
+
+    pub(crate) async fn build_with_sources(
+        self,
+        statement: Statement,
+        parameters: Vec<ScalarValue>,
+    ) -> Result<(LogicalPlan, BTreeSet<SourceOrigin>)> {
         let limits = self
             .state
             .config()
@@ -123,8 +126,12 @@ impl<'a> Planner<'a> {
             }
             .build());
         }
-        let plan = self
-            .state
+        let demand = Arc::new(SourceDemand::default());
+        let mut state = self.state.clone();
+        state
+            .register_relation_planner(demand.clone())
+            .context(crate::SqlSnafu)?;
+        let plan = state
             .statement_to_plan(statement)
             .await
             .and_then(|plan| plan.with_param_values(parameters))
@@ -136,7 +143,12 @@ impl<'a> Planner<'a> {
             .verify_plan(&plan)
             .context(crate::SqlSnafu)?;
         Self::quotas(&plan, &limits)?;
-        Ok(plan)
+        let mut origins =
+            std::mem::take(&mut *demand.origins.lock().map_err(|_| crate::Error::Sql {
+                source: DataFusionError::Internal("source demand lock is poisoned".into()),
+            })?);
+        origins.extend(Self::sources(&plan)?);
+        Ok((plan, origins))
     }
 
     pub(crate) fn quotas(plan: &LogicalPlan, limits: &Limits) -> Result<()> {
@@ -156,7 +168,7 @@ impl<'a> Planner<'a> {
                 if let Expr::WindowFunction(window) = expression {
                     if matches!(&window.fun,
                         datafusion::logical_expr::WindowFunctionDefinition::WindowUDF(function)
-                            if matches!(function.name(), "lag" | "lead"))
+                            if function.inner().as_any().is::<WindowShift>())
                     {
                         let bounded = match window.params.args.get(1) {
                             None => maximum >= 1,

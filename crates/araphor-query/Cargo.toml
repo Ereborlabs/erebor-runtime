@@ -31,7 +31,7 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-araphor-discovery-effects = { path = "../araphor-discovery-effects" }
+araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 crc32c.workspace = true
 araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
 tempfile = "3.23.0"

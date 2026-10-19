@@ -181,6 +181,72 @@ reduction. The record is `/tmp/araphor-yaml-count1.json`. Complete reduction:
 **Not done**. Full workspace CI, benchmarks, and physical Kubernetes checks
 did not run. No speed result is claimed.
 
+### Native derived relations and crate removal
+
+The user rejects the hardcoded Discovery function resolver, its call syntax,
+and the complete `araphor-discovery-effects` crate. Remove the crate and all
+workspace and dependency entries. Keep the required computations in the
+existing built-in package and image owners. Do not add a replacement resolver
+or a fixed schema bootstrap.
+
+Native SQL declarations define the ordinary views. For example:
+
+```sql
+SELECT source_id, event_count FROM discovery.observed_effects;
+```
+
+Query obtains each view name and schema from the native declaration. Native
+catalog and schema providers retain the native `ViewTable`. Query does not
+match Discovery names. The existing generic relation planner remains for
+actual package calls with relation inputs.
+
+Collect source origins during native relation planning and from the expanded,
+unoptimized native plan. The per-admission RelationPlanner observer returns
+native plans without changes. It preserves source declarations in unused
+query CTEs, which DataFusion omits from the returned plan. Keep these origins
+for capture, permission, receipts, and source notices even when optimization
+removes an empty branch. Query and package inputs use the same collection.
+Trusted views retain DataFusion's stored-plan behavior; unused CTEs in a view
+declaration are absent from that stored plan. User query admission rejects
+DDL. Native view plans remain unoptimized until query execution, so clock
+expressions use the execution time.
+
+The complete recorded and merge computations remain SQL programs with named
+input relations. A windowed program filters events before aggregation. An
+outer filter on an aggregate view cannot replace that input window. Native
+SQL CTE scopes replace the former AST table renamer during image assembly.
+All existing result, coverage, evidence, context, and lifecycle assertions
+remain required.
+
+Crate removal and selected qualification: **Done**. All 354 distinct focused
+tests pass on the final source:
+
+| Owner | Passing tests |
+| --- | ---: |
+| Query library | 268 |
+| Analysis library, including all 36 SQL cases | 41 |
+| Definition format | 21 |
+| Data definitions and request encoding | 9 |
+| Control admission, finite queries, follow, and context | 11 |
+| TLS admission | 1 |
+| CLI definitions | 3 |
+
+Scoped formatting and affected-crate Clippy with warnings denied pass. The
+source and command record is `/tmp/araphor-native-views-verification1.json`.
+The final record checks 53 Rust, SQL, Cargo, and lockfile paths against the
+commit. All earlier SQL result, coverage, context, merge, and live-state
+assertions remain. The idle-clock test uses a notification to enter its quiet
+interval; its 650 ms no-read and no-clock-read assertions remain unchanged.
+
+This change removes 157 production Rust code lines from `5c9e2fb7`: 494
+additions and 651 deletions by file size. The count excludes tests, comments,
+documents, blank lines, and moves. The record is
+`/tmp/araphor-native-views-count6.json`. The complete redesign adds 5,996 from
+`7b7b407a`; another 11,996 must be removed for the required 6,000-line reduction.
+The complete redesign, reduction target, physical OCI package-call execution,
+and managed instances remain **Not done**. Full workspace CI, benchmarks, and
+physical Kubernetes checks did not run. No speed result is claimed.
+
 ### Native admission simplification
 
 The package planner now uses native DataFrame window operations for row
@@ -206,8 +272,8 @@ by file size. The complete redesign adds 6,153 from `7b7b407a`; another
 12,153 must be removed for the 6,000-line reduction target. Tests, comments,
 documents, blank lines, and moves do not count. The count record is
 `/tmp/araphor-native-simplify-count1.json`. Complete reduction: **Not done**.
-The separate hardcoded Effects function resolver remains **Not done** for
-consolidation. Full workspace CI, benchmarks, and physical Kubernetes checks
+At this revision, the separate hardcoded Effects function resolver still
+required consolidation. The crate-removal result above records its removal. Full workspace CI, benchmarks, and physical Kubernetes checks
 did not run. No speed result is claimed.
 
 The user authorizes the OCI image in a separate crate. The current delivery
@@ -308,8 +374,9 @@ consumer. Preserve their files outside the source tree and remove their unused
 workspace wiring. They are not prerequisites for this package. Introduce a
 further extension only after a required computation proves the native API gap.
 
-Native SQL package and selected caller qualification: **Done**. The new crate
-is `araphor-discovery-effects`. Control registers its native relation planner
+Previous native SQL package and selected caller qualification: **Done**. At
+that revision, the new crate was `araphor-discovery-effects`. The crate removal
+above replaces that route. At that revision, Control registers its native relation planner
 through `ControlPlane::analysis_packages`. The package has no separate source
 reader, scheduler, logical operator, physical operator, or result cache.
 
@@ -404,7 +471,7 @@ target checks remain active. No new executor, reader, store, or timer is added.
 The complete recorded SQL body includes validation and private column removal.
 Native CAST rejects a prefixed error; a NULL error passes. The custom guard
 function and host Filter construction are deleted. The exported
-ObservedEffects::RECORDED_SNAPSHOT_SQL can be stored in an OCI program. The
+araphor_analysis_builtins::discovery::sql::RECORDED_SNAPSHOT_SQL can be stored in an OCI program. The
 round-trip case executes that retained body in plain native DataFusion, with
 no Discovery relation planner, and compares every Arrow array with the old
 algorithm. A changed body changes the artifact digest.

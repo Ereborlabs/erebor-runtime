@@ -11,7 +11,7 @@ test-fixtures = ["araphor-data/test-fixtures", "araphor-query/test-fixtures", "a
 
 [dependencies]
 araphor-discovery-definition = { path = "../araphor-discovery-definition" }
-araphor-discovery-effects = { path = "../araphor-discovery-effects" }
+araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 araphor-data = { path = "../araphor-data" }
 araphor-query = { path = "../araphor-query" }
 araphor-analysis = { path = "../araphor-analysis" }

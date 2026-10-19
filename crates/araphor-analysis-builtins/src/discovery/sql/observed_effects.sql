@@ -1,3 +1,4 @@
+CREATE VIEW discovery.observed_effects AS
 SELECT
     tenant_id,
     node_id,
@@ -20,5 +21,5 @@ SELECT
     MAX(source_cursor) AS last_cursor,
     MIN(received_at) AS first_received_at,
     MAX(received_at) AS last_received_at
-FROM records
-GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16
+FROM events
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16;

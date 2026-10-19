@@ -350,9 +350,9 @@ run. The complete replacement remains **Not done**.
   -> [CompiledPolicyContextV1::encode](../../crates/araphor-data/src/discovery/compiled.rs) encodes the actual artifact header, execution-set IDs, and compiled keys once as Arrow IPC
   -> [Capture::event](../../crates/araphor-data/src/analysis/extraction/tables/events.rs) exposes the catalog through the shared checked codec
   -> [Capture::compiled](../../crates/araphor-data/src/analysis/extraction/tables/context.rs) reads the projected proof from the same Data capture
-  -> [ObservedEffects::plan_relation](../../crates/araphor-discovery-effects/src/effects.rs) binds the three native input plans in caller scope
-  -> [context_bindings.sql](../../crates/araphor-discovery-effects/src/context_bindings.sql) joins the catalog key to the target and current compiled proof
-  -> [native grouping](../../crates/araphor-discovery-effects/src/context_bindings.sql) rejects ambiguous or invalid candidates
+  -> [Engine::register_views](../../crates/araphor-query/src/execution.rs) registers the SQL declaration through the native catalog
+  -> [context_bindings.sql](../../crates/araphor-analysis-builtins/src/discovery/sql/context_bindings.sql) joins events to the target and current compiled proof
+  -> [native grouping](../../crates/araphor-analysis-builtins/src/discovery/sql/context_bindings.sql) rejects ambiguous or invalid candidates
   -> [Engine::subscribe](../../crates/araphor-query/src/execution/admission.rs) returns binding batches and captured references
 
 Read [EvidenceDecisionCatalogV1](../../crates/araphor-data/src/evidence/model.rs)
@@ -376,11 +376,12 @@ Read [discovery_context_retained_facts](../../crates/mithril-control/src/store.r
 [control_context_compiled_refresh](../../crates/mithril-control/src/store/context.rs),
 [native_compiled_policies](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs),
 and [compiled_policies_follow_sources](../../crates/araphor-query/src/follow/tests/discovery.rs).
-Selected qualification passes 105 distinct cases and strict Clippy in eight
+Earlier qualification passes 105 distinct cases and strict Clippy in eight
 crates. The source and command record is
-`/tmp/araphor-native-binding-verification1.json`. Live Discovery still uses the
-old reader. Complete package installation, cumulative state, frozen replay inputs,
-and atomic profile publication remain **Not done**.
+`/tmp/araphor-native-binding-verification1.json`. That record precedes the
+current native-view rewrite. At that source state, live Discovery still uses
+the old reader. Complete package installation, cumulative state, frozen replay
+inputs, and atomic profile publication remain **Not done** in that record.
 
 ## Reactive retention
 
@@ -449,50 +450,51 @@ is **Not done** against the required architecture. The replacement must
 consume the actual Query input batches for live execution, finite execution,
 and manual refresh. An identity-only query must not invoke the old reader.
 
-## Native Discovery SQL package
+## Native Discovery SQL relations
 
-The new [ObservedEffects](../../crates/araphor-discovery-effects/src/effects.rs)
-relation planner binds explicit subqueries to the checked-in SQL bodies.
-[Observed effects](../../crates/araphor-discovery-effects/src/observed_effects.sql)
-uses one input and native projection, GROUP BY, COUNT, MIN, and MAX. There is no
-package logical operator, physical operator, executor, or retained result cache.
-The relation hook is required because a native table function accepts scalar
-expressions, not an input relation. The hook delegates the bound derived table
-to the native planner. It does not parse a second SQL grammar.
+The [SQL declarations](../../crates/araphor-analysis-builtins/src/discovery/sql.rs)
+contain three native CREATE VIEW statements. Their qualified names come from
+the SQL metadata. Query has no Discovery name router or relation planner.
+[Observed effects](../../crates/araphor-analysis-builtins/src/discovery/sql/observed_effects.sql)
+reads events through the native SourceProvider. Native projection, GROUP BY,
+COUNT, MIN, and MAX produce the derived relation. DataFusion registers the
+derived relation as a ViewTable. These relations add no package logical
+operator, physical operator, executor, or retained result cache.
 
 ```sql
 SELECT source_id, binding_id, event_count, first_cursor, last_cursor
-FROM discovery.observed_effects((
-    SELECT * FROM events
-    WHERE received_at >= now() - INTERVAL '60 seconds'
-))
+FROM discovery.observed_effects
 ```
 
-[ControlPlane::analysis_packages](../../crates/mithril-control/src/service/packages.rs) registers the native relation hook
+[ControlPlane::analysis_packages](../../crates/mithril-control/src/service/packages.rs) supplies VIEWS_SQL from the builtin metadata
+  -> [Engine::register_views](../../crates/araphor-query/src/execution.rs) parses native CREATE VIEW statements and registers missing native schemas
+  -> [native view registration](../../crates/araphor-query/src/execution.rs) plans each declaration and installs its native ViewTable
   -> [Engine::prepare](../../crates/araphor-query/src/execution/admission.rs) parses SQL and records the original sources
-  -> [ObservedEffects::plan_relation](../../crates/araphor-discovery-effects/src/effects.rs) binds the input subquery to the native SQL body
   -> DataFusion plans and optimizes the ordinary logical operators
   -> [SourceSnapshot](../../crates/araphor-query/src/sources/mod.rs) captures authorized input for physical execution
   -> native physical operators return Arrow batches
   -> [Subscription](../../crates/araphor-query/src/follow/mod.rs) returns the batches and their captured receipts
 
 The existing Progress owner starts replacement execution on a source notice
-or an exact supported window boundary. The package has no private wake loop.
-Each result describes the supplied relation. Projected source keys are data;
-the authorized selection and snapshot witnesses supply evidence provenance.
-The received-time bounds use receipt time with microsecond precision.
+or an exact supported window boundary. The relations have no private wake loop.
+Each result describes the selected source relation. Projected source keys are
+data. The authorized selection and snapshot witnesses supply evidence
+provenance. Received-time bounds use receipt time with microsecond precision.
 
-[Coverage ranges](../../crates/araphor-discovery-effects/src/coverage_ranges.sql)
-uses two inputs. Native joins qualify each event against the supplied coverage
-receipt and interval. Native LAG, running SUM, and GROUP BY combine adjacent
-cursors with equal interval, revision, state, and ordered reasons.
+[Coverage ranges](../../crates/araphor-analysis-builtins/src/discovery/sql/coverage_ranges.sql)
+reads events and coverage. Native joins qualify each event against the
+captured coverage receipt and interval. Native LAG, running SUM, and GROUP BY
+combine adjacent cursors with equal interval, revision, state, and ordered
+reasons.
 
 ```sql
 SELECT source_id, first_cursor, last_cursor, state, gap_reasons
-FROM discovery.coverage_ranges(
-    (SELECT * FROM events),
-    (SELECT * FROM coverage)
-)
+FROM discovery.coverage_ranges
+```
+
+```sql
+SELECT record_id, image_digest, policy_revision
+FROM discovery.context_bindings
 ```
 
 The joins and windows use tenant, node, boot, label epoch, source, source epoch,
@@ -501,50 +503,104 @@ receipts or intervals produce Unknown. A malformed interval identifier falls
 back to the source identifier. Counter sums use native decimal arithmetic.
 An overflowing UInt64 sum cannot establish complete coverage. Native reason
 arrays preserve the admitted report order. The coverage relation encodes
-Control-admitted reason tokens as comma-separated text. This call does not
+Control-admitted reason tokens as comma-separated text. This relation does not
 define a new encoding for arbitrary reason strings.
 
-The shared input binder plans each caller subquery once in its original scope.
-It aliases each native logical plan to its input name and inserts that plan
-into a new native PlannerContext. SqlToRel plans the fixed package SQL in that
-scope. DataFusion owns CTE lookup and planning. The former AST substitution
-visitor is removed. Caller CTE names cannot capture package CTE names.
+[Engine::register_views](../../crates/araphor-query/src/execution.rs) accepts
+trusted view declarations before query admission. It uses the native parser,
+catalog, SchemaProvider, and DDL planner. It derives a missing schema from the
+qualified view name. There is no separate schema SQL file or table-name match.
+The public query path remains read-only. View registration does not grant
+source access or change the authorized selection.
+The complete Effects crate and its function resolver are removed. Selected
+qualification passes 354 distinct tests, including all 36 SQL cases and all
+268 Query cases. Scoped formatting and affected-crate Clippy with warnings
+denied pass. The final source and command record is
+`/tmp/araphor-native-views-verification1.json`. Read the
+[crate-removal result](../plans/araphor-package-jobs.md#native-derived-relations-and-crate-removal)
+for the exact count and remaining work. Full workspace CI, benchmarks, and
+physical Kubernetes checks did not run.
 
-NativeContext only adapts a borrowed ContextProvider to the sized SqlToRel
-interface. It forwards all catalog, function, option, and planner methods.
-It has no policy, table filter, state, or execution owner. Explicit parentheses
-keep each IS DISTINCT FROM comparison inside its OR operand.
+Each admission replaces raw table bindings in its default schema. The catalog
+retains Arc handles for registered default-schema views. Native
+MemorySchemaProvider has no clone API, and its table lookup is asynchronous.
+The handle map preserves these views at the existing synchronous catalog
+boundary. Other native schemas and catalogs retain their own provider handles.
 
-This call supplies the raw range qualifier. It does not perform the later
-builtin temporal degradation or final profile merge. Graph callers still use
-their exact historical reports through the existing qualifier. Those callers
-must supply the same frozen rows before that qualifier can be deleted.
+[SourceProvider](../../crates/araphor-query/src/sources/mod.rs) implements the
+native TableProvider interface for retained data. DataFusion supplies ViewTable
+for each derived relation. [SourceDemand](../../crates/araphor-query/src/planner/mod.rs)
+records native source identities during relation planning. A fresh observer
+serves each admission. It delegates table binding to DataFusion and returns
+the native plan without changes. Its reentry guard prevents its own hook from
+calling itself again. The native plan traversal includes expression subqueries.
+A caller alias does not change the capture owner. View plans keep their
+catalog bindings when a caller defines a CTE with the same source name.
+Trusted view declarations retain DataFusion's stored-plan behavior. An unused
+CTE in a view declaration is absent from that stored plan. User query admission
+does not accept view DDL.
 
-The expanded package passes 11 package cases, seven Query subscription cases,
+A computation with different input relations uses a complete native SQL
+program or an installed SQL image. Native CTEs bind those inputs. Native SQL
+defines CTE lookup and scope. There is no Discovery argument binder, custom
+AST substitution, or Discovery function-call syntax. A received-time window
+must restrict events before aggregation when the computation requires a
+windowed count. Filtering a completed aggregate does not replace that input
+selection. Receipt-time bounds retain microsecond precision. Explicit
+parentheses keep each IS DISTINCT FROM comparison inside its OR operand.
+
+The coverage relation supplies the raw range qualifier. It does not perform
+the later builtin temporal degradation or final profile merge. Graph callers
+still use their exact historical reports through the existing qualifier.
+Those callers must supply the same frozen rows before that qualifier can be
+deleted.
+
+[Package::discovery_bundle](../../crates/araphor-analysis/src/package/builtin.rs)
+assembles the immutable live SQL image at the existing Analysis package owner.
+The builtin metadata supplies SQL declarations and format fragments. The host
+uses the native parser to obtain the view query bodies. Native CTEs bind those
+bodies to the image inputs. Rust formatting assembles the complete SQL program.
+There is no custom AST binder. The image retains declared input fields, its
+typed snapshot output, and its content digest. The image adds no SQL execution
+owner. [Live cases](../../crates/araphor-analysis/src/package/tests/sql/recorded/live.rs)
+check the assembled body and the retained state contract.
+
+[merge_snapshot.sql](../../crates/araphor-analysis-builtins/src/discovery/sql/merge_snapshot.sql)
+is a native SQL program with left_snapshot and right_snapshot input relations.
+Native CTEs bind arbitrary supplied snapshots. The
+[merge cases](../../crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs)
+retain the algorithm comparison, ordered witnesses, range boundaries,
+conflict rejection, and counter overflow checks.
+
+Earlier qualification passes 11 package cases, seven Query subscription cases,
 and three Control query-RPC cases. Strict Clippy passes all targets in the five
 affected crates. The source and command record is
-`/tmp/araphor-native-coverage-verification1.json`.
+`/tmp/araphor-native-coverage-verification1.json`. These results precede the
+current native-view rewrite.
 
-This is a built-in SQL package. It does not establish OCI admission, persisted
-managed jobs, complete coverage, or old behavior-profile parity. Existing
-Discovery packages and entry points remain available. The Data lock wait and
-native interrupt monitor still poll. The complete no-polling requirement is
-**Not done**.
+These native relations do not establish persisted managed jobs, complete
+coverage, or old behavior-profile parity. The complete no-polling requirement
+remains **Not done**. Existing package execution and publication owners retain
+their contracts.
 
-Read the [package tests](../../crates/araphor-discovery-effects/src/tests.rs),
+Read the [SQL tests](../../crates/araphor-analysis/src/package/tests/sql.rs),
 [subscription tests](../../crates/araphor-query/src/follow/tests/discovery.rs),
 and [Control RPC tests](../../crates/mithril-control/src/client_grpc/tests/discovery.rs)
 in that order. They cover native SQL plans, split batches, repeated evaluation,
-NULL dimensions, aliases, invalid arguments, retained input, source and tenant
-scope, window expiry without intake, idle waits, and joined cancellation.
-The plan records the final verification result.
+NULL dimensions, aliases, native view providers, retained input, source and
+tenant scope, window expiry without intake, idle waits, and joined cancellation.
+The current Analysis test subtree contains 36 SQL cases. The new cases check
+native view registration and input filters and windows before aggregation.
+Current rewrite qualification is **Not done** in this guide. The plan records
+the final verification result. This section describes the current working-tree
+native-view rewrite. Earlier result counts do not qualify this source state.
 
 ### Recorded snapshot computation
 
-[recorded_snapshot.sql](../../crates/araphor-discovery-effects/src/recorded_snapshot.sql)
+[recorded_snapshot.sql](../../crates/araphor-analysis-builtins/src/discovery/sql/recorded_snapshot.sql)
 computes one snapshot through native joins, windows, aggregates, and Arrow
-structs and lists. The SQL call is discovery.recorded_snapshot. It takes six
-subquery arguments in this order:
+structs and lists. The caller supplies a complete native SQL program or image.
+That program declares six input relations through native CTEs:
 
 | Input | Required content |
 | --- | --- |
@@ -577,7 +633,7 @@ or a bound above a limit, aggregate, window, or multi-input operation. These
 placements cannot safely restrict the source before native execution. Finite
 queries retain native SQL behavior.
 
-Read the [recorded cases](../../crates/araphor-discovery-effects/src/tests/recorded.rs),
+Read the [recorded cases](../../crates/araphor-analysis/src/package/tests/sql/recorded.rs),
 then the existing subscription and RPC cases above. The comparison encodes
 the retained algorithm result with the actual Arrow schema and compares all
 arrays. No byte-array-to-JSON result conversion is required.
@@ -609,12 +665,12 @@ Provided model or commit a result. Finite evaluation does not change its
 activation or checkpoint. The existing caller retains publication ownership.
 There is no new executor, source reader, result store, or timer.
 
-The complete body is ObservedEffects::RECORDED_SNAPSHOT_SQL. The
-[OCI body case](../../crates/araphor-discovery-effects/src/tests/recorded.rs)
+The complete body is RECORDED_SNAPSHOT_SQL in the builtin SQL metadata. The
+[OCI body case](../../crates/araphor-analysis/src/package/tests/sql/recorded.rs)
 embeds that body in an OCI artifact, restores it, and executes the restored SQL
-in a native SessionContext without the Discovery relation planner. It compares
-all Arrow output arrays against the retained algorithm. A changed SQL body
-changes the bundle digest. Invalid metadata still causes a native error.
+in a native SessionContext. It compares all Arrow output arrays against the
+retained algorithm. A changed SQL body changes the bundle digest. Invalid
+metadata still causes a native error.
 
 Read the [installed SQL cases](../../crates/araphor-analysis_back/src/package/installed/read/tests/prepared.rs)
 for actual installed execution, changed and empty input batches, schema and
@@ -628,11 +684,12 @@ inherits the parent deadline and shared cancellation for None. A configured
 duration creates a shorter stage deadline. Zero is invalid. Extraction has a
 separate deadline; disabling evaluation timeout does not disable authorization.
 
-Selected qualification passes 68 distinct cases across Data, Query, Analysis,
+Earlier qualification passes 68 distinct cases across Data, Query, Analysis,
 Control, and the SQL package. Strict Clippy passes all targets in the six
 affected crates. Final source and command records are kept in
-`/tmp/araphor-recorded-snapshot-verification1.json`. Full workspace CI and
-benchmarks are not run. Complete Discovery replacement remains **Not done**.
+`/tmp/araphor-recorded-snapshot-verification1.json`. This record precedes the
+current native-view rewrite. Full workspace CI and benchmarks are not run.
+Complete Discovery replacement remains **Not done**.
 
 ## Discovery record input contract
 
@@ -742,13 +799,14 @@ logical plan goes directly to native physical planning. No table-scan rewrite
 is required. Session clones share the map; a later registration creates a new
 map when an earlier session still holds the old map.
 
-[Planner::sources](../../crates/araphor-query/src/planner/mod.rs) records
-original retained sources for Query and input admission. It uses native AST
-visitation to separate plain tables from table functions. Native resolution
-still handles CTE scope and identifier case. The native resolver alone returns
-function names as relation names. Without this distinction, a generated input
-can inherit an unrelated input table's provenance. The collision test also
-checks that a table in an unused CTE remains a dependency.
+[Planner::build_with_sources](../../crates/araphor-query/src/planner/mod.rs)
+records original retained sources for Query and input admission. The native
+RelationPlanner hook observes table binding before DataFusion removes unused
+CTEs from the returned plan. DataFusion handles CTE scope and identifier case.
+Table functions bypass the source observer. A generated input cannot
+inherit an unrelated input table's provenance. The collision test also checks
+that a table declared in an unused query CTE remains a dependency. No custom
+AST source visitor remains.
 
 ## Subscription session ownership
 

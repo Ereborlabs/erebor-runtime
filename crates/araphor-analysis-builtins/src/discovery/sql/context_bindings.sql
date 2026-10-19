@@ -1,6 +1,7 @@
+CREATE VIEW discovery.context_bindings AS
 WITH
 __binding_records AS (
-    SELECT records.*,
+    SELECT events.*,
         named_struct('stream', named_struct(
             'tenant_id', tenant_id, 'node_id', node_id, 'node_boot_id', node_boot_id,
             'label_epoch', label_epoch, 'source_id', source_id, 'source_epoch', source_epoch),
@@ -22,7 +23,7 @@ __binding_records AS (
         encode(binding_id, 'hex') AS binding_hex,
         encode(execution_set_id, 'hex') AS execution_hex,
         encode(authority_domain_id, 'hex') AS authority_hex
-    FROM records
+    FROM events
     WHERE catalog_profile_id IS NOT NULL
         AND octet_length(encode(process_instance_id, 'hex')) = 32
         AND encode(process_instance_id, 'hex') <> '00000000000000000000000000000000'
@@ -44,10 +45,10 @@ __binding_identities AS (
     FROM __binding_records AS record
 ),
 __binding_revisions AS (
-    SELECT policies.*, MAX(commit_revision) OVER (
+    SELECT compiled_policies.*, MAX(commit_revision) OVER (
         PARTITION BY tenant_id, source_revision_id
     ) AS current_revision
-    FROM policies
+    FROM compiled_policies
 ),
 __binding_policies AS (
     SELECT policy.*, COUNT(*) OVER (
@@ -134,4 +135,4 @@ SELECT DISTINCT candidate.record_id, subject_revision, image_digest, configurati
     process_instance_id, entry_instance_id, binding_id, role_id, state_id, entry_rule_id,
     catalog_revision, static_key, policy_revision
 FROM __binding_candidates AS candidate
-JOIN __binding_valid AS valid ON candidate.record_id = valid.record_id
+JOIN __binding_valid AS valid ON candidate.record_id = valid.record_id;

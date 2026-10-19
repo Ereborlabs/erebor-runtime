@@ -135,14 +135,16 @@ dependencies = [
 name = "araphor-analysis"
 version = "0.1.0"
 dependencies = [
+ "araphor-analysis-builtins",
  "araphor-analysis-sdk",
  "araphor-data",
- "araphor-discovery-effects",
  "araphor-query",
+ "datafusion",
  "erebor-runtime-error",
  "futures-util",
  "serde",
  "serde_arrow",
+ "serde_json",
  "snafu",
  "tempfile",
  "tokio",
@@ -352,20 +354,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "araphor-discovery-effects"
-version = "0.1.0"
-dependencies = [
- "araphor-analysis-builtins",
- "araphor-analysis-sdk",
- "araphor-data",
- "datafusion",
- "serde",
- "serde_arrow",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "araphor-kubernetes-component"
 version = "0.1.0"
 dependencies = [
@@ -419,10 +407,10 @@ dependencies = [
 name = "araphor-query"
 version = "0.1.0"
 dependencies = [
+ "araphor-analysis-builtins",
  "araphor-analysis-sdk",
  "araphor-data",
  "araphor-discovery-definition",
- "araphor-discovery-effects",
  "araphor-package",
  "arrow-buffer",
  "async-trait",
@@ -5077,11 +5065,11 @@ name = "mithril-control"
 version = "0.1.0"
 dependencies = [
  "araphor-analysis",
+ "araphor-analysis-builtins",
  "araphor-analysis-sdk",
  "araphor-analysis_back",
  "araphor-data",
  "araphor-discovery-definition",
- "araphor-discovery-effects",
  "araphor-observability",
  "araphor-query",
  "arrow-array",

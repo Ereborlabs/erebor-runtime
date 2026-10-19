@@ -5,6 +5,7 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::{ExprSchema, ScalarValue};
 use datafusion::datasource::source_as_provider;
+use datafusion::functions::datetime::now::NowFunc;
 use datafusion::logical_expr::{Expr, LogicalPlan, Operator};
 use snafu::ResultExt as _;
 
@@ -131,8 +132,7 @@ impl Window {
 
     fn events(plan: &LogicalPlan) -> bool {
         matches!(plan, LogicalPlan::TableScan(scan)
-        if scan.table_name.table() == "events"
-            && source_as_provider(&scan.source).is_ok_and(|provider| {
+        if source_as_provider(&scan.source).is_ok_and(|provider| {
                 provider.as_any().downcast_ref::<SourceProvider>()
                     .is_some_and(|source| source.origin.durable() == Some("events"))
             }))
@@ -208,7 +208,7 @@ impl Window {
 
     fn clock(expression: &Expr) -> bool {
         matches!(expression, Expr::ScalarFunction(function)
-            if matches!(function.name(), "now" | "current_timestamp"))
+            if function.func.inner().as_any().is::<NowFunc>())
     }
 
     pub(crate) fn selection(

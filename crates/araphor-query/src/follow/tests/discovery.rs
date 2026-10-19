@@ -1,12 +1,15 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use araphor_analysis_builtins::discovery::sql;
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, CompiledPolicyContextV1, ContainerKindV1,
     ContextSensitivityV1, KubernetesWorkloadIdentityV1, TargetContextV1, WorkloadTargetFactV1,
 };
-use araphor_discovery_effects::ObservedEffects;
 use datafusion::common::ScalarValue;
+use datafusion::sql::sqlparser::ast::Statement as SqlStatement;
+use datafusion::sql::sqlparser::dialect::GenericDialect;
+use datafusion::sql::sqlparser::parser::Parser;
 use futures_util::StreamExt as _;
 use prost::Message as _;
 
@@ -16,9 +19,24 @@ use super::{
 };
 
 const COUNTS: &str = "SELECT event_count, first_cursor, last_cursor, binding_id, source_id
-    FROM discovery.observed_effects((SELECT * FROM events)) ORDER BY source_id";
+    FROM discovery.observed_effects ORDER BY source_id";
+
+fn view_query(sql: &str) -> String {
+    let statements = Parser::new(&GenericDialect)
+        .with_recursion_limit(usize::MAX)
+        .try_with_sql(sql)
+        .unwrap()
+        .parse_statements()
+        .unwrap();
+    let [SqlStatement::CreateView(view)] = statements.as_slice() else {
+        panic!("expected one native view");
+    };
+    view.query.to_string()
+}
 
 fn recorded_sql(events: &str) -> String {
+    let coverage = view_query(sql::COVERAGE_RANGES_SQL);
+    let recorded = sql::RECORDED_SNAPSHOT_SQL;
     format!(
         "WITH input_events AS ({events}),
         identified AS (
@@ -45,16 +63,25 @@ fn recorded_sql(events: &str) -> String {
             FROM identified WHERE FALSE
         ),
         snapshot AS (
-            SELECT * FROM discovery.recorded_snapshot(
-                (SELECT * FROM input_events), (SELECT * FROM empty_contexts),
-                (SELECT * FROM discovery.coverage_ranges(
-                    (SELECT * FROM input_events), (SELECT * FROM coverage))),
-                (SELECT record_id, CAST(NULL AS VARCHAR) AS reason FROM identified WHERE FALSE),
-                (SELECT CAST(NULL AS VARCHAR) AS \"case\", CAST(NULL AS VARCHAR) AS state,
+            WITH records AS (SELECT * FROM input_events),
+            contexts AS (SELECT * FROM empty_contexts),
+            ranges AS (
+                WITH events AS (SELECT * FROM input_events)
+                SELECT * FROM ({coverage}) AS selected_ranges
+            ),
+            exclusions AS (
+                SELECT record_id, CAST(NULL AS VARCHAR) AS reason FROM identified WHERE FALSE
+            ),
+            lifecycle AS (
+                SELECT CAST(NULL AS VARCHAR) AS \"case\", CAST(NULL AS VARCHAR) AS state,
                     [record_id] AS records, CAST(NULL AS VARCHAR) AS reason
-                    FROM identified WHERE FALSE),
-                (SELECT decode('01010101010101010101010101010101', 'hex') AS tenant_id,
-                    'retained-cut' AS source_revision, 'OBSERVED_RUNTIME' AS proof_kind))
+                FROM identified WHERE FALSE
+            ),
+            metadata AS (
+                SELECT decode('01010101010101010101010101010101', 'hex') AS tenant_id,
+                    'retained-cut' AS source_revision, 'OBSERVED_RUNTIME' AS proof_kind
+            )
+            SELECT * FROM ({recorded}) AS recorded
         )
         SELECT accepted_records, included_records, unresolved_records, excluded_records,
             duplicate_deliveries, array_length(atoms), array_length(coverage),
@@ -95,7 +122,7 @@ fn fixture(limits: Limits) -> Fixture {
     let mut fixture = Fixture::new(limits);
     Arc::get_mut(&mut fixture.engine)
         .unwrap()
-        .register_relation_planner(Arc::new(ObservedEffects))
+        .register_views(sql::VIEWS_SQL)
         .unwrap();
     fixture
 }
@@ -806,8 +833,7 @@ async fn coverage_notices_update_ranges() {
     fixture.commit(&fixture.source, 1, 2, 1_000_000_000);
     let sql = "SELECT first_cursor, last_cursor, expected_records, coverage_revision,
             coverage_interval_id, state, gap_reasons
-        FROM discovery.coverage_ranges(
-            (SELECT * FROM events), (SELECT * FROM coverage))";
+        FROM discovery.coverage_ranges";
     let (_, sources) = fixture.engine.prepare(sql, vec![]).await.unwrap();
     assert_eq!(
         sources.keys().map(String::as_str).collect::<Vec<_>>(),
@@ -888,12 +914,14 @@ async fn coverage_window_uses_deadlines() {
     fixture.commit(&fixture.source, 1, 1, 1_000_000_123);
     fixture.commit(&fixture.source, 2, 1, 3_000_000_000);
     let clock = TestClock::new(4_000_000_000);
-    let sql = "SELECT first_cursor, last_cursor, expected_records
-        FROM discovery.coverage_ranges(
-            (SELECT * FROM events
-                WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '3 seconds'),
-            (SELECT * FROM coverage))";
-    let (mut subscription, _) = subscribe(&fixture, sql, Arc::clone(&clock)).await;
+    let coverage = view_query(sql::COVERAGE_RANGES_SQL);
+    let sql = format!(
+        "WITH events AS (SELECT * FROM events
+            WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '3 seconds')
+        SELECT first_cursor, last_cursor, expected_records
+        FROM ({coverage}) AS selected_ranges"
+    );
+    let (mut subscription, _) = subscribe(&fixture, &sql, Arc::clone(&clock)).await;
     assert_eq!(subscription.moving_resolution_ns(), Some(1_000));
     let revision = fixture.store.meta().unwrap().commit_revision;
     for (now, count, first) in [
@@ -930,11 +958,14 @@ async fn window_expires_without_intake() {
     fixture.commit(&fixture.source, 1, 1, 1_000_000_123);
     fixture.commit(&fixture.source, 2, 1, 3_000_000_000);
     let clock = TestClock::new(4_000_000_000);
-    let sql = "SELECT event_count, first_cursor, last_cursor,
-            first_received_at, last_received_at
-        FROM discovery.observed_effects((SELECT * FROM events
-            WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '3 seconds'))";
-    let (mut subscription, _) = subscribe(&fixture, sql, Arc::clone(&clock)).await;
+    let effects = view_query(sql::OBSERVED_EFFECTS_SQL);
+    let sql = format!(
+        "WITH events AS (SELECT * FROM events
+            WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '3 seconds')
+        SELECT event_count, first_cursor, last_cursor, first_received_at, last_received_at
+        FROM ({effects}) AS effects"
+    );
+    let (mut subscription, _) = subscribe(&fixture, &sql, Arc::clone(&clock)).await;
     assert_eq!(subscription.moving_resolution_ns(), Some(1_000));
     let first = next(&mut subscription).await;
     assert_eq!(values(&first, 0), [ScalarValue::Int64(Some(2))]);
