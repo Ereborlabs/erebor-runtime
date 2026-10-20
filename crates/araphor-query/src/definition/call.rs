@@ -10,6 +10,7 @@ use araphor_discovery_definition::ImagePin;
 use araphor_package::{PackageBundleV1, PackageRefV1};
 use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion::common::{DFSchemaRef, DataFusionError, Result};
+use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
 
 #[derive(Clone)]
@@ -22,13 +23,15 @@ pub struct PackageCall {
     pub(crate) export: String,
     pub(crate) output: String,
     pub(crate) arguments: Arc<[String]>,
-    pub(crate) descriptor: Arc<sdk::Package>,
+    pub(crate) artifact: usize,
     pub(crate) bundle: Arc<PackageBundleV1>,
     pub(crate) sql: Option<SqlCall>,
     pub(crate) input_scope: Arc<Inputs>,
     pub(super) admitted: Arc<[LogicalPlan]>,
     pub(crate) children: Vec<LogicalPlan>,
     pub(crate) schema: DFSchemaRef,
+    pub(crate) _metadata: Arc<MemoryReservation>,
+    pub(crate) _image: Arc<MemoryReservation>,
 }
 
 impl fmt::Debug for PackageCall {
@@ -161,7 +164,7 @@ impl PackageCall {
         &self.export
     }
     pub fn descriptor(&self) -> &sdk::Package {
-        &self.descriptor
+        &self.bundle.artifacts[self.artifact].descriptor
     }
     pub fn output(&self) -> &str {
         &self.output

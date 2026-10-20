@@ -39,26 +39,77 @@ impl wire::Evaluation {
                     .saturating_mul(size_of::<wire::Input>()),
             );
         for input in &self.inputs {
-            bytes = bytes
-                .saturating_add(input.data.name.capacity())
-                .saturating_add(input.data.arrow_ipc.capacity())
-                .saturating_add(Memory::input_metadata(&input.revision, &input.coverage));
+            bytes = bytes.saturating_add(input.allocated_bytes());
         }
         if let Some(parameters) = &self.parameters {
             bytes = bytes.saturating_add(parameters.capacity());
         }
         if let Some(checkpoint) = &self.checkpoint {
-            bytes = bytes.saturating_add(
-                checkpoint
-                    .datasets
+            bytes = bytes.saturating_add(checkpoint.allocated_bytes());
+        }
+        bytes
+    }
+}
+
+impl wire::Dataset {
+    pub fn allocated_bytes(&self) -> usize {
+        self.name
+            .capacity()
+            .saturating_add(self.arrow_ipc.capacity())
+    }
+}
+
+impl wire::Input {
+    pub fn allocated_bytes(&self) -> usize {
+        self.data
+            .allocated_bytes()
+            .saturating_add(Memory::input_metadata(&self.revision, &self.coverage))
+    }
+}
+
+impl wire::Checkpoint {
+    pub fn allocated_bytes(&self) -> usize {
+        self.datasets.iter().fold(
+            self.datasets
+                .capacity()
+                .saturating_mul(size_of::<wire::Dataset>()),
+            |bytes, data| bytes.saturating_add(data.allocated_bytes()),
+        )
+    }
+}
+
+impl wire::Output {
+    pub fn allocated_bytes(&self) -> usize {
+        let mut bytes = self
+            .datasets
+            .capacity()
+            .saturating_mul(size_of::<wire::Dataset>())
+            .saturating_add(
+                self.evidence
                     .capacity()
-                    .saturating_mul(size_of::<wire::Dataset>()),
+                    .saturating_mul(size_of::<crate::EvidenceLink>()),
+            )
+            .saturating_add(
+                self.reasons
+                    .capacity()
+                    .saturating_mul(size_of::<wire::ReasonValue>()),
             );
-            for data in &checkpoint.datasets {
-                bytes = bytes
-                    .saturating_add(data.name.capacity())
-                    .saturating_add(data.arrow_ipc.capacity());
-            }
+        for data in &self.datasets {
+            bytes = bytes.saturating_add(data.allocated_bytes());
+        }
+        for link in &self.evidence {
+            bytes = bytes
+                .saturating_add(link.output.dataset.capacity())
+                .saturating_add(link.input.dataset.capacity());
+        }
+        for reason in &self.reasons {
+            bytes = bytes
+                .saturating_add(reason.output.dataset.capacity())
+                .saturating_add(reason.code.capacity())
+                .saturating_add(reason.details.capacity());
+        }
+        if let Some(checkpoint) = &self.checkpoint {
+            bytes = bytes.saturating_add(checkpoint.allocated_bytes());
         }
         bytes
     }

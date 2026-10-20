@@ -14,6 +14,7 @@ struct Exchange {
     _scratch: MemoryReservation,
     _output: Arc<MemoryReservation>,
     _permit: Arc<Permit>,
+    _image: Arc<MemoryReservation>,
     _scope: Option<araphor_package_runtime::TaskTrackerToken>,
 }
 
@@ -118,6 +119,7 @@ impl PackageExec {
             }
         });
         let lease = Exchange {
+            _image: Arc::clone(&self.call._image),
             _input: input,
             _scratch: scratch,
             _output: Arc::clone(&output),

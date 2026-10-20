@@ -175,18 +175,24 @@ impl DataSink for Sink {
     }
 }
 
-fn fixture() -> TestResult<Fixture> {
-    let fixture = Fixture::limits(Limits {
-        global_evaluations: Some(1),
-        tenant_evaluations: Some(1),
-        input_bytes: INPUT,
-        input_capacity: Some(INPUT),
-        output_capacity: Some(OUTPUT),
-        ..Default::default()
-    })?;
+async fn fixture() -> TestResult<Fixture> {
     let mut bundle = component("wasm", "count-input")?;
     bundle.artifacts[0].descriptor.exports[0].limits.max_bytes = 16 * 1024;
-    fixture.install(&bundle)?;
+    let call = r#"SELECT * FROM "runtime-fixture"."1"."count-input"(
+        input => (SELECT source_cursor AS value FROM events), mode => 'sum-input', amount => 0)"#;
+    let fixture = Fixture::image_limits(
+        Limits {
+            global_evaluations: Some(1),
+            tenant_evaluations: Some(1),
+            input_bytes: INPUT,
+            input_capacity: Some(INPUT),
+            output_capacity: Some(OUTPUT),
+            ..Default::default()
+        },
+        &bundle,
+        &Fixture::sql(format!("{call} UNION ALL {call}")),
+    )
+    .await?;
     fixture.event(1)?;
     Ok(fixture)
 }
@@ -258,7 +264,15 @@ async fn definition(fixture: &Fixture, state: Arc<SinkState>) -> TestResult<Prep
 
 fn released(fixture: &Fixture) -> TestResult {
     drop(fixture.engine.reserve_evaluation([1; 16])?);
-    drop(fixture.engine.memory().reserve_input(INPUT)?);
+    drop(
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .ok_or("input capacity")?,
+        )?,
+    );
     drop(fixture.engine.memory().reserve_output(OUTPUT)?);
     Ok(())
 }
@@ -324,7 +338,7 @@ async fn native_count_precedes_commit() -> TestResult {
 
 #[tokio::test]
 async fn capture_precedes_native_guest() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let state = Arc::new(SinkState::default());
     let definition = definition(&fixture, Arc::clone(&state)).await?;
     let parent = TaskTracker::new();
@@ -399,12 +413,13 @@ async fn capture_precedes_native_guest() -> TestResult {
     assert_eq!(output.calls.len(), 2);
     drop(receipt);
     drop(output);
+    drop(definition);
     released(&fixture)
 }
 
 #[tokio::test]
 async fn captured_cancel_releases() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let state = Arc::new(SinkState::default());
     let definition = definition(&fixture, Arc::clone(&state)).await?;
     let (entry, observed) = mpsc::channel();
@@ -423,12 +438,13 @@ async fn captured_cancel_releases() -> TestResult {
         Err(mpsc::TryRecvError::Empty)
     ));
     assert_eq!(state.entries.load(Ordering::SeqCst), 0);
+    drop(definition);
     released(&fixture)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn capture_cancel_joins_reader() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let definition = definition(&fixture, Arc::new(SinkState::default())).await?;
     let control = AnalysisReadControl::default();
     let (entered, observed) = tokio::sync::oneshot::channel();
@@ -456,13 +472,14 @@ async fn capture_cancel_joins_reader() -> TestResult {
         .err()
         .ok_or("cancelled capture succeeded")?;
     assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
+    drop(definition);
     released(&fixture)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_writer_cancel_joins() -> TestResult {
     for cancel in [true, false] {
-        let fixture = fixture()?;
+        let fixture = fixture().await?;
         let (entered, observed) = tokio::sync::oneshot::channel();
         let (release, held) = mpsc::channel();
         let state = Arc::new(SinkState {
@@ -510,6 +527,7 @@ async fn native_writer_cancel_joins() -> TestResult {
         }
         assert_eq!(state.commits.load(Ordering::SeqCst), 0);
         drop(state.receipt.lock().unwrap().take());
+        drop(definition);
         released(&fixture)?;
     }
     Ok(())
@@ -520,7 +538,7 @@ async fn capture_cancel_joins_optimizer() -> TestResult {
     use datafusion::logical_expr::lit;
 
     for cancel in [true, false] {
-        let fixture = fixture()?;
+        let fixture = fixture().await?;
         let mut definition = fixture.prepare(&Fixture::sql("SELECT 7 AS value")).await?;
         let (entered, observed) = tokio::sync::oneshot::channel();
         let entered = Mutex::new(Some(entered));
@@ -579,6 +597,7 @@ async fn capture_cancel_joins_optimizer() -> TestResult {
             tokio::time::timeout(Duration::from_secs(30), parent.wait()).await?;
             control.check()?;
         }
+        drop(definition);
         released(&fixture)?;
     }
     Ok(())
@@ -586,7 +605,7 @@ async fn capture_cancel_joins_optimizer() -> TestResult {
 
 #[tokio::test]
 async fn native_receipt_keeps_context() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let state = Arc::new(SinkState::default());
     let definition = definition(&fixture, Arc::clone(&state)).await?;
     state.admitted.store(true, Ordering::SeqCst);
@@ -604,5 +623,6 @@ async fn native_receipt_keeps_context() -> TestResult {
     }
     assert_eq!(state.commits.load(Ordering::SeqCst), 2);
     drop(state.receipt.lock().unwrap().take());
+    drop(definition);
     released(&fixture)
 }

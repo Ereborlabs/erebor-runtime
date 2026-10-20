@@ -15,6 +15,7 @@ use datafusion::common::{DFSchema, DataFusionError, ScalarValue};
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::{provider_as_source, source_as_provider, ViewTable};
 use datafusion::execution::context::SQLOptions;
+use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::SessionState;
 use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::planner::{
@@ -42,6 +43,8 @@ mod scope;
 use scope::Scope;
 
 type Exports = BTreeMap<ModelRef, BTreeMap<String, LogicalPlan>>;
+pub(super) type Bundles = [(Arc<PackageBundleV1>, String, Arc<MemoryReservation>)];
+
 type InputPlans = BTreeMap<String, (LogicalPlan, BTreeSet<SourceOrigin>)>;
 
 pub(super) struct Packages {
@@ -49,7 +52,8 @@ pub(super) struct Packages {
     pub(super) demand: Arc<crate::planner::SourceDemand>,
     tenant: [u8; 16],
     limits: crate::execution::Limits,
-    bundles: BTreeMap<PackageRefV1, (Arc<PackageBundleV1>, String)>,
+    pub(super) bundles: Arc<Bundles>,
+    memory: Arc<crate::memory::Memory>,
     sources: BTreeMap<String, Arc<dyn TableProvider>>,
     planning: Mutex<Planning>,
     calls: AtomicU64,
@@ -102,7 +106,7 @@ impl fmt::Debug for Packages {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter
             .debug_struct("Packages")
-            .field("images", &self.bundles.keys())
+            .field("images", &self.bundles.len())
             .finish()
     }
 }
@@ -110,23 +114,39 @@ impl fmt::Debug for Packages {
 impl Packages {
     pub(super) fn new(
         engine: &Engine,
-        bundles: Vec<PackageBundleV1>,
+        mut bundles: Vec<PackageBundleV1>,
         tenant: [u8; 16],
         tables: BTreeMap<String, Arc<dyn TableProvider>>,
     ) -> Result<Self> {
-        let mut images = BTreeMap::new();
+        bundles.sort_unstable_by(|left, right| left.root.cmp(&right.root));
+        if bundles.windows(2).any(|pair| pair[0].root == pair[1].root) {
+            return InvalidSnafu {
+                field: "duplicate definition image",
+            }
+            .fail();
+        }
+        let mut images = Vec::with_capacity(bundles.len());
         for bundle in bundles {
+            let bytes =
+                bundle
+                    .allocated_bytes()
+                    .map_err(araphor_data::Error::from)?
+                    .checked_add(
+                        std::mem::size_of::<PackageBundleV1>()
+                            + std::mem::size_of::<(
+                                Arc<PackageBundleV1>,
+                                String,
+                                Arc<MemoryReservation>,
+                            )>(),
+                    )
+                    .ok_or_else(|| {
+                        araphor_data::PackageErrorCodeV1::Limit.error("package image memory")
+                    })?;
+            let reservation = engine.memory().reserve_input(bytes).context(SqlSnafu)?;
             bundle.validate().map_err(araphor_data::Error::from)?;
             let digest = bundle.digest().map_err(araphor_data::Error::from)?;
-            if images
-                .insert(bundle.root.clone(), (Arc::new(bundle), digest))
-                .is_some()
-            {
-                return InvalidSnafu {
-                    field: "duplicate definition image",
-                }
-                .fail();
-            }
+            reservation.try_grow(digest.capacity()).context(SqlSnafu)?;
+            images.push((Arc::new(bundle), digest, Arc::new(reservation)));
         }
         let mut sources = SourceSnapshot::providers();
         for (name, table) in tables {
@@ -142,7 +162,8 @@ impl Packages {
             tenant,
             state: engine.catalog(sources.clone())?,
             limits: engine.limits().clone(),
-            bundles: images,
+            bundles: images.into(),
+            memory: Arc::clone(engine.memory()),
             sources,
             planning: Mutex::default(),
             calls: AtomicU64::new(0),
@@ -208,12 +229,16 @@ impl Packages {
         export: String,
         arguments: Vec<FunctionArg>,
     ) -> Result<LogicalPlan> {
-        let (bundle, digest) = self.bundles.get(&image).ok_or_else(|| {
-            InvalidSnafu {
-                field: "installed package image",
-            }
-            .build()
-        })?;
+        let index = self
+            .bundles
+            .binary_search_by(|(bundle, _, _)| bundle.root.cmp(&image))
+            .map_err(|_| {
+                InvalidSnafu {
+                    field: "installed package image",
+                }
+                .build()
+            })?;
+        let (bundle, digest, reservation) = &self.bundles[index];
         let pin = ImagePin {
             image: image.clone(),
             digest: digest.clone(),
@@ -442,7 +467,40 @@ impl Packages {
                     }
                     .build()
                 })?;
-            let descriptor = Arc::new(artifact.descriptor.clone());
+            let artifact_index = bundle
+                .artifacts
+                .iter()
+                .position(|candidate| std::ptr::eq(candidate, artifact))
+                .ok_or_else(|| {
+                    InvalidSnafu {
+                        field: "package artifact",
+                    }
+                    .build()
+                })?;
+            let plans = model
+                .outputs
+                .len()
+                .checked_add(1)
+                .and_then(|count| count.checked_mul(children.len()))
+                .and_then(|count| count.checked_mul(std::mem::size_of::<LogicalPlan>()))
+                .ok_or_else(|| {
+                    araphor_data::PackageErrorCodeV1::Limit.error("package call memory")
+                })?;
+            let bytes = input_scope
+                .allocated_bytes()
+                .checked_add(plans)
+                .and_then(|bytes| {
+                    bytes.checked_add(
+                        model
+                            .outputs
+                            .len()
+                            .checked_mul(std::mem::size_of::<PackageCall>())?,
+                    )
+                })
+                .ok_or_else(|| {
+                    araphor_data::PackageErrorCodeV1::Limit.error("package call memory")
+                })?;
+            let metadata = Arc::new(self.memory.reserve_input(bytes).context(SqlSnafu)?);
             let admitted: Arc<[LogicalPlan]> = children.clone().into();
             let mut outputs = BTreeMap::new();
             for port in &model.outputs {
@@ -459,13 +517,15 @@ impl Packages {
                     } else {
                         Arc::default()
                     },
-                    descriptor: Arc::clone(&descriptor),
+                    artifact: artifact_index,
                     bundle: Arc::clone(bundle),
                     sql: sql.clone(),
                     input_scope: Arc::clone(&input_scope),
                     admitted: Arc::clone(&admitted),
                     children: children.clone(),
                     schema: Arc::new(DFSchema::try_from(port.schema.clone()).context(SqlSnafu)?),
+                    _metadata: Arc::clone(&metadata),
+                    _image: Arc::clone(reservation),
                 };
                 outputs.insert(
                     port.name.clone(),

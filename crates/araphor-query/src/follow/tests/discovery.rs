@@ -10,6 +10,7 @@ use datafusion::common::ScalarValue;
 use datafusion::sql::sqlparser::ast::Statement as SqlStatement;
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
+use erebor_runtime_error::{ErrorExt as _, RetryHint, StatusCode};
 use futures_util::StreamExt as _;
 use prost::Message as _;
 
@@ -1189,12 +1190,14 @@ async fn subscription_change_precedes_output() {
     .await;
     let mut stream = stream.until_change(receiver);
     changes.send_replace(1);
-    assert!(matches!(
-        stream.next().await,
-        Some(Err(crate::Error::Data {
-            source: araphor_data::Error::AnalysisReadDenied { .. },
-        }))
-    ));
+    let error = match stream.next().await {
+        Some(Err(error)) => error,
+        update => panic!("authority change did not stop output: {update:?}"),
+    };
+    assert!(matches!(error, crate::Error::AuthorityChanged { .. }));
+    assert_eq!(error.status_code(), StatusCode::PermissionDenied);
+    assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
+    assert_eq!(crate::Failure::from(&error), crate::Failure::Denied);
     assert!(stream.next().await.is_none());
     assert!(control.check().is_err());
     drop(stream);
@@ -1220,12 +1223,14 @@ async fn subscription_change_wakes_idle() {
         tokio::pin!(waiting);
         assert!(futures_util::poll!(&mut waiting).is_pending());
         changes.send_replace(1);
-        assert!(matches!(
-            waiting.await,
-            Some(Err(crate::Error::Data {
-                source: araphor_data::Error::AnalysisReadDenied { .. },
-            }))
-        ));
+        let error = match waiting.await {
+            Some(Err(error)) => error,
+            update => panic!("authority change did not wake idle output: {update:?}"),
+        };
+        assert!(matches!(error, crate::Error::AuthorityChanged { .. }));
+        assert_eq!(error.status_code(), StatusCode::PermissionDenied);
+        assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
+        assert_eq!(crate::Failure::from(&error), crate::Failure::Denied);
     }
     assert!(stream.next().await.is_none());
     drop(stream);

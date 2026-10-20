@@ -235,6 +235,7 @@ async fn sql_preserves_admitted_order() -> TestResult {
         assert_eq!(values(std::slice::from_ref(&reason.details))?, [expected]);
     }
     drop(result);
+    drop(prepared);
     capacity_released(&fixture)?;
     Ok(())
 }
@@ -369,6 +370,7 @@ async fn sql_empty_output_metadata() -> TestResult {
         .ok_or("output capacity")?;
     assert!(fixture.engine.memory().reserve_output(capacity).is_err());
     drop(output);
+    drop(prepared);
     capacity_released(&fixture)?;
     Ok(())
 }
@@ -497,19 +499,21 @@ async fn sql_conversion_drops_producer() -> TestResult {
         )?
         .build()?,
     )?;
-    let execution = fixture.execute(&prepared, invocation("conversion-stop"));
-    tokio::pin!(execution);
-    let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        tokio::select! {
-            result = &mut execution => result,
-            _ = gate.later_entered.notified() => {
-                gate.released.notify_one();
-                execution.await
+    let error = {
+        let execution = fixture.execute(&prepared, invocation("conversion-stop"));
+        tokio::pin!(execution);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::select! {
+                result = &mut execution => result,
+                _ = gate.later_entered.notified() => {
+                    gate.released.notify_one();
+                    execution.await
+                }
             }
-        }
-    })
-    .await?;
-    let error = result.err().ok_or("invalid fixed width accepted")?;
+        })
+        .await?;
+        result.err().ok_or("invalid fixed width accepted")?
+    };
     let mut source: &(dyn std::error::Error + 'static) = &error;
     loop {
         if matches!(
@@ -525,6 +529,7 @@ async fn sql_conversion_drops_producer() -> TestResult {
     assert_eq!(gate.first.load(Ordering::SeqCst), 1);
     assert_eq!(gate.later.load(Ordering::SeqCst), 0);
     assert!(gate.dropped.load(Ordering::SeqCst));
+    drop(prepared);
     capacity_released(&fixture)?;
     Ok(())
 }
@@ -590,6 +595,8 @@ async fn sql_limit_precedes_references() -> TestResult {
     assert_eq!(crate::Failure::from(&error), crate::Failure::ResultTooLarge);
     assert_eq!(polls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.engine.store().meta()?, before);
+    drop(calls);
+    drop(prepared);
     capacity_released(&fixture)?;
     Ok(())
 }

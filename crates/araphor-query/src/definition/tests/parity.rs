@@ -160,6 +160,7 @@ async fn preparation_precedes_evaluation_deadline() -> TestResult {
             r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'echo', amount => 42)"#,
         ))
         .await?;
+    let retained = fixture.engine.memory().input_reserved();
     let bytes = araphor_analysis_builtins::components::RUNTIME;
     assert!(!fixture.engine.guest_cached(bytes)?);
     for id in ["cold", "cached"] {
@@ -183,15 +184,17 @@ async fn preparation_precedes_evaluation_deadline() -> TestResult {
         assert!(fixture.engine.guest_cached(bytes)?);
         control.check()?;
         drop(fixture.engine.reserve_evaluation([1; 16])?);
-        drop(
-            fixture.engine.memory().reserve_input(
-                fixture
-                    .engine
-                    .limits()
-                    .input_capacity
-                    .ok_or("configured input capacity")?,
-            )?,
-        );
+        assert_eq!(fixture.engine.memory().input_reserved(), retained);
+        let pressure = fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .ok_or("configured input capacity")?
+                .saturating_sub(retained),
+        )?;
+        assert!(fixture.engine.memory().reserve_input(1).is_err());
+        drop(pressure);
         drop(
             fixture.engine.memory().reserve_output(
                 fixture
@@ -217,6 +220,16 @@ async fn preparation_precedes_evaluation_deadline() -> TestResult {
         "{error:?}"
     );
     control.check()?;
+    drop(definition);
+    drop(
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .ok_or("input capacity")?,
+        )?,
+    );
     Ok(())
 }
 
@@ -328,6 +341,7 @@ async fn preparation_cancellation_keeps_leases() -> TestResult {
             control.check()?;
         }
         drop(fixture.engine.reserve_evaluation([1; 16])?);
+        drop(definition);
         drop(
             fixture.engine.memory().reserve_input(
                 fixture

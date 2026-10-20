@@ -7,7 +7,8 @@ use araphor_analysis_sdk as sdk;
 use araphor_data::{AnalysisSelectionV1, AnalysisStore};
 use araphor_discovery_definition::{Definition, Program, Source};
 use araphor_package::{
-    PackageArtifactV1, PackageImplementationV1, PackageRefV1, SqlModelV1, SqlReasonV1,
+    PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
+    SqlReasonV1,
 };
 use erebor_runtime_error::ErrorExt as _;
 use sdk::arrow_array::{Array as _, UInt64Array};
@@ -131,6 +132,42 @@ impl Fixture {
         })
     }
 
+    async fn image_limits(
+        mut limits: araphor_query::execution::Limits,
+        image: &PackageBundleV1,
+        sql: &str,
+    ) -> TestResult<Self> {
+        let mut fixture = Self::new(Default::default())?;
+        fixture.install(image)?;
+        if let Some(capacity) = limits.input_capacity {
+            let prepared = fixture
+                .query
+                .prepare_definition(
+                    [1; 16],
+                    &Self::definition(sql),
+                    Arc::new(AnalysisReadControl::default()),
+                )
+                .await?;
+            let retained = fixture.query.memory().input_reserved();
+            limits.input_capacity = Some(capacity.checked_add(retained).ok_or("image capacity")?);
+            drop(prepared);
+            assert_eq!(fixture.query.memory().input_reserved(), 0);
+        }
+        fixture.query = Engine::new(Arc::clone(fixture.query.store()), limits)?;
+        Ok(fixture)
+    }
+
+    fn definition(sql: &str) -> Definition {
+        Definition {
+            name: "instance-fixture".into(),
+            description: String::new(),
+            labels: BTreeMap::new(),
+            program: Program::Sql {
+                source: Source::Inline { inline: sql.into() },
+            },
+        }
+    }
+
     pub(super) fn install(&self, bundle: &PackageBundleV1) -> TestResult {
         self.query
             .store()
@@ -144,14 +181,7 @@ impl Fixture {
     }
 
     pub(super) async fn admit(&self, id: &str, sql: &str) -> TestResult<Arc<Instance>> {
-        let definition = Definition {
-            name: "instance-fixture".into(),
-            description: String::new(),
-            labels: BTreeMap::new(),
-            program: Program::Sql {
-                source: Source::Inline { inline: sql.into() },
-            },
-        };
+        let definition = Self::definition(sql);
         let definition = self
             .query
             .admit_definition(
@@ -374,7 +404,11 @@ async fn completed_retry_survives_reopen() -> TestResult {
     )
     .await?;
     let meta = store.meta()?;
-    let held = query.memory().reserve_input(capacity)?;
+    let retained = query.memory().input_reserved();
+    let held = query
+        .memory()
+        .reserve_input(capacity.saturating_sub(retained))?;
+    assert!(query.memory().reserve_input(1).is_err());
     let permit = query.reserve_evaluation([1; 16])?;
     assert_eq!(
         reopened
@@ -409,6 +443,8 @@ async fn completed_retry_survives_reopen() -> TestResult {
     drop(permit);
     drop(held);
     drop(query.reserve_evaluation([1; 16])?);
+    assert_eq!(query.memory().input_reserved(), retained);
+    drop(reopened);
     drop(query.memory().reserve_input(capacity)?);
     Ok(())
 }
@@ -742,7 +778,14 @@ async fn prior_pressure_preserves_success() -> TestResult {
         .run(request("first"), &AnalysisReadControl::default())
         .await?;
     assert_eq!(fixture.selected("prior-pressure", "first")?, [10]);
-    let pressure = fixture.query.memory().reserve_input(capacity - 1)?;
+    let retained = fixture.query.memory().input_reserved();
+    let pressure = fixture
+        .query
+        .memory()
+        .reserve_input(capacity.saturating_sub(retained).saturating_sub(1))?;
+    let last = fixture.query.memory().reserve_input(1)?;
+    assert!(fixture.query.memory().reserve_input(1).is_err());
+    drop(last);
     assert!(instance
         .run(request("pressure"), &AnalysisReadControl::default())
         .await
@@ -765,6 +808,8 @@ async fn prior_pressure_preserves_success() -> TestResult {
         .await?;
     assert_eq!(fixture.selected("prior-pressure", "pressure")?, [20]);
     assert_eq!(fixture.progress("prior-pressure")?, second.commit_revision);
+    assert_eq!(fixture.query.memory().input_reserved(), retained);
+    drop(instance);
     drop(fixture.query.memory().reserve_input(capacity)?);
     Ok(())
 }
@@ -847,17 +892,22 @@ async fn managed_subscription(target: &str) -> TestResult {
 
     const INPUT: usize = 2 * 1024 * 1024;
     const OUTPUT: usize = 32 * 1024 * 1024;
-    let fixture = Fixture::new(araphor_query::execution::Limits {
-        global_evaluations: Some(1),
-        tenant_evaluations: Some(1),
-        input_capacity: Some(INPUT),
-        output_capacity: Some(OUTPUT),
-        ..Default::default()
-    })?;
-    fixture.install(&bundle(target)?)?;
-    fixture.context(1)?;
     let sql = r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(10 AS BIGINT UNSIGNED) AS value WHERE EXISTS (SELECT 1 FROM context_versions))) UNION ALL SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(20 AS BIGINT UNSIGNED) AS value WHERE EXISTS (SELECT 1 FROM context_versions)))"#;
+    let fixture = Fixture::image_limits(
+        araphor_query::execution::Limits {
+            global_evaluations: Some(1),
+            tenant_evaluations: Some(1),
+            input_capacity: Some(INPUT),
+            output_capacity: Some(OUTPUT),
+            ..Default::default()
+        },
+        &bundle(target)?,
+        sql,
+    )
+    .await?;
+    fixture.context(1)?;
     let instance = fixture.admit("follow-state", sql).await?;
+    let retained = fixture.query.memory().input_reserved();
     let lifecycle = fixture.start(&instance)?;
     let mut stream = instance.subscribe(
         Arc::new(AnalysisReadControl::default()),
@@ -930,10 +980,21 @@ async fn managed_subscription(target: &str) -> TestResult {
         .cancel_and_join(&AnalysisReadControl::default())
         .await?;
     drop(fixture.query.reserve_evaluation([1; 16])?);
-    drop(fixture.query.memory().reserve_input(INPUT)?);
+    assert_eq!(fixture.query.memory().input_reserved(), retained);
+    let pressure = fixture.query.memory().reserve_input(
+        fixture
+            .query
+            .limits()
+            .input_capacity
+            .ok_or("input capacity")?
+            .saturating_sub(retained),
+    )?;
+    assert!(fixture.query.memory().reserve_input(1).is_err());
+    drop(pressure);
     drop(fixture.query.memory().reserve_output(OUTPUT)?);
     assert_eq!(fixture.progress("follow-state")?, second.commit_revision);
     assert_eq!(first.results.len(), 2);
+    drop(instance);
     let readmitted = fixture.admit("follow-state", sql).await?;
     let lifecycle = fixture.start(&readmitted)?;
     let mut resumed = readmitted.subscribe(
@@ -964,7 +1025,16 @@ async fn managed_subscription(target: &str) -> TestResult {
         .cancel_and_join(&AnalysisReadControl::default())
         .await?;
     drop(fixture.query.reserve_evaluation([1; 16])?);
-    drop(fixture.query.memory().reserve_input(INPUT)?);
+    drop(readmitted);
+    drop(
+        fixture.query.memory().reserve_input(
+            fixture
+                .query
+                .limits()
+                .input_capacity
+                .ok_or("input capacity")?,
+        )?,
+    );
     drop(fixture.query.memory().reserve_output(OUTPUT)?);
     Ok(())
 }
@@ -1321,6 +1391,106 @@ async fn subscription_requires_current_lifecycle() -> TestResult {
     assert!(!current.running);
     assert_eq!(current.progress, 0);
     assert!(frontier.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn instance_shares_admitted_images() -> TestResult {
+    const CAPACITY: usize = 1024 * 1024;
+    let fixture = Fixture::new(araphor_query::execution::Limits {
+        input_capacity: Some(CAPACITY),
+        ..Default::default()
+    })?;
+    fixture.install(&bundle("sql")?)?;
+    let instance = fixture
+        .admit(
+            "shared-image",
+            r#"SELECT * FROM "runtime-fixture"."1".accumulate(
+        input => (SELECT CAST(11 AS BIGINT UNSIGNED) AS value))"#,
+        )
+        .await?;
+    let images = instance.prepared.images().collect::<Vec<_>>();
+    assert_eq!(images.len(), 1);
+    assert_eq!(instance.calls.len(), 1);
+    let call = instance.calls.values().next().ok_or("call absent")?;
+    assert!(std::ptr::eq(
+        call.descriptor(),
+        &images[0].0.artifacts[0].descriptor
+    ));
+    let retained = fixture.query.memory().input_reserved();
+    assert!(retained > 0 && retained < CAPACITY);
+    let pressure = fixture
+        .query
+        .memory()
+        .reserve_input(CAPACITY.saturating_sub(retained))?;
+    assert!(fixture.query.memory().reserve_input(1).is_err());
+    let copy = Arc::clone(&instance);
+    assert!(fixture.query.memory().reserve_input(CAPACITY).is_err());
+    drop(images);
+    drop(instance);
+    assert!(fixture.query.memory().reserve_input(CAPACITY).is_err());
+    assert_eq!(fixture.query.memory().input_reserved(), CAPACITY);
+    drop(copy);
+    assert_eq!(fixture.query.memory().input_reserved(), CAPACITY - retained);
+    drop(pressure);
+    drop(fixture.query.memory().reserve_input(CAPACITY)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn image_authority_precedes_preparation() -> TestResult {
+    const CAPACITY: usize = 32 * 1024 * 1024;
+    let fixture = Fixture::new(araphor_query::execution::Limits {
+        input_capacity: Some(CAPACITY),
+        ..Default::default()
+    })?;
+    let image = bundle("wasm")?;
+    fixture.install(&image)?;
+    fixture
+        .authority
+        .images
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clear();
+    let (entered, observed) = std::sync::mpsc::channel();
+    let (_release, waiting) = std::sync::mpsc::channel();
+    fixture.query.preparation_entry(entered, waiting)?;
+    let sql = r#"SELECT * FROM "runtime-fixture"."1".accumulate(
+        input => (SELECT CAST(11 AS BIGINT UNSIGNED) AS value))"#;
+    let error = tokio::time::timeout(
+        Duration::from_secs(30),
+        fixture.admit("untrusted-image", sql),
+    )
+    .await?
+    .err()
+    .ok_or("untrusted image admitted")?;
+    let domain = error
+        .downcast_ref::<crate::Error>()
+        .ok_or("Analysis authority error absent")?;
+    assert_eq!(
+        domain.status_code(),
+        erebor_runtime_error::StatusCode::PermissionDenied
+    );
+    assert!(matches!(
+        observed.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(fixture.query.memory().input_reserved(), 0);
+    drop(fixture.query.memory().reserve_input(CAPACITY)?);
+    fixture
+        .authority
+        .images
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(image.digest()?);
+    let instance = fixture.admit("trusted-image", sql).await?;
+    assert!(matches!(
+        observed.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    drop(instance);
+    assert_eq!(fixture.query.memory().input_reserved(), 0);
+    drop(fixture.query.memory().reserve_input(CAPACITY)?);
     Ok(())
 }
 

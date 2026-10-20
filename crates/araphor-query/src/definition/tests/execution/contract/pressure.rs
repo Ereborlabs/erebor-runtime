@@ -291,24 +291,29 @@ async fn guest_schema_and_wire_preflight() -> TestResult {
 #[tokio::test]
 async fn guest_checkpoint_exchange_capacity() -> TestResult {
     let capacity = 512 * 1024;
-    let fixture = Fixture::limits(Limits {
-        input_bytes: capacity,
-        input_capacity: Some(capacity),
-        output_bytes: 1024 * 1024,
-        output_capacity: Some(1024 * 1024),
-        global_evaluations: Some(1),
-        tenant_evaluations: Some(1),
-        ..Default::default()
-    })?;
     let mut image = component("wasm", "accumulate")?;
     image.artifacts[0].descriptor.exports[0].limits.max_bytes = 16 * 1024;
     image.artifacts[0].descriptor.exports[0]
         .limits
         .max_checkpoint_bytes = 128 * 1024;
-    fixture.install(&image)?;
-    let prepared = fixture.prepare(&Fixture::sql(
+    let definition = Fixture::sql(
         r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(7 AS BIGINT UNSIGNED) AS value))"#,
-    )).await?;
+    );
+    let fixture = Fixture::image_limits(
+        Limits {
+            input_bytes: capacity,
+            input_capacity: Some(capacity),
+            output_bytes: 1024 * 1024,
+            output_capacity: Some(1024 * 1024),
+            global_evaluations: Some(1),
+            tenant_evaluations: Some(1),
+            ..Default::default()
+        },
+        &image,
+        &definition,
+    )
+    .await?;
+    let prepared = fixture.prepare(&definition).await?;
     let id = Fixture::calls(&prepared.plan)?[0].id();
     let before = fixture.engine.store().meta()?;
     let first = fixture
@@ -470,21 +475,23 @@ async fn sql_normalization_preflight() -> TestResult {
             .build()?,
         )?;
         let before = fixture.engine.store().meta()?;
-        let execution = fixture.execute(&prepared, invocation("normalization-pressure"));
-        tokio::pin!(execution);
-        let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            tokio::select! {
-                result = &mut execution => result,
-                _ = gate.later_entered.notified() => {
-                    gate.released.notify_one();
-                    execution.await
+        let error = {
+            let execution = fixture.execute(&prepared, invocation("normalization-pressure"));
+            tokio::pin!(execution);
+            let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                tokio::select! {
+                    result = &mut execution => result,
+                    _ = gate.later_entered.notified() => {
+                        gate.released.notify_one();
+                        execution.await
+                    }
                 }
-            }
-        })
-        .await?;
-        let error = result
-            .err()
-            .ok_or("normalization allocation exceeded capacity")?;
+            })
+            .await?;
+            result
+                .err()
+                .ok_or("normalization allocation exceeded capacity")?
+        };
         assert_eq!(
             crate::Failure::from(&error),
             crate::Failure::ResultTooLarge,
@@ -495,6 +502,7 @@ async fn sql_normalization_preflight() -> TestResult {
         assert_eq!(gate.later.load(Ordering::SeqCst), 0);
         assert!(gate.dropped.load(Ordering::SeqCst));
         assert_eq!(fixture.engine.store().meta()?, before);
+        drop(prepared);
         capacity_released(&fixture)?;
     }
     Ok(())

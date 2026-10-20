@@ -15,6 +15,7 @@ use datafusion::physical_plan::collect;
 use super::{PackageCall, PreparedDefinition};
 use crate::execution::{Engine, Limits};
 
+mod capacity;
 mod captured;
 mod collision;
 mod execution;
@@ -42,6 +43,24 @@ impl Fixture {
             engine: Engine::new(store, limits)?,
             _directory: directory,
         })
+    }
+
+    async fn image_limits(
+        mut limits: Limits,
+        bundle: &PackageBundleV1,
+        definition: &Definition,
+    ) -> TestResult<Self> {
+        let mut fixture = Self::new()?;
+        fixture.install(bundle)?;
+        if let Some(capacity) = limits.input_capacity {
+            let prepared = fixture.prepare(definition).await?;
+            let retained = fixture.engine.memory().input_reserved();
+            limits.input_capacity = Some(capacity.checked_add(retained).ok_or("image capacity")?);
+            drop(prepared);
+            assert_eq!(fixture.engine.memory().input_reserved(), 0);
+        }
+        fixture.engine = Engine::new(Arc::clone(fixture.engine.store()), limits)?;
+        Ok(fixture)
     }
 
     fn installed(bundle: &PackageBundleV1) -> TestResult<Self> {

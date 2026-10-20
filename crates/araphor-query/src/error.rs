@@ -12,6 +12,11 @@ pub enum Error {
     Sql {
         source: datafusion::error::DataFusionError,
     },
+    #[snafu(display("Query authority changed"))]
+    AuthorityChanged {
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Invalid {field}"))]
     Invalid {
         field: &'static str,
@@ -154,6 +159,7 @@ impl From<&Error> for Failure {
             Error::Data { source } => Self::data(source),
             Error::Contract { source } => Self::contract(source),
             Error::Sql { source } => Self::native(source),
+            Error::AuthorityChanged { .. } => Self::Denied,
             Error::Invalid { field, .. } if field.starts_with("cursor") => Self::InvalidCheckpoint,
             Error::Invalid { .. } => Self::InvalidQuery,
             Error::Busy { .. } | Error::Capacity { .. } => Self::Busy,
@@ -187,6 +193,7 @@ impl ErrorExt for Error {
         match self {
             Self::Data { source } => source.status_code(),
             Self::Contract { source } => source.status_code(),
+            Self::AuthorityChanged { .. } => StatusCode::PermissionDenied,
             Self::Invalid { .. } => StatusCode::InvalidArguments,
             Self::Busy { .. } | Self::Capacity { .. } => StatusCode::Unavailable,
             Self::Sql { source } => match Self::domain(source) {
@@ -374,6 +381,47 @@ mod tests {
                 assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
                 assert_eq!(error.output_msg(), "SQL operation failed");
             }
+        }
+    }
+
+    #[test]
+    fn runtime_contract_keeps_retry() {
+        for kind in [
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::PermissionDenied,
+        ] {
+            let contract = araphor_analysis_sdk::Error::Io {
+                path: "fixture.io".into(),
+                source: std::io::Error::new(kind, "retry fixture"),
+                location: snafu::location!(),
+            };
+            let status = contract.status_code();
+            let retry = contract.retry_hint();
+            assert_eq!(status, StatusCode::Internal);
+            assert_eq!(
+                retry,
+                if kind == std::io::ErrorKind::PermissionDenied {
+                    RetryHint::NonRetryable
+                } else {
+                    RetryHint::Retryable
+                }
+            );
+            let runtime = araphor_package_runtime::Error::AnalysisContract {
+                source: contract,
+                location: snafu::location!(),
+            };
+            assert_eq!(runtime.status_code(), status);
+            assert_eq!(runtime.retry_hint(), retry);
+            let error = Error::Sql {
+                source: DataFusionError::Shared(std::sync::Arc::new(DataFusionError::Context(
+                    "native contract".into(),
+                    Box::new(DataFusionError::External(Box::new(runtime))),
+                ))),
+            };
+            assert_eq!(Failure::from(&error), Failure::EvaluationFailed);
+            assert_eq!(error.status_code(), status);
+            assert_eq!(error.retry_hint(), retry);
         }
     }
 

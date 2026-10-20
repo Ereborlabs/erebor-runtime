@@ -324,6 +324,10 @@ reduction. The record is `/tmp/araphor-sql-call-count1.json`.
   [subscription result](araphor-analysis-migration.md#native-managed-subscription-qualification).
   The [terminal result](araphor-analysis-migration.md#known-terminal-outcomes-and-failed-offers)
   records the later 83 passing cases and the remaining pressure-retry limit.
+  Shared image ownership also passes focused checks. Query retains the
+  admitted image and its reservation once; Instance borrows that image set.
+  A typed Query authority notice stays distinct from a real source denial.
+  Read the [image result](araphor-analysis-migration.md#shared-admitted-images-and-error-origins).
 - **Required:** Create managed instances from admitted definitions. Each
   instance has its own lifetime, selected inputs, progress, and saved state.
 - **Reuse:** Query subscriptions and their native stream collection, current

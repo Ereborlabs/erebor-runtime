@@ -446,6 +446,7 @@ async fn historical_query_preserves_indices() -> TestResult {
         );
     }
     drop(fixture.query.reserve_evaluation([1; 16])?);
+    drop(instance);
     drop(fixture.query.memory().reserve_input(1024 * 1024)?);
     drop(fixture.query.memory().reserve_output(1024 * 1024)?);
     Ok(())

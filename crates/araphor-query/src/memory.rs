@@ -346,6 +346,11 @@ impl Memory {
         }
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn input_reserved(&self) -> usize {
+        self.input_pool.reserved()
+    }
+
     pub fn reserve_input(&self, bytes: usize) -> Result<MemoryReservation> {
         Self::reserve(&self.input, bytes, self.input_capacity)
     }

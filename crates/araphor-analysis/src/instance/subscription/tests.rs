@@ -82,9 +82,62 @@ fn failure_keeps_package_codes() {
         location: snafu::location!(),
     };
     let error = crate::Error::from(denied());
-    assert_eq!(Subscription::failure(&error), ManagedExit::Cancelled);
-    let error = crate::Error::from(araphor_query::Error::from(denied()));
-    assert_eq!(Subscription::failure(&error), ManagedExit::Cancelled);
+    assert_eq!(
+        Subscription::failure(&error),
+        ManagedExit::Failed(Code::Denied)
+    );
+    assert_eq!(
+        error.status_code(),
+        erebor_runtime_error::StatusCode::PermissionDenied
+    );
+    assert_eq!(
+        error.retry_hint(),
+        erebor_runtime_error::RetryHint::NonRetryable
+    );
+    for notice in [false, true] {
+        for wrapper in 0..3 {
+            let source = if notice {
+                araphor_query::Error::AuthorityChanged {
+                    location: snafu::location!(),
+                }
+            } else {
+                araphor_query::Error::from(denied())
+            };
+            let source = match wrapper {
+                0 => source,
+                1 => araphor_query::Error::Sql {
+                    source: DataFusionError::External(Box::new(source)),
+                },
+                _ => araphor_query::Error::Sql {
+                    source: DataFusionError::Shared(Arc::new(DataFusionError::Context(
+                        "authority origin".into(),
+                        Box::new(DataFusionError::External(Box::new(source))),
+                    ))),
+                },
+            };
+            assert_eq!(
+                araphor_query::Failure::from(&source),
+                araphor_query::Failure::Denied
+            );
+            let error = crate::Error::from(source);
+            assert_eq!(
+                Subscription::failure(&error),
+                if notice {
+                    ManagedExit::Cancelled
+                } else {
+                    ManagedExit::Failed(Code::Denied)
+                }
+            );
+            assert_eq!(
+                error.status_code(),
+                erebor_runtime_error::StatusCode::PermissionDenied
+            );
+            assert_eq!(
+                error.retry_hint(),
+                erebor_runtime_error::RetryHint::NonRetryable
+            );
+        }
+    }
     for resource in ["input capacity", "output capacity"] {
         let error = crate::Error::from(araphor_query::Error::Sql {
             source: DataFusionError::ResourcesExhausted(resource.into()),

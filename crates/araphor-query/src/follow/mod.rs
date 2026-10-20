@@ -249,10 +249,8 @@ impl Subscription {
                             workers.wait().await;
                             Some((
                                 Err((
-                                    crate::Error::Data {
-                                        source: araphor_data::Error::AnalysisReadDenied {
-                                            location: snafu::location!(),
-                                        },
+                                    crate::Error::AuthorityChanged {
+                                        location: snafu::location!(),
                                     },
                                     None,
                                 )),

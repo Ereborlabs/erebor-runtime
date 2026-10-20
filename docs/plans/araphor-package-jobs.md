@@ -204,6 +204,10 @@ connected checks pass for known terminal outcomes, original claim lifetime,
 completed-attempt comparisons, and exact native failed-offer wait cuts.
 Successful state and progress remain unchanged on failure. Read the
 [terminal result](araphor-analysis-migration.md#known-terminal-outcomes-and-failed-offers).
+Query and Instance now share admitted images and their native reservations.
+Typed authority notices retain their origin; real source denial remains Denied.
+The [image result](araphor-analysis-migration.md#shared-admitted-images-and-error-origins)
+records focused checks and the remaining retained-metadata capacity gap.
 The host, capture-preserving pressure retry, public lifecycle operations, and complete final Rust
 gate remain **Not done**. Read the
 [migration result](araphor-analysis-migration.md#native-managed-subscription-qualification).

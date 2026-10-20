@@ -119,7 +119,7 @@ fn stream(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn replace_admits_each_input() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let (entered, observed) = tokio::sync::oneshot::channel();
     let (release, held) = mpsc::channel();
     let state = Arc::new(SinkState {
@@ -183,7 +183,7 @@ async fn replace_admits_each_input() -> TestResult {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admission_cancel_joins_worker() -> TestResult {
     for begin in [true, false] {
-        let fixture = fixture()?;
+        let fixture = fixture().await?;
         let (entered, observed) = tokio::sync::oneshot::channel();
         let (release, held) = mpsc::channel();
         let gate = WriterGate {
@@ -257,7 +257,7 @@ async fn count_delivery_is_prepaid() -> TestResult {
 
 #[tokio::test]
 async fn scope_check_precedes_capture() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let state = Arc::new(SinkState::default());
     let (definition, target) = prepared(&fixture, &state).await?;
     let mut target = (*target).clone();
@@ -280,7 +280,7 @@ async fn scope_check_precedes_capture() -> TestResult {
 
 #[tokio::test]
 async fn window_keeps_full_grant() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let definition = fixture.prepare(&Fixture::sql(
         "SELECT source_cursor AS value FROM events WHERE received_at > CURRENT_TIMESTAMP - INTERVAL '60 seconds'",
     )).await?;
@@ -392,7 +392,7 @@ impl crate::follow::Clock for ResumeClock {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_keeps_cut_idle() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let state = Arc::new(SinkState::default());
     let (definition, target) = prepared(&fixture, &state).await?;
     let control = AnalysisReadControl::default();
@@ -450,7 +450,7 @@ async fn resume_keeps_cut_idle() -> TestResult {
 
 #[tokio::test]
 async fn expired_resume_deadline_executes() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let state = Arc::new(SinkState::default());
     let (definition, target) = prepared(&fixture, &state).await?;
     let control = AnalysisReadControl::default();
@@ -489,7 +489,7 @@ async fn expired_resume_deadline_executes() -> TestResult {
 
 #[tokio::test]
 async fn resumed_frontier_checks_binding() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let state = Arc::new(SinkState::default());
     let (definition, target) = prepared(&fixture, &state).await?;
     let control = AnalysisReadControl::default();
@@ -527,7 +527,7 @@ async fn resumed_frontier_checks_binding() -> TestResult {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_offer_keeps_cut_idle() -> TestResult {
-    let fixture = fixture()?;
+    let fixture = fixture().await?;
     let state = Arc::new(SinkState::default());
     let (mut definition, target) = prepared(&fixture, &state).await?;
     let failure = AtomicBool::new(true);

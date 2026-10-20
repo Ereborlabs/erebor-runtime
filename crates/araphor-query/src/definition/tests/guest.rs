@@ -11,11 +11,10 @@ use super::*;
 
 const BYTES: usize = 16 * 1024;
 
-fn fixture(limits: Limits) -> TestResult<(Fixture, PackageBundleV1)> {
-    let fixture = Fixture::limits(limits)?;
+async fn fixture(limits: Limits) -> TestResult<(Fixture, PackageBundleV1)> {
     let mut bundle = component("wasm", "evaluate")?;
     bundle.artifacts[0].descriptor.exports[0].limits.max_bytes = BYTES as u64;
-    fixture.install(&bundle)?;
+    let fixture = Fixture::image_limits(limits, &bundle, &definition("'echo'")).await?;
     Ok((fixture, bundle))
 }
 
@@ -36,7 +35,8 @@ async fn guest_transfer_reserved_before_entry() -> TestResult {
         output_bytes: BYTES * 4 - 1,
         output_capacity: Some(BYTES * 4 - 1),
         ..Default::default()
-    })?;
+    })
+    .await?;
     let (entry, observed) = mpsc::channel();
     fixture.engine.guest_entry(entry, None)?;
     let prepared = fixture.prepare(&definition("'echo'")).await?;
@@ -61,7 +61,8 @@ async fn guest_copy_obeys_reservation() -> TestResult {
         output_bytes: capacity,
         output_capacity: Some(capacity),
         ..Default::default()
-    })?;
+    })
+    .await?;
     let prepared = fixture
         .prepare(&Fixture::sql(format!(
             r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'oversized', amount => {})"#,
@@ -124,34 +125,77 @@ async fn guest_copy_obeys_reservation() -> TestResult {
 
 #[tokio::test]
 async fn guest_scratch_reserved_before_entry() -> TestResult {
-    let (fixture, _) = fixture(Limits {
-        input_bytes: BYTES * 4,
-        input_capacity: Some(BYTES * 4),
-        ..Default::default()
-    })?;
-    let (entry, observed) = mpsc::channel();
-    fixture.engine.guest_entry(entry, None)?;
     let mut bundle = component("wasm", "evaluate")?;
     bundle.root.revision = "scratch".into();
     bundle.artifacts[0].descriptor.revision = "scratch".into();
     bundle.artifacts[0].descriptor.exports[0].limits.max_bytes = (BYTES * 4) as u64;
-    fixture.install(&bundle)?;
     let source = Fixture::sql(format!(
         r#"SELECT * FROM "runtime-fixture"."scratch".evaluate(mode => '{}', amount => 7)"#,
         "echo".repeat(8192),
     ));
+    let fixture = Fixture::image_limits(
+        Limits {
+            input_bytes: BYTES * 4,
+            input_capacity: Some(BYTES * 4),
+            ..Default::default()
+        },
+        &bundle,
+        &source,
+    )
+    .await?;
+    let (entry, observed) = mpsc::channel();
+    fixture.engine.guest_entry(entry, None)?;
     let prepared = fixture.prepare(&source).await?;
+    let retained = fixture.engine.memory().input_reserved();
+    assert_eq!(
+        fixture.engine.limits().input_capacity,
+        Some(retained + BYTES * 4)
+    );
+    drop(fixture.engine.memory().reserve_input(BYTES * 4)?);
     let error = fixture
         .execute(&prepared, invocation("input-quota"))
         .await
         .err()
         .ok_or("guest input scratch exceeded its reservation")?;
-    assert!(format!("{error:?}").contains("araphor input requires"));
+    assert_eq!(
+        crate::Failure::from(&error),
+        crate::Failure::Busy,
+        "{error:?}"
+    );
+    let mut cause: &(dyn std::error::Error + 'static) = &error;
+    loop {
+        if let Some(crate::Error::Capacity { resource, source }) =
+            cause.downcast_ref::<crate::Error>()
+        {
+            assert_eq!(*resource, "shared input");
+            let datafusion::common::DataFusionError::ResourcesExhausted(message) = source else {
+                return Err(format!("scratch allocation lost native cause: {error:?}").into());
+            };
+            assert!(
+                message.contains("for araphor input with 0.0 B already allocated"),
+                "{error:?}"
+            );
+            break;
+        }
+        cause = cause
+            .source()
+            .ok_or_else(|| format!("scratch allocation lost capacity cause: {error:?}"))?;
+    }
     assert!(matches!(
         observed.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-    drop(fixture.engine.memory().reserve_input(BYTES * 4)?);
+    assert_eq!(fixture.engine.memory().input_reserved(), retained);
+    drop(prepared);
+    drop(
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .ok_or("input capacity")?,
+        )?,
+    );
     Ok(())
 }
 
@@ -166,7 +210,7 @@ async fn guest_capacity_held_until_join() -> TestResult {
         tenant_evaluations: Some(1),
         ..Default::default()
     };
-    let (fixture, _) = fixture(limits)?;
+    let (fixture, _) = fixture(limits).await?;
     let (entry, observed) = mpsc::channel();
     let (release, waiting) = mpsc::channel();
     fixture.engine.guest_entry(entry, Some(waiting))?;
@@ -199,7 +243,15 @@ async fn guest_capacity_held_until_join() -> TestResult {
         .err()
         .ok_or("cancelled guest completed")?;
     assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
-    drop(fixture.engine.memory().reserve_input(BYTES * 32)?);
+    drop(
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .ok_or("input capacity")?,
+        )?,
+    );
     drop(fixture.engine.memory().reserve_output(BYTES * 4)?);
     drop(fixture.engine.reserve_evaluation([1; 16])?);
     Ok(())
@@ -207,7 +259,7 @@ async fn guest_capacity_held_until_join() -> TestResult {
 
 #[tokio::test]
 async fn guest_drop_keeps_worker_lease() -> TestResult {
-    let (fixture, bundle) = fixture(Limits {
+    let fixture = Fixture::limits(Limits {
         input_bytes: BYTES,
         output_bytes: BYTES,
         input_capacity: Some(BYTES),
@@ -216,6 +268,7 @@ async fn guest_drop_keeps_worker_lease() -> TestResult {
         tenant_evaluations: Some(1),
         ..Default::default()
     })?;
+    let bundle = component("wasm", "evaluate")?;
     let runtime = Runtime::new(Default::default())?;
     let (entry, observed) = mpsc::channel();
     let (release, waiting) = mpsc::channel();
@@ -498,7 +551,8 @@ async fn subscription_cancel_joins_worker() -> TestResult {
             global_evaluations: Some(1),
             tenant_evaluations: Some(1),
             ..Default::default()
-        })?;
+        })
+        .await?;
         let prepared = fixture.prepare(&definition("'cancel'")).await?;
         let (entry, observed) = mpsc::channel();
         let (release, waiting) = mpsc::channel();
@@ -512,8 +566,14 @@ async fn subscription_cancel_joins_worker() -> TestResult {
             &AnalysisReadControl::default(),
             123,
         )?;
-        let mut stream =
-            session.subscribe(prepared.plan, prepared.sources, b"join worker", true)?;
+        let PreparedDefinition {
+            plan,
+            sources,
+            images,
+            ..
+        } = prepared;
+        drop(images);
+        let mut stream = session.subscribe(plan, sources, b"join worker", true)?;
         tokio::select! {
             result = entered(observed) => result?,
             result = stream.next() => return Err(format!("worker did not enter: {result:?}").into()),
@@ -531,7 +591,13 @@ async fn subscription_cancel_joins_worker() -> TestResult {
             fixture
                 .engine
                 .memory()
-                .reserve_input(BYTES * 32)
+                .reserve_input(
+                    fixture
+                        .engine
+                        .limits()
+                        .input_capacity
+                        .ok_or("input capacity")?,
+                )
                 .map_err(|error| format!("cancel preparing={preparing}: {error:?}"))?,
         );
         drop(fixture.engine.memory().reserve_output(BYTES * 4)?);
@@ -543,8 +609,14 @@ async fn subscription_cancel_joins_worker() -> TestResult {
                 &AnalysisReadControl::default(),
                 123,
             )?;
-            let mut stream =
-                session.subscribe(prepared.plan, prepared.sources, b"retained output", true)?;
+            let PreparedDefinition {
+                plan,
+                sources,
+                images,
+                ..
+            } = prepared;
+            drop(images);
+            let mut stream = session.subscribe(plan, sources, b"retained output", true)?;
             let update = tokio::time::timeout(Duration::from_secs(30), stream.next())
                 .await?
                 .ok_or("completed subscription ended")?
@@ -594,7 +666,8 @@ async fn subscription_revocation_joins_guest() -> TestResult {
         global_evaluations: Some(1),
         tenant_evaluations: Some(1),
         ..Default::default()
-    })?;
+    })
+    .await?;
     let prepared = fixture.prepare(&definition("'cancel'")).await?;
     let (entry, observed) = mpsc::channel();
     let (release, waiting) = mpsc::channel();
@@ -605,8 +678,15 @@ async fn subscription_revocation_joins_guest() -> TestResult {
         123,
     )?;
     let (authority, changes) = tokio::sync::watch::channel(0u64);
+    let PreparedDefinition {
+        plan,
+        sources,
+        images,
+        ..
+    } = prepared;
+    drop(images);
     let mut stream = session
-        .subscribe(prepared.plan, prepared.sources, b"join revoked", true)?
+        .subscribe(plan, sources, b"join revoked", true)?
         .until_change(changes);
     tokio::select! {
         result = entered(observed) => result?,
@@ -625,7 +705,15 @@ async fn subscription_revocation_joins_guest() -> TestResult {
         .ok_or("revoked subscription emitted output")?;
     assert_eq!(crate::Failure::from(&error), crate::Failure::Denied);
     stream.cancel_and_join().await?;
-    drop(fixture.engine.memory().reserve_input(BYTES * 32)?);
+    drop(
+        fixture.engine.memory().reserve_input(
+            fixture
+                .engine
+                .limits()
+                .input_capacity
+                .ok_or("input capacity")?,
+        )?,
+    );
     drop(fixture.engine.memory().reserve_output(BYTES * 4)?);
     drop(fixture.engine.reserve_evaluation([1; 16])?);
     Ok(())

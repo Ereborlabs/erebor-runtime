@@ -766,6 +766,7 @@ async fn physical_sql_failure_keeps_data() -> TestResult {
             .store()
             .package_activation_page(None)?
             .is_empty());
+        drop(prepared);
         capacity_released(&fixture)?;
     }
     Ok(())
@@ -815,16 +816,23 @@ async fn physical_failure_keeps_session() -> TestResult {
         assert_eq!(output.calls.len(), 1);
         control.check()?;
         drop(output);
+        drop((bad, good));
         capacity_released(&fixture)?;
     }
     Ok(())
 }
 
 async fn guest_failures(target: &str) -> TestResult {
-    let fixture = Fixture::limits(capacity_limits())?;
     let mut bundle = component(target, "evaluate")?;
     bundle.artifacts[0].descriptor.exports[0].limits.max_bytes = 16 * 1024;
-    fixture.install(&bundle)?;
+    let fixture = Fixture::image_limits(
+        capacity_limits(),
+        &bundle,
+        &Fixture::sql(
+            r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'trap', amount => 7)"#,
+        ),
+    )
+    .await?;
     for mode in ["trap", "invalid-name", "invalid-evidence"] {
         let definition = Fixture::sql(format!(
             r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => '{mode}', amount => 7)"#
@@ -841,6 +849,7 @@ async fn guest_failures(target: &str) -> TestResult {
             .store()
             .package_activation_page(None)?
             .is_empty());
+        drop(prepared);
         capacity_released(&fixture)?;
     }
     Ok(())
@@ -1065,13 +1074,13 @@ async fn physical_tight_output_capacity() -> TestResult {
         ..Default::default()
     })?;
     fixture.install(&Fixture::bundle())?;
-    let prepared = fixture
-        .prepare(&Fixture::sql(
-            r#"SELECT * FROM "fixture"."r1".count(
-            source => (SELECT CAST(7 AS BIGINT UNSIGNED) AS value), increment => 2)"#,
-        ))
-        .await?;
     for finite in [false, true] {
+        let prepared = fixture
+            .prepare(&Fixture::sql(
+                r#"SELECT * FROM "fixture"."r1".count(
+            source => (SELECT CAST(7 AS BIGINT UNSIGNED) AS value), increment => 2)"#,
+            ))
+            .await?;
         let batches = if finite {
             let output = fixture
                 .execute(&prepared, invocation("tight-output"))
@@ -1114,6 +1123,7 @@ async fn physical_tight_output_capacity() -> TestResult {
         assert!(fixture.engine.memory().reserve_output(1).is_err());
         drop(remaining);
         drop(alias);
+        drop(prepared);
         capacity_released(&fixture)?;
     }
     Ok(())

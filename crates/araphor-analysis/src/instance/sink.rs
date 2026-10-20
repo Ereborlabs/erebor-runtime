@@ -202,7 +202,7 @@ impl DataSink for Publication {
                 Instance::authorize(
                     owner.authority.as_ref(),
                     &owner.admitted.spec.grant,
-                    &owner.images,
+                    &owner.prepared,
                     || {
                         control.check()?;
                         let receipt = owner.query.store().commit_managed(

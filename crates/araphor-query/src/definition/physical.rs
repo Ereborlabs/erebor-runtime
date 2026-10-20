@@ -355,10 +355,10 @@ impl CallContext {
 
 #[derive(Clone)]
 pub(crate) struct PackageExec {
-    call: PackageCall,
-    children: Vec<Arc<dyn ExecutionPlan>>,
     prepared: Option<Prepared>,
+    children: Vec<Arc<dyn ExecutionPlan>>,
     properties: Arc<PlanProperties>,
+    call: PackageCall,
 }
 
 impl fmt::Debug for PackageExec {
@@ -398,12 +398,14 @@ impl PackageExec {
                 let control = Arc::new(control.within(None).map_err(external)?);
                 let stage = Arc::clone(&control);
                 let bundle = Arc::clone(&call.bundle);
+                let image = Arc::clone(&call._image);
                 let package = call.package.clone();
                 let export = call.export.clone();
                 crate::execution::Engine::blocking(control, worker, move || {
                     let _permit = permit;
                     runtime
                         .prepare(bundle, package, export, &stage)
+                        .map(|prepared| (prepared, image))
                         .map_err(|source| crate::Error::Sql {
                             source: external(source),
                         })
@@ -411,7 +413,7 @@ impl PackageExec {
                 .await
                 .map_err(external)?
             }
-            _ => None,
+            _ => (None, Arc::clone(&call._image)),
         };
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(call.schema.inner())),
@@ -422,7 +424,7 @@ impl PackageExec {
         Ok(Self {
             call: call.clone(),
             children: children.to_vec(),
-            prepared,
+            prepared: prepared.0,
             properties,
         })
     }
@@ -445,7 +447,7 @@ impl PackageExec {
         }
         let model = self
             .call
-            .descriptor
+            .descriptor()
             .exports
             .iter()
             .find(|model| model.name == self.call.export)
@@ -594,7 +596,7 @@ impl PackageExec {
             let output_memory = Arc::new(owner.memory.reserve_output(0)?);
             let checked = self
                 .call
-                .descriptor
+                .descriptor()
                 .check_evaluation(&evaluation)
                 .map_err(external)?;
             let output = self

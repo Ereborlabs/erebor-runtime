@@ -87,6 +87,7 @@ impl ErrorExt for Error {
     fn retry_hint(&self) -> RetryHint {
         match self {
             Self::Data { source } => source.retry_hint(),
+            Self::AnalysisContract { source, .. } => source.retry_hint(),
             Self::AnalysisBusy { .. } => RetryHint::Retryable,
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             _ => RetryHint::NonRetryable,

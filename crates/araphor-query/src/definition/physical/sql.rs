@@ -23,7 +23,7 @@ impl PackageExec {
             .ok_or_else(|| internal("package SQL plans are absent"))?;
         let model = self
             .call
-            .descriptor
+            .descriptor()
             .exports
             .iter()
             .find(|model| model.name == self.call.export)

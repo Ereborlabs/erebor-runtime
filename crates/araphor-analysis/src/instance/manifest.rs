@@ -10,7 +10,6 @@ use araphor_query::Result;
 impl Instance {
     pub(super) fn manifest(
         definition: &PreparedDefinition,
-        images: &[(araphor_data::PackageBundleV1, String)],
     ) -> Result<(ManagedManifest, BTreeMap<u64, PackageCall>)> {
         let mut calls = BTreeMap::new();
         let mut declarations = BTreeMap::new();
@@ -24,8 +23,8 @@ impl Instance {
                     Ok(false)
                 })?;
             }
-            let bundle = images
-                .iter()
+            let bundle = definition
+                .images()
                 .find(|(bundle, digest)| {
                     bundle.root == call.image().image && *digest == call.image().digest
                 })

@@ -347,17 +347,63 @@ files match the recovered baseline and the archive checksum is unchanged.
 No additional Back file is retired. Complete host supervision, pressure
 retry, and the final complete Rust procedure remain **Not done**.
 
+### Shared admitted images and error origins
+
+Implementation and focused behavior checks are **Done**. Query retains one
+sorted immutable image slice. Each admitted call borrows its descriptor from
+that image. PreparedDefinition and its calls share the existing native memory
+reservation. Instance no longer loads and retains a second image set. Data
+still checks stored images and exact pins in its final transaction.
+
+The image charge starts after Data decodes the image and before Query validates
+and plans it. A cold preparation worker retains that charge until its result
+is delivered or dropped. An entered guest retains the charge until it exits.
+The charge covers defined payload and buffer capacities. This check does not
+claim complete allocator or native planner accounting. Configured limits stay
+optional and disabled by default. Retained instance spec and manifest capacity
+contracts remain open; their mixed reference file is not retired.
+
+Query now emits a typed AuthorityChanged notice. Only this notice can become
+a cancelled offer after current authority checks. A real Data read denial
+remains Denied. Runtime also delegates the SDK I/O retry hint. Interrupted and
+WouldBlock remain retryable through native wrappers; PermissionDenied does not.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `migration-image-build97` | Connected test build passes. | 88.267 |
+| `migration-image-query96` | 124 cases pass. Two fixture cases fail before correction. Four native cases are excluded from this command. | 187.090 |
+| `migration-image-corrections97` | Both corrected fixture cases pass. The cold case reaches actual component compilation. The scratch case requires typed shared pressure before guest entry and complete pool release. | 7.989 |
+| `migration-image-analysis96` | All 35 Instance cases pass, including both source-built native cases. | 66.990 |
+| `migration-image-native-query96` | All four source-built native Query cases pass. | 12.634 |
+| `migration-image-package96` | All four image capacity cases pass. | 0.121 |
+| `migration-image-sdk96` | All seven SDK memory cases pass. | 0.104 |
+| `migration-image-clippy97` | All connected targets and features pass with warnings denied. | 104.298 |
+| `migration-image-fmt97` | Workspace formatting passes. | 5.212 |
+
+The corrected tests change no production budget or accepted error class.
+The earlier scratch fixture measured another image. The current fixture
+measures its actual image and binding, then preserves exactly 64 KiB of
+execution headroom. The incomplete Wasm header failed before compilation;
+the current component has a parse-valid core function with an invalid result
+type. Both tests keep their no-entry and full-release assertions.
+
+Native artifact record `/tmp/araphor-oci-native-managed93.json` covers all
+116 current source inputs and six artifacts on `x86_64-unknown-linux-gnu`.
+Strict Clippy and formatting pass for this delivery. All 244 local document
+links resolve. The complete final Rust procedure, host supervision, and capture-preserving pressure retry
+remain **Not done**. All 127 remaining reference files stay unchanged.
+
 ### Production code ledger
 
-The current count92 includes native terminal outcomes and failed-offer readiness.
+The current count97 includes shared admitted images and typed error origins.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 14,297 | 8,238 | +6,059 |
-| Original reduction baseline `7b7b407a` | 42,443 | 30,388 | +12,055 |
+| `6a25ba1b` | 14,548 | 8,238 | +6,310 |
+| Original reduction baseline `7b7b407a` | 42,694 | 30,388 | +12,306 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -375,12 +421,16 @@ The two image/fixture leaves remove 84 production lines. This delivery adds
 complete replacements pass. This work restores missing behavior; it does not
 yet reduce the complete production total. The later terminal and failed-offer
 replacement adds 319 production lines and retires no additional reference
-file. Another 18,055 net production lines must be removed relative to the
+file. Shared image ownership and error-origin corrections add 251 production
+lines and retire no reference file. Another 18,306 net production lines must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count92.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count97.json`. Its selected source
 fingerprint is
+`f0c2c62db1b093b1b4659822a42613a79741686508e81add70dfd90f0794f1b2`.
+The earlier count92 records known terminal outcomes and failed-offer readiness
+at +12,055 production lines from the original baseline. Its fingerprint is
 `bc6aeb1e40ba4cf8ddda47288e8442f6019af00a194e89fb0a5cfd0ca9ec5ba2`.
 The earlier count85 records native subscriptions and image/fixture retirement.
 Its fingerprint is

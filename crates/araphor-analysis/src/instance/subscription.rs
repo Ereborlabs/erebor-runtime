@@ -33,7 +33,7 @@ impl Instance {
     ) -> Result<Subscription> {
         let grant = &self.admitted.spec.grant;
         let changes = self.authority.changes_for(grant);
-        let resume = Self::authorize(self.authority.as_ref(), grant, &self.images, || {
+        let resume = Self::authorize(self.authority.as_ref(), grant, &self.prepared, || {
             control.check()?;
             let resume = self.query.store().managed_resume(
                 self.admitted.spec.tenant,
@@ -136,14 +136,16 @@ impl Subscription {
         }
         let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
         while let Some(source) = current {
-            match source.downcast_ref::<araphor_data::Error>() {
-                Some(araphor_data::Error::Package { code, .. }) => {
-                    return ManagedExit::Failed(*code);
-                }
-                Some(araphor_data::Error::AnalysisReadDenied { .. }) => {
-                    return ManagedExit::Cancelled;
-                }
-                _ => {}
+            if matches!(
+                source.downcast_ref::<araphor_query::Error>(),
+                Some(araphor_query::Error::AuthorityChanged { .. })
+            ) {
+                return ManagedExit::Cancelled;
+            }
+            if let Some(araphor_data::Error::Package { code, .. }) =
+                source.downcast_ref::<araphor_data::Error>()
+            {
+                return ManagedExit::Failed(*code);
             }
             if source
                 .downcast_ref::<araphor_analysis_sdk::Error>()
@@ -210,7 +212,7 @@ impl Stream for Subscription {
                 Some(receipt) => Instance::authorize(
                     self.owner.authority.as_ref(),
                     &self.owner.admitted.spec.grant,
-                    &self.owner.images,
+                    &self.owner.prepared,
                     || {
                         self.control.check()?;
                         Ok(receipt)
@@ -239,7 +241,7 @@ impl ManagedPublication for sink::Publication {
         Instance::authorize(
             self.owner.authority.as_ref(),
             &self.owner.admitted.spec.grant,
-            &self.owner.images,
+            &self.owner.prepared,
             || {
                 control.check()?;
                 let spec = &self.owner.admitted.spec;
@@ -302,7 +304,7 @@ impl ManagedPublication for sink::Publication {
         let attempt = Instance::authorize(
             self.owner.authority.as_ref(),
             &self.owner.admitted.spec.grant,
-            &self.owner.images,
+            &self.owner.prepared,
             || {
                 self.owner
                     .query

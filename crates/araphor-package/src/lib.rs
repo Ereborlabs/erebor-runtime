@@ -3,6 +3,7 @@ mod bundle;
 mod error;
 mod fixture;
 mod formats;
+mod memory;
 mod metadata;
 pub mod native;
 mod oci;

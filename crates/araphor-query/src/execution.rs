@@ -214,8 +214,8 @@ impl Engine {
             })
     }
 
-    #[cfg(test)]
-    pub(crate) fn preparation_entry(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn preparation_entry(
         &self,
         entered: std::sync::mpsc::Sender<()>,
         release: std::sync::mpsc::Receiver<()>,

@@ -638,6 +638,33 @@ history, and CLI/Control managed operations remain **Not done**.
 `Instance::admitted` returns immutable admission metadata; it is not a current
 status or history API.
 
+## Shared admitted image ownership
+
+[Packages::new](../../crates/araphor-query/src/definition/package.rs) sorts exact
+image keys and rejects duplicates before native planning.
+  -> [PackageBundleV1::allocated_bytes](../../crates/araphor-package/src/memory.rs) measures defined image payload and buffer capacities after Data decode.
+  -> [Packages::new](../../crates/araphor-query/src/definition/package.rs) reserves shared input capacity before image validation, digest construction, and planning.
+  -> [PackageCall](../../crates/araphor-query/src/definition/call.rs) borrows the descriptor from its immutable image and shares the image reservation.
+  -> [PreparedDefinition::images](../../crates/araphor-query/src/definition.rs) exposes borrowed image references for Instance authority and manifest checks.
+  -> [PackageExec::new](../../crates/araphor-query/src/definition/physical.rs) retains the image charge through cold preparation and result delivery.
+  -> [Exchange](../../crates/araphor-query/src/definition/physical/guest.rs) retains the image charge until the entered guest exits.
+
+Instance removes its extra Data image load and decoded image set. Data still
+validates stored image pins in its final managed transaction. This ownership
+change does not account for pre-decode allocation, every native planner
+allocation, or opaque allocator overhead. Retained spec and manifest capacity
+remain open. No additional reference file is retired.
+
+The [capacity tests](../../crates/araphor-query/src/definition/tests/capacity.rs)
+check shared ownership, exact image identity, failed cold preparation, no
+guest entry after rejection, and full release after joined cancellation.
+The [Instance tests](../../crates/araphor-analysis/src/instance/tests.rs)
+check shared image identity and trust before preparation. All 35 Instance
+cases and four source-built native Query cases pass. The two corrected Query
+fixtures pass without changes to production budgets. The
+[migration result](../plans/araphor-analysis-migration.md#shared-admitted-images-and-error-origins)
+records exact commands and source counts.
+
 ## Native managed subscriptions
 
 [Instance::subscribe](../../crates/araphor-analysis/src/instance/subscription.rs)

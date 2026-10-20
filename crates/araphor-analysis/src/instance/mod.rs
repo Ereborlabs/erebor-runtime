@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use araphor_data::{
     AnalysisReadControl, ManagedInstance, ManagedRead, ManagedReceipt, ManagedRequest, ManagedSpec,
-    PackageActionV1, PackageAuthorization, PackageBundleRef, PackageBundleV1,
-    PackageErrorCodeV1 as Code, PackageGrantV1,
+    PackageActionV1, PackageAuthorization, PackageBundleRef, PackageErrorCodeV1 as Code,
+    PackageGrantV1,
 };
 use araphor_discovery_definition::ResolvedDefinition;
 use araphor_query::definition::{Invocation, PackageCall, PreparedDefinition};
@@ -30,7 +30,6 @@ pub struct Instance {
     admitted: ManagedInstance,
     prepared: PreparedDefinition,
     calls: BTreeMap<u64, PackageCall>,
-    images: Arc<[(PackageBundleV1, String)]>,
 }
 
 impl Instance {
@@ -47,34 +46,6 @@ impl Instance {
         authority.check(&grant, PackageActionV1::Run)?;
         definition.validate().map_err(araphor_data::Error::from)?;
         let read = Arc::new(control.within(grant.remaining()?)?);
-        let store = Arc::clone(query.store());
-        let pins = definition.images.clone();
-        let tenant = grant.selection.tenant_id;
-        let stage = Arc::clone(&read);
-        let images: Arc<[(PackageBundleV1, String)]> =
-            Engine::blocking(Arc::clone(&read), (), move || {
-                pins.into_iter()
-                    .map(|pin| {
-                        let bundle = store
-                            .package_image(
-                                tenant,
-                                &pin.image.package_id,
-                                Some(&pin.image.revision),
-                                &stage,
-                            )?
-                            .ok_or_else(|| Code::Missing.error("managed image"))?;
-                        if bundle.digest().map_err(araphor_data::Error::from)? != pin.digest {
-                            return Err(Code::Conflict.error("managed image pin").into());
-                        }
-                        Ok((bundle, pin.digest))
-                    })
-                    .collect::<araphor_query::Result<Vec<_>>>()
-                    .map(Into::into)
-            })
-            .await?;
-        for (bundle, digest) in images.iter() {
-            authority.admit(&grant, &PackageBundleRef::retained(bundle, digest))?;
-        }
         let prepared = query
             .prepare_definition(
                 grant.selection.tenant_id,
@@ -85,12 +56,14 @@ impl Instance {
         if prepared.resolved != definition {
             return Err(Code::Conflict.error("managed definition pin").into());
         }
+        for (bundle, digest) in prepared.images() {
+            authority.admit(&grant, &PackageBundleRef::retained(bundle, digest))?;
+        }
         let store = Arc::clone(query.store());
         let check = Arc::clone(&authority);
-        let checked = Arc::clone(&images);
         let stage = Arc::clone(&read);
         let (admitted, prepared, calls) = Engine::blocking(read, (), move || {
-            let (manifest, calls) = Self::manifest(&prepared, &checked)?;
+            let (manifest, calls) = Self::manifest(&prepared)?;
             let spec = ManagedSpec {
                 tenant: grant.selection.tenant_id,
                 id,
@@ -98,7 +71,7 @@ impl Instance {
                 definition,
                 manifest,
             };
-            let admitted = Self::authorize(check.as_ref(), &spec.grant, &checked, || {
+            let admitted = Self::authorize(check.as_ref(), &spec.grant, &prepared, || {
                 store.admit_managed(&spec, || stage.check())
             })
             .map_err(araphor_query::Error::from)?;
@@ -111,7 +84,6 @@ impl Instance {
             admitted,
             prepared,
             calls,
-            images,
         }))
     }
 
@@ -151,7 +123,7 @@ impl Instance {
             return Err(Code::Denied.error("managed grant expiry").into());
         }
         let receipt = result?;
-        Self::authorize(self.authority.as_ref(), grant, &self.images, || {
+        Self::authorize(self.authority.as_ref(), grant, &self.prepared, || {
             control.check()?;
             Ok(receipt)
         })
@@ -249,7 +221,7 @@ impl Instance {
                 Self::authorize(
                     owner.authority.as_ref(),
                     &owner.admitted.spec.grant,
-                    &owner.images,
+                    &owner.prepared,
                     || {
                         owner.query.store().register_managed_attempt(
                             captured,
@@ -294,7 +266,7 @@ impl Instance {
         let grant = &self.admitted.spec.grant;
         grant.remaining()?;
         self.authority.check(grant, PackageActionV1::Run)?;
-        for (bundle, digest) in self.images.iter() {
+        for (bundle, digest) in self.prepared.images() {
             self.authority
                 .admit(grant, &PackageBundleRef::retained(bundle, digest))?;
         }
@@ -304,12 +276,12 @@ impl Instance {
     fn authorize<T>(
         authority: &dyn PackageAuthorization,
         grant: &PackageGrantV1,
-        images: &[(PackageBundleV1, String)],
+        prepared: &PreparedDefinition,
         operation: impl FnOnce() -> araphor_data::Result<T>,
     ) -> araphor_data::Result<T> {
         grant.remaining()?;
-        let bundles = images
-            .iter()
+        let bundles = prepared
+            .images()
             .map(|(bundle, digest)| PackageBundleRef::retained(bundle, digest))
             .collect::<Vec<_>>();
         let mut grants = Vec::with_capacity(bundles.len() + 1);

@@ -31,6 +31,15 @@ pub struct PreparedDefinition {
     pub plan: LogicalPlan,
     pub sources: AnalysisTableRequests,
     tenant: [u8; 16],
+    images: Arc<package::Bundles>,
+}
+
+impl PreparedDefinition {
+    pub fn images(&self) -> impl Iterator<Item = (&araphor_package::PackageBundleV1, &str)> {
+        self.images
+            .iter()
+            .map(|(bundle, digest, _)| (bundle.as_ref(), digest.as_str()))
+    }
 }
 
 pub struct DefinitionOutput {
@@ -270,6 +279,7 @@ impl Engine {
             plan,
             sources,
             tenant,
+            images: Arc::clone(&packages.bundles),
         })
     }
 }
