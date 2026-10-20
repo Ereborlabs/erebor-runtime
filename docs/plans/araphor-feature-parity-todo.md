@@ -52,8 +52,9 @@ The earlier finite retirement removed 29 duplicate reference leaves after
 source comparison and focused qualification. At that point, 179 files remained
 unchanged. The historical final Rust gate
 `migration-final-ci42` covers those 29 leaves. Four additional reference files
-were then retired. Eight more Wasm leaves are now retired; 167 baseline files
-remain unchanged. The recovery archive
+were then retired. Eight more Wasm leaves and 15 finite Graph, SQL, Discovery,
+test, and asset leaves are now retired; 152 baseline files remain unchanged.
+The recovery archive
 retains all 208 originals. Read the
 [retirement record](araphor-analysis-migration.md#retired-finite-reference-files)
 for the exact scope. The full Rust gate59 stops at a stale OCI fixture. The

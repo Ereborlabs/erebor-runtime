@@ -22,6 +22,13 @@ impl AnalysisStore {
         limit: usize,
         bytes: usize,
     ) -> Result<Vec<(String, FindingV1)>> {
+        if limit == 0 {
+            return GraphInvalidSnafu {
+                field: "finding page limit",
+            }
+            .fail();
+        }
+        self.check_graph_read(tenant, &[after, exact], "finding page scope")?;
         self.read_snapshot(|snapshot| {
             let selection = self.preflight_findings(
                 snapshot,
@@ -77,9 +84,11 @@ impl AnalysisStore {
         result_id: &str,
         finding_id: &str,
     ) -> Result<Option<FindingV1>> {
-        if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
-            return self.reject("the graph result reference is invalid");
-        }
+        self.check_graph_read(
+            tenant,
+            &[Some(result_id), Some(finding_id)],
+            "finding reference",
+        )?;
         self.read_snapshot(|snapshot| {
             let Some(header) = GraphRows::read_header(snapshot, tenant, result_id)? else {
                 return Ok(None);
@@ -94,6 +103,8 @@ impl AnalysisStore {
         finding_id: &str,
         revision: &GraphRevisionV1,
     ) -> Result<Option<FindingV1>> {
+        self.check_graph_read(tenant, &[Some(finding_id)], "finding reference")?;
+        revision.validate(tenant)?;
         self.read_snapshot(|snapshot| {
             let mut after = None;
             loop {

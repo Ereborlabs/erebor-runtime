@@ -1,0 +1,1168 @@
+{
+  "status": "Eleven complete finite reference leaves retired after replacement tests passed. The final Rust gate remains Not done.",
+  "recorded_at": "2026-10-20T13:03:06.532267+00:00",
+  "qualified_source_base": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+  "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+  "scope": "One SQL output helper, three finite Discovery helpers, and seven duplicated pure test or asset leaves only.",
+  "recovery_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+  "recovery_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+  "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5",
+  "candidate_files": [
+    {
+      "path": "crates/araphor-analysis_back/src/model/output.rs",
+      "sha256": "fec6335110efaeb98b4e1ece55a3739dd547db3830b879f044d33c079672b081",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 154
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/model.rs",
+      "sha256": "e5f8234823b07856b38a4ff3e7aab8459e7eeba1387395871605ae32c61b8cfa",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 21
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/sdk/compare.rs",
+      "sha256": "a3a06d8148c5c43af3823e7fdc9b6ab6809d616fd2a96b8f6e8a2eeab925781c",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 134
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/sdk/snapshot.rs",
+      "sha256": "bb0663e1eb5781acfe21442b76b6bf27cdbe59f40f1e4720bf398ad54b0b67a0",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 150
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/context/tests/sdk.rs",
+      "sha256": "95da1ced305384a53f945c54b8808999f89c6ba329019ffba277c4bd9029330c",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 0
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/context/tests/baseline.rs",
+      "sha256": "5773f751ab34dbb75166236552cdf5b9179a5e62bbb16a31662f51d5354ab5c1",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 0
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/context/tests/baseline/context.json",
+      "sha256": "b80f5c4c9578ab6ef261f202d9d40c3865c2c0a0f7c14124cda83e0f3cc7bcbd",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 0
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/tests/baseline.rs",
+      "sha256": "a07beda38c0fd4861ea195b2cf3b22d68de5d7f828193bee724bd985c6eb7433",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 0
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/tests/baseline/atoms.json",
+      "sha256": "bd31b8fbca633c755e9799d08dd60ff0379500526dffd9fdf3c7ba2e7e76cb45",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 0
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/tests/baseline/merge.json",
+      "sha256": "202abd8b989ac27ab337ed2c62c81c784102031fd77aec5cdcaabf8c268a5a68",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 0
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/tests/baseline/compare.json",
+      "sha256": "74bed4a08a84436ee6f8ec425a50bdf0e78d585b2646549dececc9d4bafc8d0a",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_code": 0
+    }
+  ],
+  "removed_production_code": 459,
+  "counter": {
+    "path": "/tmp/araphor-long.DHe7ye/target/debug/function-inventory",
+    "sha256": "ce08a285665db81fd003ae2dfd22f176b9d0647028cd0a7b26aa0e45dc2f8a9f"
+  },
+  "count_method": "Use the existing syntax counter. Exclude test-only files, assets, test code, comments and blank lines.",
+  "model_output_map_before_test_amendment": {
+    "candidate": [
+      "crates/araphor-analysis_back/src/model/output.rs"
+    ],
+    "status": "Mapped. Qualification is not run by this audit. No deletion is made.",
+    "source_sha256": {
+      "crates/araphor-analysis_back/src/model/output.rs": "fec6335110efaeb98b4e1ece55a3739dd547db3830b879f044d33c079672b081",
+      "crates/araphor-query/src/definition/physical/sql.rs": "24249bd0b47c1a07a6143eb1fdae14c9bb52534b6dad49d7bd4058dfe7ea8b4a",
+      "crates/araphor-query/src/definition/package.rs": "56eaa2e0e67418f616f466403a52a80e03d69640deec51d83427696f9520f0fb",
+      "crates/araphor-query/src/definition/physical.rs": "bde3120a76969985a0df9b6c0f1c96e2be01a4460b19ee646b390369e4b15b46",
+      "crates/araphor-query/src/definition/tests/execution.rs": "f46e974cd2365f08c430282b1c375431fcd3eb25508575396396d3690bc930f3",
+      "crates/araphor-query/src/definition/tests/execution/contract.rs": "cfe41831e28bbb9ad20e8c9fdaad91c296be6a787a9714e5722b4b13b8abac73",
+      "crates/araphor-query/src/definition/tests.rs": "7ab4a7f8c02da7addc64501508247110c121cf76fbbbf5704d1f278841502f01",
+      "crates/araphor-analysis_back/src/model/tests.rs": "6cefb3e971e0dc20c756831d126992b99272ad0ef5d9ce01c126ddf801130a1b",
+      "crates/araphor-analysis-sdk/src/validation.rs": "0b0317fd616753d9a69273f0d3a3a573f700cb572fcf67f3b888061ea0aaa0e4"
+    },
+    "functions": [
+      {
+        "old": {
+          "path": "crates/araphor-analysis_back/src/model/output.rs",
+          "first_line": 10,
+          "last_line": 56,
+          "sha256": "8edc6293309a82628f2e9fdde2d2cbf84747ea1cd5042b77ceaa9faead52dd34"
+        },
+        "name": "ModelRun::evidence",
+        "current": {
+          "path": "crates/araphor-query/src/definition/physical/sql.rs",
+          "first_line": 129,
+          "last_line": 174,
+          "sha256": "09aba44ba4603978967943e4eddd286f05b0a061332a2c9b623216492da56476"
+        },
+        "behavior": "No query returns no links. Native SQL returns the declared four non-null Utf8/UInt64 reference columns. Each link retains exact dataset names and row indices. Control and output-memory checks precede owned link creation. Native SDK output validation rejects invalid input/output references."
+      },
+      {
+        "old": {
+          "path": "crates/araphor-analysis_back/src/model/output.rs",
+          "first_line": 58,
+          "last_line": 130,
+          "sha256": "72e5ac780be7044052f0dcfc88c98fb7e9955f90b28520f663fa4edc0fa9aa09"
+        },
+        "name": "ModelRun::reasons",
+        "current": {
+          "path": "crates/araphor-query/src/definition/physical/sql.rs",
+          "first_line": 175,
+          "last_line": 227,
+          "sha256": "06383301f10769d4f021520449009681d13b5f7d9b893eeb761b5adf257ef0ad"
+        },
+        "additional_owner": {
+          "path": "crates/araphor-query/src/definition/package.rs",
+          "first_line": 810,
+          "last_line": 851,
+          "sha256": "ea24ef6ee384700cbbe14cf7013f4453c6fdbaee10bedc0cb687dfcd1ec231e6"
+        },
+        "behavior": "Admission resolves declared output and reason names, rejects a detail field named output_row, and validates the prefixed schema. Execution preserves program reason order, copies the exact output dataset/code/row, and preserves one zero-column detail row with RecordBatchOptions. Control and metadata reservations precede creation."
+      },
+      {
+        "old": {
+          "path": "crates/araphor-analysis_back/src/model/output.rs",
+          "first_line": 132,
+          "last_line": 144,
+          "sha256": "40f0d240339101c4eeb63351bd2ca3ab90a319745f85ccdf894d1eee3285f2a5"
+        },
+        "name": "ModelRun::strings",
+        "current": {
+          "path": "crates/araphor-query/src/definition/physical/sql.rs",
+          "first_line": 240,
+          "last_line": 247,
+          "sha256": "892049610732d75a6c7adbf5856eec1601835c28dc347d312b067e7a1a2eae70"
+        },
+        "behavior": "Only a non-null StringArray is accepted."
+      },
+      {
+        "old": {
+          "path": "crates/araphor-analysis_back/src/model/output.rs",
+          "first_line": 146,
+          "last_line": 158,
+          "sha256": "752865ebc9f1aebe1c0f0761ca01e1145f66f4eedd30a48bbba07b112e563d8c"
+        },
+        "name": "ModelRun::indices",
+        "current": {
+          "path": "crates/araphor-query/src/definition/physical/sql.rs",
+          "first_line": 249,
+          "last_line": 256,
+          "sha256": "8d2140a2be108bfe0747ab1f2f7d89b09fb423f856a91ea1bf423d9d98b0d6c1"
+        },
+        "behavior": "Only a non-null UInt64Array is accepted."
+      }
+    ],
+    "test_package": "araphor-query",
+    "test_selectors": [
+      "definition::tests::execution::physical_sql_return_retains_contract",
+      "definition::tests::execution::physical_sql_failure_keeps_data",
+      "definition::tests::execution::physical_failure_keeps_session",
+      "definition::tests::execution::contract::sql_zero_column_reason",
+      "definition::tests::execution::contract::sql_limit_precedes_references",
+      "definition::tests::execution::contract::sql_indexes_local_relations",
+      "definition::tests::native_package_output_reason_index"
+    ],
+    "old_assertion_map": [
+      {
+        "old": "model::tests::sql_model_state_provenance",
+        "preserved": "Exact output rows, prior/checkpoint use, input evidence and per-output reasons. Zero-column detail row survives. Invalid evidence fails. Current focused tests also preserve all complete outputs after the selected relation/plan/engine are dropped.",
+        "tests": [
+          "definition::tests::execution::physical_sql_return_retains_contract",
+          "definition::tests::execution::physical_sql_failure_keeps_data",
+          "definition::tests::execution::physical_failure_keeps_session",
+          "definition::tests::execution::contract::sql_zero_column_reason"
+        ]
+      },
+      {
+        "old": "model::tests::admitted_program_order (output/reason portion)",
+        "preserved": "Current SQL walks declared output ports and program reason bindings in their admitted order. Missing output/code is rejected at admission instead of retaining public numeric indices. Private seals reject changed body/inputs before execution. The public numeric-index mutation cases do not have a current exposed counterpart.",
+        "tests": [
+          "definition::tests::native_package_output_reason_index",
+          "definition::tests::execution::contract::sql_indexes_local_relations",
+          "definition::tests::collision::changed_body_requires_readmission"
+        ]
+      },
+      {
+        "old": "model::execute::tests plus old aggregate-output case (connected output contract)",
+        "preserved": "Output aggregate failure occurs before reference SQL is polled; invalid references leave Data unchanged, release all configured pools and permit, and do not cancel the caller session.",
+        "tests": [
+          "definition::tests::execution::physical_sql_failure_keeps_data",
+          "definition::tests::execution::physical_failure_keeps_session",
+          "definition::tests::execution::contract::sql_limit_precedes_references"
+        ]
+      }
+    ],
+    "scope_exclusions": [
+      "This map does not retire model.rs, execute.rs, component.rs, datasets.rs, or any package lifecycle/producer leaf.",
+      "The old mandatory resource ceilings are not a preserved requirement. Existing configured limits and SDK format/schema/reference checks remain.",
+      "This map makes no claim about graph producer, live-prefix commit, automatic lifecycle, or retained-output query surfaces."
+    ]
+  },
+  "discovery_map_before_qualification": {
+    "status": "Frozen full-path read-only map. Retirement is conditional on root qualification. No file was edited or deleted by this audit.",
+    "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+    "reference_root": "crates/araphor-analysis_back/src/discovery",
+    "root_reported_total_back_files_before": 163,
+    "retirement_file_count": 10,
+    "production_file_count": 3,
+    "test_asset_file_count": 7,
+    "production_lines": 305,
+    "files": [
+      {
+        "path": "crates/araphor-analysis_back/src/discovery/model.rs",
+        "production_lines": 21,
+        "missing_finite_code": null,
+        "function_map": [
+          {
+            "old": "require",
+            "current": "araphor-data/src/discovery/model.rs::require",
+            "rule": "same true return / DiscoveryInvalid field on false",
+            "proof": "exact existing helper body; Data validation tests reject false input/output provenance",
+            "current_source_paths": [
+              "crates/araphor-data/src/discovery/model.rs"
+            ]
+          },
+          {
+            "old": "same",
+            "current": "araphor-data/src/discovery/model.rs::same",
+            "rule": "same true return / DiscoveryConflict kind on false",
+            "proof": "exact existing helper body; Data merge source checks and native merge conflict tests",
+            "current_source_paths": [
+              "crates/araphor-data/src/discovery/model.rs"
+            ]
+          },
+          {
+            "old": "add",
+            "current": "araphor-data/src/discovery/model.rs::add",
+            "rule": "checked u64 addition; count remains unchanged on overflow; DiscoveryInvalid count",
+            "proof": "exact existing helper body; Data snapshot validation uses it; native merge_checks_counter_overflow retains count failure",
+            "current_source_paths": [
+              "crates/araphor-data/src/discovery/model.rs",
+              "crates/araphor-data/src/discovery/derive.rs"
+            ]
+          },
+          {
+            "old": "InputByteLimit reexport",
+            "current": "araphor-data/src/discovery/model.rs::InputByteLimit",
+            "rule": "same existing Data-owned type, not another codec/limit owner",
+            "proof": "Back reexports the current type already",
+            "current_source_paths": [
+              "crates/araphor-data/src/discovery/model.rs"
+            ]
+          }
+        ],
+        "kind": "production",
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis_back/src/discovery/model.rs",
+        "sha256": "e5f8234823b07856b38a4ff3e7aab8459e7eeba1387395871605ae32c61b8cfa",
+        "baseline_sha256": "e5f8234823b07856b38a4ff3e7aab8459e7eeba1387395871605ae32c61b8cfa",
+        "baseline_blob": "27129130e44519372ae94bf2db1d71048920911d",
+        "baseline_equal": true,
+        "old_functions": [
+          "require",
+          "same",
+          "add"
+        ]
+      },
+      {
+        "path": "crates/araphor-analysis_back/src/discovery/sdk/compare.rs",
+        "production_lines": 134,
+        "missing_finite_code": null,
+        "function_map": [
+          {
+            "old": "DiscoveryOwner::compare",
+            "current": "DiscoveryOwner::comparison_result + Builtins Discovery::compare via native PackageCall",
+            "rule": "validate current/prior snapshots, reviewer nonempty/<=256 and positive review time, equal tenants, valid exact groups, single returned row, coverage/lifecycle/group/resource provenance",
+            "proof": [
+              "comparison_matches_corpus",
+              "comparison_requires_trusted_inputs",
+              "comparison_keeps_source_proof"
+            ],
+            "current_source_paths": [
+              "crates/araphor-analysis/src/discovery/output.rs",
+              "crates/araphor-analysis-builtins/src/discovery/compare.rs",
+              "crates/araphor-query/src/definition/physical.rs"
+            ]
+          },
+          {
+            "old": "Adapter::validate_comparison",
+            "current": "BehaviorSnapshotV1::validate_comparison",
+            "rule": "same comparison state, group identity, before/after, new resource source proof; current owner also validates group/snapshot inputs",
+            "proof": [
+              "comparison_keeps_source_proof",
+              "comparison_requires_trusted_inputs"
+            ],
+            "current_source_paths": [
+              "crates/araphor-data/src/discovery/validation/comparison.rs"
+            ]
+          },
+          {
+            "old": "Adapter::comparison_state",
+            "current": "BehaviorSnapshotV1::comparison_state",
+            "rule": "empty change lists iff states equal, otherwise exact previous/current lists",
+            "proof": [
+              "comparison_keeps_source_proof",
+              "comparison_matches_corpus"
+            ],
+            "current_source_paths": [
+              "crates/araphor-data/src/discovery/validation/comparison.rs"
+            ]
+          }
+        ],
+        "intentional_architecture_delta": [
+          "native Query owns image resolution, captured revisions, execution and cancellation instead of InstalledAnalysis + fixed 60-second wrapper",
+          "mandatory forbidden-row cardinality ceiling is not restored; existing explicit budgets apply",
+          "single-row malformed output uses shared typed Package Invalid error instead of the old analysis comparison field label"
+        ],
+        "kind": "production",
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis_back/src/discovery/sdk/compare.rs",
+        "sha256": "a3a06d8148c5c43af3823e7fdc9b6ab6809d616fd2a96b8f6e8a2eeab925781c",
+        "baseline_sha256": "a3a06d8148c5c43af3823e7fdc9b6ab6809d616fd2a96b8f6e8a2eeab925781c",
+        "baseline_blob": "4ae0572d9cd1cf93163d640a0d044296ff443ae8",
+        "baseline_equal": true,
+        "old_functions": [
+          "compare",
+          "validate_comparison",
+          "comparison_state"
+        ]
+      },
+      {
+        "path": "crates/araphor-analysis_back/src/discovery/sdk/snapshot.rs",
+        "production_lines": 150,
+        "missing_finite_code": null,
+        "function_map": [
+          {
+            "old": "DiscoveryOwner::merge / merge_control",
+            "current": "native MERGE_SQL + DiscoveryOwner::merge_result + Data BehaviorSnapshotV1::validate_merge",
+            "rule": "complete immutable source inputs, exact source/overlap/counter/coverage/disposition/lifecycle proof; control at native execution owner",
+            "proof": [
+              "merge_matches_corpus",
+              "merge_matches_builtin",
+              "merge_keeps_witness_order",
+              "merge_zips_unequal_lists",
+              "merge_preserves_range_boundaries",
+              "merge_rejects_conflicts",
+              "merge_checks_counter_overflow",
+              "merge_groups_preserve_attribution"
+            ],
+            "current_source_paths": [
+              "crates/araphor-analysis/src/discovery/output.rs",
+              "crates/araphor-analysis-builtins/src/discovery/sql/merge_snapshot.sql",
+              "crates/araphor-data/src/discovery/validation/merge.rs"
+            ]
+          },
+          {
+            "old": "DiscoveryOwner::display_groups",
+            "current": "Builtins Discovery::groups via native PackageCall + DiscoveryOwner::group_result + Data validate_groups",
+            "rule": "snapshot validation, sorted groups, exact membership/count/sample/coverage proof",
+            "proof": [
+              "merge_matches_corpus",
+              "merge_groups_preserve_attribution",
+              "comparison_requires_trusted_inputs",
+              "nonempty_tenant_guests_overlap"
+            ],
+            "current_source_paths": [
+              "crates/araphor-analysis/src/discovery/output.rs",
+              "crates/araphor-analysis-builtins/src/discovery/groups.rs",
+              "crates/araphor-data/src/discovery/validation/groups.rs"
+            ]
+          },
+          {
+            "old": "Adapter::metadata / sides",
+            "current": "native SQL typed CTE relations or declared SDK PackageCall input relations",
+            "rule": "same source/count metadata and side-tagged two-input rows; native planner composes them, no Rust runner required",
+            "proof": [
+              "merge_matches_corpus",
+              "merge_matches_builtin",
+              "recorded_oci_is_native"
+            ],
+            "current_source_paths": [
+              "crates/araphor-analysis-builtins/src/discovery/sql/merge_snapshot.sql",
+              "crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs",
+              "crates/araphor-analysis/src/discovery/output/tests.rs"
+            ]
+          },
+          {
+            "old": "Adapter::snapshot",
+            "current": "DiscoveryOwner::snapshot_result + result_rows/result_data/one_result",
+            "rule": "single counts row, complete named datasets, sorted atoms/coverage, Data snapshot validation and duplicate total; current native-row path checks tenant/revision/proof metadata",
+            "proof": [
+              "recorded_matches_corpus",
+              "merge_matches_corpus",
+              "native_rows_preserve_metadata",
+              "recorded_rejects_forged_proof",
+              "results_reject_foreign_attribution"
+            ],
+            "current_source_paths": [
+              "crates/araphor-analysis/src/discovery/output.rs",
+              "crates/araphor-data/src/discovery/native.rs",
+              "crates/araphor-data/src/discovery/derive.rs"
+            ]
+          }
+        ],
+        "intentional_architecture_delta": [
+          "exact sealed CallResult origin replaces arbitrary mutable InstalledEvaluation",
+          "native effective limits replace hardcoded host codec limits",
+          "single-row malformed output uses shared typed Package Invalid error instead of the old analysis counts field label"
+        ],
+        "kind": "production",
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis_back/src/discovery/sdk/snapshot.rs",
+        "sha256": "bb0663e1eb5781acfe21442b76b6bf27cdbe59f40f1e4720bf398ad54b0b67a0",
+        "baseline_sha256": "bb0663e1eb5781acfe21442b76b6bf27cdbe59f40f1e4720bf398ad54b0b67a0",
+        "baseline_blob": "600725e37dba9875d5309c66b3c7a653e5924f53",
+        "baseline_equal": true,
+        "old_functions": [
+          "merge",
+          "merge_control",
+          "display_groups",
+          "metadata",
+          "sides",
+          "snapshot"
+        ]
+      },
+      {
+        "assertions": [
+          "context_sdk_packet",
+          "context_sdk_metadata",
+          "context_sdk_version"
+        ],
+        "path": "crates/araphor-analysis_back/src/discovery/context/tests/sdk.rs",
+        "kind": "test or fixture",
+        "production_lines": 0,
+        "replacement": "crates/araphor-analysis/src/context/tests/sdk.rs",
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis_back/src/discovery/context/tests/sdk.rs",
+        "sha256": "95da1ced305384a53f945c54b8808999f89c6ba329019ffba277c4bd9029330c",
+        "baseline_sha256": "95da1ced305384a53f945c54b8808999f89c6ba329019ffba277c4bd9029330c",
+        "baseline_blob": "d4fa79b715a7a895476487351ed59500a3861e5f",
+        "baseline_equal": true,
+        "old_functions": [
+          "context_sdk_packet",
+          "context_sdk_metadata",
+          "context_sdk_version"
+        ],
+        "replacement_absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/context/tests/sdk.rs",
+        "replacement_sha256": "48305b41a65cb82af061c453977d34837c3da7acaa039ae47579a3c2fb5a8e34",
+        "assertion_map": [
+          {
+            "old": "context_sdk_packet",
+            "current": "context::tests::sdk::context_sdk_packet"
+          },
+          {
+            "old": "context_sdk_metadata",
+            "current": "context::tests::sdk::context_sdk_metadata"
+          },
+          {
+            "old": "context_sdk_version",
+            "current": "context::tests::sdk::context_sdk_version"
+          }
+        ]
+      },
+      {
+        "assertions": [
+          "discovery_context_baseline"
+        ],
+        "path": "crates/araphor-analysis_back/src/discovery/context/tests/baseline.rs",
+        "kind": "test or fixture",
+        "production_lines": 0,
+        "replacement": "crates/araphor-analysis/src/context/tests/baseline.rs",
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis_back/src/discovery/context/tests/baseline.rs",
+        "sha256": "5773f751ab34dbb75166236552cdf5b9179a5e62bbb16a31662f51d5354ab5c1",
+        "baseline_sha256": "5773f751ab34dbb75166236552cdf5b9179a5e62bbb16a31662f51d5354ab5c1",
+        "baseline_blob": "9176a7aa924a7fb3738ab0f60c9cb09daad04c05",
+        "baseline_equal": true,
+        "old_functions": [
+          "discovery_context_baseline"
+        ],
+        "replacement_absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/context/tests/baseline.rs",
+        "replacement_sha256": "e6c50f6d7845c5c7b24f283e08f091c3bd131730f5aba6bdaa19a65fda451913",
+        "assertion_map": [
+          {
+            "old": "discovery_context_baseline",
+            "current": "context::tests::baseline::discovery_context_baseline",
+            "behavior": [
+              "cutoff and later reviewed revision",
+              "same-subject conflicts",
+              "missing receive time/future owner fact",
+              "denied sensitivity",
+              "exact full baseline payload"
+            ]
+          }
+        ]
+      },
+      {
+        "assertions": [
+          "byte-identical asset"
+        ],
+        "path": "crates/araphor-analysis_back/src/discovery/context/tests/baseline/context.json",
+        "kind": "test or fixture",
+        "production_lines": 0,
+        "replacement": "crates/araphor-analysis/src/context/tests/baseline/context.json",
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis_back/src/discovery/context/tests/baseline/context.json",
+        "sha256": "b80f5c4c9578ab6ef261f202d9d40c3865c2c0a0f7c14124cda83e0f3cc7bcbd",
+        "baseline_sha256": "b80f5c4c9578ab6ef261f202d9d40c3865c2c0a0f7c14124cda83e0f3cc7bcbd",
+        "baseline_blob": "dd522a9db5af876bd9cab1bb285456542b2cb1ca",
+        "baseline_equal": true,
+        "replacement_absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/context/tests/baseline/context.json",
+        "replacement_sha256": "b80f5c4c9578ab6ef261f202d9d40c3865c2c0a0f7c14124cda83e0f3cc7bcbd",
+        "replacement_byte_identical": true,
+        "assertion_map": [
+          {
+            "current": "context::tests::baseline::discovery_context_baseline",
+            "behavior": "byte-identical complete expected JSON"
+          }
+        ]
+      },
+      {
+        "assertions": [
+          "recorded_matches_corpus",
+          "merge_matches_corpus",
+          "comparison_matches_corpus"
+        ],
+        "path": "crates/araphor-analysis_back/src/discovery/tests/baseline.rs",
+        "kind": "test or fixture",
+        "production_lines": 0,
+        "replacement": "crates/araphor-analysis/src/discovery/output/tests/baseline.rs",
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis_back/src/discovery/tests/baseline.rs",
+        "sha256": "a07beda38c0fd4861ea195b2cf3b22d68de5d7f828193bee724bd985c6eb7433",
+        "baseline_sha256": "a07beda38c0fd4861ea195b2cf3b22d68de5d7f828193bee724bd985c6eb7433",
+        "baseline_blob": "4dcf6b58bb9385f15c0e4debffb0071266fe9623",
+        "baseline_equal": true,
+        "old_functions": [
+          "discovery_atoms_baseline",
+          "discovery_merge_baseline",
+          "discovery_compare_baseline"
+        ],
+        "replacement_absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/discovery/output/tests/baseline.rs",
+        "replacement_sha256": "621874a8e6e1b94d7b97721c7b7552dafca0fbc33a92588c9b991353330ba82e",
+        "assertion_map": [
+          {
+            "old": "discovery_atoms_baseline",
+            "current": "discovery::output::tests::baseline::recorded_matches_corpus"
+          },
+          {
+            "old": "discovery_merge_baseline",
+            "current": "discovery::output::tests::baseline::merge_matches_corpus"
+          },
+          {
+            "old": "discovery_compare_baseline",
+            "current": "discovery::output::tests::baseline::comparison_matches_corpus"
+          }
+        ]
+      },
+      {
+        "assertions": [
+          "byte-identical asset"
+        ],
+        "path": "crates/araphor-analysis_back/src/discovery/tests/baseline/atoms.json",
+        "kind": "test or fixture",
+        "production_lines": 0,
+        "replacement": "crates/araphor-data/src/discovery/validation/tests/fixtures/atoms.json",
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis_back/src/discovery/tests/baseline/atoms.json",
+        "sha256": "bd31b8fbca633c755e9799d08dd60ff0379500526dffd9fdf3c7ba2e7e76cb45",
+        "baseline_sha256": "bd31b8fbca633c755e9799d08dd60ff0379500526dffd9fdf3c7ba2e7e76cb45",
+        "baseline_blob": "0ba29b7dc52127f13bccce2123e6299b4109dc6a",
+        "baseline_equal": true,
+        "replacement_absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/tests/fixtures/atoms.json",
+        "replacement_sha256": "bd31b8fbca633c755e9799d08dd60ff0379500526dffd9fdf3c7ba2e7e76cb45",
+        "replacement_byte_identical": true,
+        "assertion_map": [
+          {
+            "current": "discovery::output::tests::baseline::recorded_matches_corpus",
+            "behavior": "byte-identical complete expected JSON, read from Data fixtures"
+          }
+        ]
+      },
+      {
+        "assertions": [
+          "byte-identical asset"
+        ],
+        "path": "crates/araphor-analysis_back/src/discovery/tests/baseline/merge.json",
+        "kind": "test or fixture",
+        "production_lines": 0,
+        "replacement": "crates/araphor-analysis/src/discovery/output/tests/baseline/merge.json",
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis_back/src/discovery/tests/baseline/merge.json",
+        "sha256": "202abd8b989ac27ab337ed2c62c81c784102031fd77aec5cdcaabf8c268a5a68",
+        "baseline_sha256": "202abd8b989ac27ab337ed2c62c81c784102031fd77aec5cdcaabf8c268a5a68",
+        "baseline_blob": "1e4dac81954f74031b332cf23d865addd345eeca",
+        "baseline_equal": true,
+        "replacement_absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/discovery/output/tests/baseline/merge.json",
+        "replacement_sha256": "202abd8b989ac27ab337ed2c62c81c784102031fd77aec5cdcaabf8c268a5a68",
+        "replacement_byte_identical": true,
+        "assertion_map": [
+          {
+            "current": "discovery::output::tests::baseline::merge_matches_corpus",
+            "behavior": "byte-identical complete expected merged snapshot plus groups JSON"
+          }
+        ]
+      },
+      {
+        "assertions": [
+          "byte-identical asset"
+        ],
+        "path": "crates/araphor-analysis_back/src/discovery/tests/baseline/compare.json",
+        "kind": "test or fixture",
+        "production_lines": 0,
+        "replacement": "crates/araphor-analysis/src/discovery/output/tests/baseline/compare.json",
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis_back/src/discovery/tests/baseline/compare.json",
+        "sha256": "74bed4a08a84436ee6f8ec425a50bdf0e78d585b2646549dececc9d4bafc8d0a",
+        "baseline_sha256": "74bed4a08a84436ee6f8ec425a50bdf0e78d585b2646549dececc9d4bafc8d0a",
+        "baseline_blob": "3d15cdc7b869f9e533cac3e2d6d15d5c9748f2b6",
+        "baseline_equal": true,
+        "replacement_absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/discovery/output/tests/baseline/compare.json",
+        "replacement_sha256": "74bed4a08a84436ee6f8ec425a50bdf0e78d585b2646549dececc9d4bafc8d0a",
+        "replacement_byte_identical": true,
+        "assertion_map": [
+          {
+            "current": "discovery::output::tests::baseline::comparison_matches_corpus",
+            "behavior": "byte-identical complete expected counts/outcomes/identities JSON"
+          }
+        ]
+      }
+    ],
+    "assertion_sources": {
+      "discovery::output::tests::baseline::recorded_matches_corpus": "crates/araphor-analysis/src/discovery/output/tests/baseline.rs",
+      "discovery::output::tests::baseline::merge_matches_corpus": "crates/araphor-analysis/src/discovery/output/tests/baseline.rs",
+      "discovery::output::tests::baseline::comparison_matches_corpus": "crates/araphor-analysis/src/discovery/output/tests/baseline.rs",
+      "discovery::output::tests::forged::recorded_rejects_forged_proof": "crates/araphor-analysis/src/discovery/output/tests/forged.rs",
+      "discovery::output::tests::forged::recorded_rejects_coverage_upgrade": "crates/araphor-analysis/src/discovery/output/tests/forged.rs",
+      "discovery::output::tests::forged::results_reject_foreign_attribution": "crates/araphor-analysis/src/discovery/output/tests/forged.rs",
+      "discovery::output::tests::forged::comparison_requires_trusted_inputs": "crates/araphor-analysis/src/discovery/output/tests/forged.rs",
+      "discovery::output::tests::native::native_rows_preserve_metadata": "crates/araphor-analysis/src/discovery/output/tests/native.rs",
+      "discovery::validation::tests::recorded_rejects_host_changes": "crates/araphor-data/src/discovery/validation/tests.rs",
+      "discovery::validation::tests::recorded_rejects_coverage_upgrade": "crates/araphor-data/src/discovery/validation/tests.rs",
+      "discovery::validation::tests::merge_groups_preserve_attribution": "crates/araphor-data/src/discovery/validation/tests.rs",
+      "discovery::validation::tests::comparison_keeps_source_proof": "crates/araphor-data/src/discovery/validation/tests.rs",
+      "context::tests::sdk::context_sdk_packet": "crates/araphor-analysis/src/context/tests/sdk.rs",
+      "context::tests::sdk::context_sdk_metadata": "crates/araphor-analysis/src/context/tests/sdk.rs",
+      "context::tests::sdk::context_sdk_version": "crates/araphor-analysis/src/context/tests/sdk.rs",
+      "context::tests::baseline::discovery_context_baseline": "crates/araphor-analysis/src/context/tests/baseline.rs",
+      "package::tests::sql::recorded::merge::merge_matches_builtin": "crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs",
+      "package::tests::sql::recorded::merge::merge_keeps_witness_order": "crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs",
+      "package::tests::sql::recorded::merge::merge_zips_unequal_lists": "crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs",
+      "package::tests::sql::recorded::merge::merge_preserves_range_boundaries": "crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs",
+      "package::tests::sql::recorded::merge::merge_rejects_conflicts": "crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs",
+      "package::tests::sql::recorded::merge::merge_checks_counter_overflow": "crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs"
+    },
+    "current_source_hashes": {
+      "crates/araphor-analysis-builtins/src/discovery/compare.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/discovery/compare.rs",
+        "sha256": "288ef0b11a7ef64dc699db86e71f8e38c8531f9254c8753c8dedb161bb333322"
+      },
+      "crates/araphor-analysis-builtins/src/discovery/groups.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/discovery/groups.rs",
+        "sha256": "c0eb287aa903a0371aef3448d0b50ef7226f1d9c8aed837c78f9e736c3525e48"
+      },
+      "crates/araphor-analysis-builtins/src/discovery/merge.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/discovery/merge.rs",
+        "sha256": "e38c85fee0064ec10841c0ccde07fc31b99a3dccacdc4d58619cdc7b4ba7b6ed"
+      },
+      "crates/araphor-analysis-builtins/src/discovery/mod.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/discovery/mod.rs",
+        "sha256": "f286f1a037da52957144b3068fa171a37dd7fb8f614e3bda760a7f39918ab9a8"
+      },
+      "crates/araphor-analysis-builtins/src/discovery/record.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/discovery/record.rs",
+        "sha256": "81947499c786cff4b4f1a1ab290acaaae19293b86faf3550bcbc07922dc6005a"
+      },
+      "crates/araphor-analysis-builtins/src/discovery/sql.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/discovery/sql.rs",
+        "sha256": "f3f431a09feb1178fbc4938f55ffacdbaa8b33eb4a15f9a2ac2b0b51fdfbdbcc"
+      },
+      "crates/araphor-analysis-builtins/src/discovery/sql/merge_snapshot.sql": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/discovery/sql/merge_snapshot.sql",
+        "sha256": "998a205102cf865f6484d0498a64a893b718602f22e98fba481a297e40215584"
+      },
+      "crates/araphor-analysis-builtins/src/discovery/sql/qualify_ranges.sql": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/discovery/sql/qualify_ranges.sql",
+        "sha256": "f2b7c3b53f9d9538ebf5d16684c4b4e38ce74ac24e4c8b79c664eaa49b3aeb52"
+      },
+      "crates/araphor-analysis-builtins/src/discovery/sql/recorded_snapshot.sql": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/discovery/sql/recorded_snapshot.sql",
+        "sha256": "20cbe5141380803a3f46e12c5b6b4c798066558e68015233f782e20bee2a201f"
+      },
+      "crates/araphor-analysis/src/context/codec.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/context/codec.rs",
+        "sha256": "66df377eefaec215366ccb3571420274b0ba965145c308fe872035c7f750f7e7"
+      },
+      "crates/araphor-analysis/src/context/selection.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/context/selection.rs",
+        "sha256": "72c8bcb324344bc6bdc9a4d7c0c281535795ab6028e4579a4f717e4668aceb8d"
+      },
+      "crates/araphor-analysis/src/context/selection.sql": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/context/selection.sql",
+        "sha256": "0a83297480fc8678400a7d47973a1ebd6bb7123ceffd1458205066ccf0c15757"
+      },
+      "crates/araphor-analysis/src/context/tests.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/context/tests.rs",
+        "sha256": "0a4217ab281a019f06a05fbb66ef80a94f98c64fd7262a05395045e671c45a89"
+      },
+      "crates/araphor-analysis/src/context/tests/baseline.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/context/tests/baseline.rs",
+        "sha256": "e6c50f6d7845c5c7b24f283e08f091c3bd131730f5aba6bdaa19a65fda451913"
+      },
+      "crates/araphor-analysis/src/context/tests/baseline/context.json": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/context/tests/baseline/context.json",
+        "sha256": "b80f5c4c9578ab6ef261f202d9d40c3865c2c0a0f7c14124cda83e0f3cc7bcbd"
+      },
+      "crates/araphor-analysis/src/context/tests/sdk.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/context/tests/sdk.rs",
+        "sha256": "48305b41a65cb82af061c453977d34837c3da7acaa039ae47579a3c2fb5a8e34"
+      },
+      "crates/araphor-analysis/src/discovery/output.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/discovery/output.rs",
+        "sha256": "97859c0db6c6ff748b88fce5bf21ff59f61bdeeafd50914bf81b921fa50d1ab8"
+      },
+      "crates/araphor-analysis/src/discovery/output/tests.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/discovery/output/tests.rs",
+        "sha256": "55007e04731c1e3419d6499141e7f2110995e98df39dbf3d6e163f96967d393d"
+      },
+      "crates/araphor-analysis/src/discovery/output/tests/baseline.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/discovery/output/tests/baseline.rs",
+        "sha256": "621874a8e6e1b94d7b97721c7b7552dafca0fbc33a92588c9b991353330ba82e"
+      },
+      "crates/araphor-analysis/src/discovery/output/tests/baseline/compare.json": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/discovery/output/tests/baseline/compare.json",
+        "sha256": "74bed4a08a84436ee6f8ec425a50bdf0e78d585b2646549dececc9d4bafc8d0a"
+      },
+      "crates/araphor-analysis/src/discovery/output/tests/baseline/merge.json": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/discovery/output/tests/baseline/merge.json",
+        "sha256": "202abd8b989ac27ab337ed2c62c81c784102031fd77aec5cdcaabf8c268a5a68"
+      },
+      "crates/araphor-analysis/src/discovery/output/tests/forged.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/discovery/output/tests/forged.rs",
+        "sha256": "013ccbd7051326600614ba603216bd0525a8569e6bd4e504809636ed4e39ebeb"
+      },
+      "crates/araphor-analysis/src/discovery/output/tests/native.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/discovery/output/tests/native.rs",
+        "sha256": "3fdfaa1f26d0bafc0da4d2d17e9ff43e0847ae77b2ab256ab8a90570871edc2e"
+      },
+      "crates/araphor-analysis/src/package/builtin.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/package/builtin.rs",
+        "sha256": "b0183ba6c47b65e5eea368a6c25df61fd671c3d0aa6e160516921aa03cff8a9a"
+      },
+      "crates/araphor-analysis/src/package/tests/sql.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/package/tests/sql.rs",
+        "sha256": "9642a0c4bbbd0a2e03f55fc00642da644e37e0844a5031ebe3d5841373cdb9bf"
+      },
+      "crates/araphor-analysis/src/package/tests/sql/recorded.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/package/tests/sql/recorded.rs",
+        "sha256": "db772ebb94ed6076bbea120e195c009126789ae99803a76ccc941e6fd9d1a0af"
+      },
+      "crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs",
+        "sha256": "c69367a889e0911f5323f8490ffa6c3b275f5357bca8aff52ace0f966587fa6b"
+      },
+      "crates/araphor-analysis/src/package/tests/subscriptions.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/package/tests/subscriptions.rs",
+        "sha256": "4b001d956a0af130f584877ba28f6ec871be352c05e2b13f71b40bc65ef43358"
+      },
+      "crates/araphor-data/src/discovery/derive.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/derive.rs",
+        "sha256": "d6952202fe1a5b2d3747df82754fc9e27699d7217d1c3a7dd413fcce580b60b2"
+      },
+      "crates/araphor-data/src/discovery/model.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/model.rs",
+        "sha256": "dda0dba5e9c34b4ab79356162fcf7b4c4bd874e26b5969867ee3ffce6d612761"
+      },
+      "crates/araphor-data/src/discovery/native.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/native.rs",
+        "sha256": "b8e6a56a31596f89be9253ff861f74abde9f02673bee198e68f7b302cdc725d8"
+      },
+      "crates/araphor-data/src/discovery/validation.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation.rs",
+        "sha256": "57bda68aeb3387334a60bf1fb39c576908f3f9464026b3934ff5d2be1fe55e8c"
+      },
+      "crates/araphor-data/src/discovery/validation/comparison.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/comparison.rs",
+        "sha256": "97e423dc6c783ece9be08400b91c73b12a66f450881bfdb1cca155cbe9754797"
+      },
+      "crates/araphor-data/src/discovery/validation/coverage.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/coverage.rs",
+        "sha256": "f54348d1e5d07d30286470bc2e6171682fa03441c8f21fc362045cf3fcd08a59"
+      },
+      "crates/araphor-data/src/discovery/validation/groups.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/groups.rs",
+        "sha256": "c3556f44936ad42d990d269a6b40f842d2fb645603054a55fb6186f7386fcc4b"
+      },
+      "crates/araphor-data/src/discovery/validation/lifecycle.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/lifecycle.rs",
+        "sha256": "733c0e7e766df918de6e5143aceb68f745dc90ea7d5ddd2f6db67160f62f66b3"
+      },
+      "crates/araphor-data/src/discovery/validation/merge.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/merge.rs",
+        "sha256": "aa3fc61b5adc100cc4ad49f47d0c17278fbacb67084ce46d7c6cb809497c76b0"
+      },
+      "crates/araphor-data/src/discovery/validation/recorded.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/recorded.rs",
+        "sha256": "773d21339125ff4ce9c2197e92adf2c7739eda8cc766e4ca73336afcce515a01"
+      },
+      "crates/araphor-data/src/discovery/validation/tests.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/tests.rs",
+        "sha256": "be92f861aae8e4b88d457aaa5ac600ac963f8892011d5935c10441e321651af7"
+      },
+      "crates/araphor-data/src/discovery/validation/tests/fixtures/atoms.json": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/tests/fixtures/atoms.json",
+        "sha256": "bd31b8fbca633c755e9799d08dd60ff0379500526dffd9fdf3c7ba2e7e76cb45"
+      },
+      "crates/araphor-data/src/discovery/validation/tests/fixtures/input.json": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/tests/fixtures/input.json",
+        "sha256": "b912d7fb39d6b0d42c1b5d0c705af42d2c9dc7d2a2bd773aadc1dde2b2b00ae5"
+      },
+      "crates/araphor-data/src/discovery/validation/tests/fixtures/merge.json": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/discovery/validation/tests/fixtures/merge.json",
+        "sha256": "202abd8b989ac27ab337ed2c62c81c784102031fd77aec5cdcaabf8c268a5a68"
+      },
+      "crates/araphor-query/src/definition/call.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-query/src/definition/call.rs",
+        "sha256": "484257d76a31cb851f65f2f9de40bfee3a4c963788c78b06285630f1c5fa4a7e"
+      },
+      "crates/araphor-query/src/definition/package.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-query/src/definition/package.rs",
+        "sha256": "56eaa2e0e67418f616f466403a52a80e03d69640deec51d83427696f9520f0fb"
+      },
+      "crates/araphor-query/src/definition/physical.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-query/src/definition/physical.rs",
+        "sha256": "bde3120a76969985a0df9b6c0f1c96e2be01a4460b19ee646b390369e4b15b46"
+      },
+      "crates/araphor-query/src/definition/physical/sql.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-query/src/definition/physical/sql.rs",
+        "sha256": "24249bd0b47c1a07a6143eb1fdae14c9bb52534b6dad49d7bd4058dfe7ea8b4a"
+      },
+      "crates/araphor-query/src/definition/tests/execution.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-query/src/definition/tests/execution.rs",
+        "sha256": "f46e974cd2365f08c430282b1c375431fcd3eb25508575396396d3690bc930f3"
+      },
+      "crates/araphor-query/src/definition/tests/execution/contract.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-query/src/definition/tests/execution/contract.rs",
+        "sha256": "d6e0942429c68a95e721291bbee4439bd8d5aae8959b78731ac18f4c766450b7"
+      },
+      "crates/araphor-query/src/definition/tests/parity.rs": {
+        "absolute_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-query/src/definition/tests/parity.rs",
+        "sha256": "d1bc0c920c6b500d84fc08e2c744c62dfaedbb7dd8dcfa59f5f6f39bbcef5b04"
+      }
+    },
+    "previous_discovery_review": {
+      "path": "/tmp/araphor-discovery-finite-retirement-20261020-ew0iv20u/REVIEW.md",
+      "sha256": "e9496df200a50e216f2a6b3dafa3fa59a5901ba149463184f0c469ee171c3bc5"
+    },
+    "independent_ordering_review": {
+      "status": "uncompiled /tmp-only candidate, no live source edits",
+      "file": "crates/araphor-query/src/definition/tests/execution/contract.rs",
+      "source_before_sha256": "d6e0942429c68a95e721291bbee4439bd8d5aae8959b78731ac18f4c766450b7",
+      "source_after_sha256": "30693f8b88e3f68cf3ef7b2b6bf7b1edbbcdeb9cee20d564c66c8db872e53bf8",
+      "patch_sha256": "4fe746d0fef30c40f32c9be07729101864b9f4f9ccabeaae43fe8b15f1b2d46b",
+      "old_test": "crates/araphor-analysis_back/src/model/tests.rs::admitted_program_order",
+      "old_file_sha256": "6cefb3e971e0dc20c756831d126992b99272ad0ef5d9ce01c126ddf801130a1b",
+      "existing_positive_order_assertions_preserved": true,
+      "missing_admission_assertions_added": [
+        "reason output must reference a declared output",
+        "reason code must reference a declared reason"
+      ],
+      "fixture_corrections": [
+        "use existing explicit capacity_limits fixture",
+        "drop retained DefinitionOutput before reacquiring full capacity"
+      ],
+      "verification": [
+        "isolated rustfmt passed",
+        "git apply --check --whitespace=error-all passed"
+      ],
+      "not_run": [
+        "Cargo",
+        "build",
+        "test"
+      ],
+      "patch": "/tmp/araphor-admitted-order-review-20261020-k8ge89sg/admitted-order.patch",
+      "review": "/tmp/araphor-admitted-order-review-20261020-k8ge89sg/REVIEW.md",
+      "current_live_test_file_sha256": "d6e0942429c68a95e721291bbee4439bd8d5aae8959b78731ac18f4c766450b7",
+      "scope": "Independent model assertion migration review. Does not establish a native Discovery export matrix or lifecycle proof."
+    },
+    "qualification": {
+      "status": "root current-owner qualification pending final report; this subagent ran no tests",
+      "required_filters": [
+        "discovery::output::tests::",
+        "discovery::validation::tests::",
+        "package::tests::sql::recorded::merge::",
+        "context::tests::sdk::",
+        "context::tests::baseline::",
+        "definition::tests::parity::nonempty_tenant_guests_overlap"
+      ],
+      "ordering_fix_status": "frozen /tmp patch; both old declaration negatives preserved in candidate, not yet live or tested"
+    },
+    "retained_scope": [
+      "sdk/atoms.rs and all mixed atom/page/native/corpus test leaves",
+      "sdk/pages.rs and sdk/mod.rs until exact finite input gates close",
+      "installed/live/replay/interval/window/finalization/frozen facts/witness expiry/recovery/notice paths"
+    ],
+    "resource_caveat": "Existing Data Discovery/Builtins ceilings remain. This record does not claim all quotas disabled and adds no quota owner."
+  },
+  "test_amendment": {
+    "path": "crates/araphor-query/src/definition/tests/execution/contract.rs",
+    "sha256": "30693f8b88e3f68cf3ef7b2b6bf7b1edbbcdeb9cee20d564c66c8db872e53bf8",
+    "tests": [
+      "definition::tests::execution::contract::sql_preserves_admitted_order",
+      "definition::tests::execution::contract::sql_zero_column_reason"
+    ],
+    "assertions": [
+      "Keep nonalphabetic descriptor output and checkpoint order, exact rows and reason program order.",
+      "Reject undeclared reason output and code through real OCI installation and native admission with exact typed source fields.",
+      "Keep zero-column reason row counts and wire roundtrip.",
+      "Use explicit capacities and release retained results before full pool reacquisition."
+    ],
+    "first_run": "migration-output-discovery-query66 passed nine cases and failed the new fixture because capacities were absent. No reference file was removed for that failed proof.",
+    "correction": "Use capacity_limits and drop the retained result before capacity checks. The final ten-case run passes."
+  },
+  "qualification": {
+    "migration-discovery-analysis66": {
+      "command": [
+        "target/debug/deps/araphor_analysis-53f064deff3acc77",
+        "discovery::output::tests::",
+        "context::tests::",
+        "--test-threads=2"
+      ],
+      "started_utc": "2026-10-20T12:51:47.912802+00:00",
+      "elapsed_seconds": 75.585,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis_back/src/graph/derive/adapter/output.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/derive/finish.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/read.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/read/tests.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-data/src/analysis/graph.rs": "2f70b3dd792af7076a8fccbe421245f3ddafc1c3260e9c5ca557c6fb5b92dd30",
+        "crates/araphor-data/src/analysis/graph/findings.rs": "7739ad8725ab02f40c7325460251a247c96e9da54baceb0b0e6e0c0edbae102d",
+        "crates/araphor-data/src/analysis/graph/findings/tests.rs": "f97cfe834b976ba5a03d006ab50c9e2a93b2864d7e491010eb00f8fe98d25ff3",
+        "crates/araphor-data/src/graph/model.rs": "50d84c69566a7425a33011e10ac44ae1a1d791218475eab0947bdddd10cc46d0",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "d6e0942429c68a95e721291bbee4439bd8d5aae8959b78731ac18f4c766450b7"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-discovery-analysis66.log",
+      "evidence_version": 2,
+      "head_before": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+      "head_after": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "45da676d58e3c3c3d297a90f66c9027d6746495acc4a34a0c5f2bb288d06229f"
+    },
+    "migration-discovery-data66": {
+      "command": [
+        "target/debug/deps/araphor_data-ff31a0c71101d6e2",
+        "discovery::validation::tests::",
+        "--test-threads=2"
+      ],
+      "started_utc": "2026-10-20T12:51:48.586043+00:00",
+      "elapsed_seconds": 0.137,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis_back/src/graph/derive/adapter/output.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/derive/finish.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/read.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/read/tests.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-data/src/analysis/graph.rs": "2f70b3dd792af7076a8fccbe421245f3ddafc1c3260e9c5ca557c6fb5b92dd30",
+        "crates/araphor-data/src/analysis/graph/findings.rs": "7739ad8725ab02f40c7325460251a247c96e9da54baceb0b0e6e0c0edbae102d",
+        "crates/araphor-data/src/analysis/graph/findings/tests.rs": "f97cfe834b976ba5a03d006ab50c9e2a93b2864d7e491010eb00f8fe98d25ff3",
+        "crates/araphor-data/src/graph/model.rs": "50d84c69566a7425a33011e10ac44ae1a1d791218475eab0947bdddd10cc46d0",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "d6e0942429c68a95e721291bbee4439bd8d5aae8959b78731ac18f4c766450b7"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-discovery-data66.log",
+      "evidence_version": 2,
+      "head_before": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+      "head_after": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "98807699d1e6a3856270b150b33d64cb56a69bb78901161bbbe7aacd1fcd723c"
+    },
+    "migration-discovery-builtins66": {
+      "command": [
+        "target/debug/deps/araphor_analysis_builtins-a3ea558d6c2750d5",
+        "--test-threads=2"
+      ],
+      "started_utc": "2026-10-20T12:54:46.082083+00:00",
+      "elapsed_seconds": 0.105,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis_back/src/graph/derive/adapter/output.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/derive/finish.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/read.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/read/tests.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-data/src/analysis/graph.rs": "2f70b3dd792af7076a8fccbe421245f3ddafc1c3260e9c5ca557c6fb5b92dd30",
+        "crates/araphor-data/src/analysis/graph/findings.rs": "7739ad8725ab02f40c7325460251a247c96e9da54baceb0b0e6e0c0edbae102d",
+        "crates/araphor-data/src/analysis/graph/findings/tests.rs": "f97cfe834b976ba5a03d006ab50c9e2a93b2864d7e491010eb00f8fe98d25ff3",
+        "crates/araphor-data/src/graph/model.rs": "50d84c69566a7425a33011e10ac44ae1a1d791218475eab0947bdddd10cc46d0",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "d6e0942429c68a95e721291bbee4439bd8d5aae8959b78731ac18f4c766450b7"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-discovery-builtins66.log",
+      "evidence_version": 2,
+      "head_before": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+      "head_after": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "0b8803df06c041084973cff9a7bbc217aa5ea78702f4233aec877bd70f31fbc5"
+    },
+    "migration-discovery-finite-sql67": {
+      "command": [
+        "target/debug/deps/araphor_analysis-53f064deff3acc77",
+        "package::tests::sql::recorded::merge::",
+        "recorded_oci_is_native",
+        "--test-threads=2"
+      ],
+      "started_utc": "2026-10-20T12:59:05.037355+00:00",
+      "elapsed_seconds": 10.849,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis_back/src/graph/derive/adapter/output.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/derive/finish.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/read.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/read/tests.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-data/src/analysis/graph.rs": "2f70b3dd792af7076a8fccbe421245f3ddafc1c3260e9c5ca557c6fb5b92dd30",
+        "crates/araphor-data/src/analysis/graph/findings.rs": "7739ad8725ab02f40c7325460251a247c96e9da54baceb0b0e6e0c0edbae102d",
+        "crates/araphor-data/src/analysis/graph/findings/tests.rs": "f97cfe834b976ba5a03d006ab50c9e2a93b2864d7e491010eb00f8fe98d25ff3",
+        "crates/araphor-data/src/graph/model.rs": "50d84c69566a7425a33011e10ac44ae1a1d791218475eab0947bdddd10cc46d0",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "30693f8b88e3f68cf3ef7b2b6bf7b1edbbcdeb9cee20d564c66c8db872e53bf8"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-discovery-finite-sql67.log",
+      "evidence_version": 2,
+      "head_before": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+      "head_after": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "45da676d58e3c3c3d297a90f66c9027d6746495acc4a34a0c5f2bb288d06229f"
+    },
+    "migration-output-discovery-query67": {
+      "command": [
+        "target/debug/deps/araphor_query-c8742c21f1c7ffc0",
+        "physical_sql_return_retains_contract",
+        "physical_sql_failure_keeps_data",
+        "physical_failure_keeps_session",
+        "sql_zero_column_reason",
+        "sql_preserves_admitted_order",
+        "sql_limit_precedes_references",
+        "sql_indexes_local_relations",
+        "native_package_output_reason_index",
+        "changed_body_requires_readmission",
+        "nonempty_tenant_guests_overlap",
+        "--test-threads=2"
+      ],
+      "started_utc": "2026-10-20T13:01:19.671798+00:00",
+      "elapsed_seconds": 14.208,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis_back/src/graph/derive/adapter/output.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/derive/finish.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/read.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/graph/read/tests.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-data/src/analysis/graph.rs": "2f70b3dd792af7076a8fccbe421245f3ddafc1c3260e9c5ca557c6fb5b92dd30",
+        "crates/araphor-data/src/analysis/graph/findings.rs": "7739ad8725ab02f40c7325460251a247c96e9da54baceb0b0e6e0c0edbae102d",
+        "crates/araphor-data/src/analysis/graph/findings/tests.rs": "f97cfe834b976ba5a03d006ab50c9e2a93b2864d7e491010eb00f8fe98d25ff3",
+        "crates/araphor-data/src/graph/model.rs": "50d84c69566a7425a33011e10ac44ae1a1d791218475eab0947bdddd10cc46d0",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "30693f8b88e3f68cf3ef7b2b6bf7b1edbbcdeb9cee20d564c66c8db872e53bf8"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-output-discovery-query67.log",
+      "evidence_version": 2,
+      "head_before": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+      "head_after": "e6be3dfe076494538a2e8b6755cb25df9a88e04b",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "f81800800a97c2e332088da8c9ea0ffbaa97ba2944ff23c67302dca793b98b22"
+    }
+  },
+  "qualified_source_sha256": {
+    "crates/araphor-analysis_back/src/model/output.rs": "fec6335110efaeb98b4e1ece55a3739dd547db3830b879f044d33c079672b081",
+    "crates/araphor-query/src/definition/physical/sql.rs": "24249bd0b47c1a07a6143eb1fdae14c9bb52534b6dad49d7bd4058dfe7ea8b4a",
+    "crates/araphor-query/src/definition/package.rs": "56eaa2e0e67418f616f466403a52a80e03d69640deec51d83427696f9520f0fb",
+    "crates/araphor-query/src/definition/physical.rs": "bde3120a76969985a0df9b6c0f1c96e2be01a4460b19ee646b390369e4b15b46",
+    "crates/araphor-query/src/definition/tests/execution.rs": "f46e974cd2365f08c430282b1c375431fcd3eb25508575396396d3690bc930f3",
+    "crates/araphor-query/src/definition/tests/execution/contract.rs": "30693f8b88e3f68cf3ef7b2b6bf7b1edbbcdeb9cee20d564c66c8db872e53bf8",
+    "crates/araphor-query/src/definition/tests.rs": "7ab4a7f8c02da7addc64501508247110c121cf76fbbbf5704d1f278841502f01",
+    "crates/araphor-analysis_back/src/model/tests.rs": "6cefb3e971e0dc20c756831d126992b99272ad0ef5d9ce01c126ddf801130a1b",
+    "crates/araphor-analysis-sdk/src/validation.rs": "0b0317fd616753d9a69273f0d3a3a573f700cb572fcf67f3b888061ea0aaa0e4",
+    "crates/araphor-analysis-builtins/src/discovery/compare.rs": "288ef0b11a7ef64dc699db86e71f8e38c8531f9254c8753c8dedb161bb333322",
+    "crates/araphor-analysis-builtins/src/discovery/groups.rs": "c0eb287aa903a0371aef3448d0b50ef7226f1d9c8aed837c78f9e736c3525e48",
+    "crates/araphor-analysis-builtins/src/discovery/merge.rs": "e38c85fee0064ec10841c0ccde07fc31b99a3dccacdc4d58619cdc7b4ba7b6ed",
+    "crates/araphor-analysis-builtins/src/discovery/mod.rs": "f286f1a037da52957144b3068fa171a37dd7fb8f614e3bda760a7f39918ab9a8",
+    "crates/araphor-analysis-builtins/src/discovery/record.rs": "81947499c786cff4b4f1a1ab290acaaae19293b86faf3550bcbc07922dc6005a",
+    "crates/araphor-analysis-builtins/src/discovery/sql.rs": "f3f431a09feb1178fbc4938f55ffacdbaa8b33eb4a15f9a2ac2b0b51fdfbdbcc",
+    "crates/araphor-analysis-builtins/src/discovery/sql/merge_snapshot.sql": "998a205102cf865f6484d0498a64a893b718602f22e98fba481a297e40215584",
+    "crates/araphor-analysis-builtins/src/discovery/sql/qualify_ranges.sql": "f2b7c3b53f9d9538ebf5d16684c4b4e38ce74ac24e4c8b79c664eaa49b3aeb52",
+    "crates/araphor-analysis-builtins/src/discovery/sql/recorded_snapshot.sql": "20cbe5141380803a3f46e12c5b6b4c798066558e68015233f782e20bee2a201f",
+    "crates/araphor-analysis/src/context/codec.rs": "66df377eefaec215366ccb3571420274b0ba965145c308fe872035c7f750f7e7",
+    "crates/araphor-analysis/src/context/selection.rs": "72c8bcb324344bc6bdc9a4d7c0c281535795ab6028e4579a4f717e4668aceb8d",
+    "crates/araphor-analysis/src/context/selection.sql": "0a83297480fc8678400a7d47973a1ebd6bb7123ceffd1458205066ccf0c15757",
+    "crates/araphor-analysis/src/context/tests.rs": "0a4217ab281a019f06a05fbb66ef80a94f98c64fd7262a05395045e671c45a89",
+    "crates/araphor-analysis/src/context/tests/baseline.rs": "e6c50f6d7845c5c7b24f283e08f091c3bd131730f5aba6bdaa19a65fda451913",
+    "crates/araphor-analysis/src/context/tests/baseline/context.json": "b80f5c4c9578ab6ef261f202d9d40c3865c2c0a0f7c14124cda83e0f3cc7bcbd",
+    "crates/araphor-analysis/src/context/tests/sdk.rs": "48305b41a65cb82af061c453977d34837c3da7acaa039ae47579a3c2fb5a8e34",
+    "crates/araphor-analysis/src/discovery/output.rs": "97859c0db6c6ff748b88fce5bf21ff59f61bdeeafd50914bf81b921fa50d1ab8",
+    "crates/araphor-analysis/src/discovery/output/tests.rs": "55007e04731c1e3419d6499141e7f2110995e98df39dbf3d6e163f96967d393d",
+    "crates/araphor-analysis/src/discovery/output/tests/baseline.rs": "621874a8e6e1b94d7b97721c7b7552dafca0fbc33a92588c9b991353330ba82e",
+    "crates/araphor-analysis/src/discovery/output/tests/baseline/compare.json": "74bed4a08a84436ee6f8ec425a50bdf0e78d585b2646549dececc9d4bafc8d0a",
+    "crates/araphor-analysis/src/discovery/output/tests/baseline/merge.json": "202abd8b989ac27ab337ed2c62c81c784102031fd77aec5cdcaabf8c268a5a68",
+    "crates/araphor-analysis/src/discovery/output/tests/forged.rs": "013ccbd7051326600614ba603216bd0525a8569e6bd4e504809636ed4e39ebeb",
+    "crates/araphor-analysis/src/discovery/output/tests/native.rs": "3fdfaa1f26d0bafc0da4d2d17e9ff43e0847ae77b2ab256ab8a90570871edc2e",
+    "crates/araphor-analysis/src/package/builtin.rs": "b0183ba6c47b65e5eea368a6c25df61fd671c3d0aa6e160516921aa03cff8a9a",
+    "crates/araphor-analysis/src/package/tests/sql.rs": "9642a0c4bbbd0a2e03f55fc00642da644e37e0844a5031ebe3d5841373cdb9bf",
+    "crates/araphor-analysis/src/package/tests/sql/recorded.rs": "db772ebb94ed6076bbea120e195c009126789ae99803a76ccc941e6fd9d1a0af",
+    "crates/araphor-analysis/src/package/tests/sql/recorded/merge.rs": "c69367a889e0911f5323f8490ffa6c3b275f5357bca8aff52ace0f966587fa6b",
+    "crates/araphor-analysis/src/package/tests/subscriptions.rs": "4b001d956a0af130f584877ba28f6ec871be352c05e2b13f71b40bc65ef43358",
+    "crates/araphor-data/src/discovery/derive.rs": "d6952202fe1a5b2d3747df82754fc9e27699d7217d1c3a7dd413fcce580b60b2",
+    "crates/araphor-data/src/discovery/model.rs": "dda0dba5e9c34b4ab79356162fcf7b4c4bd874e26b5969867ee3ffce6d612761",
+    "crates/araphor-data/src/discovery/native.rs": "b8e6a56a31596f89be9253ff861f74abde9f02673bee198e68f7b302cdc725d8",
+    "crates/araphor-data/src/discovery/validation.rs": "57bda68aeb3387334a60bf1fb39c576908f3f9464026b3934ff5d2be1fe55e8c",
+    "crates/araphor-data/src/discovery/validation/comparison.rs": "97e423dc6c783ece9be08400b91c73b12a66f450881bfdb1cca155cbe9754797",
+    "crates/araphor-data/src/discovery/validation/coverage.rs": "f54348d1e5d07d30286470bc2e6171682fa03441c8f21fc362045cf3fcd08a59",
+    "crates/araphor-data/src/discovery/validation/groups.rs": "c3556f44936ad42d990d269a6b40f842d2fb645603054a55fb6186f7386fcc4b",
+    "crates/araphor-data/src/discovery/validation/lifecycle.rs": "733c0e7e766df918de6e5143aceb68f745dc90ea7d5ddd2f6db67160f62f66b3",
+    "crates/araphor-data/src/discovery/validation/merge.rs": "aa3fc61b5adc100cc4ad49f47d0c17278fbacb67084ce46d7c6cb809497c76b0",
+    "crates/araphor-data/src/discovery/validation/recorded.rs": "773d21339125ff4ce9c2197e92adf2c7739eda8cc766e4ca73336afcce515a01",
+    "crates/araphor-data/src/discovery/validation/tests.rs": "be92f861aae8e4b88d457aaa5ac600ac963f8892011d5935c10441e321651af7",
+    "crates/araphor-data/src/discovery/validation/tests/fixtures/atoms.json": "bd31b8fbca633c755e9799d08dd60ff0379500526dffd9fdf3c7ba2e7e76cb45",
+    "crates/araphor-data/src/discovery/validation/tests/fixtures/input.json": "b912d7fb39d6b0d42c1b5d0c705af42d2c9dc7d2a2bd773aadc1dde2b2b00ae5",
+    "crates/araphor-data/src/discovery/validation/tests/fixtures/merge.json": "202abd8b989ac27ab337ed2c62c81c784102031fd77aec5cdcaabf8c268a5a68",
+    "crates/araphor-query/src/definition/call.rs": "484257d76a31cb851f65f2f9de40bfee3a4c963788c78b06285630f1c5fa4a7e",
+    "crates/araphor-query/src/definition/tests/parity.rs": "d1bc0c920c6b500d84fc08e2c744c62dfaedbb7dd8dcfa59f5f6f39bbcef5b04",
+    "crates/araphor-analysis_back/src/graph/derive/adapter/output.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "crates/araphor-analysis_back/src/graph/derive/finish.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "crates/araphor-analysis_back/src/graph/read.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "crates/araphor-analysis_back/src/graph/read/tests.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "crates/araphor-data/src/analysis/graph.rs": "2f70b3dd792af7076a8fccbe421245f3ddafc1c3260e9c5ca557c6fb5b92dd30",
+    "crates/araphor-data/src/analysis/graph/findings.rs": "7739ad8725ab02f40c7325460251a247c96e9da54baceb0b0e6e0c0edbae102d",
+    "crates/araphor-data/src/analysis/graph/findings/tests.rs": "f97cfe834b976ba5a03d006ab50c9e2a93b2864d7e491010eb00f8fe98d25ff3",
+    "crates/araphor-data/src/graph/model.rs": "50d84c69566a7425a33011e10ac44ae1a1d791218475eab0947bdddd10cc46d0"
+  },
+  "interrupted_check": "migration-discovery-native-sql66 used an overbroad recorded selector and was interrupted. It is not a passed result. The exact finite merge and OCI tests pass separately.",
+  "preserved_scope": "Keep mixed atom/page/corpus/native export, admission, retained SQL, presentation, producer, replay, expiry, lifecycle and recovery reference files.",
+  "resource_scope": "Existing explicit budgets and structural/source checks remain. This retirement does not prove all quotas are disabled or all Rust allocator work is charged.",
+  "final_rust_gate": "Not done. Run the repository final gate after the last covered edit.",
+  "complete_migration": "Not done",
+  "production_reduction_target": "Not done",
+  "remaining_reference": {
+    "before": 163,
+    "after": 152,
+    "byte_identical_to_baseline": 152,
+    "mismatches": []
+  }
+}

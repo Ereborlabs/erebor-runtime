@@ -366,13 +366,41 @@ The earlier finite retirement removed 29 duplicate reference leaves. Its final
 Rust gate passes in `migration-final-ci42` at commit `95e9bb4d`. That record does
 not qualify the later managed source. The additional finite retirement removes
 exactly four mapped leaves: Graph contract source and tests, model input, and
-model operation. Eight more Wasm leaves are now retired. The remaining 167
-reference files keep their baseline content.
+model operation. Eight more Wasm leaves and 15 finite Graph, SQL, Discovery,
+test, and asset leaves are now retired. The remaining 152 reference files keep
+their baseline content.
 The recovery archive retains all 208 recovered files. Read the
 [retirement records](../plans/araphor-analysis-migration.md#retired-finite-reference-files)
 and the [four-file record](../../recovery/araphor-analysis-managed-retirement-20261019.json)
-and [Wasm record](../../recovery/araphor-analysis-wasm-retirement-20261020.json)
+and [Wasm record](../../recovery/araphor-analysis-wasm-retirement-20261020.json),
+[Graph record](../../recovery/araphor-analysis-graph-retirement-20261020.json),
+and [output record](../../recovery/araphor-analysis-output-retirement-20261020.json)
 for the exact scope. The current final Rust gate and complete migration remain
+**Not done**.
+
+## Finite Graph reads and output validation
+
+[Data Graph reads](../../crates/araphor-data/src/analysis/graph/findings.rs)
+check the tenant, supplied identifiers, positive page size, and typed revision
+before they acquire a reader. Data owns the read snapshot and native current
+or historical result selection. Pagination retains the caller's row and byte
+bounds. A Graph reader facade and a second worker mutex are unnecessary.
+
+[Graph::apply](../../crates/araphor-analysis/src/graph/mod.rs) consumes a sealed
+native call result. Query and Package Runtime validate the complete SDK return
+before they construct that result. Graph then checks the exact admission,
+image, export, tenant, and canonical inputs. Its
+[output validator](../../crates/araphor-analysis/src/graph/output.rs) checks
+selected records, facts, subjects, evidence, reasons, and checkpoint rows.
+[Graph::finish](../../crates/araphor-analysis/src/graph/finish.rs) assembles the
+snapshot and calls the existing Data snapshot validator.
+
+These finite owners do not implement Graph production, historical replay,
+expiry scheduling, or restart recovery. Those reference files must remain.
+Data's snapshot validator still has collection limits. This replacement does
+not prove that all Graph quotas are disabled. The 31 Analysis Graph tests,
+27 Data Graph tests, and 21 notification caller tests pass. Their exact
+retirement scope is in the records above. Final Rust qualification is
 **Not done**.
 
 ## Finite managed execution

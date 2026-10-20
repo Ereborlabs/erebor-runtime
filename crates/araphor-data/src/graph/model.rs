@@ -128,14 +128,10 @@ pub struct GraphRevisionV1 {
 
 impl GraphRevisionV1 {
     pub fn validate(&self, tenant: [u8; 16]) -> Result<()> {
-        if self.evidence.len() > GRAPH_WINDOW_RECORDS as usize
-            || self.coverage.len() > 4096
-            || self.context.len() > 256
-            || self.missing_ranges.len() > 256
-            || self
-                .missing_ranges
-                .iter()
-                .any(|(first, last)| *first == 0 || last < first)
+        if self
+            .missing_ranges
+            .iter()
+            .any(|(first, last)| *first == 0 || last < first)
             || self.evidence.windows(2).any(|pair| pair[0] >= pair[1])
             || self.coverage.windows(2).any(|pair| pair[0] >= pair[1])
             || self.context.windows(2).any(|pair| pair[0] >= pair[1])

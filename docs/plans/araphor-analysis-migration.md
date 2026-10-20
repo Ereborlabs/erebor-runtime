@@ -38,12 +38,12 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 167 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 152 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
 | Shared subscriptions | Query carries complete per-step package returns and stable admitted call IDs. Explicit stop and authority loss join active workers. The finite Instance state reuse/reset and captured execution checks pass. The current final Rust gate is pending. Long-running window completion remains unimplemented. No separate package polling task exists. | Partial qualification |
-| Graph boundary | All 29 focused Graph tests pass. Graph validates canonical captured input and actual detector returns. These tests do not qualify the automatic producer. | Finite boundary qualified |
+| Graph boundary | All 31 focused Analysis Graph tests and 27 Data Graph tests pass. Data now owns request validation before native reads. Graph validates canonical captured input and actual detector returns. These tests do not qualify the automatic producer. | Finite boundary qualified |
 | Discovery boundary | All 4 Data provenance tests and 8 native output-adapter tests pass. Native SQL retains the computations. Live publication remains incomplete. | Finite boundary qualified |
 | Context | All 17 focused Context tests pass. Active Analysis retains import authorization and native selection. Quotas are explicit options and disabled by default. | Finite boundary qualified |
 | Fixture qualification | All 4 comparator cases and the corrected entered-guest cancellation/revocation case pass. Active Analysis uses native calls and current Test authority. Native accumulation and clock/seed cases pass. Negative saved fixture time returns Unsupported. | Partial qualification |
@@ -54,7 +54,7 @@ Every replacement passes its required checks
 | Public callers | Restore current managed operations through Control, CLI, and lightweight E2E. Reference test modules remain available but are not a substitute for native integration tests. | Not done |
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
-| Final retirement | The earlier 33 leaves and eight mapped Wasm leaves are removed. The 167 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Final retirement | The earlier 41 leaves and 15 mapped finite Graph, SQL, Discovery, and test leaves are removed. The 152 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -226,26 +226,31 @@ a long-running recovery supervisor.
 
 ### Production code ledger
 
-The current count61 follows the Wasm correction and eight-file retirement.
+The current count67 follows the finite Graph, SQL, and Discovery retirement.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 12,966 | 6,131 | +6,835 |
-| Original reduction baseline `7b7b407a` | 43,218 | 30,387 | +12,831 |
+| `6a25ba1b` | 12,989 | 7,197 | +5,792 |
+| Original reduction baseline `7b7b407a` | 42,173 | 30,385 | +11,788 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
 **Not done**. The later Wasm retirement removes 995 reference production lines.
 Its Runtime correction adds one production line. This deliverable removes
-994 net production lines. Another 18,831 net production lines must be removed relative to
-the current count to meet that target. No simplification or speed result is
-inferred from these counts.
+994 net production lines. The next 15-file retirement removes 1,062 reference
+production lines. Data request validation adds 19 production lines. This
+deliverable removes 1,043 net production lines. Another 17,788 net production
+lines must be removed relative to the current count to meet the target. No
+speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count61.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count67.json`. Its selected source
 fingerprint is
+`a8065dc388d1182db14f530b2b088a5201cd801f709fc0610213cec6be0f6a27`.
+The earlier count61 records the Wasm retirement at +12,831 production lines
+from the original reduction baseline. Its source fingerprint is
 `8b4cf5f003c2e3d08cf60d8117d74a584ff62da287fec5a96caec8a9ce27f264`.
 The earlier count60 records the finite managed source before this retirement.
 Its source fingerprint is
@@ -337,9 +342,44 @@ lines. The Runtime correction adds one production line.
 Strict workspace Clippy passes after this retirement in
 `migration-wasm-clippy62` in 83.945 seconds.
 
-There are now 41 retired files and 167 remaining baseline files. Every remaining
-file still matches the baseline. The recovery archive is unchanged. The complete
-final Rust gate, migration, and reference removal remain **Not done**.
+After the Wasm retirement, 41 files were retired and 167 baseline files remained.
+
+The [Graph record](../../recovery/araphor-analysis-graph-retirement-20261020.json)
+then removes four complete leaves: the old read facade and its pagination test
+helper, output validation, and snapshot assembly. Data owns the request guards
+and one native read snapshot. Current Graph owns the finite output transforms.
+All 31 Analysis Graph, 27 Data Graph, and 21 notification caller tests pass.
+
+The [output record](../../recovery/araphor-analysis-output-retirement-20261020.json)
+removes one SQL output helper, three finite Discovery helpers, and seven pure
+test or asset leaves. Native Query owns evidence and reason conversion.
+Current Discovery adapters, native SQL, Builtins, and Data own snapshot,
+grouping, comparison, and source-proof validation. The four baseline assets
+remain byte-identical in their current owners.
+
+| Check | Result | Seconds |
+| --- | --- | ---: |
+| `migration-graph-analysis65` | 31 passed | 0.710 |
+| `migration-graph-data65` | 27 passed | 15.613 |
+| `migration-graph-callers65` | 21 passed | 51.024 |
+| `migration-discovery-analysis66` | 25 Context and Discovery cases passed | 75.585 |
+| `migration-discovery-data66` | 4 provenance cases passed | 0.137 |
+| `migration-discovery-builtins66` | 20 passed | 0.105 |
+| `migration-discovery-finite-sql67` | 7 native merge and OCI cases passed | 10.849 |
+| `migration-output-discovery-query67` | 10 native contract, admission, and tenant cases passed | 14.208 |
+
+The first new ordering fixture failed because it had no configured capacities.
+The correction uses explicit capacities and drops the retained result before
+full pool checks. The final test preserves nonalphabetic output and checkpoint
+order, reason program order, and exact admission rejection for an undeclared
+reason output or code. The overbroad recorded-package selector was interrupted;
+it is not a passed check. The exact finite merge selector passes separately.
+
+There are now 56 retired files and 152 remaining baseline files. Every remaining
+file still matches the baseline. The recovery archive is unchanged. Mixed
+native, large-input, producer, replay, expiry, lifecycle, and recovery references
+remain. The complete final Rust gate, migration, and reference removal are
+**Not done**.
 
 ## Root exports
 

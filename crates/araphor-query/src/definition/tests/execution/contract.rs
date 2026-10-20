@@ -82,6 +82,14 @@ async fn sql_zero_column_reason() -> TestResult {
         2
     );
     assert_eq!(call.output().reasons.len(), 2);
+    assert_eq!(
+        call.output()
+            .reasons
+            .iter()
+            .map(|reason| reason.code.as_str())
+            .collect::<Vec<_>>(),
+        ["fixture.note", "fixture.empty"]
+    );
     let reason = call
         .output()
         .reasons
@@ -105,6 +113,129 @@ async fn sql_zero_column_reason() -> TestResult {
         .ok_or("decoded empty reason")?;
     assert_eq!(reason.details.num_columns(), 0);
     assert_eq!(reason.details.num_rows(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_preserves_admitted_order() -> TestResult {
+    let port = |name| sdk::Port::new(name, Fixture::schema("value"));
+    let mut model = sdk::Model::new("count", Vec::new(), vec![port("ZRows"), port("ARows")]);
+    model.checkpoint = Some(sdk::CheckpointSpec {
+        version: 1,
+        datasets: vec![port("ZState"), port("AState")],
+    });
+    model.reasons = ["fixture.z", "fixture.a"]
+        .map(|code| sdk::Reason {
+            code: code.into(),
+            details: Fixture::schema("value"),
+        })
+        .into();
+    let image = bundle(
+        model,
+        SqlModelV1 {
+            outputs: BTreeMap::from([
+                (
+                    "ARows".into(),
+                    "SELECT CAST(9 AS BIGINT UNSIGNED) AS value".into(),
+                ),
+                (
+                    "ZRows".into(),
+                    "SELECT CAST(7 AS BIGINT UNSIGNED) AS value".into(),
+                ),
+            ]),
+            checkpoint: BTreeMap::from([
+                ("AState".into(), "SELECT value FROM \"output_ARows\"".into()),
+                ("ZState".into(), "SELECT value FROM \"output_ZRows\"".into()),
+            ]),
+            reasons: vec![
+                SqlReasonV1 {
+                    output: "ARows".into(),
+                    code: "fixture.a".into(),
+                    sql: "SELECT __row_index AS output_row, value FROM \"output_ARows\"".into(),
+                },
+                SqlReasonV1 {
+                    output: "ZRows".into(),
+                    code: "fixture.z".into(),
+                    sql: "SELECT __row_index AS output_row, value FROM \"output_ZRows\"".into(),
+                },
+            ],
+            ..Default::default()
+        },
+    );
+    for (output, code, field) in [
+        ("missing", "fixture.a", "package reason output"),
+        ("ARows", "missing", "package reason code"),
+    ] {
+        let mut invalid = image.clone();
+        let PackageImplementationV1::Sql { program, .. } =
+            &mut invalid.artifacts[0].implementations[0]
+        else {
+            return Err("SQL fixture".into());
+        };
+        program.reasons[0].output = output.into();
+        program.reasons[0].code = code.into();
+        let invalid = Fixture::installed(&invalid)?;
+        let error = invalid
+            .prepare(&Fixture::sql(
+                r#"SELECT * FROM "fixture"."r1".count('ZRows')"#,
+            ))
+            .await
+            .err()
+            .ok_or("undeclared reason was admitted")?;
+        assert_eq!(crate::Failure::from(&error), crate::Failure::InvalidQuery);
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        let mut rejected = false;
+        while let Some(error) = source {
+            rejected |= matches!(
+                error.downcast_ref::<crate::Error>(),
+                Some(crate::Error::Invalid { field: actual, .. }) if *actual == field
+            );
+            source = error.source();
+        }
+        assert!(rejected, "{error:?}");
+    }
+    let fixture = Fixture::limits(capacity_limits())?;
+    fixture.install(&image)?;
+    let prepared = fixture
+        .prepare(&Fixture::sql(
+            r#"SELECT * FROM "fixture"."r1".count('ZRows')"#,
+        ))
+        .await?;
+    let result = fixture
+        .execute(&prepared, invocation("admitted-order"))
+        .await?;
+    let call = result.calls.values().next().ok_or("call absent")?;
+    assert_eq!(values(&result.batches)?, [7]);
+    let output = call.output();
+    assert_eq!(output.datasets.len(), 2);
+    for (data, (name, expected)) in output.datasets.iter().zip([("ZRows", 7), ("ARows", 9)]) {
+        assert_eq!(data.name, name);
+        assert_eq!(values(&data.batches)?, [expected]);
+    }
+    let checkpoint = output.checkpoint.as_ref().ok_or("checkpoint")?;
+    assert_eq!(checkpoint.version, 1);
+    assert_eq!(checkpoint.datasets.len(), 2);
+    for (data, (name, expected)) in checkpoint
+        .datasets
+        .iter()
+        .zip([("ZState", 7), ("AState", 9)])
+    {
+        assert_eq!(data.name, name);
+        assert_eq!(values(&data.batches)?, [expected]);
+    }
+    assert_eq!(output.reasons.len(), 2);
+    for (reason, (name, code, expected)) in output
+        .reasons
+        .iter()
+        .zip([("ARows", "fixture.a", 9), ("ZRows", "fixture.z", 7)])
+    {
+        assert_eq!(reason.output.dataset, name);
+        assert_eq!(reason.output.row, 0);
+        assert_eq!(reason.code, code);
+        assert_eq!(values(std::slice::from_ref(&reason.details))?, [expected]);
+    }
+    drop(result);
+    capacity_released(&fixture)?;
     Ok(())
 }
 

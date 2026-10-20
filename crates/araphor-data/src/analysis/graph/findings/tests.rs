@@ -185,3 +185,384 @@ fn native_finding_fallback() -> std::result::Result<(), Box<dyn std::error::Erro
     }
     Ok(())
 }
+
+#[test]
+fn graph_reads_reject_scope() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let fixture = CommitFixture::new()?;
+    let tenant = fixture.snapshot.scope.identity.tenant_id;
+    let result = fixture.request.result_id.as_str();
+    let finding = fixture
+        .snapshot
+        .findings
+        .first()
+        .ok_or("fixture finding")?
+        .finding_id
+        .as_str();
+    fixture.store.read_slots.close();
+    assert!(matches!(
+        fixture
+            .store
+            .graph_findings(tenant, None, None, 0, usize::MAX),
+        Err(crate::Error::GraphInvalid {
+            field: "finding page limit",
+            ..
+        })
+    ));
+    for tenant in [[0; 16], tenant] {
+        let invalid = if tenant == [0; 16] { "valid" } else { "" };
+        assert!(matches!(
+            fixture
+                .store
+                .graph_findings(tenant, Some(invalid), None, 1, usize::MAX),
+            Err(crate::Error::GraphInvalid {
+                field: "finding page scope",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture
+                .store
+                .graph_findings(tenant, None, Some(invalid), 1, usize::MAX),
+            Err(crate::Error::GraphInvalid {
+                field: "finding page scope",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture.store.graph_finding(tenant, result, invalid),
+            Err(crate::Error::GraphInvalid {
+                field: "finding reference",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture
+                .store
+                .graph_revision_finding(tenant, invalid, &fixture.snapshot.input_manifest),
+            Err(crate::Error::GraphInvalid {
+                field: "finding reference",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture.store.graph_result(tenant, invalid),
+            Err(crate::Error::GraphInvalid {
+                field: "graph result reference",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture.store.graph_source(tenant, invalid),
+            Err(crate::Error::GraphInvalid {
+                field: "graph result reference",
+                ..
+            })
+        ));
+    }
+    for invalid in ["\0", "finding\nsecret", "finding\rsecret", "finding\u{7f}"] {
+        assert!(matches!(
+            fixture
+                .store
+                .graph_findings(tenant, Some(invalid), None, 1, usize::MAX),
+            Err(crate::Error::GraphInvalid {
+                field: "finding page scope",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture
+                .store
+                .graph_findings(tenant, None, Some(invalid), 1, usize::MAX),
+            Err(crate::Error::GraphInvalid {
+                field: "finding page scope",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture.store.graph_finding(tenant, result, invalid),
+            Err(crate::Error::GraphInvalid {
+                field: "finding reference",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture.store.graph_finding(tenant, invalid, finding),
+            Err(crate::Error::GraphInvalid {
+                field: "finding reference",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture
+                .store
+                .graph_revision_finding(tenant, invalid, &fixture.snapshot.input_manifest),
+            Err(crate::Error::GraphInvalid {
+                field: "finding reference",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture.store.graph_result(tenant, invalid),
+            Err(crate::Error::GraphInvalid {
+                field: "graph result reference",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fixture.store.graph_source(tenant, invalid),
+            Err(crate::Error::GraphInvalid {
+                field: "graph result reference",
+                ..
+            })
+        ));
+    }
+    assert!(matches!(
+        fixture
+            .store
+            .graph_findings(tenant, None, None, 1, usize::MAX),
+        Err(crate::Error::AnalysisBusy {
+            resource: "reader",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn graph_revision_keeps_guards() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let fixture = CommitFixture::new()?;
+    let tenant = fixture.snapshot.scope.identity.tenant_id;
+    let finding = &fixture
+        .snapshot
+        .findings
+        .first()
+        .ok_or("fixture finding")?
+        .finding_id;
+    let revision = &fixture.snapshot.input_manifest;
+    let mut invalid = Vec::new();
+    let mut changed = revision.clone();
+    changed.evidence[0].stream.tenant_id = [9; 16];
+    invalid.push(changed);
+    let mut changed = revision.clone();
+    changed.evidence[0].durable_cursor = 0;
+    invalid.push(changed);
+    let mut changed = revision.clone();
+    changed.evidence.push(changed.evidence[0].clone());
+    invalid.push(changed);
+    let mut changed = revision.clone();
+    changed.coverage[0].source.tenant_id = [9; 16];
+    invalid.push(changed);
+    let mut changed = revision.clone();
+    changed.coverage[0].interval_id = [0; 16];
+    invalid.push(changed);
+    let mut changed = revision.clone();
+    changed.coverage.push(changed.coverage[0].clone());
+    invalid.push(changed);
+    let key = crate::AnalysisContextKeyV1 {
+        tenant_id: tenant,
+        owner_id: "graph-read".into(),
+        entity_key: vec![1],
+        lifetime_key: vec![1],
+        owner_revision: 1,
+    };
+    let mut changed = revision.clone();
+    let mut foreign = key.clone();
+    foreign.tenant_id = [9; 16];
+    changed.context.push(foreign);
+    invalid.push(changed);
+    let mut changed = revision.clone();
+    changed.context = vec![key.clone(), key];
+    invalid.push(changed);
+    for range in [(0, 1), (2, 1)] {
+        let mut changed = revision.clone();
+        changed.missing_ranges.push(range);
+        invalid.push(changed);
+    }
+    fixture.store.read_slots.close();
+    for revision in invalid {
+        assert!(matches!(
+            fixture
+                .store
+                .graph_revision_finding(tenant, finding, &revision),
+            Err(crate::Error::GraphInvalid {
+                field: "revision manifest",
+                ..
+            })
+        ));
+    }
+    assert!(matches!(
+        fixture
+            .store
+            .graph_revision_finding(tenant, finding, revision),
+        Err(crate::Error::AnalysisBusy {
+            resource: "reader",
+            ..
+        })
+    ));
+    let mut unlimited = revision.clone();
+    unlimited.evidence = (1..=257)
+        .map(|cursor| {
+            let mut id = revision.evidence[0].clone();
+            id.durable_cursor = cursor;
+            id
+        })
+        .collect();
+    unlimited.coverage = (1_u128..=4097)
+        .map(|index| {
+            let mut key = revision.coverage[0].clone();
+            key.interval_id = index.to_be_bytes();
+            key
+        })
+        .collect();
+    unlimited.context = (1_u64..=257)
+        .map(|index| crate::AnalysisContextKeyV1 {
+            tenant_id: tenant,
+            owner_id: "graph-read".into(),
+            entity_key: index.to_be_bytes().to_vec(),
+            lifetime_key: vec![1],
+            owner_revision: 1,
+        })
+        .collect();
+    unlimited.missing_ranges = (1..=257).map(|cursor| (cursor, cursor)).collect();
+    unlimited.validate(tenant)?;
+    assert!(matches!(
+        fixture
+            .store
+            .graph_revision_finding(tenant, finding, &unlimited),
+        Err(crate::Error::AnalysisBusy {
+            resource: "reader",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn graph_reads_keep_history() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let fixture = CommitFixture::new()?;
+    fixture.store.commit_graph(&fixture.request, true)?;
+    let tenant = fixture.snapshot.scope.identity.tenant_id;
+    let finding = fixture.snapshot.findings.first().ok_or("fixture finding")?;
+    let mut next = fixture.request.clone();
+    next.expected_cursor = next.consumed_cursor;
+    next.result_id = "graph:updated-window".into();
+    next.created_utc_ns += 1;
+    fixture.store.commit_graph(&next, false)?;
+    assert_eq!(
+        fixture
+            .store
+            .graph_result(tenant, &fixture.request.result_id)?,
+        Some(fixture.snapshot.clone())
+    );
+    assert_eq!(
+        fixture
+            .store
+            .graph_finding(tenant, &fixture.request.result_id, &finding.finding_id)?,
+        Some(finding.clone())
+    );
+    assert_eq!(
+        fixture
+            .store
+            .graph_revision_finding(tenant, &finding.finding_id, &finding.revision)?,
+        Some(finding.clone())
+    );
+    assert_eq!(
+        fixture
+            .store
+            .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?,
+        vec![(next.result_id.clone(), finding.clone())]
+    );
+    assert_eq!(
+        fixture
+            .store
+            .graph_source(tenant, &fixture.request.result_id)?,
+        Some(fixture.snapshot.scope.identity.clone())
+    );
+    let foreign = [9; 16];
+    assert!(fixture
+        .store
+        .graph_result(foreign, &fixture.request.result_id)?
+        .is_none());
+    assert!(fixture
+        .store
+        .graph_source(foreign, &fixture.request.result_id)?
+        .is_none());
+    assert!(fixture
+        .store
+        .graph_finding(foreign, &fixture.request.result_id, &finding.finding_id)?
+        .is_none());
+    assert!(fixture
+        .store
+        .graph_findings(foreign, None, None, usize::MAX, usize::MAX)?
+        .is_empty());
+    assert!(matches!(
+        fixture
+            .store
+            .graph_revision_finding(foreign, &finding.finding_id, &finding.revision),
+        Err(crate::Error::GraphInvalid {
+            field: "revision manifest",
+            ..
+        })
+    ));
+    let unknown = "x".repeat(4097);
+    assert!(fixture
+        .store
+        .graph_findings(tenant, Some(&unknown), None, usize::MAX, usize::MAX)?
+        .is_empty());
+    assert!(fixture
+        .store
+        .graph_findings(tenant, None, Some(&unknown), usize::MAX, usize::MAX)?
+        .is_empty());
+    assert!(fixture
+        .store
+        .graph_finding(tenant, &fixture.request.result_id, &unknown)?
+        .is_none());
+    assert!(fixture
+        .store
+        .graph_finding(tenant, &unknown, &finding.finding_id)?
+        .is_none());
+    assert!(fixture.store.graph_result(tenant, &unknown)?.is_none());
+    assert!(fixture.store.graph_source(tenant, &unknown)?.is_none());
+    assert!(fixture
+        .store
+        .graph_revision_finding(tenant, &unknown, &finding.revision)?
+        .is_none());
+    Ok(())
+}
+
+#[test]
+fn graph_pages_keep_budget() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = CommitFixture::new()?;
+    fixture.add_findings(1)?;
+    fixture.store.commit_graph(&fixture.request, true)?;
+    let tenant = fixture.snapshot.scope.identity.tenant_id;
+    let current = fixture
+        .store
+        .graph_findings(tenant, None, None, 2, usize::MAX)?;
+    assert_eq!(current.len(), 2);
+    let first_bytes = serde_json::to_vec(&current[..1])?.len();
+    assert_eq!(
+        fixture
+            .store
+            .graph_findings(tenant, None, None, 2, first_bytes)?,
+        current[..1]
+    );
+    let next_bytes = serde_json::to_vec(&current[1..])?.len();
+    assert_eq!(
+        fixture.store.graph_findings(
+            tenant,
+            Some(&current[0].1.finding_id),
+            None,
+            2,
+            next_bytes
+        )?,
+        current[1..]
+    );
+    assert!(matches!(
+        fixture
+            .store
+            .graph_findings(tenant, None, None, 2, first_bytes - 1),
+        Err(crate::Error::GraphEncoding { .. })
+    ));
+    Ok(())
+}

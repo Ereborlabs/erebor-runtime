@@ -13,6 +13,23 @@ pub(super) mod traversal;
 mod windows;
 
 impl AnalysisStore {
+    fn check_graph_read(
+        &self,
+        tenant: [u8; 16],
+        ids: &[Option<&str>],
+        field: &'static str,
+    ) -> Result<()> {
+        if tenant == [0; 16]
+            || ids
+                .iter()
+                .flatten()
+                .any(|id| id.is_empty() || id.chars().any(char::is_control))
+        {
+            return crate::GraphInvalidSnafu { field }.fail();
+        }
+        Ok(())
+    }
+
     pub fn graph_set_health(&self, source: &EvidenceIntakeIdentityV1, failed: bool) -> Result<()> {
         if failed {
             self.graph_failures
@@ -246,9 +263,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         result_id: &str,
     ) -> Result<Option<EvidenceIntakeIdentityV1>> {
-        if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
-            return self.reject("the graph result reference is invalid");
-        }
+        self.check_graph_read(tenant, &[Some(result_id)], "graph result reference")?;
         self.read_snapshot(|snapshot| {
             Ok(GraphRows::read_header(snapshot, tenant, result_id)?
                 .map(|header| header.snapshot.scope.identity))
@@ -260,9 +275,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         result_id: &str,
     ) -> Result<Option<GraphSnapshotV1>> {
-        if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
-            return self.reject("the graph result reference is invalid");
-        }
+        self.check_graph_read(tenant, &[Some(result_id)], "graph result reference")?;
         self.read_snapshot(|snapshot| {
             let Some(header) = GraphRows::read_header(snapshot, tenant, result_id)? else {
                 return Ok(None);
