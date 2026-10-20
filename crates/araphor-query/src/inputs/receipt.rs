@@ -24,6 +24,14 @@ pub(super) struct PortScope {
 }
 
 impl Inputs {
+    pub(crate) fn uses_events(&self, slot: usize) -> bool {
+        self.plans.get(slot).is_some_and(|port| {
+            port.origins
+                .iter()
+                .any(|origin| origin.durable() == Some("events"))
+        })
+    }
+
     pub(crate) fn check_supplied(&self, supplied: &[sdk::Input]) -> Result<()> {
         let mut names = std::collections::BTreeSet::new();
         if supplied.len() != self.ports.len()
@@ -112,7 +120,7 @@ impl Inputs {
     pub(crate) fn input_for(
         &self,
         data: sdk::Dataset,
-        snapshot: &ArrowSnapshot,
+        source: &SourceSnapshot,
         slot: usize,
         physical: &Arc<dyn ExecutionPlan>,
         inherited: &[sdk::Input],
@@ -124,6 +132,15 @@ impl Inputs {
             }
             .build()
         })?;
+        let snapshot = source.snapshot().context(SqlSnafu)?;
+        let mut bound = Vec::new();
+        for origin in &port.origins {
+            if let SourceOrigin::Port(id) = origin {
+                if let Some(input) = source.port_input(*id).context(SqlSnafu)? {
+                    bound.push(input);
+                }
+            }
+        }
         let sources = port
             .origins
             .iter()
@@ -141,9 +158,11 @@ impl Inputs {
             };
         self.input(
             data,
-            snapshot,
+            &snapshot,
             &PortScope { slot, selection },
-            inherited,
+            inherited
+                .iter()
+                .chain(bound.iter().map(|input| input.as_ref())),
             None,
             memory,
         )
@@ -174,7 +193,7 @@ impl Inputs {
                 let selection = SourceSnapshot::selection(original, &sources)?;
                 let ranges = SourceSnapshot::requests(requests, std::slice::from_ref(physical))
                     .context(SqlSnafu)?;
-                SourceSnapshot::extend_bounds(bounds, &ranges).context(SqlSnafu)?;
+                SourceSnapshot::extend_bounds(bounds, &ranges.fields).context(SqlSnafu)?;
                 let trace = sources.contains_key("trace_output")
                     || sources.contains_key("trace_measurements");
                 Ok(PortScope {
@@ -189,12 +208,12 @@ impl Inputs {
             .collect()
     }
 
-    pub(super) fn input(
+    pub(super) fn input<'a>(
         &self,
         data: sdk::Dataset,
         snapshot: &ArrowSnapshot,
         scope: &PortScope,
-        inherited: &[sdk::Input],
+        inherited: impl Iterator<Item = &'a sdk::Input>,
         package: Option<&sdk::Coverage>,
         memory: &Memory,
     ) -> Result<sdk::Input> {
@@ -320,7 +339,7 @@ impl Inputs {
             .iter()
             .any(context);
         let mut coverage = Self::source_coverage(&sources, missing)?;
-        let mut inherited = inherited.iter().collect::<Vec<_>>();
+        let mut inherited = inherited.collect::<Vec<_>>();
         inherited.sort_by(|left, right| left.data.name.cmp(&right.data.name));
         if !inherited.is_empty() {
             let builtin = port.origins.iter().any(|origin| origin.durable().is_some());
@@ -576,7 +595,6 @@ mod supplied {
     async fn encoding_scratch_respects_pressure() -> TestResult {
         use crate::execution::{Engine, Read};
         use araphor_data::{AnalysisReadControl, AnalysisStore};
-        use datafusion::physical_plan::empty::EmptyExec;
 
         let directory = tempfile::tempdir()?;
         let engine = Engine::new(
@@ -598,18 +616,42 @@ mod supplied {
         let memory = Memory::new(Some(capacity), None);
         let held = memory.reserve_input(scratch + 1)?;
         let scope = scope(&[SourceOrigin::Local("fixture".into())])?;
-        let physical: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(data.batches[0].schema()));
+        let selected = PortScope {
+            slot: 0,
+            selection: snapshot.selection.clone(),
+        };
         let error = scope
-            .input_for(data.clone(), &snapshot, 0, &physical, &[], &memory)
+            .input(
+                data.clone(),
+                &snapshot,
+                &selected,
+                std::iter::empty(),
+                None,
+                &memory,
+            )
             .err()
             .ok_or("input serializer exceeded available scratch")?;
         assert!(format!("{error:?}").contains("araphor input"));
         drop(memory.reserve_input(scratch - 1)?);
         drop(held);
-        let first = scope.input_for(data.clone(), &snapshot, 0, &physical, &[], &memory)?;
+        let first = scope.input(
+            data.clone(),
+            &snapshot,
+            &selected,
+            std::iter::empty(),
+            None,
+            &memory,
+        )?;
         drop(memory.reserve_input(capacity)?);
         let disabled = Memory::new(None, None);
-        let second = scope.input_for(data, &snapshot, 0, &physical, &[], &disabled)?;
+        let second = scope.input(
+            data,
+            &snapshot,
+            &selected,
+            std::iter::empty(),
+            None,
+            &disabled,
+        )?;
         assert_eq!(first.revision, second.revision);
         assert_eq!(first.coverage, second.coverage);
         Ok(())

@@ -13,7 +13,6 @@ use datafusion::arrow::compute::filter_record_batch;
 use datafusion::common::{DataFusionError, Result as NativeResult};
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
-use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use datafusion::physical_plan::{
@@ -22,7 +21,7 @@ use datafusion::physical_plan::{
 };
 use snafu::ResultExt as _;
 
-use super::{Captured, ReadMode, SourceData, SourceOrigin, SourceSnapshot};
+use super::{Captured, ReadMode, ScanBounds, SourceData, SourceOrigin, SourceSnapshot};
 use crate::execution::{Engine, Permit, Session};
 use crate::stream::{Change, Run};
 use crate::{InvalidSnafu, Result, SqlSnafu};
@@ -32,7 +31,7 @@ pub(crate) struct JournalExec {
     columns: Vec<usize>,
     positions: [usize; 2],
     requests: Arc<AnalysisTableRequests>,
-    bounds: BTreeMap<&'static str, Interval>,
+    bounds: ScanBounds,
     properties: Arc<PlanProperties>,
 }
 
@@ -74,7 +73,10 @@ impl JournalExec {
             columns,
             positions,
             requests,
-            bounds: source.bounds.clone(),
+            bounds: ScanBounds {
+                fields: source.bounds.clone(),
+                ..Default::default()
+            },
             properties,
         })
     }
@@ -155,7 +157,7 @@ pub(crate) struct Changes {
     columns: Vec<usize>,
     positions: [usize; 2],
     requests: Arc<AnalysisTableRequests>,
-    bounds: BTreeMap<&'static str, Interval>,
+    bounds: ScanBounds,
     retained: Vec<Chunk>,
     frontier: Option<StorePositionV1>,
     meta: Option<AnalysisStoreMetaV1>,

@@ -54,7 +54,12 @@ fn lifecycle_cas_is_inert() -> TestResult {
             .active_managed(&AnalysisReadControl::default())?
             .1
             .as_slice(),
-        std::slice::from_ref(&running)
+        std::slice::from_ref(&ManagedMember {
+            tenant: running.spec.tenant,
+            id: running.spec.id.clone(),
+            generation: running.generation,
+            lifecycle: running.lifecycle
+        })
     );
     assert!(notices.has_changed()?);
     assert_eq!(*notices.borrow_and_update(), running.lifecycle);
@@ -337,7 +342,12 @@ fn lifecycle_history_survives_reopen() -> TestResult {
             .active_managed(&AnalysisReadControl::default())?
             .1
             .as_slice(),
-        std::slice::from_ref(&restarted)
+        &[ManagedMember {
+            tenant: restarted.spec.tenant,
+            id: restarted.spec.id.clone(),
+            generation: restarted.generation,
+            lifecycle: restarted.lifecycle,
+        }]
     );
     let saved = store
         .managed_attempt(
@@ -618,6 +628,15 @@ fn active_membership_keeps_revision() -> TestResult {
     let (revision, members) = store.active_managed(&AnalysisReadControl::default())?;
     assert_eq!(revision, store.meta()?.commit_revision);
     assert!(running.lifecycle <= revision);
-    assert_eq!(members, [running]);
+    assert_eq!(
+        members,
+        [ManagedMember {
+            tenant: running.spec.tenant,
+            id: running.spec.id.clone(),
+            generation: running.generation,
+            lifecycle: running.lifecycle
+        }]
+    );
+    assert_eq!(fixture.current(&store)?, running);
     Ok(())
 }

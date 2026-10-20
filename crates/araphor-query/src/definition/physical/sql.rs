@@ -38,14 +38,14 @@ impl PackageExec {
                 .first()
                 .ok_or_else(|| internal("package input batch is absent"))?
                 .schema();
-            source.bind_port(*slot, schema, input.data.batches.clone())?;
+            source.bind_port(*slot, schema, input.data.batches.clone(), Some(input))?;
         }
         if let Some(slot) = sql.parameters.filter(|slot| sql.used.contains(slot)) {
             let parameters = evaluation
                 .parameters
                 .as_ref()
                 .ok_or_else(|| internal("package parameters are absent"))?;
-            source.bind_port(slot, parameters.schema(), vec![parameters.clone()])?;
+            source.bind_port(slot, parameters.schema(), vec![parameters.clone()], None)?;
         }
         if let Some(spec) = &model.checkpoint {
             for (port, slot) in spec.datasets.iter().zip(&sql.prior) {
@@ -66,7 +66,7 @@ impl PackageExec {
                         || vec![sdk::RecordBatch::new_empty(Arc::clone(&schema))],
                         |data| data.batches.clone(),
                     );
-                source.bind_port(*slot, schema, batches)?;
+                source.bind_port(*slot, schema, batches, None)?;
             }
         }
         let mut child = model.inputs.len() + usize::from(evaluation.parameters.is_some());
@@ -94,7 +94,12 @@ impl PackageExec {
             if !sql.used.contains(slot) {
                 continue;
             }
-            source.bind_port(*slot, Arc::new(port.schema.clone()), data.batches.clone())?;
+            source.bind_port(
+                *slot,
+                Arc::new(port.schema.clone()),
+                data.batches.clone(),
+                None,
+            )?;
         }
         let checkpoint = if let Some(spec) = &model.checkpoint {
             let mut limits = evaluation.context.limits;

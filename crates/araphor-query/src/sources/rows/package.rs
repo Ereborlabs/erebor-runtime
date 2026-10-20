@@ -5,11 +5,11 @@ use araphor_analysis_sdk as sdk;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 
-use super::{Captured, SourceOrigin, SourceSnapshot};
+use super::{Captured, SourceOrigin, SourceSnapshot, Table};
 
 impl Captured {
     pub(super) fn table_bytes(schema: &SchemaRef, batches: &Vec<sdk::RecordBatch>) -> usize {
-        let bytes = size_of::<(SourceOrigin, (SchemaRef, Vec<usize>, Vec<sdk::RecordBatch>))>()
+        let bytes = size_of::<(SourceOrigin, Table)>()
             .saturating_add(schema.fields().len().saturating_mul(size_of::<usize>()))
             .saturating_add(
                 batches
@@ -91,11 +91,26 @@ impl SourceSnapshot {
         let captured = captured
             .as_ref()
             .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))?;
-        let (schema, _, batches) = captured
+        let (schema, _, batches, _) = captured
             .tables
             .get(&SourceOrigin::Port(slot))
             .ok_or_else(|| DataFusionError::Execution("the materialized port is absent".into()))?;
         Ok((Arc::clone(schema), batches.clone()))
+    }
+
+    pub(crate) fn port_input(&self, slot: usize) -> Result<Option<Arc<sdk::Input>>> {
+        let captured = self
+            .captured
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
+        let input = &captured
+            .as_ref()
+            .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))?
+            .tables
+            .get(&SourceOrigin::Port(slot))
+            .ok_or_else(|| DataFusionError::Execution("the materialized port is absent".into()))?
+            .3;
+        Ok(input.as_ref().map(Arc::clone))
     }
 
     pub(crate) fn retain_ports(&self) -> Result<()> {
@@ -152,7 +167,7 @@ mod tests {
         );
         let captured = source.read(
             &BTreeMap::new(),
-            &BTreeMap::new(),
+            &Default::default(),
             super::super::ReadMode::Snapshot,
             &control,
         )?;
@@ -164,7 +179,7 @@ mod tests {
         ));
         let batch = sdk::RecordBatch::new_empty(Arc::clone(&schema));
         let error = source
-            .bind_port(0, Arc::clone(&schema), vec![batch.clone()])
+            .bind_port(0, Arc::clone(&schema), vec![batch.clone()], None)
             .expect_err("schema metadata exceeds the remaining reservation");
         assert!(
             matches!(error, datafusion::common::DataFusionError::External(source)
@@ -179,7 +194,7 @@ mod tests {
             .tables
             .contains_key(&super::SourceOrigin::Port(0)));
         drop(held);
-        source.bind_port(0, schema, vec![batch])?;
+        source.bind_port(0, schema, vec![batch], None)?;
         let charged = source
             .captured
             .lock()
@@ -201,6 +216,125 @@ mod tests {
                 .size(),
             charged
         );
+        drop(source);
+        drop(memory.reserve_input(capacity)?);
+        Ok(())
+    }
+
+    #[test]
+    fn bound_metadata_is_charged() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let capacity = 64 * 1024;
+        let memory = crate::memory::Memory::new(Some(capacity), Some(1024));
+        let control = AnalysisReadControl::default();
+        let source = SourceSnapshot::new(
+            store,
+            AnalysisSelectionV1::tenant([1; 16]),
+            None,
+            AnalysisExtractLimits::default(),
+            control.within(None)?,
+            None,
+            1,
+            Arc::clone(&memory),
+            None,
+        );
+        let captured = source.read(
+            &BTreeMap::new(),
+            &Default::default(),
+            super::super::ReadMode::Snapshot,
+            &control,
+        )?;
+        let held = memory.reserve_input(capacity - captured.receipt._metadata.size() - 1024)?;
+        *source.captured.lock().map_err(|_| "source lock")? = Some(captured);
+        let schema = Arc::new(sdk::Schema::new(vec![sdk::Field::new(
+            "value",
+            sdk::DataType::UInt64,
+            false,
+        )]));
+        let input = sdk::Input {
+            data: sdk::Dataset {
+                name: "input".into(),
+                batches: vec![sdk::RecordBatch::new_empty(Arc::clone(&schema))],
+            },
+            revision: sdk::Revision {
+                owner: "external-local".into(),
+                id: "x".repeat(8192),
+                window: Some(sdk::SourceWindow {
+                    source: vec![9; 4096],
+                    start_utc_ns: 1,
+                    end_utc_ns: 2,
+                }),
+            },
+            coverage: sdk::Coverage {
+                state: sdk::CoverageState::Gapped,
+                limits: vec!["y".repeat(8192)],
+            },
+        };
+        let error = source
+            .bind_port(
+                0,
+                Arc::clone(&schema),
+                input.data.batches.clone(),
+                Some(&input),
+            )
+            .expect_err("SDK metadata exceeds the remaining reservation");
+        assert!(
+            matches!(error, datafusion::common::DataFusionError::External(source)
+            if matches!(source.downcast_ref::<crate::Error>(), Some(crate::Error::Capacity { resource: "shared input", .. })))
+        );
+        assert!(source.port_input(0).is_err());
+        drop(memory.reserve_input(1024)?);
+        drop(held);
+        source.bind_port(
+            0,
+            Arc::clone(&schema),
+            input.data.batches.clone(),
+            Some(&input),
+        )?;
+        let stored = source.port_input(0)?.ok_or("stored SDK input")?;
+        assert_eq!(stored.data.name, input.data.name);
+        assert_eq!(stored.data.batches, input.data.batches);
+        assert_eq!(stored.revision, input.revision);
+        assert_eq!(stored.coverage, input.coverage);
+        assert!(Arc::ptr_eq(
+            &stored,
+            &source.port_input(0)?.ok_or("same SDK input")?
+        ));
+        assert!(Arc::ptr_eq(
+            stored.data.batches[0].column(0),
+            input.data.batches[0].column(0)
+        ));
+        assert!(source
+            .bind_port(0, Arc::clone(&schema), Vec::new(), None)
+            .is_err());
+        let charged = source
+            .captured
+            .lock()
+            .map_err(|_| "source lock")?
+            .as_ref()
+            .ok_or("source capture")?
+            ._memory
+            .size();
+        assert!(charged >= input.metadata_bytes());
+        source.retain_ports()?;
+        assert_eq!(
+            source
+                .captured
+                .lock()
+                .map_err(|_| "source lock")?
+                .as_ref()
+                .ok_or("source capture")?
+                ._memory
+                .size(),
+            charged
+        );
+        control.cancel()?;
+        assert!(source
+            .bind_port(1, schema, input.data.batches.clone(), Some(&input))
+            .is_err());
+        assert!(source.port_input(1).is_err());
+        drop(stored);
         drop(source);
         drop(memory.reserve_input(capacity)?);
         Ok(())

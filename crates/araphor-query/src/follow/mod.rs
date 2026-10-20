@@ -110,13 +110,16 @@ impl Subscription {
             }
             .fail();
         }
+        let requests = managed
+            .as_ref()
+            .map_or(&sources, |(definition, _)| definition.sources());
         if selection.graph_traversal().is_some()
             && (follow
                 || resume.is_some()
-                || !sources
+                || !requests
                     .keys()
                     .any(|name| matches!(name.as_str(), "graph_subjects" | "relationships"))
-                || sources.keys().any(|name| {
+                || requests.keys().any(|name| {
                     !matches!(
                         name.as_str(),
                         "graph_subjects" | "relationships" | "catalog"
@@ -142,7 +145,7 @@ impl Subscription {
         } else {
             Operation::Replace
         };
-        let binding = Fingerprint::binding(&plan, &sources, selection, operation, binding)?;
+        let binding = Fingerprint::binding(&plan, requests, selection, operation, binding)?;
         if let Some(cursor) = &resume {
             cursor.check_binding(&binding, operation)?;
         }
@@ -197,7 +200,7 @@ impl Subscription {
                                 Arc::clone(state.run.session.memory()),
                             )?;
                             session.workers = state.run.session.workers.clone();
-                            session.metadata(&state.run.sources).await
+                            session.metadata(state.run.sources()).await
                         }
                         .await;
                         match capture {

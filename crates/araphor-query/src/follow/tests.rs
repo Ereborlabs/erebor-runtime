@@ -1336,7 +1336,7 @@ async fn native_append_execution() {
         )
     );
     assert_eq!(
-        bounds["source_cursor"].lower(),
+        bounds.fields["source_cursor"].lower(),
         &ScalarValue::UInt64(Some(2))
     );
     let context = state.task_ctx();

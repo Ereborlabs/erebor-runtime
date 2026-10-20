@@ -130,6 +130,17 @@ impl DataSink for Sink {
         context: &Arc<TaskContext>,
     ) -> NativeResult<u64> {
         self.state.entries.fetch_add(1, Ordering::SeqCst);
+        if self.managed.is_some() {
+            let run = context
+                .session_config()
+                .get_extension::<crate::stream::Run>()
+                .ok_or_else(|| DataFusionError::Internal("managed native run".into()))?;
+            let (definition, _) = run
+                .managed
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Internal("managed definition".into()))?;
+            assert!(std::ptr::eq(run.sources(), definition.sources()));
+        }
         let mut rows = 0;
         while let Some(batch) = data.try_next().await? {
             rows += batch.num_rows() as u64;

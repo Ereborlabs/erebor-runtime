@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
@@ -81,6 +81,38 @@ impl Inputs {
             limits: model.limits,
             mode: model.input_mode,
         })
+    }
+
+    pub(crate) fn origins(&self) -> impl Iterator<Item = &SourceOrigin> {
+        self.plans.iter().flat_map(|port| &port.origins)
+    }
+
+    pub(crate) fn bind_ports(
+        &self,
+        model: &sdk::Model,
+        plans: &[LogicalPlan],
+        bindings: &BTreeMap<usize, &BTreeSet<SourceOrigin>>,
+    ) -> Result<Option<Self>> {
+        if !self
+            .origins()
+            .any(|origin| matches!(origin, SourceOrigin::Port(id) if bindings.contains_key(id)))
+        {
+            return Ok(None);
+        }
+        let origins = self
+            .plans
+            .iter()
+            .map(|port| {
+                let mut origins = port.origins.clone();
+                for (&id, resolved) in bindings {
+                    if origins.remove(&SourceOrigin::Port(id)) {
+                        origins.extend(resolved.iter().cloned());
+                    }
+                }
+                origins
+            })
+            .collect();
+        Self::from_plans(model, plans, origins).map(Some)
     }
 
     pub fn admit(engine: &Engine, model: &sdk::Model) -> Result<Self> {

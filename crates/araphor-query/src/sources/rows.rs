@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use araphor_analysis_sdk as sdk;
 use araphor_data::analysis::PackageResultRefV1;
 use araphor_data::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisInputTables, AnalysisPositionPageV1,
@@ -11,9 +12,8 @@ use datafusion::arrow::array::{RecordBatch, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
-use datafusion::logical_expr::interval_arithmetic::Interval;
 
-use super::{ReadMode, SourceOrigin, SourceSnapshot};
+use super::{ReadMode, ScanBounds, SourceOrigin, SourceSnapshot};
 
 mod package;
 
@@ -62,12 +62,19 @@ impl ArrowSnapshot {
     }
 }
 
+type Table = (
+    SchemaRef,
+    Vec<usize>,
+    Vec<RecordBatch>,
+    Option<Arc<sdk::Input>>,
+);
+
 #[derive(Debug)]
 pub(crate) struct Captured {
     pub(crate) receipt: Arc<ArrowSnapshot>,
     pub(crate) removals: BTreeMap<AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
     _memory: MemoryReservation,
-    tables: BTreeMap<SourceOrigin, (SchemaRef, Vec<usize>, Vec<RecordBatch>)>,
+    tables: BTreeMap<SourceOrigin, Table>,
     package_coverage: BTreeMap<usize, araphor_analysis_sdk::Coverage>,
     source_bytes: usize,
 }
@@ -126,7 +133,7 @@ impl Captured {
         indices: &[usize],
         schema: &SchemaRef,
     ) -> Result<Vec<RecordBatch>> {
-        let Some((stored, captured, batches)) = self.tables.get(origin) else {
+        let Some((stored, captured, batches, _)) = self.tables.get(origin) else {
             return match origin {
                 SourceOrigin::Durable(_) => Ok(Vec::new()),
                 SourceOrigin::Port(_) | SourceOrigin::Package(_) | SourceOrigin::Local(_) => Err(
@@ -174,7 +181,7 @@ impl SourceSnapshot {
         let captured = captured.as_ref().ok_or_else(|| {
             DataFusionError::Internal("the source snapshot is not captured".into())
         })?;
-        let Some((_, indices, batches)) = captured
+        let Some((_, indices, batches, _)) = captured
             .tables
             .iter()
             .find_map(|(origin, table)| (origin.durable() == Some("events")).then_some(table))
@@ -297,6 +304,7 @@ impl SourceSnapshot {
         port: usize,
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
+        input: Option<&sdk::Input>,
     ) -> Result<()> {
         self.control.check().map_err(Self::data_error)?;
         if batches.iter().any(|batch| batch.schema() != schema) {
@@ -317,7 +325,12 @@ impl SourceSnapshot {
                 "the materialized port is already bound".into(),
             ));
         }
-        let bytes = Captured::table_bytes(&schema, &batches);
+        let bytes =
+            Captured::table_bytes(&schema, &batches).saturating_add(input.map_or(0, |input| {
+                input
+                    .metadata_bytes()
+                    .saturating_add(std::mem::size_of::<sdk::Input>())
+            }));
         let reservation = self.memory.reserve_input(0)?;
         for batch in &batches {
             self.memory.retain_input(batch, &reservation)?;
@@ -335,6 +348,7 @@ impl SourceSnapshot {
                 schema.clone(),
                 (0..schema.fields().len()).collect(),
                 batches,
+                input.map(|input| Arc::new(input.clone())),
             ),
         );
         Ok(())
@@ -343,7 +357,7 @@ impl SourceSnapshot {
     pub(crate) fn read(
         &self,
         requests: &AnalysisTableRequests,
-        bounds: &BTreeMap<&'static str, Interval>,
+        bounds: &ScanBounds,
         mode: ReadMode,
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<Captured> {
@@ -398,7 +412,10 @@ impl SourceSnapshot {
             });
         let read = AnalysisTableRead {
             requests,
-            event_ranges: self.inputs.as_ref().map(|inputs| inputs.ranges.as_slice()),
+            event_ranges: bounds
+                .events
+                .as_deref()
+                .or_else(|| self.inputs.as_ref().map(|inputs| inputs.ranges.as_slice())),
             inputs,
             mode: match mode {
                 ReadMode::Snapshot => AnalysisReadModeV1::Complete,
@@ -429,8 +446,7 @@ impl SourceSnapshot {
                 location: snafu::location!(),
             })
         };
-        let entry_bytes =
-            std::mem::size_of::<(SourceOrigin, (SchemaRef, Vec<usize>, Vec<RecordBatch>))>();
+        let entry_bytes = std::mem::size_of::<(SourceOrigin, Table)>();
         let mut added = 0usize;
         for (name, batches) in &page.tables {
             let canonical = Self::schemas().get(name).ok_or_else(|| {
@@ -521,7 +537,10 @@ impl SourceSnapshot {
             source_bytes = source_bytes
                 .saturating_add(Captured::table_bytes(&schema, &batches))
                 .saturating_add(name.capacity());
-            tables.insert(SourceOrigin::Durable(name), (schema, indices, batches));
+            tables.insert(
+                SourceOrigin::Durable(name),
+                (schema, indices, batches, None),
+            );
         }
         let mut package_coverage = BTreeMap::new();
         for (index, (schema, batches, coverage)) in packages {
@@ -542,7 +561,10 @@ impl SourceSnapshot {
                 .saturating_add(Captured::coverage_bytes(&coverage));
             let indices = (0..schema.fields().len()).collect();
             if tables
-                .insert(SourceOrigin::Package(*slot), (schema, indices, batches))
+                .insert(
+                    SourceOrigin::Package(*slot),
+                    (schema, indices, batches, None),
+                )
                 .is_some()
                 || package_coverage.insert(*slot, coverage).is_some()
             {

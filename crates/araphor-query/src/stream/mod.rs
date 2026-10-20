@@ -32,6 +32,12 @@ pub(crate) struct Run {
 }
 
 impl Run {
+    pub(crate) fn sources(&self) -> &AnalysisTableRequests {
+        self.managed
+            .as_ref()
+            .map_or(&self.sources, |(definition, _)| definition.sources())
+    }
+
     pub(crate) async fn session(&self, now: u64, permit: &Arc<Permit>) -> crate::Result<Session> {
         let (invocation, managed) = match &self.managed {
             Some((definition, publication)) => {

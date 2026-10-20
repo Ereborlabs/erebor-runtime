@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
-use araphor_data::{PackageActionV1, PackageBundleRef, PackageGrantV1};
+use araphor_analysis_sdk as sdk;
+use araphor_data::{ManagedInstance, PackageActionV1, PackageBundleRef, PackageGrantV1};
 
 use super::*;
 use crate::instance::tests::{bundle, Authority as FixtureAuthority, Fixture, TestResult};
@@ -204,15 +205,44 @@ async fn host_keeps_newer_member() -> TestResult {
     )?;
     let host = InstanceHost::new(Arc::clone(&fixture.query), fixture.authority.clone());
     let members = FuturesUnordered::new();
-    members.push(Member::new(Arc::clone(&host), newer.clone(), u64::MAX));
-    host.reconcile(&members, older.lifecycle, Vec::new(), u64::MAX)?;
-    host.reconcile(&members, newer.lifecycle, vec![older], u64::MAX)?;
+    let current = ManagedMember {
+        tenant: newer.spec.tenant,
+        id: newer.spec.id.clone(),
+        generation: newer.generation,
+        lifecycle: newer.lifecycle,
+    };
+    let memory = host
+        .query
+        .memory()
+        .reserve_input(std::mem::size_of::<ManagedMember>() + current.id.capacity())?;
+    members.push(Member::new(Arc::clone(&host), current, memory, u64::MAX));
+    host.reconcile(
+        &members,
+        older.lifecycle,
+        Vec::new(),
+        host.query.memory().reserve_input(0)?,
+        u64::MAX,
+    )?;
+    let active = vec![ManagedMember {
+        tenant: older.spec.tenant,
+        id: older.spec.id.clone(),
+        generation: older.generation,
+        lifecycle: older.lifecycle,
+    }];
+    let memory = host.query.memory().reserve_input(0)?;
+    host.reconcile(&members, newer.lifecycle, active, memory, u64::MAX)?;
     assert_eq!(members.len(), 1);
     for member in members.iter() {
         member.control.check()?;
     }
     let snapshot = fixture.query.store().meta()?.commit_revision;
-    host.reconcile(&members, snapshot, Vec::new(), u64::MAX)?;
+    host.reconcile(
+        &members,
+        snapshot,
+        Vec::new(),
+        host.query.memory().reserve_input(0)?,
+        u64::MAX,
+    )?;
     assert!(members.iter().all(|member| member.control.check().is_err()));
     Ok(())
 }
@@ -434,7 +464,7 @@ async fn host_metadata_error_drains() -> TestResult {
     fixture
         .query
         .store()
-        .fault_write("UPDATE managed_instances SET spec = 'invalid'::BLOB", &[])?;
+        .fault_write("UPDATE managed_instances SET generation = 0", &[])?;
     let host = InstanceHost::new(Arc::clone(&fixture.query), fixture.authority.clone());
     let (_stop, stopped) = watch::channel(false);
     let result =
@@ -1079,5 +1109,356 @@ async fn host_delivery_keeps_healthy() -> TestResult {
         drop((first, second));
         drop(fixture.query.store().lease_managed()?);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn membership_keys_keep_capacity() -> TestResult {
+    let capacity = 64 * 1024;
+    let fixture = Fixture::new(araphor_query::execution::Limits {
+        input_capacity: Some(capacity),
+        ..Default::default()
+    })?;
+    let instance = fixture
+        .admit(
+            "projected-member",
+            "SELECT CAST(7 AS BIGINT UNSIGNED) AS value",
+        )
+        .await?;
+    let lifecycle = fixture.start(&instance)?;
+    let expected = ManagedMember {
+        tenant: instance.admitted().spec.tenant,
+        id: instance.admitted().spec.id.clone(),
+        generation: instance.admitted().generation,
+        lifecycle: instance.admitted().lifecycle,
+    };
+    drop(instance);
+    assert_eq!(fixture.query.memory().input_reserved(), 0);
+    let host = InstanceHost::new(Arc::clone(&fixture.query), fixture.authority.clone());
+    let before = fixture.query.store().meta()?;
+    let (revision, active) = host
+        .membership(Arc::new(AnalysisReadControl::default()))
+        .await?;
+    assert_eq!(revision, before.commit_revision);
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].tenant, expected.tenant);
+    assert_eq!(active[0].id, expected.id);
+    assert_eq!(active[0].generation, expected.generation);
+    assert_eq!(active[0].lifecycle, lifecycle);
+    let bytes = active.capacity() * std::mem::size_of::<ManagedMember>()
+        + active
+            .iter()
+            .map(|member| member.id.capacity())
+            .sum::<usize>();
+    assert_eq!(fixture.query.memory().input_reserved(), 0);
+    let memory = fixture.query.memory().reserve_input(0)?;
+    assert!(bytes >= std::mem::size_of::<ManagedMember>() + active[0].id.capacity());
+    let retained = std::mem::size_of::<ManagedMember>() + active[0].id.capacity();
+    let members = FuturesUnordered::new();
+    host.reconcile(&members, revision, active, memory, u64::MAX)?;
+    assert_eq!(members.len(), 1);
+    assert_eq!(fixture.query.memory().input_reserved(), retained);
+    let key = Arc::clone(&members.iter().next().ok_or("projected member")?.key);
+    drop(members);
+    assert_eq!(fixture.query.memory().input_reserved(), retained);
+    assert!(fixture.query.memory().reserve_input(capacity).is_err());
+    assert_eq!(fixture.query.store().meta()?, before);
+    drop(key);
+    assert_eq!(fixture.query.memory().input_reserved(), 0);
+    drop(fixture.query.memory().reserve_input(capacity)?);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replacement_releases_before_admission() -> TestResult {
+    use futures_util::FutureExt as _;
+
+    let capacity = 128 * 1024 * 1024;
+    let fixture = Fixture::new(araphor_query::execution::Limits {
+        input_capacity: Some(capacity),
+        output_capacity: Some(32 * 1024 * 1024),
+        global_evaluations: Some(2),
+        tenant_evaluations: Some(2),
+        ..Default::default()
+    })?;
+    let mut image = bundle("wasm")?;
+    let model = &mut image.artifacts[0].descriptor.exports[0];
+    model.name = "evaluate".into();
+    model.inputs.clear();
+    model.checkpoint = None;
+    model.parameters = sdk::Schema::new(vec![
+        sdk::Field::new("mode", sdk::DataType::Utf8, false),
+        sdk::Field::new("amount", sdk::DataType::UInt64, false),
+    ]);
+    let araphor_package::PackageImplementationV1::Wasm { exports, .. } =
+        &mut image.artifacts[0].implementations[0]
+    else {
+        return Err("replacement Wasm fixture".into());
+    };
+    *exports = vec!["evaluate".into()];
+    let image_bytes = image.allocated_bytes()?;
+    fixture.install(&image)?;
+    fixture.context(1)?;
+    drop(image);
+    let instance = fixture.admit("tight-worker", r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => (SELECT CASE WHEN COUNT(*) = 1 THEN 'cancel' ELSE 'clock' END FROM context_versions), amount => 0)"#).await?;
+    let lifecycle = fixture.start(&instance)?;
+    let generation = instance.admitted.generation;
+    drop(instance);
+    let authority = Authority::new(&fixture);
+    let host = InstanceHost::new(Arc::clone(&fixture.query), authority.clone());
+    let (entered, observed) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    fixture.query.guest_entry(entered, Some(released))?;
+    let (stop, stopped) = watch::channel(false);
+    let mut worker = tokio::spawn(Arc::clone(&host).serve(stopped, u64::MAX));
+    tokio::task::spawn_blocking(move || observed.recv_timeout(Duration::from_secs(30))).await??;
+    let (_, active) = host
+        .membership(Arc::new(AnalysisReadControl::default()))
+        .await?;
+    assert_eq!(active.len(), 1);
+    let headroom = active.capacity() * std::mem::size_of::<ManagedMember>()
+        + active
+            .iter()
+            .map(|member| member.id.capacity())
+            .sum::<usize>();
+    assert!(headroom < image_bytes);
+    drop(active);
+    let retained = fixture.query.memory().input_reserved();
+    let pressure = fixture.query.memory().reserve_input(
+        capacity
+            .checked_sub(retained)
+            .and_then(|bytes| bytes.checked_sub(headroom))
+            .ok_or("replacement capacity")?,
+    )?;
+    assert_eq!(fixture.query.memory().input_reserved(), capacity - headroom);
+    assert!(fixture.query.memory().reserve_input(image_bytes).is_err());
+    let stopped = fixture.query.store().set_managed_running(
+        [1; 16],
+        "tight-worker",
+        lifecycle,
+        false,
+        || Ok(()),
+    )?;
+    let restarted = fixture.query.store().set_managed_running(
+        [1; 16],
+        "tight-worker",
+        stopped.lifecycle,
+        true,
+        || Ok(()),
+    )?;
+    fixture.context(2)?;
+    assert_eq!(authority.admissions.load(Ordering::SeqCst), 1);
+    assert!(fixture.query.store().lease_managed().is_err());
+    assert!((&mut worker).now_or_never().is_none());
+    release.send(())?;
+    fixture.host_progress("tight-worker", 0).await?;
+    assert_eq!(
+        authority.admissions.load(Ordering::SeqCst),
+        3,
+        "Initial, cancellation, and replacement trust checks"
+    );
+    let current = fixture
+        .query
+        .store()
+        .managed_instance([1; 16], "tight-worker", &AnalysisReadControl::default())?
+        .ok_or("replacement instance")?;
+    assert_eq!(current.generation, generation);
+    assert_eq!(current.lifecycle, restarted.lifecycle);
+    assert!(current.running);
+    drop(pressure);
+    stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(30), worker).await???;
+    drop(host);
+    drop(fixture.query.store().lease_managed()?);
+    let permits = [
+        fixture.query.reserve_evaluation([1; 16])?,
+        fixture.query.reserve_evaluation([1; 16])?,
+    ];
+    drop(permits);
+    drop(fixture.query.memory().reserve_input(capacity)?);
+    drop(fixture.query.memory().reserve_output(32 * 1024 * 1024)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn pressure_keeps_stop_reactive() -> TestResult {
+    let capacity = 64 * 1024;
+    let fixture = Fixture::new(araphor_query::execution::Limits {
+        input_capacity: Some(capacity),
+        ..Default::default()
+    })?;
+    let running = fixture
+        .admit("pressure-running", "SELECT 1 AS value")
+        .await?;
+    let pending = fixture
+        .admit("pressure-pending", "SELECT 2 AS value")
+        .await?;
+    let lifecycle = fixture.start(&running)?;
+    drop(running);
+    let host = InstanceHost::new(Arc::clone(&fixture.query), fixture.authority.clone());
+    let control = Arc::new(AnalysisReadControl::default());
+    let members = FuturesUnordered::new();
+    let (revision, active) = host.membership(Arc::clone(&control)).await?;
+    host.reconcile(
+        &members,
+        revision,
+        active,
+        fixture.query.memory().reserve_input(0)?,
+        u64::MAX,
+    )?;
+    assert_eq!(members.len(), 1);
+    let mut notices = fixture.query.store().subscribe_activations();
+    fixture.start(&pending)?;
+    drop(pending);
+    let pressure = fixture.query.memory().reserve_input(
+        capacity
+            .checked_sub(fixture.query.memory().input_reserved())
+            .ok_or("pressure capacity")?,
+    )?;
+    assert_eq!(fixture.query.memory().input_reserved(), capacity);
+    let (revision, active) = host.membership(Arc::clone(&control)).await?;
+    assert_eq!(active.len(), 2);
+    assert!(*notices.borrow_and_update() <= revision);
+    let memory = fixture.query.memory().scope();
+    let epoch = memory.capacity_epoch();
+    let error = host
+        .reconcile(
+            &members,
+            revision,
+            active,
+            memory.reserve_input(0)?,
+            u64::MAX,
+        )
+        .err()
+        .ok_or("metadata pressure missing")?;
+    assert!(matches!(error, crate::Error::Query { source }
+        if araphor_query::Failure::from(&source) == araphor_query::Failure::Busy));
+    assert!(members.iter().all(|member| member.control.check().is_ok()));
+    let waiting = host.wait_membership(Arc::clone(&control), Arc::clone(&memory), epoch, notices);
+    tokio::pin!(waiting);
+    assert!(waiting.as_mut().now_or_never().is_none());
+    let stopped = fixture.query.store().set_managed_running(
+        [1; 16],
+        "pressure-running",
+        lifecycle,
+        false,
+        || Ok(()),
+    )?;
+    let (revision, active) = tokio::time::timeout(Duration::from_secs(30), waiting).await??;
+    assert!(revision >= stopped.lifecycle);
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id, "pressure-pending");
+    let error = host
+        .reconcile(
+            &members,
+            revision,
+            active,
+            memory.reserve_input(0)?,
+            u64::MAX,
+        )
+        .err()
+        .ok_or("metadata pressure released early")?;
+    assert!(matches!(error, crate::Error::Query { source }
+        if araphor_query::Failure::from(&source) == araphor_query::Failure::Busy));
+    assert!(members.iter().all(|member| member.control.check().is_err()));
+    assert_eq!(fixture.query.memory().input_reserved(), capacity);
+    drop(members);
+    drop(pressure);
+    assert_eq!(fixture.progress("pressure-running")?, 0);
+    assert_eq!(fixture.progress("pressure-pending")?, 0);
+    drop(fixture.query.memory().reserve_input(capacity)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn projected_member_keeps_fence() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    fixture.install(&bundle("sql")?)?;
+    let instance = fixture.admit("projected-stale", r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(11 AS BIGINT UNSIGNED) AS value))"#).await?;
+    let lifecycle = fixture.start(&instance)?;
+    drop(instance);
+    let authority = Authority::new(&fixture);
+    let host = InstanceHost::new(Arc::clone(&fixture.query), authority.clone());
+    let control = Arc::new(AnalysisReadControl::default());
+    let (_, mut active) = host.membership(Arc::clone(&control)).await?;
+    assert_eq!(active.len(), 1);
+    let member = active.pop().ok_or("stale projected member")?;
+    let bytes = std::mem::size_of::<ManagedMember>() + member.id.capacity();
+    let expected = Arc::new((member, fixture.query.memory().reserve_input(bytes)?));
+    let stopped = fixture.query.store().set_managed_running(
+        [1; 16],
+        "projected-stale",
+        lifecycle,
+        false,
+        || Ok(()),
+    )?;
+    fixture.query.store().set_managed_running(
+        [1; 16],
+        "projected-stale",
+        stopped.lifecycle,
+        true,
+        || Ok(()),
+    )?;
+    let before = fixture.query.store().meta()?;
+    let error = host
+        .member(&expected, &control, u64::MAX)
+        .await
+        .err()
+        .ok_or("stale projected admission succeeded")?;
+    assert!(matches!(
+        error,
+        crate::Error::Query {
+            source: araphor_query::Error::Data {
+                source: araphor_data::Error::Package {
+                    code: Code::Conflict,
+                    field: "managed member fence",
+                    ..
+                },
+            },
+        }
+    ));
+    assert_eq!(authority.admissions.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(fixture.progress("projected-stale")?, 0);
+    drop(expected);
+    assert_eq!(fixture.query.memory().input_reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_bad_member_isolates() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    fixture.install(&bundle("sql")?)?;
+    let sql = r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) AS value FROM context_versions))"#;
+    let broken = fixture.admit("broken-spec", sql).await?;
+    let healthy = fixture.admit("healthy-spec", sql).await?;
+    fixture.start(&broken)?;
+    fixture.start(&healthy)?;
+    drop(broken);
+    drop(healthy);
+    fixture.query.store().fault_write(
+        "UPDATE managed_instances SET spec = 'invalid'::BLOB WHERE instance_id = 'broken-spec'",
+        &[],
+    )?;
+    let authority = Authority::new(&fixture);
+    let host = InstanceHost::new(Arc::clone(&fixture.query), authority.clone());
+    let (stop, stopped) = watch::channel(false);
+    let worker = tokio::spawn(host.serve(stopped, u64::MAX));
+    let first = fixture.host_progress("healthy-spec", 0).await?;
+    fixture.context(1)?;
+    fixture.host_progress("healthy-spec", first).await?;
+    assert!(matches!(
+        fixture.query.store().managed_instance(
+            [1; 16],
+            "broken-spec",
+            &AnalysisReadControl::default(),
+        ),
+        Err(araphor_data::Error::PackageEncoding { .. })
+    ));
+    assert_eq!(authority.admissions.load(Ordering::SeqCst), 1);
+    stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(30), worker).await???;
+    drop(fixture.query.store().lease_managed()?);
+    drop(fixture.query.reserve_evaluation([1; 16])?);
     Ok(())
 }

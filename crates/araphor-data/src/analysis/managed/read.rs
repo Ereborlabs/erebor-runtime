@@ -94,12 +94,12 @@ impl AnalysisStore {
     pub fn active_managed(
         &self,
         control: &AnalysisReadControl,
-    ) -> Result<(u64, Vec<ManagedInstance>)> {
+    ) -> Result<(u64, Vec<ManagedMember>)> {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |reader| {
             let revision = Self::read_meta_from(reader, &self.root.join("analysis.duckdb"))?
                 .commit_revision;
-            let mut statement = reader.prepare("SELECT tenant_id, instance_id, spec, generation, progress, running, lifecycle FROM managed_instances WHERE running ORDER BY tenant_id, instance_id")
+            let mut statement = reader.prepare("SELECT tenant_id, instance_id, generation, lifecycle FROM managed_instances WHERE running ORDER BY tenant_id, instance_id")
                 .context(AnalysisDatabaseSnafu { operation: "prepare active managed metadata" })?;
             let mut rows = statement.query([])
                 .context(AnalysisDatabaseSnafu { operation: "read active managed metadata" })?;
@@ -108,19 +108,23 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu { operation: "read active managed row" })?
             {
                 control.check()?;
-                let tenant = row.get::<_, Vec<u8>>(0)
-                    .context(AnalysisDatabaseSnafu { operation: "read active managed tenant" })?
-                    .try_into().map_err(|_| Code::Invalid.error("active managed tenant"))?;
-                let id: String = row.get(1)
-                    .context(AnalysisDatabaseSnafu { operation: "read active managed identity" })?;
-                let values = (
-                    row.get(2).context(AnalysisDatabaseSnafu { operation: "read active managed spec" })?,
-                    row.get(3).context(AnalysisDatabaseSnafu { operation: "read active managed generation" })?,
-                    row.get(4).context(AnalysisDatabaseSnafu { operation: "read active managed progress" })?,
-                    row.get(5).context(AnalysisDatabaseSnafu { operation: "read active managed running state" })?,
-                    row.get(6).context(AnalysisDatabaseSnafu { operation: "read active managed lifecycle" })?,
-                );
-                active.push(Self::managed_row(tenant, &id, values)?);
+                let member = ManagedMember {
+                    tenant: row.get::<_, Vec<u8>>(0)
+                        .context(AnalysisDatabaseSnafu { operation: "read active managed tenant" })?
+                        .try_into().map_err(|_| Code::Invalid.error("active managed tenant"))?,
+                    id: row.get(1)
+                        .context(AnalysisDatabaseSnafu { operation: "read active managed identity" })?,
+                    generation: row.get(2)
+                        .context(AnalysisDatabaseSnafu { operation: "read active managed generation" })?,
+                    lifecycle: row.get(3)
+                        .context(AnalysisDatabaseSnafu { operation: "read active managed lifecycle" })?,
+                };
+                if member.tenant == [0; 16] || member.id.is_empty()
+                    || member.id.chars().any(char::is_control) || member.generation == 0
+                    || member.lifecycle < member.generation || member.lifecycle > revision {
+                    return Err(Code::Invalid.error("active managed member"));
+                }
+                active.push(member);
             }
             Ok((revision, active))
         })

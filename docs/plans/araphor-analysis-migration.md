@@ -38,7 +38,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 125 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 122 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -55,7 +55,7 @@ Every replacement passes its required checks
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
 | Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public transport and presentation remain open. | Finite checks pass |
-| Final retirement | The earlier 82 leaves and the complete limits leaf are removed after replacement checks pass. The 125 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Final retirement | The earlier 83 leaves and three memory/stream leaves are removed after replacement checks pass. The 122 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -456,8 +456,8 @@ and their reservation through one private Arc. Cloning that definition copies
 no admitted metadata. Instance retains native extension nodes through their
 existing Arc values. It charges its moved spec and manifest before admission.
 Defined String and Vec capacities use checked arithmetic. Native planner and
-allocator internals are outside this accounting claim. Host metadata projection
-and source-request deduplication remain **Not done**.
+allocator internals are outside this accounting claim. The later projected
+membership result below completes retained host keys and source-request sharing.
 
 Data retains one current failure fact on the instance row. Idle denial writes
 that fact in the existing suspension transaction. A joined failed attempt writes
@@ -502,23 +502,68 @@ maps all original fields, derived contracts, and both embedded tests to Runtime.
 The complete 20-line production leaf is removed. Runtime retains the exact
 disabled defaults, configured values, round trip, and unknown-field rejection.
 Configured compiler memory and native resource limits remain explicitly
-Unsupported; serialization does not prove enforcement. There are now **83
-retired files and 125 unchanged files**. The recovery archive stays intact.
+Unsupported; serialization does not prove enforcement. At that retirement,
+there are **83 retired files and 125 unchanged files**. The recovery archive stays intact.
 Complete migration, the reduction target, and the final Rust gate remain
 **Not done**.
 
+### Native input capture and projected membership
+
+Implementation and focused checks are **Done** for this bounded replacement.
+Native plans retain declared source origins through optimization. Each input
+keeps its time envelope. Independent input windows use their exact range union.
+An eliminated source scan still contributes its admitted receipt. Checked native
+port identities prevent nested calls from binding another call's local slot.
+These private identities do not change the persisted definition or plan hash.
+
+SQL bodies pass inputs to nested calls through explicit relation arguments.
+SourceSnapshot retains the parent SDK metadata beside its private bound rows.
+The child input combines those revisions and coverage through the existing
+receipt algorithm. The same capture supplies all rows, witnesses, and cuts.
+Binding charges the defined SDK payload before cloning it. Arrow buffers keep
+their existing shared claims. Opaque allocator headers are not estimated.
+
+Data active membership returns only tenant, instance ID, generation, and
+lifecycle. Each new member loads its full row once and checks those fences.
+The host shares one charged key between its existing member and future. It
+cancels stale members before it reserves new metadata. A capacity wait also
+receives lifecycle notices, so Stop can release an old owner under pressure.
+The old worker must join before a replacement admits. Managed Run borrows its
+retained definition's source map instead of cloning that map.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `migration-input-host-build113` | Connected test build passes. | 22.985 |
+| `migration-native-input-new112` | All 15 new native input cases pass. | 7.460 |
+| `migration-host-projection-new112` | All four new host cases pass. | 10.345 |
+| `migration-input-query112` | All 259 connected Query cases pass, including source-built native calls. | 236.384 |
+| `migration-input-analysis112` | 64 Instance cases pass; the old full-spec metadata fault fixture times out. | 139.822 |
+| `migration-input-analysis-corrections113` | The corrected projected-metadata fault and the added corrupt-member isolation case pass. There are 66 qualified Instance cases. | 1.676 |
+| `migration-input-data113` | All 44 managed Data cases pass. | 44.689 |
+| `migration-input-memory-package113` | All four image memory cases pass. | 0.095 |
+| `migration-input-clippy113` | Connected targets and features pass with warnings denied. | 10.015 |
+| `migration-fmt113` | Workspace formatting passes. Retirement repeats this check. | 4.535 |
+
+The [memory retirement record](../../recovery/araphor-analysis-memory-retirement-20261020.json)
+maps all 15 old helper methods, seven memory tests, and the native conversion
+stream test. The complete three files are removed after these checks. This
+removes 240 reference production lines and no test obligation. There are now
+**86 retired files and 122 unchanged baseline files**. The archive remains
+unchanged. Initial admission pressure retry, remaining operation assertions,
+producer integration, public lifecycle, and the final Rust gate are **Not done**.
+
 ### Production code ledger
 
-The current count109 includes retained metadata, durable failure status, finite
-failure recording, and the retired limits leaf.
+The current count113 includes native input capture, projected membership,
+shared managed source requests, and three retired memory/stream files.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 15,449 | 8,500 | +6,949 |
-| Original reduction baseline `7b7b407a` | 43,333 | 30,388 | +12,945 |
+| `6a25ba1b` | 15,869 | 8,740 | +7,129 |
+| Original reduction baseline `7b7b407a` | 43,513 | 30,388 | +13,125 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -541,11 +586,18 @@ lines and retire no reference file. The host, delivery, and component admission
 replacement adds 505 production lines. Error retirement removes 242. This
 delivery adds 263 net production lines. Retained metadata, failure status, and
 finite failure recording add 396 production lines. Limits retirement removes
-20. This delivery adds 376 net production lines. Another 18,945 net production lines must be removed relative to the
+20. This delivery adds 376 net production lines. Native input capture and
+projected membership add 420 production lines. Memory retirement removes 240.
+This delivery adds 180 net production lines. Another 19,125 net production lines
+must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count109.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count113.json`. Its selected source
+fingerprint is
+`5bc47d095d98793e2d751cb46d86aaee7ae7ab118c0f1c16929f05100c689dbe`.
+The earlier count109 records retained metadata, failure status, and limits
+retirement at +12,945 production lines from the original baseline. Its
 fingerprint is
 `8432347cc06447b4605b1726616e9a9c5c78439cb915e1e76800ff02cfd75b4d`.
 The earlier count104 records the reactive host and error retirement at +12,569
@@ -814,8 +866,9 @@ during source retirement. This record does not claim a remote push.
 
 Local commit `d9369555` retains the archive and its checksum. The archive
 contains the complete recovered source. The 29 earlier leaves, four additional
-finite files, and eight Wasm leaves are retired. The other 167 baseline files
-remain unchanged.
+finite files, and eight Wasm leaves are retired at that earlier source state.
+The latest custody record verifies all 122 remaining files against the baseline.
+The complete 208-file source remains in the unchanged archive.
 
 ## Back package, model and notification inventory
 

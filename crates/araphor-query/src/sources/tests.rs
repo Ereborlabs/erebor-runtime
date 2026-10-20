@@ -900,7 +900,7 @@ async fn native_ports_share_cut() -> TestResult {
     let mut requests = araphor_data::AnalysisTableRequests::new();
     let bounds = SourceSnapshot::requests(&mut requests, &plans)?;
     assert!(requests.is_empty());
-    assert!(bounds.is_empty());
+    assert!(bounds.fields.is_empty());
     let mut all = vec![Arc::clone(&durable), operation];
     all.extend(plans.iter().cloned());
     let mut requests = sources.clone();
@@ -934,17 +934,19 @@ async fn native_ports_share_cut() -> TestResult {
         ],
     )?;
     assert!(capture
-        .bind_port(0, Arc::clone(&empty), vec![materialized.clone()])
+        .bind_port(0, Arc::clone(&empty), vec![materialized.clone()], None)
         .is_err());
-    capture.bind_port(0, Arc::clone(&declared), vec![materialized])?;
-    assert!(capture.bind_port(0, Arc::clone(&declared), vec![]).is_err());
+    capture.bind_port(0, Arc::clone(&declared), vec![materialized], None)?;
+    assert!(capture
+        .bind_port(0, Arc::clone(&declared), vec![], None)
+        .is_err());
     let count = collect(Arc::clone(&plans[0]), runtime.task_ctx()).await?;
     assert_eq!(cell(&count, 0), ScalarValue::Int64(Some(1)));
     let values = collect(Arc::clone(&plans[1]), runtime.task_ctx()).await?;
     assert_eq!(values[0].schema(), declared);
     assert_eq!(cell(&values, 0), ScalarValue::UInt64(Some(1)));
     assert_eq!(cell(&values, 1), ScalarValue::UInt64(Some(0)));
-    capture.bind_port(1, Arc::clone(&declared), vec![])?;
+    capture.bind_port(1, Arc::clone(&declared), vec![], None)?;
     assert!(collect(Arc::clone(&plans[2]), runtime.task_ctx())
         .await?
         .is_empty());
@@ -956,6 +958,7 @@ async fn native_ports_share_cut() -> TestResult {
             vec![],
             &RecordBatchOptions::new().with_row_count(Some(3)),
         )?],
+        None,
     )?;
     let count = collect(Arc::clone(&plans[3]), runtime.task_ctx()).await?;
     assert_eq!(cell(&count, 0), ScalarValue::Int64(Some(3)));
@@ -963,5 +966,53 @@ async fn native_ports_share_cut() -> TestResult {
         &receipt,
         &capture.capture(&requests, received, ReadMode::Snapshot)?
     ));
+    Ok(())
+}
+
+#[test]
+fn exact_ranges_preserve_receipt() -> TestResult {
+    let fixture = Fixture::new()?;
+    for (cursor, received) in [(1, 1001), (2, 2001), (3, 3001)] {
+        fixture.commit(&fixture.source, cursor, received)?;
+    }
+    let requests = BTreeMap::from([("events".into(), None)]);
+    for (ranges, expected) in [
+        (vec![], vec![]),
+        (vec![(1001, 2001), (2001, 3001)], vec![1, 2, 3]),
+    ] {
+        let source = SourceSnapshot::new(
+            Arc::clone(&fixture.store),
+            fixture.selection(),
+            None,
+            Default::default(),
+            fixture.control()?,
+            None,
+            4000,
+            Arc::clone(fixture.engine.memory()),
+            None,
+        );
+        let snapshot = source.capture(
+            &requests,
+            super::ScanBounds {
+                events: Some(ranges),
+                ..Default::default()
+            },
+            super::ReadMode::Snapshot,
+        )?;
+        assert_eq!(
+            snapshot.page.extraction.sources[0]
+                .receipt
+                .contiguous_cursor,
+            3
+        );
+        assert_eq!(
+            snapshot
+                .witnesses
+                .iter()
+                .map(|witness| witness.cursor)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
     Ok(())
 }

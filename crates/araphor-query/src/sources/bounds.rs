@@ -6,11 +6,10 @@ use araphor_data::{AnalysisSelectionV1, AnalysisStore, AnalysisTableRequests};
 use datafusion::common::ScalarValue;
 use datafusion::datasource::MemTable;
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 
-use super::SourceSnapshot;
+use super::{ScanBounds, SourceSnapshot};
 use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
 use crate::planner::Planner;
@@ -34,9 +33,7 @@ impl Fixture {
         }
     }
 
-    fn requests(
-        plans: &[Arc<dyn ExecutionPlan>],
-    ) -> (AnalysisTableRequests, BTreeMap<&'static str, Interval>) {
+    fn requests(plans: &[Arc<dyn ExecutionPlan>]) -> (AnalysisTableRequests, ScanBounds) {
         let mut requests = BTreeMap::from([("events".to_owned(), None)]);
         let bounds = SourceSnapshot::requests(&mut requests, plans).unwrap();
         (requests, bounds)
@@ -80,7 +77,7 @@ async fn native_fixed_time_bounds() {
             .await;
         let (requests, bounds) = Fixture::requests(std::slice::from_ref(&physical));
         assert!(requests.contains_key("events"));
-        let interval = &bounds["received_utc_ns"];
+        let interval = &bounds.fields["received_utc_ns"];
         assert_eq!(interval.lower(), &ScalarValue::UInt64(Some(1000)));
         assert_eq!(interval.upper(), &ScalarValue::UInt64(Some(2999)));
         let selected = SourceSnapshot::prune_selection(selection, &bounds);
@@ -176,7 +173,7 @@ async fn local_source_has_no_bounds() {
     let mut requests = AnalysisTableRequests::new();
     let bounds = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical)).unwrap();
     assert!(requests.is_empty());
-    assert!(bounds.is_empty());
+    assert!(bounds.fields.is_empty());
 }
 
 #[tokio::test]

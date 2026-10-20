@@ -53,8 +53,8 @@ impl Runtime {
                 compiled: Some(compiled),
             } if run.follow
                 && run.window.is_none()
-                && run.sources.len() == 1
-                && run.sources.contains_key("events") =>
+                && run.sources().len() == 1
+                && run.sources().contains_key("events") =>
             {
                 let journal = journal
                     .as_any()
@@ -173,7 +173,7 @@ impl Runtime {
             let scope = self.run.session.token()?;
             match Engine::blocking(stage, scope, move || {
                 store
-                    .dependency_revision_for(&selection, &run.sources, &worker)
+                    .dependency_revision_for(&selection, run.sources(), &worker)
                     .map_err(crate::Error::from)
             })
             .await
@@ -248,7 +248,7 @@ impl Runtime {
                     .start_physical(
                         Arc::clone(&self.input),
                         Arc::clone(&self.context),
-                        &self.run.sources,
+                        self.run.sources(),
                         Read::Page(self.position),
                         permit,
                     )
@@ -311,7 +311,13 @@ impl Runtime {
                     active: true,
                 };
                 let captured = session
-                    .capture_physical(physical, context, &self.run.sources, Read::Snapshot, permit)
+                    .capture_physical(
+                        physical,
+                        context,
+                        self.run.sources(),
+                        Read::Snapshot,
+                        permit,
+                    )
                     .await?;
                 captured.reserve_complete(self.run.follow)?;
                 let captured = CapturedExecution::new(
@@ -463,7 +469,7 @@ impl Runtime {
             .run
             .session
             .at(selection, now)
-            .metadata(&self.run.sources)
+            .metadata(self.run.sources())
             .await?;
         self.check_store(&snapshot.page.extraction.meta)?;
         self.run

@@ -25,7 +25,6 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::{SessionState, TaskContext};
 use datafusion::logical_expr::execution_props::ExecutionProps;
-use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::{LogicalPlan, TableType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -39,7 +38,7 @@ use snafu::ResultExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::memory::Memory;
-use crate::sources::{ArrowSnapshot, ReadMode, SourceSnapshot};
+use crate::sources::{ArrowSnapshot, ReadMode, ScanBounds, SourceSnapshot};
 use crate::{BusySnafu, InvalidSnafu, Result, SqlSnafu};
 
 mod admission;
@@ -1195,7 +1194,7 @@ impl Session {
         &self,
         snapshot: Arc<SourceSnapshot>,
         requests: AnalysisTableRequests,
-        bounds: BTreeMap<&'static str, Interval>,
+        bounds: ScanBounds,
         mode: ReadMode,
         permit: Arc<Permit>,
     ) -> Result<Arc<ArrowSnapshot>> {

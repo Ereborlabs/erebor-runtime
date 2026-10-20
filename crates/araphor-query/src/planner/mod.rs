@@ -61,9 +61,57 @@ impl SourceDemand {
         result.map(|plan| (plan, origins))
     }
 
+    pub(crate) fn record(
+        &self,
+        origins: &BTreeSet<SourceOrigin>,
+        resolved: impl Iterator<Item = usize> + Clone,
+    ) -> NativeResult<()> {
+        let record = |scope: &mut BTreeSet<SourceOrigin>| {
+            for id in resolved.clone() {
+                scope.remove(&SourceOrigin::Port(id));
+            }
+            scope.extend(origins.iter().cloned());
+        };
+        record(
+            &mut *self
+                .origins
+                .lock()
+                .map_err(|_| DataFusionError::Internal("source demand lock is poisoned".into()))?,
+        );
+        for scope in self
+            .scopes
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source scope lock is poisoned".into()))?
+            .iter_mut()
+        {
+            record(scope);
+        }
+        Ok(())
+    }
+
     fn collect(plan: &LogicalPlan) -> NativeResult<BTreeSet<SourceOrigin>> {
         let mut origins = BTreeSet::new();
+        let mut ports = BTreeSet::new();
         plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::Extension(extension) = plan {
+                if let Some(call) = extension
+                    .node
+                    .as_any()
+                    .downcast_ref::<crate::definition::PackageCall>()
+                {
+                    origins.extend(call.input_scope.origins().cloned());
+                    if let Some(sql) = &call.sql {
+                        ports.extend(
+                            sql.inputs
+                                .iter()
+                                .chain(sql.parameters.iter())
+                                .chain(&sql.prior)
+                                .chain(&sql.outputs)
+                                .copied(),
+                        );
+                    }
+                }
+            }
             if let LogicalPlan::TableScan(scan) = plan {
                 if let Ok(provider) = source_as_provider(&scan.source) {
                     if let Some(source) = provider.as_any().downcast_ref::<SourceProvider>() {
@@ -73,6 +121,7 @@ impl SourceDemand {
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
+        origins.retain(|origin| !matches!(origin, SourceOrigin::Port(id) if ports.contains(id)));
         Ok(origins)
     }
 }
@@ -92,18 +141,7 @@ impl RelationPlanner for SourceDemand {
         self.active.store(false, Ordering::Relaxed);
         let plan = plan?;
         let origins = Self::collect(&plan)?;
-        self.origins
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source demand lock is poisoned".into()))?
-            .extend(origins.iter().cloned());
-        for scope in self
-            .scopes
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source scope lock is poisoned".into()))?
-            .iter_mut()
-        {
-            scope.extend(origins.iter().cloned());
-        }
+        self.record(&origins, std::iter::empty())?;
         Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
             plan, None,
         ))))

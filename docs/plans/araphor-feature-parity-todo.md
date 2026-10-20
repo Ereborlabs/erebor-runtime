@@ -59,7 +59,7 @@ Fifteen more retained-query, authority, Wasm, and finite notification test
 leaves are removed after 89 focused checks pass. Two image/fixture leaves then
 retire after exact replacement tests pass. The complete error leaf then
 retires after typed error and joined execution checks pass. There are now
-83 retired files; 125 baseline files remain unchanged. Runtime now owns the
+86 retired files; 122 baseline files remain unchanged. Runtime now owns the
 complete limits configuration and both original serialization tests.
 The recovery archive
 retains all 208 originals. Read the
@@ -330,6 +330,12 @@ reduction. The record is `/tmp/araphor-sql-call-count1.json`.
   admitted image and its reservation once; Instance borrows that image set.
   A typed Query authority notice stays distinct from a real source denial.
   Read the [image result](araphor-analysis-migration.md#shared-admitted-images-and-error-origins).
+  Native input capture and projected membership also pass focused checks.
+  SQL body inputs retain parent revision and coverage. The host reads small
+  membership keys, joins old workers before replacement, and receives Stop
+  notices during metadata pressure. Managed Run borrows admitted sources.
+  Read the [capture result](araphor-analysis-migration.md#native-input-capture-and-projected-membership).
+  General initial-admission pressure retry and public lifecycle remain open.
 - **Required:** Create managed instances from admitted definitions. Each
   instance has its own lifetime, selected inputs, progress, and saved state.
 - **Reuse:** Query subscriptions and their native stream collection, current

@@ -854,3 +854,479 @@ async fn native_self_sources_remain() -> TestResult {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn native_functions_keep_origins() -> TestResult {
+    let generated = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Int64, false)]);
+    let mut model = sdk::Model::new(
+        "count",
+        Vec::new(),
+        vec![sdk::Port::new("result", Fixture::schema("value"))],
+    );
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs = vec![
+        sdk::InputPort {
+            port: sdk::Port::new("guarded", generated.clone()),
+            source: sdk::InputSource::Query(
+                "WITH unused AS (SELECT * FROM generate_series) SELECT * FROM generate_series(1, 3) AS generated(value)".into(),
+            ),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new("generated", generated),
+            source: sdk::InputSource::Query(
+                "SELECT * FROM generate_series(1, 3) AS generated(value)".into(),
+            ),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new("generate_series", Fixture::schema("source_cursor")),
+            source: sdk::InputSource::Table(sdk::TableRef::Named("events".into())),
+        },
+    ];
+    let image = bundle(
+        model,
+        SqlModelV1 {
+            outputs: BTreeMap::from([(
+                "result".into(),
+                "SELECT CAST(1 AS BIGINT UNSIGNED) AS value".into(),
+            )]),
+            ..Default::default()
+        },
+    );
+    let fixture = Fixture::installed(&image)?;
+    fixture.event(1)?;
+    let prepared = fixture
+        .prepare(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
+        .await?;
+    let first = fixture
+        .execute(&prepared, invocation("origins-first"))
+        .await?;
+    fixture.event(2)?;
+    let second = fixture
+        .execute(&prepared, invocation("origins-second"))
+        .await?;
+    assert_eq!(first.calls.len(), 1);
+    assert_eq!(second.calls.len(), 1);
+    let first = first.calls.values().next().ok_or("first call absent")?;
+    let second = second.calls.values().next().ok_or("second call absent")?;
+    let first = &first.evaluation().inputs;
+    let second = &second.evaluation().inputs;
+    assert_eq!(first.len(), 3);
+    assert_eq!(second.len(), 3);
+    assert_eq!(first[0].data.name, "guarded");
+    assert_eq!(first[1].data.name, "generated");
+    assert_eq!(first[2].data.name, "generate_series");
+    assert_ne!(first[2].revision, second[2].revision);
+    assert_eq!(first[1].revision, second[1].revision);
+    assert_ne!(first[0].revision, second[0].revision);
+    for input in first.iter().take(2).chain(second.iter().take(2)) {
+        assert_eq!(
+            input
+                .data
+                .batches
+                .iter()
+                .map(sdk::RecordBatch::num_rows)
+                .sum::<usize>(),
+            3
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_disjoint_input_ranges() -> TestResult {
+    let first = NOW - 1_000_000 + 1;
+    let last = NOW - 1_000_000 + 3;
+    let mut model = sdk::Model::new(
+        "count",
+        Vec::new(),
+        vec![sdk::Port::new("result", Fixture::schema("value"))],
+    );
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs = vec![
+        sdk::InputPort {
+            port: sdk::Port::new("early", Fixture::schema("value")),
+            source: sdk::InputSource::Query(format!(
+                "SELECT source_cursor AS value FROM events WHERE received_utc_ns <= {first}"
+            )),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new("late", Fixture::schema("value")),
+            source: sdk::InputSource::Query(format!(
+                "SELECT source_cursor AS value FROM events WHERE received_utc_ns >= {last}"
+            )),
+        },
+    ];
+    let image = bundle(
+        model,
+        SqlModelV1 {
+            outputs: BTreeMap::from([(
+                "result".into(),
+                "SELECT value FROM early UNION ALL SELECT value FROM late ORDER BY value".into(),
+            )]),
+            ..Default::default()
+        },
+    );
+    let fixture = Fixture::installed(&image)?;
+    for cursor in 1..=3 {
+        fixture.event(cursor)?;
+    }
+    let before = fixture.engine.store().meta()?;
+    let prepared = fixture
+        .prepare(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
+        .await?;
+    let output = fixture.execute(&prepared, invocation("disjoint")).await?;
+    assert_eq!(values(&output.batches)?, [1, 3]);
+    assert_eq!(output.calls.len(), 1);
+    let call = output.calls.values().next().ok_or("call absent")?;
+    assert_eq!(values(&call.evaluation().inputs[0].data.batches)?, [1]);
+    assert_eq!(values(&call.evaluation().inputs[1].data.batches)?, [3]);
+    assert_eq!(output.snapshot.page.extraction.sources.len(), 1);
+    assert_eq!(
+        output.snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        3
+    );
+    assert_eq!(
+        output
+            .snapshot
+            .witnesses
+            .iter()
+            .map(|witness| witness.cursor)
+            .collect::<Vec<_>>(),
+        [1, 3]
+    );
+    assert_eq!(fixture.engine.store().meta()?, before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_pruned_input_scope() -> TestResult {
+    let time = format!("received_utc_ns >= {}", NOW - 1_000_000 + 3);
+    for (filter, scope) in [
+        (time.clone(), 0),
+        ("source_cursor >= 3".into(), 0),
+        (format!("{time} AND source_cursor >= 3"), 0),
+        (format!("{time} AND source_cursor >= 3"), 1),
+        (format!("{time} AND source_cursor >= 3"), 2),
+    ] {
+        let mut model = sdk::Model::new(
+            "count",
+            Vec::new(),
+            vec![sdk::Port::new("result", Fixture::schema("value"))],
+        );
+        model.input_mode = sdk::InputMode::Resolved;
+        model.inputs = vec![
+            sdk::InputPort {
+                port: sdk::Port::new("empty", Fixture::schema("value")),
+                source: sdk::InputSource::Query(
+                    "WITH unused AS (SELECT source_cursor FROM events) SELECT CAST(0 AS BIGINT UNSIGNED) AS value WHERE false".into(),
+                ),
+            },
+            sdk::InputPort {
+                port: sdk::Port::new("recent", Fixture::schema("value")),
+                source: sdk::InputSource::Query(format!(
+                    "SELECT source_cursor AS value FROM events WHERE {filter}"
+                )),
+            },
+        ];
+        let image = bundle(
+            model,
+            SqlModelV1 {
+                outputs: BTreeMap::from([("result".into(), "SELECT value FROM recent".into())]),
+                ..Default::default()
+            },
+        );
+        let fixture = Fixture::installed(&image)?;
+        for cursor in 1..=3 {
+            fixture.event(cursor)?;
+        }
+        let prepared = fixture
+            .prepare(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
+            .await?;
+        let mut selection = AnalysisSelectionV1::tenant([1; 16]);
+        if scope == 1 {
+            selection.cursor_from = std::ops::Bound::Included(2);
+            selection.cursor_until = std::ops::Bound::Included(3);
+        }
+        if scope == 2 {
+            selection.received_from = std::ops::Bound::Excluded(NOW - 1_000_000 + 1);
+            selection.received_until = std::ops::Bound::Included(NOW - 1_000_000 + 3);
+        }
+        let time_range = selection.time_range();
+        let cursor_range = selection.cursor_range();
+        let output = fixture
+            .engine
+            .session(selection, &AnalysisReadControl::default(), NOW)?
+            .execute_definition(&prepared, invocation("pruned-scope"))
+            .await?;
+        assert_eq!(values(&output.batches)?, [3]);
+        assert_eq!(output.calls.len(), 1);
+        let call = output.calls.values().next().ok_or("call absent")?;
+        assert!(values(&call.evaluation().inputs[0].data.batches)?.is_empty());
+        assert_eq!(values(&call.evaluation().inputs[1].data.batches)?, [3]);
+        assert_eq!(output.snapshot.selection.time_range(), time_range);
+        assert_eq!(output.snapshot.selection.cursor_range(), cursor_range);
+        assert_eq!(
+            output.snapshot.page.extraction.sources[0]
+                .receipt
+                .contiguous_cursor,
+            3
+        );
+        assert_eq!(
+            output
+                .snapshot
+                .witnesses
+                .iter()
+                .map(|witness| witness.cursor)
+                .collect::<Vec<_>>(),
+            if scope != 0 {
+                vec![2, 3]
+            } else {
+                vec![1, 2, 3]
+            }
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_cursor_input_union() -> TestResult {
+    let mut model = sdk::Model::new(
+        "count",
+        Vec::new(),
+        vec![sdk::Port::new("result", Fixture::schema("value"))],
+    );
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs = vec![
+        sdk::InputPort {
+            port: sdk::Port::new("first", Fixture::schema("value")),
+            source: sdk::InputSource::Query(
+                "SELECT source_cursor AS value FROM events WHERE source_cursor = 1".into(),
+            ),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new(
+                "frame",
+                sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Binary, false)]),
+            ),
+            source: sdk::InputSource::Query(
+                "SELECT framed_record AS value FROM events WHERE source_cursor = 3".into(),
+            ),
+        },
+    ];
+    let image = bundle(
+        model,
+        SqlModelV1 {
+            outputs: BTreeMap::from([("result".into(), "SELECT value FROM first".into())]),
+            ..Default::default()
+        },
+    );
+    let fixture = Fixture::installed(&image)?;
+    for cursor in 1..=4 {
+        fixture.event(cursor)?;
+    }
+    let prepared = fixture
+        .prepare(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
+        .await?;
+    let output = fixture
+        .execute(&prepared, invocation("cursor-union"))
+        .await?;
+    assert_eq!(values(&output.batches)?, [1]);
+    assert_eq!(output.calls.len(), 1);
+    let call = output.calls.values().next().ok_or("cursor call")?;
+    assert_eq!(values(&call.evaluation().inputs[0].data.batches)?, [1]);
+    let expected = Vec::<u8>::try_from(&araphor_data::EvidenceRecord {
+        operation: 7,
+        ..Default::default()
+    })?;
+    let mut frames = Vec::new();
+    for batch in &call.evaluation().inputs[1].data.batches {
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or("frame input type")?;
+        frames.extend(values.iter().map(|frame| frame.map(<[u8]>::to_vec)));
+    }
+    assert_eq!(frames, [Some(expected)]);
+    assert_eq!(output.snapshot.selection.cursor_range(), Some((1, 3)));
+    assert_eq!(
+        output
+            .snapshot
+            .witnesses
+            .iter()
+            .map(|witness| witness.cursor)
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        output.snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        4
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_input_keeps_envelope() -> TestResult {
+    let mut model = sdk::Model::new(
+        "count",
+        Vec::new(),
+        vec![sdk::Port::new("result", Fixture::schema("value"))],
+    );
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs = vec![sdk::InputPort {
+        port: sdk::Port::new("source", Fixture::schema("value")),
+        source: sdk::InputSource::Query(format!("SELECT source_cursor AS value FROM events WHERE received_utc_ns <= {} UNION ALL SELECT source_cursor AS value FROM events WHERE received_utc_ns >= {}", NOW - 1_000_000 + 1, NOW - 1_000_000 + 3)),
+    }];
+    let image = bundle(
+        model,
+        SqlModelV1 {
+            outputs: BTreeMap::from([(
+                "result".into(),
+                "SELECT value FROM source ORDER BY value".into(),
+            )]),
+            ..Default::default()
+        },
+    );
+    let fixture = Fixture::installed(&image)?;
+    for cursor in 1..=3 {
+        fixture.event(cursor)?;
+    }
+    let prepared = fixture
+        .prepare(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
+        .await?;
+    let output = fixture
+        .execute(&prepared, invocation("input-envelope"))
+        .await?;
+    assert_eq!(values(&output.batches)?, [1, 3]);
+    let call = output.calls.values().next().ok_or("envelope call")?;
+    assert_eq!(values(&call.evaluation().inputs[0].data.batches)?, [1, 3]);
+    assert_eq!(
+        output
+            .snapshot
+            .witnesses
+            .iter()
+            .map(|witness| witness.cursor)
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        output.snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        3
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_inputs_keep_ranges() -> TestResult {
+    let mut inner = sdk::Model::new(
+        "inner",
+        Vec::new(),
+        vec![sdk::Port::new("result", Fixture::schema("value"))],
+    );
+    inner.input_mode = sdk::InputMode::Resolved;
+    inner.inputs = vec![
+        sdk::InputPort {
+            port: sdk::Port::new("early", Fixture::schema("value")),
+            source: sdk::InputSource::Query(format!(
+                "SELECT source_cursor AS value FROM events WHERE received_utc_ns <= {}",
+                NOW - 1_000_000 + 1
+            )),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new("late", Fixture::schema("value")),
+            source: sdk::InputSource::Query(format!(
+                "SELECT source_cursor AS value FROM events WHERE received_utc_ns >= {}",
+                NOW - 1_000_000 + 3
+            )),
+        },
+    ];
+    let mut image = bundle(
+        inner,
+        SqlModelV1 {
+            outputs: BTreeMap::from([(
+                "result".into(),
+                "SELECT value FROM early UNION ALL SELECT value FROM late ORDER BY value".into(),
+            )]),
+            ..Default::default()
+        },
+    );
+    let mut outer = sdk::Model::new(
+        "count",
+        Vec::new(),
+        vec![sdk::Port::new("result", Fixture::schema("value"))],
+    );
+    outer.input_mode = sdk::InputMode::Resolved;
+    outer.inputs = vec![sdk::InputPort {
+        port: sdk::Port::new("source", Fixture::schema("value")),
+        source: sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
+            package: "fixture".into(),
+            revision: "r1".into(),
+            export: "inner".into(),
+            output: "result".into(),
+        })),
+    }];
+    image.artifacts[0].descriptor.exports.push(outer);
+    image.artifacts[0]
+        .implementations
+        .push(PackageImplementationV1::Sql {
+            export: "count".into(),
+            program: SqlModelV1 {
+                outputs: BTreeMap::from([(
+                    "result".into(),
+                    "SELECT value FROM source ORDER BY value".into(),
+                )]),
+                ..Default::default()
+            },
+        });
+    let fixture = Fixture::installed(&image)?;
+    for cursor in 1..=3 {
+        fixture.event(cursor)?;
+    }
+    let prepared = fixture
+        .prepare(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
+        .await?;
+    let output = fixture
+        .execute(&prepared, invocation("nested-ranges"))
+        .await?;
+    assert_eq!(values(&output.batches)?, [1, 3]);
+    assert_eq!(output.calls.len(), 2);
+    let inner = output
+        .calls
+        .values()
+        .find(|call| call.evaluation().export == "inner")
+        .ok_or("inner call")?;
+    assert_eq!(values(&inner.evaluation().inputs[0].data.batches)?, [1]);
+    assert_eq!(values(&inner.evaluation().inputs[1].data.batches)?, [3]);
+    let outer = output
+        .calls
+        .values()
+        .find(|call| call.evaluation().export == "count")
+        .ok_or("outer call")?;
+    assert_eq!(values(&outer.evaluation().inputs[0].data.batches)?, [1, 3]);
+    assert_eq!(
+        output
+            .snapshot
+            .witnesses
+            .iter()
+            .map(|witness| witness.cursor)
+            .collect::<Vec<_>>(),
+        [1, 3]
+    );
+    assert_eq!(
+        output.snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        3
+    );
+    Ok(())
+}
+
+mod origins;
+
+mod body_ports;

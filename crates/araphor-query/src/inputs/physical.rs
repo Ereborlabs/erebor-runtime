@@ -13,7 +13,7 @@ use snafu::ResultExt as _;
 use super::Inputs;
 use crate::execution::{Engine, Session};
 use crate::memory::Memory;
-use crate::sources::{ArrowSnapshot, InputCapture, ReadMode, SourceSnapshot};
+use crate::sources::{ArrowSnapshot, InputCapture, ReadMode, ScanBounds, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
 pub struct InputSet {
@@ -142,7 +142,10 @@ impl Inputs {
             .capture(
                 Arc::clone(&source),
                 requests,
-                bounds,
+                ScanBounds {
+                    fields: bounds,
+                    ..Default::default()
+                },
                 ReadMode::Snapshot,
                 Arc::clone(&permit),
             )
@@ -260,7 +263,7 @@ impl Inputs {
                 data,
                 &snapshot,
                 scope,
-                &inherited,
+                inherited.iter(),
                 coverage.as_ref(),
                 &memory_owner,
             )?;
@@ -275,7 +278,7 @@ impl Inputs {
                 .try_resize(InputSet::metadata_bytes(&inputs))
                 .context(SqlSnafu)?;
             source
-                .bind_port(input.slot, indexed_schema, indexed)
+                .bind_port(input.slot, indexed_schema, indexed, None)
                 .context(SqlSnafu)?;
             inputs.push(value);
             memory

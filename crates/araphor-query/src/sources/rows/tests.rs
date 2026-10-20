@@ -82,7 +82,7 @@ fn witnesses_keep_source_receipt() -> TestResult {
             ("events".to_owned(), None),
             ("context_versions".to_owned(), None),
         ]),
-        &BTreeMap::new(),
+        &super::ScanBounds::default(),
         super::ReadMode::Snapshot,
         &control,
     )?;
@@ -308,7 +308,7 @@ fn catalog_native_preflight() -> TestResult {
     )]);
     let captured = source.read(
         &requests,
-        &BTreeMap::new(),
+        &super::ScanBounds::default(),
         super::ReadMode::Snapshot,
         &control,
     )?;
@@ -408,7 +408,7 @@ fn catalog_native_preflight() -> TestResult {
     let error = source
         .read(
             &requests,
-            &BTreeMap::new(),
+            &super::ScanBounds::default(),
             super::ReadMode::Snapshot,
             &control,
         )
@@ -420,7 +420,7 @@ fn catalog_native_preflight() -> TestResult {
     );
     let captured = source.read(
         &BTreeMap::from([("catalog".to_owned(), Some(BTreeSet::new()))]),
-        &BTreeMap::new(),
+        &super::ScanBounds::default(),
         super::ReadMode::Snapshot,
         &control,
     )?;
@@ -517,7 +517,7 @@ fn catalog_content_contract() -> TestResult {
         let indices = (0..schema.fields().len()).collect::<Vec<_>>();
         let captured = source.read(
             &BTreeMap::from([("catalog".into(), Some(indices.iter().copied().collect()))]),
-            &BTreeMap::new(),
+            &super::ScanBounds::default(),
             super::ReadMode::Snapshot,
             &control,
         )?;
@@ -825,7 +825,7 @@ fn retirement_map_charges_once() -> TestResult {
     );
     let captured = source.read(
         &BTreeMap::from([("events".into(), Some(BTreeSet::new()))]),
-        &BTreeMap::new(),
+        &super::ScanBounds::default(),
         super::ReadMode::Changes(frontier),
         &control,
     )?;

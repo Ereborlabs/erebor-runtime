@@ -156,6 +156,14 @@ pub struct ManagedStatus {
     pub status_progress: u64,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct ManagedMember {
+    pub tenant: [u8; 16],
+    pub id: String,
+    pub generation: u64,
+    pub lifecycle: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct ManagedRead {
     pub instance: ManagedInstance,

@@ -704,6 +704,34 @@ corrupt metadata. The
 [qualification record](../plans/araphor-analysis-migration.md#retained-metadata-and-durable-failure-status)
 states the exact checks, corrected fixtures, and remaining boundaries.
 
+## Native package input capture
+
+[Packages::inputs](../../crates/araphor-query/src/definition/package.rs) binds each declared input or explicit relation argument.
+  -> [SourceDemand](../../crates/araphor-query/src/planner/mod.rs) retains admitted source origins before native optimization removes unused scans.
+  -> [Inputs::bind_ports](../../crates/araphor-query/src/inputs/mod.rs) resolves caller ports inside nested admitted calls without changing the optimizer's admission guards.
+  -> [SourceScan](../../crates/araphor-query/src/sources/mod.rs) visits the native physical tree once to collect columns and per-input time envelopes.
+  -> [SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) captures the exact union of independent input windows and retains the original source receipts.
+
+[PackageExec::sql](../../crates/araphor-query/src/definition/physical/sql.rs) binds a parent SDK input to its private native port.
+  -> [SourceSnapshot::bind_port](../../crates/araphor-query/src/sources/rows.rs) charges defined metadata before cloning it beside the existing Arrow rows.
+  -> [Inputs::input_for](../../crates/araphor-query/src/inputs/receipt.rs) borrows that port metadata and the same captured receipt.
+  -> [Inputs::input](../../crates/araphor-query/src/inputs/receipt.rs) combines inherited revisions and coverage through the existing input identity algorithm.
+
+Private port identities distinguish nested model inputs and SQL body bindings.
+These identities are not persisted or included in the stable native plan hash.
+Nested bodies receive parent rows through explicit relation arguments. The
+isolated default-input scope stays unchanged. No second source read, executor,
+clock, or codec is added. The metadata charge excludes opaque allocator headers.
+
+The [native contract tests](../../crates/araphor-query/src/definition/tests/execution/contract.rs),
+[nested origin tests](../../crates/araphor-query/src/definition/tests/execution/contract/origins.rs),
+and [body-port tests](../../crates/araphor-query/src/definition/tests/execution/contract/body_ports.rs)
+keep exact rows, source cuts, witnesses, coverage, revisions, checkpoints, and
+readmission identity. The [binding pressure test](../../crates/araphor-query/src/sources/rows/package.rs)
+proves rejection before insertion and complete resource release. All 259
+connected Query cases pass. The [result](../plans/araphor-analysis-migration.md#native-input-capture-and-projected-membership)
+records the exact source and qualification limits.
+
 ## Native managed subscriptions
 
 [Instance::subscribe](../../crates/araphor-analysis/src/instance/subscription.rs)
@@ -786,10 +814,28 @@ All 54 Instance cases and 130 selected Query cases pass across the ordinary
 and corrected native commands. The
 [migration record](../plans/araphor-analysis-migration.md#reactive-host-joined-delivery-and-component-admission)
 identifies the source, commands, launch correction, and retired error leaf.
-Projected host metadata, general pressure retry, renewal, public lifecycle,
+General pressure retry, renewal, public lifecycle,
 producer supervision, and the final complete Rust gate remain **Not done**.
 Unknown pending work and ambiguous Limit or Incomplete failures remain
 unavailable. The mixed reference supervision files remain.
+
+The [projected Data reader](../../crates/araphor-data/src/analysis/managed/read.rs)
+returns only tenant, ID, generation, and lifecycle for recurring membership.
+The member loads and fences its full row once. It releases the unused manifest
+before admission. The existing member and future share one charged key.
+Reconciliation cancels stale owners before metadata admission. Its wait selects
+both scoped capacity release and lifecycle notices. Stop therefore remains
+reactive when a previous owner fills the pool. The actual worker joins before
+replacement admission. A corrupt full spec parks its member while healthy
+members continue. A corrupt projected key fails the host and drains its lease.
+
+[Run::sources](../../crates/araphor-query/src/stream/mod.rs) borrows the retained
+managed definition's source map. The native managed sink test checks that exact
+map identity. All 66 connected Instance cases and 44 managed Data cases pass
+across the original and corrected commands. These checks qualify the complete
+[memory and stream retirement](../../recovery/araphor-analysis-memory-retirement-20261020.json).
+The 122 remaining reference files are unchanged. Initial admission pressure
+retry, producer and public integration, and the final Rust gate remain open.
 
 ## In-process Wasm ownership
 

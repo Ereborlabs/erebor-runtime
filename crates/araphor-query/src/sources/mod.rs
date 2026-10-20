@@ -12,7 +12,7 @@ use araphor_data::{
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::{DFSchema, DataFusionError, Result, ScalarValue, Statistics};
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::TaskContext;
@@ -76,6 +76,101 @@ pub(crate) enum ReadMode {
     Changes(StorePositionV1),
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ScanBounds {
+    pub(crate) fields: BTreeMap<&'static str, Interval>,
+    pub(crate) events: Option<Vec<(u64, u64)>>,
+}
+
+#[derive(Default)]
+struct ScanFrame {
+    inputs: Vec<bool>,
+    next: usize,
+    required: bool,
+    events: bool,
+    range: Option<(u64, u64)>,
+}
+
+struct SourceScan<'a> {
+    requests: &'a mut AnalysisTableRequests,
+    bounds: ScanBounds,
+    frames: Vec<ScanFrame>,
+    scanned: bool,
+    complete: bool,
+}
+
+impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
+    type Node = Arc<dyn ExecutionPlan>;
+
+    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+        let required = self.frames.last_mut().is_some_and(|parent| {
+            let required = parent.inputs.get(parent.next).copied().unwrap_or(false);
+            parent.next += 1;
+            required
+        });
+        let inputs = node
+            .as_any()
+            .downcast_ref::<crate::definition::physical::PackageExec>()
+            .map(|package| package.event_inputs())
+            .unwrap_or_default();
+        let mut frame = ScanFrame {
+            inputs,
+            required,
+            ..Default::default()
+        };
+        if let Some(source) = SourceData::from_plan(node.as_ref()) {
+            if let Some(name) = source.origin.durable() {
+                self.requests
+                    .get_mut(name)
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("the physical source was not admitted".into())
+                    })?
+                    .get_or_insert_with(BTreeSet::new)
+                    .extend(source.indices.iter().copied());
+                SourceSnapshot::extend_bounds(&mut self.bounds.fields, &source.bounds)?;
+                if name == "events" {
+                    frame.events = true;
+                    self.scanned = true;
+                    let interval = &source.bounds["received_utc_ns"];
+                    let first = match interval.lower() {
+                        ScalarValue::UInt64(Some(value)) => *value,
+                        _ => 0,
+                    };
+                    let last = match interval.upper() {
+                        ScalarValue::UInt64(Some(value)) => *value,
+                        _ => u64::MAX,
+                    };
+                    frame.range = Some((first, last));
+                }
+            }
+        }
+        self.frames.push(frame);
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn f_up(&mut self, _node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+        let frame = self.frames.pop().ok_or_else(|| {
+            DataFusionError::Internal("the physical source scope is absent".into())
+        })?;
+        self.complete |= frame.required && !frame.events;
+        if frame.required || self.frames.is_empty() {
+            if let (Some(range), Some(ranges)) = (frame.range, &mut self.bounds.events) {
+                ranges.push(range);
+            }
+        } else if let Some(parent) = self.frames.last_mut() {
+            parent.range = match (parent.range, frame.range) {
+                (Some((first, last)), Some((next, end))) => Some((first.min(next), last.max(end))),
+                (previous, None) => previous,
+                (None, next) => next,
+            };
+        }
+        if let Some(parent) = self.frames.last_mut() {
+            parent.events |= frame.events;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    }
+}
+
 pub(crate) struct SourceSnapshot {
     store: Arc<AnalysisStore>,
     selection: AnalysisSelectionV1,
@@ -102,28 +197,33 @@ impl SourceSnapshot {
     pub(crate) fn requests(
         requests: &mut AnalysisTableRequests,
         plans: &[Arc<dyn ExecutionPlan>],
-    ) -> Result<BTreeMap<&'static str, Interval>> {
-        let mut ranges = BTreeMap::<&'static str, Interval>::new();
+    ) -> Result<ScanBounds> {
+        let events = requests.contains_key("events").then(Vec::new);
+        let mut scan = SourceScan {
+            requests,
+            bounds: ScanBounds {
+                events,
+                ..Default::default()
+            },
+            frames: Vec::new(),
+            scanned: false,
+            complete: false,
+        };
         for plan in plans {
-            plan.apply(|node| {
-                let Some(source) = SourceData::from_plan(node.as_ref()) else {
-                    return Ok(TreeNodeRecursion::Continue);
-                };
-                let Some(name) = source.origin.durable() else {
-                    return Ok(TreeNodeRecursion::Continue);
-                };
-                requests
-                    .get_mut(name)
-                    .ok_or_else(|| {
-                        DataFusionError::Execution("the physical source was not admitted".into())
-                    })?
-                    .get_or_insert_with(BTreeSet::new)
-                    .extend(source.indices.iter().copied());
-                Self::extend_bounds(&mut ranges, &source.bounds)?;
-                Ok(TreeNodeRecursion::Continue)
-            })?;
+            plan.visit(&mut scan)?;
         }
-        Ok(ranges)
+        if scan.complete {
+            scan.bounds.fields.remove("source_cursor");
+        }
+        if let Some(events) = &mut scan.bounds.events {
+            if scan.complete || !scan.scanned {
+                *events = vec![(0, u64::MAX)];
+            } else {
+                events.sort_unstable();
+                events.dedup();
+            }
+        }
+        Ok(scan.bounds)
     }
 
     pub(crate) fn extend_bounds(
@@ -182,12 +282,15 @@ impl SourceSnapshot {
     pub(crate) fn capture(
         &self,
         requests: &AnalysisTableRequests,
-        mut bounds: BTreeMap<&'static str, Interval>,
+        mut bounds: ScanBounds,
         mode: ReadMode,
     ) -> Result<Arc<ArrowSnapshot>> {
-        if let Some(inputs) = &self.inputs {
-            let window = inputs
-                .ranges
+        if let Some(ranges) = bounds
+            .events
+            .as_deref()
+            .or_else(|| self.inputs.as_ref().map(|inputs| inputs.ranges.as_slice()))
+        {
+            let window = ranges
                 .iter()
                 .copied()
                 .reduce(|(first, last), (next, end)| (first.min(next), last.max(end)));
@@ -201,9 +304,9 @@ impl SourceSnapshot {
                 )?),
                 None => None,
             };
-            bounds.remove("received_utc_ns");
+            bounds.fields.remove("received_utc_ns");
             if let Some(received) = received {
-                bounds.insert("received_utc_ns", received);
+                bounds.fields.insert("received_utc_ns", received);
             }
         }
         let control = self
@@ -229,7 +332,7 @@ impl SourceSnapshot {
         sources: &AnalysisTableRequests,
     ) -> Result<Arc<ArrowSnapshot>> {
         let requests = sources.keys().map(|name| (name.clone(), None)).collect();
-        self.capture(&requests, BTreeMap::new(), ReadMode::Metadata)
+        self.capture(&requests, ScanBounds::default(), ReadMode::Metadata)
     }
 
     fn data_error(error: araphor_data::Error) -> DataFusionError {
@@ -238,7 +341,7 @@ impl SourceSnapshot {
 
     pub(crate) fn prune_selection(
         mut selection: AnalysisSelectionV1,
-        bounds: &BTreeMap<&'static str, Interval>,
+        bounds: &ScanBounds,
     ) -> AnalysisSelectionV1 {
         let time = selection.time_range();
         let cursor = selection.cursor_range();
@@ -256,7 +359,7 @@ impl SourceSnapshot {
                 &mut selection.cursor_until,
             ),
         ] {
-            if let (Some(interval), Some((first, last))) = (bounds.get(field), range) {
+            if let (Some(interval), Some((first, last))) = (bounds.fields.get(field), range) {
                 let lower = match interval.lower() {
                     ScalarValue::UInt64(Some(value)) => *value,
                     _ => 0,

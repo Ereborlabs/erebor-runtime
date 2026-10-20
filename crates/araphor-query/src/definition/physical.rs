@@ -381,6 +381,12 @@ impl fmt::Debug for PackageExec {
 }
 
 impl PackageExec {
+    pub(crate) fn event_inputs(&self) -> Vec<bool> {
+        (0..self.children.len())
+            .map(|slot| self.call.input_scope.uses_events(slot))
+            .collect()
+    }
+
     pub(crate) async fn new(
         call: &PackageCall,
         children: &[Arc<dyn ExecutionPlan>],
@@ -505,7 +511,7 @@ impl PackageExec {
                     .input_scope
                     .input_for(
                         data,
-                        &snapshot,
+                        &source,
                         slot,
                         &self.children[slot],
                         &inherited,

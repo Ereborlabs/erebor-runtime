@@ -477,30 +477,7 @@ impl Packages {
                     }
                     .build()
                 })?;
-            let plans = model
-                .outputs
-                .len()
-                .checked_add(1)
-                .and_then(|count| count.checked_mul(children.len()))
-                .and_then(|count| count.checked_mul(std::mem::size_of::<LogicalPlan>()))
-                .ok_or_else(|| {
-                    araphor_data::PackageErrorCodeV1::Limit.error("package call memory")
-                })?;
-            let bytes = input_scope
-                .allocated_bytes()
-                .checked_add(plans)
-                .and_then(|bytes| {
-                    bytes.checked_add(
-                        model
-                            .outputs
-                            .len()
-                            .checked_mul(std::mem::size_of::<PackageCall>())?,
-                    )
-                })
-                .ok_or_else(|| {
-                    araphor_data::PackageErrorCodeV1::Limit.error("package call memory")
-                })?;
-            let metadata = Arc::new(self.memory.reserve_input(bytes).context(SqlSnafu)?);
+            let metadata = self.metadata(model, &input_scope, children.len())?;
             let admitted: Arc<[LogicalPlan]> = children.clone().into();
             let mut outputs = BTreeMap::new();
             for port in &model.outputs {
@@ -555,6 +532,7 @@ impl Packages {
         exports: &Exports,
     ) -> Result<(Vec<LogicalPlan>, Vec<BTreeSet<SourceOrigin>>)> {
         let mut tables = self.sources.clone();
+        let mut ports = BTreeMap::new();
         for (slot, input) in model.inputs.iter().enumerate() {
             if !supplied.contains_key(&input.port.name)
                 && matches!(&input.source, sdk::InputSource::Table(sdk::TableRef::Named(name))
@@ -563,7 +541,9 @@ impl Packages {
                 continue;
             }
             let schema = Session::indexed_schema(&input.port.schema)?;
-            tables.insert(input.port.name.clone(), SourceProvider::port(slot, schema));
+            let (id, source) = Self::port(schema)?;
+            ports.insert(id, slot);
+            tables.insert(input.port.name.clone(), source);
         }
         let mut pending = Vec::new();
         for (slot, input) in model.inputs.iter().enumerate() {
@@ -618,9 +598,13 @@ impl Packages {
             origins.extend(crate::planner::Planner::sources(&plan)?);
             let mut dependencies = BTreeSet::new();
             if local {
+                dependencies.extend(origins.iter().filter_map(|origin| match origin {
+                    SourceOrigin::Port(id) if ports.contains_key(id) => Some(*id),
+                    _ => None,
+                }));
                 plan.apply_with_subqueries(|plan| {
-                    if let Some(slot) = Self::input_slot(plan) {
-                        dependencies.insert(slot);
+                    if let Some(id) = Self::input_slot(plan).filter(|id| ports.contains_key(id)) {
+                        dependencies.insert(id);
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
@@ -634,7 +618,7 @@ impl Packages {
             let next = pending
                 .iter()
                 .position(|(_, _, dependencies, _)| {
-                    dependencies.iter().all(|slot| plans.contains_key(slot))
+                    dependencies.iter().all(|id| plans.contains_key(&ports[id]))
                 })
                 .ok_or_else(|| {
                     InvalidSnafu {
@@ -646,11 +630,14 @@ impl Packages {
             let input = &model.inputs[slot];
             if !dependencies.is_empty() {
                 let mut bindings = BTreeMap::new();
-                for dependency in dependencies {
-                    origins.remove(&SourceOrigin::Port(dependency));
+                let mut bound_origins = BTreeMap::new();
+                for id in dependencies {
+                    let dependency = ports[&id];
+                    origins.remove(&SourceOrigin::Port(id));
                     origins.extend(scopes[&dependency].iter().cloned());
+                    bound_origins.insert(id, &scopes[&dependency]);
                     bindings.insert(
-                        dependency,
+                        id,
                         provider_as_source(Arc::new(ViewTable::new(
                             self.indexed(&plans[&dependency])?,
                             None,
@@ -659,6 +646,41 @@ impl Packages {
                 }
                 plan = plan
                     .transform_up_with_subqueries(|node| {
+                        if let LogicalPlan::Extension(extension) = &node {
+                            if let Some(call) =
+                                extension.node.as_any().downcast_ref::<PackageCall>()
+                            {
+                                let model = call
+                                    .descriptor()
+                                    .exports
+                                    .iter()
+                                    .find(|model| model.name == call.export())
+                                    .ok_or_else(|| {
+                                        DataFusionError::Internal("package export is absent".into())
+                                    })?;
+                                let scope = call
+                                    .input_scope
+                                    .bind_ports(
+                                        model,
+                                        &call.children[..model.inputs.len()],
+                                        &bound_origins,
+                                    )
+                                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                                if let Some(scope) = scope {
+                                    let metadata =
+                                        self.metadata(model, &scope, call.children.len()).map_err(
+                                            |error| DataFusionError::External(Box::new(error)),
+                                        )?;
+                                    let mut call = call.clone();
+                                    call.input_scope = Arc::new(scope);
+                                    call._metadata = metadata;
+                                    return Transformed::yes(LogicalPlan::Extension(Extension {
+                                        node: Arc::new(call),
+                                    }))
+                                    .map_data(LogicalPlan::recompute_schema);
+                                }
+                            }
+                        }
                         let source = Self::input_slot(&node).and_then(|slot| bindings.get(&slot));
                         match (node, source) {
                             (LogicalPlan::TableScan(scan), Some(source)) => {
@@ -684,6 +706,12 @@ impl Packages {
                 crate::planner::Planner::quotas(&plan, &self.limits)?;
             }
             Self::schema(&plan, &input.port.schema)?;
+            let id = ports
+                .iter()
+                .find_map(|(id, input)| (*input == slot).then_some(*id));
+            self.demand
+                .record(&origins, id.into_iter())
+                .context(SqlSnafu)?;
             plans.insert(slot, plan);
             scopes.insert(slot, origins);
         }
@@ -691,6 +719,49 @@ impl Packages {
             plans.into_values().collect(),
             scopes.into_values().collect(),
         ))
+    }
+
+    fn metadata(
+        &self,
+        model: &sdk::Model,
+        input_scope: &Inputs,
+        children: usize,
+    ) -> Result<Arc<MemoryReservation>> {
+        let plans = model
+            .outputs
+            .len()
+            .checked_add(1)
+            .and_then(|count| count.checked_mul(children))
+            .and_then(|count| count.checked_mul(std::mem::size_of::<LogicalPlan>()))
+            .ok_or_else(|| araphor_data::PackageErrorCodeV1::Limit.error("package call memory"))?;
+        let bytes = input_scope
+            .allocated_bytes()
+            .checked_add(plans)
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    model
+                        .outputs
+                        .len()
+                        .checked_mul(std::mem::size_of::<PackageCall>())?,
+                )
+            })
+            .ok_or_else(|| araphor_data::PackageErrorCodeV1::Limit.error("package call memory"))?;
+        Ok(Arc::new(
+            self.memory.reserve_input(bytes).context(SqlSnafu)?,
+        ))
+    }
+
+    fn port(schema: Arc<sdk::Schema>) -> Result<(usize, Arc<dyn TableProvider>)> {
+        static PORTS: AtomicUsize = AtomicUsize::new(0);
+        let id = PORTS
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| {
+                InvalidSnafu {
+                    field: "package relation identity",
+                }
+                .build()
+            })?;
+        Ok((id, SourceProvider::port(id, schema)))
     }
 
     fn input_slot(plan: &LogicalPlan) -> Option<usize> {
@@ -776,18 +847,7 @@ impl Packages {
                         schema: &sdk::Schema,
                         indexed: bool|
          -> Result<usize> {
-            static PORTS: AtomicUsize = AtomicUsize::new(0);
-            let slot = PORTS
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |slot| {
-                    slot.checked_add(1)
-                })
-                .map_err(|_| {
-                    InvalidSnafu {
-                        field: "package relation identity",
-                    }
-                    .build()
-                })?;
-            let source = SourceProvider::port(slot, Arc::new(schema.clone()));
+            let (slot, source) = Self::port(Arc::new(schema.clone()))?;
             let plan = Inputs::scan(&name, source, schema)?;
             let plan = if indexed { self.indexed(&plan)? } else { plan };
             if tables
@@ -909,14 +969,27 @@ impl Packages {
                 .push((reason.output.clone(), reason.code.clone()));
         }
         for plan in &plans {
-            plan.apply_with_subqueries(|plan| {
-                if let Some(slot) = Self::input_slot(plan) {
-                    bindings.used.insert(slot);
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })
-            .context(SqlSnafu)?;
+            bindings.used.extend(
+                crate::planner::Planner::sources(plan)?
+                    .into_iter()
+                    .filter_map(|origin| match origin {
+                        crate::sources::SourceOrigin::Port(slot) => Some(slot),
+                        _ => None,
+                    }),
+            );
         }
+        self.demand
+            .record(
+                &BTreeSet::new(),
+                bindings
+                    .inputs
+                    .iter()
+                    .chain(bindings.parameters.iter())
+                    .chain(&bindings.prior)
+                    .chain(&bindings.outputs)
+                    .copied(),
+            )
+            .context(SqlSnafu)?;
         Ok((bindings, plans))
     }
 

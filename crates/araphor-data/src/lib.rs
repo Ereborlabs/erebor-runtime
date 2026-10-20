@@ -76,7 +76,7 @@ pub use analysis::AnalysisCommitStage;
 
 pub use analysis::{
     ManagedAttempt, ManagedCall, ManagedCapture, ManagedCommit, ManagedExit, ManagedFrontier,
-    ManagedInstance, ManagedLease, ManagedManifest, ManagedPage, ManagedPrior, ManagedRead,
-    ManagedReceipt, ManagedRequest, ManagedResult, ManagedResume, ManagedReturn, ManagedSelected,
-    ManagedSpec, ManagedStatus, ManagedTerminal,
+    ManagedInstance, ManagedLease, ManagedManifest, ManagedMember, ManagedPage, ManagedPrior,
+    ManagedRead, ManagedReceipt, ManagedRequest, ManagedResult, ManagedResume, ManagedReturn,
+    ManagedSelected, ManagedSpec, ManagedStatus, ManagedTerminal,
 };

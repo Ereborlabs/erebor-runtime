@@ -90,8 +90,9 @@ and finite notification test leaves are removed after 89 checks pass.
 Two more complete image/fixture leaves are removed after their replacements
 pass. The complete error leaf then retires after exact replacement checks.
 The limits leaf also retires after Runtime preserves its complete configuration
-contract. There are now 83 retired files; 125 remain unchanged. The recovery
-archive retains all 208 originals.
+contract. The later snapshot-memory and stream-test replacement retires three
+more whole files after 373 distinct connected cases pass. There are now 86
+retired files; 122 remain unchanged. The recovery archive retains all 208 originals.
 The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish
 long-running lifecycle or automatic restart.

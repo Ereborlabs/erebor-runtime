@@ -3,8 +3,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use araphor_data::{AnalysisReadControl, ManagedExit, ManagedInstance, PackageAuthorization};
+use araphor_data::{
+    AnalysisReadControl, ManagedExit, ManagedMember, ManagedSpec, PackageAuthorization,
+};
 use araphor_query::execution::Engine;
+use araphor_query::memory::Memory;
+use datafusion::execution::memory_pool::MemoryReservation;
 use erebor_runtime_error::{ErrorExt as _, StatusCode};
 use futures_util::{future::BoxFuture, stream::FuturesUnordered, FutureExt as _, StreamExt as _};
 use snafu::ResultExt as _;
@@ -27,8 +31,7 @@ impl Drop for Shutdown {
 }
 
 struct Member {
-    key: ([u8; 16], String),
-    lifecycle: u64,
+    key: Arc<(ManagedMember, MemoryReservation)>,
     control: Arc<AnalysisReadControl>,
     future: BoxFuture<'static, ()>,
 }
@@ -42,12 +45,17 @@ impl Future for Member {
 }
 
 impl Member {
-    fn new(host: Arc<InstanceHost>, expected: ManagedInstance, witness_expiry: u64) -> Self {
+    fn new(
+        host: Arc<InstanceHost>,
+        expected: ManagedMember,
+        memory: MemoryReservation,
+        witness_expiry: u64,
+    ) -> Self {
         let control = Arc::new(AnalysisReadControl::default());
         let operation = Arc::clone(&control);
+        let expected = Arc::new((expected, memory));
         Self {
-            key: (expected.spec.tenant, expected.spec.id.clone()),
-            lifecycle: expected.lifecycle,
+            key: Arc::clone(&expected),
             control,
             future: async move {
                 let mut result = host.member(&expected, &operation, witness_expiry).await;
@@ -55,7 +63,7 @@ impl Member {
                     .as_ref()
                     .is_err_and(|error| error.status_code() == StatusCode::PermissionDenied)
                 {
-                    if let Err(error) = host.suspend(&expected).await {
+                    if let Err(error) = host.suspend(Arc::clone(&expected)).await {
                         result = Err(error);
                     }
                 }
@@ -128,8 +136,25 @@ impl InstanceHost {
                     metadata = None;
                     match result {
                         Ok((revision, active)) => {
-                            if let Err(error) = self.reconcile(&members, revision, active, witness_expiry) {
-                                break Err(error);
+                            let memory = self.query.memory().scope();
+                            let epoch = memory.capacity_epoch();
+                            let reserved = memory.reserve_input(0)
+                                .map_err(|source| araphor_query::Error::Sql { source });
+                            let result: Result<()> = reserved.map_err(Into::into).and_then(|reserved| {
+                                self.reconcile(&members, revision, active, reserved, witness_expiry)
+                            });
+                            if let Err(error) = result {
+                                if !matches!(&error, crate::Error::Query { source }
+                                    if araphor_query::Failure::from(source) == araphor_query::Failure::Busy) {
+                                    break Err(error);
+                                }
+                                metadata = Some(if *notices.borrow_and_update() > revision {
+                                    self.membership(Arc::clone(&reader)).boxed()
+                                } else {
+                                    self.wait_membership(
+                                        Arc::clone(&reader), memory, epoch, notices.clone(),
+                                    ).boxed()
+                                });
                             }
                         }
                         Err(error) => break Err(error),
@@ -157,7 +182,7 @@ impl InstanceHost {
     async fn membership(
         &self,
         control: Arc<AnalysisReadControl>,
-    ) -> Result<(u64, Vec<ManagedInstance>)> {
+    ) -> Result<(u64, Vec<ManagedMember>)> {
         let store = Arc::clone(self.query.store());
         loop {
             let reader = Arc::clone(&store);
@@ -178,28 +203,71 @@ impl InstanceHost {
         }
     }
 
+    async fn wait_membership(
+        &self,
+        control: Arc<AnalysisReadControl>,
+        memory: Arc<Memory>,
+        epoch: u64,
+        mut notices: watch::Receiver<u64>,
+    ) -> Result<(u64, Vec<ManagedMember>)> {
+        tokio::select! {
+            changed = notices.changed() => {
+                if changed.is_err() {
+                    return Err(Code::Incomplete.error("managed lifecycle notices").into());
+                }
+            }
+            result = control.query_async(memory.capacity_changed(epoch)) => result?,
+        }
+        self.membership(control).await
+    }
+
     fn reconcile(
         self: &Arc<Self>,
         members: &FuturesUnordered<Member>,
         revision: u64,
-        active: Vec<ManagedInstance>,
+        active: Vec<ManagedMember>,
+        memory: MemoryReservation,
         witness_expiry: u64,
     ) -> Result<()> {
         for member in members.iter() {
-            let current = active.iter().find(|current| {
-                current.spec.tenant == member.key.0 && current.spec.id == member.key.1
-            });
-            if member.lifecycle <= revision
-                && current.is_none_or(|current| current.lifecycle > member.lifecycle)
+            let expected = &member.key.0;
+            let current = active
+                .iter()
+                .find(|current| current.tenant == expected.tenant && current.id == expected.id);
+            if expected.lifecycle <= revision
+                && current.is_none_or(|current| {
+                    current.generation > expected.generation
+                        || current.lifecycle > expected.lifecycle
+                })
             {
                 member.control.cancel()?;
             }
         }
+        let bytes = active
+            .capacity()
+            .checked_mul(std::mem::size_of::<ManagedMember>())
+            .and_then(|bytes| {
+                active.iter().try_fold(bytes, |bytes, member| {
+                    bytes.checked_add(member.id.capacity())
+                })
+            })
+            .ok_or_else(|| Code::Limit.error("managed membership memory"))?;
+        memory
+            .try_grow(bytes)
+            .map_err(|source| araphor_query::Error::Sql { source })?;
         for current in active {
             if !members.iter().any(|member| {
-                current.spec.tenant == member.key.0 && current.spec.id == member.key.1
+                current.tenant == member.key.0.tenant && current.id == member.key.0.id
             }) {
-                members.push(Member::new(Arc::clone(self), current, witness_expiry));
+                let bytes = std::mem::size_of::<ManagedMember>()
+                    .checked_add(current.id.capacity())
+                    .ok_or_else(|| Code::Limit.error("managed membership memory"))?;
+                members.push(Member::new(
+                    Arc::clone(self),
+                    current,
+                    memory.split(bytes),
+                    witness_expiry,
+                ));
             }
         }
         Ok(())
@@ -207,19 +275,43 @@ impl InstanceHost {
 
     async fn member(
         self: &Arc<Self>,
-        expected: &ManagedInstance,
+        expected: &Arc<(ManagedMember, MemoryReservation)>,
         control: &Arc<AnalysisReadControl>,
         witness_expiry: u64,
     ) -> Result<()> {
-        let grant = &expected.spec.grant;
-        let mut changes = self.authority.changes_for(grant);
+        let store = Arc::clone(self.query.store());
+        let selected = Arc::clone(expected);
+        let stage = Arc::clone(control);
+        let current = Engine::blocking(Arc::clone(control), Arc::clone(expected), move || {
+            let current = store
+                .managed_instance(selected.0.tenant, &selected.0.id, &stage)?
+                .ok_or_else(|| Code::Missing.error("managed member instance"))?;
+            if !current.running
+                || current.generation != selected.0.generation
+                || current.lifecycle != selected.0.lifecycle
+            {
+                return Err(Code::Conflict.error("managed member fence").into());
+            }
+            Ok(current)
+        })
+        .await?;
+        let ManagedSpec {
+            id,
+            grant,
+            definition,
+            manifest,
+            ..
+        } = current.spec;
+        drop(manifest);
+        let expected = &expected.0;
+        let mut changes = self.authority.changes_for(&grant);
         let admission = Arc::new(control.operation()?.within(grant.remaining()?)?);
         let opening = Instance::admit(
             Arc::clone(&self.query),
             Arc::clone(&self.authority),
             grant.clone(),
-            expected.spec.id.clone(),
-            expected.spec.definition.clone(),
+            id,
+            definition,
             &admission,
         );
         tokio::pin!(opening);
@@ -260,6 +352,8 @@ impl InstanceHost {
                 }
             }
         };
+        drop(grant);
+        drop(changes);
         loop {
             control.check()?;
             let operation = Arc::new(control.operation()?);
@@ -312,14 +406,14 @@ impl InstanceHost {
         }
     }
 
-    async fn suspend(&self, expected: &ManagedInstance) -> Result<()> {
+    async fn suspend(&self, expected: Arc<(ManagedMember, MemoryReservation)>) -> Result<()> {
         let store = Arc::clone(self.query.store());
-        let expected = expected.clone();
         let control = Arc::new(AnalysisReadControl::default());
         let stage = Arc::clone(&control);
         Engine::blocking(control, (), move || {
+            let expected = &expected.0;
             let current = store
-                .managed_instance(expected.spec.tenant, &expected.spec.id, &stage)?
+                .managed_instance(expected.tenant, &expected.id, &stage)?
                 .ok_or_else(|| Code::Missing.error("managed suspension instance"))?;
             if current.generation == expected.generation
                 && current.lifecycle == expected.lifecycle
