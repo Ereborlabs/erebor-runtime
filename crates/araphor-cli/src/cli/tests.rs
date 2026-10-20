@@ -495,6 +495,7 @@ fn shared_command_tree() {
             "definition",
             "filesystem",
             "image",
+            "instance",
             "policy",
             "policyset",
             "run",
@@ -533,6 +534,10 @@ fn transport_options_are_separate() -> Result<(), Box<dyn std::error::Error>> {
         vec!["catalog"],
         vec!["image", "inspect", "denials"],
         vec!["definition", "inspect", "denials"],
+        vec!["instance", "inspect", "counts"],
+        vec!["instance", "read", "counts", "saved"],
+        vec!["instance", "history", "counts"],
+        vec!["instance", "query", "counts", "saved", "SELECT * FROM rows"],
         vec![
             "trace",
             "--recipe",

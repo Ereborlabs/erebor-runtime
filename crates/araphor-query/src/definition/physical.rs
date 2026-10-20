@@ -381,9 +381,28 @@ impl fmt::Debug for PackageExec {
 }
 
 impl PackageExec {
-    pub(crate) fn event_inputs(&self) -> Vec<bool> {
-        (0..self.children.len())
-            .map(|slot| self.call.input_scope.uses_events(slot))
+    pub(crate) fn event_inputs(
+        &self,
+        moving: bool,
+    ) -> Result<Vec<(bool, Option<crate::follow::Window>)>> {
+        self.call
+            .admitted
+            .iter()
+            .enumerate()
+            .map(|(slot, plan)| {
+                Ok((
+                    self.call.input_scope.uses_events(slot),
+                    if moving {
+                        self.call
+                            .input_scope
+                            .window(slot)
+                            .map_or_else(|| crate::follow::Window::infer(plan), Ok)
+                            .map_err(external)?
+                    } else {
+                        None
+                    },
+                ))
+            })
             .collect()
     }
 

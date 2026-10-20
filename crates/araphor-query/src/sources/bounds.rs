@@ -35,7 +35,7 @@ impl Fixture {
 
     fn requests(plans: &[Arc<dyn ExecutionPlan>]) -> (AnalysisTableRequests, ScanBounds) {
         let mut requests = BTreeMap::from([("events".to_owned(), None)]);
-        let bounds = SourceSnapshot::requests(&mut requests, plans).unwrap();
+        let bounds = SourceSnapshot::requests(&mut requests, plans, None).unwrap();
         (requests, bounds)
     }
 
@@ -171,7 +171,8 @@ async fn local_source_has_no_bounds() {
         )
         .await;
     let mut requests = AnalysisTableRequests::new();
-    let bounds = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical)).unwrap();
+    let bounds =
+        SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical), None).unwrap();
     assert!(requests.is_empty());
     assert!(bounds.fields.is_empty());
 }

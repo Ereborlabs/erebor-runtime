@@ -41,11 +41,13 @@ async fn image_install_roundtrip() -> Result<()> {
             selection: None,
         })
         .await?;
-    let installed: PackageResponseV1 = serde_json::from_slice(&reply.result_json)?;
-    assert_eq!(installed.image, Some(expected.clone()));
+    let PackageResponseV1::Image(installed) = PackageResponseV1::from_bytes(&reply.result)? else {
+        return Err("installed image variant".into());
+    };
+    assert_eq!(installed, expected);
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&reply.result_json)?,
-        serde_json::json!({"image": installed.image}),
+        serde_json::to_value(PackageResponseV1::from_bytes(&reply.result)?)?,
+        serde_json::json!({"image": installed}),
     );
     assert_eq!(data.package_activation_page(None)?, before);
     let revision = *data.subscribe_revision().borrow();
@@ -66,7 +68,10 @@ async fn image_install_roundtrip() -> Result<()> {
             revision: Some(bundle.root.revision.clone()),
         })
         .await?;
-    assert_eq!(inspected.image, Some(expected));
+    let PackageResponseV1::Image(inspected) = inspected else {
+        return Err("inspected image variant".into());
+    };
+    assert_eq!(inspected, expected);
     let data = fixture
         .control
         .analysis_store()

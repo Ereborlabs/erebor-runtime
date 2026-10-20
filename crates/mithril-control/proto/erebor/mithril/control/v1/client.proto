@@ -17,7 +17,7 @@ message PackageOperationRequest {
 }
 
 message PackageOperationReply {
-  bytes result_json = 1;
+  bytes result = 1;
 }
 
 service AraphorAdministrativeService {

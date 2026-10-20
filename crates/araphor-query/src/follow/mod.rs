@@ -222,7 +222,7 @@ impl Subscription {
             session,
             workers,
             schema,
-            moving: if follow { window.map(|_| 1_000) } else { None },
+            moving: (follow && clocks != 0).then_some(1_000),
             resume,
             operation,
             stream,

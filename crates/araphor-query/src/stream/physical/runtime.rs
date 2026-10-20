@@ -222,10 +222,7 @@ impl Runtime {
                 (permit, self.progress.begin()?, None)
             }
         };
-        let selection = self.run.window.map_or_else(
-            || self.run.session.selection().clone(),
-            |window| window.selection(self.run.session.selection(), now),
-        );
+        let selection = self.run.selection(now)?;
         if self.snapshot.is_none() && self.run.resume.is_some() && self.run.managed.is_none() {
             let (meta, _) = self.dependencies(selection.clone()).await?;
             self.check_store(&meta)?;
@@ -353,13 +350,6 @@ impl Runtime {
                             return Ok(None);
                         }
                     }
-                    let next_change = self
-                        .run
-                        .window
-                        .and_then(|window| window.expiry(snapshot.received_min))
-                        .into_iter()
-                        .chain(snapshot.next_change)
-                        .min();
                     let frontier = araphor_data::ManagedFrontier {
                         cursor: crate::follow::Cursor::new(
                             &snapshot.page.extraction.meta,
@@ -372,7 +362,7 @@ impl Runtime {
                             now,
                         )
                         .encode()?,
-                        next_change,
+                        next_change: snapshot.next_change,
                     };
                     let publication = Arc::clone(publication);
                     let invocation = calls.invocation().clone();
@@ -427,14 +417,8 @@ impl Runtime {
         self.check_store(&output.snapshot.page.extraction.meta)?;
         self.revision = output.snapshot.page.extraction.meta.commit_revision;
         self.position = Some(output.position);
-        let expiry = self
-            .run
-            .window
-            .and_then(|window| window.expiry(output.snapshot.received_min))
-            .into_iter()
-            .chain(output.snapshot.next_change)
-            .min();
-        self.progress.captured(self.revision, expiry);
+        self.progress
+            .captured(self.revision, output.snapshot.next_change);
         self.snapshot = Some(Arc::clone(&output.snapshot));
         self.evaluated = now;
         self.exhausted = self.run.operation == Operation::Replace
@@ -451,20 +435,18 @@ impl Runtime {
 
     async fn metadata_update(&mut self, clock_changed: bool) -> Result<Event> {
         let clock_changed = clock_changed || self.progress.clock_pending();
-        if (self.run.window.is_some()
-            || self
-                .snapshot
-                .as_ref()
-                .is_some_and(|snapshot| snapshot.next_change.is_some()))
-            && clock_changed
+        if clock_changed
+            && (self.progress.deadline().is_some()
+                || self
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.next_change.is_some())
+                || crate::follow::Window::clocks(&self.run.plan)? != 0)
         {
             return self.evaluate(true).await?.ok_or_else(Self::state_error);
         }
         let now = self.progress.time()?;
-        let selection = self.run.window.map_or_else(
-            || self.run.session.selection().clone(),
-            |window| window.selection(self.run.session.selection(), now),
-        );
+        let selection = self.run.selection(now)?;
         let snapshot = self
             .run
             .session

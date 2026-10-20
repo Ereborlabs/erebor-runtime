@@ -486,7 +486,7 @@ async fn stateful_calls(target: &str) -> TestResult {
         assert_eq!(fixture.selected("state", id)?, expected, "{target}");
         assert_eq!(receipt.results.len(), 2);
         let mut states = Vec::new();
-        for returned in receipt.results.values() {
+        for (call, returned) in &receipt.results {
             let saved = fixture.query.store().managed_result(
                 instance.admitted(),
                 &returned.result_id,
@@ -494,6 +494,8 @@ async fn stateful_calls(target: &str) -> TestResult {
                 &AnalysisReadControl::default(),
             )?;
             assert_eq!(saved.commit_revision, receipt.commit_revision);
+            assert_eq!(saved.context.target, calls[call].target);
+            assert_eq!(saved.context.artifact, calls[call].artifact);
             assert_eq!(saved.output.datasets.len(), 1);
             let state = saved.output.checkpoint.as_ref().ok_or("saved checkpoint")?;
             assert_eq!(state.version, 1);

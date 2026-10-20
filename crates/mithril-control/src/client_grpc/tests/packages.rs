@@ -8,6 +8,8 @@ use araphor_data::{
 
 use super::*;
 
+mod instance;
+
 fn bundle() -> PackageBundleV1 {
     let mut descriptor = Package::new(
         "api.fixture",
@@ -61,7 +63,7 @@ impl Fixture {
             .request(request, mutation)
             .map_err(|_| Status::internal("test request"))?;
         let reply = self.service.package_operation(request).await?.into_inner();
-        serde_json::from_slice(&reply.result_json).map_err(|_| Status::internal("test result"))
+        PackageResponseV1::from_bytes(&reply.result).map_err(|_| Status::internal("test result"))
     }
 }
 
@@ -118,7 +120,7 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
         ),
     ] {
         let name = definition.name.clone();
-        let admitted = fixture
+        let PackageResponseV1::Definition(admitted) = fixture
             .package(
                 PackageRequestV1::AdmitDefinition {
                     definition: definition.clone(),
@@ -126,20 +128,20 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
                 true,
             )
             .await?
-            .definition
-            .ok_or("definition absent")?;
+        else {
+            return Err("definition absent".into());
+        };
         assert_eq!(admitted.definition, definition);
         assert!(admitted.images.is_empty());
         let before = store.meta()?.commit_revision;
-        assert_eq!(
+        assert!(matches!(
             fixture
                 .package(PackageRequestV1::AdmitDefinition { definition }, true)
-                .await?
-                .definition,
-            Some(admitted.clone())
-        );
+                .await?,
+            PackageResponseV1::Definition(actual) if actual == admitted
+        ));
         assert_eq!(store.meta()?.commit_revision, before);
-        assert_eq!(
+        assert!(matches!(
             fixture
                 .package(
                     PackageRequestV1::InspectDefinition {
@@ -148,10 +150,9 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
                     },
                     false
                 )
-                .await?
-                .definition,
-            Some(admitted)
-        );
+                .await?,
+            PackageResponseV1::Definition(actual) if actual == admitted
+        ));
     }
     let invalid = definition(
         "invalid",
@@ -251,7 +252,7 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
             },
         },
     );
-    let admitted = fixture
+    let PackageResponseV1::Definition(admitted) = fixture
         .package(
             PackageRequestV1::AdmitDefinition {
                 definition: call.clone(),
@@ -259,8 +260,9 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
             true,
         )
         .await?
-        .definition
-        .ok_or("call definition absent")?;
+    else {
+        return Err("call definition absent".into());
+    };
     assert_eq!(admitted.definition, call);
     assert_eq!(admitted.images[0].image, image.root);
     assert_eq!(admitted.images[0].digest, image.digest()?);
@@ -342,7 +344,7 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
             },
         ),
     ] {
-        let admitted = fixture
+        let PackageResponseV1::Definition(admitted) = fixture
             .package(
                 PackageRequestV1::AdmitDefinition {
                     definition: definition.clone(),
@@ -350,15 +352,16 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
                 true,
             )
             .await?
-            .definition
-            .ok_or("multiple call definition absent")?;
+        else {
+            return Err("multiple call definition absent".into());
+        };
         assert_eq!(admitted.definition, definition);
         assert_eq!(admitted.images, vec![first_pin.clone(), second_pin.clone()]);
     }
     let repeated = definition("repeated-image", Program::Sql { source: Source::Inline {
         inline: "SELECT a.count AS first_count, b.count AS second_count FROM \"api.fixture\".\"1\".count() a CROSS JOIN \"api.fixture\".\"1\".count() b".into(),
     } });
-    let repeated = fixture
+    let PackageResponseV1::Definition(repeated) = fixture
         .package(
             PackageRequestV1::AdmitDefinition {
                 definition: repeated,
@@ -366,8 +369,9 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
             true,
         )
         .await?
-        .definition
-        .ok_or("repeated image definition absent")?;
+    else {
+        return Err("repeated image definition absent".into());
+    };
     assert_eq!(repeated.images, vec![first_pin.clone()]);
     fixture
         .service
@@ -390,7 +394,7 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
     assert_eq!(store.meta()?, before);
     assert_eq!(store.package_activation_page(None)?, activations);
     fixture.service.auth.replace_package_managers(Vec::new())?;
-    assert_eq!(
+    assert!(matches!(
         fixture
             .package(
                 PackageRequestV1::InspectDefinition {
@@ -399,10 +403,9 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
                 },
                 false
             )
-            .await?
-            .definition,
-        Some(admitted)
-    );
+            .await?,
+        PackageResponseV1::Definition(actual) if actual == admitted
+    ));
     Ok(())
 }
 
@@ -451,9 +454,10 @@ async fn package_rpc_authority_trust() -> TestResult {
             tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
             bundle_digest: bundle.digest()?,
         }])?;
-    let installed = fixture.package(operation, true).await?;
-    assert_eq!(installed.image, Some(bundle.metadata()?));
-    assert!(installed.definition.is_none());
+    let PackageResponseV1::Image(installed) = fixture.package(operation, true).await? else {
+        return Err("installed image variant".into());
+    };
+    assert_eq!(installed, bundle.metadata()?);
     let inspected = fixture
         .package(
             PackageRequestV1::InspectImage {
@@ -463,7 +467,10 @@ async fn package_rpc_authority_trust() -> TestResult {
             false,
         )
         .await?;
-    assert_eq!(inspected.image, installed.image);
+    let PackageResponseV1::Image(inspected) = inspected else {
+        return Err("inspected image variant".into());
+    };
+    assert_eq!(inspected, installed);
     fixture.service.auth.replace_package_managers(Vec::new())?;
     assert_eq!(
         fixture
@@ -478,13 +485,10 @@ async fn package_rpc_authority_trust() -> TestResult {
 
 #[test]
 fn package_response_encoding() -> TestResult {
-    let response = PackageResponseV1 {
-        definition: None,
-        image: None,
-    };
+    let response = PackageResponseV1::Image(bundle().metadata()?);
     let bytes = ClientGrpcOwner::package_response(&response)?;
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&bytes)?,
+        serde_json::to_value(PackageResponseV1::from_bytes(&bytes)?)?,
         serde_json::to_value(&response)?
     );
     Ok(())
@@ -564,11 +568,13 @@ async fn image_rpc_install_is_not_execution() -> TestResult {
             &AnalysisReadControl::default()
         )?
         .is_none());
-    let installed = fixture.package(operation.clone(), true).await?;
-    assert_eq!(installed.image, Some(bundle.metadata()?));
-    assert!(installed.definition.is_none());
+    let PackageResponseV1::Image(installed) = fixture.package(operation.clone(), true).await?
+    else {
+        return Err("installed image variant".into());
+    };
+    assert_eq!(installed, bundle.metadata()?);
     assert_eq!(
-        serde_json::to_value(&installed)?,
+        serde_json::to_value(PackageResponseV1::Image(installed.clone()))?,
         serde_json::json!({"image": bundle.metadata()?}),
     );
     assert_eq!(data.package_activation_page(None)?, activations);
@@ -585,7 +591,10 @@ async fn image_rpc_install_is_not_execution() -> TestResult {
             false,
         )
         .await?;
-    assert_eq!(inspected.image, installed.image);
+    let PackageResponseV1::Image(inspected) = inspected else {
+        return Err("inspected image variant".into());
+    };
+    assert_eq!(inspected, installed);
     assert_eq!(data.package_activation_page(None)?, activations);
     Ok(())
 }

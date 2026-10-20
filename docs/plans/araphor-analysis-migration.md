@@ -38,7 +38,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 116 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 113 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -51,11 +51,11 @@ Every replacement passes its required checks
 | Graph producer | Data final authority, immutable retry, notice acknowledgement, and exact previous-window-head checks pass focused qualification. Capture immutable ACK history, source proofs, graph heads and frozen coverage in the same view. Bind detector relations and consume subscriptions. The native producer remains absent. | Not done |
 | Discovery producer | The current adapter subscribes to an admitted PackageCall. Interval split, frozen facts, witnesses, seals, replay, and reviewed baselines remain required. The complete producer is not qualified. | Not done |
 | Notification producer | Finite operations are moved. All 5 reactive tests pass. Native SQL selects route and delivery candidates. Data supplies exact retry and grant-expiry deadlines. Managed supervision is absent. | Not done |
-| Public callers | Restore current managed operations through Control, CLI, and lightweight E2E. Reference test modules remain available but are not a substitute for native integration tests. | Not done |
+| Public callers | Fresh Inspect status, original successful receipt history, complete output reads, and native retained queries pass through Control and CLI. Lightweight image and definition E2E cases pass with binary replies. Public start, stop, restart, and complete history selection remain open. | Partial qualification |
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
-| Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public transport and presentation remain open. | Finite checks pass |
-| Final retirement | The earlier 87 leaves and five model files are removed after replacement checks pass. The 116 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public binary transport and CLI presentation now pass focused checks. Full per-window heads and latest selection remain open. | Focused checks pass |
+| Final retirement | The earlier 92 files and three output/receipt files are removed after replacement checks pass. The 113 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -84,7 +84,7 @@ checkpoint reuse after input revision or coverage changes. A completed stateful
 SQL retry survives reopen while the full input pool and only evaluation permit
 are occupied. These tests do not replace live offered-cut retry, inherited
 witness expiry, per-port deadlines, or source-scope rules. Native input qualification below now covers discarded local-port origins
-and disjoint capture ranges. Mixed-window subscription expiry remains open. The audit covers 19 finite
+and disjoint capture ranges. Mixed-window subscription expiry now passes the focused checks below. The audit covers 19 finite
 and 22 live tests. Keep every remaining assertion until a current Query or Data
 owner proves it. Executor removal is **Not done**.
 
@@ -661,19 +661,93 @@ clock inspection, and receipt guards. General scalar-clock events, per-port
 expiry, raw lease renewal, retained witness expiry, unchanged restart, and
 captured pressure retry still need exact native replacements.
 
+### Public receipt reads and native input windows
+
+Implementation and focused checks are **Done** for this bounded replacement.
+Instance exposes fresh Inspect status, original successful receipt history,
+complete package output, and native retained SQL queries through Control and
+CLI. Data reads the instance, scope and receipt history in one controlled
+transaction. Pending and failed attempts do not remove earlier successes.
+History returns original receipts, not per-window heads or latest selection.
+Selected SQL-only references can be listed; their public output reader remains
+open. Public lifecycle and complete history parity remain **Not done**.
+
+Data returns the original complete SDK wire Output after its existing retained
+record validation. The read does not re-encode Arrow IPC or load a second
+model descriptor. The public header retains exact image, export, target,
+artifact, revisions, coverage and current status. It excludes the saved Run
+grant and principal. Fresh Inspect authority protects initial and final
+read disclosure. Control checks authority, expiry and client access again
+after joined serialization. Historical reads need no current execution trust.
+
+PackageResponseV1 is one exhaustive enum. The installed MessagePack codec
+stores IPC and detail vectors as binary bytes and preserves fixed ID arrays.
+The decoder rejects trailing bytes and invalid variants. The protobuf field
+remains number 1 and is now named result. All current consumers use this
+binary reply. CLI JSON is presentation. No compatibility decoder or mandatory
+16 MiB clamp is added.
+
+Each native PackageCall input retains its own admitted SQL window. SourceScan
+collects actual ranges and row expiries for each input. One captured snapshot
+supplies the next exact deadline to Progress. A metadata-only wake preserves
+that deadline. Native SQL view planning already expands ViewTable plans.
+The window validator accepts DataFusion's exact nanosecond-to-microsecond
+bound coercion. Coarser casts and unsupported clocks remain rejected. This
+replacement adds no Analysis clock, polling loop, or second physical executor.
+
+The final focused records cover the same active source after the test-only
+Clippy correction. The 53 connected Query cases pass. They cover independent,
+dependent, nested and untimed inputs, outer-window isolation, native views,
+precision, grant bounds, invalid clocks, metadata notices, and released buffers.
+The SDK matrix retains every assertion in the old package_ipc_limits test.
+Actual SQL, Wasm and source-built native calls compare retained target and
+artifact with the admitted calls. Binary RPC and both CLI presentations retain
+all outputs, checkpoint datasets, evidence and reasons.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `migration-inspection-build131` | Connected test build passes. | 434.950 |
+| `migration-inspection-data131` | 16 cases pass. | 8.576 |
+| `migration-inspection-analysis131` | 13 cases pass. | 18.227 |
+| `migration-output-sdk131` | 14 cases pass. | 0.126 |
+| `migration-history-data131` | 2 cases pass. | 3.018 |
+| `migration-inspection-control131` | 7 cases pass. | 3.625 |
+| `migration-inspection-cli131` | 8 cases pass. | 0.185 |
+| `migration-output-native131` | 2 cases pass. | 11.919 |
+| `migration-inspection-e2e131` | 2 cases pass. | 5.316 |
+| `migration-window-connected131` | 53 cases pass. | 26.745 |
+| `migration-inspection-clippy131` | Strict connected Clippy passes. | 115.270 |
+| `migration-inspection-fmt131` | Workspace formatting passes. | 5.110 |
+
+The initial failures were fixture and type errors. Corrections preserve the
+assertions: use explicit UNION aliases, select the intended output dataset,
+use a genuinely denied reader scope, keep supported scalar types, and use the
+native Snafu source conversion. The SDK initializer correction removes only
+a redundant struct update. Earlier failed command records remain available.
+
+The [output retirement record](../../recovery/araphor-analysis-package-output-retirement-20261020.json)
+maps six old methods and the full wire matrix. These checks qualify exactly
+three whole files: package/status.rs, package/output.rs, and its wire test.
+The retirement removes 90 reference production lines. There are now **95
+retired files and 113 unchanged baseline files**. The full recovery archive
+remains unchanged. The larger inspect.rs and input-runner files stay until
+all their remaining rules pass replacement checks. Complete producers,
+public lifecycle, recovery integration, and the final Rust gate are **Not done**.
+
 ### Production code ledger
 
-The current count122 includes native input capture, projected membership,
-shared source requests, reactive admission, guarded Graph publication, and
-the five model retirements.
+The current count131 includes native input capture, projected membership,
+shared source requests, reactive admission, guarded Graph publication, model
+retirement, public receipt/output reads, native input windows, and the three
+receipt/output retirements.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 16,083 | 9,046 | +7,037 |
-| Original reduction baseline `7b7b407a` | 43,419 | 30,388 | +13,031 |
+| `6a25ba1b` | 16,460 | 8,892 | +7,568 |
+| Original reduction baseline `7b7b407a` | 43,877 | 30,315 | +13,562 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -703,13 +777,19 @@ seven production lines. Operation test retirement removes no production code.
 Reactive admission and Graph guards add 207 production lines and retire no
 reference file. Model retirement removes 306 production lines. The current
 counter also excludes two test-only attribute/import lines in model/schema.rs
-that the earlier counter incorrectly included. Another 19,031 net production lines
+that the earlier counter incorrectly included. Public receipt/output reads,
+original receipt enumeration and native input windows add 621 production
+lines. The three retirements remove 90. This delivery adds 531 net production
+lines. Another 19,562 net production lines
 must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count122.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count131.json`. Its selected source
 fingerprint is
+`0bb41262738c88011c2f6c637e90316ea6f8a27c90bd7e11319dd9f1d7742561`.
+The earlier count122 records model retirement at +13,031 production lines
+from the original baseline. Its fingerprint is
 `9c7ad010e35982feb615d921999936808d273ce077ee5d2875c9f7edb8ea12ee`.
 The earlier count120 records admission and Graph guards at +13,339 production
 lines from the original baseline. That result includes the two test-only lines
@@ -992,7 +1072,7 @@ during source retirement. This record does not claim a remote push.
 Local commit `d9369555` retains the archive and its checksum. The archive
 contains the complete recovered source. The 29 earlier leaves, four additional
 finite files, and eight Wasm leaves are retired at that earlier source state.
-The latest custody record verifies all 116 remaining files against the baseline.
+The latest custody record verifies all 113 remaining files against the baseline.
 The complete 208-file source remains in the unchanged archive.
 
 ## Back package, model and notification inventory
@@ -1020,7 +1100,7 @@ The table classifies rules, not whole features as obsolete. A current SDK valida
 | `package/fixtures.rs` | `test_package` | Finite owner moved | Analysis Qualification uses exact image fixtures through native calls, saved Arrow input, parameters, checkpoint, clock, and seed. Test authority and trust precede and follow execution. Cancellation and revocation join the entered guest. Public Control and CLI callers remain open. |
 | `package/fixtures/comparison.rs` | `output; datasets; batches; batch; reasons; array; number` | Moved | PackageFixtureV1::compare_output in araphor-package/src/fixture.rs owns this pure rule. All four focused comparison tests pass. |
 | `package/freshness.rs` | `refresh_package` | Missing rule | Managed inspection must mark stale on changed source, coverage, clock, checkpoint or dependency; do not recompute during inspection. Use capture receipts and Data current checks. |
-| `package/inspect.rs` | `activations; inspect; read_output; result_output; query_output; permits_selection` | Missing | Expose managed status, exact result reads and native queries. Retain captured selection disclosure checks and checkpoint reconstruction. Image inspection alone is not equivalent. |
+| `package/inspect.rs` | `activations; inspect; read_output; result_output; query_output; permits_selection` | Partial | Fresh Inspect status, successful receipt history, full output and native retained queries pass through Control and CLI. Full per-window heads, optional latest selection, readiness and installed lifecycle remain open. Keep the complete mixed file. |
 | `package/installed.rs` | `InstalledAnalysis::{new,evaluate}; InstalledEvaluation` | Partial | Finite Query replaces compute and owns leases. Managed caller must add whole-tenant or exact-selection authority, trust before and after evaluation, effective parameters and stable result provenance. |
 | `package/installed/commit.rs` | `InstalledAnalysis::authorize` | Missing | Preserve all dependency revisions, generation, exact metadata and current grants under commit_many. Data checks CAS in its transaction. No Data read API inside final writer-held callback. |
 | `package/installed/control.rs` | `AuthorityWatch::{start,drop}` | Missing rule | Current Package composes changes_for with the native subscription. Authority loss cancels and joins workers before Denied. Managed grant sets and restart recovery remain open. Do not copy the per-operation thread. |
@@ -1031,10 +1111,10 @@ The table classifies rules, not whole features as obsolete. A current SDK valida
 | `package/lifecycle.rs` | `install; install_model; start_model; readiness; key` | Rewrite | Image retention stays inert. Managed create/start/update owns execution. Preserve prepare-before-switch, unsupported/missing input status and generation CAS. Remove hardcoded builtin adapter allowlist. |
 | `package/lifecycle/activation.rs` | `model_activations; model_activation; check_parameters` | Missing rules | Preserve exact revision conflict, immutable parameters and selection, restart generation, and typed parameter validation. SQL source now contains parameters; instance pins its exact definition snapshot. |
 | `package/lifecycle/revisions.rs` | `install_revision; load_bundle` | Mapped | Data install_package_image/package_image and pure PackageBundle validation retain exact closure, collisions and recovery. Remove old closure cap and activation coupling. |
-| `package/output.rs` | `output_rows; encode_output; decode_output; decode_checkpoint; codec_result` | Partial | Reuse SDK wire codecs directly. Managed results need the full output and separate checkpoint; do not keep 16MiB encoding clamps or host JSON conversion as execution. |
+| `package/output.rs` | `output_rows; encode_output; decode_output; decode_checkpoint; codec_result` | Retired | SDK codecs and typed errors, Data retained validation, and CLI native Arrow presentation preserve the mapped rules. All old wire assertions pass at the SDK owner. The mandatory 16 MiB clamps stay removed. |
 | `package/removal.rs` | `remove; prune_package; prune_orphans; remove_closure; rehome_package` | Missing rules | Managed removal must protect shared dependencies, retain independent instances, release exclusive references and reconcile failed upgrades. Data owns collection; no source sweep. |
 | `package/required.rs` | `required_bundles; ensure_required` | Partial | Builtin descriptors and components remain. Retain image factories for Discovery and all detectors. Remove implicit installation/activation and InstalledAnalysis construction. |
-| `package/status.rs` | `receipt` | Missing caller | Managed receipt retains target/artifact identity, exact result and commit revision, input revisions, coverage and stale status. Current image response does not supply this. |
+| `package/status.rs` | `receipt` | Retired | Data returns the original validated target, artifact, ID, revision, input revisions, coverage and current status. Actual SQL, Wasm and native target assertions pass. |
 | `package/supervision.rs` | `supervise; registrations; admit_registrations; serve_activation; wait_inputs; wait_capacity; grant_expiry; evaluate_offer; failed` | Rewrite | Use on-demand native Query subscriptions. Retain stop-and-join, current permission/expiry, generation replacement, capacity events, retryable pressure, CAS conflict retry and durable failure status. Do not copy the registry scan or old input watcher. |
 | `package/native/mod.rs` | `NativeLimits::validate` | Mapped | Runtime native/mod.rs preserves explicit unsupported in-process resource limits and native loader exports. |
 | `package/native/artifact.rs` | `NativeAdmission::{validate,validate_files}; closure, target, ELF, symbol and path checks` | Mapped | Runtime native/artifact.rs retains this source; only public visibility differs. |

@@ -124,11 +124,13 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
             selection: None,
         })
         .await?;
-    let installed: PackageResponseV1 = serde_json::from_slice(&reply.result_json)?;
-    assert_eq!(installed.image, Some(expected_image));
+    let PackageResponseV1::Image(installed) = PackageResponseV1::from_bytes(&reply.result)? else {
+        return Err("installed image variant".into());
+    };
+    assert_eq!(installed, expected_image);
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&reply.result_json)?,
-        serde_json::json!({"image": installed.image}),
+        serde_json::to_value(PackageResponseV1::from_bytes(&reply.result)?)?,
+        serde_json::json!({"image": installed}),
     );
     assert_eq!(data.package_activation_page(None)?, activations);
     assert_eq!(data.discovery_enabled(), discovery);
@@ -140,13 +142,14 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
                 selection: None,
             })
             .await?;
-        let response: PackageResponseV1 = serde_json::from_slice(&reply.result_json)?;
-        assert!(response.image.is_none());
+        let PackageResponseV1::Definition(admitted) = PackageResponseV1::from_bytes(&reply.result)?
+        else {
+            return Err("admitted definition variant".into());
+        };
         assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&reply.result_json)?,
-            serde_json::json!({"definition": response.definition}),
+            serde_json::to_value(PackageResponseV1::from_bytes(&reply.result)?)?,
+            serde_json::json!({"definition": admitted}),
         );
-        let admitted = response.definition.ok_or("admitted definition absent")?;
         assert_eq!(admitted.definition, expected);
         assert_eq!(admitted.sql, expected.program.sql()?);
         assert_eq!(admitted.images, images);
@@ -161,8 +164,11 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
                 selection: None,
             })
             .await?;
-        let inspected: PackageResponseV1 = serde_json::from_slice(&reply.result_json)?;
-        let inspected = inspected.definition.ok_or("inspected definition absent")?;
+        let PackageResponseV1::Definition(inspected) =
+            PackageResponseV1::from_bytes(&reply.result)?
+        else {
+            return Err("inspected definition variant".into());
+        };
         assert_eq!(inspected.digest()?, revision);
         assert_eq!(inspected, admitted);
         assert_eq!(data.package_activation_page(None)?, activations);

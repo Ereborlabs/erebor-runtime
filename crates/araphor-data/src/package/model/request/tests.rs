@@ -104,6 +104,21 @@ fn package_request_metadata_roundtrip() -> TestResult {
             package_id: "example".into(),
             revision: None,
         },
+        PackageRequestV1::InspectInstanceHistory {
+            instance_id: "counts".into(),
+        },
+        PackageRequestV1::InspectInstance {
+            instance_id: "counts".into(),
+        },
+        PackageRequestV1::ReadInstanceResult {
+            instance_id: "counts".into(),
+            result_id: "retained-result".into(),
+        },
+        PackageRequestV1::QueryInstanceResult {
+            instance_id: "counts".into(),
+            result_id: "retained-result".into(),
+            sql: "SELECT value, __row_index FROM rows".into(),
+        },
         PackageRequestV1::InspectImage {
             package_id: "example".into(),
             revision: Some("1".into()),
@@ -157,5 +172,43 @@ fn image_request_runtime_fields() -> TestResult {
         .action(),
         crate::PackageActionV1::Inspect
     );
+    Ok(())
+}
+
+#[test]
+fn instance_requests_are_readonly() -> TestResult {
+    for operation in [
+        PackageRequestV1::InspectInstanceHistory {
+            instance_id: "counts".into(),
+        },
+        PackageRequestV1::InspectInstance {
+            instance_id: "counts".into(),
+        },
+        PackageRequestV1::ReadInstanceResult {
+            instance_id: "counts".into(),
+            result_id: "retained-result".into(),
+        },
+        PackageRequestV1::QueryInstanceResult {
+            instance_id: "counts".into(),
+            result_id: "retained-result".into(),
+            sql: "SELECT * FROM rows".into(),
+        },
+    ] {
+        assert_eq!(operation.action(), crate::PackageActionV1::Inspect);
+        let mut value = serde_json::to_value(&operation)?;
+        for field in ["grant", "parameters", "running", "revision"] {
+            value[field] = serde_json::json!({"unexpected": true});
+            assert!(
+                PackageRequestV1::from_bytes(&envelope(&serde_json::to_vec(&value)?, &[],)?)
+                    .is_err()
+            );
+            value.as_object_mut().ok_or("request object")?.remove(field);
+        }
+        assert!(PackageRequestV1::from_bytes(&envelope(
+            &serde_json::to_vec(&operation)?,
+            b"unexpected archive",
+        )?)
+        .is_err());
+    }
     Ok(())
 }

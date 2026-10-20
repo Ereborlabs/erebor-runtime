@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
 
+mod windows;
+
 const NOW: u64 = 1_700_000_000_123_456_789;
 
 struct Clock {

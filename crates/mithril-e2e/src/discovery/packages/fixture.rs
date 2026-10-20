@@ -111,7 +111,7 @@ impl Fixture {
                 .map_err(|_| tonic::Status::internal("fixture tenant"))?,
         );
         let reply = self.service.package_operation(request).await?.into_inner();
-        serde_json::from_slice(&reply.result_json)
+        PackageResponseV1::from_bytes(&reply.result)
             .map_err(|_| tonic::Status::internal("fixture response"))
     }
 }

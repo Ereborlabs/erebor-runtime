@@ -94,8 +94,8 @@ contract. The later snapshot-memory and stream-test replacement retires three
 more whole files after 373 distinct connected cases pass. The native operation
 replacement then retires one complete test leaf after all ten old test functions
 have passing native assertions. The native model replacement then retires five more files after all 50 mapped
-cases pass. This removes 306 production lines. There are now 92 retired files;
-116 remain unchanged. The recovery archive retains all 208 originals.
+cases pass. This removes 306 production lines. The public receipt/output replacement then retires three more files and 90
+production lines. There are now 95 retired files; 113 remain unchanged. The recovery archive retains all 208 originals.
 The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish
 long-running lifecycle or automatic restart.
@@ -107,6 +107,14 @@ final authority checks. Fresh Graph writes require the exact prior window
 head. The connected qualification covers 106 distinct passing cases. These
 corrections retire no further reference file and do not qualify complete
 producers or public lifecycle integration.
+
+Fresh Inspect status, original successful receipt history, complete output and
+native retained queries pass through Control and CLI. Replies use the existing
+MessagePack codec with native binary IPC. Each package input keeps its own
+native SQL window and the same Query Progress deadline. Full history selection,
+public lifecycle and complete restart integration remain **Not done**. Read the
+[bounded result](araphor-analysis-migration.md#public-receipt-reads-and-native-input-windows)
+for exact source and verification records.
 
 ### First deliverable: definition files and running instances
 

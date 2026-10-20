@@ -933,6 +933,64 @@ reference files and the archive are unchanged. Mixed-window subscriptions,
 installed supervision, producers, public lifecycle, and the final Rust gate
 remain open.
 
+## Public receipt reads and native input windows
+
+[Instance::read_history](../../crates/araphor-analysis/src/instance/read.rs) A reader requests original receipts or exact retained output.
+  -> [Instance::inspect](../../crates/araphor-analysis/src/instance/read.rs) checks fresh Inspect authority and watches current permission.
+  -> [Data retained reads](../../crates/araphor-data/src/analysis/managed/mod.rs) validate the requested binding and return original receipts or the complete SDK wire packet.
+  -> [ClientGrpcOwner::package_request](../../crates/mithril-control/src/client_grpc/packages.rs) joins binary serialization, then checks authority, expiry and client access.
+  -> [Output::package](../../crates/araphor-cli/src/cli/araphor/output/packages.rs) decodes native Arrow only for presentation.
+
+[Window::from_plan](../../crates/araphor-query/src/follow/window.rs) An admitted package input has a SQL window.
+  -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) retains each native scan range and its exact expiry.
+  -> [Progress::captured](../../crates/araphor-query/src/stream/progress.rs) keeps one deadline across metadata-only notices.
+  -> [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) executes through the existing native physical pipeline.
+
+```mermaid
+sequenceDiagram
+    participant Reader
+    participant Control
+    participant Instance
+    participant Data
+    Reader->>Control: Inspect exact instance or result
+    Control->>Instance: Fresh scoped grant
+    Instance->>Data: Controlled retained read
+    Data-->>Instance: Original validated receipt or packet
+    Instance-->>Control: Result after disclosure check
+    Control-->>Reader: Binary reply after final access check
+```
+
+The wire reply is one PackageResponseV1 enum. The installed MessagePack codec
+uses named fields and binary vectors. The decoder rejects trailing bytes.
+The public result header excludes saved grants and principals. The raw reader
+uses the existing retained validator and does not encode IPC again. This read
+still decodes retained IPC for validation; it does not claim complete temporary
+heap accounting. Historical reads need current Inspect permission, not current
+Run permission or image execution trust. Cancellation joins the existing worker.
+
+[AnalysisStore::managed_history](../../crates/araphor-data/src/analysis/managed/history.rs) lists original successful receipts in completion order.
+[AnalysisStore::managed_output](../../crates/araphor-data/src/analysis/managed/read.rs) returns the validated original packet. Valid pending
+or terminal attempts do not fabricate success. Corrupt bindings reject the read.
+This list is not the old per-window head index. Public latest selection,
+cross-generation history and selected SQL-only output reads remain open.
+
+Package inputs retain independent windows through native child plans. Native
+SQL already expands views before clock admission. Exact native timestamp bound
+coercion stays valid; unsupported clocks stay rejected. The source snapshot
+owns the next expiry. Query Progress owns its event. No Analysis clock or polling
+owner exists in this path.
+
+The [SDK wire test](../../crates/araphor-analysis-sdk/src/wire/tests/output.rs)
+preserves the complete old wire matrix. The [raw Control test](../../crates/mithril-control/src/client_grpc/tests/packages/instance.rs)
+checks every auxiliary output through actual package execution and the binary
+reply. The [window tests](../../crates/araphor-query/src/definition/tests/subscription/windows.rs)
+and native view tests cover the per-input expiry rules. The
+[retirement record](../../recovery/araphor-analysis-package-output-retirement-20261020.json)
+identifies the exact unchanged source, focused checks, and three removed files.
+The current source descends from 111c575e. All 113 remaining Back files match
+the baseline. The full Rust gate, larger inspection owner, input runner and
+producer integration remain **Not done**. No benchmark is run.
+
 ## In-process Wasm ownership
 
 [WasmExecution::compiled](../../crates/araphor-package-runtime/src/wasm/cache.rs)

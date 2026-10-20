@@ -23,6 +23,18 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Package response encoding failed: {source}"))]
+    PackageResponseEncode {
+        source: rmp_serde::encode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Package response decoding failed: {source}"))]
+    PackageResponseDecode {
+        source: rmp_serde::decode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Package table encoding failed: {source}"))]
     PackageArrow {
         source: duckdb::arrow::error::ArrowError,
@@ -287,6 +299,8 @@ impl ErrorExt for Error {
             Self::PackageEncoding { .. } | Self::PackageArrow { .. } => {
                 StatusCode::InvalidArguments
             }
+            Self::PackageResponseEncode { .. } => StatusCode::Internal,
+            Self::PackageResponseDecode { .. } => StatusCode::InvalidArguments,
             Self::AnalysisContract { source, .. } => source.status_code(),
             Self::Notification { code, .. } => match code {
                 crate::NotificationErrorCodeV1::Invalid | crate::NotificationErrorCodeV1::Limit => {

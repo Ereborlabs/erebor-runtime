@@ -1174,8 +1174,15 @@ impl Session {
             Read::Page(after) => ReadMode::Page(after),
         };
         let mut requests = sources.clone();
-        let bounds = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical))
-            .context(SqlSnafu)?;
+        let run = context
+            .session_config()
+            .get_extension::<crate::stream::Run>();
+        let bounds = SourceSnapshot::requests(
+            &mut requests,
+            std::slice::from_ref(&physical),
+            run.as_deref(),
+        )
+        .context(SqlSnafu)?;
         let captured = self
             .capture(snapshot, requests, bounds, mode, Arc::clone(&permit))
             .await?;

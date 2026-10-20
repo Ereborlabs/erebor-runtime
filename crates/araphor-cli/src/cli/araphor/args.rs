@@ -34,6 +34,8 @@ pub(crate) enum AraphorCommand {
     Definition(super::packages::DefinitionArgs),
     /// Read or retain OCI package images.
     Image(super::packages::ImageArgs),
+    /// Inspect a managed instance or query one retained result.
+    Instance(super::packages::InstanceArgs),
     /// List query relations, recipe source, or retained policy targets.
     Catalog(CatalogArgs),
     /// Evaluate one SQL statement, or follow its committed results.
@@ -150,6 +152,7 @@ impl AraphorCommand {
         match self {
             AraphorCommand::Definition(args) => args.prepare(),
             AraphorCommand::Image(args) => args.prepare(),
+            AraphorCommand::Instance(args) => args.prepare(),
             AraphorCommand::Catalog(args) => args.prepare(),
             AraphorCommand::Sql(args) => {
                 ensure!(
@@ -249,6 +252,7 @@ impl fmt::Display for AraphorCommand {
         formatter.write_str(match self {
             Self::Definition(_) => "definition",
             Self::Image(_) => "image",
+            Self::Instance(_) => "instance",
             Self::Catalog(_) => "catalog",
             Self::Sql(_) => "sql",
             Self::Trace(_) => "trace",

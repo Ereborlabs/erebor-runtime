@@ -374,6 +374,21 @@ pub(super) struct Attempt {
     pub terminal: Option<ManagedTerminal>,
 }
 
+impl Attempt {
+    pub(super) fn decode(tenant: [u8; 16], instance: &str, id: &str, bytes: &[u8]) -> Result<Self> {
+        use snafu::ResultExt as _;
+
+        let attempt: Self = serde_json::from_slice(bytes).context(crate::PackageEncodingSnafu)?;
+        if attempt.capture.tenant != tenant
+            || attempt.capture.instance != instance
+            || attempt.request.id != id
+        {
+            return Err(Code::Invalid.error("managed attempt key"));
+        }
+        Ok(attempt)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ManagedAttempt(
     pub(super) Attempt,

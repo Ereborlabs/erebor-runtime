@@ -6,9 +6,10 @@ use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor
 use datafusion::common::{ExprSchema, ScalarValue};
 use datafusion::datasource::source_as_provider;
 use datafusion::functions::datetime::now::NowFunc;
-use datafusion::logical_expr::{Expr, LogicalPlan, Operator};
+use datafusion::logical_expr::{Expr, ExprSchemable, LogicalPlan, Operator};
 use snafu::ResultExt as _;
 
+use crate::definition::PackageCall;
 use crate::sources::SourceProvider;
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
@@ -20,6 +21,8 @@ pub(crate) struct Window {
 
 #[derive(Default)]
 struct Windows {
+    error: Option<crate::Error>,
+    clocks: usize,
     stack: Vec<Option<Window>>,
     scans: Vec<Option<Window>>,
     filters: usize,
@@ -30,6 +33,24 @@ impl<'n> TreeNodeVisitor<'n> for Windows {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, plan: &'n LogicalPlan) -> datafusion::common::Result<TreeNodeRecursion> {
+        if let LogicalPlan::Extension(extension) = plan {
+            if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
+                for child in &call.children {
+                    if let Err(error) = Window::from_plan(child) {
+                        self.error = Some(error);
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
+                }
+                self.stack.push(None);
+                return Ok(TreeNodeRecursion::Jump);
+            }
+        }
+        plan.apply_expressions(|expression| {
+            expression.apply(|expression| {
+                self.clocks += usize::from(Window::clock(expression));
+                Ok(TreeNodeRecursion::Continue)
+            })
+        })?;
         let mut window = self.stack.last().copied().flatten();
         if !Window::preserves(plan) && !Window::events(plan) {
             window = None;
@@ -103,16 +124,18 @@ impl Window {
     }
 
     pub(crate) fn from_plan(plan: &LogicalPlan) -> Result<Option<Self>> {
-        let clocks = Self::clocks(plan)?;
-        if clocks == 0 {
-            return Ok(None);
-        }
         let mut windows = Windows::default();
         plan.visit_with_subqueries(&mut windows).context(SqlSnafu)?;
+        if let Some(error) = windows.error.take() {
+            return Err(error);
+        }
+        if windows.clocks == 0 {
+            return Ok(None);
+        }
         let window = windows.scans.first().copied().flatten();
         if windows.invalid
             || window.is_none()
-            || windows.filters != clocks
+            || windows.filters != windows.clocks
             || windows.scans.iter().any(|scan| *scan != window)
         {
             return InvalidSnafu {
@@ -180,6 +203,16 @@ impl Window {
         {
             return None;
         }
+        let bound = match bound {
+            Expr::Cast(cast)
+                if cast.data_type == *field.data_type()
+                    && cast.expr.get_type(schema).ok()?
+                        == DataType::Timestamp(TimeUnit::Nanosecond, None) =>
+            {
+                cast.expr.as_ref()
+            }
+            _ => bound,
+        };
         let Expr::BinaryExpr(bound) = bound else {
             return None;
         };

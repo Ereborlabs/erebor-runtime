@@ -95,6 +95,58 @@ impl ImageArgs {
     }
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct InstanceArgs {
+    #[command(subcommand)]
+    operation: InstanceCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum InstanceCommand {
+    /// Read current lifecycle, progress, and readiness without running the instance.
+    Inspect { instance: String },
+    /// List original successful receipts without running the instance.
+    History { instance: String },
+    /// Read every output, evidence link, reason, and checkpoint of an exact retained call.
+    Read { instance: String, result: String },
+    /// Run one local SELECT over the named datasets of an exact retained result.
+    Query {
+        instance: String,
+        result: String,
+        sql: String,
+    },
+}
+
+impl InstanceArgs {
+    pub(super) fn prepare(&self) -> Result<Prepared> {
+        let operation = match &self.operation {
+            InstanceCommand::Inspect { instance } => PackageRequestV1::InspectInstance {
+                instance_id: instance.clone(),
+            },
+            InstanceCommand::History { instance } => PackageRequestV1::InspectInstanceHistory {
+                instance_id: instance.clone(),
+            },
+            InstanceCommand::Read { instance, result } => PackageRequestV1::ReadInstanceResult {
+                instance_id: instance.clone(),
+                result_id: result.clone(),
+            },
+            InstanceCommand::Query {
+                instance,
+                result,
+                sql,
+            } => PackageRequestV1::QueryInstanceResult {
+                instance_id: instance.clone(),
+                result_id: result.clone(),
+                sql: sql.clone(),
+            },
+        };
+        Ok(Prepared::Package(wire::PackageOperationRequest {
+            definition: operation.encode().context(PackageSnafu)?,
+            selection: None,
+        }))
+    }
+}
+
 impl CommandRun {
     pub(super) async fn package(&mut self, request: wire::PackageOperationRequest) -> Result<()> {
         let response = tokio::select! {
@@ -102,9 +154,9 @@ impl CommandRun {
             result = self.client.package_operation(request) => result.context(ClientSnafu)?,
         };
         let response: PackageResponseV1 =
-            serde_json::from_slice(&response.result_json).map_err(|_| {
+            PackageResponseV1::from_bytes(&response.result).map_err(|_| {
                 ProtocolSnafu {
-                    field: "package result JSON",
+                    field: "binary package response",
                 }
                 .build()
             })?;
@@ -343,6 +395,86 @@ mod tests {
         })();
         std::fs::remove_file(path)?;
         result
+    }
+
+    #[test]
+    fn instance_cli_is_readonly() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for args in [
+            vec!["araphor", "instance"],
+            vec!["araphor", "instance", "inspect"],
+            vec!["araphor", "instance", "query", "counts", "result"],
+            vec!["araphor", "instance", "start", "counts"],
+            vec!["araphor", "instance", "read", "counts"],
+            vec!["araphor", "instance", "history"],
+            vec!["araphor", "instance", "history", "counts", "--follow"],
+            vec!["araphor", "instance", "read", "counts", "saved", "--follow"],
+            vec!["araphor", "instance", "inspect", "counts", "--unknown"],
+            vec![
+                "araphor",
+                "instance",
+                "inspect",
+                "counts",
+                "--revision",
+                "r1",
+            ],
+            vec![
+                "araphor", "instance", "query", "counts", "result", "SELECT 1", "--follow",
+            ],
+            vec![
+                "araphor", "instance", "inspect", "counts", "--node", "node-a",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        for args in [
+            vec!["araphor", "instance", "inspect", "counts"],
+            vec!["araphor", "instance", "history", "counts"],
+            vec!["araphor", "instance", "read", "counts", "saved"],
+            vec![
+                "araphor",
+                "instance",
+                "query",
+                "counts",
+                "saved",
+                "SELECT value FROM rows",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args)?;
+            let Command::Investigate(command) = cli.command else {
+                return Err("instance command absent".into());
+            };
+            assert_eq!(command.to_string(), "instance");
+            let Prepared::Package(request) = command.prepare()? else {
+                return Err("instance request absent".into());
+            };
+            assert!(request.selection.is_none());
+            let operation = PackageRequestV1::from_bytes(&request.definition)?;
+            assert_eq!(operation.action(), araphor_data::PackageActionV1::Inspect);
+            match operation {
+                PackageRequestV1::InspectInstance { instance_id }
+                | PackageRequestV1::InspectInstanceHistory { instance_id } => {
+                    assert_eq!(instance_id, "counts")
+                }
+                PackageRequestV1::ReadInstanceResult {
+                    instance_id,
+                    result_id,
+                } => {
+                    assert_eq!(instance_id, "counts");
+                    assert_eq!(result_id, "saved");
+                }
+                PackageRequestV1::QueryInstanceResult {
+                    instance_id,
+                    result_id,
+                    sql,
+                } => {
+                    assert_eq!(instance_id, "counts");
+                    assert_eq!(result_id, "saved");
+                    assert_eq!(sql, "SELECT value FROM rows");
+                }
+                _ => return Err("instance operation changed".into()),
+            }
+        }
+        Ok(())
     }
 
     #[test]

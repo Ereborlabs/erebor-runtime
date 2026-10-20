@@ -5,6 +5,7 @@ use araphor_data::{AnalysisReadControl, AnalysisTableRequests, StorePositionV1};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::execution::memory_pool::MemoryReservation;
 use futures_core::Stream;
+use snafu::ResultExt as _;
 
 use crate::execution::{Permit, Session};
 use crate::sources::ArrowSnapshot;
@@ -38,6 +39,15 @@ impl Run {
             .map_or(&self.sources, |(definition, _)| definition.sources())
     }
 
+    pub(crate) fn selection(&self, now: u64) -> crate::Result<araphor_data::AnalysisSelectionV1> {
+        if let Some(window) = self.window {
+            if !crate::definition::PackageCall::contains(&self.plan).context(crate::SqlSnafu)? {
+                return Ok(window.selection(self.session.selection(), now));
+            }
+        }
+        Ok(self.session.selection().clone())
+    }
+
     pub(crate) async fn session(&self, now: u64, permit: &Arc<Permit>) -> crate::Result<Session> {
         let (invocation, managed) = match &self.managed {
             Some((definition, publication)) => {
@@ -59,10 +69,7 @@ impl Run {
             }
             None => (crate::definition::Invocation::default(), None),
         };
-        let selection = self.window.map_or_else(
-            || self.session.selection().clone(),
-            |window| window.selection(self.session.selection(), now),
-        );
+        let selection = self.selection(now)?;
         let mut session = self.session.at(selection, now);
         session.managed = managed;
         session.calls = Some(session.call_context(invocation));

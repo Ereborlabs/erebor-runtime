@@ -37,21 +37,38 @@ impl ClientGrpcOwner {
         let response = match operation {
             definition @ (PackageRequestV1::AdmitDefinition { .. }
             | PackageRequestV1::InspectDefinition { .. }) => {
-                self.definition_request(grant, definition, control).await?
+                self.definition_request(grant.clone(), definition, control.clone())
+                    .await?
+            }
+            instance @ (PackageRequestV1::InspectInstance { .. }
+            | PackageRequestV1::InspectInstanceHistory { .. }
+            | PackageRequestV1::ReadInstanceResult { .. }
+            | PackageRequestV1::QueryInstanceResult { .. }) => {
+                self.instance_request(grant.clone(), instance, control.clone())
+                    .await?
             }
             image @ (PackageRequestV1::InstallImage { .. }
             | PackageRequestV1::InspectImage { .. }) => {
-                self.image_request(grant, image, control).await?
+                self.image_request(grant.clone(), image, control.clone())
+                    .await?
             }
         };
+        let result = araphor_query::execution::Engine::blocking(control.clone(), (), move || {
+            Ok(Self::package_response(&response))
+        })
+        .await
+        .map_err(Self::failure)??;
+        control.check().map_err(Self::failure)?;
+        grant.remaining().map_err(Self::image_failure)?;
+        self.auth
+            .check(&grant, action)
+            .map_err(Self::image_failure)?;
         access.check().map_err(Self::auth_failure)?;
-        let result_json = Self::package_response(&response)?;
-        Ok(proto::PackageOperationReply { result_json })
+        Ok(proto::PackageOperationReply { result })
     }
 
     pub(super) fn package_response(response: &PackageResponseV1) -> Result<Vec<u8>, Status> {
-        serde_json::to_vec(response)
-            .map_err(|_| Status::internal("The package response cannot be encoded."))
+        response.encode().map_err(Self::image_failure)
     }
 
     async fn definition_request(
@@ -124,10 +141,7 @@ impl ClientGrpcOwner {
             .check(&grant, action)
             .map_err(Self::image_failure)?;
         control.check().map_err(Self::failure)?;
-        Ok(PackageResponseV1 {
-            image: None,
-            definition: Some(definition),
-        })
+        Ok(PackageResponseV1::Definition(definition))
     }
 
     async fn image_request(
@@ -182,14 +196,95 @@ impl ClientGrpcOwner {
             grant.remaining()?;
             authority.check(&grant, action)?;
             control.check()?;
-            Ok(PackageResponseV1 {
-                definition: None,
-                image: Some(image),
-            })
+            Ok(PackageResponseV1::Image(image))
         })
         .await
         .map_err(|_| Status::internal("The image task failed."))?
         .map_err(Self::image_failure)
+    }
+
+    async fn instance_request(
+        &self,
+        grant: PackageGrantV1,
+        request: PackageRequestV1,
+        control: Arc<AnalysisReadControl>,
+    ) -> Result<PackageResponseV1, Status> {
+        let query = self.data()?.query.clone();
+        let response = match request {
+            PackageRequestV1::InspectInstance { instance_id } => {
+                let status = araphor_analysis::Instance::read_status(
+                    query,
+                    self.auth.clone(),
+                    grant.clone(),
+                    &instance_id,
+                    &control,
+                )
+                .await
+                .map_err(Self::failure)?;
+                PackageResponseV1::Instance(status.try_into().map_err(Self::image_failure)?)
+            }
+            PackageRequestV1::InspectInstanceHistory { instance_id } => {
+                let history = araphor_analysis::Instance::read_history(
+                    query,
+                    self.auth.clone(),
+                    grant.clone(),
+                    &instance_id,
+                    &control,
+                )
+                .await
+                .map_err(Self::failure)?;
+                PackageResponseV1::History(history)
+            }
+            PackageRequestV1::ReadInstanceResult {
+                instance_id,
+                result_id,
+            } => {
+                let result = araphor_analysis::Instance::read_output(
+                    query,
+                    self.auth.clone(),
+                    grant.clone(),
+                    &instance_id,
+                    &result_id,
+                    &control,
+                )
+                .await
+                .map_err(Self::failure)?;
+                PackageResponseV1::Result(Box::new(result))
+            }
+            PackageRequestV1::QueryInstanceResult {
+                instance_id,
+                result_id,
+                sql,
+            } => {
+                let output = araphor_analysis::Instance::query_result(
+                    query,
+                    self.auth.clone(),
+                    grant.clone(),
+                    &instance_id,
+                    &result_id,
+                    &sql,
+                    &control,
+                )
+                .await
+                .map_err(Self::failure)?;
+                araphor_query::execution::Engine::blocking(control.clone(), (), move || {
+                    PackageResponseV1::try_from(&output.data).map_err(Into::into)
+                })
+                .await
+                .map_err(Self::failure)?
+            }
+            _ => {
+                return Err(Status::invalid_argument(
+                    "The instance operation is invalid.",
+                ))
+            }
+        };
+        grant.remaining().map_err(Self::image_failure)?;
+        self.auth
+            .check(&grant, PackageActionV1::Inspect)
+            .map_err(Self::image_failure)?;
+        control.check().map_err(Self::failure)?;
+        Ok(response)
     }
 
     fn image_failure(error: araphor_data::Error) -> Status {

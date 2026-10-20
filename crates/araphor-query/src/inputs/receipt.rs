@@ -24,6 +24,10 @@ pub(super) struct PortScope {
 }
 
 impl Inputs {
+    pub(crate) fn window(&self, slot: usize) -> Option<Option<crate::follow::Window>> {
+        self.plans.get(slot).map(|port| port.window)
+    }
+
     pub(crate) fn uses_events(&self, slot: usize) -> bool {
         self.plans.get(slot).is_some_and(|port| {
             port.origins
@@ -148,7 +152,7 @@ impl Inputs {
             .collect();
         let selection = SourceSnapshot::selection(&snapshot.selection, &sources)?;
         let mut requests = sources.clone();
-        let bounds = SourceSnapshot::requests(&mut requests, std::slice::from_ref(physical))
+        let bounds = SourceSnapshot::requests(&mut requests, std::slice::from_ref(physical), None)
             .context(SqlSnafu)?;
         let selection =
             if sources.contains_key("trace_output") || sources.contains_key("trace_measurements") {
@@ -191,8 +195,9 @@ impl Inputs {
                     .filter_map(|origin| origin.durable().map(|name| (name.to_owned(), None)))
                     .collect();
                 let selection = SourceSnapshot::selection(original, &sources)?;
-                let ranges = SourceSnapshot::requests(requests, std::slice::from_ref(physical))
-                    .context(SqlSnafu)?;
+                let ranges =
+                    SourceSnapshot::requests(requests, std::slice::from_ref(physical), None)
+                        .context(SqlSnafu)?;
                 SourceSnapshot::extend_bounds(bounds, &ranges.fields).context(SqlSnafu)?;
                 let trace = sources.contains_key("trace_output")
                     || sources.contains_key("trace_measurements");

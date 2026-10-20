@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use araphor_data::{
-    AnalysisReadControl, ManagedResult, ManagedStatus, PackageActionV1, PackageAuthorization,
+    AnalysisReadControl, AnalysisStore, InstanceResultV1, ManagedInstance, ManagedReceipt,
+    ManagedResult, ManagedStatus, PackageActionV1, PackageAuthorization,
     PackageErrorCodeV1 as Code, PackageGrantV1,
 };
 use araphor_query::execution::{Engine, LocalOutput};
@@ -42,6 +43,28 @@ impl Instance {
         .await
     }
 
+    pub async fn read_history(
+        query: Arc<Engine>,
+        authority: Arc<dyn PackageAuthorization>,
+        grant: PackageGrantV1,
+        instance: &str,
+        control: &AnalysisReadControl,
+    ) -> Result<Vec<ManagedReceipt>> {
+        Self::inspect(authority.as_ref(), &grant, control, |read| {
+            let store = Arc::clone(query.store());
+            let selection = grant.selection.clone();
+            let instance = instance.to_owned();
+            let control = Arc::clone(&read);
+            async move {
+                Ok(Engine::blocking(read, (), move || {
+                    Ok(store.managed_history(&selection, &instance, &control)?)
+                })
+                .await?)
+            }
+        })
+        .await
+    }
+
     pub async fn read_result(
         query: Arc<Engine>,
         authority: Arc<dyn PackageAuthorization>,
@@ -52,7 +75,40 @@ impl Instance {
     ) -> Result<ManagedResult> {
         let (query, grant) = (&query, &grant);
         Self::inspect(authority.as_ref(), grant, control, |read| async move {
-            Self::retained(query, grant, instance, id, Self::read_time()?, read).await
+            Self::retained(
+                query,
+                grant,
+                instance,
+                id,
+                Self::read_time()?,
+                read,
+                AnalysisStore::managed_result,
+            )
+            .await
+        })
+        .await
+    }
+
+    pub async fn read_output(
+        query: Arc<Engine>,
+        authority: Arc<dyn PackageAuthorization>,
+        grant: PackageGrantV1,
+        instance: &str,
+        id: &str,
+        control: &AnalysisReadControl,
+    ) -> Result<InstanceResultV1> {
+        let (query, grant) = (&query, &grant);
+        Self::inspect(authority.as_ref(), grant, control, |read| async move {
+            Self::retained(
+                query,
+                grant,
+                instance,
+                id,
+                Self::read_time()?,
+                read,
+                AnalysisStore::managed_output,
+            )
+            .await
         })
         .await
     }
@@ -69,8 +125,16 @@ impl Instance {
         let (query, grant) = (&query, &grant);
         Self::inspect(authority.as_ref(), grant, control, |read| async move {
             let now = Self::read_time()?;
-            let retained =
-                Self::retained(query, grant, instance, id, now, Arc::clone(&read)).await?;
+            let retained = Self::retained(
+                query,
+                grant,
+                instance,
+                id,
+                now,
+                Arc::clone(&read),
+                AnalysisStore::managed_result,
+            )
+            .await?;
             let session = query.session(grant.selection.clone(), &read, now)?;
             Ok(session
                 .query_local(&retained.output.datasets, sql, retained.limits)
@@ -79,14 +143,21 @@ impl Instance {
         .await
     }
 
-    async fn retained(
+    async fn retained<T: Send + 'static>(
         query: &Arc<Engine>,
         grant: &PackageGrantV1,
         instance: &str,
         id: &str,
         now: u64,
         control: Arc<AnalysisReadControl>,
-    ) -> Result<ManagedResult> {
+        output: fn(
+            &AnalysisStore,
+            &ManagedInstance,
+            &str,
+            u64,
+            &AnalysisReadControl,
+        ) -> araphor_data::Result<T>,
+    ) -> Result<T> {
         let store = Arc::clone(query.store());
         let grant = grant.clone();
         let instance = instance.to_owned();
@@ -97,7 +168,7 @@ impl Instance {
                 .managed_instance(grant.selection.tenant_id, &instance, &read)?
                 .ok_or_else(|| Code::Missing.error("managed instance"))?;
             stored.spec.grant.permitted_by(&grant.selection)?;
-            Ok(store.managed_result(&stored, &id, now, &read)?)
+            Ok(output(&store, &stored, &id, now, &read)?)
         })
         .await?)
     }

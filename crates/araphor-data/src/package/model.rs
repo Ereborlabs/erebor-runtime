@@ -215,24 +215,134 @@ pub enum PackageRequestV1 {
         package_id: String,
         revision: Option<String>,
     },
+    InspectInstance {
+        instance_id: String,
+    },
+    InspectInstanceHistory {
+        instance_id: String,
+    },
+    ReadInstanceResult {
+        instance_id: String,
+        result_id: String,
+    },
+    QueryInstanceResult {
+        instance_id: String,
+        result_id: String,
+        sql: String,
+    },
 }
 
 impl PackageRequestV1 {
     pub fn action(&self) -> PackageActionV1 {
         match self {
             Self::AdmitDefinition { .. } | Self::InstallImage { .. } => PackageActionV1::Install,
-            Self::InspectDefinition { .. } | Self::InspectImage { .. } => PackageActionV1::Inspect,
+            Self::InspectDefinition { .. }
+            | Self::InspectImage { .. }
+            | Self::InspectInstance { .. }
+            | Self::InspectInstanceHistory { .. }
+            | Self::ReadInstanceResult { .. }
+            | Self::QueryInstanceResult { .. } => PackageActionV1::Inspect,
         }
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct PackageResponseV1 {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub definition: Option<araphor_discovery_definition::ResolvedDefinition>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<araphor_package::PackageImageV1>,
+pub struct InstanceStatusV1 {
+    pub id: String,
+    pub definition_revision: String,
+    pub generation: u64,
+    pub lifecycle: u64,
+    pub running: bool,
+    pub progress: u64,
+    pub readiness: PackageReadinessV1,
+    pub status_progress: u64,
+}
+
+impl TryFrom<crate::ManagedStatus> for InstanceStatusV1 {
+    type Error = crate::Error;
+
+    fn try_from(status: crate::ManagedStatus) -> Result<Self> {
+        Ok(Self {
+            definition_revision: status.instance.spec.definition.digest()?,
+            id: status.instance.spec.id,
+            generation: status.instance.generation,
+            lifecycle: status.instance.lifecycle,
+            running: status.instance.running,
+            progress: status.instance.progress,
+            readiness: status.readiness,
+            status_progress: status.status_progress,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceResultV1 {
+    pub instance_id: String,
+    pub result_id: String,
+    pub image: araphor_discovery_definition::ImagePin,
+    pub package: super::PackageRefV1,
+    pub export: String,
+    pub context: ResultContext,
+    pub limits: sdk::Limits,
+    pub commit_revision: u64,
+    pub current: bool,
+    pub output: sdk::wire::Output,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum PackageResponseV1 {
+    Definition(araphor_discovery_definition::ResolvedDefinition),
+    Image(araphor_package::PackageImageV1),
+    Instance(InstanceStatusV1),
+    History(Vec<crate::ManagedReceipt>),
+    Output(sdk::wire::Dataset),
+    Result(Box<InstanceResultV1>),
+}
+
+impl PackageResponseV1 {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        use snafu::ResultExt as _;
+
+        let mut bytes = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut bytes)
+            .with_struct_map()
+            .with_bytes(rmp_serde::config::BytesMode::ForceIterables);
+        self.serialize(&mut serializer)
+            .context(crate::PackageResponseEncodeSnafu)?;
+        Ok(bytes)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        use snafu::ResultExt as _;
+
+        let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
+        let response =
+            Self::deserialize(&mut decoder).context(crate::PackageResponseDecodeSnafu)?;
+        if decoder.position() != bytes.len() as u64 {
+            return Err(PackageErrorCodeV1::Invalid.error("package response trailing bytes"));
+        }
+        Ok(response)
+    }
+}
+
+impl TryFrom<&sdk::Dataset> for PackageResponseV1 {
+    type Error = crate::Error;
+
+    fn try_from(data: &sdk::Dataset) -> Result<Self> {
+        use snafu::ResultExt as _;
+
+        let schema = data
+            .batches
+            .first()
+            .ok_or_else(|| PackageErrorCodeV1::Incomplete.error("retained query schema"))?
+            .schema();
+        let output = sdk::wire::Dataset::encode(data, &schema, sdk::Limits::default())
+            .context(crate::AnalysisContractSnafu)?;
+        Ok(Self::Output(output))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -313,5 +423,212 @@ mod tests {
                 })
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod inspection_tests {
+    use super::*;
+
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn status_hides_saved_authority() -> TestResult {
+        let definition: araphor_discovery_definition::Definition =
+            serde_json::from_value(serde_json::json!({
+                "name": "counts",
+                "program": {"kind":"sql", "source":{"inline":"SELECT 1"}}
+            }))?;
+        let definition = araphor_discovery_definition::ResolvedDefinition::new(
+            definition,
+            "SELECT 1".into(),
+            Vec::new(),
+        )?;
+        let revision = definition.digest()?;
+        let status = crate::ManagedStatus {
+            instance: crate::ManagedInstance {
+                spec: crate::ManagedSpec {
+                    tenant: [1; 16],
+                    id: "counts".into(),
+                    grant: PackageGrantV1 {
+                        principal: "saved-run-principal".into(),
+                        revision: 7,
+                        selection: crate::AnalysisSelectionV1::tenant([1; 16]),
+                        expires_utc_ns: Some(99),
+                        authorization_id: Some("saved-run-session".into()),
+                    },
+                    definition,
+                    manifest: crate::ManagedManifest {
+                        format: 1,
+                        planner: "native".into(),
+                        definition: revision.clone(),
+                        calls: Default::default(),
+                    },
+                },
+                generation: 10,
+                progress: 12,
+                running: false,
+                lifecycle: 14,
+            },
+            readiness: PackageReadinessV1::Failed {
+                code: PackageErrorCodeV1::Invalid,
+                field: "model evaluation".into(),
+            },
+            status_progress: 12,
+        };
+        let status = InstanceStatusV1::try_from(status)?;
+        assert_eq!(
+            serde_json::to_value(&status)?,
+            serde_json::json!({
+                "id":"counts", "definition_revision":revision,
+                "generation":10, "lifecycle":14, "running":false,
+                "progress":12, "status_progress":12,
+                "readiness":{"state":"failed", "code":"invalid", "field":"model evaluation"}
+            }),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn selected_wire_preserves_schema() -> TestResult {
+        for empty in [false, true] {
+            let schema =
+                sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]);
+            let batch = if empty {
+                sdk::RecordBatch::new_empty(std::sync::Arc::new(schema.clone()))
+            } else {
+                crate::decode_parameters(&schema, Some(&serde_json::json!({"value":u64::MAX})))?
+                    .ok_or("value batch")?
+            };
+            let data = sdk::Dataset {
+                name: "query".into(),
+                batches: vec![batch],
+            };
+            let response = PackageResponseV1::try_from(&data)?;
+            let bytes = response.encode()?;
+            let PackageResponseV1::Output(output) = PackageResponseV1::from_bytes(&bytes)? else {
+                return Err("selected output variant".into());
+            };
+            let decoded = output.decode_any(Default::default())?;
+            assert_eq!(decoded.name, data.name);
+            assert_eq!(decoded.batches, data.batches);
+            assert_eq!(decoded.batches[0].schema().as_ref(), &schema);
+        }
+        assert!(PackageResponseV1::try_from(&sdk::Dataset {
+            name: "query".into(),
+            batches: Vec::new()
+        })
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn binary_response_keeps_bytes() -> TestResult {
+        let data = sdk::wire::Dataset {
+            name: "query".into(),
+            arrow_ipc: vec![255; 4096],
+        };
+        let bytes = PackageResponseV1::Output(data.clone()).encode()?;
+        assert!(bytes
+            .windows(data.arrow_ipc.len())
+            .any(|value| value == data.arrow_ipc));
+        assert!(bytes.len() < data.arrow_ipc.len() + 64);
+        let PackageResponseV1::Output(returned) = PackageResponseV1::from_bytes(&bytes)? else {
+            return Err("binary output variant".into());
+        };
+        assert_eq!(returned, data);
+        Ok(())
+    }
+
+    #[test]
+    fn binary_ids_keep_shape() -> TestResult {
+        #[derive(Debug, Deserialize, PartialEq, Serialize)]
+        struct Fixed {
+            id: [u8; 16],
+            payload: Vec<u8>,
+        }
+        let value = Fixed {
+            id: [255; 16],
+            payload: vec![255; 128],
+        };
+        let mut bytes = Vec::new();
+        value.serialize(
+            &mut rmp_serde::Serializer::new(&mut bytes)
+                .with_struct_map()
+                .with_bytes(rmp_serde::config::BytesMode::ForceIterables),
+        )?;
+        assert_eq!(rmp_serde::from_slice::<Fixed>(&bytes)?, value);
+        assert!(bytes
+            .windows(value.payload.len())
+            .any(|bytes| bytes == value.payload));
+        Ok(())
+    }
+
+    #[test]
+    fn response_rejects_invalid_frames() -> TestResult {
+        let output = sdk::wire::Dataset {
+            name: "query".into(),
+            arrow_ipc: vec![255; 16],
+        };
+        let bytes = PackageResponseV1::Output(output.clone()).encode()?;
+        for invalid in [
+            &[][..],
+            &[0xc1][..],
+            &bytes[..bytes.len() - 1],
+            b"{}".as_slice(),
+        ] {
+            assert!(matches!(
+                PackageResponseV1::from_bytes(invalid),
+                Err(crate::Error::PackageResponseDecode { .. })
+            ));
+        }
+        for suffix in [vec![0], bytes.clone()] {
+            let mut invalid = bytes.clone();
+            invalid.extend(suffix);
+            assert!(matches!(
+                PackageResponseV1::from_bytes(&invalid),
+                Err(crate::Error::Package {
+                    code: PackageErrorCodeV1::Invalid,
+                    field: "package response trailing bytes",
+                    ..
+                })
+            ));
+        }
+        for invalid in [
+            serde_json::json!({}),
+            serde_json::json!({"unknown": {}}),
+            serde_json::json!({"output": output, "instance": {}}),
+            serde_json::json!({"output": {"name":"query", "arrow_ipc": [], "unknown": true}}),
+        ] {
+            let bytes = rmp_serde::to_vec_named(&invalid)?;
+            assert!(matches!(
+                PackageResponseV1::from_bytes(&bytes),
+                Err(crate::Error::PackageResponseDecode { .. })
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn response_errors_keep_categories() -> TestResult {
+        use erebor_runtime_error::{ErrorExt as _, RetryHint, StatusCode};
+
+        let decode = PackageResponseV1::from_bytes(&[0xc1])
+            .err()
+            .ok_or("invalid frame accepted")?;
+        assert!(matches!(decode, crate::Error::PackageResponseDecode { .. }));
+        assert_eq!(decode.status_code(), StatusCode::InvalidArguments);
+        assert_eq!(decode.retry_hint(), RetryHint::NonRetryable);
+        assert!(std::error::Error::source(&decode)
+            .is_some_and(|source| source.is::<rmp_serde::decode::Error>()));
+        let encode = snafu::IntoError::into_error(
+            crate::PackageResponseEncodeSnafu,
+            rmp_serde::encode::Error::InvalidDataModel("fixture"),
+        );
+        assert_eq!(encode.status_code(), StatusCode::Internal);
+        assert_eq!(encode.retry_hint(), RetryHint::NonRetryable);
+        assert!(std::error::Error::source(&encode)
+            .is_some_and(|source| source.is::<rmp_serde::encode::Error>()));
+        Ok(())
     }
 }

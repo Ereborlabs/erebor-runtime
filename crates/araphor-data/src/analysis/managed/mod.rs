@@ -1,5 +1,6 @@
 mod capture;
 mod commit;
+mod history;
 mod lifecycle;
 mod model;
 mod read;

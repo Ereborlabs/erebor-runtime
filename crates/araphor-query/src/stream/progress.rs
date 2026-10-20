@@ -79,6 +79,10 @@ impl Progress {
         self.elapsed = false;
     }
 
+    pub(crate) fn deadline(&self) -> Option<u64> {
+        self.expiry
+    }
+
     pub(crate) fn expired(&self, now: u64) -> bool {
         self.expiry.is_some_and(|expiry| expiry <= now)
     }

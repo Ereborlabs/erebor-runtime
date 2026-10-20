@@ -349,17 +349,7 @@ impl AnalysisStore {
         let bytes: Option<Vec<u8>> = reader.query_row("SELECT contract FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND attempt_id = ?", params![tenant.as_slice(), instance, id], |row| row.get(0))
             .optional().context(AnalysisDatabaseSnafu { operation: "read managed attempt" })?;
         bytes
-            .map(|bytes| {
-                let attempt: Attempt =
-                    serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu)?;
-                if attempt.capture.tenant != tenant
-                    || attempt.capture.instance != instance
-                    || attempt.request.id != id
-                {
-                    return Err(Code::Invalid.error("managed attempt key"));
-                }
-                Ok(attempt)
-            })
+            .map(|bytes| Attempt::decode(tenant, instance, id, &bytes))
             .transpose()
     }
 
@@ -370,6 +360,39 @@ impl AnalysisStore {
         now: u64,
         control: &AnalysisReadControl,
     ) -> Result<ManagedResult> {
+        self.read_managed_result(instance, id, now, control)
+            .map(|(result, _, _)| result)
+    }
+
+    pub fn managed_output(
+        &self,
+        instance: &ManagedInstance,
+        id: &str,
+        now: u64,
+        control: &AnalysisReadControl,
+    ) -> Result<crate::InstanceResultV1> {
+        let (result, output, declaration) = self.read_managed_result(instance, id, now, control)?;
+        Ok(crate::InstanceResultV1 {
+            instance_id: instance.spec.id.clone(),
+            result_id: id.to_owned(),
+            image: declaration.image,
+            package: declaration.package,
+            export: declaration.export,
+            context: result.context,
+            limits: result.limits,
+            commit_revision: result.commit_revision,
+            current: result.current,
+            output,
+        })
+    }
+
+    fn read_managed_result(
+        &self,
+        instance: &ManagedInstance,
+        id: &str,
+        now: u64,
+        control: &AnalysisReadControl,
+    ) -> Result<(ManagedResult, sdk::wire::Output, ManagedCall)> {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |reader| {
             let (record, output, commit_revision) =
@@ -379,7 +402,7 @@ impl AnalysisStore {
             {
                 return Err(Code::Denied.error("managed result scope"));
             }
-            let (output, limits) = Self::validate_managed_record(
+            let (decoded, limits) = Self::validate_managed_record(
                 reader,
                 instance.spec.tenant,
                 id,
@@ -387,20 +410,19 @@ impl AnalysisStore {
                 &output,
                 commit_revision,
             )?;
-            Ok(ManagedResult {
-                context: record.context,
-                output,
-                limits,
-                commit_revision,
-                current: self.managed_current(
-                    reader,
-                    &instance.spec,
-                    id,
+            let current =
+                self.managed_current(reader, &instance.spec, id, commit_revision, now, control)?;
+            Ok((
+                ManagedResult {
+                    context: record.context,
+                    output: decoded,
+                    limits,
                     commit_revision,
-                    now,
-                    control,
-                )?,
-            })
+                    current,
+                },
+                output,
+                record.declaration,
+            ))
         })
     }
 

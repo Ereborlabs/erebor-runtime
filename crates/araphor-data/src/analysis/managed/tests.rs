@@ -16,8 +16,10 @@ use crate::{
     PackageImplementationV1, SqlModelV1, SqlReasonV1,
 };
 
+mod history;
 mod lifecycle;
 mod memory;
+mod output;
 mod status;
 mod terminal;
 
@@ -1046,6 +1048,14 @@ fn managed_recovery_checks_outputs() -> TestResult {
                     )?;
                 }
             }
+        }
+        if corruption != "edge" {
+            assert!(
+                store
+                    .managed_output(&fixture.instance, id, 10, &AnalysisReadControl::default())
+                    .is_err(),
+                "raw corruption {corruption}"
+            );
         }
         drop(store);
         assert!(

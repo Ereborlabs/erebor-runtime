@@ -470,9 +470,9 @@ async fn native_source_demands() -> TestResult {
         plans.push(state.create_physical_plan(&plan).await?);
     }
     let mut absent = araphor_data::AnalysisTableRequests::new();
-    assert!(SourceSnapshot::requests(&mut absent, &plans).is_err());
+    assert!(SourceSnapshot::requests(&mut absent, &plans, None).is_err());
     assert!(absent.is_empty());
-    let received = SourceSnapshot::requests(&mut requests, &plans)?;
+    let received = SourceSnapshot::requests(&mut requests, &plans, None)?;
     assert_eq!(requests["context_versions"], None);
     assert_eq!(requests["events"], Some(BTreeSet::new()));
     assert_eq!(
@@ -747,7 +747,7 @@ async fn native_capture_isolated() -> TestResult {
         vec![foreign.clone()],
     ));
     let mut requests = sources.clone();
-    let received = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical))?;
+    let received = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical), None)?;
     let first_receipt = first.capture(&requests, received.clone(), ReadMode::Snapshot)?;
     let second_receipt = second.capture(&requests, received, ReadMode::Snapshot)?;
     assert_eq!(first_receipt.witnesses.len(), 1);
@@ -812,7 +812,7 @@ async fn native_stream_keeps_metadata() -> TestResult {
         None,
     );
     let mut requests = sources.clone();
-    let received = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical))?;
+    let received = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical), None)?;
     let receipt = snapshot.capture(&requests, received, ReadMode::Snapshot)?;
     assert_eq!(receipt.witnesses.len(), 1);
     drop(receipt);
@@ -898,13 +898,13 @@ async fn native_ports_share_cut() -> TestResult {
         plans.push(state.create_physical_plan(&logical).await?);
     }
     let mut requests = araphor_data::AnalysisTableRequests::new();
-    let bounds = SourceSnapshot::requests(&mut requests, &plans)?;
+    let bounds = SourceSnapshot::requests(&mut requests, &plans, None)?;
     assert!(requests.is_empty());
     assert!(bounds.fields.is_empty());
     let mut all = vec![Arc::clone(&durable), operation];
     all.extend(plans.iter().cloned());
     let mut requests = sources.clone();
-    let received = SourceSnapshot::requests(&mut requests, &all)?;
+    let received = SourceSnapshot::requests(&mut requests, &all, None)?;
     let capture = SourceSnapshot::new(
         Arc::clone(&fixture.store),
         fixture.selection(),

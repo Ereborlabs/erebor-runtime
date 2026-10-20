@@ -294,8 +294,27 @@ async fn window_keeps_full_grant() -> TestResult {
         managed: Some(instance),
     });
     let control = AnalysisReadControl::default();
-    let mut stream = stream(&fixture, definition, target, &control)?;
+    let mut stream = Subscription::managed(
+        fixture.engine.session(full.clone(), &control, 0)?,
+        definition,
+        target,
+        b"managed-test",
+        None,
+        ResumeClock::new(NOW, None),
+    )?;
     let update = stream.next().await.ok_or("window update")??;
+    let received = NOW - 1_000_000 + 1;
+    let expiry = received / 1000 * 1000 + 60_000_000_000;
+    assert_eq!(update.snapshot.received_min, Some(received));
+    assert_eq!(update.snapshot.next_change, Some(expiry));
+    let frontier = state
+        .frontier
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("window frontier")?;
+    assert_eq!(frontier.next_change, Some(expiry));
+    assert_eq!(frontier.cursor, update.cursor.encode()?);
     assert_eq!(
         update
             .snapshot

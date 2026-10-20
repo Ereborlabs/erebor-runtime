@@ -80,6 +80,41 @@ pub(crate) struct Captured {
 }
 
 impl Captured {
+    pub(super) fn received_min(
+        &self,
+        range: (u64, u64),
+        control: &araphor_data::AnalysisReadControl,
+    ) -> Result<Option<u64>> {
+        let Some((_, indices, batches, _)) = self
+            .tables
+            .iter()
+            .find_map(|(origin, table)| (origin.durable() == Some("events")).then_some(table))
+        else {
+            return Ok(None);
+        };
+        let canonical = SourceSnapshot::schemas()["events"].index_of("received_utc_ns")?;
+        let column = indices
+            .binary_search(&canonical)
+            .map_err(|_| DataFusionError::Internal("window intake time is not captured".into()))?;
+        let mut received = None;
+        for batch in batches {
+            control.check().map_err(SourceSnapshot::data_error)?;
+            let values = batch
+                .column(column)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal("window intake time has an invalid type".into())
+                })?;
+            for value in values.iter().flatten() {
+                if (range.0..=range.1).contains(&value) {
+                    received = Some(received.map_or(value, |old: u64| old.min(value)));
+                }
+            }
+        }
+        Ok(received)
+    }
+
     pub(crate) fn set_witnesses(&mut self, witnesses: Vec<AnalysisWitnessV1>) -> Result<()> {
         let receipt = Arc::get_mut(&mut self.receipt).ok_or_else(|| {
             DataFusionError::Internal("the source receipt is already shared".into())
@@ -174,41 +209,12 @@ impl SourceSnapshot {
     }
 
     pub(crate) fn received_min(&self, range: (u64, u64)) -> Result<Option<u64>> {
-        let captured = self
-            .captured
+        self.captured
             .lock()
-            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
-        let captured = captured.as_ref().ok_or_else(|| {
-            DataFusionError::Internal("the source snapshot is not captured".into())
-        })?;
-        let Some((_, indices, batches, _)) = captured
-            .tables
-            .iter()
-            .find_map(|(origin, table)| (origin.durable() == Some("events")).then_some(table))
-        else {
-            return Ok(None);
-        };
-        let canonical = Self::schemas()["events"].index_of("received_utc_ns")?;
-        let column = indices
-            .binary_search(&canonical)
-            .map_err(|_| DataFusionError::Internal("window intake time is not captured".into()))?;
-        let mut received = None;
-        for batch in batches {
-            self.control.check().map_err(Self::data_error)?;
-            let values = batch
-                .column(column)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("window intake time has an invalid type".into())
-                })?;
-            for value in values.iter().flatten() {
-                if (range.0..=range.1).contains(&value) {
-                    received = Some(received.map_or(value, |old: u64| old.min(value)));
-                }
-            }
-        }
-        Ok(received)
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?
+            .as_ref()
+            .ok_or_else(|| DataFusionError::Internal("the source snapshot is not captured".into()))?
+            .received_min(range, &self.control)
     }
 
     pub(crate) fn selection(

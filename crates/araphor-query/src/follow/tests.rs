@@ -1326,7 +1326,7 @@ async fn native_append_execution() {
     );
     let canonical = &SourceSnapshot::schemas()["events"];
     let mut requests = BTreeMap::from([("events".to_owned(), None)]);
-    let bounds = SourceSnapshot::requests(&mut requests, &[Arc::clone(children[0])]).unwrap();
+    let bounds = SourceSnapshot::requests(&mut requests, &[Arc::clone(children[0])], None).unwrap();
     assert_eq!(
         requests["events"],
         Some(

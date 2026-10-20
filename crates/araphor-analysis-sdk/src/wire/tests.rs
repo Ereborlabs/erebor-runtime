@@ -8,6 +8,7 @@ use super::Dataset;
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 mod buffers;
+mod output;
 
 fn values(name: &str, values: Vec<u64>) -> crate::Result<(Schema, crate::Dataset)> {
     let schema = Schema::new(vec![Field::new("value", DataType::UInt64, false)]);

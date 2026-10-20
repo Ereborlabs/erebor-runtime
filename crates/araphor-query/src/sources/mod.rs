@@ -80,13 +80,16 @@ pub(crate) enum ReadMode {
 pub(crate) struct ScanBounds {
     pub(crate) fields: BTreeMap<&'static str, Interval>,
     pub(crate) events: Option<Vec<(u64, u64)>>,
+    pub(crate) windows: Vec<(crate::follow::Window, (u64, u64))>,
 }
 
 #[derive(Default)]
 struct ScanFrame {
-    inputs: Vec<bool>,
+    inputs: Vec<(bool, Option<crate::follow::Window>)>,
     next: usize,
+    scoped: bool,
     required: bool,
+    window: Option<crate::follow::Window>,
     events: bool,
     range: Option<(u64, u64)>,
 }
@@ -97,25 +100,34 @@ struct SourceScan<'a> {
     frames: Vec<ScanFrame>,
     scanned: bool,
     complete: bool,
+    window: Option<crate::follow::Window>,
+    moving: bool,
 }
 
 impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
     type Node = Arc<dyn ExecutionPlan>;
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-        let required = self.frames.last_mut().is_some_and(|parent| {
-            let required = parent.inputs.get(parent.next).copied().unwrap_or(false);
+        let input = self.frames.last_mut().and_then(|parent| {
+            let input = parent.inputs.get(parent.next).copied();
             parent.next += 1;
-            required
+            input
         });
+        let (required, window) = input.unwrap_or((
+            false,
+            self.frames.is_empty().then_some(self.window).flatten(),
+        ));
         let inputs = node
             .as_any()
             .downcast_ref::<crate::definition::physical::PackageExec>()
-            .map(|package| package.event_inputs())
+            .map(|package| package.event_inputs(self.moving))
+            .transpose()?
             .unwrap_or_default();
         let mut frame = ScanFrame {
             inputs,
+            scoped: required || (self.moving && input.is_some()),
             required,
+            window,
             ..Default::default()
         };
         if let Some(source) = SourceData::from_plan(node.as_ref()) {
@@ -153,9 +165,12 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
             DataFusionError::Internal("the physical source scope is absent".into())
         })?;
         self.complete |= frame.required && !frame.events;
-        if frame.required || self.frames.is_empty() {
+        if frame.scoped || self.frames.is_empty() {
             if let (Some(range), Some(ranges)) = (frame.range, &mut self.bounds.events) {
                 ranges.push(range);
+                if let Some(window) = frame.window {
+                    self.bounds.windows.push((window, range));
+                }
             }
         } else if let Some(parent) = self.frames.last_mut() {
             parent.range = match (parent.range, frame.range) {
@@ -197,6 +212,7 @@ impl SourceSnapshot {
     pub(crate) fn requests(
         requests: &mut AnalysisTableRequests,
         plans: &[Arc<dyn ExecutionPlan>],
+        run: Option<&crate::stream::Run>,
     ) -> Result<ScanBounds> {
         let events = requests.contains_key("events").then(Vec::new);
         let mut scan = SourceScan {
@@ -208,6 +224,8 @@ impl SourceSnapshot {
             frames: Vec::new(),
             scanned: false,
             complete: false,
+            window: run.and_then(|run| run.window),
+            moving: run.is_some_and(|run| run.follow),
         };
         for plan in plans {
             plan.visit(&mut scan)?;
@@ -222,6 +240,14 @@ impl SourceSnapshot {
                 events.sort_unstable();
                 events.dedup();
             }
+        }
+        if !scan.bounds.windows.is_empty() {
+            let column = Self::schemas()["events"].index_of("received_utc_ns")?;
+            scan.requests
+                .get_mut("events")
+                .ok_or_else(|| DataFusionError::Internal("window source is absent".into()))?
+                .get_or_insert_with(BTreeSet::new)
+                .insert(column);
         }
         Ok(scan.bounds)
     }
@@ -321,7 +347,26 @@ impl SourceSnapshot {
         if let Some(snapshot) = captured.as_ref() {
             return Ok(Arc::clone(&snapshot.receipt));
         }
-        let snapshot = self.read(requests, &bounds, mode, &control)?;
+        let mut snapshot = self.read(requests, &bounds, mode, &control)?;
+        let mut deadline = snapshot.receipt.next_change;
+        for (window, range) in bounds.windows {
+            let Some(selected) = window
+                .selection(&snapshot.receipt.selection, self.now)
+                .time_range()
+            else {
+                continue;
+            };
+            let range = (range.0.max(selected.0), range.1.min(selected.1));
+            if range.0 <= range.1 {
+                let expiry = window.expiry(snapshot.received_min(range, &control)?);
+                deadline = deadline.into_iter().chain(expiry).min();
+            }
+        }
+        Arc::get_mut(&mut snapshot.receipt)
+            .ok_or_else(|| {
+                DataFusionError::Internal("the source receipt is already shared".into())
+            })?
+            .next_change = deadline;
         let receipt = Arc::clone(&snapshot.receipt);
         *captured = Some(snapshot);
         Ok(receipt)
