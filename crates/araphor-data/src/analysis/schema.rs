@@ -510,7 +510,7 @@ impl AnalysisStore {
     pub(super) fn validate_tables(writer: &Connection) -> Result<()> {
         let projections = [
             "singleton, store_uuid, schema_version, recovery_epoch, commit_revision FROM store_meta",
-            "tenant_id, instance_id, spec, generation, progress, running, lifecycle FROM managed_instances",
+            "tenant_id, instance_id, spec, generation, progress, running, lifecycle, failure FROM managed_instances",
             "tenant_id, instance_id, call_id, state_revision, result_id FROM managed_calls",
             "tenant_id, instance_id, attempt_id, contract, completed FROM managed_attempts",
             "tenant_id, result_id, dependency_id, commit_revision FROM managed_edges",

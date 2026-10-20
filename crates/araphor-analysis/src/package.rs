@@ -130,9 +130,9 @@ impl Package {
                         Arc::clone(&control),
                     )
                     .await?;
-                if prepared.resolved.images.len() != 1
-                    || prepared.resolved.images[0].image != self.bundle.root
-                    || prepared.resolved.images[0].digest != self.digest
+                if prepared.resolved().images.len() != 1
+                    || prepared.resolved().images[0].image != self.bundle.root
+                    || prepared.resolved().images[0].digest != self.digest
                 {
                     return Err(Code::Denied.error("package image pin").into());
                 }
@@ -183,13 +183,13 @@ impl Package {
         let selection = self.selection(source)?;
         let (prepared, _) = self.prepared().await?;
         let binding = prepared
-            .resolved
+            .resolved()
             .digest()
             .map_err(araphor_data::Error::from)?;
         let session = self.query.session(selection, &self.control()?, 0)?;
         let stream = session.subscribe(
             prepared.plan.clone(),
-            prepared.sources.clone(),
+            prepared.sources().clone(),
             binding.as_bytes(),
             follow,
         )?;

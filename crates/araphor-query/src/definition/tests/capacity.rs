@@ -50,7 +50,7 @@ async fn image_capacity_follows_plan() -> TestResult {
     let prepared = fixture.prepare(&Fixture::definition()).await?;
     let calls = Fixture::calls(&prepared.plan)?;
     let call = calls.first().ok_or("package call absent")?;
-    let (_, _, reservation) = prepared.images.first().ok_or("image absent")?;
+    let (_, _, reservation) = prepared.admission.images.first().ok_or("image absent")?;
     assert!(Arc::ptr_eq(reservation, &call._image));
     assert!(std::ptr::eq(
         call.descriptor(),
@@ -64,16 +64,18 @@ async fn image_capacity_follows_plan() -> TestResult {
     let copy = prepared.clone();
     drop(prepared);
     drop(calls);
-    let pressure = fixture.engine.memory().reserve_input(CAPACITY - bytes)?;
+    let retained = fixture.engine.memory().input_reserved();
+    let pressure = fixture.engine.memory().reserve_input(CAPACITY - retained)?;
     assert!(fixture.engine.memory().reserve_input(1).is_err());
     drop(copy);
     assert!(image.upgrade().is_some());
     assert!(charge.upgrade().is_some());
+    let metadata = fixture.engine.memory().reserve_input(retained - bytes)?;
     assert!(fixture.engine.memory().reserve_input(1).is_err());
     drop(plan);
     assert!(image.upgrade().is_none());
     assert!(charge.upgrade().is_none());
-    drop(pressure);
+    drop((pressure, metadata));
     drop(fixture.engine.memory().reserve_input(CAPACITY)?);
     Ok(())
 }
@@ -276,6 +278,73 @@ async fn image_admission_rejects_short_capacity() -> TestResult {
             crate::Failure::from(&error),
             crate::Failure::Busy | crate::Failure::InputTooLarge
         ),
+        "{error:?}"
+    );
+    assert_eq!(fixture.engine.store().meta()?, before);
+    assert_eq!(fixture.engine.memory().input_reserved(), 0);
+    drop(fixture.engine.memory().reserve_input(capacity)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn metadata_clones_share_capacity() -> TestResult {
+    const CAPACITY: usize = 1024 * 1024;
+    let fixture = Fixture::limits(Limits {
+        input_capacity: Some(CAPACITY),
+        ..Default::default()
+    })?;
+    let mut definition = Fixture::sql("SELECT CAST(7 AS BIGINT UNSIGNED) AS value");
+    definition.description = "metadata".repeat(8192);
+    let prepared = fixture.prepare(&definition).await?;
+    assert_eq!(prepared.images().count(), 0);
+    let retained = fixture.engine.memory().input_reserved();
+    assert!(retained >= definition.description.len());
+    let weak = Arc::downgrade(&prepared.admission);
+    let copy = prepared.clone();
+    assert!(Arc::ptr_eq(&prepared.admission, &copy.admission));
+    assert!(std::ptr::eq(prepared.resolved(), copy.resolved()));
+    assert!(std::ptr::eq(prepared.sources(), copy.sources()));
+    assert_eq!(fixture.engine.memory().input_reserved(), retained);
+    let pressure = fixture.engine.memory().reserve_input(CAPACITY - retained)?;
+    assert!(fixture.engine.memory().reserve_input(1).is_err());
+    drop(prepared);
+    assert!(weak.upgrade().is_some());
+    assert!(fixture.engine.memory().reserve_input(1).is_err());
+    drop(copy);
+    assert!(weak.upgrade().is_none());
+    assert_eq!(
+        fixture.engine.memory().input_reserved(),
+        CAPACITY - retained
+    );
+    drop(pressure);
+    drop(fixture.engine.memory().reserve_input(CAPACITY)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn metadata_rejects_short_capacity() -> TestResult {
+    let measured = Fixture::new()?;
+    let mut definition = Fixture::sql("SELECT CAST(7 AS BIGINT UNSIGNED) AS value");
+    definition.description = "retained metadata".repeat(4096);
+    let prepared = measured.prepare(&definition).await?;
+    let retained = measured.engine.memory().input_reserved();
+    assert!(retained > definition.description.len());
+    drop(prepared);
+    assert_eq!(measured.engine.memory().input_reserved(), 0);
+    let capacity = retained.checked_sub(1).ok_or("metadata fixture capacity")?;
+    let fixture = Fixture::limits(Limits {
+        input_capacity: Some(capacity),
+        ..Default::default()
+    })?;
+    let before = fixture.engine.store().meta()?;
+    let error = fixture
+        .prepare(&definition)
+        .await
+        .err()
+        .ok_or("short metadata capacity admitted")?;
+    assert_eq!(
+        crate::Failure::from(&error),
+        crate::Failure::InputTooLarge,
         "{error:?}"
     );
     assert_eq!(fixture.engine.store().meta()?, before);

@@ -38,7 +38,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 126 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 125 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -55,7 +55,7 @@ Every replacement passes its required checks
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
 | Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public transport and presentation remain open. | Finite checks pass |
-| Final retirement | The earlier 81 leaves and the complete error leaf are removed after replacement checks pass. The 126 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Final retirement | The earlier 82 leaves and the complete limits leaf are removed after replacement checks pass. The 125 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -448,18 +448,77 @@ Back file changes. There are now **82 retired files and 126 unchanged files**.
 The full archive remains intact. Complete migration, the production reduction
 target, and the final Rust gate remain **Not done**.
 
+### Retained metadata and durable failure status
+
+Implementation and focused checks are **Done** for this bounded replacement.
+PreparedDefinition shares resolved metadata, source requests, image handles,
+and their reservation through one private Arc. Cloning that definition copies
+no admitted metadata. Instance retains native extension nodes through their
+existing Arc values. It charges its moved spec and manifest before admission.
+Defined String and Vec capacities use checked arithmetic. Native planner and
+allocator internals are outside this accounting claim. Host metadata projection
+and source-request deduplication remain **Not done**.
+
+Data retains one current failure fact on the instance row. Idle denial writes
+that fact in the existing suspension transaction. A joined failed attempt writes
+the fact in its terminal transaction only when the captured fences still match.
+Stop and start preserve the fact. New successful progress makes the old failure
+inactive. Recovery checks the failure, completion, and progress references.
+Schema 32 adds this field without a compatibility loader.
+
+Instance::read_status requires fresh Inspect authority and exact stored scope.
+It reads no Arrow payload and admits no image. An expired writer grant does not
+block a fresh reader. Current reader checks still protect final disclosure.
+
+Finite execution records a known joined failure only before publication starts.
+The existing Step records entry into the actual writer before final authority
+and commit. Typed Busy, cancelled controls, uncertain publication, and process
+loss stay pending. A committed lost acknowledgement keeps its original receipt.
+No second classifier, history, or executor is added.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `migration-metadata-build109` | Connected test build passes after caller and fixture corrections. | 21.552 |
+| `migration-metadata-new-data107` | All six new Data status and memory cases pass. | 12.246 |
+| `migration-metadata-new-analysis107` | All eight new finite, Inspect, and memory cases pass. | 32.796 |
+| `migration-metadata-new-query107` | Both new metadata ownership cases pass. | 1.130 |
+| `migration-metadata-data107` | All 45 selected managed Data cases pass. | 61.420 |
+| `migration-metadata-analysis107` | 59 cases pass. Two stale pending-outcome fixtures fail. | 144.763 |
+| `migration-metadata-analysis-corrections109` | Both corrected cases pass. Actual publication failure stays pending. A known fixed row limit is Failed(Limit). | 1.241 |
+| `migration-metadata-query107` | 138 cases pass. Two fixtures omit the retained admission charge. | 213.531 |
+| `migration-metadata-query-corrections109` | Both corrected cases pass. Capture retains one byte of execution headroom; definition drop releases the complete pool. | 1.235 |
+| `migration-limits-runtime108` | All 50 Runtime cases pass, including both transferred configuration cases. | 165.791 |
+| `migration-metadata-clippy109` | Connected targets and features pass with warnings denied. | 19.686 |
+| `migration-metadata-fmt109` | Workspace formatting passes. Retirement requires another fresh formatting command. | 4.659 |
+
+The corrected fixtures keep all no-publication, no-child-entry, exact-attempt,
+and full-release assertions. The earlier invalid SQL fixture returned a known
+joined failure; it was not unknown pending work. The current host fixture reaches
+the real BeforeResultCommit hook. The fixed row-limit test now requires an exact
+terminal code and rejects replay of its terminated ID without another capture.
+
+The [limits retirement record](../../recovery/araphor-analysis-limit-retirement-20261020.json)
+maps all original fields, derived contracts, and both embedded tests to Runtime.
+The complete 20-line production leaf is removed. Runtime retains the exact
+disabled defaults, configured values, round trip, and unknown-field rejection.
+Configured compiler memory and native resource limits remain explicitly
+Unsupported; serialization does not prove enforcement. There are now **83
+retired files and 125 unchanged files**. The recovery archive stays intact.
+Complete migration, the reduction target, and the final Rust gate remain
+**Not done**.
+
 ### Production code ledger
 
-The current count104 includes the reactive host, joined delivery, component
-admission, and the retired error leaf.
+The current count109 includes retained metadata, durable failure status, finite
+failure recording, and the retired limits leaf.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 15,053 | 8,480 | +6,573 |
-| Original reduction baseline `7b7b407a` | 42,957 | 30,388 | +12,569 |
+| `6a25ba1b` | 15,449 | 8,500 | +6,949 |
+| Original reduction baseline `7b7b407a` | 43,333 | 30,388 | +12,945 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -480,12 +539,17 @@ replacement adds 319 production lines and retires no additional reference
 file. Shared image ownership and error-origin corrections add 251 production
 lines and retire no reference file. The host, delivery, and component admission
 replacement adds 505 production lines. Error retirement removes 242. This
-delivery adds 263 net production lines. Another 18,569 net production lines must be removed relative to the
+delivery adds 263 net production lines. Retained metadata, failure status, and
+finite failure recording add 396 production lines. Limits retirement removes
+20. This delivery adds 376 net production lines. Another 18,945 net production lines must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count104.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count109.json`. Its selected source
 fingerprint is
+`8432347cc06447b4605b1726616e9a9c5c78439cb915e1e76800ff02cfd75b4d`.
+The earlier count104 records the reactive host and error retirement at +12,569
+production lines from the original baseline. Its fingerprint is
 `f613cab398713fef1b95dea59a3736d28efa6c43e1542e3fec052c4f6e6b6c41`.
 The earlier count97 records shared images and error origins at +12,306
 production lines from the original baseline. Its fingerprint is

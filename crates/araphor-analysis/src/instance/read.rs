@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use araphor_data::{
-    AnalysisReadControl, ManagedResult, PackageActionV1, PackageAuthorization,
+    AnalysisReadControl, ManagedResult, ManagedStatus, PackageActionV1, PackageAuthorization,
     PackageErrorCodeV1 as Code, PackageGrantV1,
 };
 use araphor_query::execution::{Engine, LocalOutput};
@@ -20,6 +20,28 @@ impl Drop for Inspection {
 }
 
 impl Instance {
+    pub async fn read_status(
+        query: Arc<Engine>,
+        authority: Arc<dyn PackageAuthorization>,
+        grant: PackageGrantV1,
+        instance: &str,
+        control: &AnalysisReadControl,
+    ) -> Result<ManagedStatus> {
+        Self::inspect(authority.as_ref(), &grant, control, |read| {
+            let store = Arc::clone(query.store());
+            let selection = grant.selection.clone();
+            let instance = instance.to_owned();
+            let control = Arc::clone(&read);
+            async move {
+                Ok(Engine::blocking(read, (), move || {
+                    Ok(store.managed_status(&selection, &instance, &control)?)
+                })
+                .await?)
+            }
+        })
+        .await
+    }
+
     pub async fn read_result(
         query: Arc<Engine>,
         authority: Arc<dyn PackageAuthorization>,

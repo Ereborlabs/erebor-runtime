@@ -209,15 +209,15 @@ async fn native_package_call_contract() -> TestResult {
     let fixture = Fixture::installed(&bundle)?;
     let definition = Fixture::definition();
     let prepared = fixture.prepare(&definition).await?;
-    assert_eq!(prepared.resolved.definition, definition);
-    assert_eq!(prepared.resolved.sql, definition.program.sql()?);
-    assert_eq!(prepared.resolved.images.len(), 1);
-    assert_eq!(prepared.resolved.images[0].image, bundle.root);
-    assert_eq!(prepared.resolved.images[0].digest, bundle.digest()?);
+    assert_eq!(prepared.resolved().definition, definition);
+    assert_eq!(prepared.resolved().sql, definition.program.sql()?);
+    assert_eq!(prepared.resolved().images.len(), 1);
+    assert_eq!(prepared.resolved().images[0].image, bundle.root);
+    assert_eq!(prepared.resolved().images[0].digest, bundle.digest()?);
     let calls = Fixture::calls(&prepared.plan)?;
     assert_eq!(calls.len(), 1);
     let call = &calls[0];
-    assert_eq!(call.image(), &prepared.resolved.images[0]);
+    assert_eq!(call.image(), &prepared.resolved().images[0]);
     assert_eq!(call.package(), &bundle.root);
     assert_eq!(call.export(), "count");
     assert_eq!(call.output(), "result");
@@ -378,7 +378,7 @@ async fn native_package_output_selection() -> TestResult {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].output(), output);
         assert_eq!(calls[0].schema().as_arrow(), &Fixture::schema("value"));
-        assert_eq!(prepared.resolved.sql, definition.program.sql()?);
+        assert_eq!(prepared.resolved().sql, definition.program.sql()?);
     }
     Ok(())
 }
@@ -424,7 +424,7 @@ async fn native_definition_sql_prql() -> TestResult {
         let mut definition = Fixture::definition();
         definition.program = program;
         let prepared = fixture.prepare(&definition).await?;
-        assert!(prepared.resolved.images.is_empty());
+        assert!(prepared.resolved().images.is_empty());
         assert!(Fixture::calls(&prepared.plan)?.is_empty());
         assert_eq!(prepared.plan.schema().fields().len(), 1);
         assert_eq!(prepared.plan.schema().field(0).name(), "source_cursor");
@@ -517,10 +517,10 @@ async fn native_definition_call_file() -> TestResult {
     std::fs::remove_file(&source)?;
     std::fs::remove_file(&path)?;
     let prepared = fixture.prepare(&captured).await?;
-    assert_eq!(prepared.resolved.definition, captured);
-    assert_eq!(prepared.resolved.images.len(), 1);
-    assert_eq!(prepared.resolved.images[0].image, bundle.root);
-    assert_eq!(prepared.resolved.images[0].digest, bundle.digest()?);
+    assert_eq!(prepared.resolved().definition, captured);
+    assert_eq!(prepared.resolved().images.len(), 1);
+    assert_eq!(prepared.resolved().images[0].image, bundle.root);
+    assert_eq!(prepared.resolved().images[0].digest, bundle.digest()?);
     let calls = Fixture::calls(&prepared.plan)?;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].output(), "result");
@@ -667,9 +667,9 @@ async fn native_package_locked_dependency() -> TestResult {
     let definition = Fixture::sql(r#"SELECT * FROM "consumer"."r1".count(increment => 2)"#);
     let fixture = Fixture::installed(&bundle)?;
     let prepared = fixture.prepare(&definition).await?;
-    assert_eq!(prepared.resolved.images.len(), 1);
-    assert_eq!(prepared.resolved.images[0].image, bundle.root);
-    assert_eq!(prepared.resolved.images[0].digest, bundle.digest()?);
+    assert_eq!(prepared.resolved().images.len(), 1);
+    assert_eq!(prepared.resolved().images[0].image, bundle.root);
+    assert_eq!(prepared.resolved().images[0].digest, bundle.digest()?);
     assert_eq!(prepared.plan.schema().as_arrow(), &Fixture::schema("value"));
     let model = &mut bundle.artifacts[0].descriptor.exports[0];
     model.input_mode = sdk::InputMode::Resolved;
@@ -1062,7 +1062,7 @@ async fn native_package_multiple_calls() -> TestResult {
         let prepared = fixture.prepare(&Fixture::sql(sql)).await?;
         let calls = Fixture::calls(&prepared.plan)?;
         assert_eq!(calls.len(), 2);
-        assert_eq!(prepared.resolved.images.len(), 1);
+        assert_eq!(prepared.resolved().images.len(), 1);
         let state = fixture
             .engine
             .catalog(crate::sources::SourceSnapshot::providers())?;
@@ -1343,7 +1343,7 @@ async fn native_package_body_optimization() -> TestResult {
             let body_calls = Fixture::calls(children[2])?;
             assert_eq!(body_calls.len(), 1);
             assert_eq!(body_calls[0].id(), nested.id());
-            assert_eq!(prepared.resolved.images[0].digest, bundle.digest()?);
+            assert_eq!(prepared.resolved().images[0].digest, bundle.digest()?);
         }
     }
     Ok(())
@@ -1377,10 +1377,10 @@ async fn unused_call_follows_native() -> TestResult {
         )))
         .await?;
     assert!(Fixture::calls(&prepared.plan)?.is_empty());
-    assert!(prepared.sources.contains_key("events"));
-    assert_eq!(prepared.resolved.images.len(), 1);
-    assert_eq!(prepared.resolved.images[0].image, bundle.root);
-    assert_eq!(prepared.resolved.images[0].digest, bundle.digest()?);
+    assert!(prepared.sources().contains_key("events"));
+    assert_eq!(prepared.resolved().images.len(), 1);
+    assert_eq!(prepared.resolved().images[0].image, bundle.root);
+    assert_eq!(prepared.resolved().images[0].digest, bundle.digest()?);
     fixture.event(1)?;
     let output = fixture
         .execute(&prepared, execution::invocation("unused-call"))
@@ -1420,8 +1420,8 @@ async fn native_package_prql_call() -> TestResult {
     } };
     let prepared = fixture.prepare(&definition).await?;
     assert_eq!(Fixture::calls(&prepared.plan)?.len(), 1);
-    assert_eq!(prepared.resolved.images[0].image, Fixture::bundle().root);
-    assert!(prepared.resolved.sql.contains(r#""fixture"."r1".count"#));
+    assert_eq!(prepared.resolved().images[0].image, Fixture::bundle().root);
+    assert!(prepared.resolved().sql.contains(r#""fixture"."r1".count"#));
     let output = fixture
         .execute(&prepared, execution::invocation("prql"))
         .await?;

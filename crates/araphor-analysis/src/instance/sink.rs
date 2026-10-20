@@ -8,7 +8,7 @@ use araphor_data::{
     AnalysisReadControl, ManagedAttempt, ManagedCommit, ManagedReceipt, ManagedReturn,
     PackageErrorCodeV1 as Code,
 };
-use araphor_query::definition::ExecutionReceipt;
+use araphor_query::definition::{ExecutionReceipt, PackageCall};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{DataFusionError, Result};
@@ -26,6 +26,7 @@ use super::Instance;
 pub(super) struct Step {
     pub(super) completed: u64,
     pub(super) attempt: Option<Arc<ManagedAttempt>>,
+    pub(super) publishing: bool,
     pub(super) receipt: Option<ManagedReceipt>,
 }
 
@@ -152,6 +153,12 @@ impl DataSink for Publication {
                 .owner
                 .calls
                 .get(id)
+                .and_then(|plan| match plan {
+                    datafusion::logical_expr::LogicalPlan::Extension(extension) => {
+                        extension.node.as_any().downcast_ref::<PackageCall>()
+                    }
+                    _ => None,
+                })
                 .is_none_or(|call| !returned.belongs_to(call))
             {
                 return Err(DataFusionError::External(Box::new(
@@ -199,6 +206,10 @@ impl DataSink for Publication {
                     .ok()
                     .and_then(|time| u64::try_from(time.as_nanos()).ok())
                     .ok_or_else(|| Code::Incomplete.error("managed publication time"))?;
+                state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .publishing = true;
                 Instance::authorize(
                     owner.authority.as_ref(),
                     &owner.admitted.spec.grant,

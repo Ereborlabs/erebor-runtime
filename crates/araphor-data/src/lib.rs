@@ -78,5 +78,5 @@ pub use analysis::{
     ManagedAttempt, ManagedCall, ManagedCapture, ManagedCommit, ManagedExit, ManagedFrontier,
     ManagedInstance, ManagedLease, ManagedManifest, ManagedPage, ManagedPrior, ManagedRead,
     ManagedReceipt, ManagedRequest, ManagedResult, ManagedResume, ManagedReturn, ManagedSelected,
-    ManagedSpec, ManagedTerminal,
+    ManagedSpec, ManagedStatus, ManagedTerminal,
 };

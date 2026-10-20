@@ -346,10 +346,9 @@ impl ManagedPublication for sink::Publication {
                 .error("managed subscription attempt completed")
                 .into());
         }
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .attempt = Some(Arc::new(attempt));
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.publishing = false;
+        state.attempt = Some(Arc::new(attempt));
         Ok(())
     }
 }

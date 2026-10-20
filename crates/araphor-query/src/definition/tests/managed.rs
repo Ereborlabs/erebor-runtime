@@ -16,7 +16,7 @@ impl Fixture {
     ) -> TestResult<ManagedInstance> {
         self.engine
             .store()
-            .admit_definition([1; 16], &definition.resolved, || Ok(()))?;
+            .admit_definition([1; 16], definition.resolved(), || Ok(()))?;
         Ok(self.engine.store().admit_managed(
             &ManagedSpec {
                 tenant: [1; 16],
@@ -28,11 +28,11 @@ impl Fixture {
                     expires_utc_ns: None,
                     authorization_id: Some("constant-grant".into()),
                 },
-                definition: definition.resolved.clone(),
+                definition: definition.resolved().clone(),
                 manifest: ManagedManifest {
                     format: 1,
                     planner: "datafusion-53/sql-call-1".into(),
-                    definition: definition.resolved.digest()?,
+                    definition: definition.resolved().digest()?,
                     calls: BTreeMap::new(),
                 },
             },
@@ -56,7 +56,10 @@ async fn constant_capture_keeps_state() -> TestResult {
     let definition = session
         .prepare_definition(&Fixture::sql("SELECT CAST(7 AS BIGINT UNSIGNED) AS value"))
         .await?;
-    assert!(definition.sources.is_empty());
+    let retained = session.memory().input_reserved();
+    assert!(retained > 0);
+    let available = CAPACITY.checked_sub(retained).ok_or("admitted metadata")?;
+    assert!(definition.sources().is_empty());
     let instance = fixture.managed(&definition, selection)?;
     let captured = session
         .capture_managed(
@@ -77,7 +80,7 @@ async fn constant_capture_keeps_state() -> TestResult {
     assert!(state.rebuild());
     assert!(state.datasets().next().is_none());
     assert!(captured.snapshot().results().next().is_none());
-    assert!(session.memory().reserve_input(CAPACITY).is_err());
+    assert!(session.memory().reserve_input(available).is_err());
     let result = captured.execute().await?;
     assert_eq!(
         result
@@ -104,7 +107,9 @@ async fn constant_capture_keeps_state() -> TestResult {
         .collect::<Vec<_>>();
     assert_eq!(values, [7]);
     drop(result);
-    let released = session.memory().reserve_input(CAPACITY)?;
+    assert_eq!(session.memory().input_reserved(), retained);
+    let released = session.memory().reserve_input(available)?;
+    assert!(session.memory().reserve_input(1).is_err());
     drop(released);
     let captured = session
         .capture_managed(
@@ -118,8 +123,11 @@ async fn constant_capture_keeps_state() -> TestResult {
         )
         .await?;
     captured.cancel_and_join().await?;
-    let released = session.memory().reserve_input(CAPACITY)?;
+    assert_eq!(session.memory().input_reserved(), retained);
+    let released = session.memory().reserve_input(available)?;
     drop(released);
+    drop(definition);
+    drop(session.memory().reserve_input(CAPACITY)?);
     Ok(())
 }
 

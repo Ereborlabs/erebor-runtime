@@ -423,10 +423,11 @@ async fn package_checkpoint_releases_capacity(
         changes: watch::channel(1_000_000_000).0,
         reads: AtomicUsize::new(0),
     });
+    let sources = prepared.sources().clone();
     let subscription = Subscription::new(
         session,
         Arc::new(prepared.plan),
-        prepared.sources,
+        sources,
         b"package delivery",
         None,
         clock,

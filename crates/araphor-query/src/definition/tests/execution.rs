@@ -38,7 +38,7 @@ async fn registered_arrow_package_inputs() -> TestResult {
                 source => (SELECT * FROM fixture_input), increment => 2)"#,
         ))
         .await?;
-    assert!(prepared.sources.is_empty());
+    assert!(prepared.sources().is_empty());
     let result = session
         .execute_definition(&prepared, invocation("fixture-input"))
         .await?;
@@ -493,7 +493,7 @@ async fn physical_nested_calls_share_permit() -> TestResult {
                 mode => 'sum-input', amount => 0)), increment => 2)"#,
     );
     let prepared = fixture.prepare(&definition).await?;
-    assert_eq!(prepared.resolved.images.len(), 2);
+    assert_eq!(prepared.resolved().images.len(), 2);
     let before = fixture.engine.store().meta()?;
     let output = fixture.execute(&prepared, invocation("nested")).await?;
     assert_eq!(values(&output.batches)?, [20]);
@@ -686,7 +686,7 @@ async fn physical_definition_denies_other_tenant() -> TestResult {
     let (snapshot, stream) = session
         .stream(
             &prepared.plan,
-            &prepared.sources,
+            prepared.sources(),
             crate::execution::Read::Snapshot,
         )
         .await?;
@@ -1096,7 +1096,7 @@ async fn physical_tight_output_capacity() -> TestResult {
             let (_snapshot, stream) = session
                 .stream(
                     &prepared.plan,
-                    &prepared.sources,
+                    prepared.sources(),
                     crate::execution::Read::Snapshot,
                 )
                 .await?;
@@ -1228,7 +1228,7 @@ async fn sql_body_scope() -> TestResult {
             r#"SELECT * FROM "fixture"."r1".count(increment => 2)"#,
         ))
         .await?;
-    assert!(prepared.sources.contains_key("events"));
+    assert!(prepared.sources().contains_key("events"));
     let id = Fixture::calls(&prepared.plan)?[0].id();
     let mut invocation = invocation("declared-body");
     invocation.checkpoints.insert(

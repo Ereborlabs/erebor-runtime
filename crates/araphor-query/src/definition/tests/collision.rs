@@ -199,7 +199,7 @@ async fn changed_child_rejected(slot: usize) -> TestResult {
             1 => session
                 .stream(
                     &prepared.plan,
-                    &prepared.sources,
+                    prepared.sources(),
                     crate::execution::Read::Snapshot,
                 )
                 .await
@@ -214,7 +214,7 @@ async fn changed_child_rejected(slot: usize) -> TestResult {
             _ => crate::follow::Subscription::new(
                 session.clone(),
                 Arc::new(prepared.plan.clone()),
-                prepared.sources.clone(),
+                prepared.sources().clone(),
                 b"altered call",
                 None,
                 Arc::new(crate::follow::SystemClock::default()),
@@ -341,7 +341,7 @@ async fn replaced_provider_requires_readmission() -> TestResult {
                 1 => session
                     .stream(
                         &prepared.plan,
-                        &prepared.sources,
+                        prepared.sources(),
                         crate::execution::Read::Snapshot,
                     )
                     .await
@@ -356,7 +356,7 @@ async fn replaced_provider_requires_readmission() -> TestResult {
                 _ => crate::follow::Subscription::new(
                     session.clone(),
                     Arc::new(prepared.plan.clone()),
-                    prepared.sources.clone(),
+                    prepared.sources().clone(),
                     b"provider replacement",
                     None,
                     Arc::new(crate::follow::SystemClock::default()),

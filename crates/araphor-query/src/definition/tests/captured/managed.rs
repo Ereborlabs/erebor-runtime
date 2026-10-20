@@ -318,7 +318,7 @@ async fn window_keeps_full_grant() -> TestResult {
 #[tokio::test]
 async fn capture_limits_precede_admission() -> TestResult {
     for configured in [true, false] {
-        let limits = if configured {
+        let mut limits = if configured {
             Limits {
                 input_bytes: 1,
                 ..Default::default()
@@ -329,7 +329,18 @@ async fn capture_limits_precede_admission() -> TestResult {
                 ..Default::default()
             }
         };
-        let fixture = Fixture::limits(limits)?;
+        let mut fixture = Fixture::new()?;
+        if !configured {
+            let admitted = fixture
+                .prepare(&Fixture::sql("SELECT source_cursor AS value FROM events"))
+                .await?;
+            let retained = fixture.engine.memory().input_reserved();
+            assert!(retained > 0);
+            limits.input_capacity = Some(retained.checked_add(1).ok_or("admission capacity")?);
+            drop(admitted);
+            assert_eq!(fixture.engine.memory().input_reserved(), 0);
+        }
+        fixture.engine = Engine::new(Arc::clone(fixture.engine.store()), limits)?;
         fixture.event(1)?;
         let state = Arc::new(SinkState::default());
         let (definition, target) = prepared(&fixture, &state).await?;
@@ -351,7 +362,8 @@ async fn capture_limits_precede_admission() -> TestResult {
         stream.cancel_and_join().await?;
         drop(fixture.engine.reserve_evaluation([1; 16])?);
         if !configured {
-            drop(fixture.engine.memory().reserve_input(1)?);
+            let capacity = fixture.engine.limits().input_capacity.ok_or("input pool")?;
+            drop(fixture.engine.memory().reserve_input(capacity)?);
         }
     }
     Ok(())

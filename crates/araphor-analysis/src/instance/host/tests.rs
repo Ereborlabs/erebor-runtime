@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
@@ -498,7 +498,21 @@ async fn host_replaces_one_lifecycle() -> TestResult {
 async fn host_preserves_pending() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
     fixture.context(1)?;
-    let pending = fixture.admit("pending-member", "SELECT CAST(CASE WHEN COUNT(*) = 0 THEN '0' ELSE 'wrong' END AS BIGINT UNSIGNED) AS value FROM context_versions").await?;
+    let pending = fixture
+        .admit(
+            "pending-member",
+            "SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) AS value FROM context_versions",
+        )
+        .await?;
+    let entered = Arc::new(AtomicBool::new(false));
+    let published = Arc::clone(&entered);
+    fixture.query.store().set_commit_hook(
+        araphor_data::AnalysisCommitStage::BeforeResultCommit,
+        move || {
+            published.store(true, Ordering::SeqCst);
+            Err(Code::Incomplete.error("pending publication fixture"))
+        },
+    )?;
     let request = araphor_data::ManagedRequest {
         id: "original-pending".into(),
         time_utc_ns: 10,
@@ -511,6 +525,7 @@ async fn host_preserves_pending() -> TestResult {
         .run(request.clone(), &AnalysisReadControl::default())
         .await
         .is_err());
+    assert!(entered.load(Ordering::SeqCst));
     let previous = fixture
         .query
         .store()

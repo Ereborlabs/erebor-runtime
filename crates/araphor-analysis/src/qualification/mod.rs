@@ -142,9 +142,9 @@ impl Qualification {
             }
             let definition = Self::definition(image, fixture, model)?;
             let prepared = session.prepare_definition(&definition).await?;
-            if prepared.resolved.images.len() != 1
-                || prepared.resolved.images[0].image != *image
-                || prepared.resolved.images[0].digest != retained.digest()
+            if prepared.resolved().images.len() != 1
+                || prepared.resolved().images[0].image != *image
+                || prepared.resolved().images[0].digest != retained.digest()
             {
                 return Err(Code::Denied.error("fixture image pin").into());
             }

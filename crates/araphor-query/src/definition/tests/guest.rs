@@ -567,13 +567,9 @@ async fn subscription_cancel_joins_worker() -> TestResult {
             &AnalysisReadControl::default(),
             123,
         )?;
-        let PreparedDefinition {
-            plan,
-            sources,
-            images,
-            ..
-        } = prepared;
-        drop(images);
+        let sources = prepared.sources().clone();
+        let PreparedDefinition { plan, admission } = prepared;
+        drop(admission);
         let mut stream = session.subscribe(plan, sources, b"join worker", true)?;
         tokio::select! {
             result = entered(observed) => result?,
@@ -610,13 +606,9 @@ async fn subscription_cancel_joins_worker() -> TestResult {
                 &AnalysisReadControl::default(),
                 123,
             )?;
-            let PreparedDefinition {
-                plan,
-                sources,
-                images,
-                ..
-            } = prepared;
-            drop(images);
+            let sources = prepared.sources().clone();
+            let PreparedDefinition { plan, admission } = prepared;
+            drop(admission);
             let mut stream = session.subscribe(plan, sources, b"retained output", true)?;
             let update = tokio::time::timeout(Duration::from_secs(30), stream.next())
                 .await?
@@ -679,13 +671,9 @@ async fn subscription_revocation_joins_guest() -> TestResult {
         123,
     )?;
     let (authority, changes) = tokio::sync::watch::channel(0u64);
-    let PreparedDefinition {
-        plan,
-        sources,
-        images,
-        ..
-    } = prepared;
-    drop(images);
+    let sources = prepared.sources().clone();
+    let PreparedDefinition { plan, admission } = prepared;
+    drop(admission);
     let mut stream = session
         .subscribe(plan, sources, b"join revoked", true)?
         .until_change(changes);
@@ -751,7 +739,10 @@ async fn subscription_cancel_joins_capture() -> TestResult {
     let session = fixture
         .engine
         .session(AnalysisSelectionV1::tenant([1; 16]), &control, 123)?;
-    let mut stream = session.subscribe(prepared.plan, prepared.sources, b"join capture", true)?;
+    let sources = prepared.sources().clone();
+    let PreparedDefinition { plan, admission } = prepared;
+    drop(admission);
+    let mut stream = session.subscribe(plan, sources, b"join capture", true)?;
     tokio::select! {
         result = entered(observed) => result?,
         result = stream.next() => return Err(format!("capture did not enter: {result:?}").into()),

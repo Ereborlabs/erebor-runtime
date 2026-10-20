@@ -50,7 +50,7 @@ impl Subscription {
         Self::open(
             session,
             Arc::new(plan),
-            definition.sources.clone(),
+            definition.sources().clone(),
             binding,
             cursor,
             clock,

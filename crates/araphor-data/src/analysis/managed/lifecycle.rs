@@ -87,9 +87,17 @@ impl AnalysisStore {
             return Ok(instance);
         }
         let revision = self.package_next(&transaction)?;
+        let failure = captured
+            .map(|_| super::status::Failure {
+                code: Code::Denied,
+                progress: instance.progress,
+                revision,
+            })
+            .map(|failure| serde_json::to_vec(&failure).context(crate::PackageEncodingSnafu))
+            .transpose()?;
         let changed = transaction.execute(
-            "UPDATE managed_instances SET running = ?, lifecycle = ? WHERE tenant_id = ? AND instance_id = ? AND lifecycle = ?",
-            params![running, revision, tenant.as_slice(), id, expected],
+            "UPDATE managed_instances SET running = ?, lifecycle = ?, failure = CASE WHEN ? THEN ? ELSE failure END WHERE tenant_id = ? AND instance_id = ? AND lifecycle = ?",
+            params![running, revision, captured.is_some(), failure, tenant.as_slice(), id, expected],
         ).context(AnalysisDatabaseSnafu { operation: "change managed running state" })?;
         if changed != 1 {
             return crate::AnalysisConflictSnafu.fail();

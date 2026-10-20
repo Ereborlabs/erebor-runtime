@@ -7,6 +7,7 @@ use araphor_discovery_definition::{Definition, ResolvedDefinition};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::catalog::TableProvider as _;
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::logical_expr::LogicalPlan;
 use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
@@ -27,16 +28,58 @@ pub use physical::{CallResult, ExecutionReceipt, Invocation};
 
 #[derive(Clone)]
 pub struct PreparedDefinition {
-    pub resolved: ResolvedDefinition,
     pub plan: LogicalPlan,
-    pub sources: AnalysisTableRequests,
+    admission: Arc<DefinitionAdmission>,
+}
+
+struct DefinitionAdmission {
+    resolved: ResolvedDefinition,
+    sources: AnalysisTableRequests,
     tenant: [u8; 16],
     images: Arc<package::Bundles>,
+    _memory: MemoryReservation,
+}
+
+impl DefinitionAdmission {
+    fn allocation_bytes(
+        resolved: &ResolvedDefinition,
+        sources: &AnalysisTableRequests,
+    ) -> Result<usize> {
+        let bytes = resolved
+            .allocation_bytes()
+            .and_then(|bytes| bytes.checked_sub(std::mem::size_of::<ResolvedDefinition>()))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()));
+        bytes
+            .and_then(|bytes| {
+                sources.iter().try_fold(bytes, |bytes, (name, columns)| {
+                    bytes
+                        .checked_add(std::mem::size_of::<(String, Option<BTreeSet<usize>>)>())?
+                        .checked_add(name.capacity())?
+                        .checked_add(columns.as_ref().map_or(Some(0), |columns| {
+                            columns.len().checked_mul(std::mem::size_of::<usize>())
+                        })?)
+                })
+            })
+            .ok_or_else(|| {
+                PackageErrorCodeV1::Limit
+                    .error("definition metadata memory")
+                    .into()
+            })
+    }
 }
 
 impl PreparedDefinition {
+    pub fn resolved(&self) -> &ResolvedDefinition {
+        &self.admission.resolved
+    }
+
+    pub fn sources(&self) -> &AnalysisTableRequests {
+        &self.admission.sources
+    }
+
     pub fn images(&self) -> impl Iterator<Item = (&araphor_package::PackageBundleV1, &str)> {
-        self.images
+        self.admission
+            .images
             .iter()
             .map(|(bundle, digest, _)| (bundle.as_ref(), digest.as_str()))
     }
@@ -184,7 +227,8 @@ impl Engine {
         Ok(self
             .prepare_definition(tenant, &definition, control)
             .await?
-            .resolved)
+            .resolved()
+            .clone())
     }
 
     pub async fn prepare_definition(
@@ -218,7 +262,16 @@ impl Engine {
             .program
             .sql()
             .map_err(araphor_data::Error::from)?;
-        let statement = self.limits().parser.parse(&sql)?;
+        let mut resolved = ResolvedDefinition::new(definition.clone(), sql, Vec::new())
+            .map_err(araphor_data::Error::from)?;
+        let memory = self
+            .memory()
+            .reserve_input(DefinitionAdmission::allocation_bytes(
+                &resolved,
+                &AnalysisTableRequests::new(),
+            )?)
+            .context(SqlSnafu)?;
+        let statement = self.limits().parser.parse(&resolved.sql)?;
         let references = package::Packages::references(&statement)?;
         let bundles = if references.is_empty() {
             Vec::new()
@@ -265,7 +318,10 @@ impl Engine {
             .into_iter()
             .filter_map(|source| source.durable().map(|name| (name.to_owned(), None)))
             .collect();
-        let images = packages.pins()?;
+        resolved.images = packages.pins()?;
+        memory
+            .try_resize(DefinitionAdmission::allocation_bytes(&resolved, &sources)?)
+            .context(SqlSnafu)?;
         let validation = state.optimize(&plan).context(SqlSnafu)?;
         state
             .query_planner()
@@ -274,12 +330,14 @@ impl Engine {
             .context(SqlSnafu)?;
         control.check()?;
         Ok(PreparedDefinition {
-            resolved: ResolvedDefinition::new(definition.clone(), sql, images)
-                .map_err(araphor_data::Error::from)?,
             plan,
-            sources,
-            tenant,
-            images: Arc::clone(&packages.bundles),
+            admission: Arc::new(DefinitionAdmission {
+                resolved,
+                sources,
+                tenant,
+                images: Arc::clone(&packages.bundles),
+                _memory: memory,
+            }),
         })
     }
 }
@@ -352,7 +410,7 @@ impl Session {
                 session
                     .capture_plan(
                         &definition.plan,
-                        &definition.sources,
+                        definition.sources(),
                         Read::Snapshot,
                         permit,
                     )
@@ -397,7 +455,7 @@ impl PreparedDefinition {
         invocation: &Invocation,
         managed: Option<&araphor_data::ManagedRead>,
     ) -> Result<()> {
-        if self.tenant != selection.tenant_id {
+        if self.admission.tenant != selection.tenant_id {
             return Err(PackageErrorCodeV1::Denied
                 .error("definition execution tenant")
                 .into());
@@ -417,7 +475,7 @@ impl PreparedDefinition {
             let spec = &managed.instance.spec;
             if spec.tenant != selection.tenant_id
                 || spec.grant.selection != *selection
-                || spec.definition != self.resolved
+                || spec.definition != *self.resolved()
             {
                 return Err(PackageErrorCodeV1::Denied
                     .error("managed invocation scope")

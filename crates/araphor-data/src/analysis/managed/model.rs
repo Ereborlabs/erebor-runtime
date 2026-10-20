@@ -64,6 +64,59 @@ pub struct ManagedSpec {
 }
 
 impl ManagedSpec {
+    pub fn allocation_bytes(&self) -> Option<usize> {
+        let bytes = std::mem::size_of::<Self>()
+            .checked_add(self.id.capacity())?
+            .checked_add(self.grant.principal.capacity())?
+            .checked_add(
+                self.grant
+                    .authorization_id
+                    .as_ref()
+                    .map_or(0, String::capacity),
+            )?
+            .checked_add(
+                self.grant
+                    .selection
+                    .allocation_bytes()
+                    .checked_sub(std::mem::size_of::<crate::AnalysisSelectionV1>())?,
+            )?
+            .checked_add(
+                self.definition
+                    .allocation_bytes()?
+                    .checked_sub(std::mem::size_of::<ResolvedDefinition>())?,
+            )?
+            .checked_add(self.manifest.planner.capacity())?
+            .checked_add(self.manifest.definition.capacity())?;
+        self.manifest.calls.values().try_fold(bytes, |bytes, call| {
+            let bytes = bytes
+                .checked_add(std::mem::size_of::<(u64, ManagedCall)>())?
+                .checked_add(call.image.image.package_id.capacity())?
+                .checked_add(call.image.image.revision.capacity())?
+                .checked_add(call.image.digest.capacity())?
+                .checked_add(call.package.package_id.capacity())?
+                .checked_add(call.package.revision.capacity())?
+                .checked_add(call.export.capacity())?
+                .checked_add(call.target.capacity())?
+                .checked_add(call.artifact.as_ref().map_or(
+                    0,
+                    araphor_package::PackageArtifactIdentityV1::allocated_bytes,
+                ))?
+                .checked_add(
+                    call.dependencies
+                        .len()
+                        .checked_mul(std::mem::size_of::<u64>())?,
+                )?
+                .checked_add(
+                    call.arguments
+                        .capacity()
+                        .checked_mul(std::mem::size_of::<String>())?,
+                )?;
+            call.arguments
+                .iter()
+                .try_fold(bytes, |bytes, value| bytes.checked_add(value.capacity()))
+        })
+    }
+
     pub(super) fn validate(&self) -> Result<()> {
         if self.tenant == [0; 16]
             || self.id.is_empty()
@@ -94,6 +147,13 @@ pub struct ManagedInstance {
     pub progress: u64,
     pub running: bool,
     pub lifecycle: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ManagedStatus {
+    pub instance: ManagedInstance,
+    pub readiness: crate::PackageReadinessV1,
+    pub status_progress: u64,
 }
 
 #[derive(Clone, Debug)]

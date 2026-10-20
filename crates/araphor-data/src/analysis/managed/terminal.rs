@@ -56,10 +56,22 @@ impl AnalysisStore {
             return crate::AnalysisConflictSnafu.fail();
         }
         let revision = self.package_next(&transaction)?;
-        let suspended = exit == ManagedExit::Failed(Code::Denied)
-            && instance.running
-            && instance.lifecycle == attempt.capture.lifecycle
-            && instance.progress == attempt.capture.progress;
+        let failure = match exit {
+            ManagedExit::Failed(code)
+                if instance.running == attempt.capture.running
+                    && instance.lifecycle == attempt.capture.lifecycle
+                    && instance.progress == attempt.capture.progress =>
+            {
+                Some(super::status::Failure {
+                    code,
+                    progress: instance.progress,
+                    revision,
+                })
+            }
+            _ => None,
+        };
+        let suspended =
+            exit == ManagedExit::Failed(Code::Denied) && instance.running && failure.is_some();
         let terminal = ManagedTerminal {
             instance: spec.id.clone(),
             attempt: attempt.request.id.clone(),
@@ -76,11 +88,11 @@ impl AnalysisStore {
         if changed != 1 {
             return crate::AnalysisConflictSnafu.fail();
         }
-        if suspended {
+        if let Some(failure) = &failure {
             let changed = transaction.execute(
-                "UPDATE managed_instances SET running = false, lifecycle = ? WHERE tenant_id = ? AND instance_id = ? AND lifecycle = ? AND progress = ? AND running",
-                params![revision, spec.tenant.as_slice(), spec.id, instance.lifecycle, instance.progress],
-            ).context(AnalysisDatabaseSnafu { operation: "suspend denied managed instance" })?;
+                "UPDATE managed_instances SET failure = ?, running = CASE WHEN ? THEN false ELSE running END, lifecycle = CASE WHEN ? THEN ? ELSE lifecycle END WHERE tenant_id = ? AND instance_id = ? AND generation = ? AND lifecycle = ? AND progress = ? AND running = ?",
+                params![serde_json::to_vec(failure).context(crate::PackageEncodingSnafu)?, suspended, suspended, revision, spec.tenant.as_slice(), spec.id, instance.generation, instance.lifecycle, instance.progress, instance.running],
+            ).context(AnalysisDatabaseSnafu { operation: "record managed failure" })?;
             if changed != 1 {
                 return crate::AnalysisConflictSnafu.fail();
             }
@@ -89,7 +101,7 @@ impl AnalysisStore {
         Self::record_revision(
             &transaction,
             revision,
-            if suspended {
+            if failure.is_some() {
                 &["managed_attempts", "managed_instances"]
             } else {
                 &["managed_attempts"]

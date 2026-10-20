@@ -59,7 +59,8 @@ Fifteen more retained-query, authority, Wasm, and finite notification test
 leaves are removed after 89 focused checks pass. Two image/fixture leaves then
 retire after exact replacement tests pass. The complete error leaf then
 retires after typed error and joined execution checks pass. There are now
-82 retired files; 126 baseline files remain unchanged.
+83 retired files; 125 baseline files remain unchanged. Runtime now owns the
+complete limits configuration and both original serialization tests.
 The recovery archive
 retains all 208 originals. Read the
 [retirement record](araphor-analysis-migration.md#retired-finite-reference-files)

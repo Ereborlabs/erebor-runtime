@@ -89,7 +89,8 @@ focused replacement checks pass. Fifteen more retained-query, authority, Wasm,
 and finite notification test leaves are removed after 89 checks pass.
 Two more complete image/fixture leaves are removed after their replacements
 pass. The complete error leaf then retires after exact replacement checks.
-There are now 82 retired files; 126 remain unchanged. The recovery
+The limits leaf also retires after Runtime preserves its complete configuration
+contract. There are now 83 retired files; 125 remain unchanged. The recovery
 archive retains all 208 originals.
 The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish
@@ -215,9 +216,11 @@ Held authority callbacks and guests preserve actual joins. Component admission
 keeps the original capture, attempt, and frontier. The
 [host result](araphor-analysis-migration.md#reactive-host-joined-delivery-and-component-admission)
 records all 54 Instance cases and 130 selected Query cases across ordinary
-and corrected native commands. Public lifecycle integration, durable idle
-failure status, retained metadata capacity, and the complete final Rust gate
-remain **Not done**.
+and corrected native commands. Retained admission metadata, durable failure
+status, fresh Inspect status, and finite known failure recording now pass
+[focused checks](araphor-analysis-migration.md#retained-metadata-and-durable-failure-status).
+Public lifecycle integration, projected host metadata, general pressure retry,
+and the complete final Rust gate remain **Not done**.
 
 ### Approved YAML authoring design
 

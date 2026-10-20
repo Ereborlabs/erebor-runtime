@@ -5,6 +5,7 @@ mod model;
 mod read;
 mod schema;
 mod selected;
+mod status;
 
 pub use lifecycle::ManagedLease;
 pub use model::*;

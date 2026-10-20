@@ -7,10 +7,11 @@ use araphor_data::{
     PackageGrantV1,
 };
 use araphor_discovery_definition::ResolvedDefinition;
-use araphor_query::definition::{Invocation, PackageCall, PreparedDefinition};
+use araphor_query::definition::{Invocation, PreparedDefinition};
 use araphor_query::execution::Engine;
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::{dml::InsertOp, LogicalPlanBuilder};
+use datafusion::execution::memory_pool::MemoryReservation;
+use datafusion::logical_expr::{dml::InsertOp, LogicalPlan, LogicalPlanBuilder};
 
 use crate::Result;
 
@@ -31,7 +32,8 @@ pub struct Instance {
     authority: Arc<dyn PackageAuthorization>,
     admitted: ManagedInstance,
     prepared: PreparedDefinition,
-    calls: BTreeMap<u64, PackageCall>,
+    calls: BTreeMap<u64, LogicalPlan>,
+    _metadata: MemoryReservation,
 }
 
 impl Instance {
@@ -61,13 +63,14 @@ impl Instance {
                 Arc::new(control.within(grant.remaining()?)?),
             )
             .await?;
-        if prepared.resolved != definition {
+        if *prepared.resolved() != definition {
             return Err(Code::Conflict.error("managed definition pin").into());
         }
         let store = Arc::clone(query.store());
         let check = Arc::clone(&authority);
         let stage = Arc::clone(&read);
-        let (admitted, prepared, calls) = Engine::blocking(read, (), move || {
+        let memory = Arc::clone(query.memory());
+        let (admitted, prepared, calls, metadata) = Engine::blocking(read, (), move || {
             for (bundle, digest) in prepared.images() {
                 check.admit(&grant, &PackageBundleRef::retained(bundle, digest))?;
             }
@@ -79,11 +82,26 @@ impl Instance {
                 definition,
                 manifest,
             };
-            let admitted = Self::authorize(check.as_ref(), &spec.grant, &prepared, || {
+            let bytes = spec
+                .allocation_bytes()
+                .and_then(|bytes| bytes.checked_sub(std::mem::size_of::<ManagedSpec>()))
+                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+                .and_then(|bytes| {
+                    calls
+                        .len()
+                        .checked_mul(std::mem::size_of::<(u64, LogicalPlan)>())
+                        .and_then(|slots| bytes.checked_add(slots))
+                })
+                .ok_or_else(|| Code::Limit.error("managed instance memory"))?;
+            let metadata = memory
+                .reserve_input(bytes)
+                .map_err(|source| araphor_query::Error::Sql { source })?;
+            let mut admitted = Self::authorize(check.as_ref(), &spec.grant, &prepared, || {
                 store.admit_managed(&spec, || stage.check())
             })
             .map_err(araphor_query::Error::from)?;
-            Ok((admitted, prepared, calls))
+            admitted.spec = spec;
+            Ok((admitted, prepared, calls, metadata))
         })
         .await?;
         Ok(Arc::new(Self {
@@ -92,6 +110,7 @@ impl Instance {
             admitted,
             prepared,
             calls,
+            _metadata: metadata,
         }))
     }
 
@@ -257,7 +276,29 @@ impl Instance {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .attempt = Some(Arc::new(attempt));
-        captured.execute().await?;
+        if let Err(error) = captured.execute().await {
+            let busy = araphor_query::Failure::from(&error) == araphor_query::Failure::Busy;
+            let error = crate::Error::from(error);
+            if !busy && control.check().is_ok() {
+                let attempt = {
+                    let state = state.lock().unwrap_or_else(|error| error.into_inner());
+                    (!state.publishing).then(|| state.attempt.clone()).flatten()
+                };
+                if let Some(attempt) = attempt {
+                    let exit = Subscription::failure(&error);
+                    let read = Arc::new(control.within(None)?);
+                    let stage = Arc::clone(&read);
+                    let store = Arc::clone(self.query.store());
+                    let _terminal = Engine::blocking(read, (), move || {
+                        store
+                            .finish_managed(&attempt, exit, || stage.check())
+                            .map_err(Into::into)
+                    })
+                    .await?;
+                }
+            }
+            return Err(error);
+        }
         let receipt = state
             .lock()
             .unwrap_or_else(|error| error.into_inner())

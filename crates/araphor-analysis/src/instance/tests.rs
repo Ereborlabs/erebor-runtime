@@ -10,11 +10,13 @@ use araphor_package::{
     PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
     SqlReasonV1,
 };
+use araphor_query::definition::PackageCall;
 use erebor_runtime_error::ErrorExt as _;
 use sdk::arrow_array::{Array as _, UInt64Array};
 
 use super::*;
 
+mod finite;
 mod history;
 
 pub(super) type TestResult<T = ()> =
@@ -521,10 +523,15 @@ async fn selected_pressure_keeps_progress() -> TestResult {
         ..Default::default()
     })?;
     let instance = fixture.admit("pressure", "SELECT CAST(1 AS BIGINT UNSIGNED) AS value UNION ALL SELECT CAST(2 AS BIGINT UNSIGNED) AS value").await?;
-    assert!(instance
+    let error = instance
         .run(request("too-many"), &AnalysisReadControl::default())
         .await
-        .is_err());
+        .err()
+        .ok_or("fixed row limit published")?;
+    assert_eq!(
+        Subscription::failure(&error),
+        araphor_data::ManagedExit::Failed(Code::Limit)
+    );
     assert_eq!(fixture.progress("pressure")?, 0);
     let attempt = fixture
         .query
@@ -537,14 +544,39 @@ async fn selected_pressure_keeps_progress() -> TestResult {
         )?
         .ok_or("registered attempt")?;
     assert!(attempt.receipt().is_none());
+    assert_eq!(
+        attempt.terminal().ok_or("known row limit terminal")?.exit,
+        araphor_data::ManagedExit::Failed(Code::Limit)
+    );
+    assert!(fixture
+        .query
+        .store()
+        .managed_selected(
+            [1; 16],
+            "pressure",
+            "too-many",
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+    let before = fixture.query.store().meta()?;
     let read = AnalysisReadControl::default();
-    read.on_read_step(|| Err(Code::Invalid.error("pending retry recaptured")))?;
+    read.on_read_step(|| Err(Code::Invalid.error("terminated retry recaptured")))?;
     let error = instance
         .run(request("too-many"), &read)
         .await
         .err()
-        .ok_or("pending retry executed")?;
-    assert!(format!("{error:?}").contains("managed pending attempt"));
+        .ok_or("terminated retry executed")?;
+    assert!(matches!(
+        error,
+        crate::Error::Data {
+            source: araphor_data::Error::Package {
+                code: Code::Conflict,
+                field: "managed attempt terminated",
+                ..
+            }
+        }
+    ));
+    assert_eq!(fixture.query.store().meta()?, before);
     Ok(())
 }
 
@@ -1182,74 +1214,6 @@ async fn sql_frontier_survives_reopen() -> TestResult {
 }
 
 #[tokio::test]
-async fn failed_step_blocks_restart() -> TestResult {
-    let fixture = Fixture::new(Default::default())?;
-    let mut image = bundle("wasm")?;
-    let model = &mut image.artifacts[0].descriptor.exports[0];
-    model.name = "evaluate".into();
-    model.inputs.clear();
-    model.checkpoint = None;
-    model.parameters = sdk::Schema::new(vec![
-        sdk::Field::new("mode", sdk::DataType::Utf8, false),
-        sdk::Field::new("amount", sdk::DataType::UInt64, false),
-    ]);
-    let PackageImplementationV1::Wasm { exports, .. } = &mut image.artifacts[0].implementations[0]
-    else {
-        return Err("Wasm pending fixture absent".into());
-    };
-    *exports = vec!["evaluate".into()];
-    fixture.install(&image)?;
-    let instance = fixture
-        .admit(
-            "durable-pending",
-            r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'trap', amount => 0)"#,
-        )
-        .await?;
-    assert!(instance
-        .run(
-            request("entered-and-failed"),
-            &AnalysisReadControl::default()
-        )
-        .await
-        .is_err());
-    assert!(fixture
-        .query
-        .store()
-        .managed_attempt(
-            [1; 16],
-            "durable-pending",
-            "entered-and-failed",
-            &AnalysisReadControl::default()
-        )?
-        .ok_or("failed attempt")?
-        .receipt()
-        .is_none());
-    let lifecycle = fixture.start(&instance)?;
-    let before = fixture.query.store().meta()?;
-    let error = instance
-        .subscribe(
-            Arc::new(AnalysisReadControl::default()),
-            u64::MAX,
-            lifecycle,
-        )
-        .err()
-        .ok_or("pending work silently reopened")?;
-    assert!(matches!(
-        error,
-        crate::Error::Data {
-            source: araphor_data::Error::Package {
-                code: Code::Incomplete,
-                field: "managed pending attempt",
-                ..
-            }
-        }
-    ));
-    assert_eq!(fixture.query.store().meta()?, before);
-    assert_eq!(fixture.progress("durable-pending")?, 0);
-    Ok(())
-}
-
-#[tokio::test]
 async fn stream_keeps_selected_lifecycle() -> TestResult {
     use futures_util::StreamExt as _;
 
@@ -1412,11 +1376,29 @@ async fn instance_shares_admitted_images() -> TestResult {
     let images = instance.prepared.images().collect::<Vec<_>>();
     assert_eq!(images.len(), 1);
     assert_eq!(instance.calls.len(), 1);
-    let call = instance.calls.values().next().ok_or("call absent")?;
+    let node = instance.calls.values().next().ok_or("call absent")?;
+    let LogicalPlan::Extension(extension) = node else {
+        return Err("native call node absent".into());
+    };
+    let call = extension
+        .node
+        .as_any()
+        .downcast_ref::<PackageCall>()
+        .ok_or("package call absent")?;
     assert!(std::ptr::eq(
         call.descriptor(),
         &images[0].0.artifacts[0].descriptor
     ));
+    assert!(PackageCall::any(
+        &instance.prepared.plan,
+        &mut |original| {
+            if original.id() == call.id() {
+                assert!(std::ptr::eq(original, call));
+                return Ok(true);
+            }
+            Ok(false)
+        }
+    )?);
     let retained = fixture.query.memory().input_reserved();
     assert!(retained > 0 && retained < CAPACITY);
     let pressure = fixture
@@ -1604,5 +1586,87 @@ async fn subscription_keeps_selected_progress() -> TestResult {
     assert_eq!(fixture.selected("sealed-progress", &first.attempt)?, [10]);
     assert_eq!(fixture.selected("sealed-progress", &second.attempt)?, [10]);
     drop(fixture.query.reserve_evaluation([1; 16])?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn instance_metadata_keeps_capacity() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    let mut definition = Fixture::definition("SELECT CAST(7 AS BIGINT UNSIGNED) AS value");
+    definition.description = "retained metadata".repeat(4096);
+    let definition = fixture
+        .query
+        .admit_definition(
+            [1; 16],
+            definition,
+            Arc::new(AnalysisReadControl::default()),
+        )
+        .await?;
+    fixture
+        .query
+        .store()
+        .admit_definition([1; 16], &definition, || Ok(()))?;
+    let instance = Instance::admit(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        fixture.grant.clone(),
+        "metadata-first".into(),
+        definition.clone(),
+        &AnalysisReadControl::default(),
+    )
+    .await?;
+    assert!(instance.calls.is_empty());
+    assert_eq!(instance.prepared.images().count(), 0);
+    let retained = fixture.query.memory().input_reserved();
+    assert!(retained > definition.definition.description.len() * 2);
+    assert!(
+        instance._metadata.size()
+            >= instance
+                .admitted
+                .spec
+                .allocation_bytes()
+                .ok_or("metadata size")?
+    );
+    let copy = Arc::clone(&instance);
+    assert_eq!(fixture.query.memory().input_reserved(), retained);
+    drop(instance);
+    assert_eq!(fixture.query.memory().input_reserved(), retained);
+    drop(copy);
+    assert_eq!(fixture.query.memory().input_reserved(), 0);
+    let capacity = retained.checked_sub(1).ok_or("metadata capacity")?;
+    let query = Engine::new(
+        Arc::clone(fixture.query.store()),
+        araphor_query::execution::Limits {
+            input_capacity: Some(capacity),
+            ..Default::default()
+        },
+    )?;
+    let before = query.store().meta()?;
+    let error = Instance::admit(
+        Arc::clone(&query),
+        fixture.authority.clone(),
+        fixture.grant.clone(),
+        "metadata-short".into(),
+        definition,
+        &AnalysisReadControl::default(),
+    )
+    .await
+    .err()
+    .ok_or("one-byte-short metadata admitted")?;
+    let crate::Error::Query { source } = error else {
+        return Err(format!("metadata quota lost Query owner: {error:?}").into());
+    };
+    assert_eq!(
+        araphor_query::Failure::from(&source),
+        araphor_query::Failure::Busy,
+        "{source:?}"
+    );
+    assert_eq!(query.store().meta()?, before);
+    assert!(query
+        .store()
+        .managed_instance([1; 16], "metadata-short", &AnalysisReadControl::default())?
+        .is_none());
+    assert_eq!(query.memory().input_reserved(), 0);
+    drop(query.memory().reserve_input(capacity)?);
     Ok(())
 }

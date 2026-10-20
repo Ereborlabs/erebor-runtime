@@ -2,6 +2,8 @@ use std::sync::atomic::AtomicUsize;
 
 use super::*;
 
+mod status;
+
 struct Reader {
     grant: PackageGrantV1,
     allowed: AtomicBool,

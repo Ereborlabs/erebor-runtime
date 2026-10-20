@@ -193,7 +193,7 @@ async fn captures_inputs(target: &str) -> TestResult {
         .collect::<Vec<_>>();
     revisions.sort_unstable();
     assert_eq!(revisions, [1, 7], "{target}");
-    assert!(prepared.sources.contains_key("context_versions"));
+    assert!(prepared.sources().contains_key("context_versions"));
     assert_eq!(
         update.snapshot.page.extraction.meta.commit_revision,
         initial.commit_revision
@@ -211,13 +211,13 @@ async fn captures_inputs(target: &str) -> TestResult {
     assert!(contexts
         .iter()
         .any(|reference| **reference == package.context));
-    assert_eq!(prepared.resolved.images[0].image, package.bundle.root);
-    assert_eq!(prepared.resolved.images[0].digest, package.digest);
-    let digest = prepared.resolved.digest()?;
+    assert_eq!(prepared.resolved().images[0].image, package.bundle.root);
+    assert_eq!(prepared.resolved().images[0].digest, package.digest);
+    let digest = prepared.resolved().digest()?;
     assert_eq!(
         package.query.store().definition(
             [1; 16],
-            &prepared.resolved.definition.name,
+            &prepared.resolved().definition.name,
             Some(&digest),
             &AnalysisReadControl::default()
         )?,

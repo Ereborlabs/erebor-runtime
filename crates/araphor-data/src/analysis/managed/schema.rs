@@ -11,7 +11,7 @@ impl AnalysisStore {
         CREATE TABLE managed_instances (
             tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL, spec BLOB NOT NULL,
             generation UBIGINT NOT NULL, progress UBIGINT NOT NULL,
-            running BOOLEAN NOT NULL, lifecycle UBIGINT NOT NULL,
+            running BOOLEAN NOT NULL, lifecycle UBIGINT NOT NULL, failure BLOB,
             PRIMARY KEY (tenant_id, instance_id)
         );
         CREATE TABLE managed_calls (
@@ -36,7 +36,8 @@ impl AnalysisStore {
         );";
 
     pub(in crate::analysis) const MANAGED_CHARGES: &'static str = "
-        SELECT tenant_id, 256 + octet_length(encode(instance_id)) + octet_length(spec) AS bytes
+        SELECT tenant_id, 256 + octet_length(encode(instance_id)) + octet_length(spec)
+            + COALESCE(octet_length(failure), 0) AS bytes
             FROM managed_instances
         UNION ALL SELECT tenant_id, 256 + octet_length(encode(instance_id))
             + COALESCE(octet_length(encode(result_id)), 0) FROM managed_calls
@@ -52,6 +53,7 @@ impl AnalysisStore {
         let meta = Self::read_meta_from(reader, &root.join("analysis.duckdb"))?;
         let mut progress = std::collections::BTreeMap::new();
         let mut heads = std::collections::BTreeMap::new();
+        let mut failures = std::collections::BTreeMap::new();
         let head: u64 = reader
             .query_row("SELECT commit_revision FROM store_meta", [], |row| {
                 row.get(0)
@@ -93,6 +95,10 @@ impl AnalysisStore {
                 return Self::reject_path(root, "the managed generation is invalid");
             }
             Self::check_managed_images(reader, &instance.spec)?;
+            failures.insert(
+                (tenant, id.clone()),
+                Self::validate_managed_failure(reader, &instance)?,
+            );
             progress.insert((tenant, id.clone()), (instance.progress, 0_u64));
             let mut calls = reader.prepare("SELECT call_id, state_revision, result_id FROM managed_calls WHERE tenant_id = ? AND instance_id = ? ORDER BY call_id")
                 .context(AnalysisDatabaseSnafu { operation: "prepare recovered managed calls" })?;
@@ -290,6 +296,17 @@ impl AnalysisStore {
                 return Self::reject_path(root, "the managed attempt revision is invalid");
             }
             if let Some(terminal) = &attempt.terminal {
+                if matches!(terminal.exit, super::ManagedExit::Failed(_))
+                    && capture.progress == owner.progress
+                    && (capture.lifecycle == owner.lifecycle
+                        || terminal.suspended && terminal.revision == owner.lifecycle)
+                    && failures
+                        .get(&(tenant, instance.clone()))
+                        .and_then(Option::as_ref)
+                        .is_none_or(|failure| failure.revision < terminal.revision)
+                {
+                    return Self::reject_path(root, "the managed failure status is absent");
+                }
                 if terminal.instance != instance
                     || terminal.attempt != id
                     || terminal.revision <= attempt.registered

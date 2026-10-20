@@ -652,8 +652,9 @@ image keys and rejects duplicates before native planning.
 Instance removes its extra Data image load and decoded image set. Data still
 validates stored image pins in its final managed transaction. This ownership
 change does not account for pre-decode allocation, every native planner
-allocation, or opaque allocator overhead. Retained spec and manifest capacity
-remain open. No additional reference file is retired.
+allocation, or opaque allocator overhead. The retained metadata owner below
+supplies spec and manifest accounting. That image delivery retires no
+additional reference file.
 
 The [capacity tests](../../crates/araphor-query/src/definition/tests/capacity.rs)
 check shared ownership, exact image identity, failed cold preparation, no
@@ -664,6 +665,44 @@ cases and four source-built native Query cases pass. The two corrected Query
 fixtures pass without changes to production budgets. The
 [migration result](../plans/araphor-analysis-migration.md#shared-admitted-images-and-error-origins)
 records exact commands and source counts.
+
+## Retained metadata and current status
+
+[DefinitionAdmission](../../crates/araphor-query/src/definition.rs) owns resolved
+metadata, source requests, image handles, and their native reservation.
+  -> [PreparedDefinition::resolved](../../crates/araphor-query/src/definition.rs) exposes borrowed metadata. Definition clones share the same owner.
+  -> [Instance::manifest](../../crates/araphor-analysis/src/instance/manifest.rs) retains native extension Arc values instead of deep package-call copies.
+  -> [Instance::admit](../../crates/araphor-analysis/src/instance/mod.rs) charges the exact moved spec and manifest before Data admission.
+
+The reservations outlive their retained buffers. This scope covers defined
+metadata capacity. It does not claim the complete native planner or allocator
+heap. Host projected keys and the managed source-request copy remain open.
+
+[Instance::read_status](../../crates/araphor-analysis/src/instance/read.rs)
+accepts a fresh Inspect grant and an instance key.
+  -> [Instance::inspect](../../crates/araphor-analysis/src/instance/read.rs) checks reader scope, authority, and expiry around the joined read.
+  -> [AnalysisStore::managed_status](../../crates/araphor-data/src/analysis/managed/status.rs) reads current metadata and rejects unknown pending work.
+  -> [Failure](../../crates/araphor-data/src/analysis/managed/status.rs) binds the current failure code to observed successful progress and its durable revision.
+
+Idle suspension and eligible attempt failure write that fact in their existing
+transactions. A late old lifecycle cannot replace the current fact. Stop and
+start preserve it. New successful progress makes it inactive. Status reads no
+image or Arrow payload and requires no current writer Run permission.
+
+[Instance::execute](../../crates/araphor-analysis/src/instance/mod.rs) waits for
+captured execution to join before it records a known prepublication failure.
+  -> [Step](../../crates/araphor-analysis/src/instance/sink.rs) records actual publication entry before final authority and commit.
+  -> [AnalysisStore::finish_managed](../../crates/araphor-data/src/analysis/managed/terminal.rs) records the original known failed attempt with its exact fences.
+
+Busy, cancellation, and uncertain publication stay pending. A successful Data
+commit with a lost acknowledgement retains its receipt. The
+[finite tests](../../crates/araphor-analysis/src/instance/tests/finite.rs)
+exercise real traps, native SQL failure, writer failure, and shared pressure.
+The [status tests](../../crates/araphor-data/src/analysis/managed/tests/status.rs)
+cover rollback, stale lifecycles, successful progress, reopen, backup, and
+corrupt metadata. The
+[qualification record](../plans/araphor-analysis-migration.md#retained-metadata-and-durable-failure-status)
+states the exact checks, corrected fixtures, and remaining boundaries.
 
 ## Native managed subscriptions
 
@@ -747,7 +786,7 @@ All 54 Instance cases and 130 selected Query cases pass across the ordinary
 and corrected native commands. The
 [migration record](../plans/araphor-analysis-migration.md#reactive-host-joined-delivery-and-component-admission)
 identifies the source, commands, launch correction, and retired error leaf.
-Durable idle failure status, metadata accounting, renewal, public lifecycle,
+Projected host metadata, general pressure retry, renewal, public lifecycle,
 producer supervision, and the final complete Rust gate remain **Not done**.
 Unknown pending work and ambiguous Limit or Incomplete failures remain
 unavailable. The mixed reference supervision files remain.

@@ -17,6 +17,8 @@ use crate::{
 };
 
 mod lifecycle;
+mod memory;
+mod status;
 mod terminal;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;

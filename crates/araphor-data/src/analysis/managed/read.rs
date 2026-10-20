@@ -32,7 +32,7 @@ impl AnalysisStore {
         let revision = self.package_next(&transaction)?;
         transaction
             .execute(
-                "INSERT INTO managed_instances VALUES (?, ?, ?, ?, 0, false, ?)",
+                "INSERT INTO managed_instances (tenant_id, instance_id, spec, generation, progress, running, lifecycle) VALUES (?, ?, ?, ?, 0, false, ?)",
                 params![spec.tenant.as_slice(), spec.id, bytes, revision, revision],
             )
             .context(AnalysisDatabaseSnafu {
@@ -126,7 +126,7 @@ impl AnalysisStore {
         })
     }
 
-    fn managed_row(
+    pub(super) fn managed_row(
         tenant: [u8; 16],
         id: &str,
         (bytes, generation, progress, running, lifecycle): (Vec<u8>, u64, u64, bool, u64),
