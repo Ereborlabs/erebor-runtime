@@ -61,11 +61,7 @@ impl ClientGrpcOwner {
         auth: Arc<ClientAuth>,
         config: ClientGrpcConfig,
     ) -> crate::Result<Self> {
-        if config.output_timeout.is_zero()
-            || config.output_timeout > Duration::from_secs(10)
-            || config.query.output_rows > 200
-            || config.query.output_bytes > 1024 * 1024
-        {
+        if config.output_timeout.is_zero() || config.output_timeout > Duration::from_secs(10) {
             return Err(crate::error::InvalidConfigurationSnafu {
                 reason: "client query limits are invalid",
             }

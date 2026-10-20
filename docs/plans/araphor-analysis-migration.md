@@ -94,6 +94,25 @@ Analysis passes 122 tests with 2 ignored. Builtins passes 20. SDK passes 82.
 The run stops at two stale CLI command tests. The corrected CLI passes all
 69 tests in `migration-cli12.log`.
 
+The later complete run `migration-final-ci72` covers commit `098f66a7` without
+source changes. Formatting, workspace check, and strict Clippy pass. Analysis
+passes 151 cases, Data passes 337, Query passes 352, and Package Runtime passes
+46. The run stops in Control: 27 cases encounter the same constructor rejection.
+The constructor retains old 200-row and 1 MiB upper bounds while Query defaults
+now disable those quotas. The narrow correction removes those upper bounds.
+Native Query validation and delivery timeout validation remain. Both new
+regression cases pass in `migration-control-limits74` in 2.843 seconds. All 30
+gRPC cases then pass in `migration-control-grpc75` in 14.209 seconds. The
+complete run takes 1,934.901 seconds and does not pass. Its failing group is
+now corrected; the final complete procedure remains pending.
+
+Retained-result Inspect and native local SQL replacement are in progress.
+The candidate uses a fresh reader grant and exact retained instance/result
+binding. The local native catalog contains only the retained datasets. Data
+supplies the retained descriptor limits without another descriptor read.
+The writer's invocation limits do not set the later reader's query limits.
+No reference file is removed for this candidate before its checks pass.
+
 Focused checks correct the stale catalog, retention, graph, and quota
 fixtures. Query now retains the initial SQL error receipt before delivery.
 The corrected failures pass their focused reruns. The earlier full run is

@@ -201,6 +201,63 @@ impl Fixture {
     }
 }
 
+#[test]
+fn client_query_limits_preserved() -> TestResult {
+    for query in [
+        Limits::default(),
+        Limits {
+            output_rows: 201,
+            output_bytes: 2 * 1024 * 1024,
+            ..Default::default()
+        },
+    ] {
+        let expected = query.clone();
+        let fixture = Fixture::with_config(ClientGrpcConfig {
+            query,
+            ..Default::default()
+        })?;
+        assert_eq!(fixture.service.data()?.query.limits(), &expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn client_query_invalid_limits() -> TestResult {
+    for field in ["rows", "bytes", "capacity"] {
+        let mut config = ClientGrpcConfig::default();
+        match field {
+            "rows" => config.query.output_rows = 0,
+            "bytes" => config.query.output_bytes = 0,
+            _ => config.query.output_capacity = Some(0),
+        }
+        let error = Fixture::with_config(config)
+            .err()
+            .ok_or("invalid query limits were accepted")?;
+        assert!(
+            matches!(error.downcast_ref::<crate::Error>(),
+            Some(crate::Error::Query { source, .. })
+            if matches!(source.as_ref(), araphor_query::Error::Invalid {
+                field: "execution limits", ..
+            })),
+            "{field}: {error:?}"
+        );
+    }
+    let error = Fixture::with_config(ClientGrpcConfig {
+        output_timeout: Duration::ZERO,
+        ..Default::default()
+    })
+    .err()
+    .ok_or("empty delivery timeout was accepted")?;
+    assert!(matches!(
+        error.downcast_ref::<crate::Error>(),
+        Some(crate::Error::InvalidConfiguration {
+            reason,
+            ..
+        }) if reason == "client query limits are invalid"
+    ));
+    Ok(())
+}
+
 #[tokio::test]
 async fn observability_grpc_trace_timeout() -> TestResult {
     let fixture = Fixture::with_config(ClientGrpcConfig {
