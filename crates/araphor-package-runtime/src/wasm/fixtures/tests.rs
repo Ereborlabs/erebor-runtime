@@ -96,5 +96,24 @@ fn fixture_options_stay_separate(
             assert!(configured.cached(&Sha256::digest(source).into())?.is_none());
         }
     }
+    let limits = WasmLimits {
+        compiler_bytes: Some(1),
+        ..Default::default()
+    };
+    for result in [
+        WasmExecution::new(limits),
+        WasmExecution::fixture_code(limits),
+    ] {
+        assert!(matches!(
+            result,
+            Err(crate::Error::Data {
+                source: araphor_data::Error::Package {
+                    code: Code::Unsupported,
+                    field: "in-process compiler memory limit",
+                    ..
+                }
+            })
+        ));
+    }
     Ok(())
 }

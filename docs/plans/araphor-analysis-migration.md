@@ -38,9 +38,9 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 175 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 167 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
-| Native and Wasm runtime | Package Runtime passes all 46 current tests. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
+| Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
 | Shared subscriptions | Query carries complete per-step package returns and stable admitted call IDs. Explicit stop and authority loss join active workers. The finite Instance state reuse/reset and captured execution checks pass. The current final Rust gate is pending. Long-running window completion remains unimplemented. No separate package polling task exists. | Partial qualification |
 | Graph boundary | All 29 focused Graph tests pass. Graph validates canonical captured input and actual detector returns. These tests do not qualify the automatic producer. | Finite boundary qualified |
@@ -54,7 +54,7 @@ Every replacement passes its required checks
 | Public callers | Restore current managed operations through Control, CLI, and lightweight E2E. Reference test modules remain available but are not a substitute for native integration tests. | Not done |
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
-| Final retirement | The earlier 29 leaves and four additional mapped finite leaves are removed. The 175 remaining files retain unqualified or mixed rules. The current final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Final retirement | The earlier 33 leaves and eight mapped Wasm leaves are removed. The 167 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -226,26 +226,31 @@ a long-running recovery supervisor.
 
 ### Production code ledger
 
-The current count60 follows the OCI fixture correction and the four-file retirement.
+The current count61 follows the Wasm correction and eight-file retirement.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 12,965 | 5,136 | +7,829 |
-| Original reduction baseline `7b7b407a` | 44,212 | 30,387 | +13,825 |
+| `6a25ba1b` | 12,966 | 6,131 | +6,835 |
+| Original reduction baseline `7b7b407a` | 43,218 | 30,387 | +12,831 |
 
-The finite managed deliverable adds 3,407 net production lines relative to
+The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
-**Not done**. Another 19,825 net production lines must be removed relative to
+**Not done**. The later Wasm retirement removes 995 reference production lines.
+Its Runtime correction adds one production line. This deliverable removes
+994 net production lines. Another 18,831 net production lines must be removed relative to
 the current count to meet that target. No simplification or speed result is
 inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count60.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count61.json`. Its selected source
 fingerprint is
+`8b4cf5f003c2e3d08cf60d8117d74a584ff62da287fec5a96caec8a9ce27f264`.
+The earlier count60 records the finite managed source before this retirement.
+Its source fingerprint is
 `6774e44ebda654a827dab6fe4389dbbd4b8e7e5d2b97d9ab4ca6f45176d2be78`.
-The earlier count58 has the same production totals. Its source fingerprint is
+Count58 has the same production totals as count60. Its source fingerprint is
 `a19423ab11a6da3d5d67fb22f1f65cc2eb3674740b9d074fe218e0da7eae4243`.
 The test-only OCI correction changes no production count.
 
@@ -309,9 +314,32 @@ control, memory leases, and operation permit. The extra source count is 178
 production lines; the test-only file contributes zero. This is a gross
 reference removal, not the current workspace net change.
 
-There are now 33 retired files and 175 remaining baseline files. The recovery
-archive retains all 208 originals. The current final Rust gate is pending;
-complete migration and reference removal remain **Not done**.
+After this four-file retirement, 33 files were retired and 175 baseline files
+remained. The recovery archive retains all 208 originals.
+
+The later [Wasm retirement record](../../recovery/araphor-analysis-wasm-retirement-20261020.json)
+removes eight complete reference files. Runtime owns the engine and code cache.
+Safe in-process `Component::new` replaces the compiler process, CBOR request
+and reply protocols, pipes, PID checks, and fixed process CPU and wall limits.
+The current compiler-memory option returns Unsupported. Synchronous compilation
+cannot be preempted; cancellation joins the actual worker before acknowledgement.
+Cache failure paths now drop compiled code before its retained byte charge.
+Existing admission tests also check exact source bounds, failed admission
+capacity, and both unsupported compiler-memory construction routes.
+
+`migration-runtime61` passes all 46 Runtime cases in 151.295 seconds.
+`migration-wasm-query61` passes 15 relevant Query cases in 57.470 seconds;
+two native artifact cases are ignored in that Wasm-focused run. The separate
+native60 runs cover those cases. The current owners and assertion map cover all
+36 tests in the old Wasm family. Assertions for the removed process protocol
+have no current execution boundary. The eight leaves remove 995 production
+lines. The Runtime correction adds one production line.
+Strict workspace Clippy passes after this retirement in
+`migration-wasm-clippy62` in 83.945 seconds.
+
+There are now 41 retired files and 167 remaining baseline files. Every remaining
+file still matches the baseline. The recovery archive is unchanged. The complete
+final Rust gate, migration, and reference removal remain **Not done**.
 
 ## Root exports
 
@@ -334,8 +362,9 @@ tests, and independently checked reconstruction manifests. Do not remove it
 during source retirement. This record does not claim a remote push.
 
 Local commit `d9369555` retains the archive and its checksum. The archive
-contains the complete recovered source. The 29 earlier leaves and four additional finite files are retired; the other
-175 baseline files remain unchanged.
+contains the complete recovered source. The 29 earlier leaves, four additional
+finite files, and eight Wasm leaves are retired. The other 167 baseline files
+remain unchanged.
 
 ## Back package, model and notification inventory
 

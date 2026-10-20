@@ -82,9 +82,10 @@ was made for that removal.
 Current finite execution and managed-state checks pass as recorded in the
 [migration result](araphor-analysis-migration.md#finite-managed-source-focused-qualification).
 The historical full Rust gate `migration-final-ci42` covers the earlier 29
-retired leaves. Four additional reference files are now retired; 175 remain.
-The recovery archive retains all 208 originals. The current final Rust gate
-`migration-final-ci59` is pending. These finite results do not establish
+retired leaves. Four additional reference files and eight Wasm leaves are now
+retired; 167 remain unchanged. The recovery archive retains all 208 originals.
+The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
+all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish
 long-running lifecycle or automatic restart.
 
 ### First deliverable: definition files and running instances
@@ -183,7 +184,7 @@ retries return Incomplete. Current authority protects capture, commit, and
 receipt delivery. The [migration result](araphor-analysis-migration.md#finite-managed-source-focused-qualification)
 records the focused checks and resource limits.
 
-The required final Rust gate `migration-final-ci59` is pending. Long-running
+The complete final Rust gate remains **Not done**. Long-running
 supervision, start/inspect/stop/update/removal, public history, automatic
 restart, and complete migration remain **Not done**.
 

@@ -52,11 +52,13 @@ The earlier finite retirement removed 29 duplicate reference leaves after
 source comparison and focused qualification. At that point, 179 files remained
 unchanged. The historical final Rust gate
 `migration-final-ci42` covers those 29 leaves. Four additional reference files
-are now retired; 175 baseline files remain unchanged. The recovery archive
+were then retired. Eight more Wasm leaves are now retired; 167 baseline files
+remain unchanged. The recovery archive
 retains all 208 originals. Read the
 [retirement record](araphor-analysis-migration.md#retired-finite-reference-files)
-for the exact scope. The current final Rust gate `migration-final-ci59` is
-pending. Complete migration remains **Not done**.
+for the exact scope. The full Rust gate59 stops at a stale OCI fixture. The
+corrected fixture passes all 15 Package cases. The complete final Rust gate
+and migration remain **Not done**.
 The items below that describe removed paths refer to the stopped draft, not
 a qualified replacement. No deletion commit or push was made.
 
@@ -274,7 +276,7 @@ remaining work. Finite Instance execution now registers the captured attempt
 before execution and atomically publishes complete actual call returns,
 guarded state, evidence references, and progress. Focused checks cover prior
 reuse and reset, exact completed retries, current authority, and cancellation.
-The current final Rust gate `migration-final-ci59` is pending. Complete managed
+The complete final Rust gate remains **Not done**. Complete managed
 execution and automatic restart remain **Not done**. Read the
 [definition review](../guides/araphor-discovery-definition-review.md).
 

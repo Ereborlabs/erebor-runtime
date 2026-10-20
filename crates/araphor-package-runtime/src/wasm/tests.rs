@@ -35,6 +35,7 @@ fn admission_rejects_native_images() -> TestResult {
 #[test]
 fn admission_requires_analysis_contract() -> TestResult {
     let runtime = WasmExecution::new(WasmLimits {
+        cache_entries: Some(1),
         memory_bytes: Some(256 * 1024 * 1024),
         ..WasmLimits::default()
     })?;
@@ -63,6 +64,11 @@ fn admission_requires_analysis_contract() -> TestResult {
     assert!(runtime
         .admit(&wat::parse_str("(module)")?, &control)
         .is_err());
+    assert!(runtime
+        .cache
+        .lock()
+        .map_err(|_| "component cache lock")?
+        .available(0));
     Ok(())
 }
 
@@ -99,6 +105,29 @@ fn sdk_components_pass_admission() -> TestResult {
 #[test]
 fn admission_bounds_compile_work() -> TestResult {
     let control = AnalysisReadControl::default();
+    let bytes = wat::parse_str("(component)")?;
+    let quota = WasmLimits {
+        source_bytes: Some(bytes.len()),
+        ..Default::default()
+    };
+    CompileBudget::check(&bytes, &control, &quota)?;
+    assert!(matches!(
+        CompileBudget::check(
+            &bytes,
+            &control,
+            &WasmLimits {
+                source_bytes: Some(bytes.len() - 1),
+                ..quota
+            }
+        ),
+        Err(crate::Error::Data {
+            source: araphor_data::Error::Package {
+                code: super::Code::Limit,
+                field: "component source bytes",
+                ..
+            }
+        })
+    ));
     let quota = WasmLimits {
         function_operators: Some(32_768),
         compile_instances: Some(16),

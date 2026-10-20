@@ -227,6 +227,7 @@ impl super::WasmExecution {
             return Ok(prepared);
         }
         CompileBudget::check(bytes, control, &self.limits)?;
+        let reservation;
         let component = wasmtime::component::Component::new(&self.engine, bytes).context(
             crate::PackageWasmSnafu {
                 code: Code::Invalid,
@@ -246,7 +247,7 @@ impl super::WasmExecution {
         let charge = image_bytes
             .checked_add(bytes.len())
             .ok_or_else(|| Code::Limit.error("component cache bytes"))?;
-        let reservation = self
+        reservation = self
             .cache
             .lock()
             .map_err(|_| Code::Incomplete.error("component cache lock"))?

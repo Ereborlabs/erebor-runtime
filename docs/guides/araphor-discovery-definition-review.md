@@ -366,10 +366,12 @@ The earlier finite retirement removed 29 duplicate reference leaves. Its final
 Rust gate passes in `migration-final-ci42` at commit `95e9bb4d`. That record does
 not qualify the later managed source. The additional finite retirement removes
 exactly four mapped leaves: Graph contract source and tests, model input, and
-model operation. The remaining 175 reference files keep their baseline content.
+model operation. Eight more Wasm leaves are now retired. The remaining 167
+reference files keep their baseline content.
 The recovery archive retains all 208 recovered files. Read the
 [retirement records](../plans/araphor-analysis-migration.md#retired-finite-reference-files)
 and the [four-file record](../../recovery/araphor-analysis-managed-retirement-20261019.json)
+and [Wasm record](../../recovery/araphor-analysis-wasm-retirement-20261020.json)
 for the exact scope. The current final Rust gate and complete migration remain
 **Not done**.
 
@@ -524,6 +526,23 @@ completion, start/stop/resume/update/removal, current inspection, authorized
 history, and CLI/Control managed operations remain **Not done**.
 `Instance::admitted` returns immutable admission metadata; it is not a current
 status or history API.
+
+## In-process Wasm ownership
+
+[WasmExecution::compiled](../../crates/araphor-package-runtime/src/wasm/cache.rs)
+uses safe native `Component::new`. Its cache reservation is declared before the
+compiled component. A failure drops compiled code before its retained byte
+charge. Prepared handles and trap sources keep their existing code pins.
+No compiler process or request/reply codec remains in the active path.
+
+All 46 Runtime cases pass in `migration-runtime61`. The 15 relevant Query cases
+pass in `migration-wasm-query61`. The tests keep exact source bounds, cache
+release, preparation order, identity, cancellation, and joined worker assertions.
+Strict workspace Clippy passes in `migration-wasm-clippy62`.
+Configured compiler working-memory limits return Unsupported. Native synchronous
+compilation cannot be preempted. Cancellation joins its worker before it returns.
+These checks qualify the eight-file Wasm retirement. They do not qualify managed
+lifecycle or a complete final Rust gate.
 
 ## Migration boundaries
 

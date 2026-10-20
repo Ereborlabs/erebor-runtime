@@ -1,0 +1,1507 @@
+{
+  "status": "Eight complete reference leaves are retired after focused qualification. The final Rust gate remains Not done.",
+  "recorded_at": "2026-10-20T06:23:59.769629+00:00",
+  "qualified_source_base": "7315cabdf3ddea84a137ec3c9359b9c7a04850b6",
+  "scope": "Exactly eight complete Wasm reference leaves. Keep every other reference file and the full recovery archive.",
+  "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+  "recovery_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+  "recovery_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+  "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5",
+  "candidate_files": [
+    {
+      "path": "crates/araphor-analysis_back/src/package/wasm.rs",
+      "sha256": "18eccefbe88cce9a604bf200a1e10a1b7f43dbe557cb5f0222f179a0ccf3b92d",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "archive_member": "araphor-recovery-20261019-24zu3vty/backup-crate.tar!crates/araphor-analysis_back/src/package/wasm.rs",
+      "lines": 221,
+      "production_code": 161,
+      "counter_raw": {
+        "production_lines": 180,
+        "production_nonblank": 161,
+        "production_code": 161
+      }
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/wasm/cache.rs",
+      "sha256": "385fa073290e0f9dceac86741f14b4712c7f25efa018cedda5a564544b3f222b",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "archive_member": "araphor-recovery-20261019-24zu3vty/backup-crate.tar!crates/araphor-analysis_back/src/package/wasm/cache.rs",
+      "lines": 449,
+      "production_code": 249,
+      "counter_raw": {
+        "production_lines": 271,
+        "production_nonblank": 250,
+        "production_code": 249
+      }
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/wasm/compiler.rs",
+      "sha256": "7923ed1e21a7030c25cb74f4f06eac34595e3f7aaa6129e82bdfbb51093f91ed",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "archive_member": "araphor-recovery-20261019-24zu3vty/backup-crate.tar!crates/araphor-analysis_back/src/package/wasm/compiler.rs",
+      "lines": 265,
+      "production_code": 227,
+      "counter_raw": {
+        "production_lines": 245,
+        "production_nonblank": 228,
+        "production_code": 227
+      }
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/wasm/compiler/image.rs",
+      "sha256": "d4d0703aef2bc4463e8c7ed14917b47d8ec6b9e3f80ac1f7996d4c5752710448",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "archive_member": "araphor-recovery-20261019-24zu3vty/backup-crate.tar!crates/araphor-analysis_back/src/package/wasm/compiler/image.rs",
+      "lines": 248,
+      "production_code": 185,
+      "counter_raw": {
+        "production_lines": 202,
+        "production_nonblank": 187,
+        "production_code": 185
+      }
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/wasm/compiler/input.rs",
+      "sha256": "82853483152ab901859784e2e5e8ac07e860f154edcbf17f3b4acce08d1f1109",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "archive_member": "araphor-recovery-20261019-24zu3vty/backup-crate.tar!crates/araphor-analysis_back/src/package/wasm/compiler/input.rs",
+      "lines": 122,
+      "production_code": 110,
+      "counter_raw": {
+        "production_lines": 120,
+        "production_nonblank": 110,
+        "production_code": 110
+      }
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/wasm/compiler/input/tests.rs",
+      "sha256": "67f8ed5c6d16f33d41bb81ea763d2d074e6fbf5cdb71eb124c617a54ce0bc217",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "archive_member": "araphor-recovery-20261019-24zu3vty/backup-crate.tar!crates/araphor-analysis_back/src/package/wasm/compiler/input/tests.rs",
+      "lines": 75,
+      "production_code": 0,
+      "counter_raw": {
+        "production_lines": 6,
+        "production_nonblank": 2,
+        "production_code": 2
+      }
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+      "sha256": "6b2f66db71c58b191c12a874e9cd7af2b2decf9294da84071de59501275e2c56",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "archive_member": "araphor-recovery-20261019-24zu3vty/backup-crate.tar!crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+      "lines": 229,
+      "production_code": 0,
+      "counter_raw": {
+        "production_lines": 22,
+        "production_nonblank": 9,
+        "production_code": 9
+      }
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/wasm/compiler/worker.rs",
+      "sha256": "1ccb5f16f3890d92c44d637067f7d4ab0f724c7e20a5d34345db1e7cd9e7c9f7",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "archive_member": "araphor-recovery-20261019-24zu3vty/backup-crate.tar!crates/araphor-analysis_back/src/package/wasm/compiler/worker.rs",
+      "lines": 75,
+      "production_code": 63,
+      "counter_raw": {
+        "production_lines": 75,
+        "production_nonblank": 67,
+        "production_code": 63
+      }
+    }
+  ],
+  "removed_production_code": 995,
+  "counter": {
+    "path": "/tmp/araphor-long.DHe7ye/target/debug/function-inventory",
+    "sha256": "ce08a285665db81fd003ae2dfd22f176b9d0647028cd0a7b26aa0e45dc2f8a9f"
+  },
+  "count_method": "Use the existing syn counter. Exclude tests, comments and blank lines. Test-only child files contribute zero.",
+  "source_map": {
+    "scope": "Eight complete Back leaves only",
+    "status": "Source-ready after focused qualification of the test amendment",
+    "live_removal": false,
+    "archive_must_remain": true,
+    "production_patch_delta": 0,
+    "candidates": [
+      {
+        "old": "crates/araphor-analysis_back/src/package/wasm.rs",
+        "old_symbols": [
+          "WasmExecution",
+          "PreparedComponent",
+          "CapacityRelease",
+          "wait_capacity",
+          "limits",
+          "new",
+          "new_engine",
+          "admit",
+          "prepare",
+          "evaluate"
+        ],
+        "current_symbols": [
+          "Runtime::wasm",
+          "WasmExecution::new",
+          "WasmExecution::wait_capacity",
+          "WasmExecution::evaluate_prepared"
+        ],
+        "first_current_source": "crates/araphor-package-runtime/src/wasm.rs",
+        "preserved": [
+          "Lazy Wasm creation",
+          "Optional configured quotas",
+          "Source-only Engine/Linker admission",
+          "Prepared code pin",
+          "Actual capacity watch",
+          "SDK evaluation/output validation"
+        ],
+        "removed_with_approved_architecture": [
+          "EpochTicker field",
+          "Mandatory batch/row/checkpoint caps",
+          "Fixed MAX_EVALUATIONS"
+        ],
+        "gate": "Apply runtime-boundary-tests.patch, pass focused current owner tests, then root may remove this complete leaf."
+      },
+      {
+        "old": "crates/araphor-analysis_back/src/package/wasm/cache.rs",
+        "old_symbols": [
+          "CacheBudget",
+          "CacheCharge",
+          "CodeCache",
+          "cached",
+          "compiled"
+        ],
+        "current_symbols": [
+          "CacheCharge",
+          "CodeCache",
+          "WasmExecution::cached",
+          "WasmExecution::compiled"
+        ],
+        "first_current_source": "crates/araphor-package-runtime/src/wasm/cache.rs",
+        "preserved": [
+          "Source SHA256 identity within one configured Engine",
+          "Double cache check under compiler lock",
+          "Configured byte and entry bounds",
+          "Busy versus permanent Limit",
+          "Unpinned eviction",
+          "Code pins retain charges",
+          "Drop sends capacity notice",
+          "Interface/resource check before cache insertion"
+        ],
+        "removed_with_approved_architecture": [
+          "Serialized compiler transfer",
+          "Unreaped-child recovery flag",
+          "Reply-image-size equality check",
+          "Default MAX_IMAGE_BYTES"
+        ],
+        "gate": "Apply runtime-boundary-tests.patch, pass focused current owner tests, then root may remove this complete leaf."
+      },
+      {
+        "old": "crates/araphor-analysis_back/src/package/wasm/compiler.rs",
+        "old_symbols": [
+          "CompilerChild",
+          "CompilerProcessFailure",
+          "command",
+          "test_executable",
+          "restrict",
+          "capture",
+          "run",
+          "WasmExecution::compile"
+        ],
+        "current_symbols": [
+          "WasmExecution::compiled",
+          "Engine::blocking",
+          "Runtime::evaluate_reserved"
+        ],
+        "first_current_source": "crates/araphor-package-runtime/src/wasm/cache.rs",
+        "preserved": [
+          "Native source compilation",
+          "Typed compilation error",
+          "Control check before and after compilation",
+          "Tracked worker and permit lifetime",
+          "Explicit cancellation joins actual work"
+        ],
+        "removed_with_approved_architecture": [
+          "current_exe dispatch",
+          "env_clear for child",
+          "Child stdin/stderr pipes",
+          "Tokio I/O runtime thread",
+          "Child address/CPU/core process limits",
+          "Fixed 45-second wall limit",
+          "Signals/PID/reap state"
+        ],
+        "gate": "Apply runtime-boundary-tests.patch, pass focused current owner tests, then root may remove this complete leaf."
+      },
+      {
+        "old": "crates/araphor-analysis_back/src/package/wasm/compiler/image.rs",
+        "old_symbols": [
+          "CompilerReply",
+          "CompilerProtocolError",
+          "CompilerResultError",
+          "CompilerImage",
+          "write",
+          "read",
+          "reply",
+          "component",
+          "component_reserved"
+        ],
+        "current_symbols": [
+          "WasmExecution::compiled",
+          "CompileBudget::check_size"
+        ],
+        "first_current_source": "crates/araphor-package-runtime/src/wasm/cache.rs",
+        "preserved": [
+          "No supplied native-image deserialize",
+          "Typed native compilation errors",
+          "Configured retained-image bound",
+          "Exact native image-range charge"
+        ],
+        "removed_with_approved_architecture": [
+          "CBOR compiler reply shape/version/status",
+          "Reply transfer digest",
+          "MAX_REPLY_BYTES buffer",
+          "Compiler serialized native image",
+          "unsafe Component::deserialize"
+        ],
+        "gate": "Apply runtime-boundary-tests.patch, pass focused current owner tests, then root may remove this complete leaf."
+      },
+      {
+        "old": "crates/araphor-analysis_back/src/package/wasm/compiler/input.rs",
+        "old_symbols": [
+          "CompilerRequest",
+          "CompilerInput",
+          "write",
+          "read",
+          "request"
+        ],
+        "current_symbols": [
+          "CompileBudget::check_size",
+          "CompileBudget::check"
+        ],
+        "first_current_source": "crates/araphor-package-runtime/src/wasm/admission.rs",
+        "preserved": [
+          "Exact source bytes remain alive during native compilation",
+          "Component-only source validation",
+          "Explicit source_bytes boundary",
+          "Malformed source has Invalid",
+          "Cancelled parser checks control"
+        ],
+        "removed_with_approved_architecture": [
+          "CBOR request shape/version/fuel field",
+          "MAX_REQUEST_BYTES buffer",
+          "Request pipe framing/transfer/errors"
+        ],
+        "gate": "Apply runtime-boundary-tests.patch, pass focused current owner tests, then root may remove this complete leaf."
+      },
+      {
+        "old": "crates/araphor-analysis_back/src/package/wasm/compiler/input/tests.rs",
+        "old_symbols": [
+          "request_checks_framing",
+          "request_bounds_source",
+          "request_matches_codec"
+        ],
+        "current_symbols": [
+          "admission_bounds_compile_work",
+          "admission_rejects_native_images"
+        ],
+        "first_current_source": "crates/araphor-package-runtime/src/wasm/tests.rs",
+        "preserved": [
+          "Exact source boundary accepts",
+          "One extra source byte has exact Limit",
+          "Native images have exact Invalid"
+        ],
+        "removed_with_approved_architecture": [
+          "Canonical CBOR length thresholds",
+          "Both request wire fuel flags",
+          "Trailing request frames",
+          "Wrong request version/types",
+          "Broken request pipe"
+        ],
+        "gate": "Apply runtime-boundary-tests.patch, pass focused current owner tests, then root may remove this complete leaf."
+      },
+      {
+        "old": "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+        "old_symbols": [
+          "araphor_component_compiler",
+          "araphor_component_compiler_blocking",
+          "araphor_component_compiler_memory",
+          "araphor_component_compiler_cpu",
+          "compiler_enforces_os_limits",
+          "compiler_reaps_interrupted_children",
+          "installation_rejects_native_images",
+          "compiler_requires_worker_dispatch"
+        ],
+        "current_symbols": [
+          "admission_rejects_native_images",
+          "fixture_options_stay_separate",
+          "preparation_cancellation_keeps_leases",
+          "subscription_cancel_joins_worker"
+        ],
+        "first_current_source": "crates/araphor-package-runtime/src/wasm/tests.rs",
+        "preserved": [
+          "Real Wasmtime native image rejected",
+          "Exact compiler_bytes Unsupported",
+          "Distinct cancellation and deadline errors",
+          "Worker join before explicit completion",
+          "Future drop preserves worker lease",
+          "Later capacity reuse"
+        ],
+        "removed_with_approved_architecture": [
+          "Ignored compiler executable fixtures",
+          "Address-space allocation probe in child",
+          "CPU termination signal",
+          "PID absence assertion",
+          "Missing executable dispatch entry"
+        ],
+        "gate": "Apply runtime-boundary-tests.patch, pass focused current owner tests, then root may remove this complete leaf."
+      },
+      {
+        "old": "crates/araphor-analysis_back/src/package/wasm/compiler/worker.rs",
+        "old_symbols": [
+          "run_worker_if_requested",
+          "run_compiler_worker",
+          "worker_limits",
+          "worker_image"
+        ],
+        "current_symbols": [
+          "WasmExecution::new",
+          "WasmExecution::compiled"
+        ],
+        "first_current_source": "crates/araphor-package-runtime/src/wasm.rs",
+        "preserved": [
+          "Native source validation",
+          "Explicit Unsupported compiler memory option",
+          "Native Wasmtime compilation",
+          "Configured image and work limits"
+        ],
+        "removed_with_approved_architecture": [
+          "Executable argument hook",
+          "Before-application-setup dispatch",
+          "Child inherited limit readback",
+          "Compiler stdin/stderr protocol",
+          "precompile_component transfer"
+        ],
+        "gate": "Apply runtime-boundary-tests.patch, pass focused current owner tests, then root may remove this complete leaf."
+      }
+    ],
+    "limits": [
+      "Native active Component::new is not preemptible. Cancellation joins it after completion.",
+      "compiler_bytes is explicitly Unsupported. image_bytes/cache_bytes do not bound peak compiler heap.",
+      "No service, lifecycle, restart, frontier or source-prefix completion is claimed."
+    ]
+  },
+  "assertion_map": {
+    "source_state": "95e9bb4d35bd2cab78f6f3ef6a864df87324a413 plus pinned live files",
+    "old_test_count": 36,
+    "current_runtime_test_count": 46,
+    "current_native_tests": 18,
+    "current_wasm_tests": 28,
+    "old_assertion_map": [
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/cache.rs",
+        "old_test": "cache_enforces_each_bound",
+        "assertions": [
+          "Default cache accepts 17 pinned entries, each larger than the configured-cache fixture byte limit; no default byte or entry quota applies.",
+          "Configured entry count evicts the oldest unpinned entry and keeps the newest digest.",
+          "Configured byte count repeatedly evicts unpinned code, reports exact aggregate charges, and retains the newest digest."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/cache.rs",
+            "tests": [
+              "cache_enforces_each_bound"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/cache.rs",
+        "old_test": "pinned_code_retains_charge",
+        "assertions": [
+          "Pinned code prevents eviction and returns Busy; dropping one prepared handle sends a capacity notice without early code-charge release.",
+          "A zero configured entry count returns Limit, including a zero-byte request.",
+          "Exact remaining byte capacity succeeds; one extra byte returns Busy with the original requested amount.",
+          "Clearing original and cloned cache owners preserves charges while prepared handles remain; final handle drop releases byte and entry charges exactly.",
+          "A retained second handle keeps the final entry alive; later reservations can reuse capacity only after that handle drops."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/cache.rs",
+            "tests": [
+              "pinned_code_retains_charge"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/image.rs",
+        "old_test": "compiler_reply_rejects_corruption",
+        "assertions": [
+          "Accept a framed version-1 Limit reply with no payload.",
+          "Reject empty, scalar, trailing-byte, bad-digest native-code replies and an over-bound reply stream."
+        ],
+        "classification": "Removed compiler reply protocol",
+        "current": [],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/input/tests.rs",
+        "old_test": "request_checks_framing",
+        "assertions": [
+          "Round-trip both fuel flags and exact source bytes.",
+          "Reject trailing bytes, empty/scalar frames, wrong CBOR types and a wrong version."
+        ],
+        "classification": "Removed compiler request protocol",
+        "current": [],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/input/tests.rs",
+        "old_test": "request_bounds_source",
+        "assertions": [
+          "Accept exactly MAX_SOURCE_BYTES and reject one extra source byte on the writer and reader.",
+          "Reject MAX_REQUEST_BYTES plus one received byte."
+        ],
+        "classification": "Source bound preserved as explicit option; request envelope removed",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+            "tests": [
+              "admission_bounds_compile_work"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/input/tests.rs",
+        "old_test": "request_matches_codec",
+        "assertions": [
+          "For fuel false/true, match canonical CBOR at lengths 0, 1, 23, 24, 255, 256, 65535, 65536 and MAX_SOURCE_BYTES.",
+          "A broken request pipe returns typed Incomplete for component compiler request write."
+        ],
+        "classification": "Removed compiler request codec and pipe",
+        "current": [],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+        "old_test": "araphor_component_compiler",
+        "assertions": [
+          "Ignored subprocess entry invokes the compiler worker."
+        ],
+        "classification": "Removed subprocess fixture",
+        "current": [],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+        "old_test": "araphor_component_compiler_blocking",
+        "assertions": [
+          "Ignored subprocess entry checks worker limits, drains input and blocks until the parent kills the child."
+        ],
+        "classification": "Removed subprocess fixture",
+        "current": [],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+        "old_test": "araphor_component_compiler_memory",
+        "assertions": [
+          "Ignored subprocess entry checks inherited/configured address-space limits and allocation failure above the configured address-space limit.",
+          "Return a typed Limit reply to the parent."
+        ],
+        "classification": "Unsupported in-process compiler memory option",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs",
+            "tests": [
+              "fixture_options_stay_separate"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+        "old_test": "araphor_component_compiler_cpu",
+        "assertions": [
+          "Ignored subprocess entry checks worker limits, installs a 1-second CPU process limit, then spins until OS termination."
+        ],
+        "classification": "Removed fixed compiler process CPU limit",
+        "current": [],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+        "old_test": "compiler_enforces_os_limits",
+        "assertions": [
+          "With inherited and explicit address-space limits, child-side allocation probes return typed Limit.",
+          "CPU signal termination returns typed Limit; no failed-to-reap state remains."
+        ],
+        "classification": "Compiler process controls intentionally removed; guest limits retained",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs",
+            "tests": [
+              "fixture_options_stay_separate"
+            ]
+          },
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs",
+            "tests": [
+              "explicit_fuel_exhausts_component",
+              "explicit_timeout_interrupts_component"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+        "old_test": "compiler_reaps_interrupted_children",
+        "assertions": [
+          "Cancellation and deadline preserve their distinct Data error variants.",
+          "Before return, failed-reap is false and test_kill_process reports that the child PID no longer exists.",
+          "A later compiler request still succeeds after interrupted cleanup."
+        ],
+        "classification": "Worker lifetime preserved; subprocess kill and PID checks removed",
+        "current": [
+          {
+            "path": "crates/araphor-query/src/definition/tests/parity.rs",
+            "tests": [
+              "preparation_cancellation_keeps_leases"
+            ]
+          },
+          {
+            "path": "crates/araphor-query/src/definition/tests/guest.rs",
+            "tests": [
+              "subscription_cancel_joins_worker"
+            ]
+          },
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+            "tests": [
+              "runtime_cancellation_joins_guest_and_releases_capacity",
+              "dropped_runtime_future_retains_worker_until_completion",
+              "runtime_deadline_joins_queued_worker"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+        "old_test": "installation_rejects_native_images",
+        "assertions": [
+          "A real Wasmtime-produced native component image is rejected by source admission with exact Invalid."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+            "tests": [
+              "admission_rejects_native_images"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs",
+        "old_test": "compiler_requires_worker_dispatch",
+        "assertions": [
+          "A missing child entry produces Incomplete and leaves no failed-reap state."
+        ],
+        "classification": "Removed executable child dispatch",
+        "current": [],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/fixtures/tests.rs",
+        "old_test": "fixture_cache_charges_fit",
+        "assertions": [
+          "All five fixture source digests are unique; source count fits the configured entry count.",
+          "Each native image is nonzero and within the former fixed 32-MiB image bound; the current test supplies the same 32-MiB bound explicitly.",
+          "Each cache charge equals exact source length plus native image length; aggregate charge fits the configured byte quota.",
+          "All fixture digests remain cached after preparation."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs",
+            "tests": [
+              "fixture_cache_charges_fit"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/fixtures/tests.rs",
+        "old_test": "fixture_options_stay_separate",
+        "assertions": [
+          "Explicit cache byte and entry limits create separate engine/cache owners without imported fixture entries.",
+          "Former explicit compiler_bytes does not reuse the shared fixture cache; the approved native owner now rejects that option with exact Unsupported.",
+          "The current image_bytes isolation case also remains."
+        ],
+        "classification": "Current owner plus exact Unsupported test amendment",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs",
+            "tests": [
+              "fixture_options_stay_separate"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime/batches.rs",
+        "old_test": "component_keeps_input_batches",
+        "assertions": [
+          "Input batches [2,3], [], [5] keep three source batches and return sum 10."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/batches.rs",
+            "tests": [
+              "component_keeps_input_batches"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime/concurrency.rs",
+        "old_test": "installed_guests_overlap",
+        "assertions": [
+          "Two tenant snapshots share one runtime owner and both reach their guest barriers before release.",
+          "Nonempty inputs [2,3] and [7,11] produce one group with tenant-specific identity and counts 5 and 18.",
+          "Group member order and evidence cursor samples remain exact; coverage, checkpoint, evidence and reasons remain empty where declared."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-query/src/definition/tests/parity.rs",
+            "tests": [
+              "nonempty_tenant_guests_overlap"
+            ]
+          },
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/concurrency.rs",
+            "tests": [
+              "guests_overlap_with_independent_lifetimes"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime/prepared.rs",
+        "old_test": "preparation_precedes_evaluation_deadline",
+        "assertions": [
+          "A cold component becomes cached before a one-nanosecond evaluation deadline rejects execution.",
+          "The parent control remains valid; tenant permit and complete input/output pools can be reserved after cleanup."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-query/src/definition/tests/parity.rs",
+            "tests": [
+              "preparation_precedes_evaluation_deadline"
+            ]
+          },
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/prepared.rs",
+            "tests": [
+              "preparation_precedes_guest_timeout"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime/prepared.rs",
+        "old_test": "prepared_handle_keeps_binding",
+        "assertions": [
+          "A foreign engine returns exact Unsupported/component engine and releases its evaluation capacity.",
+          "Cancellation takes precedence over foreign-engine denial and also releases capacity.",
+          "After cache clear and while compiler admission is occupied, an existing prepared handle still executes; a new prepare returns Busy."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/prepared.rs",
+            "tests": [
+              "prepared_handle_keeps_binding"
+            ]
+          },
+          {
+            "path": "crates/araphor-query/src/definition/tests/parity.rs",
+            "tests": [
+              "prepared_guest_keeps_identity"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime/prepared.rs",
+        "old_test": "retained_trap_keeps_code",
+        "assertions": [
+          "A trap has exact Incomplete, preserves its Wasm backtrace and keeps native UnreachableCodeReached as the root cause.",
+          "After cache clear, the retained error pins code and its charge; dropping the error releases the last pin."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/prepared.rs",
+            "tests": [
+              "retained_trap_keeps_code"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime/quotas.rs",
+        "old_test": "default_quotas_execute_component",
+        "assertions": [
+          "Default Wasm limits remain disabled, fuel is not configured, and an echo returns 42.",
+          "The former SDK 64-MiB default becomes u64::MAX under the approved disabled-default policy."
+        ],
+        "classification": "Current owner with approved default removal",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs",
+            "tests": [
+              "default_quotas_execute_component"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime/quotas.rs",
+        "old_test": "explicit_fuel_exhausts_component",
+        "assertions": [
+          "Explicit fuel permits echo, rejects an infinite loop with exact Limit and OutOfFuel root trap, and permits a later echo."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs",
+            "tests": [
+              "explicit_fuel_exhausts_component"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime/quotas.rs",
+        "old_test": "explicit_timeout_interrupts_component",
+        "assertions": [
+          "Explicit guest timeout returns the Data deadline variant, preserves the parent control, and permits a later echo."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs",
+            "tests": [
+              "explicit_timeout_interrupts_component"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime/quotas.rs",
+        "old_test": "fixture_modes_keep_quotas",
+        "assertions": [
+          "Fuel-enabled and fuel-disabled fixtures use distinct engines; strict quotas retain the selected compatible engine.",
+          "The strict resource configuration is retained and rejects admission with Limit.",
+          "Limited and unlimited fixtures still return echo 9."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs",
+            "tests": [
+              "fixture_modes_keep_quotas"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime.rs",
+        "old_test": "component_state_is_separate",
+        "assertions": [
+          "A cached component is usable while the compiler lock is held; uncached source returns Busy.",
+          "Echo returns 42; repeated isolated runs return 1; captured time returns 123; captured seed returns 7."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+            "tests": [
+              "component_state_is_separate"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime.rs",
+        "old_test": "component_recovers_after_failure",
+        "assertions": [
+          "Trap, loop, host-call exhaustion, deep recursion, excessive memory and oversized host transfer all fail under explicit limits.",
+          "Oversized host transfer has exact Limit and preserves the Wasmtime hostcall-fuel root message.",
+          "A later echo returns 9 after each failure."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+            "tests": [
+              "component_recovers_after_failure"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime.rs",
+        "old_test": "component_validates_error_output",
+        "assertions": [
+          "Guest denial and limit preserve exact SDK codes and fields.",
+          "Invalid dataset name and invalid evidence/reason reference preserve exact Invalid fields."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+            "tests": [
+              "component_validates_error_output"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime.rs",
+        "old_test": "component_enforces_transfer_limits",
+        "assertions": [
+          "Configured data bytes bound effective transport limits and do not mutate the original evaluation limits.",
+          "Echo returns 42; an oversized parameter returns exact SDK Limit/batch bytes.",
+          "The old implicit batch/row/checkpoint caps are removed under the approved disabled-default policy."
+        ],
+        "classification": "Current owner with approved default removal",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+            "tests": [
+              "component_enforces_transfer_limits"
+            ]
+          },
+          {
+            "path": "crates/araphor-query/src/definition/tests/guest.rs",
+            "tests": [
+              "wasm_preserves_input_capacity"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime.rs",
+        "old_test": "component_control_interrupts_runs",
+        "assertions": [
+          "A running infinite loop reaches a deadline and returns the distinct Data deadline error.",
+          "Already-cancelled input returns the Data cancellation error.",
+          "Cancellation after the guest entry signal returns the same cancellation class."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+            "tests": [
+              "component_control_interrupts_runs"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests/runtime.rs",
+        "old_test": "fixture_code_separates_state",
+        "assertions": [
+          "Two fixture runtimes share compatible code while keeping independent evaluation counters and stores.",
+          "Saturating one runtime does not prevent the other from returning isolated value 1.",
+          "After permit release the first works; a deadline in the first does not break the second."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+            "tests": [
+              "fixture_code_separates_state"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests.rs",
+        "old_test": "admission_requires_analysis_contract",
+        "assertions": [
+          "Reject missing Analysis exports, WASI filesystem imports, nested component code, malformed bytes and a core module.",
+          "Explicit initial-memory quota rejects 4097 pages with typed Limit."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+            "tests": [
+              "admission_requires_analysis_contract"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests.rs",
+        "old_test": "sdk_components_pass_admission",
+        "assertions": [
+          "Discovery, process, credentials, Kubernetes and detector-example SDK components all pass source/interface admission."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+            "tests": [
+              "sdk_components_pass_admission"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests.rs",
+        "old_test": "admission_bounds_compile_work",
+        "assertions": [
+          "Explicit function operator bound rejects 65536 nops and accepts a valid local declaration.",
+          "Explicit instance count rejects 17 instantiations with typed Limit.",
+          "Cancelled parsing returns the Data cancellation variant.",
+          "The test-only amendment accepts exactly source_bytes and rejects the same valid component when its configured source bound is one byte smaller."
+        ],
+        "classification": "Current owner plus exact source boundary test amendment",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+            "tests": [
+              "admission_bounds_compile_work"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests.rs",
+        "old_test": "evaluation_capacity_recovers",
+        "assertions": [
+          "Four configured evaluation permits succeed, the fifth returns Busy, final drops send capacity changes, and later admission succeeds."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+            "tests": [
+              "evaluation_capacity_recovers"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      },
+      {
+        "old_path": "crates/araphor-analysis_back/src/package/wasm/tests.rs",
+        "old_test": "wait_checks_resource",
+        "assertions": [
+          "An evaluation wait stays Pending on an unrelated notice while four permits remain; releasing permits makes it Ready.",
+          "A compiler wait stays Pending while the compile lock remains held, including after a notice; release plus notice makes it Ready."
+        ],
+        "classification": "Current owner",
+        "current": [
+          {
+            "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+            "tests": [
+              "wait_checks_resource"
+            ]
+          }
+        ],
+        "qualification": "Source reviewed; not run in this audit"
+      }
+    ],
+    "current_runtime_tests": [
+      {
+        "path": "crates/araphor-package-runtime/src/native/artifact.rs",
+        "name": "native_names_cannot_escape",
+        "line": 484,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/artifact.rs",
+        "name": "admission_rejects_foreign_target",
+        "line": 492,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/artifact.rs",
+        "name": "multiarch_preserves_platform_abi",
+        "line": 521,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/artifact.rs",
+        "name": "platform_rejects_wrong_class",
+        "line": 540,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "failures_preserve_typed_codes",
+        "line": 176,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "loading_rejects_null_accessor",
+        "line": 259,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "cancellation_prevents_native_load",
+        "line": 288,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "loading_rejects_system_paths",
+        "line": 309,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "admission_checks_system_requirements",
+        "line": 337,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "admission_checks_dependency_content",
+        "line": 372,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "extraction_rejects_replacement",
+        "line": 409,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "mapped_dependency_rejects_alias",
+        "line": 422,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "pinned_path_rejects_replacement",
+        "line": 454,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "sealed_closure_loads_sibling",
+        "line": 473,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "dependency_soname_matches_name",
+        "line": 543,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "admission_rejects_unreachable_provider",
+        "line": 570,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "name": "loading_rejects_incompatible_table",
+        "line": 600,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/mod.rs",
+        "name": "disabled_limits_allow_execution",
+        "line": 41,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/cache.rs",
+        "name": "cache_enforces_each_bound",
+        "line": 293,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/cache.rs",
+        "name": "pinned_code_retains_charge",
+        "line": 348,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs",
+        "name": "fixture_cache_charges_fit",
+        "line": 6,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs",
+        "name": "fixture_options_stay_separate",
+        "line": 74,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/batches.rs",
+        "name": "component_keeps_input_batches",
+        "line": 3,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/concurrency.rs",
+        "name": "guests_overlap_with_independent_lifetimes",
+        "line": 43,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/prepared.rs",
+        "name": "preparation_precedes_guest_timeout",
+        "line": 5,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/prepared.rs",
+        "name": "prepared_handle_keeps_binding",
+        "line": 49,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/prepared.rs",
+        "name": "retained_trap_keeps_code",
+        "line": 107,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs",
+        "name": "default_quotas_execute_component",
+        "line": 3,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs",
+        "name": "explicit_fuel_exhausts_component",
+        "line": 24,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs",
+        "name": "explicit_timeout_interrupts_component",
+        "line": 67,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs",
+        "name": "fixture_modes_keep_quotas",
+        "line": 106,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+        "name": "component_state_is_separate",
+        "line": 84,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+        "name": "component_recovers_after_failure",
+        "line": 117,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+        "name": "component_validates_error_output",
+        "line": 187,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+        "name": "component_enforces_transfer_limits",
+        "line": 226,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+        "name": "component_control_interrupts_runs",
+        "line": 272,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+        "name": "runtime_cancellation_joins_guest_and_releases_capacity",
+        "line": 327,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+        "name": "dropped_runtime_future_retains_worker_until_completion",
+        "line": 382,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+        "name": "runtime_deadline_joins_queued_worker",
+        "line": 457,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests/runtime.rs",
+        "name": "fixture_code_separates_state",
+        "line": 513,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+        "name": "admission_rejects_native_images",
+        "line": 12,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+        "name": "admission_requires_analysis_contract",
+        "line": 35,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+        "name": "sdk_components_pass_admission",
+        "line": 69,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+        "name": "admission_bounds_compile_work",
+        "line": 99,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+        "name": "evaluation_capacity_recovers",
+        "line": 134,
+        "qualification": "Source read; not run in this audit"
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+        "name": "wait_checks_resource",
+        "line": 153,
+        "qualification": "Source read; not run in this audit"
+      }
+    ],
+    "source_inventory_note": "The test attribute inventory is a source check. It is not a test-run receipt. Conditional platform attributes remain in source.",
+    "patch_tests": [
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/tests.rs",
+        "tests": [
+          "admission_bounds_compile_work"
+        ]
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs",
+        "tests": [
+          "fixture_options_stay_separate"
+        ]
+      }
+    ],
+    "qualification": "Not run; root owns Cargo"
+  },
+  "qualification": {
+    "migration-runtime61": {
+      "command": [
+        "target/debug/deps/araphor_package_runtime-0f7837d6857b250a",
+        "--test-threads=2",
+        "--nocapture"
+      ],
+      "started_utc": "2026-10-20T06:18:51.413695+00:00",
+      "elapsed_seconds": 151.295,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-package-runtime/src/wasm/cache.rs": "c70668c769ec1a065087423f73deffa28aad3f3839901baf70450c02c5a3794d",
+        "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs": "96e908dc845e586bbf2ec929d9867fa0c7245ffb94f618b2da4c6a31103e8650",
+        "crates/araphor-package-runtime/src/wasm/tests.rs": "c7cc0ad424768726a0ebbd49598acd1632ff8e1bd6d4eb5995556ce0b668ca87"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-runtime61.log",
+      "evidence_version": 2,
+      "head_before": "7315cabdf3ddea84a137ec3c9359b9c7a04850b6",
+      "head_after": "7315cabdf3ddea84a137ec3c9359b9c7a04850b6",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "991fb83547d0ff456152f76042e818a1e67be0ed6cbf08539b1ab40a5289b43f"
+    },
+    "migration-wasm-query61": {
+      "command": [
+        "target/debug/deps/araphor_query-c8742c21f1c7ffc0",
+        "definition::tests::parity::",
+        "definition::tests::guest::",
+        "--test-threads=2",
+        "--nocapture"
+      ],
+      "started_utc": "2026-10-20T06:18:51.195441+00:00",
+      "elapsed_seconds": 57.47,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-package-runtime/src/wasm/cache.rs": "c70668c769ec1a065087423f73deffa28aad3f3839901baf70450c02c5a3794d",
+        "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs": "96e908dc845e586bbf2ec929d9867fa0c7245ffb94f618b2da4c6a31103e8650",
+        "crates/araphor-package-runtime/src/wasm/tests.rs": "c7cc0ad424768726a0ebbd49598acd1632ff8e1bd6d4eb5995556ce0b668ca87"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-wasm-query61.log",
+      "evidence_version": 2,
+      "head_before": "7315cabdf3ddea84a137ec3c9359b9c7a04850b6",
+      "head_after": "7315cabdf3ddea84a137ec3c9359b9c7a04850b6",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "a9e75e8a1407c404179ea39b3cef7cbc88b0d124c630b0cd6c05404b36518b2b"
+    },
+    "migration-wasm-clippy62": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "started_utc": "2026-10-20T06:30:28.929738+00:00",
+      "elapsed_seconds": 83.945,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis_back/src/package/wasm.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/package/wasm/cache.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/package/wasm/compiler.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/package/wasm/compiler/image.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/package/wasm/compiler/input.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/package/wasm/compiler/input/tests.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/package/wasm/compiler/tests.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-analysis_back/src/package/wasm/compiler/worker.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "crates/araphor-package-runtime/src/wasm/cache.rs": "c70668c769ec1a065087423f73deffa28aad3f3839901baf70450c02c5a3794d",
+        "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs": "96e908dc845e586bbf2ec929d9867fa0c7245ffb94f618b2da4c6a31103e8650",
+        "crates/araphor-package-runtime/src/wasm/tests.rs": "c7cc0ad424768726a0ebbd49598acd1632ff8e1bd6d4eb5995556ce0b668ca87"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-wasm-clippy62.log",
+      "evidence_version": 2,
+      "head_before": "7315cabdf3ddea84a137ec3c9359b9c7a04850b6",
+      "head_after": "7315cabdf3ddea84a137ec3c9359b9c7a04850b6",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57"
+    }
+  },
+  "qualified_owner_sha256": {
+    ".agents/engineering.md": "42355fc247b8036e3f1395a2339865c174076c9c2c0220f9a2a6bf2c5e6cd05d",
+    ".agents/verification.md": "94c20f5b24a19a14af88843c4fc42b4b06f8af4a98306fcc875b388502e1c8f3",
+    "Cargo.toml": "31eb1d1a1c737d75a733480266485b71faab82e1261660b48026b952f3253048",
+    "crates/araphor-package-runtime/Cargo.toml": "edecd6ba5eb9ef77a0bf8f5f628b102ab47b3c471a3224e7be8a00dee7113614",
+    "crates/araphor-package-runtime/src/error.rs": "d06901270e8a41ff6a0536b13849734cee9c3ffbfafc347e0a33b434343701cc",
+    "crates/araphor-package-runtime/src/lib.rs": "5cca4421ffaec6e7fd1ca332646d523b0518f06510217e087e551046f876274b",
+    "crates/araphor-package-runtime/src/limits.rs": "4ccac3ee388b9a8d3d6e5700dc622848bde51fc08378114008d4b5ce7773e51a",
+    "crates/araphor-package-runtime/src/native/artifact.rs": "052efd1ae74d5f766b7fe72d4d6498d80a3e968d28b57f1d42c1f48b9a8b1660",
+    "crates/araphor-package-runtime/src/native/files.rs": "3ad1860035fe16681a038ce5c8dc0ca1135d2bbbdfb4fe37426a0b0979383493",
+    "crates/araphor-package-runtime/src/native/loading.rs": "7a9722dcd223ca7c62e00f703594b81bd5ffbc547ca7f0ea5245257895dac43b",
+    "crates/araphor-package-runtime/src/native/mod.rs": "566c307ad4c16065ace19b339a47e6ab6b027a2738c459153de58431d4b9a749",
+    "crates/araphor-package-runtime/src/wasm/admission.rs": "6dd42f80876cd34cf35c3cbed819e2b259014f32e39af46d550265a4461a370e",
+    "crates/araphor-package-runtime/src/wasm/bindings.rs": "8389acec4986766b3fa5b844714d5b54e17951398cea00845bb48174eaa86ff6",
+    "crates/araphor-package-runtime/src/wasm/cache.rs": "c70668c769ec1a065087423f73deffa28aad3f3839901baf70450c02c5a3794d",
+    "crates/araphor-package-runtime/src/wasm/execution.rs": "685189aa096bb5ef9c8962950c475a786f0bf63510d28346cc4a29e5d824db9b",
+    "crates/araphor-package-runtime/src/wasm/fixtures/tests.rs": "96e908dc845e586bbf2ec929d9867fa0c7245ffb94f618b2da4c6a31103e8650",
+    "crates/araphor-package-runtime/src/wasm/fixtures.rs": "ba73849fa4611961ebac0fb5c552ab0a32bf38cb581cae90e71f6007911277fa",
+    "crates/araphor-package-runtime/src/wasm/tests/runtime/batches.rs": "24aa3e3d57532c3229a1362fcce12af4f58ddcc0d33f37e10addae3e52b4dc65",
+    "crates/araphor-package-runtime/src/wasm/tests/runtime/concurrency.rs": "99276b6982bd8a7dd35444adf2a2443b0e0e418022446a1e9d40eddbaa7090a7",
+    "crates/araphor-package-runtime/src/wasm/tests/runtime/prepared.rs": "166f20d841953d6afd542e8864cb1dd611a42d5f503d7fe1dba2802d7d0e64d9",
+    "crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs": "fa53ea16df161fc8663a32a57ebc8af2e57f081f1c87d54dd4c86a8a52adf4b6",
+    "crates/araphor-package-runtime/src/wasm/tests/runtime.rs": "4d48ea65e9a34a8a932c83caf2c980f25c2e3e860a1a28d68cbec3c6bd7e86e2",
+    "crates/araphor-package-runtime/src/wasm/tests.rs": "c7cc0ad424768726a0ebbd49598acd1632ff8e1bd6d4eb5995556ce0b668ca87",
+    "crates/araphor-package-runtime/src/wasm.rs": "96c642f44d463f0489e02fdca74bb40ef770538b5f017bbbb5e4dcdbe397b19d",
+    "crates/araphor-query/src/definition/call.rs": "484257d76a31cb851f65f2f9de40bfee3a4c963788c78b06285630f1c5fa4a7e",
+    "crates/araphor-query/src/definition/physical/guest.rs": "b7a4d763d242d70f00a357773c92f138b50cad6ad94c0b8994a94335bfa8af48",
+    "crates/araphor-query/src/definition/physical/tests.rs": "c233554415a5c648b0c46ac60d045d233e870d706017d200dae9daa7c4146b82",
+    "crates/araphor-query/src/definition/physical.rs": "bde3120a76969985a0df9b6c0f1c96e2be01a4460b19ee646b390369e4b15b46",
+    "crates/araphor-query/src/definition/tests/execution.rs": "f46e974cd2365f08c430282b1c375431fcd3eb25508575396396d3690bc930f3",
+    "crates/araphor-query/src/definition/tests/guest.rs": "eef8dc0b6df17e027e87dde8e6485ab4778881d937753555f49cef51319a4891",
+    "crates/araphor-query/src/definition/tests/parity.rs": "d1bc0c920c6b500d84fc08e2c744c62dfaedbb7dd8dcfa59f5f6f39bbcef5b04",
+    "crates/araphor-query/src/definition.rs": "428b4de0bf230e907a2c71003c2707c25fb9d1751c8daf974a2858c827d691e9",
+    "crates/araphor-query/src/error.rs": "2e7ab7a54e91bfda9e99b20627678977d698c820736352b90a3ae7710d8fe94f",
+    "crates/araphor-query/src/execution/tests.rs": "083991b6f2ceead0650ed142f6858ad4bd004ccd9c893de713d8c9cee7602e55",
+    "crates/araphor-query/src/execution.rs": "aa77ccef3408a462f639501e7cb676020492c8ce8114edffc984a813a130b6bb",
+    "crates/mithril-control/Cargo.toml": "3310aad868be30d4b04dcffe9cf1b242abd1a4ce6655cf83303aec40a44d8d0e",
+    "crates/mithril-control/src/discovery/mod.rs": "1737df937953b2c57bc2c039710d7d9fbe459df114546e5b9d456f4083ed1672",
+    "crates/mithril-control/src/discovery/preview.rs": "c13b2e31e9acd9a528e364ebfe165963ee75b46735dd0012d3dba653e61e150a",
+    "docs/plans/araphor-analysis-migration.md": "c650f4da1c544782dce31aa7ffd0acf74ad947915ed629e637665dc2432f3ce3",
+    "docs/plans/araphor-component-redesign.md": "80329068a55ab131fcf82e82a318ff8d6c034e53e198f282015b5d6a549d4085",
+    "docs/plans/araphor-feature-parity-todo.md": "370a48ce381556fce6c6a978ffbc331f84e81e22906285b530e339ab11384c37",
+    "docs/plans/araphor-performance-simplification-todo.md": "5598e590f31317c722f4a2106c774b835a1812e5abe7a26ad521b31517f0f759"
+  },
+  "runtime_correction": "Declare the cache reservation before compiled code. Failure drops code before its cache charge. Existing failure-admission assertions check full capacity after return; they do not observe the native destructor timing.",
+  "architecture_change": "Native in-process Component::new replaces compiler processes, request and reply pipes, CBOR framing, PID checks and fixed process CPU and wall limits.",
+  "unsupported": [
+    "Configured in-process compiler working-memory limits return typed Unsupported.",
+    "Synchronous native compilation is not preemptible. Explicit cancellation joins the actual worker before acknowledgement.",
+    "Cache and image limits do not bound peak compiler working memory."
+  ],
+  "final_rust_gate": "Not done for this source. The earlier full run stops at the OCI fixture. Its test-only correction passes all 15 Package cases. A complete final gate is still required after the last covered edit.",
+  "complete_migration": "Not done",
+  "production_reduction_target": "Not done",
+  "remaining_reference": {
+    "before": 175,
+    "after": 167,
+    "byte_identical_to_baseline": 167,
+    "mismatches": []
+  },
+  "assertion_map_status": "The map retains the original audit wording. The current qualification records run all mapped active Runtime tests and relevant Query cases. Removed subprocess assertions have no active protocol boundary.",
+  "production_ledger": {
+    "record": "/tmp/araphor-oci-execution-count61.json",
+    "source_fingerprint": "8b4cf5f003c2e3d08cf60d8117d74a584ff62da287fec5a96caec8a9ce27f264",
+    "deliverable_net": -994,
+    "reference_removed": 995,
+    "runtime_added": 1,
+    "net_from_original_baseline": 12831,
+    "target_met": false
+  }
+}
