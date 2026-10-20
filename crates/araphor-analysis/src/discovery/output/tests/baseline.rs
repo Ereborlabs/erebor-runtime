@@ -89,3 +89,101 @@ async fn comparison_matches_corpus() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn recorded_crosses_old_boundary() -> TestResult {
+    let fixture = Fixture::new()?;
+    let mut input = Fixture::input()?;
+    let record = input.records[0].clone();
+    let context = input.contexts[0].clone();
+    input.records = (1..=129)
+        .map(|cursor| {
+            let mut record = record.clone();
+            record.id.durable_cursor = cursor;
+            record
+        })
+        .collect();
+    input.contexts = input.records[..128]
+        .iter()
+        .map(|record| {
+            let mut context = context.clone();
+            context.record_id = record.id.clone();
+            context
+        })
+        .collect();
+    input.coverage[0].last_cursor = 129;
+    input.coverage[0].expected_records = 129;
+    input.exclusions = vec![DiscoveryUnresolvedV1 {
+        record_id: input.records[127].id.clone(),
+        reason: "EXPLICIT_EXCLUSION".into(),
+    }];
+    input.lifecycle = vec![DiscoveryLifecycleEntryV1 {
+        case: DiscoveryLifecycleCaseV1::Startup,
+        state: DiscoveryLifecycleStateV1::Recorded {
+            records: vec![input.records[0].id.clone(), input.records[128].id.clone()],
+        },
+    }];
+    let unique = fixture.recorded(&input).await?;
+    input.records.extend(input.records.clone());
+    input.records.reverse();
+    input.contexts.reverse();
+    let complete = fixture.recorded(&input).await?;
+    assert_eq!(complete.snapshot, unique.snapshot);
+    assert_eq!(unique.duplicate_deliveries, 0);
+    assert_eq!(complete.duplicate_deliveries, 129);
+    assert_eq!(complete.snapshot.accepted_records, 129);
+    assert_eq!(complete.snapshot.included_records, 127);
+    assert_eq!(complete.snapshot.excluded_records, 1);
+    assert_eq!(complete.snapshot.unresolved_records, 1);
+    assert_eq!(complete.snapshot.coverage, input.coverage);
+    assert_eq!(complete.snapshot.excluded, input.exclusions);
+    assert_eq!(
+        complete.snapshot.unresolved[0].record_id.durable_cursor,
+        129
+    );
+    assert_eq!(
+        complete.snapshot.atoms[0]
+            .evidence_sample
+            .iter()
+            .map(|id| id.durable_cursor)
+            .collect::<Vec<_>>(),
+        (1..=8).collect::<Vec<_>>()
+    );
+    assert_eq!(complete.snapshot.lifecycle[0], input.lifecycle[0]);
+    assert_eq!(complete.snapshot.tenant_id, input.tenant_id);
+    assert_eq!(complete.snapshot.source_revision, input.source_revision);
+    assert_eq!(complete.snapshot.proof_kind, input.proof_kind);
+    Ok(())
+}
+
+#[tokio::test]
+async fn duplicates_keep_context_projection() -> TestResult {
+    let fixture = Fixture::new()?;
+    let mut input = Fixture::input()?;
+    input.records.truncate(1);
+    input.contexts.truncate(1);
+    input.coverage[0].last_cursor = 1;
+    input.coverage[0].expected_records = 1;
+    let text = "\\\"".repeat(2048);
+    input.contexts[0].subject_revision = text.clone();
+    input.contexts[0].image_digest = text.clone();
+    input.contexts[0].configuration_digest = text.clone();
+    input.contexts[0].static_key.object_selector = text;
+    let single = fixture.recorded(&input).await?;
+    let record = input.records[0].clone();
+    input.records.extend(std::iter::repeat_n(record, 1023));
+    let (call, result) = fixture.atoms(&input).await?;
+    let repeated = DiscoveryOwner::recorded_result(&input, &call, &result)?;
+    assert_eq!(repeated.snapshot, single.snapshot);
+    assert_eq!(repeated.duplicate_deliveries, 1023);
+    assert_eq!(repeated.snapshot.included_records, 1);
+    let records = &result.evaluation().input("records")?.data;
+    assert_eq!(records.rows(), 1024);
+    for batch in &records.batches {
+        let projected: Vec<builtin::Record<'_>> = serde_arrow::from_record_batch(batch)?;
+        for record in projected {
+            assert!(!serde_json::to_string(&record)?.contains("subject_revision"));
+        }
+    }
+    Ok(())
+}

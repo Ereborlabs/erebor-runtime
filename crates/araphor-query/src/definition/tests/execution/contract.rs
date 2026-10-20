@@ -376,6 +376,7 @@ async fn sql_empty_output_metadata() -> TestResult {
 #[derive(Debug)]
 struct ConversionGate {
     schema: Arc<sdk::Schema>,
+    batch: Option<sdk::RecordBatch>,
     first: Arc<AtomicUsize>,
     later: Arc<AtomicUsize>,
     later_entered: Arc<Notify>,
@@ -396,13 +397,18 @@ impl PartitionStream for ConversionGate {
     }
 
     fn execute(&self, context: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let first = sdk::RecordBatch::try_new(
-            Arc::clone(&self.schema),
-            vec![Arc::new(BinaryArray::from_iter_values(
-                std::iter::repeat_n([7_u8], context.session_config().batch_size()),
-            ))],
-        )
-        .map_err(DataFusionError::from);
+        let first = self.batch.clone().map_or_else(
+            || {
+                sdk::RecordBatch::try_new(
+                    Arc::clone(&self.schema),
+                    vec![Arc::new(BinaryArray::from_iter_values(
+                        std::iter::repeat_n([7_u8], context.session_config().batch_size()),
+                    ))],
+                )
+                .map_err(DataFusionError::from)
+            },
+            Ok,
+        );
         let producer = Producer(Arc::clone(&self.dropped));
         let first_count = Arc::clone(&self.first);
         let later_count = Arc::clone(&self.later);
@@ -464,6 +470,7 @@ async fn sql_conversion_drops_producer() -> TestResult {
         .prepare(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
         .await?;
     let gate = Arc::new(ConversionGate {
+        batch: None,
         schema: Arc::new(sdk::Schema::new(vec![sdk::Field::new(
             "value",
             sdk::DataType::Binary,
@@ -521,6 +528,8 @@ async fn sql_conversion_drops_producer() -> TestResult {
     capacity_released(&fixture)?;
     Ok(())
 }
+
+mod pressure;
 
 #[tokio::test]
 async fn sql_limit_precedes_references() -> TestResult {

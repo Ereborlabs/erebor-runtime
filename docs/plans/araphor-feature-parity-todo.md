@@ -53,7 +53,9 @@ source comparison and focused qualification. At that point, 179 files remained
 unchanged. The historical final Rust gate
 `migration-final-ci42` covers those 29 leaves. Four additional reference files
 were then retired. Eight more Wasm leaves and 15 finite Graph, SQL, Discovery,
-test, and asset leaves are now retired; 152 baseline files remain unchanged.
+test, and asset leaves are retired. Eight executor, component, atom, pager,
+and pure test leaves are then removed after 50 focused replacement checks pass.
+There are now 64 retired files; 144 baseline files remain unchanged.
 The recovery archive
 retains all 208 originals. Read the
 [retirement record](araphor-analysis-migration.md#retired-finite-reference-files)

@@ -367,14 +367,17 @@ Rust gate passes in `migration-final-ci42` at commit `95e9bb4d`. That record doe
 not qualify the later managed source. The additional finite retirement removes
 exactly four mapped leaves: Graph contract source and tests, model input, and
 model operation. Eight more Wasm leaves and 15 finite Graph, SQL, Discovery,
-test, and asset leaves are now retired. The remaining 152 reference files keep
+test, and asset leaves are retired. Eight more executor, component, atom,
+pager, and pure test leaves are removed after 50 focused replacement checks
+pass. The remaining 144 reference files keep
 their baseline content.
 The recovery archive retains all 208 recovered files. Read the
 [retirement records](../plans/araphor-analysis-migration.md#retired-finite-reference-files)
 and the [four-file record](../../recovery/araphor-analysis-managed-retirement-20261019.json)
 and [Wasm record](../../recovery/araphor-analysis-wasm-retirement-20261020.json),
 [Graph record](../../recovery/araphor-analysis-graph-retirement-20261020.json),
-and [output record](../../recovery/araphor-analysis-output-retirement-20261020.json)
+the [output record](../../recovery/araphor-analysis-output-retirement-20261020.json),
+and [native helper record](../../recovery/araphor-analysis-native-retirement-20261020.json)
 for the exact scope. The current final Rust gate and complete migration remain
 **Not done**.
 
@@ -402,6 +405,43 @@ not prove that all Graph quotas are disabled. The 31 Analysis Graph tests,
 27 Data Graph tests, and 21 notification caller tests pass. Their exact
 retirement scope is in the records above. Final Rust qualification is
 **Not done**.
+
+## Finite native helper replacement
+
+[PackageExec](../../crates/araphor-query/src/definition/physical.rs) receives
+captured native input relations.
+  -> [Guest execution](../../crates/araphor-query/src/definition/physical/guest.rs) reserves retained inputs and encoding scratch before Runtime entry.
+  -> [Native SQL execution](../../crates/araphor-query/src/definition/physical/sql.rs) keeps declared output, checkpoint, and reason order.
+  -> [Query memory](../../crates/araphor-query/src/memory.rs) keeps retained arrays charged until the last alias is dropped.
+
+[Recorded SQL](../../crates/araphor-analysis-builtins/src/discovery/sql/recorded_snapshot.sql)
+receives the complete selected relations.
+  -> [Native operators](../../crates/araphor-analysis-builtins/src/discovery/sql/recorded_snapshot.sql) aggregate all Arrow partitions without an Analysis pager.
+  -> [DiscoveryOwner::recorded_result](../../crates/araphor-analysis/src/discovery/output.rs) checks the exact call and complete result.
+  -> [Data validation](../../crates/araphor-data/src/discovery/validation/recorded.rs) checks source attribution, accounting, coverage, and lifecycle.
+
+[Conversion preflight](../../crates/araphor-query/src/definition/tests/execution/contract/pressure.rs)
+fails under configured output pressure.
+  -> [The physical executor](../../crates/araphor-query/src/definition/physical.rs) returns the typed limit error before conversion.
+  -> [The collection owner](../../crates/araphor-query/src/definition/physical.rs) drops the producer without a later poll.
+  -> [The failure checks](../../crates/araphor-query/src/definition/tests/execution/contract/pressure.rs) prove unchanged Data and released reservations.
+
+The [pressure cases](../../crates/araphor-query/src/definition/tests/execution/contract/pressure.rs)
+also check nested encoding scratch, zero-row schema metadata, valid saved-state
+exchange, and the actual Runtime SDK encoder failure. The
+[record projection cases](../../crates/araphor-analysis/src/discovery/output/tests/native.rs)
+check every typed event field, original bytes, source witnesses, stream
+completion, and content-derived input revisions. The
+[boundary cases](../../crates/araphor-analysis/src/discovery/output/tests/baseline.rs)
+keep duplicate accounting and lifecycle references across the old 128-group
+boundary. The [native SQL cases](../../crates/araphor-analysis/src/package/tests/sql/recorded.rs)
+keep sparse declared counts, empty ranges, orphan rejection, and complete
+partition results.
+
+All 50 mapped focused checks pass before the eight reference leaves are
+removed. The record pins the owner source and test binaries. No production
+code is added for this removal. The long-running lifecycle and complete final
+Rust gate remain **Not done**.
 
 ## Finite managed execution
 

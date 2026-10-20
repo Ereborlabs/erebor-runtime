@@ -1144,3 +1144,110 @@ async fn recorded_rejects_relational_conflicts() -> TestResult {
     assert!(fixture.query(false).await.is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn recorded_sparse_counts_survive() -> TestResult {
+    for count in [0, 1, 2, 3, 10_000] {
+        let mut fixture = Recorded::new(2);
+        fixture.records[1].id.durable_cursor = 10_000;
+        fixture.contexts[1].record_id = fixture.records[1].id.clone();
+        fixture.coverage[0].last_cursor = 10_000;
+        fixture.coverage[0].expected_records = count;
+        fixture.coverage[0].state = CoverageState::Unknown;
+        fixture.coverage[0].gap_reasons = vec!["RECORDED_UNKNOWN".into()];
+        let expected = fixture.oracle()?;
+        assert_eq!(expected.accepted_records, 2);
+        assert_eq!(expected.coverage.len(), 1);
+        let range = &expected.coverage[0];
+        assert_eq!(range.stream, fixture.coverage[0].stream);
+        assert_eq!(range.cpu_id, fixture.coverage[0].cpu_id);
+        assert_eq!((range.first_cursor, range.last_cursor), (1, 10_000));
+        assert_eq!(range.expected_records, count);
+        assert_eq!(
+            range.coverage_revision,
+            fixture.coverage[0].coverage_revision
+        );
+        assert_eq!(
+            range.coverage_interval_id,
+            fixture.coverage[0].coverage_interval_id
+        );
+        assert_eq!(
+            range.state,
+            if count == 2 {
+                CoverageState::Unknown
+            } else {
+                CoverageState::Gapped
+            }
+        );
+        assert!(range.gap_reasons.contains(&"RECORDED_UNKNOWN".into()));
+        assert_eq!(
+            range.gap_reasons.contains(&"INPUT_RANGE_INCOMPLETE".into()),
+            count != 2
+        );
+        expected.assert_batch(fixture.query(true).await?)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorded_preserves_empty_ranges() -> TestResult {
+    let mut fixture = Recorded::new(2);
+    fixture.records[0].id.durable_cursor = 2;
+    fixture.records[1].id.durable_cursor = 4;
+    fixture.records[1].id.stream.node_id = "zz-other-node".into();
+    for (record, context) in fixture.records.iter().zip(&mut fixture.contexts) {
+        context.record_id = record.id.clone();
+    }
+    fixture.coverage[0].last_cursor = 2;
+    fixture.coverage[0].expected_records = 1;
+    let mut other = fixture.coverage[0].clone();
+    other.stream = fixture.records[1].id.stream.clone();
+    other.last_cursor = 4;
+    let mut empty = fixture.coverage[0].clone();
+    empty.cpu_id += 1;
+    empty.last_cursor = 8;
+    empty.expected_records = 3;
+    empty.state = CoverageState::Closed;
+    fixture.coverage.extend([other, empty.clone()]);
+    fixture.records.reverse();
+    fixture.contexts.reverse();
+    fixture.coverage.reverse();
+    let expected = fixture.oracle()?;
+    assert_eq!(expected.accepted_records, 2);
+    assert_eq!(expected.coverage.len(), 3);
+    let mut qualified = empty.clone();
+    qualified.state = CoverageState::Gapped;
+    qualified.gap_reasons.push("INPUT_RANGE_INCOMPLETE".into());
+    assert_eq!(
+        expected
+            .coverage
+            .iter()
+            .filter(|range| **range == qualified)
+            .count(),
+        1
+    );
+    for original in fixture.coverage.iter().filter(|range| **range != empty) {
+        assert!(expected.coverage.contains(original));
+    }
+    expected.assert_batch(fixture.query(true).await?)?;
+    fixture.records.clear();
+    fixture.contexts.clear();
+    let empty = fixture.oracle()?;
+    assert_eq!(empty.accepted_records, 0);
+    assert_eq!(empty.coverage.len(), 3);
+    for original in &fixture.coverage {
+        let mut qualified = original.clone();
+        qualified.state = CoverageState::Gapped;
+        qualified.gap_reasons.push("INPUT_RANGE_INCOMPLETE".into());
+        assert_eq!(
+            empty
+                .coverage
+                .iter()
+                .filter(|range| **range == qualified)
+                .count(),
+            1
+        );
+    }
+    empty.assert_batch(fixture.query(true).await?)?;
+    Ok(())
+}

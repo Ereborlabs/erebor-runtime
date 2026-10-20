@@ -38,13 +38,13 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 152 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 144 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
 | Shared subscriptions | Query carries complete per-step package returns and stable admitted call IDs. Explicit stop and authority loss join active workers. The finite Instance state reuse/reset and captured execution checks pass. The current final Rust gate is pending. Long-running window completion remains unimplemented. No separate package polling task exists. | Partial qualification |
 | Graph boundary | All 31 focused Analysis Graph tests and 27 Data Graph tests pass. Data now owns request validation before native reads. Graph validates canonical captured input and actual detector returns. These tests do not qualify the automatic producer. | Finite boundary qualified |
-| Discovery boundary | All 4 Data provenance tests and 8 native output-adapter tests pass. Native SQL retains the computations. Live publication remains incomplete. | Finite boundary qualified |
+| Discovery boundary | All 4 Data provenance tests, 12 output-adapter tests, and 11 complete native recorded SQL tests pass. Exact event projection, input revision, duplicate accounting, sparse coverage, and lifecycle checks pass. Live publication remains incomplete. | Finite boundary qualified |
 | Context | All 17 focused Context tests pass. Active Analysis retains import authorization and native selection. Quotas are explicit options and disabled by default. | Finite boundary qualified |
 | Fixture qualification | All 4 comparator cases and the corrected entered-guest cancellation/revocation case pass. Active Analysis uses native calls and current Test authority. Native accumulation and clock/seed cases pass. Negative saved fixture time returns Unsupported. | Partial qualification |
 | Managed state and lifecycle | Finite Instance, Query capture, and Data managed checks pass for immutable attempts, guarded state, atomic multi-call publication, receipt recovery, authority, and cancellation. The native Instance case passes separately. The final Rust gate is pending. Long-running supervision, start/inspect/stop, public history, and automatic restart remain absent. | Finite checks pass; lifecycle Not done |
@@ -54,7 +54,7 @@ Every replacement passes its required checks
 | Public callers | Restore current managed operations through Control, CLI, and lightweight E2E. Reference test modules remain available but are not a substitute for native integration tests. | Not done |
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
-| Final retirement | The earlier 41 leaves and 15 mapped finite Graph, SQL, Discovery, and test leaves are removed. The 152 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Final retirement | The earlier 56 leaves and 8 mapped executor, component, atom, pager, and test leaves are removed. The 144 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -226,15 +226,15 @@ a long-running recovery supervisor.
 
 ### Production code ledger
 
-The current count67 follows the finite Graph, SQL, and Discovery retirement.
+The current count71 follows the finite executor, component, atom, and pager retirement.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 12,989 | 7,197 | +5,792 |
-| Original reduction baseline `7b7b407a` | 42,173 | 30,385 | +11,788 |
+| `6a25ba1b` | 12,989 | 8,001 | +4,988 |
+| Original reduction baseline `7b7b407a` | 41,369 | 30,385 | +10,984 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -242,12 +242,16 @@ The finite managed deliverable at `7315cabd` adds 3,407 net production lines rel
 Its Runtime correction adds one production line. This deliverable removes
 994 net production lines. The next 15-file retirement removes 1,062 reference
 production lines. Data request validation adds 19 production lines. This
-deliverable removes 1,043 net production lines. Another 17,788 net production
+deliverable removes 1,043 net production lines. The later eight-file retirement
+removes 804 production lines and adds no production line. Another 16,984 net production
 lines must be removed relative to the current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count67.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count71.json`. Its selected source
 fingerprint is
+`ff4547f03bc8aa5701f8e0c1f063dab59a8fc208ec1738e9ace78bb28a5c3456`.
+The earlier count67 records the finite Graph, SQL, and Discovery retirement at
++11,788 production lines from the original reduction baseline. Its fingerprint is
 `a8065dc388d1182db14f530b2b088a5201cd801f709fc0610213cec6be0f6a27`.
 The earlier count61 records the Wasm retirement at +12,831 production lines
 from the original reduction baseline. Its source fingerprint is
@@ -379,6 +383,45 @@ There are now 56 retired files and 152 remaining baseline files. Every remaining
 file still matches the baseline. The recovery archive is unchanged. Mixed
 native, large-input, producer, replay, expiry, lifecycle, and recovery references
 remain. The complete final Rust gate, migration, and reference removal are
+**Not done**.
+
+The later [native helper record](../../recovery/araphor-analysis-native-retirement-20261020.json)
+removes eight more complete leaves. Query and Package Runtime replace the
+component exchange helper. Native physical SQL execution replaces ModelRun.
+Query captures complete relations. Native SQL, Builtins, and Data replace the
+recorded atom adapter and pager. Four pure test leaves leave with those owners.
+Every old function and assertion has a replacement map in the record.
+
+| Check | Result | Seconds |
+| --- | --- | ---: |
+| `migration-native-source-build70` | Relevant test targets compile | 19.339 |
+| `migration-native-helper-map70` | 17 executor and exchange cases passed | 31.987 |
+| `migration-recorded-analysis70` | 23 output and native SQL cases passed | 79.312 |
+| `migration-recorded-data70` | 4 provenance cases passed | 0.052 |
+| `migration-recorded-query70` | 3 actual cancellation and join cases passed | 8.280 |
+| `migration-recorded-builtins70` | Typed record proof passed | 0.051 |
+| `migration-native-alias70` | Sliced arrays retain both pool charges | 0.048 |
+| `migration-native-empty-schema70` | Empty IPC dataset retains its schema | 0.058 |
+
+All 50 focused cases pass before removal. Ten new cases check the exact
+remaining boundaries. These cases use actual native calls, source providers,
+SQL execution, and Runtime exchange failures. They add no production owner.
+The new cases keep sparse nested encoding, empty schema metadata, checkpoint
+scratch, valid output conversion pressure, complete record projection, and
+content-derived input revisions. They also keep duplicate counts, declared
+coverage totals, empty ranges, and complete lifecycle references.
+
+The old fixed page split and intermediate fragments have no native API.
+Complete final semantics remain checked. No mixed Back root is edited to
+repair historical module declarations. Back is not a workspace member.
+There are now **64 retired files and 144 remaining baseline files**. All
+remaining files and the complete recovery archive retain their exact bytes.
+This deliverable removes 804 production lines and adds no production line.
+Formatting passes after removal in `migration-native-format71` in 3.992 seconds.
+Strict Clippy passes for all affected targets and features in
+`migration-native-clippy71` in 89.972 seconds. All 193 local documentation
+links resolve.
+Complete migration, reference removal, and the final Rust gate remain
 **Not done**.
 
 ## Root exports
