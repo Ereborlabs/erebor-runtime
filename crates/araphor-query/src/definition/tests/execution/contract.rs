@@ -118,6 +118,10 @@ async fn sql_zero_column_reason() -> TestResult {
 
 #[tokio::test]
 async fn sql_preserves_admitted_order() -> TestResult {
+    admitted_order(Fixture::limits(capacity_limits())?).await
+}
+
+async fn admitted_order(fixture: Fixture) -> TestResult {
     let port = |name| sdk::Port::new(name, Fixture::schema("value"));
     let mut model = sdk::Model::new("count", Vec::new(), vec![port("ZRows"), port("ARows")]);
     model.checkpoint = Some(sdk::CheckpointSpec {
@@ -194,7 +198,6 @@ async fn sql_preserves_admitted_order() -> TestResult {
         }
         assert!(rejected, "{error:?}");
     }
-    let fixture = Fixture::limits(capacity_limits())?;
     fixture.install(&image)?;
     let prepared = fixture
         .prepare(&Fixture::sql(
@@ -1339,3 +1342,5 @@ mod origins;
 mod body_ports;
 
 mod operation;
+
+mod model;

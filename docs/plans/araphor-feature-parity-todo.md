@@ -59,11 +59,13 @@ Fifteen more retained-query, authority, Wasm, and finite notification test
 leaves are removed after 89 focused checks pass. Two image/fixture leaves then
 retire after exact replacement tests pass. The complete error leaf then
 retires after typed error and joined execution checks pass. There are now
-87 retired files; 121 baseline files remain unchanged. Runtime now owns the
+92 retired files; 116 baseline files remain unchanged. Runtime now owns the
 complete limits configuration and both original serialization tests.
 The native operation replacement also retires one complete test leaf after
 all ten old test functions have passing native assertions. This test-only
-removal does not reduce production code. The recovery archive
+removal does not reduce production code. The native model replacement retires five more whole files after all 50
+mapped cases pass. This removes 306 production lines. Installed clock,
+supervision, and old input-runner live rules remain open. The recovery archive
 retains all 208 originals. Read the
 [retirement record](araphor-analysis-migration.md#retired-finite-reference-files)
 for the exact scope. The full Rust gate59 stops at a stale OCI fixture. The

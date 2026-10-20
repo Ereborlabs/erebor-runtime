@@ -1,0 +1,991 @@
+{
+  "status": "The five whole model reference files have qualified native replacements. Complete migration and the final Rust gate remain Not done.",
+  "recorded_at": "2026-10-20T22:08:05.412813+00:00",
+  "qualified_source_base": "6bb468c83ab621207d944db5abaadc67deb81167",
+  "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+  "candidate_files": [
+    {
+      "path": "crates/araphor-analysis_back/src/model.rs",
+      "sha256": "f192d263ff7eeca149cd4cb587ec206f64c6780266b4f60140a516d25a5592f0",
+      "production_lines": 306,
+      "baseline_equal": true,
+      "archive_equal": true
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/model/schema.rs",
+      "sha256": "71792775c19aaa49a058f6e8da13e37c469209a6a63949c929ab1dc2ef7bf3e2",
+      "production_lines": 0,
+      "baseline_equal": true,
+      "archive_equal": true
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/model/tests.rs",
+      "sha256": "6cefb3e971e0dc20c756831d126992b99272ad0ef5d9ce01c126ddf801130a1b",
+      "production_lines": 0,
+      "baseline_equal": true,
+      "archive_equal": true
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/model/tests/clock.rs",
+      "sha256": "9d2c8ffd34a65616fded65dadf3989c7790aa0b3092c6e03b0ebf09cf4f4597f",
+      "production_lines": 0,
+      "baseline_equal": true,
+      "archive_equal": true
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/model/tests/types.rs",
+      "sha256": "2550147eccabe5dcea2a8174211bc1d913fa780c904bdb0a99e9a75be949280a",
+      "production_lines": 0,
+      "baseline_equal": true,
+      "archive_equal": true
+    }
+  ],
+  "source_and_assertion_map": {
+    "old_model_production_code": 306,
+    "old_model_functions": 16,
+    "old_tests": 12,
+    "new_tests": 10,
+    "production_delta": 0,
+    "methods": [
+      {
+        "old_symbol": "AdmittedExport::admit",
+        "old_line": 39,
+        "rules": [
+          "Admit exact model input plans and an optional SQL implementation.",
+          "Reject selected invalid input sources and undeclared body sources."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/package.rs",
+          "crates/araphor-query/src/inputs/mod.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_relation_names",
+          "definition::tests::execution::contract::operation::operation_scope_rejections",
+          "definition::tests::native_package_call_rejections"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedExport::compile",
+        "old_line": 53,
+        "rules": [
+          "Select the declared export implementation from the exact retained image.",
+          "Reject absent or mismatched package, revision, export, target, or implementation."
+        ],
+        "native_owners": [
+          "crates/araphor-package/src/bundle.rs",
+          "crates/araphor-query/src/definition/package.rs",
+          "crates/araphor-query/src/definition/physical.rs"
+        ],
+        "native_tests": [
+          "definition::tests::native_package_call_rejections",
+          "definition::tests::parity::prepared_guest_keeps_identity",
+          "definition::tests::execution::physical_calls_keep_state_identity"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedExport::implementation",
+        "old_line": 73,
+        "rules": [
+          "Keep the selected implementation alive for execution.",
+          "Do not substitute an implementation from another image."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/call.rs",
+          "crates/araphor-query/src/definition/physical.rs"
+        ],
+        "native_tests": [
+          "definition::tests::parity::prepared_guest_keeps_identity",
+          "definition::tests::collision::foreign_admission_cannot_share",
+          "definition::tests::collision::same_admission_shares_outputs"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedExport::implementation_index",
+        "old_line": 85,
+        "rules": [
+          "Bind the selected implementation by immutable package and export identity."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/call.rs"
+        ],
+        "native_tests": [
+          "definition::tests::parity::prepared_guest_keeps_identity",
+          "definition::tests::execution::physical_calls_keep_state_identity"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedExport::input_clock",
+        "old_line": 88,
+        "rules": [
+          "Distinguish typed SQL clocks from literal strings.",
+          "Retain clock dependencies through derived inputs and output dependencies.",
+          "Retain notification deadlines through direct, queried, and discarded input relations."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/follow/window.rs",
+          "crates/araphor-query/src/sources/rows.rs",
+          "crates/araphor-query/src/stream/physical/runtime.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_input_clocks",
+          "follow::tests::model::model_notification_deadlines"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedExport::model_clock",
+        "old_line": 91,
+        "rules": [
+          "Detect typed clocks in outputs, checkpoint, evidence, and reasons.",
+          "Use one captured time in the actual native model body."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/follow/window.rs",
+          "crates/araphor-query/src/definition/physical.rs",
+          "crates/araphor-query/src/definition/physical/sql.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_clock_children",
+          "definition::tests::execution::physical_calls_keep_capture_and_clock"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedExport::allocated_bytes",
+        "old_line": 95,
+        "rules": [
+          "Retain admitted metadata in the existing Query memory owner.",
+          "Share the charge across clones and release the charge with the actual owner.",
+          "Reject configured metadata pressure before retaining bulk clones."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition.rs",
+          "crates/araphor-query/src/definition/package.rs",
+          "crates/araphor-query/src/definition/call.rs",
+          "crates/araphor-query/src/memory.rs"
+        ],
+        "native_tests": [
+          "definition::tests::capacity::metadata_clones_share_capacity",
+          "definition::tests::capacity::metadata_rejects_short_capacity",
+          "definition::tests::capacity::image_capacity_follows_plan",
+          "definition::tests::capacity::image_capacity_joins_guest"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "SqlModelOutputV1::owned_bytes",
+        "old_line": 111,
+        "rules": [
+          "Account for complete SDK output metadata and arrays under configured limits."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/physical.rs",
+          "crates/araphor-query/src/memory.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::pressure::sql_normalization_preflight",
+          "definition::tests::execution::contract::sql_limit_precedes_references"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "SqlModelOutputV1::retain",
+        "old_line": 115,
+        "rules": [
+          "Retain dataset, checkpoint, and reason arrays through real native buffer claims.",
+          "Keep output data valid after plan, Session, and fixture handles drop.",
+          "Release all claims after final aliases and workers drop."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/physical.rs",
+          "crates/araphor-query/src/memory.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::physical_sql_return_retains_contract",
+          "definition::tests::execution::physical_tight_output_capacity",
+          "definition::tests::execution::contract::sql_zero_column_reason",
+          "execution::tests::local::local_query_releases_capacity"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "SqlModelOutputV1::into_parts",
+        "old_line": 155,
+        "rules": [
+          "Transfer the complete typed output and its retained metadata to the immutable call receipt."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/physical.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::physical_sql_return_retains_contract",
+          "definition::tests::execution::contract::model::model_state_provenance"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedModel::reads_output",
+        "old_line": 169,
+        "rules": [
+          "Bind output references for checkpoint, evidence, and reasons.",
+          "Keep the original admitted output binding through native plan rewriting."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/package.rs",
+          "crates/araphor-query/src/definition/call.rs",
+          "crates/araphor-query/src/definition/physical/sql.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::sql_indexes_local_relations",
+          "definition::tests::execution::contract::body_ports::body_port_metadata",
+          "definition::tests::execution::contract::body_ports::body_elided_metadata",
+          "definition::tests::execution::contract::model::model_state_provenance"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedModel::admit",
+        "old_line": 187,
+        "rules": [
+          "Bind complete output and checkpoint sets in descriptor order.",
+          "Bind each reason to a declared output and code.",
+          "Plan every body through the native restricted ContextProvider."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/package.rs",
+          "crates/araphor-query/src/definition/package/scope.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::sql_preserves_admitted_order",
+          "definition::tests::execution::contract::model::model_state_provenance",
+          "definition::tests::execution::contract::operation::operation_scope_rejections"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedModel::outputs",
+        "old_line": 255,
+        "rules": [
+          "Require exact declared output and checkpoint sets.",
+          "Keep descriptor order independent of BTreeMap query order.",
+          "Validate native result schema and SDK output limits."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/package.rs",
+          "crates/araphor-query/src/definition/physical/sql.rs",
+          "crates/araphor-query/src/definition/physical.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::sql_preserves_admitted_order",
+          "definition::tests::execution::physical_checkpoint_preflight",
+          "definition::tests::execution::contract::sql_limit_precedes_references"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedModel::relations",
+        "old_line": 281,
+        "rules": [
+          "Expose only declared inputs, parameters, and prior checkpoint datasets to the model body.",
+          "Expose output relations only to later body stages."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/package.rs",
+          "crates/araphor-query/src/definition/package/scope.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::sql_indexes_local_relations",
+          "definition::tests::execution::sql_body_scope",
+          "definition::tests::execution::contract::operation::operation_scope_rejections"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedModel::relation",
+        "old_line": 301,
+        "rules": [
+          "Keep case-distinct quoted names separate.",
+          "Reject duplicate relations without changing the previously admitted plan.",
+          "Preserve original row indices and schema on local relations."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/definition/package.rs",
+          "crates/araphor-query/src/execution/local.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_relation_names",
+          "execution::tests::local::local_query_keeps_indices",
+          "execution::tests::local::local_query_closes_catalog"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_symbol": "AdmittedModel::plan",
+        "old_line": 319,
+        "rules": [
+          "Parse and plan one native SQL statement.",
+          "Reject external filesystem functions, extra statements, and missing sources.",
+          "Keep error status and retry semantics at the native Query boundary."
+        ],
+        "native_owners": [
+          "crates/araphor-query/src/parser/mod.rs",
+          "crates/araphor-query/src/planner/mod.rs",
+          "crates/araphor-query/src/definition/package/scope.rs"
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::operation::operation_scope_rejections",
+          "execution::tests::local::local_query_closes_catalog"
+        ],
+        "result": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      }
+    ],
+    "test_groups": [
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/schema.rs",
+        "old_test": "relation_names_stay_exact",
+        "old_line": 6,
+        "assertions": [
+          "Keep InputRows and INPUTROWS distinct.",
+          "Reject exact duplicate without changing the retained original plan."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_relation_names"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests.rs",
+        "old_test": "sql_model_state_provenance",
+        "old_line": 69,
+        "assertions": [
+          "Count three input rows.",
+          "Keep prior checkpoint9 or output checkpoint3 under exact state version1.",
+          "Keep three exact input evidence links and reject row99.",
+          "Keep repeated and zero-column reasons with output row0 and wire round trip.",
+          "Reject a selected invalid resolved input and external, missing, or multi-statement body SQL.",
+          "Accept actual supplied local input through the strict native scope guard."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_state_provenance",
+          "definition::tests::execution::contract::model::model_relation_names",
+          "definition::tests::execution::contract::operation::operation_scope_rejections",
+          "definition::tests::execution::contract::origins::nested_local_metadata"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests.rs",
+        "old_test": "sql_model_source_bounds",
+        "old_line": 227,
+        "assertions": [
+          "An outer one-row result bound does not truncate three admitted source rows.",
+          "Retain witnesses1,2,3 and exact declared source revisions.",
+          "Exclude analysis_results from the event input source set.",
+          "A time-only change keeps the input content revision.",
+          "A two-row received bound changes content revision and keeps incomplete coverage.",
+          "A local array alias remains valid and holds input capacity after output and plan drop.",
+          "Evaluation capacity is free while only the array alias remains.",
+          "Local SQL keeps original row indices and rejects unused catalog reads with typed invalid/nonretryable errors."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_source_lifetimes",
+          "execution::tests::local::local_query_keeps_indices",
+          "execution::tests::local::local_query_closes_catalog",
+          "execution::tests::local::local_query_releases_capacity"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests.rs",
+        "old_test": "sql_model_exact_parameters",
+        "old_line": 378,
+        "assertions": [
+          "Native scalar arguments preserve UInt64MAX and Int64MIN.",
+          "Reject negative-to-unsigned, integer overflow, null for required field, missing required argument, and unknown argument."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_scalar_boundaries"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests.rs",
+        "old_test": "admitted_program_order",
+        "old_line": 406,
+        "assertions": [
+          "Keep ZRows7 then ARows9 in descriptor order.",
+          "Keep ZState7 then AState9 in descriptor order.",
+          "Keep reason query order ARows/fixture.a9 then ZRows/fixture.z7.",
+          "Reject unknown reason output or code.",
+          "Retain immutable admitted metadata and exact native admission guards.",
+          "Release all configured capacities after completion or rejection."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::sql_preserves_admitted_order",
+          "definition::tests::capacity::metadata_clones_share_capacity",
+          "definition::tests::capacity::metadata_rejects_short_capacity",
+          "definition::tests::collision::changed_inputs_require_readmission",
+          "definition::tests::collision::changed_body_requires_readmission",
+          "definition::tests::collision::replaced_provider_requires_readmission",
+          "definition::tests::execution::contract::model::model_relation_names"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests.rs",
+        "old_test": "program_in_current_thread",
+        "old_line": 611,
+        "assertions": [
+          "Run the same complete native ordered program in a current-thread Tokio runtime."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::sql_preserves_admitted_order"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests.rs",
+        "old_test": "program_in_multithread",
+        "old_line": 616,
+        "assertions": [
+          "Run the same complete native ordered program in a multithread Tokio runtime."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_in_multithread"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests.rs",
+        "old_test": "program_in_blocking_worker",
+        "old_line": 621,
+        "assertions": [
+          "Run the same complete native ordered program from a blocking worker through the existing Engine bridge."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_in_blocking"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests/types.rs",
+        "old_test": "sql_model_portable_precision",
+        "old_line": 6,
+        "assertions": [
+          "Keep UInt64MAX, UTC nanosecond -1, and binary00ff exact in actual typed input, full call return, and outer result.",
+          "Reject signed cast overflow.",
+          "Reject cancelled control and a one-byte configured invocation bound."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::sql_preserves_portable_precision",
+          "definition::tests::execution::contract::model::model_scalar_boundaries"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests/types.rs",
+        "old_test": "sql_model_timestamp_parameters",
+        "old_line": 125,
+        "assertions": [
+          "Native SQL timestamp and binary scalar arguments preserve UTC nanosecond -1 and fixed binary00ff."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_scalar_boundaries"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests/clock.rs",
+        "old_test": "model_clock_dependencies",
+        "old_line": 4,
+        "assertions": [
+          "A string containing CURRENT_TIMESTAMP is clock-free.",
+          "Each body output, checkpoint, evidence, or reason can carry a typed clock.",
+          "Derived inputs keep their own clocks through an installed output dependency while the body remains clock-free.",
+          "Notification Table, Query, and unused-CTE inputs retain their actual Data deadline even without a typed SQL clock."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_clock_children",
+          "definition::tests::execution::contract::model::model_input_clocks",
+          "follow::tests::model::model_notification_deadlines"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      },
+      {
+        "old_file": "crates/araphor-analysis_back/src/model/tests/clock.rs",
+        "old_test": "model_output_deadline",
+        "old_line": 98,
+        "assertions": [
+          "An expired bounded caller returns the exact Data AnalysisReadDeadline.",
+          "The original parent remains valid.",
+          "The same admitted program succeeds under a fresh Session using that parent."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::model::model_deadline_keeps_parent"
+        ],
+        "qualification": "Pass in migration-model-mapped122 on the recorded unchanged source."
+      }
+    ],
+    "separate_operation_leaf": {
+      "old_file": "crates/araphor-analysis_back/src/model/operation/tests.rs",
+      "old_test_count": 10,
+      "new_test_count": 8,
+      "existing_test_expansions": 1,
+      "production_line_delta": 0,
+      "leaf_gate": "Conditional: remove only this test leaf after every native selector passes on the same source. Other model and legacy input-runner leaves are not qualified by this map.",
+      "functions": [
+        {
+          "old_function": "operation_inputs_match",
+          "old_line": 110,
+          "rules": [
+            "Typed resolved inputs keep data, revision, coverage, source revisions, contexts, witnesses, and dependencies.",
+            "SQL returns both outputs with no evidence, reasons, or checkpoint.",
+            "Bare, public, and datafusion.public body bindings return equal wire values."
+          ],
+          "native_tests": [
+            "definition::tests::execution::contract::operation::operation_qualified_inputs"
+          ],
+          "notes": [
+            "The old input-only and SQL helper runners are obsolete. The test uses only native PackageCall/PackageExec."
+          ],
+          "qualification": "Not done. Root must run the exact selectors against the integrated source."
+        },
+        {
+          "old_function": "reused_session_narrows_deadline",
+          "old_line": 218,
+          "rules": [
+            "A reused Session obeys a shorter deadline and returns AnalysisReadDeadline.",
+            "The parent control and evaluation capacity remain valid."
+          ],
+          "native_tests": [
+            "definition::tests::execution::contract::operation::reused_session_deadline"
+          ],
+          "notes": [
+            "The test awaits the existing AnalysisReadControl::expired event. It adds no clock, polling, or sleep cushion."
+          ],
+          "qualification": "Not done. Root must run the exact selectors against the integrated source."
+        },
+        {
+          "old_function": "operation_source_cleanup",
+          "old_line": 241,
+          "rules": [
+            "Held evaluation, input, and output capacity return Busy.",
+            "A failed native input cast releases reservations.",
+            "Success after pressure release returns the original values.",
+            "Failure does not write Data or retain evaluation capacity."
+          ],
+          "native_tests": [
+            "definition::tests::execution::contract::operation::operation_error_classes",
+            "definition::tests::execution::physical_sql_failure_keeps_data",
+            "definition::tests::execution::physical_failure_keeps_session",
+            "definition::tests::execution::physical_tight_output_capacity"
+          ],
+          "notes": [
+            "Retained native SQL failure and buffer-alias tests also apply. No InputSet runner is retained."
+          ],
+          "qualification": "Not done. Root must run the exact selectors against the integrated source."
+        },
+        {
+          "old_function": "pruned_source_evidence",
+          "old_line": 332,
+          "rules": [
+            "Two distinct source operations retain witnesses 1 and 2 for filtered, false, and unused-CTE inputs.",
+            "Equal returned rows and captured source cut give equal SDK input revisions.",
+            "An empty returned relation changes the SDK input revision."
+          ],
+          "native_tests": [
+            "definition::tests::execution::contract::operation::pruned_revision_equivalence"
+          ],
+          "notes": [],
+          "qualification": "Not done. Root must run the exact selectors against the integrated source."
+        },
+        {
+          "old_function": "operation_source_denial",
+          "old_line": 390,
+          "rules": [
+            "Undeclared catalog, old catalog-function syntax, private materialized names, and unused CTE source access fail.",
+            "An output cannot read its own output_result binding through an unused CTE.",
+            "Errors stay InvalidQuery, InvalidArguments, and NonRetryable.",
+            "Admission failure releases all configured capacity."
+          ],
+          "native_tests": [
+            "definition::tests::execution::contract::operation::operation_scope_rejections"
+          ],
+          "notes": [
+            "PackageCode::Invalid is represented by Query Failure::InvalidQuery at the native boundary. Analysis delegates Query status and retry through Error::Query."
+          ],
+          "qualification": "Not done. Root must run the exact selectors against the integrated source."
+        },
+        {
+          "old_function": "named_alias_revision",
+          "old_line": 436,
+          "rules": [
+            "A quoted forward alias reaches durable events.",
+            "An empty dependent relation retains its declared source scope.",
+            "A later source cursor changes the empty input revision, witnesses, and selected output rows."
+          ],
+          "native_tests": [
+            "definition::tests::execution::contract::operation::named_alias_revision"
+          ],
+          "notes": [],
+          "qualification": "Not done. Root must run the exact selectors against the integrated source."
+        },
+        {
+          "old_function": "declared_tables_override_canonical_names",
+          "old_line": 510,
+          "rules": [
+            "A declared events port can bind catalog and override the canonical events name.",
+            "Both resolved inputs return the same batches without event witnesses or source revisions.",
+            "Quoted uppercase names bind exactly; unquoted lowercase names cannot bind uppercase ports."
+          ],
+          "native_tests": [
+            "definition::tests::execution::contract::operation::declared_port_case"
+          ],
+          "notes": [],
+          "qualification": "Not done. Root must run the exact selectors against the integrated source."
+        },
+        {
+          "old_function": "operation_input_capacity",
+          "old_line": 541,
+          "rules": [
+            "Actual shared input pressure returns retryable Busy.",
+            "A configured model byte bound returns nonretryable InputTooLarge.",
+            "After release, native execution succeeds and all reservations return."
+          ],
+          "native_tests": [
+            "definition::tests::execution::contract::operation::operation_error_classes",
+            "definition::tests::execution::combined_input_respects_limit"
+          ],
+          "notes": [
+            "The old whole-per-evaluation reservation and one-byte-pressure trigger are removed architecture mechanics. Native prepare_input prepays only available configured capacity and charges actual retained buffers. Default quotas remain disabled."
+          ],
+          "qualification": "Not done. Root must run the exact selectors against the integrated source."
+        },
+        {
+          "old_function": "aggregate_output_rows_stop_before_reference_tables",
+          "old_line": 571,
+          "rules": [
+            "Two one-row model outputs exceed an aggregate one-row bound.",
+            "Evidence is not polled after the row limit fails.",
+            "Descriptor and invocation bounds are tested independently.",
+            "All configured capacity returns and Data remains unchanged."
+          ],
+          "native_tests": [
+            "definition::tests::execution::contract::sql_limit_precedes_references"
+          ],
+          "notes": [
+            "The existing sql_limit_precedes_references test now runs once for each bound owner."
+          ],
+          "qualification": "Not done. Root must run the exact selectors against the integrated source."
+        },
+        {
+          "old_function": "admitted_input_provenance",
+          "old_line": 613,
+          "rules": [
+            "SDK inputs remain in declared order.",
+            "Reordered declarations preserve exact per-name IPC data, revision, and coverage.",
+            "Removing one unused declaration preserves each remaining input.",
+            "Catalog and event revisions remain distinct.",
+            "Source revisions, dependency refs, witnesses, and context refs remain equal.",
+            "Prepared definition/source admission remains unchanged and reservations return after outputs drop."
+          ],
+          "native_tests": [
+            "definition::tests::execution::contract::operation::reordered_input_provenance"
+          ],
+          "notes": [
+            "PreparedDefinition::resolved and sources are read-only shared admission values. Their equality and retained charge replace mutable AdmittedExport byte accounting."
+          ],
+          "qualification": "Not done. Root must run the exact selectors against the integrated source."
+        }
+      ],
+      "qualification": "Root reports commit3c8d93e2 retires this leaf after nine new, 67 Query, seven Instance cases, and Clippy pass. This candidate preserves the current operation source and extends only its three missing body negatives."
+    },
+    "intentional_architecture_removals": [
+      "The old ModelRun and duplicate input evaluator are not recreated.",
+      "JSON parameter decoder syntax and its fractional-number rejection are obsolete. Native SQL coercion rules apply; typed signedness, overflow, timestamp and binary boundaries remain checked.",
+      "The private implementation index and mutable output/reason vectors no longer cross the admission boundary. Immutable PackageCall/Origin values and readmission guards replace corruption of those private vectors.",
+      "The old fixed 128 reason-query cap is not retained. The user requires default-disabled resource quotas.",
+      "The old std::thread::sleep deadline probe uses the existing AnalysisReadControl::expired event instead.",
+      "The old table-name output dependency walk uses the existing native unique Port bindings and one admitted input capture."
+    ],
+    "whole_leaf_candidates": [
+      "crates/araphor-analysis_back/src/model.rs",
+      "crates/araphor-analysis_back/src/model/schema.rs",
+      "crates/araphor-analysis_back/src/model/tests.rs",
+      "crates/araphor-analysis_back/src/model/tests/clock.rs",
+      "crates/araphor-analysis_back/src/model/tests/types.rs"
+    ],
+    "retirement_gate": "All mapped native selectors pass on unchanged active source before these five files retire. The required final shared Rust procedure remains pending after the last connected edit, as the migration plan requires."
+  },
+  "qualification": {
+    "migration-model-build122": {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-analysis-sdk",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-package",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "araphor-component-build",
+        "-p",
+        "araphor-analysis-builtins",
+        "-p",
+        "mithril-control",
+        "-p",
+        "mithril-e2e",
+        "-p",
+        "erebor-runtime-session",
+        "-p",
+        "erebor-runtime-context",
+        "--all-features",
+        "--lib",
+        "--no-run"
+      ],
+      "started_utc": "2026-10-20T22:02:57.778179+00:00",
+      "elapsed_seconds": 86.529,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "a1cdd28c6cded10019a65e4df812716d3bb0835bc2731c55b209cae0fe66cb14",
+        "crates/araphor-query/src/definition/tests/execution/contract/model.rs": "8d9622a10a062473114d2859125bb4afc9d069e747428ab2fe347c162e12abf4",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "fda65ef1ed975a853d9e9e951c3a107bfd10fd6802416c36702fe863a1b14dfa",
+        "crates/araphor-query/src/execution/tests/local.rs": "51f2c8828fd3916f5e50d8dd9541c9ca7adae1277d12ad5d5ad27e3378f609c8",
+        "crates/araphor-query/src/follow/tests.rs": "d422e531996c0e2df39c7cc0f171fb236ca524b185edf8c849ac1a40483d5c87",
+        "crates/araphor-query/src/follow/tests/model.rs": "c98543f2bcecd775eccaed5dc7e43322bfc37a51d4792abf1f0c26fd080b61b8"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-model-build122.log",
+      "evidence_version": 2,
+      "head_before": "6bb468c83ab621207d944db5abaadc67deb81167",
+      "head_after": "6bb468c83ab621207d944db5abaadc67deb81167",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57"
+    },
+    "migration-model-new122": {
+      "command": [
+        "target/debug/deps/araphor_query-c8742c21f1c7ffc0",
+        "definition::tests::execution::contract::model::",
+        "follow::tests::model::model_notification_deadlines",
+        "definition::tests::execution::contract::sql_preserves_admitted_order",
+        "definition::tests::execution::contract::operation::operation_scope_rejections",
+        "execution::tests::local::local_query_closes_catalog",
+        "--include-ignored"
+      ],
+      "started_utc": "2026-10-20T22:05:29.434414+00:00",
+      "elapsed_seconds": 9.039,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "a1cdd28c6cded10019a65e4df812716d3bb0835bc2731c55b209cae0fe66cb14",
+        "crates/araphor-query/src/definition/tests/execution/contract/model.rs": "8d9622a10a062473114d2859125bb4afc9d069e747428ab2fe347c162e12abf4",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "fda65ef1ed975a853d9e9e951c3a107bfd10fd6802416c36702fe863a1b14dfa",
+        "crates/araphor-query/src/execution/tests/local.rs": "51f2c8828fd3916f5e50d8dd9541c9ca7adae1277d12ad5d5ad27e3378f609c8",
+        "crates/araphor-query/src/follow/tests.rs": "d422e531996c0e2df39c7cc0f171fb236ca524b185edf8c849ac1a40483d5c87",
+        "crates/araphor-query/src/follow/tests/model.rs": "c98543f2bcecd775eccaed5dc7e43322bfc37a51d4792abf1f0c26fd080b61b8"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-model-new122.log",
+      "evidence_version": 2,
+      "head_before": "6bb468c83ab621207d944db5abaadc67deb81167",
+      "head_after": "6bb468c83ab621207d944db5abaadc67deb81167",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "0b5c1604d8e3f61fdd93f5b0606b9e211bb3898068a7bfc1391aca1d6acca3ac"
+    },
+    "migration-model-mapped122": {
+      "command": [
+        "target/debug/deps/araphor_query-c8742c21f1c7ffc0",
+        "definition::tests::capacity::image_capacity_follows_plan",
+        "definition::tests::capacity::image_capacity_joins_guest",
+        "definition::tests::capacity::metadata_clones_share_capacity",
+        "definition::tests::capacity::metadata_rejects_short_capacity",
+        "definition::tests::collision::changed_body_requires_readmission",
+        "definition::tests::collision::changed_inputs_require_readmission",
+        "definition::tests::collision::foreign_admission_cannot_share",
+        "definition::tests::collision::replaced_provider_requires_readmission",
+        "definition::tests::collision::same_admission_shares_outputs",
+        "definition::tests::execution::combined_input_respects_limit",
+        "definition::tests::execution::contract::body_ports::body_elided_metadata",
+        "definition::tests::execution::contract::body_ports::body_port_metadata",
+        "definition::tests::execution::contract::model::model_clock_children",
+        "definition::tests::execution::contract::model::model_deadline_keeps_parent",
+        "definition::tests::execution::contract::model::model_in_blocking",
+        "definition::tests::execution::contract::model::model_in_multithread",
+        "definition::tests::execution::contract::model::model_input_clocks",
+        "definition::tests::execution::contract::model::model_relation_names",
+        "definition::tests::execution::contract::model::model_scalar_boundaries",
+        "definition::tests::execution::contract::model::model_source_lifetimes",
+        "definition::tests::execution::contract::model::model_state_provenance",
+        "definition::tests::execution::contract::operation::declared_port_case",
+        "definition::tests::execution::contract::operation::named_alias_revision",
+        "definition::tests::execution::contract::operation::operation_error_classes",
+        "definition::tests::execution::contract::operation::operation_qualified_inputs",
+        "definition::tests::execution::contract::operation::operation_scope_rejections",
+        "definition::tests::execution::contract::operation::pruned_revision_equivalence",
+        "definition::tests::execution::contract::operation::reordered_input_provenance",
+        "definition::tests::execution::contract::operation::reused_session_deadline",
+        "definition::tests::execution::contract::origins::nested_local_metadata",
+        "definition::tests::execution::contract::pressure::sql_normalization_preflight",
+        "definition::tests::execution::contract::sql_indexes_local_relations",
+        "definition::tests::execution::contract::sql_limit_precedes_references",
+        "definition::tests::execution::contract::sql_preserves_admitted_order",
+        "definition::tests::execution::contract::sql_preserves_portable_precision",
+        "definition::tests::execution::contract::sql_zero_column_reason",
+        "definition::tests::execution::physical_calls_keep_capture_and_clock",
+        "definition::tests::execution::physical_calls_keep_state_identity",
+        "definition::tests::execution::physical_checkpoint_preflight",
+        "definition::tests::execution::physical_failure_keeps_session",
+        "definition::tests::execution::physical_sql_failure_keeps_data",
+        "definition::tests::execution::physical_sql_return_retains_contract",
+        "definition::tests::execution::physical_tight_output_capacity",
+        "definition::tests::execution::sql_body_scope",
+        "definition::tests::native_package_call_rejections",
+        "definition::tests::parity::prepared_guest_keeps_identity",
+        "execution::tests::local::local_query_closes_catalog",
+        "execution::tests::local::local_query_keeps_indices",
+        "execution::tests::local::local_query_releases_capacity",
+        "follow::tests::model::model_notification_deadlines",
+        "--exact",
+        "--include-ignored"
+      ],
+      "started_utc": "2026-10-20T22:06:13.601957+00:00",
+      "elapsed_seconds": 42.012,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "a1cdd28c6cded10019a65e4df812716d3bb0835bc2731c55b209cae0fe66cb14",
+        "crates/araphor-query/src/definition/tests/execution/contract/model.rs": "8d9622a10a062473114d2859125bb4afc9d069e747428ab2fe347c162e12abf4",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "fda65ef1ed975a853d9e9e951c3a107bfd10fd6802416c36702fe863a1b14dfa",
+        "crates/araphor-query/src/execution/tests/local.rs": "51f2c8828fd3916f5e50d8dd9541c9ca7adae1277d12ad5d5ad27e3378f609c8",
+        "crates/araphor-query/src/follow/tests.rs": "d422e531996c0e2df39c7cc0f171fb236ca524b185edf8c849ac1a40483d5c87",
+        "crates/araphor-query/src/follow/tests/model.rs": "c98543f2bcecd775eccaed5dc7e43322bfc37a51d4792abf1f0c26fd080b61b8"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-model-mapped122.log",
+      "evidence_version": 2,
+      "head_before": "6bb468c83ab621207d944db5abaadc67deb81167",
+      "head_after": "6bb468c83ab621207d944db5abaadc67deb81167",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "0b5c1604d8e3f61fdd93f5b0606b9e211bb3898068a7bfc1391aca1d6acca3ac"
+    },
+    "migration-model-clippy122": {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-analysis-sdk",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-package",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "araphor-component-build",
+        "-p",
+        "araphor-analysis-builtins",
+        "-p",
+        "mithril-control",
+        "-p",
+        "mithril-e2e",
+        "-p",
+        "erebor-runtime-session",
+        "-p",
+        "erebor-runtime-context",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "started_utc": "2026-10-20T22:06:18.048279+00:00",
+      "elapsed_seconds": 24.014,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "a1cdd28c6cded10019a65e4df812716d3bb0835bc2731c55b209cae0fe66cb14",
+        "crates/araphor-query/src/definition/tests/execution/contract/model.rs": "8d9622a10a062473114d2859125bb4afc9d069e747428ab2fe347c162e12abf4",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "fda65ef1ed975a853d9e9e951c3a107bfd10fd6802416c36702fe863a1b14dfa",
+        "crates/araphor-query/src/execution/tests/local.rs": "51f2c8828fd3916f5e50d8dd9541c9ca7adae1277d12ad5d5ad27e3378f609c8",
+        "crates/araphor-query/src/follow/tests.rs": "d422e531996c0e2df39c7cc0f171fb236ca524b185edf8c849ac1a40483d5c87",
+        "crates/araphor-query/src/follow/tests/model.rs": "c98543f2bcecd775eccaed5dc7e43322bfc37a51d4792abf1f0c26fd080b61b8"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-model-clippy122.log",
+      "evidence_version": 2,
+      "head_before": "6bb468c83ab621207d944db5abaadc67deb81167",
+      "head_after": "6bb468c83ab621207d944db5abaadc67deb81167",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57"
+    },
+    "migration-model-fmt122": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "started_utc": "2026-10-20T22:06:22.486272+00:00",
+      "elapsed_seconds": 4.655,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "a1cdd28c6cded10019a65e4df812716d3bb0835bc2731c55b209cae0fe66cb14",
+        "crates/araphor-query/src/definition/tests/execution/contract/model.rs": "8d9622a10a062473114d2859125bb4afc9d069e747428ab2fe347c162e12abf4",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "fda65ef1ed975a853d9e9e951c3a107bfd10fd6802416c36702fe863a1b14dfa",
+        "crates/araphor-query/src/execution/tests/local.rs": "51f2c8828fd3916f5e50d8dd9541c9ca7adae1277d12ad5d5ad27e3378f609c8",
+        "crates/araphor-query/src/follow/tests.rs": "d422e531996c0e2df39c7cc0f171fb236ca524b185edf8c849ac1a40483d5c87",
+        "crates/araphor-query/src/follow/tests/model.rs": "c98543f2bcecd775eccaed5dc7e43322bfc37a51d4792abf1f0c26fd080b61b8"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-model-fmt122.log",
+      "evidence_version": 2,
+      "head_before": "6bb468c83ab621207d944db5abaadc67deb81167",
+      "head_after": "6bb468c83ab621207d944db5abaadc67deb81167",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57"
+    }
+  },
+  "qualified_owner_sha256": {
+    "crates/araphor-query/src/definition/tests/execution/contract.rs": "a1cdd28c6cded10019a65e4df812716d3bb0835bc2731c55b209cae0fe66cb14",
+    "crates/araphor-query/src/definition/tests/execution/contract/model.rs": "8d9622a10a062473114d2859125bb4afc9d069e747428ab2fe347c162e12abf4",
+    "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "fda65ef1ed975a853d9e9e951c3a107bfd10fd6802416c36702fe863a1b14dfa",
+    "crates/araphor-query/src/execution/tests/local.rs": "51f2c8828fd3916f5e50d8dd9541c9ca7adae1277d12ad5d5ad27e3378f609c8",
+    "crates/araphor-query/src/follow/tests.rs": "d422e531996c0e2df39c7cc0f171fb236ca524b185edf8c849ac1a40483d5c87",
+    "crates/araphor-query/src/follow/tests/model.rs": "c98543f2bcecd775eccaed5dc7e43322bfc37a51d4792abf1f0c26fd080b61b8"
+  },
+  "root_corrections": [
+    "The blocking-runtime test passes its unchanged assertion result through the existing Engine::wait as a value, then returns that exact test result. No production error translation is added.",
+    "The local test uses existing inherent Query error methods and removes its unused ErrorExt import."
+  ],
+  "gate_scope": "All 50 native selectors pass before removal. The repository final shared Rust procedure remains pending after the last connected edit.",
+  "ownership": "Native PackageCall and PackageExec replace the old ModelRun and model admission/output wrappers. Native scalar coercion, immutable admission seals, the existing SDK validator and native source receipt remain the owners. No JSON parameter decoder, mutable model catalog or second evaluator is restored.",
+  "recovery_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+  "recovery_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+  "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5",
+  "remaining_scope": "Installed model clock and supervision, old Query input executor live rules, producers, public lifecycle and complete recovery integration remain Not done.",
+  "final_rust_gate": "Not done. Run the complete procedure after the final connected edit.",
+  "production_reduction_target": "Not done. The five files remove 306 production lines; other removed lines are test code.",
+  "remaining_reference": {
+    "before": 121,
+    "after": 116,
+    "byte_identical_to_baseline": 116,
+    "mismatches": []
+  },
+  "counter": {
+    "record": "/tmp/araphor-oci-execution-count122.json",
+    "production_retired": 306,
+    "test_only_counter_correction": 2,
+    "original_baseline_net": 13031,
+    "selected_worktree_sha256": "9c7ad010e35982feb615d921999936808d273ce077ee5d2875c9f7edb8ea12ee"
+  }
+}

@@ -148,6 +148,9 @@ async fn reused_session_deadline() -> TestResult {
 #[tokio::test]
 async fn operation_scope_rejections() -> TestResult {
     for sql in [
+        "SELECT * FROM read_csv('/etc/passwd')",
+        "SELECT * FROM source; DROP TABLE source",
+        "SELECT * FROM absent",
         "SELECT CAST(1 AS BIGINT UNSIGNED) AS value FROM catalog",
         "SELECT CAST(1 AS BIGINT UNSIGNED) AS value FROM datafusion.public.catalog",
         "SELECT CAST(1 AS BIGINT UNSIGNED) AS value FROM _query_catalog()",

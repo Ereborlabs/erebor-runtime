@@ -907,6 +907,32 @@ The 121 remaining reference files and recovery archive are unchanged. Other
 model rules, complete producer integration, public lifecycle, and the final
 Rust gate remain open.
 
+## Native model boundary
+
+Read [PackageExec](../../crates/araphor-query/src/definition/physical.rs) and
+[its SQL implementation](../../crates/araphor-query/src/definition/physical/sql.rs)
+for the existing physical execution path. The admitted package plan binds
+inputs, parameters, prior state, outputs, evidence, and reasons. The native
+optimizer and physical planner remain in use. Immutable call receipts retain
+the complete SDK return and actual buffer claims.
+
+The [model cases](../../crates/araphor-query/src/definition/tests/execution/contract/model.rs)
+check output and checkpoint order, full evidence links, prior versus new state,
+exact scalar values, quoted names, input revisions, buffer aliases, deadlines,
+and body time. The existing ordered-output scenario also runs on multithread
+and blocking-worker paths. The blocking case uses the existing Engine bridge
+and preserves the original assertion result.
+
+The [follow model case](../../crates/araphor-query/src/follow/tests/model.rs)
+consumes actual notification deadlines from Query. It adds no model clock.
+All 50 exact mapped cases pass. The
+[retirement record](../../recovery/araphor-analysis-model-retirement-20261020.json)
+covers 16 old methods, 12 old tests, and five whole removed files. Active
+production code, ABI, and storage format do not change. All 116 remaining
+reference files and the archive are unchanged. Mixed-window subscriptions,
+installed supervision, producers, public lifecycle, and the final Rust gate
+remain open.
+
 ## In-process Wasm ownership
 
 [WasmExecution::compiled](../../crates/araphor-package-runtime/src/wasm/cache.rs)

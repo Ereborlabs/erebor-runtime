@@ -93,7 +93,9 @@ The limits leaf also retires after Runtime preserves its complete configuration
 contract. The later snapshot-memory and stream-test replacement retires three
 more whole files after 373 distinct connected cases pass. The native operation
 replacement then retires one complete test leaf after all ten old test functions
-have passing native assertions. There are now 87 retired files; 121 remain unchanged. The recovery archive retains all 208 originals.
+have passing native assertions. The native model replacement then retires five more files after all 50 mapped
+cases pass. This removes 306 production lines. There are now 92 retired files;
+116 remain unchanged. The recovery archive retains all 208 originals.
 The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish
 long-running lifecycle or automatic restart.

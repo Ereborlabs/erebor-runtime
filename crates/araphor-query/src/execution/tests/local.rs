@@ -3,6 +3,7 @@ use datafusion::arrow::array::UInt64Array;
 use datafusion::catalog::memory::MemoryCatalogProvider;
 
 use super::*;
+use erebor_runtime_error::{RetryHint, StatusCode};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
@@ -129,6 +130,7 @@ async fn local_query_closes_catalog() -> TestResult {
     session.register("undeclared", data.batches[0].schema(), &data.batches)?;
     for table in [
         "events",
+        "datafusion.public.catalog",
         "inherited",
         "private.hidden",
         "archive.private.hidden",
@@ -138,12 +140,20 @@ async fn local_query_closes_catalog() -> TestResult {
             format!("SELECT * FROM {table}"),
             format!("WITH unused AS (SELECT * FROM {table}) SELECT 1"),
         ] {
-            assert!(
-                session
-                    .query_local(std::slice::from_ref(&data), &sql, sdk::Limits::default())
-                    .await
-                    .is_err(),
-                "accepted: {sql}"
+            let error = session
+                .query_local(std::slice::from_ref(&data), &sql, sdk::Limits::default())
+                .await
+                .err()
+                .ok_or_else(|| format!("accepted: {sql}"))?;
+            assert_eq!(
+                error.status_code(),
+                StatusCode::InvalidArguments,
+                "{sql}: {error:?}"
+            );
+            assert_eq!(
+                error.retry_hint(),
+                RetryHint::NonRetryable,
+                "{sql}: {error:?}"
             );
         }
     }

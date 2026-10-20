@@ -28,6 +28,7 @@ use crate::parser::Parser;
 use crate::sources::SourceSnapshot;
 
 mod discovery;
+mod model;
 mod progress;
 mod runtime;
 mod trace;
