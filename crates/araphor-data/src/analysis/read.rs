@@ -991,7 +991,14 @@ mod tests {
     #[test]
     fn metadata_default_reads_wait() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            Default::default(),
+            super::super::StorageLimitsV1 {
+                reader_admissions: Some(16),
+                ..Default::default()
+            },
+        )?;
         let identity = EvidenceIntakeIdentityV1 {
             node_id: "n".into(),
             ..crate::analysis::tests::identity()
@@ -1036,7 +1043,14 @@ mod tests {
                 worker.join().map_err(|_| "metadata reader panicked")??;
                 Ok(())
             })?;
-            assert_eq!(store.read_slots.available_permits(), 16);
+            assert_eq!(
+                store
+                    .read_slots
+                    .as_ref()
+                    .ok_or("configured reader admissions")?
+                    .available_permits(),
+                16
+            );
             read()?;
         }
         assert_eq!(store.meta()?, before);
@@ -1047,7 +1061,14 @@ mod tests {
     #[test]
     fn analysis_read_lock_deadline() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            Default::default(),
+            super::super::StorageLimitsV1 {
+                reader_admissions: Some(16),
+                ..Default::default()
+            },
+        )?;
         let identity = EvidenceIntakeIdentityV1 {
             node_id: "n".into(),
             ..crate::analysis::tests::identity()
@@ -1090,7 +1111,14 @@ mod tests {
                 ));
             }
             drop((writer, maintenance, readers));
-            assert_eq!(store.read_slots.available_permits(), 16);
+            assert_eq!(
+                store
+                    .read_slots
+                    .as_ref()
+                    .ok_or("configured reader admissions")?
+                    .available_permits(),
+                16
+            );
             assert!(store.maintenance.try_write().is_ok());
             assert_eq!(store.read_page(&identity, 1)?.records.len(), 1);
         }
@@ -1132,7 +1160,14 @@ mod tests {
     #[test]
     fn analysis_read_native_deadline() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            Default::default(),
+            super::super::StorageLimitsV1 {
+                reader_admissions: Some(16),
+                ..Default::default()
+            },
+        )?;
         let before = store.meta()?;
         let mut reader = store.reader()?;
         for _ in 0..16 {
@@ -1191,7 +1226,14 @@ mod tests {
             "{result:?}"
         );
         drop(reader);
-        assert_eq!(store.read_slots.available_permits(), 16);
+        assert_eq!(
+            store
+                .read_slots
+                .as_ref()
+                .ok_or("configured reader admissions")?
+                .available_permits(),
+            16
+        );
         assert!(store.maintenance.try_write().is_ok());
         assert_eq!(store.meta()?, before);
         store.checkpoint()?;
@@ -1203,7 +1245,14 @@ mod tests {
         use std::sync::mpsc;
 
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            Default::default(),
+            super::super::StorageLimitsV1 {
+                reader_admissions: Some(16),
+                ..Default::default()
+            },
+        )?;
         let before = store.meta()?;
         let mut reader = store.reader()?;
         for _ in 0..16 {
@@ -1261,7 +1310,14 @@ mod tests {
             .is_err());
         assert!(reader.connection.is_some());
         drop(reader);
-        assert_eq!(store.read_slots.available_permits(), 16);
+        assert_eq!(
+            store
+                .read_slots
+                .as_ref()
+                .ok_or("configured reader admissions")?
+                .available_permits(),
+            16
+        );
         assert!(store.maintenance.try_write().is_ok());
         assert_eq!(store.meta()?, before);
         store.checkpoint()?;

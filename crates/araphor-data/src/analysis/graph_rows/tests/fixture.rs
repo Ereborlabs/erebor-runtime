@@ -13,12 +13,22 @@ pub(in crate::analysis) struct CommitFixture {
 
 impl CommitFixture {
     pub(in crate::analysis) fn new() -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        Self::limits(Default::default())
+    }
+
+    pub(in crate::analysis) fn limits(
+        storage: StorageLimitsV1,
+    ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let mut snapshot: GraphSnapshotV1 = serde_json::from_slice(include_bytes!("graph.json"))?;
         snapshot.witness_deadline_utc_ns = 10 + GRAPH_WITNESS_TTL_NS;
         snapshot.validate()?;
         let source = snapshot.scope.identity.clone();
         let directory = tempfile::tempdir()?;
-        let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
+        let store = Arc::new(AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            Default::default(),
+            storage,
+        )?);
         store.enable_graph_owner()?;
         store.register_graph(&source)?;
         let wire = EvidenceRecord {

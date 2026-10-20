@@ -45,6 +45,19 @@ impl Instance {
         definition: ResolvedDefinition,
         control: &AnalysisReadControl,
     ) -> Result<Arc<Self>> {
+        let memory = query.memory().scope();
+        Self::admit_on(query, authority, grant, id, definition, control, memory).await
+    }
+
+    async fn admit_on(
+        query: Arc<Engine>,
+        authority: Arc<dyn PackageAuthorization>,
+        grant: PackageGrantV1,
+        id: String,
+        definition: ResolvedDefinition,
+        control: &AnalysisReadControl,
+        memory: Arc<araphor_query::memory::Memory>,
+    ) -> Result<Arc<Self>> {
         control.check()?;
         let read = Arc::new(control.within(grant.remaining()?)?);
         let checked = Arc::clone(&authority);
@@ -57,11 +70,8 @@ impl Instance {
         .await?;
         definition.validate().map_err(araphor_data::Error::from)?;
         let prepared = query
-            .prepare_definition(
-                grant.selection.tenant_id,
-                &definition.definition,
-                Arc::new(control.within(grant.remaining()?)?),
-            )
+            .session_on(grant.selection.clone(), &read, 0, Arc::clone(&memory))?
+            .prepare_definition(&definition.definition)
             .await?;
         if *prepared.resolved() != definition {
             return Err(Code::Conflict.error("managed definition pin").into());
@@ -69,7 +79,6 @@ impl Instance {
         let store = Arc::clone(query.store());
         let check = Arc::clone(&authority);
         let stage = Arc::clone(&read);
-        let memory = Arc::clone(query.memory());
         let (admitted, prepared, calls, metadata) = Engine::blocking(read, (), move || {
             for (bundle, digest) in prepared.images() {
                 check.admit(&grant, &PackageBundleRef::retained(bundle, digest))?;

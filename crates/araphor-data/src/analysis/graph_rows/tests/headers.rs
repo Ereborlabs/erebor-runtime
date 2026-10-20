@@ -3,7 +3,9 @@ use super::*;
 #[test]
 fn native_header_batch_bounds() -> TestResult {
     let fixture = CommitFixture::new()?;
-    let receipt = fixture.store.commit_graph(&fixture.request, true)?;
+    let receipt = fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     let ids = vec![fixture.request.result_id.clone()];
     let mut calls = 0;

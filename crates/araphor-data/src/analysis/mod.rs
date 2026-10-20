@@ -108,7 +108,7 @@ pub struct AnalysisStore {
     raw: Mutex<raw::RawJournal>,
     raw_dirty: AtomicBool,
     raw_pending: AtomicBool,
-    read_slots: Arc<tokio::sync::Semaphore>,
+    read_slots: Option<Arc<tokio::sync::Semaphore>>,
     read_next: AtomicUsize,
     pub(crate) package_lifecycle: Arc<Mutex<()>>,
     pub(crate) discovery_owners: AtomicUsize,
@@ -558,7 +558,9 @@ impl AnalysisStore {
             readers,
             read_monitors: std::array::from_fn(|_| read::ReadMonitor::default()),
             write_monitor: Arc::new(read::ReadMonitor::default()),
-            read_slots: Arc::new(tokio::sync::Semaphore::new(16)),
+            read_slots: storage
+                .reader_admissions
+                .map(|limit| Arc::new(tokio::sync::Semaphore::new(limit))),
             read_next: AtomicUsize::new(0),
             package_lifecycle: Arc::new(Mutex::new(())),
             discovery_owners: AtomicUsize::new(0),

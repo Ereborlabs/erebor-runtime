@@ -237,8 +237,14 @@ impl Engine {
         definition: &Definition,
         control: Arc<AnalysisReadControl>,
     ) -> Result<PreparedDefinition> {
-        self.prepare_definition_tables(tenant, definition, control, Arc::default())
-            .await
+        self.prepare_definition_tables(
+            tenant,
+            definition,
+            control,
+            Arc::default(),
+            Arc::clone(self.memory()),
+        )
+        .await
     }
 
     async fn prepare_definition_tables(
@@ -247,6 +253,7 @@ impl Engine {
         definition: &Definition,
         control: Arc<AnalysisReadControl>,
         tables: Arc<crate::execution::LocalTables>,
+        memory: Arc<crate::memory::Memory>,
     ) -> Result<PreparedDefinition> {
         control.check()?;
         if tenant == [0; 16] {
@@ -264,8 +271,7 @@ impl Engine {
             .map_err(araphor_data::Error::from)?;
         let mut resolved = ResolvedDefinition::new(definition.clone(), sql, Vec::new())
             .map_err(araphor_data::Error::from)?;
-        let memory = self
-            .memory()
+        let retained = memory
             .reserve_input(DefinitionAdmission::allocation_bytes(
                 &resolved,
                 &AnalysisTableRequests::new(),
@@ -302,7 +308,7 @@ impl Engine {
                 )
             })
             .collect();
-        let mut packages = package::Packages::new(self, bundles, tenant, providers)?;
+        let mut packages = package::Packages::new(self, bundles, tenant, providers, memory)?;
         packages.state.config_mut().set_extension(tables);
         let packages = Arc::new(packages);
         let mut state = packages.state.clone();
@@ -319,7 +325,7 @@ impl Engine {
             .filter_map(|source| source.durable().map(|name| (name.to_owned(), None)))
             .collect();
         resolved.images = packages.pins()?;
-        memory
+        retained
             .try_resize(DefinitionAdmission::allocation_bytes(&resolved, &sources)?)
             .context(SqlSnafu)?;
         let validation = state.optimize(&plan).context(SqlSnafu)?;
@@ -336,7 +342,7 @@ impl Engine {
                 sources,
                 tenant,
                 images: Arc::clone(&packages.bundles),
-                _memory: memory,
+                _memory: retained,
             }),
         })
     }
@@ -350,6 +356,7 @@ impl Session {
                 definition,
                 Arc::clone(self.control()),
                 Arc::clone(&self.tables),
+                Arc::clone(self.memory()),
             )
             .await
     }

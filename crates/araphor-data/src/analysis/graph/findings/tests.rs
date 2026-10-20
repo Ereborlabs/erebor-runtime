@@ -21,7 +21,9 @@ fn native_header_once() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut fixture = CommitFixture::new()?;
     fixture.snapshot.packages[0].coverage_predicate = "x".repeat(1024 * 1024);
     fixture.add_findings(2)?;
-    fixture.store.commit_graph(&fixture.request, true)?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     assert_eq!(
         fixture
@@ -60,7 +62,9 @@ fn native_header_once() -> std::result::Result<(), Box<dyn std::error::Error>> {
 fn native_finding_batches() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut fixture = CommitFixture::new()?;
     fixture.add_findings(257)?;
-    fixture.store.commit_graph(&fixture.request, true)?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     fixture.store.read_snapshot(|snapshot| {
         let selection = fixture.store.preflight_findings(
@@ -140,7 +144,9 @@ fn finding_shared_header_batch() {
 fn native_finding_fallback() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut fixture = CommitFixture::new()?;
     fixture.add_findings(2)?;
-    fixture.store.commit_graph(&fixture.request, true)?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     let expected = fixture
         .store
@@ -188,7 +194,10 @@ fn native_finding_fallback() -> std::result::Result<(), Box<dyn std::error::Erro
 
 #[test]
 fn graph_reads_reject_scope() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let fixture = CommitFixture::new()?;
+    let fixture = CommitFixture::limits(crate::StorageLimitsV1 {
+        reader_admissions: Some(16),
+        ..Default::default()
+    })?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     let result = fixture.request.result_id.as_str();
     let finding = fixture
@@ -198,7 +207,12 @@ fn graph_reads_reject_scope() -> std::result::Result<(), Box<dyn std::error::Err
         .ok_or("fixture finding")?
         .finding_id
         .as_str();
-    fixture.store.read_slots.close();
+    fixture
+        .store
+        .read_slots
+        .as_ref()
+        .ok_or("configured reader admissions")?
+        .close();
     assert!(matches!(
         fixture
             .store
@@ -330,7 +344,10 @@ fn graph_reads_reject_scope() -> std::result::Result<(), Box<dyn std::error::Err
 
 #[test]
 fn graph_revision_keeps_guards() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let fixture = CommitFixture::new()?;
+    let fixture = CommitFixture::limits(crate::StorageLimitsV1 {
+        reader_admissions: Some(16),
+        ..Default::default()
+    })?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     let finding = &fixture
         .snapshot
@@ -378,7 +395,12 @@ fn graph_revision_keeps_guards() -> std::result::Result<(), Box<dyn std::error::
         changed.missing_ranges.push(range);
         invalid.push(changed);
     }
-    fixture.store.read_slots.close();
+    fixture
+        .store
+        .read_slots
+        .as_ref()
+        .ok_or("configured reader admissions")?
+        .close();
     for revision in invalid {
         assert!(matches!(
             fixture
@@ -440,14 +462,19 @@ fn graph_revision_keeps_guards() -> std::result::Result<(), Box<dyn std::error::
 #[test]
 fn graph_reads_keep_history() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let fixture = CommitFixture::new()?;
-    fixture.store.commit_graph(&fixture.request, true)?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     let finding = fixture.snapshot.findings.first().ok_or("fixture finding")?;
     let mut next = fixture.request.clone();
     next.expected_cursor = next.consumed_cursor;
     next.result_id = "graph:updated-window".into();
     next.created_utc_ns += 1;
-    fixture.store.commit_graph(&next, false)?;
+    let mut snapshot = fixture.snapshot.clone();
+    snapshot.previous_result_id = Some(fixture.request.result_id.clone());
+    next.body = serde_json::to_vec(&snapshot)?;
+    fixture.store.commit_graph(&next, false, || Ok(()))?;
     assert_eq!(
         fixture
             .store
@@ -534,7 +561,9 @@ fn graph_reads_keep_history() -> std::result::Result<(), Box<dyn std::error::Err
 fn graph_pages_keep_budget() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut fixture = CommitFixture::new()?;
     fixture.add_findings(1)?;
-    fixture.store.commit_graph(&fixture.request, true)?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     let current = fixture
         .store

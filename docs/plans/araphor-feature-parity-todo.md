@@ -69,6 +69,13 @@ retains all 208 originals. Read the
 for the exact scope. The full Rust gate59 stops at a stale OCI fixture. The
 corrected fixture passes all 15 Package cases. The complete final Rust gate
 and migration remain **Not done**.
+Before an attempt exists, the host waits on known reader and memory release events. Data
+reader admission is configurable and disabled by default. Graph publication,
+immutable retry, and notice acknowledgement require final authority checks.
+Fresh Graph writes compare the exact prior window head. The connected checks
+cover 106 distinct passing cases. No further reference file is retired by
+these corrections. Complete producers, public lifecycle, native Data waits,
+and the final Rust gate remain open.
 The items below that describe removed paths refer to the stopped draft, not
 a qualified replacement. No deletion commit or push was made.
 

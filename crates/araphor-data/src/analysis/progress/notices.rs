@@ -51,6 +51,7 @@ impl AnalysisStore {
             revision,
             facts,
             coverage,
+            &mut || Ok(()),
         )
     }
 
@@ -61,13 +62,14 @@ impl AnalysisStore {
         revision: u64,
         facts: u64,
         coverage: u64,
+        mut check: impl FnMut() -> Result<()>,
     ) -> Result<()> {
         if scope.processor_id != crate::GRAPH_PROCESSOR
             || scope.method_version != u64::from(crate::GRAPH_SCHEMA_VERSION)
         {
             return self.reject("the graph notice scope is invalid");
         }
-        self.mark_result_notice(scope, result_id, revision, facts, coverage)
+        self.mark_result_notice(scope, result_id, revision, facts, coverage, &mut check)
     }
 
     fn mark_result_notice(
@@ -77,6 +79,7 @@ impl AnalysisStore {
         revision: u64,
         facts: u64,
         coverage: u64,
+        check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         if !scope.valid() || result_id.is_empty() || result_id.len() > 256 || revision == 0 {
             return self.reject("the result notice identity is invalid");
@@ -123,6 +126,11 @@ impl AnalysisStore {
         if changed != 1 {
             return AnalysisConflictSnafu.fail();
         }
+        #[cfg(any(test, feature = "test-fixtures"))]
+        if graph {
+            self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
+        }
+        check()?;
         self.commit_metadata(transaction, "commit analysis notice")
     }
 }

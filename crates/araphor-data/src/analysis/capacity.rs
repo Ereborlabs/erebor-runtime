@@ -10,6 +10,7 @@ use crate::{IoSnafu, Result, StorageCapacitySnafu};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StorageLimitsV1 {
+    pub reader_admissions: Option<usize>,
     pub native_memory_bytes: Option<u64>,
     pub native_temp_bytes: Option<u64>,
     pub disk_max_bytes: Option<u64>,
@@ -35,15 +36,18 @@ impl StorageLimitsV1 {
             .policy_reserve_bytes
             .unwrap_or(0)
             .checked_add(self.write_reserve_bytes.unwrap_or(0));
-        reserve.is_some_and(|reserve| {
-            self.disk_max_bytes.is_none_or(|limit| {
-                limit >= self.write_reserve_bytes.unwrap_or(0)
-                    && reserve.checked_add(limit).is_some()
+        self.reader_admissions
+            .is_none_or(|limit| limit <= tokio::sync::Semaphore::MAX_PERMITS)
+            && reserve.is_some_and(|reserve| {
+                self.disk_max_bytes.is_none_or(|limit| {
+                    limit >= self.write_reserve_bytes.unwrap_or(0)
+                        && reserve.checked_add(limit).is_some()
+                })
             })
-        }) && self
-            .tenant_max_bytes
-            .zip(self.logical_max_bytes)
-            .is_none_or(|(tenant, total)| tenant <= total)
+            && self
+                .tenant_max_bytes
+                .zip(self.logical_max_bytes)
+                .is_none_or(|(tenant, total)| tenant <= total)
     }
 
     fn bound(limit: Option<u64>, value: u64, resource: &'static str) -> Result<()> {
@@ -267,6 +271,7 @@ impl StorageLimitsV1 {
 impl StorageLimitsV1 {
     pub(super) fn fixture() -> Self {
         Self {
+            reader_admissions: None,
             native_memory_bytes: Some(128 * 1024 * 1024),
             native_temp_bytes: Some(128 * 1024 * 1024),
             disk_max_bytes: Some(8 * 1024 * 1024 * 1024),
@@ -301,6 +306,7 @@ mod tests {
         let limits: StorageLimitsV1 = serde_json::from_str("{}")?;
         assert_eq!(limits, StorageLimitsV1::default());
         assert!(limits.valid());
+        assert_eq!(limits.reader_admissions, None);
         assert_eq!(limits.native_memory_bytes, None);
         assert_eq!(limits.native_temp_bytes, None);
         assert_eq!(limits.maintenance_bytes()?, 0);
@@ -342,9 +348,27 @@ mod tests {
             )
             .is_err());
         let limits: StorageLimitsV1 = serde_json::from_str(
-            r#"{"native_memory_bytes":16777216,"native_temp_bytes":33554432,"tenant_max_bytes":8,"source_entries":1,"tenant_revisions":1}"#,
+            r#"{"reader_admissions":2,"native_memory_bytes":16777216,"native_temp_bytes":33554432,"tenant_max_bytes":8,"source_entries":1,"tenant_revisions":1}"#,
         )?;
         assert!(limits.valid());
+        assert_eq!(limits.reader_admissions, Some(2));
+        for reader_admissions in [
+            None,
+            Some(0),
+            Some(1),
+            Some(tokio::sync::Semaphore::MAX_PERMITS),
+        ] {
+            assert!(StorageLimitsV1 {
+                reader_admissions,
+                ..Default::default()
+            }
+            .valid());
+        }
+        assert!(!StorageLimitsV1 {
+            reader_admissions: Some(tokio::sync::Semaphore::MAX_PERMITS + 1),
+            ..Default::default()
+        }
+        .valid());
         assert_eq!(limits.native_memory_bytes, Some(16 * 1024 * 1024));
         assert_eq!(limits.native_temp_bytes, Some(32 * 1024 * 1024));
         limits.check_logical(100, 6, false)?;

@@ -219,7 +219,9 @@ fn commit_finding(store: &AnalysisStore, finding: FindingV1, cursor: u64) -> Res
         ],
         missing_ranges: vec![],
         input_positions: vec![],
-        previous_result_id: None,
+        previous_result_id: store
+            .processor_result(&scope)?
+            .map(|result| result.result_id),
         context_notice_revision: 0,
         witness_deadline_utc_ns: 1 + araphor_data::GRAPH_WITNESS_TTL_NS,
     };
@@ -237,6 +239,7 @@ fn commit_finding(store: &AnalysisStore, finding: FindingV1, cursor: u64) -> Res
             context_refs: vec![],
         },
         true,
+        || Ok(()),
     )?;
     Ok(())
 }

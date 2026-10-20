@@ -943,7 +943,14 @@ mod tests {
     #[test]
     fn source_binding_preserves_identity() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            Default::default(),
+            super::super::StorageLimitsV1 {
+                reader_admissions: Some(16),
+                ..Default::default()
+            },
+        )?;
         let identity = EvidenceIntakeIdentityV1 {
             label_epoch: 7,
             source_epoch: 9,
@@ -957,7 +964,11 @@ mod tests {
                 identity.source_epoch,
             )
         };
-        let _readers = store.read_slots.try_acquire_many(16)?;
+        let _readers = store
+            .read_slots
+            .as_ref()
+            .ok_or("configured reader admissions")?
+            .try_acquire_many(16)?;
         assert_eq!(lookup()?, None);
         assert!(store.source_receipt(&identity)?.is_none());
         store.accept_validated_batch(

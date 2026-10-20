@@ -98,6 +98,14 @@ The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish
 long-running lifecycle or automatic restart.
 
+Before an attempt exists, known reader and memory pressure waits on existing
+release events. Reader admission is configurable and disabled by default. Data Graph
+publication, immutable retry, and notice acknowledgement retain mandatory
+final authority checks. Fresh Graph writes require the exact prior window
+head. The connected qualification covers 106 distinct passing cases. These
+corrections retire no further reference file and do not qualify complete
+producers or public lifecycle integration.
+
 ### First deliverable: definition files and running instances
 
 The user requires this work before the earlier feature parity TODOs. Implement

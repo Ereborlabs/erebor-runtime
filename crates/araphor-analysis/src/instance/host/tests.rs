@@ -16,6 +16,7 @@ struct Authority {
     admissions: AtomicUsize,
     gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     delivery: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    reader_busy: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl Authority {
@@ -27,6 +28,7 @@ impl Authority {
             admissions: AtomicUsize::new(0),
             gate: Mutex::default(),
             delivery: Mutex::default(),
+            reader_busy: Mutex::default(),
         })
     }
 
@@ -113,7 +115,24 @@ impl PackageAuthorization for Authority {
                 return Err(Code::Denied.error("host fixture principal"));
             }
         }
-        self.inner.commit_many(grants, action, operation)
+        let result = self.inner.commit_many(grants, action, operation);
+        if matches!(
+            &result,
+            Err(araphor_data::Error::AnalysisBusy {
+                resource: "reader",
+                ..
+            })
+        ) {
+            if let Some(entered) = self
+                .reader_busy
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take()
+            {
+                let _sent = entered.send(());
+            }
+        }
+        result
     }
 
     fn changes(&self) -> watch::Receiver<u64> {
@@ -1462,3 +1481,5 @@ async fn host_bad_member_isolates() -> TestResult {
     drop(fixture.query.reserve_evaluation([1; 16])?);
     Ok(())
 }
+
+mod admission;

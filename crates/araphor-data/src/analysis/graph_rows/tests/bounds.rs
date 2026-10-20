@@ -40,7 +40,8 @@ fn graph_typed_commit_rejects_metadata() -> TestResult {
         .commit_graph_snapshot(
             fixture.request.clone(),
             CanonicalGraph::new(fixture.snapshot.clone())?,
-            true
+            true,
+            || Ok(()),
         )
         .is_err());
     for fault in [0, 1, 2] {
@@ -56,7 +57,8 @@ fn graph_typed_commit_rejects_metadata() -> TestResult {
             .commit_graph_snapshot(
                 request,
                 CanonicalGraph::new(fixture.snapshot.clone())?,
-                true
+                true,
+                || Ok(()),
             )
             .is_err());
         assert_eq!(fixture.store.meta()?, before);

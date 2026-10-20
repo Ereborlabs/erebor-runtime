@@ -410,6 +410,32 @@ not prove that all Graph quotas are disabled. The 31 Analysis Graph tests,
 retirement scope is in the records above. Final Rust qualification is
 **Not done**.
 
+## Graph publication guards
+
+[AnalysisStore::commit_graph_snapshot](../../crates/araphor-data/src/analysis/progress.rs)
+consumes the existing canonical graph pair and a final caller check.
+  -> The existing transaction checks manifest, scope, witnesses, and progress.
+  -> A fresh result compares its exact prior window head in that transaction.
+  -> Row insertion and the existing commit hook complete before the final check.
+  -> Data commits only when the final check succeeds.
+
+An exact immutable retry returns its original receipt and still requires the
+final check. It does not compare a historical result against a newer window
+head. [mark_graph_notice](../../crates/araphor-data/src/analysis/progress/notices.rs)
+uses its existing supersession check, commit hook, and final authority check.
+The generic result entry rejects Graph writes. There is no new transaction,
+reader, schema table, or execution owner.
+
+The [guard tests](../../crates/araphor-data/src/analysis/graph_rows/tests/guards.rs)
+check actual rollback, exact retry, missing and stale heads, superseded notice,
+and generic-entry rejection. All 39 connected Data cases pass. Notification
+qualification covers 13 original passing cases and eight corrected replacement
+fixtures. The fixture now supplies the actual prior result. All original
+notification assertions remain. The
+[migration record](../plans/araphor-analysis-migration.md#reactive-admission-and-guarded-graph-publication)
+records exact commands and corrections. This does not qualify the complete
+native Graph producer.
+
 ## Finite native helper replacement
 
 [PackageExec](../../crates/araphor-query/src/definition/physical.rs) receives
@@ -836,6 +862,29 @@ across the original and corrected commands. These checks qualify the complete
 [memory and stream retirement](../../recovery/araphor-analysis-memory-retirement-20261020.json).
 At that retirement, the 122 remaining reference files are unchanged. Initial admission pressure
 retry, producer and public integration, and the final Rust gate remain open.
+
+### Admission pressure
+
+[InstanceHost::open_member](../../crates/araphor-analysis/src/instance/host.rs)
+uses one existing Query memory scope for each member opening.
+  -> It loads the exact current instance and checks generation and lifecycle.
+  -> [Instance::admit_on](../../crates/araphor-analysis/src/instance/mod.rs) passes that scope to native Session preparation.
+  -> A known reader or shared-memory failure drops failed admission metadata.
+  -> The host waits on the existing capacity event, authority notice, expiry, or stop.
+  -> It reloads the exact lifecycle before it retries.
+
+The scope excludes its own releases from its capacity epoch. Unknown pending
+work, Runtime Busy, evaluation pressure, and fixed bounds are not admission
+capacity waits. Subscription assembly retries a reader failure only before a
+stream or attempt exists. Stop joins actual admission and stream workers.
+
+[StorageLimitsV1](../../crates/araphor-data/src/analysis/capacity.rs) owns the
+optional reader_admissions value. None creates no semaphore. Some(0) returns
+the fixed reader-admission quota error. A positive value uses native permits.
+[ReadPermit](../../crates/araphor-data/src/analysis/connection.rs) releases its
+actual token before it sends the existing capacity notice. The two native
+connections stay unchanged. All 25 host and nine Query capacity cases pass.
+The native lock and interrupt polling in Data remain open.
 
 ## Native operation validation
 

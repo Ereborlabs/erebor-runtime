@@ -113,8 +113,19 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new(limits: araphor_query::execution::Limits) -> TestResult<Self> {
+        Self::storage(limits, Default::default())
+    }
+
+    pub(super) fn storage(
+        limits: araphor_query::execution::Limits,
+        storage: araphor_data::StorageLimitsV1,
+    ) -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
-        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let store = Arc::new(AnalysisStore::open_with_limits(
+            directory.path().join("data"),
+            Default::default(),
+            storage,
+        )?);
         Ok(Self {
             directory,
             query: Engine::new(store, limits)?,

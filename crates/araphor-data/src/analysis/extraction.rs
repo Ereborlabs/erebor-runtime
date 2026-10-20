@@ -2489,7 +2489,9 @@ mod tests {
         use super::super::graph_rows::{tests::fixture::CommitFixture, GraphRows};
 
         let fixture = CommitFixture::new()?;
-        fixture.store.commit_graph(&fixture.request, true)?;
+        fixture
+            .store
+            .commit_graph(&fixture.request, true, || Ok(()))?;
         let mut snapshot = fixture.snapshot.clone();
         snapshot.previous_result_id = Some(fixture.request.result_id.clone());
         snapshot.graph.edges.clear();
@@ -2498,7 +2500,7 @@ mod tests {
         replacement.expected_cursor = replacement.consumed_cursor;
         replacement.created_utc_ns += 1;
         replacement.body = serde_json::to_vec(&snapshot)?;
-        fixture.store.commit_graph(&replacement, false)?;
+        fixture.store.commit_graph(&replacement, false, || Ok(()))?;
         fixture.store.release_graph_owner();
         assert!(!fixture.store.graph_enabled());
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;

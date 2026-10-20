@@ -117,6 +117,7 @@ impl Packages {
         mut bundles: Vec<PackageBundleV1>,
         tenant: [u8; 16],
         tables: BTreeMap<String, Arc<dyn TableProvider>>,
+        memory: Arc<crate::memory::Memory>,
     ) -> Result<Self> {
         bundles.sort_unstable_by(|left, right| left.root.cmp(&right.root));
         if bundles.windows(2).any(|pair| pair[0].root == pair[1].root) {
@@ -142,7 +143,7 @@ impl Packages {
                     .ok_or_else(|| {
                         araphor_data::PackageErrorCodeV1::Limit.error("package image memory")
                     })?;
-            let reservation = engine.memory().reserve_input(bytes).context(SqlSnafu)?;
+            let reservation = memory.reserve_input(bytes).context(SqlSnafu)?;
             bundle.validate().map_err(araphor_data::Error::from)?;
             let digest = bundle.digest().map_err(araphor_data::Error::from)?;
             reservation.try_grow(digest.capacity()).context(SqlSnafu)?;
@@ -163,7 +164,7 @@ impl Packages {
             state: engine.catalog(sources.clone())?,
             limits: engine.limits().clone(),
             bundles: images.into(),
-            memory: Arc::clone(engine.memory()),
+            memory,
             sources,
             planning: Mutex::default(),
             calls: AtomicU64::new(0),

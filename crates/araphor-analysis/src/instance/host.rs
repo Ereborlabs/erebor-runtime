@@ -63,7 +63,10 @@ impl Member {
                     .as_ref()
                     .is_err_and(|error| error.status_code() == StatusCode::PermissionDenied)
                 {
-                    if let Err(error) = host.suspend(Arc::clone(&expected)).await {
+                    if let Err(error) = host
+                        .suspend(Arc::clone(&expected), Arc::clone(&operation))
+                        .await
+                    {
                         result = Err(error);
                     }
                 }
@@ -273,90 +276,195 @@ impl InstanceHost {
         Ok(())
     }
 
+    async fn open_member(
+        self: &Arc<Self>,
+        expected: &Arc<(ManagedMember, MemoryReservation)>,
+        control: &Arc<AnalysisReadControl>,
+    ) -> Result<Arc<Instance>> {
+        let memory = self.query.memory().scope();
+        let mut notices = self.authority.changes();
+        loop {
+            control.check()?;
+            let epoch = memory.capacity_epoch();
+            let store = Arc::clone(self.query.store());
+            let selected = Arc::clone(expected);
+            let stage = Arc::clone(control);
+            let current = Engine::blocking(Arc::clone(control), Arc::clone(expected), move || {
+                let current = store
+                    .managed_instance(selected.0.tenant, &selected.0.id, &stage)?
+                    .ok_or_else(|| Code::Missing.error("managed member instance"))?;
+                if !current.running
+                    || current.generation != selected.0.generation
+                    || current.lifecycle != selected.0.lifecycle
+                {
+                    return Err(Code::Conflict.error("managed member fence").into());
+                }
+                Ok(current)
+            })
+            .await;
+            let current = match current {
+                Ok(current) => current,
+                Err(error) => {
+                    let error = error.into();
+                    tokio::select! {
+                        ready = self.wait_open(&error, control, &memory, epoch) => {
+                            if !ready? { return Err(error); }
+                        }
+                        changed = notices.changed() => {
+                            if changed.is_err() {
+                                return Err(Code::Denied.error("managed admission authority notice").into());
+                            }
+                        }
+                    }
+                    continue;
+                }
+            };
+            let ManagedSpec {
+                id,
+                grant,
+                definition,
+                manifest,
+                ..
+            } = current.spec;
+            drop(manifest);
+            let mut changes = self.authority.changes_for(&grant);
+            let admission = Arc::new(control.operation()?.within(grant.remaining()?)?);
+            let result = {
+                let opening = Instance::admit_on(
+                    Arc::clone(&self.query),
+                    Arc::clone(&self.authority),
+                    grant.clone(),
+                    id,
+                    definition,
+                    &admission,
+                    Arc::clone(&memory),
+                );
+                tokio::pin!(opening);
+                loop {
+                    tokio::select! {
+                        result = &mut opening => break result,
+                        _ = control.cancelled() => {
+                            let _cancelled = admission.cancel();
+                            let _joined = opening.await;
+                            return Err(Code::Incomplete.error("managed admission stopped").into());
+                        }
+                        changed = changes.changed() => {
+                            let authority = Arc::clone(&self.authority);
+                            let checked_grant = grant.clone();
+                            let checked = Engine::blocking(Arc::clone(&admission), (), move || {
+                                authority.check(&checked_grant, araphor_data::PackageActionV1::Run).map_err(Into::into)
+                            }).await;
+                            if changed.is_err() || checked.is_err() {
+                                let _cancelled = admission.cancel();
+                                let _joined = opening.await;
+                                checked?;
+                                return Err(Code::Denied.error("managed admission authority notice").into());
+                            }
+                        }
+                    }
+                }
+            };
+            if control.check().is_ok() {
+                grant.remaining()?;
+            }
+            let error = match result {
+                Ok(owner) => return Ok(owner),
+                Err(error) => error,
+            };
+            let ready = tokio::select! {
+                _ = control.cancelled() => {
+                    let _cancelled = admission.cancel();
+                    return Err(Code::Incomplete.error("managed admission stopped").into());
+                }
+                ready = self.wait_open(&error, &admission, &memory, epoch) => ready,
+                changed = changes.changed() => {
+                    if changed.is_err() {
+                        return Err(Code::Denied.error("managed admission authority notice").into());
+                    }
+                    Ok(true)
+                }
+            };
+            if control.check().is_ok() {
+                grant.remaining()?;
+            }
+            if !ready? {
+                return Err(error);
+            }
+        }
+    }
+
+    async fn wait_open(
+        &self,
+        error: &crate::Error,
+        control: &AnalysisReadControl,
+        memory: &Memory,
+        epoch: u64,
+    ) -> Result<bool> {
+        let resource = {
+            let mut resource = None;
+            let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+            while let Some(error) = current {
+                if matches!(
+                    error.downcast_ref::<araphor_data::Error>(),
+                    Some(araphor_data::Error::AnalysisBusy {
+                        resource: "reader",
+                        ..
+                    })
+                ) {
+                    resource = Some("reader");
+                    break;
+                }
+                if let Some(araphor_query::Error::Capacity {
+                    resource: capacity @ ("shared input" | "shared output"),
+                    ..
+                }) = error.downcast_ref::<araphor_query::Error>()
+                {
+                    resource = Some(*capacity);
+                    break;
+                }
+                current = match error.downcast_ref::<crate::Error>() {
+                    Some(crate::Error::Data { source }) => Some(source),
+                    Some(crate::Error::Query { source }) => Some(source),
+                    _ => match error.downcast_ref::<araphor_query::Error>() {
+                        Some(araphor_query::Error::Data { source }) => Some(source),
+                        _ => error.source(),
+                    },
+                };
+            }
+            resource
+        };
+        match resource {
+            Some("reader") => {
+                control
+                    .query_async(self.query.store().wait_capacity())
+                    .await?
+            }
+            Some(_) => control.query_async(memory.capacity_changed(epoch)).await?,
+            None => return Ok(false),
+        }
+        Ok(true)
+    }
+
     async fn member(
         self: &Arc<Self>,
         expected: &Arc<(ManagedMember, MemoryReservation)>,
         control: &Arc<AnalysisReadControl>,
         witness_expiry: u64,
     ) -> Result<()> {
-        let store = Arc::clone(self.query.store());
-        let selected = Arc::clone(expected);
-        let stage = Arc::clone(control);
-        let current = Engine::blocking(Arc::clone(control), Arc::clone(expected), move || {
-            let current = store
-                .managed_instance(selected.0.tenant, &selected.0.id, &stage)?
-                .ok_or_else(|| Code::Missing.error("managed member instance"))?;
-            if !current.running
-                || current.generation != selected.0.generation
-                || current.lifecycle != selected.0.lifecycle
-            {
-                return Err(Code::Conflict.error("managed member fence").into());
-            }
-            Ok(current)
-        })
-        .await?;
-        let ManagedSpec {
-            id,
-            grant,
-            definition,
-            manifest,
-            ..
-        } = current.spec;
-        drop(manifest);
-        let expected = &expected.0;
-        let mut changes = self.authority.changes_for(&grant);
-        let admission = Arc::new(control.operation()?.within(grant.remaining()?)?);
-        let opening = Instance::admit(
-            Arc::clone(&self.query),
-            Arc::clone(&self.authority),
-            grant.clone(),
-            id,
-            definition,
-            &admission,
-        );
-        tokio::pin!(opening);
-        let owner = loop {
-            tokio::select! {
-                result = &mut opening => match result {
-                    Ok(owner) => break owner,
-                    Err(error) => {
-                        if control.check().is_ok() {
-                            if let Err(expired @ araphor_data::Error::Package {
-                                code: Code::Denied,
-                                field: "package grant",
-                                ..
-                            }) = grant.remaining() {
-                                return Err(expired.into());
-                            }
-                        }
-                        return Err(error);
-                    }
-                },
-                _ = control.cancelled() => {
-                    let _cancelled = admission.cancel();
-                    let _joined = opening.await;
-                    return Ok(());
-                }
-                changed = changes.changed() => {
-                    let authority = Arc::clone(&self.authority);
-                    let checked_grant = grant.clone();
-                    let checked = Engine::blocking(Arc::clone(&admission), (), move || {
-                        authority.check(&checked_grant, araphor_data::PackageActionV1::Run).map_err(Into::into)
-                    }).await;
-                    if changed.is_err() || checked.is_err() {
-                        let _cancelled = admission.cancel();
-                        let _joined = opening.await;
-                        checked?;
-                        return Err(Code::Denied.error("managed admission authority notice").into());
-                    }
-                }
-            }
+        let owner = match self.open_member(expected, control).await {
+            Ok(owner) => owner,
+            Err(_) if control.check().is_err() => return Ok(()),
+            Err(error) => return Err(error),
         };
-        drop(grant);
-        drop(changes);
+        let expected = &expected.0;
         loop {
             control.check()?;
-            let operation = Arc::new(control.operation()?);
+            let operation = Arc::new(
+                control
+                    .operation()?
+                    .within(owner.admitted.spec.grant.remaining()?)?,
+            );
+            let mut changes = self.authority.changes_for(&owner.admitted.spec.grant);
             let opened = Arc::clone(&owner);
             let lifecycle = expected.lifecycle;
             let stage = Arc::clone(&operation);
@@ -364,14 +472,41 @@ impl InstanceHost {
                 Ok(opened.subscribe(stage, witness_expiry, lifecycle))
             });
             tokio::pin!(opening);
-            let mut stream = tokio::select! {
-                result = &mut opening => result??,
+            let result = tokio::select! {
+                result = &mut opening => result?,
                 _ = control.cancelled() => {
                     let _cancelled = operation.cancel();
                     if let Ok(Ok(stream)) = opening.await {
                         stream.cancel_and_join(&AnalysisReadControl::default()).await?;
                     }
                     return Ok(());
+                }
+            };
+            let mut stream = match result {
+                Ok(stream) => stream,
+                Err(error) => {
+                    let memory = self.query.memory().scope();
+                    let epoch = memory.capacity_epoch();
+                    let ready = tokio::select! {
+                        _ = control.cancelled() => {
+                            let _cancelled = operation.cancel();
+                            return Ok(());
+                        }
+                        ready = self.wait_open(&error, &operation, &memory, epoch) => ready,
+                        changed = changes.changed() => {
+                            if changed.is_err() {
+                                return Err(Code::Denied.error("managed admission authority notice").into());
+                            }
+                            Ok(true)
+                        }
+                    };
+                    if control.check().is_ok() {
+                        owner.admitted.spec.grant.remaining()?;
+                    }
+                    if !ready? {
+                        return Err(error);
+                    }
+                    continue;
                 }
             };
             let failure = loop {
@@ -406,25 +541,43 @@ impl InstanceHost {
         }
     }
 
-    async fn suspend(&self, expected: Arc<(ManagedMember, MemoryReservation)>) -> Result<()> {
-        let store = Arc::clone(self.query.store());
-        let control = Arc::new(AnalysisReadControl::default());
-        let stage = Arc::clone(&control);
-        Engine::blocking(control, (), move || {
-            let expected = &expected.0;
-            let current = store
-                .managed_instance(expected.tenant, &expected.id, &stage)?
-                .ok_or_else(|| Code::Missing.error("managed suspension instance"))?;
-            if current.generation == expected.generation
-                && current.lifecycle == expected.lifecycle
-                && current.running
-            {
-                store.suspend_managed(&current, || stage.check())?;
+    async fn suspend(
+        &self,
+        expected: Arc<(ManagedMember, MemoryReservation)>,
+        control: Arc<AnalysisReadControl>,
+    ) -> Result<()> {
+        loop {
+            let store = Arc::clone(self.query.store());
+            let selected = Arc::clone(&expected);
+            let stage = Arc::clone(&control);
+            let result = Engine::blocking(Arc::clone(&control), Arc::clone(&expected), move || {
+                let expected = &selected.0;
+                let current = store
+                    .managed_instance(expected.tenant, &expected.id, &stage)?
+                    .ok_or_else(|| Code::Missing.error("managed suspension instance"))?;
+                if current.generation == expected.generation
+                    && current.lifecycle == expected.lifecycle
+                    && current.running
+                {
+                    store.suspend_managed(&current, || stage.check())?;
+                }
+                Ok(())
+            })
+            .await;
+            match result {
+                Err(araphor_query::Error::Data {
+                    source:
+                        araphor_data::Error::AnalysisBusy {
+                            resource: "reader", ..
+                        },
+                }) => {
+                    control
+                        .query_async(self.query.store().wait_capacity())
+                        .await?;
+                }
+                result => return result.map_err(Into::into),
             }
-            Ok(())
-        })
-        .await
-        .map_err(Into::into)
+        }
     }
 }
 

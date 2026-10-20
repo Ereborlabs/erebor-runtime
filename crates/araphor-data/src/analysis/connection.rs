@@ -376,14 +376,26 @@ impl AnalysisStore {
     }
 
     pub(crate) fn reserve_reader(&self) -> Result<ReadPermit> {
-        self.read_slots
-            .clone()
-            .try_acquire_owned()
-            .map(|permit| ReadPermit {
-                permit: Some(permit),
-                capacity: self.capacity.clone(),
+        if self.storage.reader_admissions == Some(0) {
+            return crate::StorageCapacitySnafu {
+                resource: "reader admissions",
+            }
+            .fail();
+        }
+        let permit = self
+            .read_slots
+            .as_ref()
+            .map(|slots| {
+                slots
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| AnalysisBusySnafu { resource: "reader" }.build())
             })
-            .map_err(|_| AnalysisBusySnafu { resource: "reader" }.build())
+            .transpose()?;
+        Ok(ReadPermit {
+            permit,
+            capacity: self.capacity.clone(),
+        })
     }
 
     pub async fn wait_capacity(&self) -> Result<()> {
@@ -487,6 +499,104 @@ mod tests {
     }
 
     #[test]
+    fn reader_default_admits_queue() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        assert!(store.read_slots.is_none());
+        assert_eq!(store.readers.len(), 2);
+        let held = store
+            .maintenance
+            .write()
+            .map_err(|_| "maintenance poisoned")?;
+        let (entered, observed) = mpsc::channel();
+        let controls = (0..17)
+            .map(|_| {
+                let control = AnalysisReadControl::default();
+                *control
+                    .wait_signal
+                    .lock()
+                    .map_err(|_| "wait signal poisoned")? = Some(entered.clone());
+                Ok(std::sync::Arc::new(control))
+            })
+            .collect::<std::result::Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        thread::scope(|scope| -> TestResult {
+            let mut workers: Vec<_> = controls
+                .iter()
+                .map(|control| {
+                    let control = std::sync::Arc::clone(control);
+                    let store = &store;
+                    scope.spawn(move || -> Result<i64> {
+                        let reader = store.reader_until(&control)?;
+                        reader
+                            .get()?
+                            .query_row("SELECT 1", [], |row| row.get(0))
+                            .context(AnalysisDatabaseSnafu {
+                                operation: "test unbounded reader admission",
+                            })
+                    })
+                })
+                .collect();
+            for _ in 0..17 {
+                observed.recv_timeout(Duration::from_secs(5))?;
+            }
+            controls[0].cancel()?;
+            assert!(matches!(
+                workers.remove(0).join().map_err(|_| "reader panicked")?,
+                Err(crate::Error::AnalysisReadCancelled { .. })
+            ));
+            drop(held);
+            for worker in workers {
+                assert_eq!(worker.join().map_err(|_| "reader panicked")??, 1);
+            }
+            Ok(())
+        })?;
+        store.meta()?;
+        assert!(store.maintenance.try_write().is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reader_zero_rejects_reads() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open_with_limits(
+            &root,
+            Default::default(),
+            StorageLimitsV1 {
+                reader_admissions: Some(0),
+                ..Default::default()
+            },
+        )?;
+        assert!(matches!(
+            store.reserve_reader(),
+            Err(crate::Error::StorageCapacity {
+                resource: "reader admissions",
+                ..
+            })
+        ));
+        assert!(matches!(
+            store.meta(),
+            Err(crate::Error::StorageCapacity {
+                resource: "reader admissions",
+                ..
+            })
+        ));
+        assert!(matches!(
+            store.wait_capacity().await,
+            Err(crate::Error::StorageCapacity {
+                resource: "reader admissions",
+                ..
+            })
+        ));
+        store.accept_validated_batch(identity(), batch(1))?;
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert!(store.read_slots.is_none());
+        assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
+        Ok(())
+    }
+
+    #[test]
     fn analysis_store_lease_release() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
@@ -570,7 +680,14 @@ mod tests {
     #[test]
     fn analysis_store_admission_bounds() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            Default::default(),
+            StorageLimitsV1 {
+                reader_admissions: Some(16),
+                ..Default::default()
+            },
+        )?;
         let held = store.writer()?;
         thread::scope(|scope| -> TestResult {
             let store = &store;
@@ -609,7 +726,13 @@ mod tests {
                 .map(|_| scope.spawn(|| store.reader().map(|_| ())))
                 .collect();
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while store.read_slots.available_permits() != 0 {
+            while store
+                .read_slots
+                .as_ref()
+                .ok_or("configured reader admissions")?
+                .available_permits()
+                != 0
+            {
                 if std::time::Instant::now() >= deadline {
                     drop((first, second));
                     return Err("readers did not enter admission".into());
@@ -630,7 +753,14 @@ mod tests {
             }
             Ok(())
         })?;
-        assert_eq!(store.read_slots.available_permits(), 16);
+        assert_eq!(
+            store
+                .read_slots
+                .as_ref()
+                .ok_or("configured reader admissions")?
+                .available_permits(),
+            16
+        );
         assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
         Ok(())
     }

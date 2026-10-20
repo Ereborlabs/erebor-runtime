@@ -1,7 +1,7 @@
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use araphor_data::AnalysisSelectionV1;
+use araphor_data::{AnalysisReadControl, AnalysisSelectionV1};
 use datafusion::common::DataFusionError;
 
 use super::{execution, Fixture, Limits, PackageImplementationV1, TestResult};
@@ -105,6 +105,7 @@ async fn image_capacity_is_shared() -> TestResult {
         vec![second, Fixture::bundle()],
         [1; 16],
         Default::default(),
+        Arc::clone(fixture.engine.memory()),
     )?;
     assert_eq!(images.bundles[0].0.root.revision, "r1");
     assert_eq!(images.bundles[1].0.root.revision, "r2");
@@ -113,6 +114,7 @@ async fn image_capacity_is_shared() -> TestResult {
         vec![Fixture::bundle(), Fixture::bundle()],
         [1; 16],
         Default::default(),
+        Arc::clone(fixture.engine.memory()),
     )
     .err()
     .ok_or("duplicate image admitted")?;
@@ -348,6 +350,57 @@ async fn metadata_rejects_short_capacity() -> TestResult {
         "{error:?}"
     );
     assert_eq!(fixture.engine.store().meta()?, before);
+    assert_eq!(fixture.engine.memory().input_reserved(), 0);
+    drop(fixture.engine.memory().reserve_input(capacity)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn admission_keeps_memory_scope() -> TestResult {
+    let capacity = 128 * 1024;
+    let fixture = Fixture::limits(Limits {
+        input_capacity: Some(capacity),
+        ..Default::default()
+    })?;
+    fixture.install(&Fixture::bundle())?;
+    let control = AnalysisReadControl::default();
+    let memory = fixture.engine.memory().scope();
+    let observer = fixture.engine.memory().scope();
+    let session = fixture.engine.session_on(
+        araphor_data::AnalysisSelectionV1::tenant([1; 16]),
+        &control,
+        0,
+        Arc::clone(&memory),
+    )?;
+    let definition = Fixture::definition();
+    let prepared = session.prepare_definition(&definition).await?;
+    let retained = fixture.engine.memory().input_reserved();
+    assert!(retained > 1);
+    drop(prepared);
+    assert_eq!(fixture.engine.memory().input_reserved(), 0);
+    let pressure = fixture
+        .engine
+        .memory()
+        .reserve_input(capacity - retained + 1)?;
+    let epoch = memory.capacity_epoch();
+    let observed = observer.capacity_epoch();
+    let error = session
+        .prepare_definition(&definition)
+        .await
+        .err()
+        .ok_or("scoped admission ignored pressure")?;
+    assert_eq!(crate::Failure::from(&error), crate::Failure::Busy);
+    assert_eq!(memory.capacity_epoch(), epoch);
+    assert_ne!(observer.capacity_epoch(), observed);
+    assert_eq!(fixture.engine.memory().input_reserved(), pressure.size());
+    let waiting = memory.capacity_changed(epoch);
+    tokio::pin!(waiting);
+    assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+    drop(pressure);
+    tokio::time::timeout(std::time::Duration::from_secs(30), waiting).await??;
+    let prepared = session.prepare_definition(&definition).await?;
+    assert_eq!(fixture.engine.memory().input_reserved(), retained);
+    drop(prepared);
     assert_eq!(fixture.engine.memory().input_reserved(), 0);
     drop(fixture.engine.memory().reserve_input(capacity)?);
     Ok(())

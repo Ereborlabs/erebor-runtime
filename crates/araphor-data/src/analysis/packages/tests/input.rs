@@ -104,7 +104,14 @@ fn input_checks_global_notices() -> TestResult {
 #[test]
 fn controlled_registration_reads() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let store = AnalysisStore::open_with_limits(
+        directory.path().join("store"),
+        Default::default(),
+        crate::StorageLimitsV1 {
+            reader_admissions: Some(16),
+            ..Default::default()
+        },
+    )?;
     let first = start(&store, "first")?;
     start(&store, "second")?;
     assert_eq!(
@@ -139,7 +146,14 @@ fn controlled_registration_reads() -> TestResult {
         store.package_activations_until([1; 16], "scope", None, &cancelled),
         Err(crate::Error::AnalysisReadCancelled { .. })
     ));
-    assert_eq!(store.read_slots.available_permits(), 16);
+    assert_eq!(
+        store
+            .read_slots
+            .as_ref()
+            .ok_or("configured reader admissions")?
+            .available_permits(),
+        16
+    );
     Ok(())
 }
 
@@ -440,7 +454,14 @@ fn activation_watch_reconciles_recovery() -> TestResult {
 #[test]
 fn reader_release_wakes_capacity() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let store = AnalysisStore::open_with_limits(
+        directory.path().join("store"),
+        Default::default(),
+        crate::StorageLimitsV1 {
+            reader_admissions: Some(16),
+            ..Default::default()
+        },
+    )?;
     let identity = crate::analysis::tests::identity();
     append(&store, identity.clone())?;
     store.meta()?;
@@ -454,16 +475,37 @@ fn reader_release_wakes_capacity() -> TestResult {
     ));
     assert!(!capacity.has_changed()?);
     drop(permits.pop());
-    assert_eq!(store.read_slots.available_permits(), 1);
+    assert_eq!(
+        store
+            .read_slots
+            .as_ref()
+            .ok_or("configured reader admissions")?
+            .available_permits(),
+        1
+    );
     assert!(capacity.has_changed()?);
     capacity.borrow_and_update();
     let reader = store.reader_until(&control()?)?;
     assert!(!capacity.has_changed()?);
     drop(reader);
     assert!(capacity.has_changed()?);
-    assert_eq!(store.read_slots.available_permits(), 1);
+    assert_eq!(
+        store
+            .read_slots
+            .as_ref()
+            .ok_or("configured reader admissions")?
+            .available_permits(),
+        1
+    );
     drop(permits);
-    assert_eq!(store.read_slots.available_permits(), 16);
+    assert_eq!(
+        store
+            .read_slots
+            .as_ref()
+            .ok_or("configured reader admissions")?
+            .available_permits(),
+        16
+    );
     capacity.borrow_and_update();
     assert_eq!(store.read_page(&identity, 1)?.records.len(), 1);
     assert!(capacity.has_changed()?);
@@ -493,7 +535,14 @@ async fn cancellation_ignores_stage_deadline() -> TestResult {
 #[tokio::test]
 async fn capacity_checks_reader_gate() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let store = AnalysisStore::open_with_limits(
+        directory.path().join("store"),
+        Default::default(),
+        crate::StorageLimitsV1 {
+            reader_admissions: Some(16),
+            ..Default::default()
+        },
+    )?;
     let mut permits = (0..16)
         .map(|_| store.reserve_trace_read())
         .collect::<crate::Result<Vec<_>>>()?;
@@ -504,7 +553,14 @@ async fn capacity_checks_reader_gate() -> TestResult {
     assert!(futures_util::poll!(&mut wait).is_pending());
     drop(permits.pop());
     tokio::time::timeout(Duration::from_secs(1), wait).await??;
-    assert_eq!(store.read_slots.available_permits(), 1);
+    assert_eq!(
+        store
+            .read_slots
+            .as_ref()
+            .ok_or("configured reader admissions")?
+            .available_permits(),
+        1
+    );
     drop(permits);
     store.wait_capacity().await?;
     Ok(())

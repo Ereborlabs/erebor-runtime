@@ -243,7 +243,9 @@ fn row(
 #[test]
 fn graph_event_coverage_fields() -> TestResult {
     let fixture = CommitFixture::new()?;
-    let receipt = fixture.store.commit_graph(&fixture.request, true)?;
+    let receipt = fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let graph = &fixture.snapshot;
     let mut selection = AnalysisSelectionV1::new(
         graph.scope.identity.tenant_id,
@@ -437,7 +439,9 @@ fn graph_event_coverage_fields() -> TestResult {
 #[test]
 fn context_notification_fields() -> TestResult {
     let fixture = CommitFixture::new()?;
-    fixture.store.commit_graph(&fixture.request, true)?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     fixture.store.enable_notification_owner()?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     let document = DiscoveryContextRevisionV1 {

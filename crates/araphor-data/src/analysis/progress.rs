@@ -562,7 +562,7 @@ impl AnalysisStore {
 
     pub fn commit_result(&self, input: &AnalysisResultCommitV1) -> Result<AnalysisResultReceiptV1> {
         if input.scope.processor_id == crate::GRAPH_PROCESSOR {
-            return self.commit_graph(input, true);
+            return self.reject("the graph result requires a guarded graph commit");
         }
         self.commit_progress(input, None, true, None, None, false, &mut || Ok(()))
     }
@@ -571,12 +571,13 @@ impl AnalysisStore {
         &self,
         input: &AnalysisResultCommitV1,
         advance: bool,
+        mut check: impl FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
         if input.scope.processor_id != crate::GRAPH_PROCESSOR {
             return self.reject("the graph result owner is invalid");
         }
         let graph = crate::GraphSnapshotV1::try_from(input.body.as_slice())?;
-        self.commit_graph_inner(input, &graph, advance, false)
+        self.commit_graph_inner(input, &graph, advance, false, &mut check)
     }
 
     pub fn commit_graph_snapshot(
@@ -584,6 +585,7 @@ impl AnalysisStore {
         mut input: AnalysisResultCommitV1,
         prepared: super::graph_rows::CanonicalGraph,
         advance: bool,
+        mut check: impl FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
         if input.scope.processor_id != crate::GRAPH_PROCESSOR {
             return self.reject("the graph result owner is invalid");
@@ -593,7 +595,7 @@ impl AnalysisStore {
         }
         let (graph, body) = prepared.into_parts();
         input.body = body;
-        self.commit_graph_inner(&input, &graph, advance, true)
+        self.commit_graph_inner(&input, &graph, advance, true, &mut check)
     }
 
     fn commit_graph_inner(
@@ -602,6 +604,7 @@ impl AnalysisStore {
         graph: &crate::GraphSnapshotV1,
         advance: bool,
         canonical: bool,
+        check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
         let expected: Vec<_> = graph
             .input_manifest
@@ -636,15 +639,7 @@ impl AnalysisStore {
         {
             return self.reject("the graph input manifest, witnesses, or progress differ");
         }
-        self.commit_progress(
-            input,
-            None,
-            advance,
-            None,
-            Some(graph),
-            canonical,
-            &mut || Ok(()),
-        )
+        self.commit_progress(input, None, advance, None, Some(graph), canonical, check)
     }
 
     #[cfg(test)]
@@ -852,6 +847,29 @@ impl AnalysisStore {
             }
         } else if previous.is_some() {
             return AnalysisConflictSnafu.fail();
+        }
+        if let Some(graph) = graph {
+            let head: Option<String> = transaction
+                .query_row(
+                    "SELECT result_id FROM analysis_results WHERE tenant_id = ?
+                     AND processor_id = ? AND method_version = ? AND stream_key = ?
+                     AND first_cursor = ? ORDER BY commit_revision DESC LIMIT 1",
+                    params![
+                        input.scope.identity.tenant_id.as_slice(),
+                        input.scope.processor_id,
+                        input.scope.method_version,
+                        key.as_slice(),
+                        graph.first_cursor
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read expected graph window head",
+                })?;
+            if head.as_deref() != graph.previous_result_id.as_deref() {
+                return AnalysisConflictSnafu.fail();
+            }
         }
         let progress: Option<(u64, u64, bool, String)> = transaction
             .query_row(

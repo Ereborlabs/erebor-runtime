@@ -48,7 +48,7 @@ Every replacement passes its required checks
 | Context | All 17 focused Context tests pass. Active Analysis retains import authorization and native selection. Quotas are explicit options and disabled by default. | Finite boundary qualified |
 | Fixture qualification | All 4 comparator cases and the corrected entered-guest cancellation/revocation case pass. Active Analysis uses native calls and current Test authority. Native accumulation and clock/seed cases pass. Negative saved fixture time returns Unsupported. | Partial qualification |
 | Managed state and lifecycle | Finite and native subscription checks pass for immutable attempts, guarded state, atomic multi-call publication, saved frontiers, lifecycle comparisons, authority, cancellation, and known terminal outcomes. The internal reactive host admits retained running instances and drains actual workers before replacement. Original live claims cannot publish after clean reopen. Data admission starts no work. Public lifecycle and recovery integration remain open. | Focused checks pass; public integration Not done |
-| Graph producer | Capture immutable ACK history, source proofs, graph heads and frozen coverage in the same view. Bind detector relations and consume subscriptions. Add the final authority callback and exact previous-head check to the existing Data graph transaction. | Not done |
+| Graph producer | Data final authority, immutable retry, notice acknowledgement, and exact previous-window-head checks pass focused qualification. Capture immutable ACK history, source proofs, graph heads and frozen coverage in the same view. Bind detector relations and consume subscriptions. The native producer remains absent. | Not done |
 | Discovery producer | The current adapter subscribes to an admitted PackageCall. Interval split, frozen facts, witnesses, seals, replay, and reviewed baselines remain required. The complete producer is not qualified. | Not done |
 | Notification producer | Finite operations are moved. All 5 reactive tests pass. Native SQL selects route and delivery candidates. Data supplies exact retry and grant-expiry deadlines. Managed supervision is absent. | Not done |
 | Public callers | Restore current managed operations through Control, CLI, and lightweight E2E. Reference test modules remain available but are not a substitute for native integration tests. | Not done |
@@ -67,11 +67,11 @@ format, and checked arithmetic validation. SDK limits remain shared with the
 native ABI and WIT. Query Memory does not charge every Data writer allocation.
 The complete quota audit is **Not done**.
 
-Data also has a fixed 16-slot reader admission semaphore. This quota rejects
-the seventeenth active or queued read. The two reusable reader connections
-are a separate execution pool. Reader admission needs an optional limit in
-StorageLimitsV1 with a disabled default. This correction does not remove
-the contended-lock or native-interrupt polling described above.
+Data reader admission is now StorageLimitsV1.reader_admissions. Its default
+is None, which creates no admission semaphore. Some(0) rejects reads with the
+existing fixed quota error. Positive values use the native semaphore. The two
+reader connections remain a separate execution pool. Focused checks pass.
+The contended-lock and native-interrupt polling described above remain open.
 
 The old Query input executor has no active production caller. Its historical
 removal preview estimated 986 production code lines. That preview also removes
@@ -83,8 +83,8 @@ Finite managed tests now reject a wrong returned evaluation time and stale
 checkpoint reuse after input revision or coverage changes. A completed stateful
 SQL retry survives reopen while the full input pool and only evaluation permit
 are occupied. These tests do not replace live offered-cut retry, inherited
-witness expiry, per-port deadlines, or source-scope rules. Discarded local-port
-origins and disjoint capture ranges remain open. The audit covers 19 finite
+witness expiry, per-port deadlines, or source-scope rules. Native input qualification below now covers discarded local-port origins
+and disjoint capture ranges. Mixed-window subscription expiry remains open. The audit covers 19 finite
 and 22 live tests. Keep every remaining assertion until a current Query or Data
 owner proves it. Executor removal is **Not done**.
 
@@ -582,18 +582,58 @@ files and 121 unchanged baseline files**. The archive remains unchanged.
 Other model rules, initial admission pressure retry, producer integration,
 public lifecycle, and the final Rust gate remain **Not done**.
 
+### Reactive admission and guarded Graph publication
+
+Implementation and focused checks are **Done** for this bounded correction.
+Session preparation uses its existing memory scope. The host retries only
+known reader or shared input/output pressure before an attempt exists. Failed
+admission releases its retained image and metadata before the wait. Its own
+release cannot wake that same scope. External capacity release, authority
+changes, grant expiry, and stop remain events. Unknown pending work, Runtime
+pressure, and fixed bounds do not enter this retry.
+
+Data reader admission is optional and disabled by default. A configured zero
+rejects reads without preventing a write. Configured positive values preserve
+reader Busy and release notifications. The two native connections remain.
+
+Graph writes keep the existing transaction. Changed publication and exact
+immutable retry require a final caller check. Fresh publication compares the
+exact tenant, processor, method, stream, and first-cursor head. Notice
+acknowledgement also requires its final check. Generic commit_result rejects
+Graph writes, so callers cannot bypass the guarded entry.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `migration-host-graph-build120` | Connected test build passes. | 21.434 |
+| `migration-host-graph-data-new117` | All seven new reader and Graph guard cases pass. | 4.899 |
+| `migration-host-graph-data-retained117` | All 16 retained Data cases pass. | 6.852 |
+| `migration-host-all118` | All 25 host cases pass. | 36.778 |
+| `migration-scope-all118` | All nine Query capacity cases pass. | 10.060 |
+| `migration-graph-connected119` | All 39 connected Data Graph and native table cases pass. | 22.653 |
+| `migration-graph-notification119` | 13 notification cases pass; eight replacement fixtures omit their prior head. | 25.017 |
+| `migration-notification-corrected120` | All eight corrected notification cases pass with their original assertions. | 38.535 |
+| `migration-host-graph-clippy120` | Connected targets and features pass with warnings denied. | 11.739 |
+| `migration-host-graph-fmt120` | Workspace formatting passes. | 4.782 |
+
+The [qualification record](../../recovery/araphor-analysis-host-graph-qualification-20261020.json)
+identifies 106 distinct passing cases. It preserves the earlier compiler and
+fixture failures and the exact corrections. Final formatting changes only
+line wrapping in two test files. This delivery retires no Back file. All 121
+remaining files and the recovery archive are unchanged. Complete producers,
+public lifecycle, native Data waits, and the final Rust gate are **Not done**.
+
 ### Production code ledger
 
-The current count115 includes native input capture, projected membership,
-shared source requests, the input-limit correction, and operation test retirement.
+The current count120 includes native input capture, projected membership,
+shared source requests, reactive admission, and guarded Graph publication.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 15,876 | 8,740 | +7,136 |
-| Original reduction baseline `7b7b407a` | 43,520 | 30,388 | +13,132 |
+| `6a25ba1b` | 16,083 | 8,740 | +7,343 |
+| Original reduction baseline `7b7b407a` | 43,727 | 30,388 | +13,339 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -620,13 +660,17 @@ finite failure recording add 396 production lines. Limits retirement removes
 projected membership add 420 production lines. Memory retirement removes 240.
 This delivery adds 180 net production lines. The input-limit correction adds
 seven production lines. Operation test retirement removes no production code.
-Another 19,132 net production lines
+Reactive admission and Graph guards add 207 production lines and retire no
+reference file. Another 19,339 net production lines
 must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count115.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count120.json`. Its selected source
 fingerprint is
+`ac385977f6fa6f4a1d5c7b1b692c54eaa4dd7ceec0d9c97737f37387e89f3290`.
+The earlier count115 records the input-limit correction and operation test
+retirement at +13,132 production lines from the original baseline. Its fingerprint is
 `0f4f6cb8277d831edea72500719acb4256a49f9cc72173eb1f79d5a97ad2acb3`.
 The earlier count113 records native input capture and projected membership at
 +13,125 production lines from the original baseline. Its fingerprint is

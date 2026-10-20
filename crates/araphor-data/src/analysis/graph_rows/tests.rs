@@ -3,6 +3,7 @@ use super::*;
 mod bounds;
 mod encoding;
 pub(in crate::analysis) mod fixture;
+mod guards;
 mod headers;
 mod packages;
 mod schema;
@@ -176,7 +177,9 @@ fn native_borrowed_columns() -> TestResult {
 #[test]
 fn native_row_read_cancel() -> TestResult {
     let fixture = CommitFixture::new()?;
-    fixture.store.commit_graph(&fixture.request, true)?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let writer = fixture.store.writer_access()?;
     let writer = writer.get()?;
     let result = &fixture.request.result_id;
@@ -217,7 +220,9 @@ fn native_row_read_cancel() -> TestResult {
 #[test]
 fn native_finding_tenant() -> TestResult {
     let fixture = CommitFixture::new()?;
-    fixture.store.commit_graph(&fixture.request, true)?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let mut writer = fixture.store.writer_access()?;
     let transaction = writer.get_mut()?.transaction()?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
@@ -258,7 +263,9 @@ fn native_finding_tenant() -> TestResult {
 #[test]
 fn native_selected_byte_bounds() -> TestResult {
     let fixture = CommitFixture::new()?;
-    fixture.store.commit_graph(&fixture.request, true)?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let original: Vec<u8> = {
         let mut writer = fixture.store.writer_access()?;
         writer.get_mut()?.query_row(
@@ -356,7 +363,9 @@ fn native_selected_byte_bounds() -> TestResult {
 #[test]
 fn native_retry_byte_bounds() -> TestResult {
     let fixture = CommitFixture::new()?;
-    let receipt = fixture.store.commit_graph(&fixture.request, true)?;
+    let receipt = fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
     let result = &fixture.request.result_id;
     let original: (Vec<u8>, Vec<u8>, Vec<u8>) = {
         let mut writer = fixture.store.writer_access()?;
@@ -379,7 +388,7 @@ fn native_retry_byte_bounds() -> TestResult {
         )?;
         let error = fixture
             .store
-            .commit_graph(&fixture.request, true)
+            .commit_graph(&fixture.request, true, || Ok(()))
             .err()
             .ok_or("the corrupted retry was accepted")?;
         if header {
@@ -399,7 +408,12 @@ fn native_retry_byte_bounds() -> TestResult {
             "UPDATE analysis_results SET tenant_id = ?, request_meta = ?, body = ? WHERE result_id = ?",
             params![original.0, original.1, original.2, result],
         )?;
-        assert_eq!(fixture.store.commit_graph(&fixture.request, true)?, receipt);
+        assert_eq!(
+            fixture
+                .store
+                .commit_graph(&fixture.request, true, || Ok(()))?,
+            receipt
+        );
         assert_eq!(
             fixture.store.meta()?.commit_revision,
             receipt.commit_revision

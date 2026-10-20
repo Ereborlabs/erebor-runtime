@@ -26,7 +26,9 @@ fn graph_appender_constraint_rollback() -> TestResult {
     request.body.clear();
     let prepared = crate::analysis::graph_rows::CanonicalGraph::new(fixture.snapshot.clone())?;
     assert!(matches!(
-        fixture.store.commit_graph_snapshot(request, prepared, true),
+        fixture
+            .store
+            .commit_graph_snapshot(request, prepared, true, || Ok(())),
         Err(crate::Error::AnalysisDatabase { .. })
     ));
     assert_eq!(fixture.store.meta()?, before);
@@ -70,8 +72,15 @@ fn graph_appender_constraint_rollback() -> TestResult {
     fixture
         .store
         .fault_write(&format!("DROP TABLE graph_findings; {original}"), &[])?;
-    let receipt = fixture.store.commit_graph(&fixture.request, true)?;
-    assert_eq!(fixture.store.commit_graph(&fixture.request, true)?, receipt);
+    let receipt = fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
+    assert_eq!(
+        fixture
+            .store
+            .commit_graph(&fixture.request, true, || Ok(()))?,
+        receipt
+    );
     Ok(())
 }
 
@@ -82,13 +91,14 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
     let typed = CommitFixture::new()?;
     assert_eq!(byte.snapshot, typed.snapshot);
     assert_eq!(byte.request, typed.request);
-    let receipt = byte.store.commit_graph(&byte.request, true)?;
+    let receipt = byte.store.commit_graph(&byte.request, true, || Ok(()))?;
     let mut metadata = typed.request.clone();
     metadata.body.clear();
     let actual = typed.store.commit_graph_snapshot(
         metadata.clone(),
         CanonicalGraph::new(typed.snapshot.clone())?,
         true,
+        || Ok(()),
     )?;
     assert_eq!(actual, receipt);
     assert_eq!(
@@ -96,6 +106,7 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
             metadata.clone(),
             CanonicalGraph::new(typed.snapshot.clone())?,
             true,
+            || Ok(()),
         )?,
         receipt
     );
@@ -149,7 +160,7 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
     assert!(matches!(
         typed
             .store
-            .commit_graph_snapshot(metadata, CanonicalGraph::new(changed)?, true),
+            .commit_graph_snapshot(metadata, CanonicalGraph::new(changed)?, true, || Ok(())),
         Err(crate::Error::AnalysisConflict { .. })
     ));
     assert_eq!(typed.store.meta()?.commit_revision, receipt.commit_revision);
