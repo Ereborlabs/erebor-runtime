@@ -3,10 +3,13 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use araphor_data::{
-    AnalysisReadControl, ManagedFrontier, ManagedRead, ManagedReceipt, ManagedRequest,
+    AnalysisReadControl, ManagedExit, ManagedFrontier, ManagedRead, ManagedReceipt, ManagedRequest,
+    ManagedTerminal,
 };
 use araphor_query::definition::Invocation;
+use araphor_query::execution::Engine;
 use araphor_query::follow::ManagedPublication;
+use erebor_runtime_error::{ErrorExt as _, StatusCode};
 use futures_util::Stream;
 
 use super::{sink, Code, Instance};
@@ -17,6 +20,7 @@ pub struct Subscription {
     owner: Arc<Instance>,
     state: Arc<Mutex<sink::Step>>,
     control: Arc<AnalysisReadControl>,
+    terminal: Option<ManagedExit>,
 }
 
 impl Instance {
@@ -29,26 +33,25 @@ impl Instance {
     ) -> Result<Subscription> {
         let grant = &self.admitted.spec.grant;
         let changes = self.authority.changes_for(grant);
-        let (progress, resume) =
-            Self::authorize(self.authority.as_ref(), grant, &self.images, || {
-                control.check()?;
-                let (current, resume) = self.query.store().managed_resume(
-                    self.admitted.spec.tenant,
-                    &self.admitted.spec.id,
-                    &control,
-                )?;
-                if current.spec != self.admitted.spec
-                    || current.generation != self.admitted.generation
-                {
-                    return Err(Code::Conflict.error("managed instance generation"));
-                }
-                if current.lifecycle != expected_lifecycle || !current.running {
-                    return Err(Code::Conflict.error("managed subscription lifecycle"));
-                }
-                Ok((current.progress, resume))
-            })?;
+        let resume = Self::authorize(self.authority.as_ref(), grant, &self.images, || {
+            control.check()?;
+            let resume = self.query.store().managed_resume(
+                self.admitted.spec.tenant,
+                &self.admitted.spec.id,
+                &control,
+            )?;
+            let current = &resume.instance;
+            if current.spec != self.admitted.spec || current.generation != self.admitted.generation
+            {
+                return Err(Code::Conflict.error("managed instance generation"));
+            }
+            if current.lifecycle != expected_lifecycle || !current.running {
+                return Err(Code::Conflict.error("managed subscription lifecycle"));
+            }
+            Ok(resume)
+        })?;
         let state = Arc::new(Mutex::new(sink::Step {
-            progress,
+            completed: resume.completed,
             ..Default::default()
         }));
         let publication = Arc::new(sink::Publication {
@@ -74,7 +77,7 @@ impl Instance {
                 self.prepared.clone(),
                 publication,
                 binding.as_bytes(),
-                resume,
+                resume.frontier,
             )?
             .until_change(changes);
         Ok(Subscription {
@@ -82,13 +85,101 @@ impl Instance {
             owner: Arc::clone(self),
             state,
             control,
+            terminal: None,
         })
     }
 }
 
 impl Subscription {
-    pub async fn cancel_and_join(self) -> Result<()> {
-        self.query.cancel_and_join().await.map_err(Into::into)
+    /// The diagnostic control must remain valid after this stream is cancelled.
+    pub async fn cancel_and_join(
+        self,
+        diagnostic: &AnalysisReadControl,
+    ) -> Result<Option<ManagedTerminal>> {
+        let joined = self.query.cancel_and_join().await;
+        let attempt = self
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .attempt
+            .clone();
+        let Some(attempt) = attempt else {
+            joined?;
+            return Ok(None);
+        };
+        let mut exit = self.terminal.unwrap_or(ManagedExit::Cancelled);
+        if exit == ManagedExit::Cancelled
+            && self
+                .owner
+                .check()
+                .is_err_and(|error| error.status_code() == StatusCode::PermissionDenied)
+        {
+            exit = ManagedExit::Failed(Code::Denied);
+        }
+        let control = Arc::new(diagnostic.within(None)?);
+        let stage = Arc::clone(&control);
+        let store = Arc::clone(self.owner.query.store());
+        let terminal = Engine::blocking(control, (), move || {
+            stage.check()?;
+            store
+                .finish_managed(&attempt, exit, || stage.check())
+                .map_err(Into::into)
+        })
+        .await?;
+        joined?;
+        Ok(Some(terminal))
+    }
+
+    fn failure(error: &crate::Error) -> ManagedExit {
+        if error.status_code() == StatusCode::Cancelled {
+            return ManagedExit::Cancelled;
+        }
+        let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+        while let Some(source) = current {
+            match source.downcast_ref::<araphor_data::Error>() {
+                Some(araphor_data::Error::Package { code, .. }) => {
+                    return ManagedExit::Failed(*code);
+                }
+                Some(araphor_data::Error::AnalysisReadDenied { .. }) => {
+                    return ManagedExit::Cancelled;
+                }
+                _ => {}
+            }
+            if source
+                .downcast_ref::<araphor_analysis_sdk::Error>()
+                .is_some_and(|error| error.code() == araphor_analysis_sdk::ErrorCode::Limit)
+            {
+                return ManagedExit::Failed(Code::Limit);
+            }
+            current = match source.downcast_ref::<crate::Error>() {
+                Some(crate::Error::Data { source }) => Some(source),
+                Some(crate::Error::Query { source }) => Some(source),
+                _ => match source.downcast_ref::<araphor_query::Error>() {
+                    Some(araphor_query::Error::Data { source }) => Some(source),
+                    Some(araphor_query::Error::Contract { source }) => Some(source),
+                    _ => source.source(),
+                },
+            };
+        }
+        if matches!(error, crate::Error::Query { source } if matches!(araphor_query::Failure::from(source),
+            araphor_query::Failure::InputTooLarge | araphor_query::Failure::ResultTooLarge))
+            || matches!(
+                error,
+                crate::Error::Data {
+                    source: araphor_data::Error::AnalysisInputTooLarge { .. }
+                }
+            )
+        {
+            return ManagedExit::Failed(Code::Limit);
+        }
+        ManagedExit::Failed(match error.status_code() {
+            StatusCode::PermissionDenied => Code::Denied,
+            StatusCode::Unsupported => Code::Unsupported,
+            StatusCode::NotFound => Code::Missing,
+            StatusCode::Unavailable | StatusCode::DeadlineExceeded => Code::Incomplete,
+            StatusCode::AlreadyExists => Code::Conflict,
+            _ => Code::Invalid,
+        })
     }
 }
 
@@ -131,7 +222,8 @@ impl Stream for Subscription {
                     Ok(_) => Err(Code::Incomplete.error("managed publication receipt").into()),
                 },
             };
-            if result.is_err() {
+            if let Err(error) = &result {
+                self.terminal = Some(Self::failure(error));
                 let _cancelled = self.query.cancel();
             }
             return Poll::Ready(Some(result));
@@ -151,11 +243,12 @@ impl ManagedPublication for sink::Publication {
             || {
                 control.check()?;
                 let spec = &self.owner.admitted.spec;
-                let (current, _) =
+                let resume =
                     self.owner
                         .query
                         .store()
                         .managed_resume(spec.tenant, &spec.id, control)?;
+                let current = resume.instance;
                 if current.spec != *spec
                     || current.generation != self.owner.admitted.generation
                     || self
@@ -165,8 +258,8 @@ impl ManagedPublication for sink::Publication {
                     return Err(Code::Conflict.error("managed instance lifecycle"));
                 }
                 let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-                if current.progress != state.progress {
-                    return Err(Code::Conflict.error("managed subscription progress"));
+                if resume.completed != state.completed {
+                    return Err(Code::Conflict.error("managed subscription completion"));
                 }
                 if state.attempt.is_some() || state.receipt.is_some() {
                     return Err(Code::Incomplete.error("managed subscription step"));
@@ -180,6 +273,7 @@ impl ManagedPublication for sink::Publication {
                     ManagedRead {
                         instance: current,
                         rebuild: false,
+                        completed: Some(resume.completed),
                     },
                 ))
             },
@@ -216,7 +310,7 @@ impl ManagedPublication for sink::Publication {
                     .register_managed_attempt(captured, &request, || control.check())
             },
         )?;
-        if attempt.receipt().is_some() {
+        if attempt.receipt().is_some() || attempt.terminal().is_some() {
             return Err(Code::Conflict
                 .error("managed subscription attempt completed")
                 .into());
@@ -224,7 +318,10 @@ impl ManagedPublication for sink::Publication {
         self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .attempt = Some(attempt);
+            .attempt = Some(Arc::new(attempt));
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

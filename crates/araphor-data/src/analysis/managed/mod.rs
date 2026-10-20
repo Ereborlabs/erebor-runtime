@@ -10,3 +10,5 @@ pub use model::*;
 
 #[cfg(test)]
 mod tests;
+
+mod terminal;

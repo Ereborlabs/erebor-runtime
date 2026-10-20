@@ -65,6 +65,7 @@ async fn constant_capture_keeps_state() -> TestResult {
             ManagedRead {
                 instance: instance.clone(),
                 rebuild: true,
+                completed: None,
             },
         )
         .await?;
@@ -112,6 +113,7 @@ async fn constant_capture_keeps_state() -> TestResult {
             ManagedRead {
                 instance,
                 rebuild: false,
+                completed: None,
             },
         )
         .await?;
@@ -153,6 +155,7 @@ async fn managed_capture_rejects_state() -> TestResult {
                 ManagedRead {
                     instance: instance.clone(),
                     rebuild: false,
+                    completed: None,
                 },
             )
             .await
@@ -193,6 +196,7 @@ async fn managed_capture_keeps_binding() -> TestResult {
                 ManagedRead {
                     instance: changed,
                     rebuild: false,
+                    completed: None,
                 },
             )
             .await

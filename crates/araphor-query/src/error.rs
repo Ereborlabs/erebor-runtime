@@ -327,6 +327,16 @@ mod tests {
                 ),
                 (Code::Denied, Failure::Denied, StatusCode::PermissionDenied),
                 (
+                    Code::Missing,
+                    Failure::StorageUnavailable,
+                    StatusCode::NotFound,
+                ),
+                (
+                    Code::Conflict,
+                    Failure::EvaluationFailed,
+                    StatusCode::AlreadyExists,
+                ),
+                (
                     Code::Unsupported,
                     Failure::Unsupported,
                     StatusCode::Unsupported,

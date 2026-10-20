@@ -187,11 +187,14 @@ impl AnalysisStore {
                 })?;
             let owner = Self::managed_instance_from(reader, tenant, &instance)?
                 .ok_or_else(|| crate::PackageErrorCodeV1::Missing.error("managed attempt owner"))?;
-            if completed
-                != attempt
-                    .receipt
-                    .as_ref()
-                    .map_or(0, |receipt| receipt.commit_revision)
+            if attempt.receipt.is_some() && attempt.terminal.is_some()
+                || completed
+                    != attempt
+                        .receipt
+                        .as_ref()
+                        .map(|receipt| receipt.commit_revision)
+                        .or_else(|| attempt.terminal.as_ref().map(|terminal| terminal.revision))
+                        .unwrap_or(0)
                 || attempt
                     .request
                     .frontier
@@ -215,7 +218,8 @@ impl AnalysisStore {
                 || capture.lifecycle > capture.revision
                 || (capture.lifecycle == owner.generation && capture.running)
                 || (capture.lifecycle == owner.lifecycle && capture.running != owner.running)
-                || capture.progress > capture.revision
+                || capture.progress > capture.completed
+                || capture.completed > capture.revision
                 || capture.prior.keys().ne(owner.spec.manifest.calls.keys())
                 || attempt.request.id.is_empty()
                 || attempt.request.time_utc_ns == 0
@@ -272,11 +276,33 @@ impl AnalysisStore {
                     }
                 }
             }
+            let prior_completed: u64 = reader.query_row(
+                "SELECT COALESCE(MAX(completed), 0) FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND completed <= ?",
+                params![tenant.as_slice(), instance, capture.revision], |row| row.get(0),
+            ).context(AnalysisDatabaseSnafu { operation: "validate captured managed completion" })?;
+            if capture.completed != prior_completed {
+                return Self::reject_path(root, "the captured managed completion is invalid");
+            }
             if attempt.registered == 0
                 || attempt.registered > head
                 || attempt.capture.revision >= attempt.registered
             {
                 return Self::reject_path(root, "the managed attempt revision is invalid");
+            }
+            if let Some(terminal) = &attempt.terminal {
+                if terminal.instance != instance
+                    || terminal.attempt != id
+                    || terminal.revision <= attempt.registered
+                    || terminal.revision > head
+                    || terminal.suspended
+                        && (terminal.exit
+                            != super::ManagedExit::Failed(crate::PackageErrorCodeV1::Denied)
+                            || !capture.running
+                            || owner.lifecycle < terminal.revision
+                            || (owner.lifecycle == terminal.revision && owner.running))
+                {
+                    return Self::reject_path(root, "the managed terminal state is invalid");
+                }
             }
             if let Some(receipt) = &attempt.receipt {
                 if let Some((_, expected)) = progress.get_mut(&(tenant, instance.clone())) {

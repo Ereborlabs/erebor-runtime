@@ -9,7 +9,11 @@ fn frontier_commits_with_receipt() -> TestResult {
     let fixture = Fixture::admit(&store)?;
     assert_eq!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
-        (fixture.instance.clone(), None)
+        ManagedResume {
+            instance: fixture.instance.clone(),
+            frontier: None,
+            completed: 0
+        }
     );
     let captured = fixture.capture(&store, false)?;
     let mut input = request("frontier");
@@ -70,8 +74,11 @@ fn frontier_commits_with_receipt() -> TestResult {
     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
     assert_eq!(receipt.frontier, input.frontier);
     assert_eq!(receipt.results.len(), 2);
-    let (current, frontier) =
-        store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?;
+    let ManagedResume {
+        instance: current,
+        frontier,
+        ..
+    } = store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?;
     assert_eq!(current.progress, receipt.commit_revision);
     assert_eq!(frontier, input.frontier);
     assert_eq!(attempt.request().time_utc_ns, 10);
@@ -79,7 +86,11 @@ fn frontier_commits_with_receipt() -> TestResult {
     let store = AnalysisStore::open(&root)?;
     assert_eq!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
-        (current, frontier)
+        ManagedResume {
+            instance: current,
+            frontier,
+            completed: receipt.commit_revision
+        }
     );
     assert_eq!(
         store

@@ -190,7 +190,8 @@ fn transition_fences_registration() -> TestResult {
             &fixture.instance.spec.grant.selection,
             &ManagedRead {
                 instance: fixture.instance.clone(),
-                rebuild: false
+                rebuild: false,
+                completed: None,
             },
             AnalysisTableRead {
                 requests: &requests,

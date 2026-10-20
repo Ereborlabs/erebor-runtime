@@ -61,14 +61,14 @@ impl AnalysisStore {
             if saved.capture != *capture || saved.request != *request {
                 return crate::AnalysisConflictSnafu.fail();
             }
-            if saved.receipt.is_none() {
+            if saved.receipt.is_none() && saved.terminal.is_none() {
                 return Err(Code::Incomplete.error("managed pending attempt"));
             }
             check()?;
             return Ok(ManagedAttempt(
                 saved,
                 captured.instance.clone(),
-                false,
+                None,
                 BTreeMap::new(),
             ));
         }
@@ -83,6 +83,7 @@ impl AnalysisStore {
             capture: capture.clone(),
             registered: revision,
             receipt: None,
+            terminal: None,
         };
         let bytes = serde_json::to_vec(&attempt).context(crate::PackageEncodingSnafu)?;
         transaction
@@ -101,7 +102,7 @@ impl AnalysisStore {
         Ok(ManagedAttempt(
             attempt,
             captured.instance.clone(),
-            true,
+            Some(self.revision.subscribe()),
             captured.prior.clone(),
         ))
     }
@@ -132,12 +133,10 @@ impl AnalysisStore {
         {
             return crate::AnalysisConflictSnafu.fail();
         }
-        if attempt.receipt.is_none() && !input.attempt.2 {
-            return Err(Code::Incomplete.error("managed pending attempt capture"));
-        }
-        if attempt.receipt.is_some() {
+        if attempt.receipt.is_some() || attempt.terminal.is_some() {
             return crate::AnalysisConflictSnafu.fail();
         }
+        self.check_managed_claim(input.attempt)?;
         let revision = self.package_next(&transaction)?;
         let (packets, step, selected, receipt) =
             self.prepare_managed(&transaction, &attempt, input, revision)?;
@@ -201,6 +200,17 @@ impl AnalysisStore {
         Ok(receipt)
     }
 
+    pub(super) fn check_managed_claim(&self, attempt: &ManagedAttempt) -> Result<()> {
+        let owner = attempt
+            .2
+            .as_ref()
+            .ok_or_else(|| Code::Incomplete.error("managed pending attempt capture"))?;
+        if !owner.same_channel(&self.revision.subscribe()) {
+            return crate::AnalysisConflictSnafu.fail();
+        }
+        Ok(())
+    }
+
     pub(super) fn check_managed_capture(
         &self,
         reader: &Connection,
@@ -219,6 +229,8 @@ impl AnalysisStore {
             || instance.lifecycle != capture.lifecycle
             || instance.running != capture.running
             || instance.progress != capture.progress
+            || Self::managed_completed_from(reader, capture.tenant, &capture.instance)?
+                != capture.completed
             || capture.prior.keys().ne(spec.manifest.calls.keys())
         {
             return crate::AnalysisConflictSnafu.fail();
@@ -264,7 +276,7 @@ impl AnalysisStore {
         if capture.witnesses.iter().any(|witness| {
             witness.identity.tenant() != spec.tenant
                 || witness.cursor == 0
-                || witness.expires_utc_ns < now
+                || witness.expires_utc_ns <= now
         }) {
             return Err(Code::Incomplete.error("managed witness lifetime"));
         }

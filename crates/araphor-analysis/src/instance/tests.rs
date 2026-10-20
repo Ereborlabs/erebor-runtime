@@ -16,9 +16,10 @@ use super::*;
 
 mod history;
 
-type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+pub(super) type TestResult<T = ()> =
+    std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-struct Authority {
+pub(super) struct Authority {
     allowed: Mutex<bool>,
     images: Mutex<BTreeSet<String>>,
     changes: tokio::sync::watch::Sender<u64>,
@@ -26,7 +27,7 @@ struct Authority {
 }
 
 impl Authority {
-    fn set(&self, allowed: bool) {
+    pub(super) fn set(&self, allowed: bool) {
         *self
             .allowed
             .lock()
@@ -100,15 +101,15 @@ impl PackageAuthorization for Authority {
     }
 }
 
-struct Fixture {
+pub(super) struct Fixture {
     directory: tempfile::TempDir,
-    query: Arc<Engine>,
-    authority: Arc<Authority>,
+    pub(super) query: Arc<Engine>,
+    pub(super) authority: Arc<Authority>,
     grant: PackageGrantV1,
 }
 
 impl Fixture {
-    fn new(limits: araphor_query::execution::Limits) -> TestResult<Self> {
+    pub(super) fn new(limits: araphor_query::execution::Limits) -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         Ok(Self {
@@ -130,7 +131,7 @@ impl Fixture {
         })
     }
 
-    fn install(&self, bundle: &PackageBundleV1) -> TestResult {
+    pub(super) fn install(&self, bundle: &PackageBundleV1) -> TestResult {
         self.query
             .store()
             .install_package_image([1; 16], bundle, || Ok(()))?;
@@ -142,7 +143,7 @@ impl Fixture {
         Ok(())
     }
 
-    async fn admit(&self, id: &str, sql: &str) -> TestResult<Arc<Instance>> {
+    pub(super) async fn admit(&self, id: &str, sql: &str) -> TestResult<Arc<Instance>> {
         let definition = Definition {
             name: "instance-fixture".into(),
             description: String::new(),
@@ -173,7 +174,7 @@ impl Fixture {
         .await?)
     }
 
-    fn progress(&self, id: &str) -> TestResult<u64> {
+    pub(super) fn progress(&self, id: &str) -> TestResult<u64> {
         Ok(self
             .query
             .store()
@@ -182,7 +183,11 @@ impl Fixture {
             .progress)
     }
 
-    fn selected(&self, instance: &str, attempt: &str) -> TestResult<Vec<u64>> {
+    pub(in crate::instance) fn selected(
+        &self,
+        instance: &str,
+        attempt: &str,
+    ) -> TestResult<Vec<u64>> {
         let selected = self
             .query
             .store()
@@ -218,7 +223,7 @@ fn values(batches: &[sdk::RecordBatch]) -> TestResult<Vec<u64>> {
     Ok(values)
 }
 
-fn bundle(target: &str) -> TestResult<PackageBundleV1> {
+pub(super) fn bundle(target: &str) -> TestResult<PackageBundleV1> {
     let schema = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]);
     let mut output = sdk::Port::new("data", schema.clone());
     output.evidence_required = target == "sql";
@@ -765,7 +770,7 @@ async fn prior_pressure_preserves_success() -> TestResult {
 }
 
 impl Fixture {
-    fn start(&self, instance: &Instance) -> TestResult<u64> {
+    pub(super) fn start(&self, instance: &Instance) -> TestResult<u64> {
         let current = instance.admitted();
         Ok(self
             .query
@@ -780,7 +785,7 @@ impl Fixture {
             .lifecycle)
     }
 
-    fn context(&self, revision: u64) -> TestResult {
+    pub(super) fn context(&self, revision: u64) -> TestResult {
         self.query
             .store()
             .commit_context(&araphor_data::AnalysisContextVersionV1 {
@@ -830,7 +835,9 @@ async fn sql_subscription_keeps_receipts() -> TestResult {
     assert_eq!(fixture.selected("follow-sql", &second.attempt)?, [7]);
     assert_eq!(fixture.progress("follow-sql")?, second.commit_revision);
     assert!(futures_util::poll!(stream.next()).is_pending());
-    stream.cancel_and_join().await?;
+    stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?;
     assert_eq!(fixture.selected("follow-sql", &first.attempt)?, [7]);
     Ok(())
 }
@@ -919,7 +926,9 @@ async fn managed_subscription(target: &str) -> TestResult {
         assert!(result.output.checkpoint.is_some());
     }
     assert!(futures_util::poll!(stream.next()).is_pending());
-    stream.cancel_and_join().await?;
+    stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?;
     drop(fixture.query.reserve_evaluation([1; 16])?);
     drop(fixture.query.memory().reserve_input(INPUT)?);
     drop(fixture.query.memory().reserve_output(OUTPUT)?);
@@ -951,7 +960,9 @@ async fn managed_subscription(target: &str) -> TestResult {
     );
     assert_eq!(fixture.selected("follow-state", &third.attempt)?, [10, 20]);
     assert!(third.frontier.is_some());
-    resumed.cancel_and_join().await?;
+    resumed
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?;
     drop(fixture.query.reserve_evaluation([1; 16])?);
     drop(fixture.query.memory().reserve_input(INPUT)?);
     drop(fixture.query.memory().reserve_output(OUTPUT)?);
@@ -996,7 +1007,9 @@ async fn idle_subscription_checks_authority() -> TestResult {
         error.status_code(),
         erebor_runtime_error::StatusCode::PermissionDenied
     );
-    stream.cancel_and_join().await?;
+    stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?;
     assert_eq!(
         fixture.progress("follow-authority")?,
         receipt.commit_revision
@@ -1022,7 +1035,9 @@ async fn sql_frontier_survives_reopen() -> TestResult {
     let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("durable first receipt")??;
-    stream.cancel_and_join().await?;
+    stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?;
     let frontier = first.frontier.clone().ok_or("committed native frontier")?;
     let original = fixture
         .query
@@ -1052,7 +1067,11 @@ async fn sql_frontier_survives_reopen() -> TestResult {
         authority,
         grant,
     };
-    let (saved, resumed) = fixture.query.store().managed_resume(
+    let araphor_data::ManagedResume {
+        instance: saved,
+        frontier: resumed,
+        ..
+    } = fixture.query.store().managed_resume(
         [1; 16],
         "durable-sql",
         &AnalysisReadControl::default(),
@@ -1086,7 +1105,9 @@ async fn sql_frontier_survives_reopen() -> TestResult {
         .ok_or("retained durable attempt")?;
     assert_eq!(original.request().time_utc_ns, original_time);
     assert_eq!(original.receipt(), Some(&first));
-    stream.cancel_and_join().await?;
+    stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?;
     Ok(())
 }
 
@@ -1209,7 +1230,9 @@ async fn stream_keeps_selected_lifecycle() -> TestResult {
         fixture.progress("durable-lifecycle")?,
         first.commit_revision
     );
-    stream.cancel_and_join().await?;
+    stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?;
     Ok(())
 }
 
@@ -1281,9 +1304,15 @@ async fn subscription_requires_current_lifecycle() -> TestResult {
         error.to_string().contains("managed instance lifecycle"),
         "{error:?}"
     );
-    stream.cancel_and_join().await?;
+    stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?;
     assert_eq!(fixture.query.store().meta()?, before);
-    let (current, frontier) = fixture.query.store().managed_resume(
+    let araphor_data::ManagedResume {
+        instance: current,
+        frontier,
+        ..
+    } = fixture.query.store().managed_resume(
         [1; 16],
         "sealed-lifecycle",
         &AnalysisReadControl::default(),
@@ -1324,16 +1353,18 @@ async fn subscription_keeps_selected_progress() -> TestResult {
         .ok_or("next progress receipt")??;
     assert!(second.commit_revision > first.commit_revision);
     assert_eq!(fixture.selected("sealed-progress", &second.attempt)?, [10]);
-    stream.cancel_and_join().await?;
+    stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?;
     waiting.check()?;
 
     let store = fixture.query.store();
     let control = AnalysisReadControl::default();
     let before = store.meta()?;
     let saved = store.managed_resume([1; 16], "sealed-progress", &control)?;
-    assert_eq!(saved.0.lifecycle, lifecycle);
-    assert!(saved.0.running);
-    assert_eq!(saved.0.progress, second.commit_revision);
+    assert_eq!(saved.instance.lifecycle, lifecycle);
+    assert!(saved.instance.running);
+    assert_eq!(saved.instance.progress, second.commit_revision);
     let attempt = store
         .managed_attempt([1; 16], "sealed-progress", &second.attempt, &control)?
         .ok_or("saved progress attempt")?;
@@ -1355,7 +1386,9 @@ async fn subscription_keeps_selected_progress() -> TestResult {
     let rejected = tokio::time::timeout(Duration::from_secs(30), stale.next())
         .await?
         .ok_or("stale progress stream ended")?;
-    stale.cancel_and_join().await?;
+    stale
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?;
     assert_eq!(fixture.progress("sealed-progress")?, second.commit_revision);
     assert_eq!(store.meta()?, before);
     assert_eq!(
@@ -1364,7 +1397,9 @@ async fn subscription_keeps_selected_progress() -> TestResult {
     );
     let error = rejected.err().ok_or("stale progress stream published")?;
     assert!(
-        error.to_string().contains("managed subscription progress"),
+        error
+            .to_string()
+            .contains("managed subscription completion"),
         "{error:?}"
     );
     assert_eq!(

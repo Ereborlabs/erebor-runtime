@@ -642,13 +642,13 @@ status or history API.
 
 [Instance::subscribe](../../crates/araphor-analysis/src/instance/subscription.rs)
 accepts one current running lifecycle and one operation control.
-  -> [AnalysisStore::managed_resume](../../crates/araphor-data/src/analysis/managed/read.rs) reads committed progress and its native cursor. An unfinished attempt returns Incomplete.
+  -> [AnalysisStore::managed_resume](../../crates/araphor-data/src/analysis/managed/read.rs) reads instance metadata, its native frontier, and the latest completion revision in one snapshot. An unknown unfinished attempt returns Incomplete.
   -> [Run::session](../../crates/araphor-query/src/stream/mod.rs) checks the full invocation scope before it selects the SQL window.
   -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) captures the physical plan once. An unchanged resumed cut waits for source or window events.
   -> [CapturedPhysical::reserve_complete](../../crates/araphor-query/src/execution.rs) reserves native count delivery before attempt registration.
   -> [ManagedPublication::admit](../../crates/araphor-analysis/src/instance/subscription.rs) registers the exact captured attempt before native child execution.
   -> [Publication::write_all](../../crates/araphor-analysis/src/instance/sink.rs) commits complete call returns, selected rows, saved state, and the native frontier through Data.
-  -> [Step](../../crates/araphor-analysis/src/instance/sink.rs) records the committed progress. Another stream cannot combine this new progress with its older selected cursor.
+  -> [Step](../../crates/araphor-analysis/src/instance/sink.rs) records the completion revision. Another stream cannot combine a newer completion with its older selected cursor.
 
 [Subscription::cancel_and_join](../../crates/araphor-analysis/src/instance/subscription.rs)
 cancels the Query subscription and joins its actual workers. Data changes to
@@ -662,12 +662,30 @@ regression first fails on an actual duplicate commit: progress changes from
 10 to 12. With the progress check, this regression preserves metadata,
 frontier, results, saved state, and progress.
 
-The host that owns all running subscriptions is **Not implemented**. Durable
-known failure, suspension, capacity retry, renewal, public lifecycle commands,
-and automatic recovery admission remain open. An unfinished attempt remains
-Incomplete; this stream does not invent a new attempt after a failed step.
-The reference supervision files remain. The complete final Rust gate remains
-**Not done**.
+Known failure handling passes focused qualification.
+[Subscription::cancel_and_join](../../crates/araphor-analysis/src/instance/subscription.rs)
+joins Query before it uses the separate diagnostic control to record an outcome.
+  -> [AnalysisStore::finish_managed](../../crates/araphor-data/src/analysis/managed/terminal.rs) accepts only the original live pending claim for a new terminal outcome. Loaded pending work remains unavailable.
+  -> [AnalysisStore::check_managed_claim](../../crates/araphor-data/src/analysis/managed/commit.rs) compares the existing watch channel identity. A stale original claim cannot publish or finish after a clean reopen.
+  -> [AnalysisStore::managed_resume](../../crates/araphor-data/src/analysis/managed/read.rs) selects the exact failed native offer for an unambiguous nonpressure failure. Successful state and progress stay unchanged.
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) waits at this native cut until its source or window changes. Cancelled offers remain unconsumed.
+
+The [terminal tests](../../crates/araphor-data/src/analysis/managed/tests/terminal.rs)
+check original claim lifetime, current caller checks, retained success, and
+recovery. The [readiness tests](../../crates/araphor-data/src/analysis/managed/tests/readiness.rs)
+check completion races at capture, registration, and publication. Native
+[subscription tests](../../crates/araphor-analysis/src/instance/subscription/tests.rs)
+hold real guests across cancellation and permission notices. They also check
+the exact stored request on retry. All 83 connected behavior cases pass.
+Strict Clippy and formatting pass. The
+[migration result](../plans/araphor-analysis-migration.md#known-terminal-outcomes-and-failed-offers)
+records the exact commands, source count, and remaining scope.
+
+The host that owns all running subscriptions is **Not implemented**. Idle
+suspension, capture-preserving capacity retry, renewal, public lifecycle
+commands, and automatic recovery admission remain open. Unknown pending work
+and ambiguous Limit or Incomplete failures remain unavailable. The reference
+supervision files remain. The complete final Rust gate remains **Not done**.
 
 ## In-process Wasm ownership
 

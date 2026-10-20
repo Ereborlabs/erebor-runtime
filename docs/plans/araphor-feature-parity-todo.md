@@ -318,9 +318,12 @@ reduction. The record is `/tmp/araphor-sql-call-count1.json`.
   progress atomically. Completed retries recover the original receipt. No
   general service API starts, stops, or restores independent running instances.
   The native Instance subscription now passes focused lifecycle, saved-cursor,
-  state, cancellation, and progress checks. The host and known failure handling
-  remain open. Read the
+  state, cancellation, and progress checks. Known terminal outcomes, original
+  claim lifetime, and failed-offer wait cuts also pass focused checks. The host
+  remains open. Read the
   [subscription result](araphor-analysis-migration.md#native-managed-subscription-qualification).
+  The [terminal result](araphor-analysis-migration.md#known-terminal-outcomes-and-failed-offers)
+  records the later 83 passing cases and the remaining pressure-retry limit.
 - **Required:** Create managed instances from admitted definitions. Each
   instance has its own lifetime, selected inputs, progress, and saved state.
 - **Reuse:** Query subscriptions and their native stream collection, current

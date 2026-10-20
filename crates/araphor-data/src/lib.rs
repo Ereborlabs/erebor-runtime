@@ -75,7 +75,8 @@ pub use araphor_analysis_builtins::discovery::{
 pub use analysis::AnalysisCommitStage;
 
 pub use analysis::{
-    ManagedAttempt, ManagedCall, ManagedCapture, ManagedCommit, ManagedFrontier, ManagedInstance,
-    ManagedManifest, ManagedPage, ManagedPrior, ManagedRead, ManagedReceipt, ManagedRequest,
-    ManagedResult, ManagedReturn, ManagedSelected, ManagedSpec,
+    ManagedAttempt, ManagedCall, ManagedCapture, ManagedCommit, ManagedExit, ManagedFrontier,
+    ManagedInstance, ManagedManifest, ManagedPage, ManagedPrior, ManagedRead, ManagedReceipt,
+    ManagedRequest, ManagedResult, ManagedResume, ManagedReturn, ManagedSelected, ManagedSpec,
+    ManagedTerminal,
 };

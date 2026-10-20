@@ -24,6 +24,7 @@ impl ManagedPublication for Sink {
             ManagedRead {
                 instance,
                 rebuild: false,
+                completed: None,
             },
         ))
     }
@@ -521,5 +522,92 @@ async fn resumed_frontier_checks_binding() -> TestResult {
     ));
     assert_eq!(state.begins.load(Ordering::SeqCst), 1);
     assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_offer_keeps_cut_idle() -> TestResult {
+    let fixture = fixture()?;
+    let state = Arc::new(SinkState::default());
+    let (mut definition, target) = prepared(&fixture, &state).await?;
+    let failure = AtomicBool::new(true);
+    let gate = create_udf(
+        "failed_offer_input",
+        vec![sdk::DataType::UInt64],
+        sdk::DataType::UInt64,
+        Volatility::Volatile,
+        Arc::new(move |arguments| {
+            if failure.swap(false, Ordering::SeqCst) {
+                return Err(DataFusionError::Execution("known failed offer".into()));
+            }
+            arguments
+                .first()
+                .cloned()
+                .ok_or_else(|| DataFusionError::Execution("failed offer input absent".into()))
+        }),
+    );
+    definition.plan = LogicalPlanBuilder::from(definition.plan)
+        .project(vec![gate.call(vec![col("value")]).alias("value")])?
+        .build()?;
+    let control = AnalysisReadControl::default();
+    let mut first = stream(&fixture, definition.clone(), Arc::clone(&target), &control)?;
+    let error = tokio::time::timeout(Duration::from_secs(30), first.next())
+        .await?
+        .ok_or("failed offer result")?
+        .err()
+        .ok_or("failed offer published")?;
+    assert!(format!("{error:?}").contains("known failed offer"));
+    let frontier = state
+        .frontier
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("failed native frontier")?;
+    first.cancel_and_join().await?;
+    assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
+    assert_eq!(state.entries.load(Ordering::SeqCst), 1);
+    assert_eq!(state.commits.load(Ordering::SeqCst), 0);
+    let inputs = state.input_evaluations.load(Ordering::SeqCst);
+    let now = crate::follow::Cursor::decode(&frontier.cursor)?.evaluated() + 1;
+    let (idle, observed) = tokio::sync::oneshot::channel();
+    let clock = ResumeClock::new(now, Some(idle));
+    let control = AnalysisReadControl::default();
+    let mut resumed = Subscription::managed(
+        fixture
+            .engine
+            .session(AnalysisSelectionV1::tenant([1; 16]), &control, 0)?,
+        definition,
+        target,
+        b"managed-test",
+        Some(frontier.clone()),
+        clock,
+    )?;
+    let mut next = Box::pin(resumed.next());
+    tokio::select! {
+        update = &mut next => return Err(format!("unchanged failed cut executed: {update:?}").into()),
+        observed = observed => observed?,
+    }
+    assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
+    assert_eq!(state.entries.load(Ordering::SeqCst), 1);
+    assert_eq!(state.commits.load(Ordering::SeqCst), 0);
+    assert_eq!(state.input_evaluations.load(Ordering::SeqCst), inputs);
+    assert_eq!(state.frontier.lock().unwrap().as_ref(), Some(&frontier));
+    fixture.event(2)?;
+    let update = tokio::time::timeout(Duration::from_secs(30), next)
+        .await?
+        .ok_or("changed failed cut update")??;
+    assert_eq!(state.admissions.load(Ordering::SeqCst), 2);
+    assert_eq!(state.entries.load(Ordering::SeqCst), 2);
+    assert_eq!(state.commits.load(Ordering::SeqCst), 1);
+    assert!(state.input_evaluations.load(Ordering::SeqCst) > inputs);
+    assert_eq!(
+        update.snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        2
+    );
+    resumed.cancel_and_join().await?;
+    drop(update);
+    drop(fixture.engine.reserve_evaluation([1; 16])?);
     Ok(())
 }

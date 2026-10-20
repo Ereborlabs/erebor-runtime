@@ -100,6 +100,15 @@ pub struct ManagedInstance {
 pub struct ManagedRead {
     pub instance: ManagedInstance,
     pub rebuild: bool,
+    /// Require this completion when a native frontier was selected.
+    pub completed: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ManagedResume {
+    pub instance: ManagedInstance,
+    pub frontier: Option<ManagedFrontier>,
+    pub completed: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -188,6 +197,7 @@ pub(super) struct Capture {
     pub instance: String,
     pub generation: u64,
     pub progress: u64,
+    pub completed: u64,
     pub running: bool,
     pub lifecycle: u64,
     pub rebuild: bool,
@@ -271,19 +281,36 @@ pub struct ManagedReceipt {
     pub results: BTreeMap<u64, PackageResultRefV1>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ManagedExit {
+    Cancelled,
+    Failed(crate::PackageErrorCodeV1),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedTerminal {
+    pub instance: String,
+    pub attempt: String,
+    pub revision: u64,
+    pub exit: ManagedExit,
+    pub suspended: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub(super) struct Attempt {
     pub request: ManagedRequest,
     pub capture: Capture,
     pub registered: u64,
     pub receipt: Option<ManagedReceipt>,
+    pub terminal: Option<ManagedTerminal>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ManagedAttempt(
     pub(super) Attempt,
     pub(super) ManagedInstance,
-    pub(super) bool,
+    pub(super) Option<tokio::sync::watch::Receiver<u64>>,
     pub(super) BTreeMap<u64, ManagedPrior>,
 );
 
@@ -296,6 +323,9 @@ impl ManagedAttempt {
     }
     pub fn receipt(&self) -> Option<&ManagedReceipt> {
         self.0.receipt.as_ref()
+    }
+    pub fn terminal(&self) -> Option<&ManagedTerminal> {
+        self.0.terminal.as_ref()
     }
 }
 

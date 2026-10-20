@@ -209,12 +209,47 @@ impl AnalysisStore {
         tenant: [u8; 16],
         id: &str,
         control: &AnalysisReadControl,
-    ) -> Result<(ManagedInstance, Option<ManagedFrontier>)> {
+    ) -> Result<ManagedResume> {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |reader| {
             let instance = Self::managed_instance_from(reader, tenant, id)?
                 .ok_or_else(|| Code::Missing.error("managed resume instance"))?;
             Self::check_managed_pending(reader, tenant, id)?;
+            let completed = Self::managed_completed_from(reader, tenant, id)?;
+            if completed > instance.progress {
+                let bytes: Vec<u8> = reader.query_row(
+                    "SELECT contract FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND completed = ?",
+                    params![tenant.as_slice(), id, completed], |row| row.get(0),
+                ).context(AnalysisDatabaseSnafu { operation: "read managed terminal frontier" })?;
+                let attempt: Attempt = serde_json::from_slice(&bytes)
+                    .context(crate::PackageEncodingSnafu)?;
+                let terminal = attempt.terminal.as_ref().filter(|terminal|
+                    terminal.instance == id && terminal.attempt == attempt.request.id
+                        && terminal.revision == completed && attempt.receipt.is_none())
+                    .ok_or_else(|| Code::Invalid.error("managed terminal frontier"))?;
+                if attempt.capture.tenant != tenant || attempt.capture.instance != id
+                    || attempt.capture.generation != instance.generation {
+                    return Err(Code::Invalid.error("managed terminal frontier"));
+                }
+                if attempt.capture.progress == instance.progress
+                    && attempt.capture.lifecycle == instance.lifecycle
+                    && attempt.capture.running == instance.running
+                    && attempt.request.frontier.is_some()
+                {
+                    match terminal.exit {
+                        ManagedExit::Failed(Code::Invalid | Code::Unsupported | Code::Missing | Code::Conflict) => {
+                            let frontier = attempt.request.frontier.ok_or_else(||
+                                Code::Incomplete.error("managed native frontier unavailable"))?;
+                            control.check()?;
+                            return Ok(ManagedResume { instance, frontier: Some(frontier), completed });
+                        }
+                        ManagedExit::Failed(Code::Incomplete | Code::Limit) => {
+                            return Err(Code::Incomplete.error("managed capacity retry unavailable"));
+                        }
+                        ManagedExit::Cancelled | ManagedExit::Failed(Code::Denied) => {}
+                    }
+                }
+            }
             let frontier = if instance.progress == 0 {
                 None
             } else {
@@ -237,8 +272,19 @@ impl AnalysisStore {
                     Code::Incomplete.error("managed native frontier unavailable"))?)
             };
             control.check()?;
-            Ok((instance, frontier))
+            Ok(ManagedResume { instance, frontier, completed })
         })
+    }
+
+    pub(super) fn managed_completed_from(
+        reader: &Connection,
+        tenant: [u8; 16],
+        id: &str,
+    ) -> Result<u64> {
+        reader.query_row(
+            "SELECT COALESCE(MAX(completed), 0) FROM managed_attempts WHERE tenant_id = ? AND instance_id = ?",
+            params![tenant.as_slice(), id], |row| row.get(0),
+        ).context(AnalysisDatabaseSnafu { operation: "read managed completion" })
     }
 
     pub(super) fn check_managed_pending(
@@ -279,7 +325,7 @@ impl AnalysisStore {
             Ok(Some(ManagedAttempt(
                 attempt,
                 instance,
-                false,
+                None,
                 std::collections::BTreeMap::new(),
             )))
         })
@@ -506,7 +552,7 @@ impl AnalysisStore {
             if capture
                 .witnesses
                 .iter()
-                .any(|witness| witness.expires_utc_ns < now)
+                .any(|witness| witness.expires_utc_ns <= now)
             {
                 return Ok(false);
             }

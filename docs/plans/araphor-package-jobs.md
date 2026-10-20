@@ -199,8 +199,12 @@ the exact running lifecycle and uses Query's existing native subscription.
 Data commits the native cursor with complete results and saved state. An
 unchanged resumed cut waits for Query source or window events. A stream cannot
 use another stream's newer progress with an older cursor. All 27 selected
-Analysis cases pass, including the source-built native cases. The host,
-known failure handling, public lifecycle operations, and complete final Rust
+Analysis cases pass, including the source-built native cases. The later 83
+connected checks pass for known terminal outcomes, original claim lifetime,
+completed-attempt comparisons, and exact native failed-offer wait cuts.
+Successful state and progress remain unchanged on failure. Read the
+[terminal result](araphor-analysis-migration.md#known-terminal-outcomes-and-failed-offers).
+The host, capture-preserving pressure retry, public lifecycle operations, and complete final Rust
 gate remain **Not done**. Read the
 [migration result](araphor-analysis-migration.md#native-managed-subscription-qualification).
 

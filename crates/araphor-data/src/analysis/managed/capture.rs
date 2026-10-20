@@ -31,6 +31,14 @@ impl AnalysisStore {
             Self::managed_instance_from(reader, expected.spec.tenant, &expected.spec.id)?
                 .filter(|instance| instance == expected)
                 .ok_or_else(|| Code::Conflict.error("managed capture generation"))?;
+        let completed =
+            Self::managed_completed_from(reader, expected.spec.tenant, &expected.spec.id)?;
+        if request
+            .completed
+            .is_some_and(|expected| expected != completed)
+        {
+            return Err(Code::Conflict.error("managed capture completion"));
+        }
         let mut prior = BTreeMap::new();
         let mut states = BTreeMap::new();
         for call in instance.spec.manifest.calls.keys() {
@@ -76,6 +84,7 @@ impl AnalysisStore {
                 instance: instance.spec.id.clone(),
                 generation: instance.generation,
                 progress: instance.progress,
+                completed,
                 running: instance.running,
                 lifecycle: instance.lifecycle,
                 rebuild: request.rebuild,

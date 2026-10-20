@@ -24,8 +24,8 @@ use super::Instance;
 
 #[derive(Default)]
 pub(super) struct Step {
-    pub(super) progress: u64,
-    pub(super) attempt: Option<ManagedAttempt>,
+    pub(super) completed: u64,
+    pub(super) attempt: Option<Arc<ManagedAttempt>>,
     pub(super) receipt: Option<ManagedReceipt>,
 }
 
@@ -164,7 +164,7 @@ impl DataSink for Publication {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .attempt
-            .take()
+            .clone()
             .ok_or_else(|| {
                 DataFusionError::External(Box::new(
                     Code::Incomplete.error("managed execution attempt"),
@@ -217,7 +217,8 @@ impl DataSink for Publication {
                             || control.check(),
                         )?;
                         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
-                        state.progress = receipt.commit_revision;
+                        state.attempt = None;
+                        state.completed = receipt.commit_revision;
                         state.receipt = Some(receipt);
                         Ok(())
                     },

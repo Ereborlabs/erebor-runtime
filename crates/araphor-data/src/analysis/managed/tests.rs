@@ -17,6 +17,7 @@ use crate::{
 };
 
 mod lifecycle;
+mod terminal;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -117,6 +118,7 @@ impl Fixture {
             &ManagedRead {
                 instance: instance.clone(),
                 rebuild,
+                completed: None,
             },
             AnalysisTableRead {
                 requests: &requests,
@@ -901,6 +903,7 @@ fn managed_sql_checks_authority() -> TestResult {
             &ManagedRead {
                 instance,
                 rebuild: false,
+                completed: None,
             },
             AnalysisTableRead {
                 requests: &requests,
@@ -1195,6 +1198,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
                 &ManagedRead {
                     instance,
                     rebuild: false,
+                    completed: None,
                 },
                 AnalysisTableRead {
                     requests: &requests,
@@ -1410,6 +1414,7 @@ fn managed_registration_keeps_cut() -> TestResult {
             &ManagedRead {
                 instance,
                 rebuild: false,
+                completed: None,
             },
             AnalysisTableRead {
                 requests: &requests,
@@ -1440,6 +1445,7 @@ fn managed_registration_keeps_cut() -> TestResult {
             &ManagedRead {
                 instance,
                 rebuild: false,
+                completed: None,
             },
             AnalysisTableRead {
                 requests: &requests,
@@ -1499,6 +1505,7 @@ fn managed_witness_lifetime_check() -> TestResult {
             &ManagedRead {
                 instance: fixture.instance.clone(),
                 rebuild: false,
+                completed: None,
             },
             AnalysisTableRead {
                 requests: &requests,
@@ -1553,6 +1560,16 @@ fn managed_witness_lifetime_check() -> TestResult {
         })
     ));
     assert_eq!(store.meta()?, before);
+    commit.now_utc_ns = 20;
+    assert!(matches!(
+        store.commit_managed(&commit, || Ok(())),
+        Err(crate::Error::Package {
+            code: crate::PackageErrorCodeV1::Incomplete,
+            field: "managed witness lifetime",
+            ..
+        })
+    ));
+    assert_eq!(store.meta()?, before);
     commit.now_utc_ns = 19;
     assert!(store
         .commit_managed(&commit, || crate::AnalysisReadDeniedSnafu.fail())
@@ -1576,6 +1593,26 @@ fn managed_witness_lifetime_check() -> TestResult {
     })?;
     assert_eq!(count, 3);
     assert!(
+        store
+            .managed_result(
+                &fixture.instance,
+                &receipt.results[&10].result_id,
+                19,
+                &AnalysisReadControl::default()
+            )?
+            .current
+    );
+    assert!(
+        !store
+            .managed_result(
+                &fixture.instance,
+                &receipt.results[&10].result_id,
+                20,
+                &AnalysisReadControl::default()
+            )?
+            .current
+    );
+    assert!(
         !store
             .managed_result(
                 &fixture.instance,
@@ -1596,3 +1633,5 @@ fn managed_witness_lifetime_check() -> TestResult {
 }
 
 mod frontier;
+
+mod readiness;

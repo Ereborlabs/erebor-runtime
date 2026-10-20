@@ -124,9 +124,6 @@ impl Instance {
         request: ManagedRequest,
         control: &AnalysisReadControl,
     ) -> Result<ManagedReceipt> {
-        if request.frontier.is_some() {
-            return Err(Code::Invalid.error("finite managed frontier").into());
-        }
         let grant = &self.admitted.spec.grant;
         let mut changes = self.authority.changes_for(grant);
         self.check()?;
@@ -194,10 +191,16 @@ impl Instance {
             if previous.request() != &request || previous.instance().spec != *spec {
                 return Err(Code::Conflict.error("managed attempt identity").into());
             }
+            if previous.terminal().is_some() {
+                return Err(Code::Conflict.error("managed attempt terminated").into());
+            }
             return previous
                 .receipt()
                 .cloned()
                 .ok_or_else(|| Code::Incomplete.error("managed pending attempt").into());
+        }
+        if request.frontier.is_some() {
+            return Err(Code::Invalid.error("finite managed frontier").into());
         }
         self.check()?;
         let state = Arc::new(Mutex::new(sink::Step::default()));
@@ -232,6 +235,7 @@ impl Instance {
                 ManagedRead {
                     instance: current,
                     rebuild: request.rebuild,
+                    completed: None,
                 },
             )
             .await?;
@@ -272,7 +276,7 @@ impl Instance {
         state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .attempt = Some(attempt);
+            .attempt = Some(Arc::new(attempt));
         let result = captured.execute().await;
         let receipt = state
             .lock()
