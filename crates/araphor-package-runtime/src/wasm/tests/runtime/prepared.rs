@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use super::*;
 
 #[tokio::test]
@@ -9,6 +7,7 @@ async fn preparation_precedes_guest_timeout() -> TestResult {
     let runtime = crate::Runtime::new(crate::Limits {
         wasm: WasmLimits {
             timeout: Some(Duration::from_nanos(1)),
+            evaluations: Some(1),
             ..Default::default()
         },
         ..Default::default()
@@ -39,7 +38,12 @@ async fn preparation_precedes_guest_timeout() -> TestResult {
         "{result:?}"
     );
     assert!(wasm.cached(&digest)?.is_some());
-    assert_eq!(wasm.running.load(Ordering::Acquire), 0);
+    assert_eq!(
+        wasm.evaluations
+            .as_ref()
+            .map(|capacity| capacity.available_permits()),
+        Some(1)
+    );
     control.check()?;
     workers.close();
     workers.wait().await;
@@ -48,9 +52,13 @@ async fn preparation_precedes_guest_timeout() -> TestResult {
 
 #[test]
 fn prepared_handle_keeps_binding() -> TestResult {
-    let runtime = WasmExecution::new(WasmLimits::default())?;
+    let runtime = WasmExecution::new(WasmLimits {
+        evaluations: Some(1),
+        ..Default::default()
+    })?;
     let foreign = WasmExecution::new(WasmLimits {
         fuel: Some(100_000_000),
+        evaluations: Some(1),
         ..WasmLimits::default()
     })?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
@@ -68,7 +76,13 @@ fn prepared_handle_keeps_binding() -> TestResult {
             }
         })
     ));
-    assert_eq!(foreign.running.load(Ordering::Acquire), 0);
+    assert_eq!(
+        foreign
+            .evaluations
+            .as_ref()
+            .map(|capacity| capacity.available_permits()),
+        Some(1)
+    );
     let cancelled = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     cancelled.cancel()?;
     assert!(matches!(
@@ -77,7 +91,13 @@ fn prepared_handle_keeps_binding() -> TestResult {
             source: araphor_data::Error::AnalysisReadCancelled { .. }
         })
     ));
-    assert_eq!(foreign.running.load(Ordering::Acquire), 0);
+    assert_eq!(
+        foreign
+            .evaluations
+            .as_ref()
+            .map(|capacity| capacity.available_permits()),
+        Some(1)
+    );
     drop(prepared);
 
     let prepared = runtime.prepare(COMPONENT, &control)?;
@@ -100,7 +120,13 @@ fn prepared_handle_keeps_binding() -> TestResult {
     let output = runtime.invoke(&prepared, checked.encode()?.into(), &control)?;
     let output = sdk::wire::Output::from(output).decode(&package, &input)?;
     assert_eq!(value(&output)?, 42);
-    assert_eq!(runtime.running.load(Ordering::Acquire), 0);
+    assert_eq!(
+        runtime
+            .evaluations
+            .as_ref()
+            .map(|capacity| capacity.available_permits()),
+        Some(1)
+    );
     Ok(())
 }
 

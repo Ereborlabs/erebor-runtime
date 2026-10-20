@@ -11,7 +11,7 @@ pub use context::{Context, ContextLimits};
 pub use discovery::DiscoveryOwner;
 pub use error::{Error, Result};
 pub use graph::Graph;
-pub use instance::{Instance, Subscription as InstanceSubscription};
+pub use instance::{Instance, InstanceHost, Subscription as InstanceSubscription};
 pub use notification::{NotificationRouter, NotificationUpdate};
 pub use package::Package;
 pub use qualification::{FixtureResult, Qualification};

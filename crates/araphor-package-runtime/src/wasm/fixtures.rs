@@ -1,8 +1,9 @@
-use std::sync::{atomic::AtomicUsize, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
+use tokio::sync::Semaphore;
 
 use crate::{AnalysisReadControl, Result, WasmLimits};
 
@@ -37,6 +38,9 @@ impl WasmExecution {
             || limits.cache_entries.is_some()
             || limits.compiler_bytes.is_some()
             || limits.image_bytes.is_some()
+            || limits
+                .evaluations
+                .is_some_and(|maximum| maximum > Semaphore::MAX_PERMITS)
         {
             return Self::new(limits);
         }
@@ -90,7 +94,9 @@ impl WasmExecution {
             linker: prepared.linker.clone(),
             cache: Mutex::new(cache),
             compiler: Mutex::new(()),
-            running: AtomicUsize::new(0),
+            evaluations: limits
+                .evaluations
+                .map(|maximum| Arc::new(Semaphore::new(maximum))),
             capacity: prepared.capacity.clone(),
             #[cfg(any(test, feature = "test-fixtures"))]
             entered: Mutex::new(None),

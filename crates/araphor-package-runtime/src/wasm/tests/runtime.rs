@@ -9,6 +9,7 @@ use crate::{AnalysisReadControl, Error, PackageErrorCodeV1 as Code, WasmLimits};
 
 use super::{TestResult, WasmExecution};
 
+mod admission;
 mod batches;
 mod concurrency;
 mod prepared;
@@ -522,13 +523,7 @@ fn fixture_code_separates_state() -> TestResult {
     let package = package();
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let permits = (0..4)
-        .map(|_| {
-            super::super::execution::EvaluationPermit::acquire(
-                &first.running,
-                &first.capacity,
-                first.limits.evaluations,
-            )
-        })
+        .map(|_| first.try_acquire_evaluation())
         .collect::<crate::Result<Vec<_>>>()?;
     let input = evaluation(&package, "isolation", 0)?;
     assert!(matches!(

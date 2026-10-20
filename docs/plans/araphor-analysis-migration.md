@@ -38,7 +38,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 127 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 126 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -47,7 +47,7 @@ Every replacement passes its required checks
 | Discovery boundary | All 4 Data provenance tests, 12 output-adapter tests, and 11 complete native recorded SQL tests pass. Exact event projection, input revision, duplicate accounting, sparse coverage, and lifecycle checks pass. Live publication remains incomplete. | Finite boundary qualified |
 | Context | All 17 focused Context tests pass. Active Analysis retains import authorization and native selection. Quotas are explicit options and disabled by default. | Finite boundary qualified |
 | Fixture qualification | All 4 comparator cases and the corrected entered-guest cancellation/revocation case pass. Active Analysis uses native calls and current Test authority. Native accumulation and clock/seed cases pass. Negative saved fixture time returns Unsupported. | Partial qualification |
-| Managed state and lifecycle | Finite and native subscription checks pass for immutable attempts, guarded state, atomic multi-call publication, saved frontiers, lifecycle comparisons, authority, cancellation, and known terminal outcomes. Original live claims cannot publish after clean reopen. Data starts no work when it admits an instance. The final Rust gate is pending. Host supervision, public start/inspect/stop, and automatic recovery admission remain absent. | Focused checks pass; host Not done |
+| Managed state and lifecycle | Finite and native subscription checks pass for immutable attempts, guarded state, atomic multi-call publication, saved frontiers, lifecycle comparisons, authority, cancellation, and known terminal outcomes. The internal reactive host admits retained running instances and drains actual workers before replacement. Original live claims cannot publish after clean reopen. Data admission starts no work. Public lifecycle and recovery integration remain open. | Focused checks pass; public integration Not done |
 | Graph producer | Capture immutable ACK history, source proofs, graph heads and frozen coverage in the same view. Bind detector relations and consume subscriptions. Add the final authority callback and exact previous-head check to the existing Data graph transaction. | Not done |
 | Discovery producer | The current adapter subscribes to an admitted PackageCall. Interval split, frozen facts, witnesses, seals, replay, and reviewed baselines remain required. The complete producer is not qualified. | Not done |
 | Notification producer | Finite operations are moved. All 5 reactive tests pass. Native SQL selects route and delivery candidates. Data supplies exact retry and grant-expiry deadlines. Managed supervision is absent. | Not done |
@@ -55,7 +55,7 @@ Every replacement passes its required checks
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
 | Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public transport and presentation remain open. | Finite checks pass |
-| Final retirement | The earlier 79 leaves and two complete image/fixture leaves are removed after replacement checks pass. The 127 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Final retirement | The earlier 81 leaves and the complete error leaf are removed after replacement checks pass. The 126 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -393,17 +393,73 @@ Strict Clippy and formatting pass for this delivery. All 244 local document
 links resolve. The complete final Rust procedure, host supervision, and capture-preserving pressure retry
 remain **Not done**. All 127 remaining reference files stay unchanged.
 
+### Reactive host, joined delivery, and component admission
+
+Implementation and focused checks are **Done** for this bounded replacement.
+The internal InstanceHost uses one FuturesUnordered collection as its member
+registry. Data lifecycle notices supply membership changes. Query subscriptions
+supply source and window events. The host has no polling clock. One store lease
+remains held until all members and their actual workers exit.
+
+A membership read starts after notice subscription. An older snapshot cannot
+cancel a newer lifecycle. Replacement cancels the exact existing member and
+waits for its drain before admission. A known failure affects that member.
+An unknown pending attempt stays unavailable. Idle denial suspends only the
+observed generation, lifecycle, and progress. Public lifecycle integration,
+durable idle failure status, and retained metadata capacity remain **Not done**.
+
+Initial and final authority callbacks use tracked blocking workers. A held
+final callback does not stop healthy subscriptions. Stop and caller Drop keep
+the instance, image reservations, and store lease until that callback exits.
+Delivery preserves a Query error after a Data commit. Data retains the receipt
+for an authorized retry. A real source denial remains Failed(Denied).
+
+Configured component admission uses Tokio's semaphore. Managed work waits
+asynchronously before exchange allocation and guest launch. The original
+capture, attempt, time, and frontier remain unchanged. Default admission stays
+unbounded. Finite calls retain typed Busy behavior. Actual worker exit releases
+the slot. Native execution can retain an unfinished package future after its
+stream is dropped. CallContext drains these exact shared futures before it
+waits for workers. This correction adds no executor or source capture.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `migration-slot-build104` | Connected test build passes. | 231.635 |
+| `migration-slot-analysis104` | Both previously failing slot and cancellation cases pass. | 20.014 |
+| `migration-host-analysis104` | All 52 ordinary Instance cases pass. Two native cases lack the required directory variable. | 112.850 |
+| `migration-host-native-analysis104` | Both exact native cases pass with the correct directory variable. | 17.803 |
+| `migration-host-query104` | All 126 ordinary selected Query cases pass. Four native cases lack the required directory variable. | 190.503 |
+| `migration-host-native-query104` | All four exact native cases pass with the correct directory variable. | 17.858 |
+| `migration-host-data99` | All 38 managed Data cases pass on unchanged Data source. | 39.274 |
+| `migration-native-runtime102` | All 48 Runtime cases pass on unchanged Runtime source. | 198.072 |
+| `migration-host-clippy104` | All connected targets and features pass with warnings denied. | 101.025 |
+| `migration-host-fmt104` | Workspace formatting passes. Retirement also requires a fresh successful formatting command. | 4.973 |
+
+The first native commands supplied ARAPHOR_NATIVE_FIXTURE_DIR. The tests require
+ARAPHOR_NATIVE_DIR. Their only failures report that missing variable. The six
+corrected cases use the same source and native artifacts. All 116 native source
+inputs and six artifact hashes still match native93.
+
+The [error retirement record](../../recovery/araphor-analysis-error-retirement-20261020.json)
+maps all 12 old variants, five helpers, conversions, and three embedded tests.
+Current owners preserve typed codes, I/O retry hints, pressure, cancellation,
+and actual denial. The complete 242-line production leaf is removed. No other
+Back file changes. There are now **82 retired files and 126 unchanged files**.
+The full archive remains intact. Complete migration, the production reduction
+target, and the final Rust gate remain **Not done**.
+
 ### Production code ledger
 
-The current count97 includes shared admitted images and typed error origins.
+The current count104 includes the reactive host, joined delivery, component
+admission, and the retired error leaf.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 14,548 | 8,238 | +6,310 |
-| Original reduction baseline `7b7b407a` | 42,694 | 30,388 | +12,306 |
+| `6a25ba1b` | 15,053 | 8,480 | +6,573 |
+| Original reduction baseline `7b7b407a` | 42,957 | 30,388 | +12,569 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -422,12 +478,17 @@ complete replacements pass. This work restores missing behavior; it does not
 yet reduce the complete production total. The later terminal and failed-offer
 replacement adds 319 production lines and retires no additional reference
 file. Shared image ownership and error-origin corrections add 251 production
-lines and retire no reference file. Another 18,306 net production lines must be removed relative to the
+lines and retire no reference file. The host, delivery, and component admission
+replacement adds 505 production lines. Error retirement removes 242. This
+delivery adds 263 net production lines. Another 18,569 net production lines must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count97.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count104.json`. Its selected source
 fingerprint is
+`f613cab398713fef1b95dea59a3736d28efa6c43e1542e3fec052c4f6e6b6c41`.
+The earlier count97 records shared images and error origins at +12,306
+production lines from the original baseline. Its fingerprint is
 `f0c2c62db1b093b1b4659822a42613a79741686508e81add70dfd90f0794f1b2`.
 The earlier count92 records known terminal outcomes and failed-offer readiness
 at +12,055 production lines from the original baseline. Its fingerprint is

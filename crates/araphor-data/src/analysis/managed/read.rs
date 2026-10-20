@@ -91,9 +91,14 @@ impl AnalysisStore {
     }
 
     /// The caller checks current authority before execution.
-    pub fn active_managed(&self, control: &AnalysisReadControl) -> Result<Vec<ManagedInstance>> {
+    pub fn active_managed(
+        &self,
+        control: &AnalysisReadControl,
+    ) -> Result<(u64, Vec<ManagedInstance>)> {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |reader| {
+            let revision = Self::read_meta_from(reader, &self.root.join("analysis.duckdb"))?
+                .commit_revision;
             let mut statement = reader.prepare("SELECT tenant_id, instance_id, spec, generation, progress, running, lifecycle FROM managed_instances WHERE running ORDER BY tenant_id, instance_id")
                 .context(AnalysisDatabaseSnafu { operation: "prepare active managed metadata" })?;
             let mut rows = statement.query([])
@@ -117,7 +122,7 @@ impl AnalysisStore {
                 );
                 active.push(Self::managed_row(tenant, &id, values)?);
             }
-            Ok(active)
+            Ok((revision, active))
         })
     }
 

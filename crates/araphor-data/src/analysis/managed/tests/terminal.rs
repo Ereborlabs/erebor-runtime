@@ -289,6 +289,7 @@ fn denied_exit_fences_lifecycle() -> TestResult {
     assert_eq!(current.progress, 0);
     assert!(store
         .active_managed(&AnalysisReadControl::default())?
+        .1
         .is_empty());
     Ok(())
 }

@@ -1,11 +1,8 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Mutex, TryLockError,
-};
+use std::sync::{Arc, Mutex, TryLockError};
 
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
-use tokio::sync::watch;
+use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
 use wasmtime::{component::Linker, Config, Engine, OptLevel};
 
 use crate::{AnalysisReadControl, Result, WasmLimits};
@@ -29,11 +26,13 @@ pub struct WasmExecution {
     linker: Linker<execution::GuestState>,
     cache: Mutex<cache::CodeCache>,
     compiler: Mutex<()>,
-    running: AtomicUsize,
+    evaluations: Option<Arc<Semaphore>>,
     capacity: watch::Sender<()>,
     #[cfg(any(test, feature = "test-fixtures"))]
     entered: Mutex<Option<execution::GuestEntry>>,
 }
+
+pub struct EvaluationPermit(OwnedSemaphorePermit);
 
 #[derive(Clone)]
 pub struct PreparedComponent {
@@ -61,15 +60,58 @@ impl PreparedComponent {
 }
 
 impl WasmExecution {
+    fn try_acquire_evaluation(&self) -> Result<Option<EvaluationPermit>> {
+        let Some(capacity) = &self.evaluations else {
+            return Ok(None);
+        };
+        Arc::clone(capacity)
+            .try_acquire_owned()
+            .map(|permit| Some(EvaluationPermit(permit)))
+            .map_err(|_| {
+                crate::AnalysisBusySnafu {
+                    resource: "component evaluations",
+                    requested: 1_usize,
+                }
+                .build()
+            })
+    }
+
+    pub(crate) async fn acquire_evaluation(
+        &self,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<EvaluationPermit>> {
+        control.check()?;
+        let Some(capacity) = &self.evaluations else {
+            return Ok(None);
+        };
+        if self.limits.evaluations == Some(0) {
+            return Err(Code::Limit.error("component evaluations").into());
+        }
+        let permit = control
+            .query_async(async {
+                Arc::clone(capacity)
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| Code::Incomplete.error("component evaluation capacity"))
+            })
+            .await?;
+        Ok(Some(EvaluationPermit(permit)))
+    }
+
     pub async fn wait_capacity(&self, resource: &str, requested: usize) -> Result<()> {
+        if resource == "component evaluations" {
+            if let Some(capacity) = &self.evaluations {
+                let _permit = capacity
+                    .acquire()
+                    .await
+                    .map_err(|_| Code::Incomplete.error("component evaluation capacity"))?;
+            }
+            return Ok(());
+        }
         let mut changes = self.capacity.subscribe();
         loop {
             changes.borrow_and_update();
             let ready = match resource {
-                "component evaluations" => self
-                    .limits
-                    .evaluations
-                    .is_none_or(|maximum| self.running.load(Ordering::Acquire) < maximum),
                 "component compiler" => match self.compiler.try_lock() {
                     Ok(_compiler) => true,
                     Err(TryLockError::WouldBlock) => false,
@@ -109,6 +151,12 @@ impl WasmExecution {
     }
 
     pub fn new(limits: WasmLimits) -> Result<Self> {
+        if limits
+            .evaluations
+            .is_some_and(|maximum| maximum > Semaphore::MAX_PERMITS)
+        {
+            return Err(Code::Invalid.error("component evaluations").into());
+        }
         if limits.compiler_bytes.is_some() {
             return Err(Code::Unsupported
                 .error("in-process compiler memory limit")
@@ -131,7 +179,9 @@ impl WasmExecution {
             linker,
             cache: Mutex::new(cache::CodeCache::new(capacity.clone(), limits)),
             compiler: Mutex::new(()),
-            running: AtomicUsize::new(0),
+            evaluations: limits
+                .evaluations
+                .map(|maximum| Arc::new(Semaphore::new(maximum))),
             capacity,
             #[cfg(any(test, feature = "test-fixtures"))]
             entered: Mutex::new(None),
@@ -204,9 +254,11 @@ impl WasmExecution {
             control,
             evaluation.context.limits,
             copy_bytes,
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn evaluate_prepared(
         &self,
         descriptor: &sdk::Package,
@@ -215,6 +267,7 @@ impl WasmExecution {
         control: &AnalysisReadControl,
         output_limits: sdk::Limits,
         copy_bytes: Option<usize>,
+        admission: Option<EvaluationPermit>,
     ) -> Result<sdk::Output> {
         use std::borrow::Cow;
 
@@ -235,7 +288,8 @@ impl WasmExecution {
             .and_then(|checked| checked.encode())
             .context(crate::AnalysisContractSnafu)?;
         control.check()?;
-        let output = self.invoke_reserved(prepared, input.into(), control, copy_bytes)?;
+        let output =
+            self.invoke_reserved(prepared, input.into(), control, copy_bytes, admission)?;
         let output = sdk::wire::Output::from(output);
         let decoded = if copy_bytes.is_some() {
             output.decode_bounded(descriptor, &evaluation, output_limits)

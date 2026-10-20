@@ -300,6 +300,7 @@ impl Runtime {
                 } else {
                     let mut state = session.state()?;
                     state.config_mut().set_extension(Arc::clone(&permit));
+                    state.config_mut().set_extension(Arc::clone(&self.run));
                     (
                         session.physical(&self.run.plan, &state).await?,
                         state.task_ctx(),

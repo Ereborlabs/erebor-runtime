@@ -14,11 +14,13 @@ use datafusion::logical_expr::{dml::InsertOp, LogicalPlanBuilder};
 
 use crate::Result;
 
+mod host;
 mod manifest;
 mod read;
 mod sink;
 mod subscription;
 
+pub use host::InstanceHost;
 pub use subscription::Subscription;
 
 #[cfg(test)]
@@ -42,10 +44,16 @@ impl Instance {
         control: &AnalysisReadControl,
     ) -> Result<Arc<Self>> {
         control.check()?;
-        grant.remaining()?;
-        authority.check(&grant, PackageActionV1::Run)?;
-        definition.validate().map_err(araphor_data::Error::from)?;
         let read = Arc::new(control.within(grant.remaining()?)?);
+        let checked = Arc::clone(&authority);
+        let checked_grant = grant.clone();
+        Engine::blocking(Arc::clone(&read), (), move || {
+            checked
+                .check(&checked_grant, PackageActionV1::Run)
+                .map_err(Into::into)
+        })
+        .await?;
+        definition.validate().map_err(araphor_data::Error::from)?;
         let prepared = query
             .prepare_definition(
                 grant.selection.tenant_id,
@@ -56,13 +64,13 @@ impl Instance {
         if prepared.resolved != definition {
             return Err(Code::Conflict.error("managed definition pin").into());
         }
-        for (bundle, digest) in prepared.images() {
-            authority.admit(&grant, &PackageBundleRef::retained(bundle, digest))?;
-        }
         let store = Arc::clone(query.store());
         let check = Arc::clone(&authority);
         let stage = Arc::clone(&read);
         let (admitted, prepared, calls) = Engine::blocking(read, (), move || {
+            for (bundle, digest) in prepared.images() {
+                check.admit(&grant, &PackageBundleRef::retained(bundle, digest))?;
+            }
             let (manifest, calls) = Self::manifest(&prepared)?;
             let spec = ManagedSpec {
                 tenant: grant.selection.tenant_id,
@@ -249,7 +257,7 @@ impl Instance {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .attempt = Some(Arc::new(attempt));
-        let result = captured.execute().await;
+        captured.execute().await?;
         let receipt = state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -258,7 +266,6 @@ impl Instance {
         if let Some(receipt) = receipt {
             return Ok(receipt);
         }
-        result?;
         Err(Code::Incomplete.error("managed publication receipt").into())
     }
 

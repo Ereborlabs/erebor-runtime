@@ -1,9 +1,8 @@
-use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
 use crate::{AnalysisReadControl, WasmLimits};
 
-use super::{admission::CompileBudget, execution::EvaluationPermit, WasmExecution};
+use super::{admission::CompileBudget, WasmExecution};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
@@ -162,20 +161,30 @@ fn admission_bounds_compile_work() -> TestResult {
 
 #[test]
 fn evaluation_capacity_recovers() -> TestResult {
-    let running = AtomicUsize::new(0);
-    let capacity = tokio::sync::watch::channel(()).0;
-    let mut changes = capacity.subscribe();
+    use std::future::Future;
+    use std::task::{Context, Poll};
+
+    let runtime = WasmExecution::new(WasmLimits {
+        evaluations: Some(4),
+        ..Default::default()
+    })?;
     let permits = (0..4)
-        .map(|_| EvaluationPermit::acquire(&running, &capacity, Some(4)))
+        .map(|_| runtime.try_acquire_evaluation())
         .collect::<crate::Result<Vec<_>>>()?;
     assert!(matches!(
-        EvaluationPermit::acquire(&running, &capacity, Some(4)),
+        runtime.try_acquire_evaluation(),
         Err(crate::Error::AnalysisBusy { .. })
     ));
-    changes.borrow_and_update();
+    let mut context = Context::from_waker(futures_util::task::noop_waker_ref());
+    let wait = runtime.wait_capacity("component evaluations", 1);
+    tokio::pin!(wait);
+    assert!(wait.as_mut().poll(&mut context).is_pending());
     drop(permits);
-    assert!(changes.has_changed()?);
-    let _permit = EvaluationPermit::acquire(&running, &capacity, Some(4))?;
+    assert!(matches!(
+        wait.as_mut().poll(&mut context),
+        Poll::Ready(Ok(()))
+    ));
+    let _permit = runtime.try_acquire_evaluation()?;
     Ok(())
 }
 
@@ -190,13 +199,7 @@ fn wait_checks_resource() -> TestResult {
     })?;
     let mut context = Context::from_waker(futures_util::task::noop_waker_ref());
     let permits = (0..4)
-        .map(|_| {
-            EvaluationPermit::acquire(
-                &runtime.running,
-                &runtime.capacity,
-                runtime.limits.evaluations,
-            )
-        })
+        .map(|_| runtime.try_acquire_evaluation())
         .collect::<crate::Result<Vec<_>>>()?;
     let wait = runtime.wait_capacity("component evaluations", 1);
     tokio::pin!(wait);

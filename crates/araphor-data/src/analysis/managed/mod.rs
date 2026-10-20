@@ -6,6 +6,7 @@ mod read;
 mod schema;
 mod selected;
 
+pub use lifecycle::ManagedLease;
 pub use model::*;
 
 #[cfg(test)]

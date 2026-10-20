@@ -7,12 +7,14 @@ use araphor_data::ManagedExit;
 use araphor_package::PackageImplementationV1;
 use futures_util::StreamExt as _;
 
+mod capacity;
+
 impl Fixture {
-    async fn terminal_stream(
+    pub(in crate::instance) async fn terminal_instance(
         &self,
         id: &str,
         mode: &str,
-    ) -> TestResult<(Arc<Instance>, Subscription)> {
+    ) -> TestResult<Arc<Instance>> {
         let mut image = bundle("wasm")?;
         let model = &mut image.artifacts[0].descriptor.exports[0];
         model.name = "evaluate".into();
@@ -33,7 +35,15 @@ impl Fixture {
         let sql = format!(
             r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => '{mode}', amount => 0) WHERE EXISTS (SELECT 1 FROM context_versions)"#
         );
-        let instance = self.admit(id, &sql).await?;
+        self.admit(id, &sql).await
+    }
+
+    async fn terminal_stream(
+        &self,
+        id: &str,
+        mode: &str,
+    ) -> TestResult<(Arc<Instance>, Subscription)> {
+        let instance = self.terminal_instance(id, mode).await?;
         let lifecycle = self.start(&instance)?;
         let stream = instance.subscribe(
             Arc::new(AnalysisReadControl::default()),
@@ -751,5 +761,86 @@ async fn failed_offer_fences_old_stream() -> TestResult {
         .managed_selected([1; 16], "failed-offer", &terminal.attempt, &control)?
         .is_none());
     drop(fixture.query.reserve_evaluation([1; 16])?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn postcommit_notice_keeps_receipt() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    fixture.context(1)?;
+    let instance = fixture
+        .admit(
+            "postcommit-notice",
+            "SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) AS value FROM context_versions",
+        )
+        .await?;
+    let lifecycle = fixture.start(&instance)?;
+    let mut stream = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    tokio::time::timeout(Duration::from_secs(30), stream.query.next())
+        .await?
+        .ok_or("native stream ended before commit")??;
+    let receipt = stream
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .receipt
+        .clone()
+        .ok_or("native publication did not retain receipt")?;
+    assert_eq!(
+        fixture.progress("postcommit-notice")?,
+        receipt.commit_revision
+    );
+    fixture.authority.set(true);
+    let error = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("notice stream ended")?
+        .err()
+        .ok_or("committed receipt hid native authority notice")?;
+    assert!(matches!(
+        &error,
+        crate::Error::Query {
+            source: araphor_query::Error::AuthorityChanged { .. }
+        }
+    ));
+    assert_eq!(Subscription::failure(&error), ManagedExit::Cancelled);
+    assert!(stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?
+        .is_none());
+    let saved = fixture
+        .query
+        .store()
+        .managed_attempt(
+            [1; 16],
+            "postcommit-notice",
+            &receipt.attempt,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("committed receipt absent")?;
+    assert_eq!(saved.receipt(), Some(&receipt));
+    assert_eq!(saved.terminal(), None);
+    assert_eq!(
+        fixture.progress("postcommit-notice")?,
+        receipt.commit_revision
+    );
+    let mut resumed = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    fixture.context(2)?;
+    let next = tokio::time::timeout(Duration::from_secs(30), resumed.next())
+        .await?
+        .ok_or("resumed stream ended")??;
+    assert_ne!(next.attempt, receipt.attempt);
+    assert!(next.commit_revision > receipt.commit_revision);
+    assert!(resumed
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?
+        .is_none());
     Ok(())
 }

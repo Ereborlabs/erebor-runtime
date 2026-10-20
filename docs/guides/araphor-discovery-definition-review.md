@@ -708,11 +708,49 @@ Strict Clippy and formatting pass. The
 [migration result](../plans/araphor-analysis-migration.md#known-terminal-outcomes-and-failed-offers)
 records the exact commands, source count, and remaining scope.
 
-The host that owns all running subscriptions is **Not implemented**. Idle
-suspension, capture-preserving capacity retry, renewal, public lifecycle
-commands, and automatic recovery admission remain open. Unknown pending work
-and ambiguous Limit or Incomplete failures remain unavailable. The reference
-supervision files remain. The complete final Rust gate remains **Not done**.
+## Reactive instance host
+
+[InstanceHost::serve](../../crates/araphor-analysis/src/instance/host.rs)
+starts one driver and retains its store lease until every member drains.
+  -> [InstanceHost::drive](../../crates/araphor-analysis/src/instance/host.rs) subscribes to lifecycle notices before it reads retained running instances.
+  -> [InstanceHost::reconcile](../../crates/araphor-analysis/src/instance/host.rs) adds members to FuturesUnordered and cancels only replaced or stopped lifecycles.
+  -> [InstanceHost::member](../../crates/araphor-analysis/src/instance/host.rs) checks current authority, admits the exact saved definition, and consumes its Query subscription.
+  -> [Subscription::poll_next](../../crates/araphor-analysis/src/instance/subscription.rs) delivers receipts only after its tracked final authority callback.
+  -> [Subscription::cancel_and_join](../../crates/araphor-analysis/src/instance/subscription.rs) drains pending delivery and actual Query workers before Data records a terminal outcome.
+
+FuturesUnordered is the sole member registry. A metadata read uses a tracked
+blocking worker. An older metadata snapshot cannot cancel a newer member.
+The exact old member drains before its replacement starts. A held authority
+callback or guest does not stop another subscription. Caller Drop cancels
+the driver; its task retains the store lease through actual worker exit.
+
+[Prepared::acquire_evaluation](../../crates/araphor-package-runtime/src/lib.rs)
+uses the existing native semaphore for managed component admission.
+  -> [PackageExec::guest](../../crates/araphor-query/src/definition/physical/guest.rs) waits before exchange allocation and guest launch. The captured request remains unchanged.
+  -> [CallContext::finish](../../crates/araphor-query/src/definition/physical.rs) closes registration, drains its existing running shared futures, and then waits for actual workers.
+
+A native operator can retain a pending future after cancellation drops the
+output stream. Draining that same future lets its cancellation complete.
+The shared future executes only once. The original error remains the result.
+This path does not reset native plans, duplicate a package call, or change
+the maintained native aggregate state. Component admission is unbounded by
+default. Configured finite admission retains typed Busy behavior.
+
+The [host tests](../../crates/araphor-analysis/src/instance/host/tests.rs)
+cover lifecycle replacement, idle denial, real source denial, failure isolation,
+unknown pending work, held callbacks, held guests, stop, and Drop. The
+[capacity tests](../../crates/araphor-analysis/src/instance/subscription/tests/capacity.rs)
+cover exact request retention, healthy work, cancellation, actual joins, and
+full configured pool release with two blocking workers.
+
+All 54 Instance cases and 130 selected Query cases pass across the ordinary
+and corrected native commands. The
+[migration record](../plans/araphor-analysis-migration.md#reactive-host-joined-delivery-and-component-admission)
+identifies the source, commands, launch correction, and retired error leaf.
+Durable idle failure status, metadata accounting, renewal, public lifecycle,
+producer supervision, and the final complete Rust gate remain **Not done**.
+Unknown pending work and ambiguous Limit or Incomplete failures remain
+unavailable. The mixed reference supervision files remain.
 
 ## In-process Wasm ownership
 

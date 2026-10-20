@@ -12,7 +12,7 @@ use futures_util::{StreamExt as _, TryStreamExt as _};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use crate::execution::{Permit, Session};
+use crate::execution::{Engine, Permit, Session};
 use crate::sources::ArrowSnapshot;
 use crate::stream::physical::{Fingerprint, SubscribeExec};
 use crate::stream::{Event, Output, OutputStream, Run, StreamError};
@@ -265,6 +265,30 @@ impl Subscription {
         })
         .boxed();
         self
+    }
+
+    pub fn blocking<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&AnalysisReadControl) -> Result<T> + Send + 'static,
+    ) -> impl std::future::Future<Output = Result<T>> + Send + 'static {
+        let control = Arc::clone(self.session.control());
+        let workers = self.workers.clone();
+        async move {
+            let lease = workers.token();
+            if workers.is_closed() {
+                return InvalidSnafu {
+                    field: "closed subscription worker",
+                }
+                .fail();
+            }
+            control.check()?;
+            let stage = Arc::clone(&control);
+            Engine::blocking(control, lease, move || {
+                stage.check()?;
+                operation(&stage)
+            })
+            .await
+        }
     }
 
     pub fn schema(&self) -> SchemaRef {

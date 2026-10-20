@@ -4,10 +4,11 @@ use araphor_analysis_sdk as sdk;
 use araphor_package::PackageImplementationV1;
 use araphor_package_runtime::wasm::WasmExecution;
 use datafusion::execution::memory_pool::MemoryReservation;
+use datafusion::execution::TaskContext;
 
 use crate::execution::Permit;
 
-use super::{external, limit, CallContext, PackageExec, Result};
+use super::{external, internal, limit, CallContext, PackageExec, Result};
 
 struct Exchange {
     _input: Arc<MemoryReservation>,
@@ -24,8 +25,12 @@ impl PackageExec {
         mut evaluation: sdk::Evaluation,
         owner: &CallContext,
         input: Arc<MemoryReservation>,
-        permit: Arc<Permit>,
+        context: &TaskContext,
     ) -> Result<(sdk::Evaluation, sdk::Output, Arc<MemoryReservation>)> {
+        let permit = context
+            .session_config()
+            .get_extension::<Permit>()
+            .ok_or_else(|| internal("package evaluation permit is absent"))?;
         let artifact = self
             .call
             .bundle
@@ -41,6 +46,25 @@ impl PackageExec {
             evaluation.context.limits =
                 WasmExecution::limits(evaluation.context.limits, &owner.runtime.limits().wasm);
         }
+        let admission = if wasm
+            && context
+                .session_config()
+                .get_extension::<crate::stream::Run>()
+                .is_some_and(|run| run.managed.is_some())
+        {
+            let control = context
+                .session_config()
+                .get_extension::<araphor_data::AnalysisReadControl>()
+                .ok_or_else(|| internal("package execution control is absent"))?;
+            self.prepared
+                .as_ref()
+                .ok_or_else(|| internal("package preparation is absent"))?
+                .acquire_evaluation(&control)
+                .await
+                .map_err(external)?
+        } else {
+            None
+        };
         let scratch = if owner.memory.input_capacity().is_some() {
             let retained = evaluation.allocated_bytes();
             let bytes = evaluation
@@ -140,6 +164,7 @@ impl PackageExec {
                 limits,
                 copy_bytes,
                 self.prepared.clone(),
+                admission,
                 lease,
             )
             .await

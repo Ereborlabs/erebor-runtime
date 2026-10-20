@@ -417,6 +417,7 @@ async fn prepared_guest_keeps_identity() -> TestResult {
                 model.limits,
                 None,
                 Some(prepared.clone()),
+                None,
                 (),
             )
             .await
@@ -443,6 +444,7 @@ async fn prepared_guest_keeps_identity() -> TestResult {
             model.limits,
             None,
             Some(prepared),
+            None,
             (),
         )
         .await?;

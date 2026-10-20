@@ -1,18 +1,17 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 use std::sync::mpsc;
 
 use araphor_analysis_sdk as sdk;
 use snafu::{IntoError as _, ResultExt as _};
-use tokio::sync::watch;
 use wasmtime::{Engine, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
 
 use crate::{AnalysisReadControl, Result, WasmLimits};
 
 use super::{
     bindings::{self, araphor::analysis::types},
-    Code, PreparedComponent,
+    Code, EvaluationPermit, PreparedComponent,
 };
 
 #[derive(snafu::Snafu)]
@@ -182,38 +181,6 @@ impl Drop for EpochWatch {
     }
 }
 
-pub(super) struct EvaluationPermit<'a>(&'a AtomicUsize, &'a watch::Sender<()>);
-
-impl<'a> EvaluationPermit<'a> {
-    pub(super) fn acquire(
-        running: &'a AtomicUsize,
-        capacity: &'a watch::Sender<()>,
-        maximum: Option<usize>,
-    ) -> Result<Self> {
-        running
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                count
-                    .checked_add(1)
-                    .filter(|count| maximum.is_none_or(|maximum| *count <= maximum))
-            })
-            .map_err(|_| {
-                crate::AnalysisBusySnafu {
-                    resource: "component evaluations",
-                    requested: 1_usize,
-                }
-                .build()
-            })?;
-        Ok(Self(running, capacity))
-    }
-}
-
-impl Drop for EvaluationPermit<'_> {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-        self.1.send_replace(());
-    }
-}
-
 impl super::WasmExecution {
     pub fn invoke(
         &self,
@@ -221,7 +188,7 @@ impl super::WasmExecution {
         input: types::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<types::Output> {
-        self.invoke_reserved(prepared, input, control, None)
+        self.invoke_reserved(prepared, input, control, None, None)
     }
 
     pub(super) fn invoke_reserved(
@@ -230,10 +197,18 @@ impl super::WasmExecution {
         input: types::Evaluation,
         control: &AnalysisReadControl,
         copy_bytes: Option<usize>,
+        admission: Option<EvaluationPermit>,
     ) -> Result<types::Output> {
         control.check()?;
-        let _permit =
-            EvaluationPermit::acquire(&self.running, &self.capacity, self.limits.evaluations)?;
+        let _permit = match (admission, &self.evaluations) {
+            (Some(permit), Some(capacity)) if Arc::ptr_eq(permit.0.semaphore(), capacity) => {
+                Some(permit)
+            }
+            (Some(_), _) => {
+                return Err(Code::Invalid.error("component evaluation admission").into())
+            }
+            (None, _) => self.try_acquire_evaluation()?,
+        };
         if !Engine::same(&self.engine, prepared.component().engine()) {
             return Err(Code::Unsupported.error("component engine").into());
         }

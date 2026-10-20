@@ -10,7 +10,7 @@ use araphor_query::definition::Invocation;
 use araphor_query::execution::Engine;
 use araphor_query::follow::ManagedPublication;
 use erebor_runtime_error::{ErrorExt as _, StatusCode};
-use futures_util::Stream;
+use futures_util::{future::BoxFuture, FutureExt as _, Stream};
 
 use super::{sink, Code, Instance};
 use crate::Result;
@@ -19,8 +19,10 @@ pub struct Subscription {
     query: araphor_query::follow::Subscription,
     owner: Arc<Instance>,
     state: Arc<Mutex<sink::Step>>,
+    #[cfg(test)]
     control: Arc<AnalysisReadControl>,
     terminal: Option<ManagedExit>,
+    delivery: Option<BoxFuture<'static, araphor_query::Result<ManagedReceipt>>>,
 }
 
 impl Instance {
@@ -84,8 +86,10 @@ impl Instance {
             query,
             owner: Arc::clone(self),
             state,
+            #[cfg(test)]
             control,
             terminal: None,
+            delivery: None,
         })
     }
 }
@@ -93,10 +97,14 @@ impl Instance {
 impl Subscription {
     /// The diagnostic control must remain valid after this stream is cancelled.
     pub async fn cancel_and_join(
-        self,
+        mut self,
         diagnostic: &AnalysisReadControl,
     ) -> Result<Option<ManagedTerminal>> {
-        let joined = self.query.cancel_and_join().await;
+        let cancelled = self.query.cancel();
+        if let Some(delivery) = self.delivery.take() {
+            let _delivered = delivery.await;
+        }
+        let joined = cancelled.and(self.query.cancel_and_join().await);
         let attempt = self
             .state
             .lock()
@@ -107,19 +115,21 @@ impl Subscription {
             joined?;
             return Ok(None);
         };
-        let mut exit = self.terminal.unwrap_or(ManagedExit::Cancelled);
-        if exit == ManagedExit::Cancelled
-            && self
-                .owner
-                .check()
-                .is_err_and(|error| error.status_code() == StatusCode::PermissionDenied)
-        {
-            exit = ManagedExit::Failed(Code::Denied);
-        }
+        let exit = self.terminal.unwrap_or(ManagedExit::Cancelled);
+        let owner = Arc::clone(&self.owner);
         let control = Arc::new(diagnostic.within(None)?);
         let stage = Arc::clone(&control);
         let store = Arc::clone(self.owner.query.store());
         let terminal = Engine::blocking(control, (), move || {
+            let exit = if exit == ManagedExit::Cancelled
+                && owner
+                    .check()
+                    .is_err_and(|error| error.status_code() == StatusCode::PermissionDenied)
+            {
+                ManagedExit::Failed(Code::Denied)
+            } else {
+                exit
+            };
             stage.check()?;
             store
                 .finish_managed(&attempt, exit, || stage.check())
@@ -130,7 +140,7 @@ impl Subscription {
         Ok(Some(terminal))
     }
 
-    fn failure(error: &crate::Error) -> ManagedExit {
+    pub(super) fn failure(error: &crate::Error) -> ManagedExit {
         if error.status_code() == StatusCode::Cancelled {
             return ManagedExit::Cancelled;
         }
@@ -190,39 +200,58 @@ impl Stream for Subscription {
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
-            let update = match Pin::new(&mut self.query).poll_next(context) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Ready(Some(update)) => update,
-            };
-            let receipt = self
-                .state
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .receipt
-                .take();
-            if receipt.is_none()
-                && update
-                    .as_ref()
-                    .is_ok_and(|update| update.snapshot.managed().is_none())
-            {
-                continue;
-            }
-            let result = match receipt {
-                Some(receipt) => Instance::authorize(
-                    self.owner.authority.as_ref(),
-                    &self.owner.admitted.spec.grant,
-                    &self.owner.prepared,
-                    || {
-                        self.control.check()?;
-                        Ok(receipt)
-                    },
-                )
-                .map_err(Into::into),
-                None => match update {
-                    Err(error) => Err(error.into()),
-                    Ok(_) => Err(Code::Incomplete.error("managed publication receipt").into()),
-                },
+            let result: Result<ManagedReceipt> = if let Some(delivery) = self.delivery.as_mut() {
+                let result = match std::future::Future::poll(delivery.as_mut(), context) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(result) => result.map_err(Into::into),
+                };
+                self.delivery = None;
+                result
+            } else {
+                let update = match Pin::new(&mut self.query).poll_next(context) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(None) => return Poll::Ready(None),
+                    Poll::Ready(Some(update)) => update,
+                };
+                let receipt = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .receipt
+                    .take();
+                if receipt.is_none()
+                    && update
+                        .as_ref()
+                        .is_ok_and(|update| update.snapshot.managed().is_none())
+                {
+                    continue;
+                }
+                match (update, receipt) {
+                    (Err(error), _) => Err(error.into()),
+                    (Ok(_), Some(receipt)) => {
+                        let owner = Arc::clone(&self.owner);
+                        self.delivery = Some(
+                            self.query
+                                .blocking(move |control| {
+                                    Instance::authorize(
+                                        owner.authority.as_ref(),
+                                        &owner.admitted.spec.grant,
+                                        &owner.prepared,
+                                        || {
+                                            control.check()?;
+                                            Ok(receipt)
+                                        },
+                                    )
+                                    .map_err(Into::into)
+                                })
+                                .boxed(),
+                        );
+                        continue;
+                    }
+                    (Ok(_), None) => {
+                        Err(Code::Incomplete.error("managed publication receipt").into())
+                    }
+                }
             };
             if let Err(error) = &result {
                 self.terminal = Some(Self::failure(error));

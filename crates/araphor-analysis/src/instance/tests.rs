@@ -106,7 +106,7 @@ pub(super) struct Fixture {
     directory: tempfile::TempDir,
     pub(super) query: Arc<Engine>,
     pub(super) authority: Arc<Authority>,
-    grant: PackageGrantV1,
+    pub(super) grant: PackageGrantV1,
 }
 
 impl Fixture {

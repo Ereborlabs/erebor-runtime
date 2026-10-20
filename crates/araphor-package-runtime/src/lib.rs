@@ -47,6 +47,19 @@ impl Drop for Pending {
     }
 }
 
+impl Prepared {
+    pub async fn acquire_evaluation(
+        &self,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<wasm::EvaluationPermit>> {
+        let runtime = self
+            .runtime
+            .upgrade()
+            .ok_or_else(|| PackageErrorCodeV1::Incomplete.error("prepared runtime is closed"))?;
+        runtime.wasm()?.acquire_evaluation(control).await
+    }
+}
+
 impl Runtime {
     pub fn new(limits: Limits) -> Result<Arc<Self>> {
         limits.native.validate()?;
@@ -175,6 +188,7 @@ impl Runtime {
             limits,
             None,
             None,
+            None,
             (),
         )
         .await
@@ -191,6 +205,7 @@ impl Runtime {
         output_limits: sdk::Limits,
         copy_bytes: Option<usize>,
         prepared: Option<Prepared>,
+        admission: Option<wasm::EvaluationPermit>,
         lease: impl Send + 'static,
     ) -> Result<(sdk::Evaluation, sdk::Output)> {
         let worker_token = workers.token();
@@ -220,6 +235,11 @@ impl Runtime {
                     .into())
             }
         };
+        if wasm.is_none() && admission.is_some() {
+            return Err(PackageErrorCodeV1::Invalid
+                .error("component evaluation admission")
+                .into());
+        }
         let stage = control.within(None)?;
         let mut pending = Pending {
             control: stage.within(None)?,
@@ -253,6 +273,7 @@ impl Runtime {
                         &stage,
                         output_limits,
                         copy_bytes,
+                        admission,
                     )?;
                     Ok((evaluation, output))
                 } else {

@@ -57,8 +57,9 @@ test, and asset leaves are retired. Eight executor, component, atom, pager,
 and pure test leaves are then removed after 50 focused replacement checks pass.
 Fifteen more retained-query, authority, Wasm, and finite notification test
 leaves are removed after 89 focused checks pass. Two image/fixture leaves then
-retire after exact replacement tests pass. There are now 81 retired files;
-127 baseline files remain unchanged.
+retire after exact replacement tests pass. The complete error leaf then
+retires after typed error and joined execution checks pass. There are now
+82 retired files; 126 baseline files remain unchanged.
 The recovery archive
 retains all 208 originals. Read the
 [retirement record](araphor-analysis-migration.md#retired-finite-reference-files)

@@ -1,5 +1,4 @@
 use std::future::Future as _;
-use std::sync::atomic::Ordering;
 use std::task::Context;
 
 use araphor_analysis_builtins::discovery::Discovery;
@@ -101,16 +100,20 @@ async fn guests_overlap_with_independent_lifetimes() -> TestResult {
     tokio::pin!(second);
     assert!(second.as_mut().poll(&mut context).is_pending());
     tokio::task::spawn_blocking(move || entering.recv_timeout(Duration::from_secs(10))).await??;
-    assert_eq!(wasm.running.load(Ordering::Acquire), 2);
+    let slots = wasm
+        .evaluations
+        .as_ref()
+        .ok_or("configured evaluation slots")?;
+    assert_eq!(slots.available_permits(), 0);
 
     first_release.send(())?;
     let first = first.await?;
     assert!(second.as_mut().poll(&mut context).is_pending());
-    assert_eq!(wasm.running.load(Ordering::Acquire), 1);
+    assert_eq!(slots.available_permits(), 1);
     second_control.check()?;
     second_release.send(())?;
     let second = second.await?;
-    assert_eq!(wasm.running.load(Ordering::Acquire), 0);
+    assert_eq!(slots.available_permits(), 2);
     for ((evaluation, output), id) in [(first, "first"), (second, "second")] {
         assert_eq!(evaluation.context.id, id);
         assert!(evaluation

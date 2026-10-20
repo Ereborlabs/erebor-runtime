@@ -13,6 +13,7 @@ fn lifecycle_cas_is_inert() -> TestResult {
     assert_eq!(admitted.progress, 0);
     assert!(store
         .active_managed(&AnalysisReadControl::default())?
+        .1
         .is_empty());
     assert!(!notices.has_changed()?);
     let before = store.meta()?;
@@ -51,6 +52,7 @@ fn lifecycle_cas_is_inert() -> TestResult {
     assert_eq!(
         store
             .active_managed(&AnalysisReadControl::default())?
+            .1
             .as_slice(),
         std::slice::from_ref(&running)
     );
@@ -89,6 +91,7 @@ fn lifecycle_cas_is_inert() -> TestResult {
     assert_eq!(stopped.spec, admitted.spec);
     assert!(store
         .active_managed(&AnalysisReadControl::default())?
+        .1
         .is_empty());
     assert!(notices.has_changed()?);
     notices.borrow_and_update();
@@ -155,6 +158,7 @@ fn lifecycle_notice_excludes_data() -> TestResult {
     assert_eq!(*notices.borrow_and_update(), stopped.lifecycle);
     assert!(store
         .active_managed(&AnalysisReadControl::default())?
+        .1
         .is_empty());
     Ok(())
 }
@@ -273,6 +277,7 @@ fn transition_fences_publication() -> TestResult {
     assert_eq!(current.generation, fixture.instance.generation);
     assert!(store
         .active_managed(&AnalysisReadControl::default())?
+        .1
         .is_empty());
     Ok(())
 }
@@ -330,6 +335,7 @@ fn lifecycle_history_survives_reopen() -> TestResult {
     assert_eq!(
         store
             .active_managed(&AnalysisReadControl::default())?
+            .1
             .as_slice(),
         std::slice::from_ref(&restarted)
     );
@@ -516,5 +522,102 @@ fn active_metadata_honors_cancel() -> TestResult {
         store.active_managed(&control),
         Err(crate::Error::AnalysisReadCancelled { .. })
     ));
+    Ok(())
+}
+
+#[test]
+fn idle_suspend_checks_fences() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let fixture = Fixture::admit(&store)?;
+    let running =
+        store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
+            Ok(())
+        })?;
+    let before = store.meta()?;
+    for stale in [
+        ManagedInstance {
+            generation: running.generation + 1,
+            ..running.clone()
+        },
+        ManagedInstance {
+            lifecycle: running.lifecycle + 1,
+            ..running.clone()
+        },
+        ManagedInstance {
+            progress: running.progress + 1,
+            ..running.clone()
+        },
+    ] {
+        let mut checked = false;
+        assert!(matches!(
+            store.suspend_managed(&stale, || {
+                checked = true;
+                Ok(())
+            }),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        assert!(!checked);
+        assert_eq!(fixture.current(&store)?, running);
+        assert_eq!(store.meta()?, before);
+    }
+    let mut checked = false;
+    assert!(matches!(
+        store.suspend_managed(&running, || {
+            checked = true;
+            Err(Code::Denied.error("suspension callback"))
+        }),
+        Err(crate::Error::Package {
+            code: Code::Denied,
+            ..
+        })
+    ));
+    assert!(checked);
+    assert_eq!(fixture.current(&store)?, running);
+    assert_eq!(store.meta()?, before);
+    let stopped = store.suspend_managed(&running, || Ok(()))?;
+    assert!(!stopped.running);
+    assert_eq!(stopped.progress, running.progress);
+    assert_eq!(stopped.generation, running.generation);
+    assert_eq!(stopped.spec, running.spec);
+    assert!(stopped.lifecycle > running.lifecycle);
+    assert!(matches!(
+        store.suspend_managed(&running, || Ok(())),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn host_lease_is_exclusive() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("store"))?);
+    let lease = store.lease_managed()?;
+    assert!(matches!(
+        store.lease_managed(),
+        Err(crate::Error::Package {
+            code: Code::Conflict,
+            field: "managed host owner",
+            ..
+        })
+    ));
+    drop(lease);
+    drop(store.lease_managed()?);
+    Ok(())
+}
+
+#[test]
+fn active_membership_keeps_revision() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let fixture = Fixture::admit(&store)?;
+    let running =
+        store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
+            Ok(())
+        })?;
+    let (revision, members) = store.active_managed(&AnalysisReadControl::default())?;
+    assert_eq!(revision, store.meta()?.commit_revision);
+    assert!(running.lifecycle <= revision);
+    assert_eq!(members, [running]);
     Ok(())
 }

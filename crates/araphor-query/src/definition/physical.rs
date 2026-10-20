@@ -21,7 +21,7 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use futures_util::future::{BoxFuture, FutureExt, Shared, WeakShared};
-use futures_util::{stream, TryStreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
 
 use super::PackageCall;
 use crate::memory::Memory;
@@ -280,13 +280,22 @@ impl CallContext {
     }
 
     pub async fn finish(&self) {
-        {
-            let _calls = self
+        let mut pending: stream::FuturesUnordered<_> = {
+            let calls = self
                 .calls
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             self.workers.close();
-        }
+            calls
+                .values()
+                .filter_map(|call| match call {
+                    CallState::Running(_, future) => future.upgrade(),
+                    CallState::Complete(_, _) => None,
+                })
+                .collect()
+        };
+        // A native join can retain a pending call after its stream is dropped.
+        while pending.next().await.is_some() {}
         self.workers.wait().await;
     }
 
@@ -606,15 +615,7 @@ impl PackageExec {
             (output, output_memory)
         } else {
             let (effective, output, memory) = self
-                .guest(
-                    evaluation,
-                    &owner,
-                    Arc::clone(&input),
-                    context
-                        .session_config()
-                        .get_extension::<crate::execution::Permit>()
-                        .ok_or_else(|| internal("package evaluation permit is absent"))?,
-                )
+                .guest(evaluation, &owner, Arc::clone(&input), &context)
                 .await?;
             evaluation = effective;
             (output, memory)
