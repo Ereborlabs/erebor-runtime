@@ -6,7 +6,7 @@ mod graph;
 mod semantics;
 
 #[path = "../examples/files_count.rs"]
-mod files_count;
+pub(crate) mod files_count;
 
 #[path = "../examples/sensitive_access.rs"]
 pub(crate) mod sensitive_access;

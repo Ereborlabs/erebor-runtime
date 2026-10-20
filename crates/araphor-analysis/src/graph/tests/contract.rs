@@ -1,15 +1,16 @@
-use super::*;
-
-type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+use super::super::*;
+use super::TestResult;
 
 #[test]
 fn descriptor_preserves_owners() -> TestResult {
     for id in FindingV1::PACKAGES {
-        let package = GraphAndFindingOwner::analysis_package(id)?;
+        let package = algorithm::Detector::from_id(id)?.descriptor();
+        package.validate()?;
         assert_eq!(package.id, id);
         assert_eq!(package.revision, "1");
         assert_eq!(package.exports.len(), 1);
         let model = &package.exports[0];
+        assert!(Graph::supports(model));
         assert_eq!(model.name, "detect");
         let expected: &[&str] = match id {
             "HF-PROC-001" => &[
@@ -74,6 +75,32 @@ fn descriptor_preserves_owners() -> TestResult {
         let inspected = package.inspect()?;
         assert!(!inspected.contains("GraphSnapshotV1"));
     }
-    assert!(GraphAndFindingOwner::analysis_package("outside-package").is_err());
+    let error = algorithm::Detector::from_id("outside-package")
+        .err()
+        .ok_or("unknown detector accepted")?;
+    assert_eq!(error.code(), sdk::ErrorCode::Incompatible);
+    Ok(())
+}
+
+#[test]
+fn support_requires_exact_ports() -> TestResult {
+    let package = algorithm::Detector::Process.descriptor();
+    let model = &package.exports[0];
+    for change in 0..7 {
+        let mut altered = model.clone();
+        match change {
+            0 => altered.inputs.swap(0, 1),
+            1 => altered.inputs[0].port.name = "other".into(),
+            2 => altered.outputs.reverse(),
+            3 => altered.outputs[2].evidence_required = false,
+            4 => altered.checkpoint = None,
+            5 => altered.checkpoint.as_mut().ok_or("checkpoint")?.version += 1,
+            6 => {
+                altered.checkpoint.as_mut().ok_or("checkpoint")?.datasets[0].name = "other".into();
+            }
+            _ => return Err("contract mutation".into()),
+        }
+        assert!(!Graph::supports(&altered), "accepted mutation {change}");
+    }
     Ok(())
 }

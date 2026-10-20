@@ -115,7 +115,7 @@ impl AnalysisStore {
             })
     }
 
-    pub(super) fn package_image_from(
+    pub(in crate::analysis) fn package_image_from(
         reader: &Connection,
         tenant: [u8; 16],
         package: &str,

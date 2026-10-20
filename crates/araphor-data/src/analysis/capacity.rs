@@ -10,6 +10,8 @@ use crate::{IoSnafu, Result, StorageCapacitySnafu};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StorageLimitsV1 {
+    pub native_memory_bytes: Option<u64>,
+    pub native_temp_bytes: Option<u64>,
     pub disk_max_bytes: Option<u64>,
     pub policy_reserve_bytes: Option<u64>,
     pub write_reserve_bytes: Option<u64>,
@@ -265,6 +267,8 @@ impl StorageLimitsV1 {
 impl StorageLimitsV1 {
     pub(super) fn fixture() -> Self {
         Self {
+            native_memory_bytes: Some(128 * 1024 * 1024),
+            native_temp_bytes: Some(128 * 1024 * 1024),
             disk_max_bytes: Some(8 * 1024 * 1024 * 1024),
             policy_reserve_bytes: Some(256 * 1024 * 1024),
             write_reserve_bytes: Some(256 * 1024 * 1024),
@@ -297,6 +301,8 @@ mod tests {
         let limits: StorageLimitsV1 = serde_json::from_str("{}")?;
         assert_eq!(limits, StorageLimitsV1::default());
         assert!(limits.valid());
+        assert_eq!(limits.native_memory_bytes, None);
+        assert_eq!(limits.native_temp_bytes, None);
         assert_eq!(limits.maintenance_bytes()?, 0);
         limits.check(
             StorageUsageV1 {
@@ -336,9 +342,11 @@ mod tests {
             )
             .is_err());
         let limits: StorageLimitsV1 = serde_json::from_str(
-            r#"{"tenant_max_bytes":8,"source_entries":1,"tenant_revisions":1}"#,
+            r#"{"native_memory_bytes":16777216,"native_temp_bytes":33554432,"tenant_max_bytes":8,"source_entries":1,"tenant_revisions":1}"#,
         )?;
         assert!(limits.valid());
+        assert_eq!(limits.native_memory_bytes, Some(16 * 1024 * 1024));
+        assert_eq!(limits.native_temp_bytes, Some(32 * 1024 * 1024));
         limits.check_logical(100, 6, false)?;
         assert!(limits.check_logical(100, 7, false).is_err());
         limits.check_logical(100, 8, true)?;
@@ -806,9 +814,92 @@ mod tests {
     }
 
     #[test]
+    fn analysis_store_native_configuration() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        for (limits, memory, temporary) in [
+            (StorageLimitsV1::default(), "16383.9 PiB", "16383.9 PiB"),
+            (
+                StorageLimitsV1 {
+                    native_memory_bytes: Some(128 * 1024 * 1024),
+                    native_temp_bytes: Some(64 * 1024 * 1024),
+                    ..Default::default()
+                },
+                "128.0 MiB",
+                "64.0 MiB",
+            ),
+        ] {
+            let check = |connection: &duckdb::Connection| -> std::result::Result<
+                (),
+                Box<dyn std::error::Error>,
+            > {
+                let settings: (String, String, bool, bool, bool) = connection.query_row(
+                    "SELECT current_setting('memory_limit'), current_setting('max_temp_directory_size'), current_setting('autoload_known_extensions'), current_setting('autoinstall_known_extensions'), current_setting('enable_external_access')",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                )?;
+                assert_eq!(settings, (memory.into(), temporary.into(), false, false, false));
+                Ok(())
+            };
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("analysis");
+            let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+            check(store.reader()?.get()?)?;
+            store.recover()?;
+            check(store.reader()?.get()?)?;
+            store.fault_write("UPDATE store_meta SET singleton = singleton", &[])?;
+            check(store.reader()?.get()?)?;
+            assert!(store
+                .fault_write("INSERT INTO absent VALUES (1)", &[])
+                .is_err());
+            check(store.reader()?.get()?)?;
+            let backup = root.join("backups/saved");
+            store.backup(&backup)?;
+            check(store.reader()?.get()?)?;
+            {
+                let connection = AnalysisStore::open_native(
+                    &backup.join("analysis.duckdb"),
+                    limits,
+                    duckdb::AccessMode::ReadOnly,
+                )?;
+                check(&connection)?;
+                assert_eq!(
+                    connection.query_row(
+                        "SELECT current_setting('temp_directory')",
+                        [],
+                        |row| row.get::<_, String>(0)
+                    )?,
+                    "",
+                );
+                assert!(connection
+                    .execute_batch("CREATE TABLE absent (value BIGINT)")
+                    .is_err());
+            }
+            let restored = AnalysisStore::restore_with_limits(
+                &backup,
+                &directory.path().join("restored"),
+                limits,
+            )?;
+            check(restored.reader()?.get()?)?;
+            drop(store);
+            let reopened = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+            check(reopened.reader()?.get()?)?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn analysis_store_native_limits() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let memory = 128 * 1024 * 1024_u64;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            Default::default(),
+            StorageLimitsV1 {
+                native_memory_bytes: Some(memory),
+                native_temp_bytes: Some(64 * 1024 * 1024),
+                ..Default::default()
+            },
+        )?;
         let reader_guard = store.reader()?;
         let reader = reader_guard.get()?;
         let settings: (String, String, String, u64, u64, String) = reader.query_row(
@@ -820,7 +911,7 @@ mod tests {
             (
                 "128.0 MiB".into(),
                 "16.0 MiB".into(),
-                "128.0 MiB".into(),
+                "64.0 MiB".into(),
                 2,
                 0,
                 "0 bytes".into(),
@@ -832,10 +923,11 @@ mod tests {
         connection.execute_batch("CREATE TEMP TABLE native_limit (payload BLOB)")?;
         let control =
             super::super::AnalysisReadControl::with_timeout(std::time::Duration::from_secs(10))?;
+        let bytes = i64::try_from(memory + 1)?;
         let result = control.query_run(connection, || {
             Ok(connection.execute(
                 "INSERT INTO native_limit SELECT CAST(repeat('x', ?) AS BLOB)",
-                [(crate::analysis::NATIVE_MEMORY_BYTES + 1) as i64],
+                [bytes],
             ))
         })?;
         assert!(

@@ -251,6 +251,7 @@ impl Runtime {
                         &evaluation,
                         &prepared,
                         &stage,
+                        output_limits,
                         copy_bytes,
                     )?;
                     Ok((evaluation, output))

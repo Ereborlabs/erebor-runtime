@@ -48,12 +48,15 @@ files are restored from `6a25ba1b`. The current production wiring does not
 reconnect the old execution owners. Migration and removal remain **Not done**.
 A complete file and function map must replace assumptions about compatibility.
 
-The later finite retirement removes 29 duplicate reference leaves after
-source comparison and focused qualification. The other 179 files remain
-unchanged. The recovery archive retains all 208 recovered files. Read the
+The earlier finite retirement removed 29 duplicate reference leaves after
+source comparison and focused qualification. At that point, 179 files remained
+unchanged. The historical final Rust gate
+`migration-final-ci42` covers those 29 leaves. Four additional reference files
+are now retired; 175 baseline files remain unchanged. The recovery archive
+retains all 208 originals. Read the
 [retirement record](araphor-analysis-migration.md#retired-finite-reference-files)
-for the exact scope. The final Rust gate passes in `migration-final-ci42`.
-The complete migration remains **Not done**.
+for the exact scope. The current final Rust gate `migration-final-ci59` is
+pending. Complete migration remains **Not done**.
 The items below that describe removed paths refer to the stopped draft, not
 a qualified replacement. No deletion commit or push was made.
 
@@ -79,8 +82,12 @@ implementation.
 
 Active Analysis exports the reactive Discovery owner, its SQL package adapter,
 and finite notification operations. Native Query has the general OCI physical
-call path. Most remaining work connects these finite operations to managed
-subscriptions and Data commits. Some work below corrects specific regressions.
+call path. The finite Instance owner now connects exact definition admission,
+immutable attempts, captured prior state, and atomic multi-call Data commits.
+Focused finite checks pass. Managed subscriptions, lifecycle, automatic
+restart, and full migration remain open. Some work below corrects specific
+regressions. The [finite result](araphor-analysis-migration.md#finite-managed-source-focused-qualification)
+records current owners and qualification.
 
 A profile is the saved behavior summary for one Discovery interval. Saved
 state means the package checkpoint. Input evidence references identify the
@@ -212,14 +219,15 @@ must be removed for the 6,000-line reduction target. Tests, comments,
 documents, blank lines, and moves do not count as reduction. The record is
 `/tmp/araphor-yaml-count1.json`. Complete reduction: **Not done**. Full
 workspace CI, benchmarks, and physical Kubernetes checks did not run.
-Package-call physical execution and running instances remain open.
+At that authoring revision, package-call physical execution and running
+instances remained open.
 
 The [native admission simplification](araphor-package-jobs.md#native-admission-simplification)
 uses native DataFrame indexing and plan transformation. Default input SQL is
 parsed once. The same traversal binds dependent inputs and updates schemas.
 Configured quotas still apply. Package calls use the native `RelationPlanner`
-for relation arguments; they are not scalar UDFs. Physical package execution
-and running instances remain **Not done**.
+for relation arguments; they are not scalar UDFs. At that admission revision,
+physical package execution and running instances remained **Not done**.
 
 Native admission simplification and selected qualification: **Done**. All
 61 distinct focused tests pass. Formatting and affected-crate Clippy with
@@ -235,8 +243,8 @@ built-in and Analysis package owners. Crate removal and selected qualification:
 affected-crate Clippy with warnings denied pass. The source and command record
 is `/tmp/araphor-native-views-verification1.json`. The change removes 157
 production Rust code lines from `5c9e2fb7`. Read the linked result for the count
-method and exclusions. Physical package-call execution, managed instances,
-and the complete reduction remain **Not done**.
+method and exclusions. At that revision, physical package-call execution,
+managed instances, and the complete reduction remained **Not done**.
 
 The previous delivery replaces the separate JSON package form with native SQL and PRQL
 calls. The function name has three parts: image, exact revision, and export.
@@ -262,8 +270,12 @@ Arrow inputs, parameters, and prior state. SDK checks cover all returned
 datasets, proposed state, reasons, and evidence. Admission checks precede
 native optimization. Results have read-only accessors and private attribution.
 The [migration record](araphor-analysis-migration.md) gives current tests and
-remaining work. Complete managed execution remains **Not done**. Atomic
-publication, durable state reuse, and restart recovery remain open. Read the
+remaining work. Finite Instance execution now registers the captured attempt
+before execution and atomically publishes complete actual call returns,
+guarded state, evidence references, and progress. Focused checks cover prior
+reuse and reset, exact completed retries, current authority, and cancellation.
+The current final Rust gate `migration-final-ci59` is pending. Complete managed
+execution and automatic restart remain **Not done**. Read the
 [definition review](../guides/araphor-discovery-definition-review.md).
 
 Previous qualification at `318a3259`: **Done**. All 73 distinct cases passed.
@@ -292,8 +304,11 @@ reduction. The record is `/tmp/araphor-sql-call-count1.json`.
 
 - **Before:** Control ran fixed Discovery work. The retained package owner
   supervised scoped activations and saved their results and state.
-- **Now:** Fresh Discovery uses reactive Query streams, but no general API
-  starts and stops independent instances from definition files.
+- **Now:** Fresh Discovery uses reactive Query streams. The finite Instance
+  owner admits an exact definition and call manifest, captures guarded prior
+  state, registers immutable attempts, and commits multi-call results and
+  progress atomically. Completed retries recover the original receipt. No
+  general service API starts, stops, or restores independent running instances.
 - **Required:** Create managed instances from admitted definitions. Each
   instance has its own lifetime, selected inputs, progress, and saved state.
 - **Reuse:** Query subscriptions and their native stream collection, current
@@ -302,6 +317,12 @@ reduction. The record is `/tmp/araphor-sql-call-count1.json`.
   Do not copy run_clock, source sweeps, or separate raw readers.
 
 Recorded specifications:
+
+The [finite result](araphor-analysis-migration.md#finite-managed-source-focused-qualification)
+covers finite admission, capture, state, publication, authority, cancellation,
+and receipt recovery. The requirements below also include running-service
+lifetime and restart behavior. Keep them unchecked until that complete
+behavior passes qualification. The current final Rust gate is pending.
 
 - [ ] Start, inspect, and stop each instance independently. Keep its identity
   separate from the image and reusable definition. Support multiple instances
@@ -374,8 +395,10 @@ contracts remain. Their presence does not qualify a complete producing path.
   Return named outputs, reasons, and evidence.
 - **Now:** Image and definition install/inspection use current owners. Finite
   native Query execution accepts Arrow input, parameters, and prior state.
-  The old activation, update, rollback, removal, and restart APIs are removed.
-  Managed instance state and lifecycle are not implemented.
+  Finite Instance execution now preserves guarded state, atomic multi-call
+  publication, immutable attempts, and original receipt recovery. The old
+  activation, update, rollback, removal, and restart APIs are removed. Their
+  managed lifecycle replacements remain unimplemented.
 - **Required:** Support the same operations through active Analysis. Preserve
   exact retries, failed-update rollback, permissions, restart, and atomic saved
   state. Separate package installation from Discovery start as described in
@@ -392,8 +415,9 @@ contracts remain. Their presence does not qualify a complete producing path.
 - **Before:** The package owner selected and called the installed SQL, Wasm,
   or native implementation.
 - **Now:** Native Query admits exact installed export calls and has a physical
-  extension for SQL, Wasm, and native execution. Focused qualification is in
-  progress. Managed restart state and publication remain open.
+  extension for SQL, Wasm, and native execution. Focused finite qualification
+  passes, including managed state and atomic publication. The current final
+  Rust gate is pending. Automatic restart remains open.
 - **Required:** Let a SQL query call an installed export and use its declared
   outputs. Use the same native planning and execution route. Preserve
   parameters, saved state, permissions, and the exact artifact revision.

@@ -882,7 +882,11 @@ mod tests {
             let committed = point != "retention.before";
             let expected = committed.then_some(position);
             {
-                let snapshot = AnalysisStore::open_native(&root.join("analysis.duckdb"))?;
+                let snapshot = AnalysisStore::open_native(
+                    &root.join("analysis.duckdb"),
+                    Default::default(),
+                    duckdb::AccessMode::Automatic,
+                )?;
                 assert_eq!(
                     AnalysisStore::replay_floor_from(&snapshot, source.tenant_id)?,
                     expected,

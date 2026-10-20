@@ -159,7 +159,9 @@ impl AnalysisStore {
         processor: &str,
         metadata: &[u8],
     ) -> Result<PackageEvidence> {
-        if processor == "analysis-package" {
+        if matches!(processor, "managed-package-v1" | "managed-definition-v1") {
+            Self::managed_evidence(processor, metadata)
+        } else if processor == "analysis-package" {
             let contract: super::PackageCommitV1 =
                 serde_json::from_slice(metadata).context(JsonSnafu {
                     path: "<package-evidence>",

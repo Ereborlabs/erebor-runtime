@@ -39,7 +39,7 @@ pub struct PackageGrantV1 {
 }
 
 impl PackageGrantV1 {
-    pub fn remaining(&self) -> Result<Option<Duration>> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.principal.is_empty()
             || self.principal.len() > 256
             || self.revision == 0
@@ -47,6 +47,11 @@ impl PackageGrantV1 {
         {
             return Err(PackageErrorCodeV1::Denied.error("package grant"));
         }
+        Ok(())
+    }
+
+    pub fn remaining(&self) -> Result<Option<Duration>> {
+        self.validate()?;
         let Some(expiry) = self.expires_utc_ns else {
             return Ok(None);
         };
@@ -90,7 +95,7 @@ pub struct InstalledContext {
     pub clock: ClockDependency,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ResultContext {
     #[serde(default = "ResultContext::sql_target")]
     pub target: String,
@@ -119,18 +124,7 @@ impl ResultContext {
 
     pub fn new(id: &str, now: u64, model: &sdk::Model, inputs: &[sdk::Input]) -> Self {
         let input_coverage: Vec<_> = inputs.iter().map(|input| input.coverage.clone()).collect();
-        let (mut state, mut limits) = (sdk::CoverageState::Complete, Vec::new());
-        for coverage in &input_coverage {
-            if coverage.state == sdk::CoverageState::Unknown
-                || (coverage.state == sdk::CoverageState::Gapped
-                    && state == sdk::CoverageState::Complete)
-            {
-                state = coverage.state;
-            }
-            limits.extend(coverage.limits.iter().cloned());
-        }
-        limits.sort();
-        limits.dedup();
+        let coverage = Self::coverage(&input_coverage);
         Self {
             target: Self::sql_target(),
             artifact: None,
@@ -142,8 +136,23 @@ impl ResultContext {
             },
             inputs: inputs.iter().map(|input| input.revision.clone()).collect(),
             input_coverage,
-            coverage: sdk::Coverage { state, limits },
+            coverage,
         }
+    }
+    pub fn coverage(input_coverage: &[sdk::Coverage]) -> sdk::Coverage {
+        let (mut state, mut limits) = (sdk::CoverageState::Complete, Vec::new());
+        for coverage in input_coverage {
+            if coverage.state == sdk::CoverageState::Unknown
+                || (coverage.state == sdk::CoverageState::Gapped
+                    && state == sdk::CoverageState::Complete)
+            {
+                state = coverage.state;
+            }
+            limits.extend(coverage.limits.iter().cloned());
+        }
+        limits.sort();
+        limits.dedup();
+        sdk::Coverage { state, limits }
     }
 }
 
@@ -177,11 +186,11 @@ pub trait PackageAuthorization: Send + Sync + 'static {
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, &PackageBundleRef<'_>)],
+        grants: &[(&PackageGrantV1, Option<&PackageBundleRef<'_>>)],
         action: PackageActionV1,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
-        let [(grant, bundle)] = grants else {
+        let [(grant, Some(bundle))] = grants else {
             return Err(PackageErrorCodeV1::Unsupported.error("atomic package authority set"));
         };
         self.commit(grant, action, bundle, operation)

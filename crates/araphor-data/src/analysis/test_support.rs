@@ -9,10 +9,7 @@ impl AnalysisStore {
         let mut writer = self.writer_access()?;
         let writer = writer.get_mut()?;
         writer
-            .execute_batch(&format!(
-                "SET memory_limit='{}B'",
-                4 * crate::analysis::NATIVE_MEMORY_BYTES
-            ))
+            .execute_batch("SET memory_limit = '-1'")
             .context(AnalysisDatabaseSnafu {
                 operation: "set fixture memory limit",
             })?;
@@ -20,8 +17,10 @@ impl AnalysisStore {
             .execute(query, values)
             .and_then(|_| writer.execute_batch("CHECKPOINT"));
         let restored = writer.execute_batch(&format!(
-            "SET memory_limit='{}B'",
-            crate::analysis::NATIVE_MEMORY_BYTES
+            "SET memory_limit='{}'",
+            self.storage
+                .native_memory_bytes
+                .map_or_else(|| "-1".to_owned(), |bytes| format!("{bytes}B"))
         ));
         mutation.context(AnalysisDatabaseSnafu {
             operation: "inject fixture mutation",

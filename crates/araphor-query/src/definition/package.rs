@@ -236,6 +236,7 @@ impl Packages {
                 }
                 .build()
             })?;
+        let bindings: Arc<[String]> = arguments.iter().map(ToString::to_string).collect();
         let mut output = None;
         let mut supplied = BTreeMap::new();
         let mut parameters = BTreeMap::new();
@@ -453,6 +454,11 @@ impl Packages {
                     package: key.package.clone(),
                     export: key.export.clone(),
                     output: port.name.clone(),
+                    arguments: if key == root {
+                        Arc::clone(&bindings)
+                    } else {
+                        Arc::default()
+                    },
                     descriptor: Arc::clone(&descriptor),
                     bundle: Arc::clone(bundle),
                     sql: sql.clone(),
@@ -490,10 +496,14 @@ impl Packages {
     ) -> Result<(Vec<LogicalPlan>, Vec<BTreeSet<SourceOrigin>>)> {
         let mut tables = self.sources.clone();
         for (slot, input) in model.inputs.iter().enumerate() {
+            if !supplied.contains_key(&input.port.name)
+                && matches!(&input.source, sdk::InputSource::Table(sdk::TableRef::Named(name))
+                    if name == &input.port.name)
+            {
+                continue;
+            }
             let schema = Session::indexed_schema(&input.port.schema)?;
-            tables
-                .entry(input.port.name.clone())
-                .or_insert_with(|| SourceProvider::port(slot, schema));
+            tables.insert(input.port.name.clone(), SourceProvider::port(slot, schema));
         }
         let mut pending = Vec::new();
         for (slot, input) in model.inputs.iter().enumerate() {
@@ -506,7 +516,15 @@ impl Packages {
                 plan.clone()
             } else {
                 self.demand.capture(|| match &input.source {
-                    sdk::InputSource::Query(sql) => self.plan(provider, &tables, sql),
+                    sdk::InputSource::Query(sql) => {
+                        if let Some(source) = self.sources.get(&input.port.name) {
+                            let mut source_tables = tables.clone();
+                            source_tables.insert(input.port.name.clone(), Arc::clone(source));
+                            self.plan(provider, &source_tables, sql)
+                        } else {
+                            self.plan(provider, &tables, sql)
+                        }
+                    }
                     sdk::InputSource::Table(sdk::TableRef::Named(name)) => {
                         let source = tables.get(name).cloned().ok_or_else(|| {
                             InvalidSnafu {
@@ -737,7 +755,7 @@ impl Packages {
                 &mut tables,
                 "parameters".into(),
                 &model.parameters,
-                false,
+                true,
             )?);
         }
         if let Some(checkpoint) = &model.checkpoint {

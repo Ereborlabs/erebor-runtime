@@ -75,6 +75,7 @@ fn witnesses_keep_source_receipt() -> TestResult {
         Some(Duration::from_secs(30)),
         1,
         Arc::clone(&memory),
+        None,
     );
     let mut captured = snapshot.read(
         &BTreeMap::from([
@@ -296,6 +297,7 @@ fn catalog_native_preflight() -> TestResult {
         Some(Duration::from_secs(30)),
         1,
         Arc::clone(&memory),
+        None,
     );
     let schemas = super::SourceSnapshot::schemas();
     let schema = schemas.get("catalog").ok_or("catalog schema")?;
@@ -401,6 +403,7 @@ fn catalog_native_preflight() -> TestResult {
         Some(Duration::from_secs(30)),
         1,
         Arc::clone(&memory),
+        None,
     );
     let error = source
         .read(
@@ -507,6 +510,7 @@ fn catalog_content_contract() -> TestResult {
             Some(Duration::from_secs(30)),
             1,
             Arc::clone(&memory),
+            None,
         );
         let schemas = SourceSnapshot::schemas();
         let schema = schemas.get("catalog").ok_or("catalog schema")?;
@@ -817,6 +821,7 @@ fn retirement_map_charges_once() -> TestResult {
         Some(Duration::from_secs(30)),
         1,
         Arc::clone(&memory),
+        None,
     );
     let captured = source.read(
         &BTreeMap::from([("events".into(), Some(BTreeSet::new()))]),

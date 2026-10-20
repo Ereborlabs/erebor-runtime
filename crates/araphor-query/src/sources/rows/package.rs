@@ -148,6 +148,7 @@ mod tests {
             Some(Duration::from_secs(30)),
             1,
             Arc::clone(&memory),
+            None,
         );
         let captured = source.read(
             &BTreeMap::new(),

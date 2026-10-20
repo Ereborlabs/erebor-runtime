@@ -162,8 +162,8 @@ async fn guest_capacity_held_until_join() -> TestResult {
         output_bytes: BYTES * 4,
         input_capacity: Some(BYTES * 32),
         output_capacity: Some(BYTES * 4),
-        global_evaluations: 1,
-        tenant_evaluations: 1,
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
         ..Default::default()
     };
     let (fixture, _) = fixture(limits)?;
@@ -212,8 +212,8 @@ async fn guest_drop_keeps_worker_lease() -> TestResult {
         output_bytes: BYTES,
         input_capacity: Some(BYTES),
         output_capacity: Some(BYTES),
-        global_evaluations: 1,
-        tenant_evaluations: 1,
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
         ..Default::default()
     })?;
     let runtime = Runtime::new(Default::default())?;
@@ -309,6 +309,71 @@ async fn guest_defaults_disable_quotas() -> TestResult {
             .value(0),
         7
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn wasm_preserves_input_capacity() -> TestResult {
+    let capacity = BYTES * 4;
+    let fixture = Fixture::limits(Limits {
+        output_bytes: capacity,
+        output_capacity: Some(capacity),
+        ..Default::default()
+    })?;
+    let bundle = component("wasm", "accumulate")?;
+    assert_eq!(
+        bundle.artifacts[0].descriptor.exports[0].limits,
+        sdk::Limits::default()
+    );
+    fixture.install(&bundle)?;
+    let prepared = fixture
+        .prepare(&Fixture::sql(
+            r#"SELECT * FROM "runtime-fixture"."1".accumulate(
+                input => (SELECT CAST(1 AS BIGINT UNSIGNED) AS value FROM range(4096)))"#,
+        ))
+        .await?;
+    let result = fixture
+        .execute(&prepared, invocation("wasm-output-capacity"))
+        .await?;
+    let call = result.calls.values().next().ok_or("call")?;
+    assert_eq!(call.evaluation().context.limits, sdk::Limits::default());
+    assert_eq!(call.evaluation().context.limits.max_bytes, u64::MAX);
+    assert_eq!(
+        call.evaluation().inputs[0]
+            .data
+            .batches
+            .iter()
+            .map(sdk::RecordBatch::num_rows)
+            .sum::<usize>(),
+        4096
+    );
+    assert!(call.evaluation().inputs[0].data.allocated_bytes() > capacity / 4);
+    assert_eq!(
+        result.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or("output type")?
+            .value(0),
+        4096
+    );
+    assert_eq!(
+        call.output()
+            .checkpoint
+            .as_ref()
+            .ok_or("checkpoint")?
+            .datasets[0]
+            .batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or("checkpoint type")?
+            .value(0),
+        4096
+    );
+    assert!(call.output().allocated_bytes() <= capacity / 4);
+    drop(result);
+    drop(fixture.engine.memory().reserve_output(capacity)?);
     Ok(())
 }
 
@@ -430,8 +495,8 @@ async fn subscription_cancel_joins_worker() -> TestResult {
             input_capacity: Some(BYTES * 32),
             output_bytes: BYTES * 4,
             output_capacity: Some(BYTES * 4),
-            global_evaluations: 1,
-            tenant_evaluations: 1,
+            global_evaluations: Some(1),
+            tenant_evaluations: Some(1),
             ..Default::default()
         })?;
         let prepared = fixture.prepare(&definition("'cancel'")).await?;
@@ -526,8 +591,8 @@ async fn subscription_revocation_joins_guest() -> TestResult {
         input_capacity: Some(BYTES * 32),
         output_bytes: BYTES * 4,
         output_capacity: Some(BYTES * 4),
-        global_evaluations: 1,
-        tenant_evaluations: 1,
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
         ..Default::default()
     })?;
     let prepared = fixture.prepare(&definition("'cancel'")).await?;
@@ -574,8 +639,8 @@ async fn subscription_cancel_joins_capture() -> TestResult {
     let fixture = Fixture::limits(Limits {
         input_bytes: capacity,
         input_capacity: Some(capacity),
-        global_evaluations: 1,
-        tenant_evaluations: 1,
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
         ..Default::default()
     })?;
     fixture.event(1)?;

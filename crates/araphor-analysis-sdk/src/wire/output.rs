@@ -12,7 +12,7 @@ impl Output {
         Self::encode_checked(&package.check_evaluation(evaluation)?, output)
     }
 
-    pub(crate) fn encode_checked(
+    pub fn encode_checked(
         checked: &crate::CheckedEvaluation<'_>,
         output: &crate::Output,
     ) -> Result<Self> {
@@ -89,16 +89,45 @@ impl Output {
     ) -> Result<crate::Output> {
         let limits = evaluation.context.limits;
         let model = package.wire_validator(&evaluation.export, limits)?;
-        let output = self.decode_parts(model, limits, true)?;
+        let output = self.decode_parts(model, limits, true, false)?;
         model.input(evaluation)?;
         model.output(evaluation, &output)?;
+        Ok(output)
+    }
+
+    pub fn decode_bounded(
+        &self,
+        package: &Package,
+        evaluation: &crate::Evaluation,
+        limits: crate::Limits,
+    ) -> Result<crate::Output> {
+        limits.validate()?;
+        let checked = package.check_evaluation(evaluation)?;
+        let output = self.decode_parts(checked.model(), limits, true, true)?;
+        checked.validate_output(&output)?;
+        if output.allocated_bytes() as u64 > limits.max_bytes {
+            return Err(Error::contract(ErrorCode::Limit, "output allocation bytes"));
+        }
+        Ok(output)
+    }
+
+    pub fn decode_retained(
+        &self,
+        package: &Package,
+        export: &str,
+        limits: crate::Limits,
+        inputs: &std::collections::BTreeMap<String, u64>,
+    ) -> Result<crate::Output> {
+        let model = package.wire_validator(export, limits)?;
+        let output = self.decode_parts(model, limits, true, false)?;
+        package.validate_retained_output(export, limits, inputs, &output)?;
         Ok(output)
     }
 
     /// Decode output values with per-dataset row and batch limits.
     /// The caller must validate the model and output contract.
     pub fn decode_model(&self, model: &crate::Model) -> Result<crate::Output> {
-        self.decode_parts(model, model.limits, false)
+        self.decode_parts(model, model.limits, false, false)
     }
 
     fn decode_parts(
@@ -106,6 +135,7 @@ impl Output {
         model: &crate::Model,
         limits: crate::Limits,
         aggregate: bool,
+        combined: bool,
     ) -> Result<crate::Output> {
         let mut codec = Codec::new(limits, aggregate);
         let datasets = self
@@ -136,7 +166,15 @@ impl Output {
             checkpoint: self
                 .checkpoint
                 .as_ref()
-                .map(|checkpoint| checkpoint.decode(model, limits, aggregate))
+                .map(|checkpoint| {
+                    let mut limits = limits;
+                    if combined {
+                        limits.max_checkpoint_bytes = limits
+                            .max_checkpoint_bytes
+                            .min(codec.remaining(false).max_bytes);
+                    }
+                    checkpoint.decode(model, limits, aggregate)
+                })
                 .transpose()?,
         })
     }

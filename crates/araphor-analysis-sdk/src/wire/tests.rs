@@ -321,3 +321,77 @@ fn generated_types_preserve_context() -> TestResult {
     assert_eq!(decoded.export_name, "run");
     Ok(())
 }
+
+#[test]
+fn output_budget_includes_checkpoint() -> TestResult {
+    let (schema, data) = values("data", vec![7; 4096])?;
+    let mut model = crate::Model::new(
+        "stateful",
+        Vec::new(),
+        vec![crate::Port::new("data", schema.clone())],
+    );
+    model.checkpoint = Some(crate::CheckpointSpec {
+        version: 1,
+        datasets: vec![crate::Port::new("state", schema)],
+    });
+    let package = crate::Package::new("fixture", "1", vec![model]);
+    let evaluation = crate::Evaluation {
+        export: "stateful".into(),
+        inputs: Vec::new(),
+        parameters: None,
+        checkpoint: None,
+        context: crate::EvaluationContext {
+            id: "bounded-output".into(),
+            time_utc_ns: 1,
+            seed: None,
+            limits: Limits::default(),
+        },
+    };
+    let mut state = data.clone();
+    state.name = "state".into();
+    let output = crate::Output {
+        datasets: vec![data],
+        checkpoint: Some(crate::Checkpoint {
+            version: 1,
+            datasets: vec![state],
+        }),
+        ..Default::default()
+    };
+    let encoded = super::Output::encode(&package, &evaluation, &output)?;
+    encoded.decode(&package, &evaluation)?;
+    let tight = Limits {
+        max_bytes: 48 * 1024,
+        max_checkpoint_bytes: 48 * 1024,
+        ..Limits::default()
+    };
+    assert!(encoded.datasets[0].arrow_ipc.len() < tight.max_bytes as usize);
+    assert!(
+        encoded.checkpoint.as_ref().ok_or("checkpoint")?.datasets[0]
+            .arrow_ipc
+            .len()
+            < tight.max_checkpoint_bytes as usize
+    );
+    assert_eq!(
+        encoded
+            .decode_bounded(&package, &evaluation, tight)
+            .err()
+            .ok_or("combined output exceeded its budget")?
+            .code(),
+        ErrorCode::Limit
+    );
+    let decoded = encoded.decode_bounded(
+        &package,
+        &evaluation,
+        Limits {
+            max_bytes: 256 * 1024,
+            max_checkpoint_bytes: 256 * 1024,
+            ..Limits::default()
+        },
+    )?;
+    assert_eq!(decoded.datasets[0].batches, output.datasets[0].batches);
+    assert_eq!(
+        decoded.checkpoint.ok_or("decoded checkpoint")?.datasets[0].batches,
+        output.checkpoint.ok_or("original checkpoint")?.datasets[0].batches
+    );
+    Ok(())
+}

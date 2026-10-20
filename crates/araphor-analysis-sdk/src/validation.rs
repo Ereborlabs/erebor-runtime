@@ -37,6 +37,36 @@ impl Package {
         self.check_evaluation(evaluation)?.validate_output(output)
     }
 
+    pub fn validate_retained_output(
+        &self,
+        export: &str,
+        limits: Limits,
+        inputs: &BTreeMap<String, u64>,
+        output: &Output,
+    ) -> Result<()> {
+        let model = self.wire_validator(export, limits)?;
+        if inputs.keys().map(String::as_str).collect::<BTreeSet<_>>()
+            != model
+                .inputs
+                .iter()
+                .map(|input| input.port.name.as_str())
+                .collect()
+        {
+            return Err(Error::contract(ErrorCode::Invalid, "retained input names"));
+        }
+        let rows = inputs
+            .values()
+            .try_fold(0_u64, |rows, count| rows.checked_add(*count))
+            .ok_or_else(|| Error::contract(ErrorCode::Invalid, "retained input rows"))?;
+        let rows = rows
+            .checked_add(u64::from(!model.parameters.fields().is_empty()))
+            .ok_or_else(|| Error::contract(ErrorCode::Invalid, "retained input rows"))?;
+        if rows > limits.max_rows {
+            return Err(Error::contract(ErrorCode::Limit, "retained input rows"));
+        }
+        model.output_rows(limits, inputs, output)
+    }
+
     pub(crate) fn validator(&self, evaluation: &Evaluation) -> Result<&Model> {
         self.validate()?;
         self.select_validator(&evaluation.export, evaluation.context.limits)
@@ -144,13 +174,25 @@ impl Model {
     }
 
     pub(crate) fn output(&self, evaluation: &Evaluation, output: &Output) -> Result<()> {
-        let limits = evaluation.context.limits;
-        let mut budget = BatchBudget::new(limits.max_bytes, &limits);
-        let outputs = Self::datasets(self.outputs.iter(), output.datasets.iter(), &mut budget)?;
-        let inputs: BTreeMap<_, _> = evaluation
+        let inputs = evaluation
             .inputs
             .iter()
-            .map(|input| (input.data.name.as_str(), input.data.rows()))
+            .map(|input| (input.data.name.clone(), input.data.rows()))
+            .collect();
+        self.output_rows(evaluation.context.limits, &inputs, output)
+    }
+
+    fn output_rows(
+        &self,
+        limits: Limits,
+        inputs: &BTreeMap<String, u64>,
+        output: &Output,
+    ) -> Result<()> {
+        let mut budget = BatchBudget::new(limits.max_bytes, &limits);
+        let outputs = Self::datasets(self.outputs.iter(), output.datasets.iter(), &mut budget)?;
+        let inputs = inputs
+            .iter()
+            .map(|(name, rows)| (name.as_str(), *rows))
             .collect();
         let mut evidence = BTreeSet::new();
         for link in &output.evidence {
@@ -285,10 +327,13 @@ impl Dataset {
         Ok(rows)
     }
 
-    pub(crate) fn rows(&self) -> u64 {
+    pub fn rows(&self) -> u64 {
         self.batches
             .iter()
             .map(|batch| batch.num_rows() as u64)
             .sum()
     }
 }
+
+#[cfg(test)]
+mod retained_tests;

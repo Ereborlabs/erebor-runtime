@@ -21,6 +21,7 @@ pub struct PackageCall {
     pub(crate) package: PackageRefV1,
     pub(crate) export: String,
     pub(crate) output: String,
+    pub(crate) arguments: Arc<[String]>,
     pub(crate) descriptor: Arc<sdk::Package>,
     pub(crate) bundle: Arc<PackageBundleV1>,
     pub(crate) sql: Option<SqlCall>,
@@ -164,6 +165,10 @@ impl PackageCall {
     }
     pub fn output(&self) -> &str {
         &self.output
+    }
+
+    pub fn arguments(&self) -> &[String] {
+        &self.arguments
     }
 
     fn key(&self) -> (&str, &str, &str, &str, &str, &str, &str) {

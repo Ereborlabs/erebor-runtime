@@ -38,40 +38,54 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 179 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 175 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
-| Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 4 native Query cases pass with the current source-built fixture. Separate admissions cannot share cached calls. All 64 ordinary definition tests pass after the admission, provider, worker, and cancellation changes. The full Rust gate passes on the finite retirement source. Managed execution remains incomplete. | Finite boundary qualified |
-| Shared subscriptions | Query carries complete per-step package returns and stable admitted call IDs. Explicit stop and authority loss join active workers. Durable checkpoint reuse/reset and window completion remain unimplemented. No separate package polling task exists. | Partial qualification |
+| Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
+| Shared subscriptions | Query carries complete per-step package returns and stable admitted call IDs. Explicit stop and authority loss join active workers. The finite Instance state reuse/reset and captured execution checks pass. The current final Rust gate is pending. Long-running window completion remains unimplemented. No separate package polling task exists. | Partial qualification |
 | Graph boundary | All 29 focused Graph tests pass. Graph validates canonical captured input and actual detector returns. These tests do not qualify the automatic producer. | Finite boundary qualified |
 | Discovery boundary | All 4 Data provenance tests and 8 native output-adapter tests pass. Native SQL retains the computations. Live publication remains incomplete. | Finite boundary qualified |
 | Context | All 17 focused Context tests pass. Active Analysis retains import authorization and native selection. Quotas are explicit options and disabled by default. | Finite boundary qualified |
 | Fixture qualification | All 4 comparator cases and the corrected entered-guest cancellation/revocation case pass. Active Analysis uses native calls and current Test authority. Native accumulation and clock/seed cases pass. Negative saved fixture time returns Unsupported. | Partial qualification |
-| Managed state and lifecycle | Stable instance and attempt identity, captured guarded prior state, atomic multi-call publication, start/inspect/stop, authority changes, and restart recovery must be connected. | Not done |
-| Graph producer | Capture immutable ACK and source proofs, bind detector relations, consume subscriptions, and publish through existing Data graph transactions. | Not done |
+| Managed state and lifecycle | Finite Instance, Query capture, and Data managed checks pass for immutable attempts, guarded state, atomic multi-call publication, receipt recovery, authority, and cancellation. The native Instance case passes separately. The final Rust gate is pending. Long-running supervision, start/inspect/stop, public history, and automatic restart remain absent. | Finite checks pass; lifecycle Not done |
+| Graph producer | Capture immutable ACK history, source proofs, graph heads and frozen coverage in the same view. Bind detector relations and consume subscriptions. Add the final authority callback and exact previous-head check to the existing Data graph transaction. | Not done |
 | Discovery producer | The current adapter subscribes to an admitted PackageCall. Interval split, frozen facts, witnesses, seals, replay, and reviewed baselines remain required. The complete producer is not qualified. | Not done |
 | Notification producer | Finite operations are moved. All 5 reactive tests pass. Native SQL selects route and delivery candidates. Data supplies exact retry and grant-expiry deadlines. Managed supervision is absent. | Not done |
 | Public callers | Restore current managed operations through Control, CLI, and lightweight E2E. Reference test modules remain available but are not a substitute for native integration tests. | Not done |
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
-| Quotas | Preserve explicit quota failures and buffer lifetime checks. Runtime host quotas default to None. SDK contract defaults and Query/Data bulk caps remain finite; reconcile them with the disabled-default requirement. Keep identity, format, type, and checked arithmetic validation. | Not done |
-| Final retirement | The 29 qualified finite leaves are removed. The final Rust gate passes. The 179 remaining files retain unqualified or mixed rules. Complete reference removal remains open. | Partial |
+| Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
+| Final retirement | The earlier 29 leaves and four additional mapped finite leaves are removed. The 175 remaining files retain unqualified or mixed rules. The current final Rust gate is pending. Complete reference removal remains open. | Partial |
 
-The quota audit also found default caps outside these moved owners. Query
-and Data extraction retain byte limits. SDK model defaults retain output
-limits. Data forces 128 MiB for DuckDB memory and temporary storage. Graph,
-notification, and Discovery context boundaries retain some 32 KiB payload
-checks. These resource checks must become explicit configuration with disabled
-defaults. Preserve identity, type, format, and checked arithmetic validation.
-SDK limits are shared with the native ABI and WIT; a quota change must keep
-those callers and guest transfer accounting coherent. This work is **Not done**.
+The earlier quota audit found default caps outside the moved owners. Current
+SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
+maxima; count and pool limits are optional. Data extraction key limits and
+native memory/temp limits are optional. Focused checks pass, but the final
+Rust gate and remaining boundary payload audit are pending. Resource bounds
+must stay configurable with disabled defaults. Preserve identity, type,
+format, and checked arithmetic validation. SDK limits remain shared with the
+native ABI and WIT. Query Memory does not charge every Data writer allocation.
+The complete quota audit is **Not done**.
 
-The old Query input executor has no active production caller. Its removal
-would remove 986 production code lines. Removal is not yet safe: the native
-path must retain exact completion time and input matching, saved-result
-restart with full input capacity, offered-cut retry identity, and inherited
-witness expiry. The audit covers 19 finite and 22 live tests. Keep all their
-assertions until native or Data tests prove each rule. Do not count this
-proposed deletion as complete.
+Data also has a fixed 16-slot reader admission semaphore. This quota rejects
+the seventeenth active or queued read. The two reusable reader connections
+are a separate execution pool. Reader admission needs an optional limit in
+StorageLimitsV1 with a disabled default. This correction does not remove
+the contended-lock or native-interrupt polling described above.
+
+The old Query input executor has no active production caller. Its historical
+removal preview estimated 986 production code lines. That preview also removes
+native clock inspection and must not be applied. Keep `Inputs::from_plans`,
+`scan`, `clocked`, and the shared receipt guards. No current removal count is
+claimed for that executor.
+
+Finite managed tests now reject a wrong returned evaluation time and stale
+checkpoint reuse after input revision or coverage changes. A completed stateful
+SQL retry survives reopen while the full input pool and only evaluation permit
+are occupied. These tests do not replace live offered-cut retry, inherited
+witness expiry, per-port deadlines, or source-scope rules. Discarded local-port
+origins and disjoint capture ranges remain open. The audit covers 19 finite
+and 22 live tests. Keep every remaining assertion until a current Query or Data
+owner proves it. Executor removal is **Not done**.
 
 The required final command is `bash .github/scripts/verify-rust-ci.sh` after
 the last covered edit. The earlier full run, `migration-final-ci11`, passes
@@ -126,19 +140,131 @@ No benchmark or complete-migration result is claimed. The final command uses
 `RUST_TEST_THREADS=2` on this host. This standard Rust setting preserves all
 assertions and timeout values.
 
+### Finite managed source: focused qualification
+
+The full Rust gate `migration-final-ci42` and commit `95e9bb4d` cover the earlier
+finite migration and its 29 retired leaves. They do not qualify the later
+managed source. Its build and focused checks now pass. The required final Rust
+gate `migration-final-ci58` stopped during test compilation because the host disk was full. Formatting, workspace check, and strict Clippy passed. The later `migration-final-ci59` passes those checks, all 145 ordinary Analysis cases, and all 333 ordinary Data cases. It stops at the stale OCI identity fixture. The fixture inherited the changed SDK default limits. The fixture now supplies its original exact limits. All 15 Package cases pass in `migration-oci-package60`. The full result remains **Not done**.
+
+[Instance::admit and run](../../crates/araphor-analysis/src/instance/mod.rs)
+now connect an explicit Run grant, exact retained definition, versioned call
+manifest, and finite attempt. Admission starts no work. The
+[manifest](../../crates/araphor-analysis/src/instance/manifest.rs) retains exact
+image, target, artifact, argument, and dependency identities without serializing
+a logical plan. SQL-only instances still require current authority.
+
+[Session::capture_managed](../../crates/araphor-query/src/definition.rs)
+returns one native prepared execution with its source cut, prior state, permit,
+and worker tokens. Analysis registers the immutable attempt before it consumes
+that same handle. [PackageExec](../../crates/araphor-query/src/definition/physical.rs)
+selects prior state after effective inputs and parameters are known. Revision,
+coverage, parameter values/schema, checkpoint version, named state dataset
+schemas, or rebuild prevent incompatible state reuse.
+
+The [publication sink](../../crates/araphor-analysis/src/instance/sink.rs)
+uses native TableProvider insertion and DataSinkExec. It wraps the admitted
+SELECT with native INSERT and adds no parser or physical runner. Ordinary tables
+remain TableProviders; only relation-valued package calls use RelationPlanner.
+DataSinkExec invokes the sink and emits the native UInt64 count. Query checks
+that measured count array against its row/byte bounds and reserves its buffer
+before execution. Analysis drains the stream and retains selected Arrow rows
+and actual complete call returns, then
+[Data commits](../../crates/araphor-data/src/analysis/managed/commit.rs) outputs,
+state, evidence, and progress atomically under the full current grant/image set.
+Eliminated calls produce no invented return or state change.
+
+Cancellation joins the captured workers. A final authority check also protects
+the acknowledgement of an existing receipt. Completed retries return the
+original receipt without execution; pending retries return Incomplete rather
+than capture a newer view. [Recovery](../../crates/araphor-data/src/analysis/managed/schema.rs)
+checks retained metadata, Arrow packets, heads, and references. Query Memory
+retains prior, result, and selected Arrow buffers through use. Data writer IPC
+serialization and transaction allocations are not all charged to Query Memory;
+configured quotas do not bound all Rust heap allocation.
+
+The [review guide](../guides/araphor-discovery-definition-review.md#finite-managed-execution)
+gives the source order, guard details, and actual resource ownership. Query
+`input_bytes` bounds complete input/parameter/prior allocations. The sink
+checks selected rows/bytes under `output_rows` and `output_bytes`. Optional
+pool limits retain Arrow buffers through the writer. SDK limits separately
+bound complete output batches/rows/bytes and checkpoint bytes.
+
+The focused records are under `/tmp/araphor-oci-execution/`. Each listed
+command returns zero and records unchanged covered source during that command.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `migration-managed-build55` | Build passes | 171.176 |
+| `migration-contract55` | All 8 SQL contract cases pass | 4.418 |
+| `migration-native-query55` | All 4 source-built native Query cases pass | 22.062 |
+| `migration-native-analysis55` | All 4 source-built native Analysis cases pass | 21.925 |
+| `migration-native-query60` | All 4 source-built native Query cases pass after the clean build | 19.200 |
+| `migration-native-analysis60` | All 4 source-built native Analysis cases pass after the clean build | 17.567 |
+| `migration-oci-package60` | All 15 Package cases pass with the unchanged golden identity | 0.189 |
+| `migration-managed-data55` | All 11 managed Data cases pass | 15.482 |
+| `migration-managed-instance56` | 10 pass; 1 native case ignored here and passed separately | 17.380 |
+| `migration-managed-captured57` | All 7 captured-execution cases pass | 33.417 |
+| `migration-managed-graph57` | Both Graph contract cases pass | 0.057 |
+| `migration-clippy57` | Strict workspace Clippy passes after test-only fixes | 97.088 |
+| `migration-managed-sdk50` | All 87 SDK cases pass | 0.150 |
+| `migration-runtime53` | All 46 Runtime cases pass | 162.755 |
+| `migration-extract53` | 22 pass; 1 release-only case ignored | 11.757 |
+| `migration-dependencies53` | All 3 dependency cases pass | 2.552 |
+
+The native runs use six source-built artifacts from build54 with complete
+recorded source provenance. The native57 cached refresh passes in 31.395
+seconds: all 116 recorded artifact inputs are hashed, and the six artifacts match build54
+byte for byte on `x86_64-unknown-linux-gnu`. No benchmark result is claimed.
+The required full Rust gate58 is **Not done**. The host disk filled during test compilation. The user removed generated Cargo output. Gate59 repeats the complete procedure with `CARGO_INCREMENTAL=0` and debug information level 1 for dev and test builds. These settings do not remove test assertions. Gate59 stops at the OCI fixture after 4,076.415 seconds. Its source manifest remains unchanged. The test-only correction retains the exact byte count, golden digest, and round-trip assertions. The complete workspace test build passes in `migration-oci-build60` in 3.139 seconds. No complete final pass is claimed for this later source.
+
+Long-running reactive supervision, per-port windows and window completion,
+start/inspect/stop/update/removal, authorized history, CLI/Control managed
+operations, historical replay, automatic restart, Data coordination polling,
+and the remaining quota audit are **Not done**. Finite receipt recovery is not
+a long-running recovery supervisor.
+
 ### Production code ledger
 
-The syntax-based count excludes tests, fixture helpers, comments, and blank
-lines. Moves cancel in the net result. It includes the retained reference
-crate and all new current owners. No source changed during this count.
+The current count60 follows the OCI fixture correction and the four-file retirement.
+It excludes tests, comments, and blank lines. Moves cancel in the net result;
+the retained Back source is included. No covered source changed during the
+count.
+
+| Baseline | Added production Rust | Removed production Rust | Net |
+| --- | ---: | ---: | ---: |
+| `6a25ba1b` | 12,965 | 5,136 | +7,829 |
+| Original reduction baseline `7b7b407a` | 44,212 | 30,387 | +13,825 |
+
+The finite managed deliverable adds 3,407 net production lines relative to
+`95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
+**Not done**. Another 19,825 net production lines must be removed relative to
+the current count to meet that target. No simplification or speed result is
+inferred from these counts.
+
+The record is `/tmp/araphor-oci-execution-count60.json`. Its selected source
+fingerprint is
+`6774e44ebda654a827dab6fe4389dbbd4b8e7e5d2b97d9ab4ca6f45176d2be78`.
+The earlier count58 has the same production totals. Its source fingerprint is
+`a19423ab11a6da3d5d67fb22f1f65cc2eb3674740b9d074fe218e0da7eae4243`.
+The test-only OCI correction changes no production count.
+
+#### Historical count42
+
+This is the historical count42 ledger at commit `95e9bb4d`, before the finite
+managed deliverable. It is not a count of the current worktree. The syntax
+count excludes tests, fixture helpers, comments, and blank lines. Moves cancel
+in the net result. It includes the reference crate and new owners at that
+source state. No source changed during that count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
 | `6a25ba1b` | 9,384 | 4,962 | +4,422 |
 | Original reduction baseline `7b7b407a` | 40,827 | 30,409 | +10,418 |
 
-The required net reduction of 6,000 production lines is **Not done**. Relative
-to the original baseline, another 16,418 net lines must be removed to meet it.
+The required net reduction of 6,000 production lines is **Not done**. At that
+historical source state, another 16,418 net lines were required relative to
+the original baseline. These values do not measure the current deliverable.
 The count record is `/tmp/araphor-oci-execution-count42.json`; the selected
 source fingerprint is
 `1d9c8e57c7c8dbc2d45ca1b11d5fe0022e5ca5827f8ad4c06bc73fb6bcce0f69`.
@@ -149,8 +275,8 @@ credit against the production Rust target.
 
 ## Retired finite reference files
 
-The current owners and mapped assertions cover 29 complete reference files.
-Those duplicate leaves are removed after the focused checks. No test rule is
+The earlier current owners and mapped assertions cover 29 complete reference
+files. Those duplicate leaves were removed after the focused checks. No test rule is
 removed from the current owners. Final Rust qualification of this source
 state is **Done** in `migration-final-ci42`. The complete migration remains
 **Not done**.
@@ -167,21 +293,36 @@ state is **Done** in `migration-final-ci42`. The complete migration remains
 
 The [retirement record](../../recovery/araphor-analysis-finite-retirement-20261019.json)
 lists every path, source checksum, current owner, and required assertion.
-The recovery archive checksum was verified before removal. The 179 remaining
-reference files retain their original content. Mixed execution, capture,
-publication, inspection, recovery, and producer files remain available.
-The 4,243 removed lines are a gross duplicate count. The ledger above states
-the workspace net result.
+The recovery archive checksum was verified before that removal. At that point,
+179 reference files retained their original content. Mixed execution, capture,
+publication, inspection, recovery, and producer files remained available.
+The 4,243 removed lines are a gross duplicate count for that retirement. The
+historical ledger above states its workspace net result.
+
+The [additional retirement record](../../recovery/araphor-analysis-managed-retirement-20261019.json)
+removes exactly these four complete files:
+`graph/contract.rs`, `graph/contract/tests.rs`, `model/input.rs`, and
+`model/operation.rs`. Current Graph contract tests preserve the descriptor
+rules. Native SQL contract tests preserve typed inputs, parameters, prior-state
+indices, conversion, and configured limits. Captured execution owns the cut,
+control, memory leases, and operation permit. The extra source count is 178
+production lines; the test-only file contributes zero. This is a gross
+reference removal, not the current workspace net change.
+
+There are now 33 retired files and 175 remaining baseline files. The recovery
+archive retains all 208 originals. The current final Rust gate is pending;
+complete migration and reference removal remain **Not done**.
 
 ## Root exports
 
 The reference `src/lib.rs` exports execution owners, duplicated model output
 wrappers, and local quota types. Active Analysis exports finite Graph,
-Context, notification operations, and the current reactive Discovery owner.
-Package Runtime owns native and Wasm limits. Query owns execution receipts.
-Do not recreate the old owner facade or move its glob imports. Each current
-crate owns its structured error type. The remaining managed owner must use
-these current APIs.
+Context, notification operations, the current reactive Discovery owner, and
+the finite Instance owner with focused qualification. Package Runtime owns native and Wasm
+limits. Query owns captured execution and receipts. Data owns managed attempts
+and atomic result/state transactions. Do not recreate the old owner facade or
+move its glob imports. Each current crate owns its structured error type. The
+remaining long-running owner must use these current APIs.
 
 ## Recovery custody
 
@@ -193,8 +334,8 @@ tests, and independently checked reconstruction manifests. Do not remove it
 during source retirement. This record does not claim a remote push.
 
 Local commit `d9369555` retains the archive and its checksum. The archive
-contains the complete recovered source. The 29 finite files listed above
-are retired; the other 179 baseline files remain unchanged.
+contains the complete recovered source. The 29 earlier leaves and four additional finite files are retired; the other
+175 baseline files remain unchanged.
 
 ## Back package, model and notification inventory
 
@@ -262,10 +403,10 @@ The table classifies rules, not whole features as obsolete. A current SDK valida
 
 ### Managed instance contract
 
-The current source has no Data type named `PackageInvocation`. Current values are Query `Invocation {id, seed, inputs, checkpoints, limits}`, `DefinitionOutput {snapshot, batches, calls}`, read-only `CallResult::{evaluation, output}` accessors, and Data `PackageActivationV1`, `PackageCommitV1`, `ResultContext`.
+The current source has no Data type named `PackageInvocation`. Query retains `Invocation {id, seed, inputs, checkpoints, limits}`, `DefinitionOutput {snapshot, batches, calls}`, and read-only `CallResult::{evaluation, output}` accessors. New Data managed types are `ManagedSpec`, `ManagedManifest`, `ManagedRead`, `ManagedRequest`, `ManagedAttempt`, `ManagedCommit`, and `ManagedReceipt`. The finite Instance path uses those types; the older `PackageActivationV1` and `PackageCommitV1` remain separate contracts.
 
 1. Keep immutable image retention, immutable definition admission and managed lifetime separate. Installing an image or admitting a definition starts no work. A managed instance pins tenant, selection, exact definition snapshot/digest, exact image closures and grants.
-2. Persist a stable call identity for each call site in that snapshot. Current finite numeric call IDs are not a restart contract. Two uses of the same export must have separate state. Do not put call IDs in separate scope strings: `package_dependency_current` requires the same scope for composed package dependencies.
+2. Persist a stable call identity for each call site in that snapshot. A bare finite numeric call ID is not a restart contract. The new versioned manifest binds each ID to the exact definition, native arguments, and image pins. Two uses of the same export must have separate state. Do not put call IDs in separate scope strings: `package_dependency_current` requires the same scope for composed package dependencies.
 3. Capture each attempt once. Its immutable identity includes instance generation, exact definition and call pins, fixed logical time/seed, selected input receipt, prior checkpoint revisions and the authorized selection. Persist an attempt before guest execution when retries must retain a capture across process failure. A retry returns the original receipt, or fails if its request differs. It must not silently select a newer view. A new view needs a new attempt identity.
 4. Use the current native source capture. `ArrowSnapshot` already supplies the extraction identity, captured relation revision, exact result dependencies, context refs and witnesses. `CallResult` supplies effective evaluation parameters, complete input revision/coverage metadata and full validated output. Do not publish only the selected Arrow relation.
 5. Choose guarded prior state after native child inputs are collected and before the target executes. Preserve Back `prepare_model`: reuse state only when prior input revisions AND coverage match, and no rebuild was requested. A changed snapshot resets state. Explicit finite caller-supplied state can keep its existing caller-owned contract.
@@ -276,18 +417,15 @@ The current source has no Data type named `PackageInvocation`. Current values ar
 
 `PackageKeyV1 {tenant, scope, package, export}` and the single-call public commit API need an actual managed call identity and atomic step edit. They cannot represent multiple stateful calls to the same export by renaming metadata alone. Retained within-step dependency edges also need admitted call metadata: current `DefinitionOutput.calls` contains evaluation/export and output, while package/image/target identity is on each admitted `PackageCall` in the native plan.
 
-The next state boundary is the existing
-[Data package extraction](../../crates/araphor-data/src/analysis/extraction/package.rs).
-This owner reads activations, retained result context, and checkpoint packets
-with the same connection as source capture. Canonical TableProviders do not
-currently expose package checkpoint state. Extend the captured state request
-and result for the exact managed calls. PackageExec must select eligible prior
-state from that captured result after it collects native inputs. Execute the
-guest once. Do not read prior state from a new live connection, or execute a
-subscription result again through the finite API. A stale dependency head and
-the call's own prior state have different rules: prior state can be eligible
-when its input revisions and coverage still match. This connection is
-**Not done**.
+The new [managed capture](../../crates/araphor-data/src/analysis/managed/capture.rs)
+extends the existing source read with exact managed prior state on the same
+connection. Canonical TableProviders do not expose a separate checkpoint read.
+PackageExec selects eligible prior state after native input collection and
+executes the guest once. The finite connection is present but its qualification
+is **Not done**. A stale dependency head and the call's own prior state have
+different rules: prior state can be eligible when input revisions, coverage,
+and parameters still match. Long-running subscription steps do not yet use
+this managed transaction path.
 
 ### Public lifecycle
 
@@ -315,8 +453,8 @@ Data `analysis/extraction/tables/notification.rs` supplies acknowledgement, retr
 Query now reserves measured SDK encoding scratch and acquired guest output
 capacity before the runtime call. The worker retains that lease through
 output copy and release. Explicit quota failures and full pool recovery have
-focused proof. SDK defaults and Query/Data bulk quotas still require the
-separate disabled-default change recorded above.
+focused proof. The new SDK defaults and Query/Data bulk changes require the
+separate qualification recorded above.
 
 ## Graph compatibility inventory
 
@@ -498,6 +636,11 @@ MemTable inputs, native Planner, and Query Session execution. No second Engine,
 SQL framework, legacy reader, or polling loop is required.
 
 ## Focused qualification and migration order
+
+This section records the earlier finite source before the later managed
+implementation. Its pending results and migration order are historical. Read
+[Finite managed source](#finite-managed-source-focused-qualification) for the
+current source and qualification.
 
 The 2026-10-19 focused results below replace earlier pending notes for these
 finite families. Logs are in `/tmp/araphor-oci-execution`.

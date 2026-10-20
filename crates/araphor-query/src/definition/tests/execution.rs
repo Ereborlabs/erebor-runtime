@@ -376,6 +376,7 @@ async fn physical_sql_return_retains_contract() -> TestResult {
 
 async fn accumulation(target: &str) -> TestResult {
     let fixture = Fixture::installed(&component(target, "accumulate")?)?;
+    assert_eq!(fixture.engine.limits(), &Limits::default());
     let before = fixture.engine.store().meta()?;
     for (source, total, repartition) in [
         (
@@ -478,8 +479,8 @@ async fn physical_native_complete_relation() -> TestResult {
 #[tokio::test]
 async fn physical_nested_calls_share_permit() -> TestResult {
     let fixture = Fixture::limits(Limits {
-        global_evaluations: 1,
-        tenant_evaluations: 1,
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
         ..Default::default()
     })?;
     fixture.install(&Fixture::bundle())?;
@@ -706,8 +707,8 @@ async fn physical_definition_denies_other_tenant() -> TestResult {
 
 fn capacity_limits() -> Limits {
     Limits {
-        global_evaluations: 1,
-        tenant_evaluations: 1,
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
         input_bytes: 4 * 1024 * 1024,
         input_capacity: Some(4 * 1024 * 1024),
         output_capacity: Some(1024 * 1024),
@@ -1353,3 +1354,101 @@ async fn sql_struct_join_inputs() -> TestResult {
     );
     Ok(())
 }
+
+impl Fixture {
+    async fn assembled_input(
+        &self,
+        batch: &sdk::RecordBatch,
+        prior: &sdk::Checkpoint,
+    ) -> crate::Result<DefinitionOutput> {
+        let mut session = self.engine.session(
+            AnalysisSelectionV1::tenant([1; 16]),
+            &AnalysisReadControl::default(),
+            NOW,
+        )?;
+        session.register("total_input", batch.schema(), std::slice::from_ref(batch))?;
+        let prepared = session.prepare_definition(&Fixture::sql(
+            r#"SELECT * FROM "fixture"."r1".count(source => (SELECT value FROM total_input), increment => 2)"#,
+        )).await?;
+        let calls =
+            Fixture::calls(&prepared.plan).map_err(|source| crate::Error::Sql { source })?;
+        let mut request = invocation("total-input");
+        request.checkpoints.insert(calls[0].id(), prior.clone());
+        session.execute_definition(&prepared, request).await
+    }
+}
+
+#[tokio::test]
+async fn combined_input_respects_limit() -> TestResult {
+    let batch = sdk::RecordBatch::try_new(
+        Arc::new(Fixture::schema("value")),
+        vec![Arc::new(UInt64Array::from((0..4096).collect::<Vec<u64>>()))],
+    )?;
+    let prior = sdk::Checkpoint {
+        version: 2,
+        datasets: vec![sdk::Dataset {
+            name: "state".into(),
+            batches: vec![sdk::RecordBatch::try_new(
+                Arc::new(Fixture::schema("total")),
+                vec![Arc::new(UInt64Array::from((0..4096).collect::<Vec<u64>>()))],
+            )?],
+        }],
+    };
+    let fixture = Fixture::installed(&Fixture::bundle())?;
+    assert_eq!(fixture.engine.limits().input_capacity, None);
+    let result = fixture.assembled_input(&batch, &prior).await?;
+    let evaluation = result
+        .calls
+        .values()
+        .next()
+        .ok_or("call absent")?
+        .evaluation();
+    let total = evaluation.allocated_bytes();
+    assert!(evaluation.inputs[0].data.allocated_bytes() < total - 1);
+    assert!(prior.datasets[0].allocated_bytes() < total - 1);
+    assert!(
+        evaluation
+            .parameters
+            .as_ref()
+            .ok_or("parameters absent")?
+            .get_array_memory_size()
+            < total - 1
+    );
+    drop(result);
+    for (input_bytes, accepted) in [(total - 1, false), (total, true)] {
+        let fixture = Fixture::limits(Limits {
+            input_bytes,
+            input_capacity: None,
+            ..Limits::default()
+        })?;
+        fixture.install(&Fixture::bundle())?;
+        let before = fixture.engine.store().meta()?;
+        let result = fixture.assembled_input(&batch, &prior).await;
+        if accepted {
+            let output = result?;
+            assert_eq!(
+                output
+                    .calls
+                    .values()
+                    .next()
+                    .ok_or("call absent")?
+                    .evaluation()
+                    .allocated_bytes(),
+                total
+            );
+        } else {
+            let error = result.err().ok_or("combined input limit was ignored")?;
+            assert_eq!(crate::Failure::from(&error), crate::Failure::InputTooLarge);
+            assert!(
+                matches!(&error, crate::Error::Sql { source }
+                    if matches!(source.find_root(), DataFusionError::ResourcesExhausted(resource)
+                        if resource == "package input bytes")),
+                "{error:?}"
+            );
+        }
+        assert_eq!(fixture.engine.store().meta()?, before);
+    }
+    Ok(())
+}
+
+mod contract;

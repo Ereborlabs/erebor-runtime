@@ -27,6 +27,7 @@ pub struct ArrowSnapshot {
     pub mutable_discovery: bool,
     pub received_min: Option<u64>,
     pub next_change: Option<u64>,
+    managed: Option<araphor_data::ManagedCapture>,
     _metadata: MemoryReservation,
 }
 
@@ -40,6 +41,10 @@ impl std::fmt::Debug for ArrowSnapshot {
 }
 
 impl ArrowSnapshot {
+    pub fn managed(&self) -> Option<&araphor_data::ManagedCapture> {
+        self.managed.as_ref()
+    }
+
     pub fn contexts(&self) -> impl Iterator<Item = &AnalysisContextRefV1> {
         self.page
             .extraction
@@ -343,8 +348,12 @@ impl SourceSnapshot {
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<Captured> {
         let reservation = self.memory.prepare_input(self.limits.input_bytes)?;
+        let prepaid =
+            self.memory.input_capacity().is_some() || self.limits.input_bytes != usize::MAX;
         let mut limits = self.limits;
-        limits.input_bytes = reservation.size();
+        if prepaid {
+            limits.input_bytes = reservation.size();
+        }
         let constrained = limits.input_bytes < self.limits.input_bytes;
         let data_error = |error| {
             if constrained
@@ -387,26 +396,33 @@ impl SourceSnapshot {
                 outputs,
                 limits: inputs.limits,
             });
-        let mut page = self
-            .store
-            .read_tables(
-                &selection,
-                AnalysisTableRead {
-                    requests,
-                    event_ranges: self.inputs.as_ref().map(|inputs| inputs.ranges.as_slice()),
-                    inputs,
-                    mode: match mode {
-                        ReadMode::Snapshot => AnalysisReadModeV1::Complete,
-                        ReadMode::Page(after) => AnalysisReadModeV1::Page(after),
-                        ReadMode::Changes(after) => AnalysisReadModeV1::Changes(after),
-                        ReadMode::Metadata => AnalysisReadModeV1::Metadata,
-                    },
-                    now: self.now,
-                },
-                limits,
-                control,
-            )
-            .map_err(data_error)?;
+        let read = AnalysisTableRead {
+            requests,
+            event_ranges: self.inputs.as_ref().map(|inputs| inputs.ranges.as_slice()),
+            inputs,
+            mode: match mode {
+                ReadMode::Snapshot => AnalysisReadModeV1::Complete,
+                ReadMode::Page(after) => AnalysisReadModeV1::Page(after),
+                ReadMode::Changes(after) => AnalysisReadModeV1::Changes(after),
+                ReadMode::Metadata => AnalysisReadModeV1::Metadata,
+            },
+            now: self.now,
+        };
+        let (mut page, managed) = match &self.managed {
+            Some(managed) => {
+                let captured = self
+                    .store
+                    .read_managed_tables(&selection, managed, read, limits, control)
+                    .map_err(data_error)?;
+                (captured.page, Some(captured.state))
+            }
+            None => (
+                self.store
+                    .read_tables(&selection, read, limits, control)
+                    .map_err(data_error)?,
+                None,
+            ),
+        };
         let overflow = || {
             data_error(araphor_data::Error::AnalysisInputTooLarge {
                 resource: "selected input bytes",
@@ -535,6 +551,11 @@ impl SourceSnapshot {
                 ));
             }
         }
+        if let Some(managed) = &managed {
+            for batch in managed.datasets().flat_map(|data| &data.batches) {
+                self.memory.retain_input(batch, &reservation)?;
+            }
+        }
         let mut witnesses = std::mem::take(&mut page.extraction.witnesses);
         if self.inputs.is_some() {
             for witness in &mut witnesses {
@@ -553,6 +574,11 @@ impl SourceSnapshot {
         witnesses
             .dedup_by(|left, right| left.identity == right.identity && left.cursor == right.cursor);
         let metadata = std::mem::size_of::<ArrowSnapshot>()
+            .saturating_add(
+                managed
+                    .as_ref()
+                    .map_or(0, araphor_data::ManagedCapture::metadata_bytes),
+            )
             .saturating_add(
                 page.extraction
                     .allocation_bytes()
@@ -595,7 +621,7 @@ impl SourceSnapshot {
                 })
         });
         let retained = removed.saturating_add(source_bytes);
-        if metadata.saturating_add(retained) > reservation.size() {
+        if prepaid && metadata.saturating_add(retained) > reservation.size() {
             let source = DataFusionError::ResourcesExhausted(
                 "source metadata exceeds the admitted input".into(),
             );
@@ -618,6 +644,7 @@ impl SourceSnapshot {
             page,
             selection,
             witnesses,
+            managed,
             _metadata: reservation,
         });
         Ok(Captured {

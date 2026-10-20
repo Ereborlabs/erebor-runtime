@@ -1,4 +1,4 @@
-use arrow_ipc::MessageHeader;
+use arrow_ipc::{Message, MessageHeader};
 
 use crate::{Error, ErrorCode, Limits, Model, Result};
 
@@ -9,25 +9,36 @@ pub(super) struct IpcFrames<'a> {
 }
 
 impl<'a> IpcFrames<'a> {
+    pub(super) fn validate_envelope(bytes: &'a [u8]) -> Result<()> {
+        let mut frames = Self {
+            bytes,
+            rows: 0,
+            batches: 0,
+        };
+        while let Some((message, _, _)) = frames.next()? {
+            match message.header_type() {
+                MessageHeader::RecordBatch => {
+                    Self::uncompressed(message.header_as_record_batch().ok_or_else(Self::invalid)?)?
+                }
+                MessageHeader::DictionaryBatch => {
+                    let dictionary = message
+                        .header_as_dictionary_batch()
+                        .ok_or_else(Self::invalid)?;
+                    Self::uncompressed(dictionary.data().ok_or_else(Self::invalid)?)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn validate(bytes: &'a [u8], limits: Limits) -> Result<()> {
         let mut frames = Self {
             bytes,
             rows: 0,
             batches: 0,
         };
-        while !frames.bytes.is_empty() {
-            let mut length = frames.length()?;
-            if length == u32::MAX {
-                length = frames.length()?;
-            }
-            if length == 0 {
-                if !frames.bytes.is_empty() {
-                    return Err(Self::invalid());
-                }
-                break;
-            }
-            let metadata = frames.take(length as usize)?;
-            let message = arrow_ipc::root_as_message(metadata).map_err(|_| Self::invalid())?;
+        while let Some((message, _, _)) = frames.next()? {
             match message.header_type() {
                 MessageHeader::Schema => {
                     let schema = message.header_as_schema().ok_or_else(Self::invalid)?;
@@ -39,19 +50,57 @@ impl<'a> IpcFrames<'a> {
                 }
                 MessageHeader::RecordBatch => {
                     let batch = message.header_as_record_batch().ok_or_else(Self::invalid)?;
-                    if batch.compression().is_some() {
-                        return Err(Error::contract(
-                            ErrorCode::Incompatible,
-                            "compressed arrow stream",
-                        ));
+                    frames.record(batch, limits)?;
+                }
+                _ => {
+                    return Err(Error::contract(
+                        ErrorCode::Incompatible,
+                        "arrow message type",
+                    ))
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn decoding_bytes(bytes: &'a [u8], limits: Limits) -> Result<usize> {
+        let mut frames = Self {
+            bytes,
+            rows: 0,
+            batches: 0,
+        };
+        let mut buffers = DecodeBuffers::default();
+        buffers.add_aligned(bytes.len())?;
+        while let Some((message, body, metadata)) = frames.next()? {
+            // StreamDecoder can copy the final message into its scratch buffer.
+            buffers.add_aligned(metadata)?;
+            match message.header_type() {
+                MessageHeader::Schema => {
+                    let schema = message.header_as_schema().ok_or_else(Self::invalid)?;
+                    let fields = SchemaBudget::validate(schema, limits)?;
+                    // An empty variable-size field has one offset buffer.
+                    buffers.add(fields.checked_mul(64).ok_or_else(DecodeBuffers::limit)?)?;
+                }
+                MessageHeader::RecordBatch => {
+                    let batch = message.header_as_record_batch().ok_or_else(Self::invalid)?;
+                    frames.record(batch, limits)?;
+                    for buffer in batch.buffers().ok_or_else(Self::invalid)? {
+                        let offset =
+                            usize::try_from(buffer.offset()).map_err(|_| Self::invalid())?;
+                        let length =
+                            usize::try_from(buffer.length()).map_err(|_| Self::invalid())?;
+                        offset
+                            .checked_add(length)
+                            .filter(|end| *end <= body.len())
+                            .ok_or_else(Self::invalid)?;
+                        // The native reader can copy an unaligned IPC buffer.
+                        buffers.add_aligned(length)?;
+                        buffers.add_owned(length)?;
                     }
-                    frames.rows = frames
-                        .rows
-                        .checked_add(u64::try_from(batch.length()).map_err(|_| Self::invalid())?)
-                        .ok_or_else(|| Error::contract(ErrorCode::Limit, "stream rows"))?;
-                    frames.batches = frames.batches.saturating_add(1);
-                    if frames.rows > limits.max_rows || frames.batches > limits.max_batches {
-                        return Err(Error::contract(ErrorCode::Limit, "stream rows or batches"));
+                    for node in batch.nodes().ok_or_else(Self::invalid)? {
+                        let length = usize::try_from(node.length()).map_err(|_| Self::invalid())?;
+                        // A nullable parent can require child validity storage.
+                        buffers.add_aligned(length.div_ceil(8))?;
                     }
                 }
                 _ => {
@@ -61,7 +110,50 @@ impl<'a> IpcFrames<'a> {
                     ))
                 }
             }
-            frames.take(usize::try_from(message.bodyLength()).map_err(|_| Self::invalid())?)?;
+        }
+        Ok(buffers.bytes)
+    }
+
+    fn next(&mut self) -> Result<Option<(Message<'a>, &'a [u8], usize)>> {
+        if self.bytes.is_empty() {
+            return Ok(None);
+        }
+        let mut length = self.length()?;
+        if length == u32::MAX {
+            length = self.length()?;
+        }
+        if length == 0 {
+            if !self.bytes.is_empty() {
+                return Err(Self::invalid());
+            }
+            return Ok(None);
+        }
+        let metadata = self.take(length as usize)?;
+        let message = arrow_ipc::root_as_message(metadata).map_err(|_| Self::invalid())?;
+        let body =
+            self.take(usize::try_from(message.bodyLength()).map_err(|_| Self::invalid())?)?;
+        Ok(Some((message, body, metadata.len())))
+    }
+
+    fn uncompressed(batch: arrow_ipc::RecordBatch<'_>) -> Result<()> {
+        if batch.compression().is_some() {
+            return Err(Error::contract(
+                ErrorCode::Incompatible,
+                "compressed arrow stream",
+            ));
+        }
+        Ok(())
+    }
+
+    fn record(&mut self, batch: arrow_ipc::RecordBatch<'_>, limits: Limits) -> Result<()> {
+        Self::uncompressed(batch)?;
+        self.rows = self
+            .rows
+            .checked_add(u64::try_from(batch.length()).map_err(|_| Self::invalid())?)
+            .ok_or_else(|| Error::contract(ErrorCode::Limit, "stream rows"))?;
+        self.batches = self.batches.saturating_add(1);
+        if self.rows > limits.max_rows || self.batches > limits.max_batches {
+            return Err(Error::contract(ErrorCode::Limit, "stream rows or batches"));
         }
         Ok(())
     }
@@ -90,7 +182,7 @@ struct SchemaBudget {
 }
 
 impl SchemaBudget {
-    fn validate(schema: arrow_ipc::Schema<'_>, limits: Limits) -> Result<()> {
+    fn validate(schema: arrow_ipc::Schema<'_>, limits: Limits) -> Result<usize> {
         let mut budget = Self {
             fields: 0,
             bytes: 0,
@@ -101,7 +193,7 @@ impl SchemaBudget {
         for field in schema.fields().into_iter().flatten() {
             budget.field(field, 0)?;
         }
-        Ok(())
+        Ok(budget.fields)
     }
 
     fn field(&mut self, field: arrow_ipc::Field<'_>, depth: usize) -> Result<()> {
@@ -142,5 +234,44 @@ impl SchemaBudget {
             return Err(Error::contract(ErrorCode::Limit, "arrow schema bytes"));
         }
         Ok(())
+    }
+}
+
+#[derive(Default)]
+struct DecodeBuffers {
+    bytes: usize,
+}
+
+impl DecodeBuffers {
+    fn add(&mut self, bytes: usize) -> Result<()> {
+        self.bytes = self.bytes.checked_add(bytes).ok_or_else(Self::limit)?;
+        Ok(())
+    }
+
+    fn add_aligned(&mut self, bytes: usize) -> Result<()> {
+        self.add(Self::aligned(bytes)?)
+    }
+
+    fn add_owned(&mut self, bytes: usize) -> Result<()> {
+        // MutableArrayData starts offsets with four bytes in a 64-byte buffer.
+        let required = bytes.checked_add(4).ok_or_else(Self::limit)?;
+        let capacity = if required <= 64 {
+            64
+        } else {
+            Self::aligned(required)?.max(128)
+        };
+        // This also bounds a primitive buffer copied once from zero capacity.
+        self.add(capacity)
+    }
+
+    fn aligned(bytes: usize) -> Result<usize> {
+        bytes
+            .checked_add(63)
+            .map(|bytes| bytes & !63)
+            .ok_or_else(Self::limit)
+    }
+
+    fn limit() -> Error {
+        Error::contract(ErrorCode::Limit, "arrow decode buffers")
     }
 }

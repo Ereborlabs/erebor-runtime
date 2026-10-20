@@ -15,9 +15,11 @@ use datafusion::physical_plan::collect;
 use super::{PackageCall, PreparedDefinition};
 use crate::execution::{Engine, Limits};
 
+mod captured;
 mod collision;
 mod execution;
 mod guest;
+mod managed;
 mod parity;
 mod subscription;
 
@@ -200,6 +202,7 @@ async fn native_package_call_contract() -> TestResult {
     assert_eq!(call.package(), &bundle.root);
     assert_eq!(call.export(), "count");
     assert_eq!(call.output(), "result");
+    assert!(!call.arguments().is_empty());
     assert_eq!(call.descriptor(), &bundle.artifacts[0].descriptor);
     assert_eq!(call.schema().as_arrow(), &Fixture::schema("value"));
     let inputs = call.inputs();

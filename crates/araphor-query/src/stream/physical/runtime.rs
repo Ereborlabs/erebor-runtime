@@ -8,7 +8,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use snafu::ResultExt as _;
 
 use super::{kernel::Kernel, Compiled, Mode, SubscribeExec};
-use crate::execution::{Engine, Read};
+use crate::execution::{Engine, PhysicalStream, Read};
 use crate::follow::Operation;
 use crate::sources::{ArrowSnapshot, Changes, JournalExec};
 use crate::stream::progress::{Progress, Wake};
@@ -167,7 +167,7 @@ impl Runtime {
             let store = Arc::clone(self.run.session.engine().store());
             let selection = selection.clone();
             let run = Arc::clone(&self.run);
-            let scope = self.run.session.token();
+            let scope = self.run.session.token()?;
             match Engine::blocking(stage, scope, move || {
                 store
                     .dependency_revision_for(&selection, &run.sources, &worker)
@@ -232,7 +232,13 @@ impl Runtime {
         session.calls = Some(Arc::clone(&calls));
         let execution = async {
             let output = if self.run.operation == Operation::Append {
-                let (snapshot, mut stream, permit, control, reservation) = session
+                let PhysicalStream {
+                    snapshot,
+                    mut stream,
+                    permit,
+                    control,
+                    reservation,
+                } = session
                     .start_physical(
                         Arc::clone(&self.input),
                         Arc::clone(&self.context),
@@ -293,7 +299,13 @@ impl Runtime {
                         state.task_ctx(),
                     )
                 };
-                let (snapshot, stream, permit, control, reservation) = session
+                let PhysicalStream {
+                    snapshot,
+                    stream,
+                    permit,
+                    control,
+                    reservation,
+                } = session
                     .start_physical(physical, context, &self.run.sources, Read::Snapshot, permit)
                     .await?;
                 self.check_store(&snapshot.page.extraction.meta)?;

@@ -197,7 +197,14 @@ impl WasmExecution {
     ) -> Result<sdk::Output> {
         control.check()?;
         let prepared = self.prepare(bytes, control)?;
-        self.evaluate_prepared(descriptor, evaluation, &prepared, control, copy_bytes)
+        self.evaluate_prepared(
+            descriptor,
+            evaluation,
+            &prepared,
+            control,
+            evaluation.context.limits,
+            copy_bytes,
+        )
     }
 
     pub(crate) fn evaluate_prepared(
@@ -206,6 +213,7 @@ impl WasmExecution {
         evaluation: &sdk::Evaluation,
         prepared: &PreparedComponent,
         control: &AnalysisReadControl,
+        output_limits: sdk::Limits,
         copy_bytes: Option<usize>,
     ) -> Result<sdk::Output> {
         use std::borrow::Cow;
@@ -228,9 +236,13 @@ impl WasmExecution {
             .context(crate::AnalysisContractSnafu)?;
         control.check()?;
         let output = self.invoke_reserved(prepared, input.into(), control, copy_bytes)?;
-        let decoded = sdk::wire::Output::from(output)
-            .decode(descriptor, &evaluation)
-            .context(crate::AnalysisContractSnafu)?;
+        let output = sdk::wire::Output::from(output);
+        let decoded = if copy_bytes.is_some() {
+            output.decode_bounded(descriptor, &evaluation, output_limits)
+        } else {
+            output.decode(descriptor, &evaluation)
+        }
+        .context(crate::AnalysisContractSnafu)?;
         control.check()?;
         Ok(decoded)
     }

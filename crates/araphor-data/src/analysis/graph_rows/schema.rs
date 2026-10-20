@@ -70,7 +70,11 @@ impl GraphRows {
         if let Some(shape) = EXPECTED.get() {
             return Ok(shape);
         }
-        let expected = super::super::AnalysisStore::open_native(std::path::Path::new(":memory:"))?;
+        let expected = super::super::AnalysisStore::open_native(
+            std::path::Path::new(":memory:"),
+            Default::default(),
+            duckdb::AccessMode::Automatic,
+        )?;
         expected
             .execute_batch(Self::SCHEMA)
             .context(AnalysisDatabaseSnafu {

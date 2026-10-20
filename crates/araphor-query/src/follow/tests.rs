@@ -266,7 +266,10 @@ async fn next(subscription: &mut Subscription) -> Update {
 
 #[test]
 fn lazy_native_shape() {
-    let fixture = Fixture::new(Limits::default());
+    let fixture = Fixture::new(Limits {
+        tenant_evaluations: Some(1),
+        ..Limits::default()
+    });
     let clock = TestClock::new(2_000_000_000);
     let held = fixture
         .engine
@@ -1404,7 +1407,10 @@ async fn native_append_execution() {
 
 #[tokio::test]
 async fn evaluation_wait_and_cancel() {
-    let fixture = Fixture::new(Limits::default());
+    let fixture = Fixture::new(Limits {
+        tenant_evaluations: Some(1),
+        ..Limits::default()
+    });
     fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
     let held = fixture
         .engine
@@ -1476,7 +1482,10 @@ async fn health_keeps_cursor() {
 
 #[tokio::test]
 async fn native_subscribe_execution() {
-    let fixture = Fixture::new(Limits::default());
+    let fixture = Fixture::new(Limits {
+        tenant_evaluations: Some(1),
+        ..Limits::default()
+    });
     fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
     let control = Arc::new(AnalysisReadControl::default());
     let (plan, sources) = fixture
@@ -1783,7 +1792,10 @@ async fn native_subscribe_execution() {
 #[tokio::test]
 async fn count_consumes_committed_changes() {
     let fixture = Fixture::open(
-        Limits::default(),
+        Limits {
+            input_bytes: 64 * 1024 * 1024,
+            ..Limits::default()
+        },
         araphor_data::RetentionLimitsV1 {
             raw_max_age_ns: Some(24 * 60 * 60 * 1_000_000_000),
             ..Default::default()

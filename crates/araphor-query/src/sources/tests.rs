@@ -490,6 +490,7 @@ async fn native_source_demands() -> TestResult {
         Some(Duration::from_secs(5)),
         20_000,
         Arc::clone(fixture.engine.memory()),
+        None,
     );
     let receipt = source.capture(&requests, received, ReadMode::Snapshot)?;
     assert_eq!(receipt.witnesses.len(), 1);
@@ -737,6 +738,7 @@ async fn native_capture_isolated() -> TestResult {
             Some(Duration::from_secs(5)),
             20_000,
             Arc::clone(fixture.engine.memory()),
+            None,
         )
     };
     let first = capture(fixture.selection());
@@ -807,6 +809,7 @@ async fn native_stream_keeps_metadata() -> TestResult {
         Some(Duration::from_secs(5)),
         20_000,
         Arc::clone(&memory),
+        None,
     );
     let mut requests = sources.clone();
     let received = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical))?;
@@ -911,6 +914,7 @@ async fn native_ports_share_cut() -> TestResult {
         Some(Duration::from_secs(5)),
         20_000,
         Arc::clone(fixture.engine.memory()),
+        None,
     );
     let receipt = capture.capture(&requests, received.clone(), ReadMode::Snapshot)?;
     assert_eq!(receipt.witnesses.len(), 1);

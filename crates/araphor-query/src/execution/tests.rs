@@ -24,6 +24,7 @@ use crate::planner::Planner;
 use crate::sources::SourceSnapshot;
 use crate::Error;
 
+mod limits;
 mod views;
 
 struct Fixture {
@@ -213,7 +214,11 @@ fn batch(value: i64) -> RecordBatch {
 
 #[tokio::test]
 async fn waiting_preserves_global_capacity() {
-    let fixture = Fixture::new(Limits::default());
+    let fixture = Fixture::new(Limits {
+        global_evaluations: Some(2),
+        tenant_evaluations: Some(1),
+        ..Limits::default()
+    });
     let held = fixture.engine.reserve_evaluation([1; 16]).unwrap();
     {
         let waiting = fixture.engine.acquire_evaluation([1; 16]);
@@ -998,8 +1003,8 @@ async fn execute_in_blocking_worker() {
 #[tokio::test(flavor = "current_thread")]
 async fn buffers_outlive_producer_permits() {
     let fixture = Fixture::new(Limits {
-        global_evaluations: 1,
-        tenant_evaluations: 1,
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
         ..Limits::default()
     });
     let (plan, sources) = local_plan(&fixture.engine);
@@ -1068,8 +1073,8 @@ async fn buffers_outlive_producer_permits() {
 #[test]
 fn cancelled_sessions_release_capacity() {
     let fixture = Fixture::new(Limits {
-        global_evaluations: 1,
-        tenant_evaluations: 1,
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
         ..Limits::default()
     });
     let cancelled = control();
@@ -1089,8 +1094,8 @@ fn cancelled_sessions_release_capacity() {
 #[test]
 fn idle_sessions_skip_admission() {
     let fixture = Fixture::new(Limits {
-        global_evaluations: 1,
-        tenant_evaluations: 1,
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
         ..Limits::default()
     });
     let idle = (1..=8)
@@ -1348,7 +1353,13 @@ async fn physical_preserves_context() {
         .session(AnalysisSelectionV1::new([1; 16], vec![]), &operation, 1)
         .unwrap();
     let permit = Arc::new(fixture.engine.reserve_evaluation([1; 16]).unwrap());
-    let (snapshot, stream, _permit, _control, _memory) = session
+    let super::PhysicalStream {
+        snapshot,
+        stream,
+        permit: _permit,
+        control: _control,
+        reservation: _memory,
+    } = session
         .start_physical(
             physical,
             Arc::clone(&context),
@@ -1464,8 +1475,8 @@ impl PartitionStream for Gate {
 #[tokio::test(flavor = "current_thread")]
 async fn cancellation_stops_native_producers() {
     let fixture = Fixture::new(Limits {
-        global_evaluations: 1,
-        tenant_evaluations: 1,
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
         ..Limits::default()
     });
     let gate = Gate {
@@ -1533,7 +1544,10 @@ async fn cancellation_stops_native_producers() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn local_producer_cancel() {
-    let fixture = Fixture::new(Limits::default());
+    let fixture = Fixture::new(Limits {
+        tenant_evaluations: Some(1),
+        ..Limits::default()
+    });
     let gate = Gate {
         schema: schema(),
         entered: Arc::new(Notify::new()),
@@ -1584,7 +1598,11 @@ async fn local_producer_cancel() {
 
 #[test]
 fn local_stream_keeps_capacity() {
-    let fixture = Fixture::new(Limits::default());
+    let fixture = Fixture::new(Limits {
+        tenant_evaluations: Some(1),
+        output_bytes: 1024 * 1024,
+        ..Limits::default()
+    });
     let (plan, _) = local_plan(&fixture.engine);
     let mut session = fixture
         .engine
@@ -1721,7 +1739,11 @@ async fn local_rejects_foreign_permits() {
 
 #[test]
 fn local_empty_releases_prepayment() {
-    let fixture = Fixture::new(Limits::default());
+    let fixture = Fixture::new(Limits {
+        tenant_evaluations: Some(1),
+        output_bytes: 1024 * 1024,
+        ..Limits::default()
+    });
     let (plan, _) = local_plan(&fixture.engine);
     let mut session = fixture
         .engine
@@ -1903,7 +1925,10 @@ async fn planning_cancel_joins_worker(
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use futures_util::StreamExt as _;
 
-    let mut fixture = Fixture::new(Limits::default());
+    let mut fixture = Fixture::new(Limits {
+        tenant_evaluations: Some(1),
+        ..Limits::default()
+    });
     let (plan, sources) = fixture
         .engine
         .prepare("SELECT * FROM catalog", Vec::new())

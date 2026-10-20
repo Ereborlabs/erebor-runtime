@@ -437,3 +437,83 @@ fn definition_commit_image_trust() -> std::result::Result<(), Box<dyn std::error
     assert!(!committed);
     Ok(())
 }
+
+#[test]
+fn definition_commit_requires_grant() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let owner = super::super::tests::owner()?;
+    owner.replace_package_managers(managers())?;
+    let session = super::super::tests::session(&owner)?;
+    let access = owner.browser(&session.token, [1; 16], &owner.origin, None, false)?;
+    let grant = access.package_grant(AnalysisSelectionV1::tenant([1; 16]), PackageActionV1::Run)?;
+    let mut committed = false;
+    assert!(owner
+        .commit_many(&[], PackageActionV1::Run, &mut || {
+            committed = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!committed);
+    owner.commit_many(&[(&grant, None)], PackageActionV1::Run, &mut || {
+        assert!(matches!(
+            owner.state.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        committed = true;
+        Ok(())
+    })?;
+    assert!(committed);
+    owner.logout(&session.token, &owner.origin, &session.csrf)?;
+    committed = false;
+    assert!(owner
+        .commit_many(&[(&grant, None)], PackageActionV1::Run, &mut || {
+            committed = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!committed);
+    Ok(())
+}
+
+#[test]
+fn definition_commit_checks_images() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let owner = super::super::tests::owner()?;
+    owner.replace_package_managers(managers())?;
+    let session = super::super::tests::session(&owner)?;
+    let access = owner.browser(&session.token, [1; 16], &owner.origin, None, false)?;
+    let grant = access.package_grant(AnalysisSelectionV1::tenant([1; 16]), PackageActionV1::Run)?;
+    let first = bundle("SELECT 1::BIGINT UNSIGNED AS count");
+    let second = bundle("SELECT 2::BIGINT UNSIGNED AS count");
+    let first_ref = araphor_data::PackageBundleRef::new(&first)?;
+    let second_ref = araphor_data::PackageBundleRef::new(&second)?;
+    let pin = |bundle: &PackageBundleV1| -> std::result::Result<PackageTrustPinV1, Box<dyn std::error::Error>> {
+        Ok(PackageTrustPinV1 {
+            tenant_id: Uuid::from_bytes([1; 16]).to_string(),
+            bundle_digest: bundle.digest()?,
+        })
+    };
+    owner.replace_package_trust(vec![pin(&first)?])?;
+    let grants = [
+        (&grant, None),
+        (&grant, Some(&first_ref)),
+        (&grant, Some(&second_ref)),
+    ];
+    let mut committed = false;
+    assert!(owner
+        .commit_many(&grants, PackageActionV1::Run, &mut || {
+            committed = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!committed);
+    owner.replace_package_trust(vec![pin(&first)?, pin(&second)?])?;
+    owner.commit_many(&grants, PackageActionV1::Run, &mut || {
+        assert!(matches!(
+            owner.state.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        committed = true;
+        Ok(())
+    })?;
+    assert!(committed);
+    Ok(())
+}

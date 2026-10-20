@@ -10,6 +10,13 @@ fn checked_output_keeps_contract() -> TestResult {
     assert!(std::ptr::eq(checked.model(), &package.exports[0]));
     let mut output = FilesCount::evaluate(checked.evaluation())?;
     checked.validate_output(&output)?;
+    let mut encoded = crate::wire::Output::encode(&package, &fixture.evaluation, &output)?;
+    encoded.evidence.clear();
+    assert!(matches!(
+        encoded.decode_bounded(&package, &fixture.evaluation, Limits::default()),
+        Err(Error::Contract { code: ErrorCode::Incomplete, field, .. })
+            if field == "required output evidence"
+    ));
     output.evidence.clear();
     assert!(
         matches!(checked.validate_output(&output), Err(Error::Contract {
@@ -258,7 +265,7 @@ fn reason_namespace_and_details() -> TestResult {
 
 #[test]
 fn limits_reject_complete_result() -> TestResult {
-    let package = FilesCount::package();
+    let mut package = FilesCount::package();
     let mut fixture = FilesCount::fixture()?;
     for limits in [
         Limits {
@@ -295,6 +302,7 @@ fn limits_reject_complete_result() -> TestResult {
         ErrorCode::Limit
     );
     fixture.evaluation.inputs[0].data.batches.pop();
+    package.exports[0].limits.max_rows = 1_000_000;
     fixture.evaluation.context.limits = Limits {
         max_rows: 1_000_001,
         ..Limits::default()
@@ -344,5 +352,17 @@ fn rejects_descriptor_duplicates() -> TestResult {
             .code(),
         ErrorCode::Incompatible
     );
+    Ok(())
+}
+
+#[test]
+fn limits_default_disabled() -> TestResult {
+    let limits = Limits::default();
+    assert_eq!(limits.max_batches, u32::MAX);
+    assert_eq!(limits.max_rows, u64::MAX);
+    assert_eq!(limits.max_bytes, u64::MAX);
+    assert_eq!(limits.max_checkpoint_bytes, u64::MAX);
+    let restored: Limits = serde_json::from_slice(&serde_json::to_vec(&limits)?)?;
+    assert_eq!(restored, limits);
     Ok(())
 }

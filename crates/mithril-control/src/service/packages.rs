@@ -213,20 +213,25 @@ impl PackageAuthorization for ControlPackageAuthority {
         bundle: &araphor_data::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
-        self.commit_many(&[(grant, bundle)], action, operation)
+        self.commit_many(&[(grant, Some(bundle))], action, operation)
     }
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, &araphor_data::PackageBundleRef<'_>)],
+        grants: &[(&PackageGrantV1, Option<&araphor_data::PackageBundleRef<'_>>)],
         action: PackageActionV1,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
+        if grants.is_empty() {
+            return Err(Self::denied());
+        }
         let mut external = Vec::new();
         for (grant, bundle) in grants {
             if self.internal(grant) {
                 self.check(grant, action)?;
-                self.admit(grant, bundle)?;
+                if let Some(bundle) = bundle {
+                    self.admit(grant, bundle)?;
+                }
             } else {
                 external.push((*grant, *bundle));
             }

@@ -58,8 +58,9 @@ reference source until replacements pass their required checks.
 
 On 2026-10-19, the user requires compatible functionality to move before the
 backup crate is deleted. The initial removal did not establish complete
-coverage. That removal is withdrawn. All 208 backup files match the local
-`6a25ba1b` commit. The 34 deleted Control and E2E reference files are restored.
+coverage. That removal is withdrawn. At restoration, all 208 backup files
+matched the local `6a25ba1b` commit. The 34 deleted Control and E2E reference
+files were restored.
 The backup is a reference; current execution must not call its old planners,
 source sweeps, compiler process, or periodic tasks.
 
@@ -70,13 +71,21 @@ parity. A file and function inventory must identify each compatible rule,
 its current owner and tests, or the work required to move it. Old caller
 coupling alone does not justify deleting domain behavior.
 
-Backup migration and removal: **Not done**. Finite OCI execution qualification
-is also **Not done**. Formatting, workspace compilation, and strict Clippy
-passed before source restoration. Full workspace tests failed to build because
-the host disk filled. They did not pass. The previous 11,664-line delivery
-reduction and 5,668-line complete reduction describe the withdrawn deletion;
-they are not current results. Recount only after compatible migration and
-qualification. No deletion commit or push was made.
+Backup migration and removal: **Not done**. The withdrawn deletion had no
+complete finite OCI qualification. Formatting, workspace compilation, and
+strict Clippy passed before source restoration. Full workspace tests failed
+to build because the host disk filled. They did not pass. The previous
+11,664-line delivery reduction and 5,668-line complete reduction describe the
+withdrawn deletion; they are not current results. No deletion commit or push
+was made for that removal.
+
+Current finite execution and managed-state checks pass as recorded in the
+[migration result](araphor-analysis-migration.md#finite-managed-source-focused-qualification).
+The historical full Rust gate `migration-final-ci42` covers the earlier 29
+retired leaves. Four additional reference files are now retired; 175 remain.
+The recovery archive retains all 208 originals. The current final Rust gate
+`migration-final-ci59` is pending. These finite results do not establish
+long-running lifecycle or automatic restart.
 
 ### First deliverable: definition files and running instances
 
@@ -146,9 +155,10 @@ child call uses the existing operation permit. It does not enter the
 synchronous Query bridge or acquire a second permit.
 
 Each admitted call has a distinct identity. Readers of that call share its
-complete result. Separate call sites have separate proposed state. The finite
-caller supplies prior state by admitted call identity. These identities are
-not a managed-instance restart contract. That contract remains in TODO 16.
+complete result. Separate call sites have separate proposed state. A finite
+caller can supply prior state by admitted call identity. The finite Instance
+owner instead captures guarded prior state on the same source cut and retains
+a versioned call manifest. Automatic restart remains in TODO 16.
 
 Wasm interruption waits for cancellation, an exact configured deadline, or
 completion. No recurring epoch timer runs. Compilation uses Wasmtime inside
@@ -162,9 +172,20 @@ through execute_definition joins logical and guest work before return. A
 caller that drops the complete async future cannot wait for cleanup in Drop;
 worker tokens still retain executable and operation resources through teardown.
 
-Implementation qualification: **Not done**. The implementation and focused
-checks are in progress. Running instances, atomic composed-step commits,
-permission supervision, progress, and restart recovery remain **Not done**.
+Finite implementation and focused qualification: **Done**. Query executes
+SQL, Wasm, and native OCI calls through the native pipeline. Analysis
+`Instance::admit` starts no work. `Instance::run` registers an immutable attempt
+after capture and before execution. Data atomically commits complete actual
+call returns, guarded state, evidence references, and progress. Input revision,
+coverage, parameters, schema, version, and rebuild checks prevent incompatible
+prior-state reuse. Completed retries return the original receipt; pending
+retries return Incomplete. Current authority protects capture, commit, and
+receipt delivery. The [migration result](araphor-analysis-migration.md#finite-managed-source-focused-qualification)
+records the focused checks and resource limits.
+
+The required final Rust gate `migration-final-ci59` is pending. Long-running
+supervision, start/inspect/stop/update/removal, public history, automatic
+restart, and complete migration remain **Not done**.
 
 ### Approved YAML authoring design
 
@@ -329,9 +350,10 @@ additions and 651 deletions by file size. The count excludes tests, comments,
 documents, blank lines, and moves. The record is
 `/tmp/araphor-native-views-count6.json`. The complete redesign adds 5,996 from
 `7b7b407a`; another 11,996 must be removed for the required 6,000-line reduction.
-The complete redesign, reduction target, physical OCI package-call execution,
-and managed instances remain **Not done**. Full workspace CI, benchmarks, and
-physical Kubernetes checks did not run. No speed result is claimed.
+At this revision, the complete redesign, reduction target, physical OCI
+package-call execution, and managed instances remained **Not done**. Full
+workspace CI, benchmarks, and physical Kubernetes checks did not run. No speed
+result is claimed. The finite execution result above records later work.
 
 ### Native admission simplification
 
@@ -345,8 +367,9 @@ quotas and trust checks remain. YAML uses one shared field-presence check.
 Calls use DataFusion's `RelationPlanner`, because package inputs are complete
 relations. The native `TableFunctionImpl` accepts scalar expressions. The
 package call is not a registered scalar UDF. The native logical extension
-retains exact image identity and the typed execution contract. Physical
-package execution and running instances remain **Not done**. Read the
+retains exact image identity and the typed execution contract. At this
+revision, physical package execution and running instances remained **Not
+done**. Read the
 [definition review](../guides/araphor-discovery-definition-review.md).
 
 Native admission simplification and selected qualification: **Done**. All
@@ -367,8 +390,9 @@ uses `araphor-package` for image content and the existing Data store for
 durable installation. Control and CLI image requests do not call a package
 executor. Image content, installation, inspection, and focused qualification
 are **Done**. Definition-file admission and inspection are implemented in
-`araphor-discovery-definition`, Query, Data, Control, and CLI. Running instances
-and the physical package-call executor remain **Not done**. Read the
+`araphor-discovery-definition`, Query, Data, Control, and CLI. Native finite
+OCI execution and finite managed state are implemented and have focused
+qualification. The running-instance lifecycle remains **Not done**. Read the
 [image review](../guides/araphor-binary-package-storage-review.md#image-installation-without-execution)
 for the source route and verification limits.
 
@@ -376,9 +400,9 @@ The [definition review](../guides/araphor-discovery-definition-review.md)
 records the YAML file schema and admission route. Admission captures source
 files once, binds exact installed images, validates native query plans, and
 retains an immutable snapshot. Admission starts no Discovery. SQL and PRQL
-reach native physical planning. A package call reaches a typed logical node;
-the physical executor and instance lifecycle remain open. The complete native
-execution acceptance criterion below remains **Not done**.
+reach native physical planning. A package call reaches a typed logical node
+and the native PackageExec executor. The instance lifecycle remains open.
+The complete running-instance acceptance criterion below remains **Not done**.
 
 | Order | TODO | Result |
 | --- | --- | --- |
@@ -636,6 +660,9 @@ source receipt. This delivery adds 401 production Rust code lines. The complete
 redesign and the required production Rust reduction remain **Not done**.
 
 ## Earlier design draft
+
+The design and statuses below are historical. The finite execution result
+above and the migration record state current implementation and qualification.
 
 The sections below retain the earlier design for review. Their controller,
 checkpoint, loader, and runtime crate proposals are not prerequisites for the

@@ -80,6 +80,7 @@ pub(crate) struct SourceSnapshot {
     store: Arc<AnalysisStore>,
     selection: AnalysisSelectionV1,
     inputs: Option<InputCapture>,
+    managed: Option<araphor_data::ManagedRead>,
     limits: AnalysisExtractLimits,
     control: AnalysisReadControl,
     extract_timeout: Option<Duration>,
@@ -149,11 +150,13 @@ impl SourceSnapshot {
         extract_timeout: Option<Duration>,
         now: u64,
         memory: Arc<Memory>,
+        managed: Option<araphor_data::ManagedRead>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
             selection,
             inputs,
+            managed,
             limits,
             control,
             extract_timeout,

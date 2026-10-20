@@ -1,0 +1,441 @@
+{
+  "status": "Four verified finite leaves are retired. The final Rust gate remains pending.",
+  "recorded_at": "2026-10-20T03:29:07.555725+00:00",
+  "scope": "Exactly four whole finite leaves. Keep all other reference files and the complete archive.",
+  "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+  "remaining_back_verification": {
+    "before": 179,
+    "after": 175,
+    "byte_identical_before": 179,
+    "mismatches": [],
+    "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab"
+  },
+  "recovery_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+  "recovery_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+  "archive_verification": "Root verified the archive digest and exact baseline bytes for all four leaves before deletion.",
+  "historical_record": "recovery/araphor-analysis-finite-retirement-20261019.json",
+  "production_code_count_method": "Use the existing syn function-inventory --source binary. Exclude comments, blank lines, cfg(test) source and the entire graph/contract/tests.rs child test file.",
+  "counter": {
+    "path": "/tmp/araphor-long.DHe7ye/target/debug/function-inventory",
+    "sha256": "ce08a285665db81fd003ae2dfd22f176b9d0647028cd0a7b26aa0e45dc2f8a9f",
+    "new_build": false
+  },
+  "candidate_file_count": 4,
+  "candidate_production_code": 178,
+  "candidate_files": [
+    {
+      "back": "crates/araphor-analysis_back/src/graph/contract.rs",
+      "back_sha256": "80f329acde88d1e060717f62248345d0e775220af4a4c707e41ce047fe5358d1",
+      "baseline_equal": true,
+      "production_code": 31,
+      "counter_raw": {
+        "production_lines": 35,
+        "production_nonblank": 31,
+        "production_code": 31
+      },
+      "status": "Retired after focused qualification. Final Rust gate is pending.",
+      "rules": [
+        {
+          "old": "GraphAndFindingOwner::supports_analysis",
+          "current": [
+            "crates/araphor-analysis/src/graph/mod.rs::Graph::supports"
+          ],
+          "preserved": "Compare ordered input ports, output ports and the checkpoint contract. Input source declarations do not change the port contract."
+        },
+        {
+          "old": "GraphAndFindingOwner::analysis_package",
+          "current": [
+            "crates/araphor-analysis-builtins/src/graph/contract.rs::Detector::from_id",
+            "crates/araphor-analysis-builtins/src/graph/contract.rs::Detector::descriptor",
+            "crates/araphor-analysis-sdk/src/descriptor.rs::Package::validate"
+          ],
+          "preserved": "Accept the three retained detector IDs. Return revision 1, one detect export and the exact typed descriptor. Reject an unknown ID. The current SDK returns Incompatible; the obsolete owner error wrapper is not retained."
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/araphor-analysis/src/graph/tests/contract.rs",
+          "functions": [
+            "descriptor_preserves_owners",
+            "support_requires_exact_ports"
+          ],
+          "assertions": [
+            "All three exact IDs, revision 1, one detect export and the ordered reason codes.",
+            "Ordered records/facts/manifest inputs; Binary subject selection metadata; findings require evidence.",
+            "Each reason detail schema equals the findings schema; checkpoint version is 1; inspection has no GraphSnapshotV1.",
+            "Unknown ID has SDK Incompatible.",
+            "Reject input reorder/rename, output reorder, removed evidence requirement, removed checkpoint, changed version and renamed state dataset."
+          ]
+        }
+      ],
+      "blockers": []
+    },
+    {
+      "back": "crates/araphor-analysis_back/src/graph/contract/tests.rs",
+      "back_sha256": "1c228570c9132acbf3edf4568002b63837c06ee9d4b09b9298da412556f918f2",
+      "baseline_equal": true,
+      "production_code": 0,
+      "counter_raw": {
+        "production_lines": 4,
+        "production_nonblank": 2,
+        "production_code": 2
+      },
+      "status": "Retired after focused qualification. Final Rust gate is pending.",
+      "rules": [
+        {
+          "old": "descriptor_preserves_owners and its test-only TestResult alias/imports",
+          "current": [
+            "crates/araphor-analysis/src/graph/tests/contract.rs::descriptor_preserves_owners"
+          ],
+          "preserved": "Every original positive and unknown-ID assertion remains. The current test also calls Graph::supports. A second current test checks seven contract mutations."
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/araphor-analysis/src/graph/tests/contract.rs",
+          "functions": [
+            "descriptor_preserves_owners",
+            "support_requires_exact_ports"
+          ]
+        }
+      ],
+      "blockers": [],
+      "count_note": "This entire child file is test code. The counter source mode starts outside the parent cfg(test) module and reports two import/type-alias lines. These lines count as zero production code."
+    },
+    {
+      "back": "crates/araphor-analysis_back/src/model/input.rs",
+      "back_sha256": "1d6fec80c4b4a40e0aea9bcc639faac2dc51cd5b282011da764c1b54ea37de23",
+      "baseline_equal": true,
+      "production_code": 78,
+      "counter_raw": {
+        "production_lines": 81,
+        "production_nonblank": 78,
+        "production_code": 78
+      },
+      "status": "Retired after focused qualification. Final Rust gate is pending.",
+      "rules": [
+        {
+          "old": "ModelRun::register: one combined input check",
+          "current": [
+            "crates/araphor-query/src/definition/physical.rs::PackageExec::evaluate"
+          ],
+          "preserved": "Charge the complete SDK evaluation: every declared input, parameters and prior checkpoint. Check the configured per-evaluation input byte bound after complete assembly and before package execution."
+        },
+        {
+          "old": "ModelRun::register: optional captured InputSet or supplied datasets",
+          "current": [
+            "crates/araphor-query/src/definition/package.rs::Packages::inputs",
+            "crates/araphor-query/src/definition/physical.rs::PackageExec::evaluate",
+            "crates/araphor-query/src/definition/physical/sql.rs::PackageExec::sql"
+          ],
+          "preserved": "Native logical children select the admitted inputs. Native physical children supply complete typed datasets to the SQL body. Invocation inputs carry explicit external provenance when required. No second legacy executor is required."
+        },
+        {
+          "old": "ModelRun::register: parameters and prior_<dataset>",
+          "current": [
+            "crates/araphor-query/src/definition/package.rs::Packages::sql",
+            "crates/araphor-query/src/definition/physical/sql.rs::PackageExec::sql"
+          ],
+          "preserved": "Bind parameters and each declared prior dataset in the local SQL body scope. An absent checkpoint binds an empty batch with the declared schema. The applied one-flag change uses the existing native zero-based index relation for parameters as well as inputs and prior state. SDK batches keep their declared schemas."
+        },
+        {
+          "old": "ModelRun::table",
+          "current": [
+            "crates/araphor-query/src/definition/package.rs::Packages::indexed",
+            "crates/araphor-query/src/definition/package/scope.rs::Scope::get_table_source",
+            "crates/araphor-query/src/sources/mod.rs::SourceProvider",
+            "crates/araphor-query/src/definition/physical/sql.rs::PackageExec::sql",
+            "crates/araphor-query/src/memory.rs"
+          ],
+          "preserved": "Use native ViewTable and TableProvider relations. Preserve schemas, row indices and alias buffer claims. Check the active operation during physical collection and retain its memory claims through all consumers."
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/araphor-query/src/definition/tests/execution.rs",
+          "functions": [
+            "combined_input_respects_limit"
+          ],
+          "assertions": [
+            "The real assembled inputs, parameters and prior each fit below the total.",
+            "Configured input_bytes = total - 1 rejects with InputTooLarge and package input bytes.",
+            "Configured input_bytes = total accepts exactly the same assembled byte count.",
+            "Default input_capacity is disabled; no Data revision changes."
+          ]
+        },
+        {
+          "path": "crates/araphor-query/src/definition/tests/execution.rs",
+          "functions": [
+            "sql_body_scope",
+            "physical_sql_return_retains_contract",
+            "physical_checkpoint_preflight",
+            "physical_input_keeps_declared_sources"
+          ],
+          "assertions": [
+            "Declared local input/parameters/prior checkpoint produce the complete expected output, state, evidence and reasons.",
+            "Output, state, evidence and reason SQL cannot read undeclared events or caller_rows.",
+            "Unused CTE and LIMIT 0 keep declared source revisions across an accepted source change."
+          ]
+        },
+        {
+          "path": "crates/araphor-query/src/definition/tests.rs",
+          "functions": [
+            "native_package_bound_inputs",
+            "native_package_input_order",
+            "native_package_named_projection",
+            "native_package_zero_column_input"
+          ],
+          "assertions": [
+            "Named declared inputs bind by name through dependent native queries, independent of descriptor order.",
+            "Projection keeps declared Arrow view types and configured width checks.",
+            "A zero-column relation keeps its source row count."
+          ]
+        },
+        {
+          "path": "crates/araphor-query/src/definition/tests/execution/contract.rs",
+          "functions": [
+            "sql_preserves_portable_precision",
+            "sql_empty_output_metadata"
+          ],
+          "assertions": [
+            "UInt64 maximum, negative nanosecond timestamp and fixed binary bytes remain exact; signed cast overflow fails.",
+            "An empty native result keeps schema metadata and releases quota after its owner drops."
+          ]
+        },
+        {
+          "path": "crates/araphor-query/src/execution/tables/tests.rs",
+          "functions": [
+            "indexed_schema_keeps_metadata",
+            "prepaid_indices_keep_aliases",
+            "claimed_inputs_skip_prepayment",
+            "empty_index_keeps_schema",
+            "zero_columns_keep_indices"
+          ],
+          "assertions": [
+            "Existing native index helpers keep field/schema metadata, aliases, empty schemas and zero-column rows. These helpers are unchanged current owners, not copies of ModelRun."
+          ]
+        },
+        {
+          "path": "crates/araphor-query/src/definition/tests/execution/contract.rs",
+          "functions": [
+            "sql_indexes_local_relations"
+          ],
+          "status": "Passed in migration-contract55.",
+          "assertions": [
+            "Native input and prior indices are [0, 1]; parameter indices are [0, 0].",
+            "The installed SQL package returns [12, 18], checkpoint version 2 and state [12, 18].",
+            "SDK input, parameter and prior batches keep their declared value/increment/total schemas without generated index fields.",
+            "Complete evidence maps both input rows to exact result rows; complete reasons keep the corresponding result values.",
+            "Admission and finite execution make no Data revision change."
+          ]
+        }
+      ],
+      "blockers": []
+    },
+    {
+      "back": "crates/araphor-analysis_back/src/model/operation.rs",
+      "back_sha256": "e420d55203f477e19005db2b04a247be203a0de71b370e55e8d6a6c2e896fd45",
+      "baseline_equal": true,
+      "production_code": 69,
+      "counter_raw": {
+        "production_lines": 74,
+        "production_nonblank": 69,
+        "production_code": 69
+      },
+      "status": "Retired after focused qualification. Final Rust gate is pending.",
+      "rules": [
+        {
+          "old": "ModelRun fields: Session, optional InputSet, memory, permit, control, output reservation and counters",
+          "current": [
+            "crates/araphor-query/src/definition.rs::CapturedExecution",
+            "crates/araphor-query/src/execution.rs::CapturedPhysical",
+            "crates/araphor-query/src/definition/physical.rs::CallContext",
+            "crates/araphor-query/src/definition/physical.rs::CallResult",
+            "crates/araphor-query/src/definition/physical.rs::Budget"
+          ],
+          "preserved": "One captured native operation owns the cut, active control and evaluation permit. Each complete call retains input/output reservations. Native collection uses row/byte/batch counters. No installed-analysis or managed scheduler rule is in this leaf."
+        },
+        {
+          "old": "ModelRun::new: cancellation, timestamp and deadline",
+          "current": [
+            "crates/araphor-query/src/definition.rs::Session::capture_invocation",
+            "crates/araphor-query/src/execution.rs::Session::capture_physical",
+            "crates/araphor-query/src/definition/physical.rs::PackageExec::evaluate"
+          ],
+          "preserved": "Check cancellation before and during capture. Keep tenant selection and one captured time. Checked i64 conversion rejects an out-of-range evaluation time. The configured evaluation timeout starts after native preparation; this is the current required order."
+        },
+        {
+          "old": "ModelRun::new: clipped output/checkpoint limits and zero-size reservation",
+          "current": [
+            "crates/araphor-query/src/definition/physical.rs::PackageExec::evaluate",
+            "crates/araphor-query/src/definition/physical.rs::Budget",
+            "crates/araphor-query/src/definition/physical/sql.rs::PackageExec::sql",
+            "crates/araphor-query/src/definition/physical/guest.rs::PackageExec::guest",
+            "crates/araphor-query/src/memory.rs"
+          ],
+          "preserved": "Use the minimum requested/model SDK limits. SQL complete outputs and checkpoint batches share the configured output pool; native guest output/checkpoint share the actual transfer budget. Reservations start at zero for native retained Arrow and use actual configured capacity. Disabled limits do not reserve a maximum allocation."
+        },
+        {
+          "old": "ModelRun::new: global and tenant evaluation admission",
+          "current": [
+            "crates/araphor-query/src/definition.rs::Session::capture_invocation",
+            "crates/araphor-query/src/execution.rs::Engine::reserve_evaluation"
+          ],
+          "preserved": "Take one native tenant/global permit per captured execution. Nested calls share it. Worker and stream cleanup release it on error, cancellation or completion."
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/araphor-query/src/definition/tests/execution.rs",
+          "functions": [
+            "physical_nested_calls_share_permit",
+            "physical_calls_keep_capture_and_clock",
+            "physical_failure_keeps_session",
+            "physical_call_cancellation_joins",
+            "physical_tight_output_capacity"
+          ],
+          "assertions": [
+            "Nested complete calls share one configured evaluation permit and captured clock.",
+            "A failed call does not cancel the parent Session.",
+            "Cancellation joins the guest and releases configured capacities.",
+            "Finite and low-level native routes accept a tiny output under an exact configured capacity; retained aliases hold capacity until drop."
+          ]
+        },
+        {
+          "path": "crates/araphor-query/src/definition/tests/parity.rs",
+          "functions": [
+            "preparation_precedes_evaluation_deadline",
+            "nonempty_tenant_guests_overlap"
+          ],
+          "assertions": [
+            "Cold and cached native preparation precede the configured evaluation deadline.",
+            "Tenant and global capacity are retained until each active guest exits."
+          ]
+        },
+        {
+          "path": "crates/araphor-query/src/definition/tests/execution/contract.rs",
+          "functions": [
+            "sql_limit_precedes_references",
+            "sql_conversion_drops_producer"
+          ],
+          "assertions": [
+            "The aggregate output row bound rejects before evidence/reason work starts.",
+            "A failed native batch conversion drops the producer before polling another batch and releases capacity."
+          ]
+        },
+        {
+          "path": "crates/araphor-query/src/execution/tests.rs",
+          "functions": [
+            "blocking_cancel_joins_worker",
+            "blocking_deadline_keeps_parent",
+            "waiting_preserves_global_capacity",
+            "buffers_outlive_producer_permits",
+            "cancelled_sessions_release_capacity",
+            "input_output_budget"
+          ],
+          "assertions": [
+            "Blocking work joins before cancellation/deadline returns.",
+            "Cancelled or failed work releases permits; retained Arrow aliases keep their actual input/output claims.",
+            "Configured input/output pressure remains enforced."
+          ]
+        },
+        {
+          "path": "crates/araphor-analysis/src/instance/tests.rs",
+          "functions": [
+            "sql_instance_is_inert",
+            "sql_wasm_keep_state",
+            "native_keeps_call_state",
+            "revoked_guest_joins_attempt",
+            "later_failure_is_atomic",
+            "nested_calls_publish_together"
+          ],
+          "assertions": [
+            "The connected finite Instance uses the same native call/capture owner, inert admission, atomic complete-call publication and joined revocation.",
+            "The source-built native state case passed in migration-native-analysis55."
+          ]
+        }
+      ],
+      "blockers": []
+    }
+  ],
+  "qualification": {
+    "contract": "migration-contract55: all 8 passed, including parameter row indices and canonical-name input binding.",
+    "graph": "migration-managed-graph57: both contract cases passed.",
+    "instance": "migration-managed-instance56: 10 ordinary cases passed; 1 native case separately passed in migration-native-analysis55.",
+    "captured": "migration-managed-captured57: all 7 cases passed.",
+    "data": "migration-managed-data55: all 11 cases passed, including process crashes and checkpoint guards.",
+    "native": "migration-native-query60: all 4 passed; migration-native-analysis60: all 4 passed. Source-built native57 artifacts match all 116 source inputs. Host target x86_64-unknown-linux-gnu.",
+    "clippy": "migration-clippy57: strict workspace Clippy passed.",
+    "final_rust_gate": "Not done. migration-final-ci59 passes formatting, workspace check and strict Clippy, then stops at one stale OCI identity fixture after 145 ordinary Analysis and 333 ordinary Data passes. migration-oci-package60 passes all 15 cases after the fixture supplies its original explicit limits.",
+    "test_build": "migration-oci-build60: complete workspace test build passes after the test-only OCI correction.",
+    "failed_gate_record": {
+      "path": "/tmp/araphor-oci-execution/migration-final-ci59.json",
+      "exit_code": 101,
+      "elapsed_seconds": 4076.415,
+      "source_unchanged": true
+    }
+  },
+  "exclusions": [
+    "All other 175 Back files stay byte-identical to the baseline. The complete archive remains unchanged.",
+    "Keep model/operation/tests.rs and all other mixed test or source leaves. This record does not retire the legacy input executor, its receipt/provenance rules or its assertions.",
+    "No long-running instance, source discovery, window finalization, replay, recovery supervisor, CLI or retained-history capability is declared complete by these four leaves.",
+    "Query memory claims cover the existing Arrow and SDK ownership contracts. This record does not claim a bound for every Rust allocation or Data writer serialization buffer."
+  ],
+  "source_sha256": {
+    "crates/araphor-analysis-builtins/src/graph/contract.rs": "f1db7719b0d1704855831493480a514218c6eccbf226f2f7bab10531923160a3",
+    "crates/araphor-analysis-sdk/src/descriptor.rs": "b96e7ce197cbf6f7f6c258704a85b0b4e88a7247d1b7390a3992d3e04809f172",
+    "crates/araphor-analysis/src/graph/mod.rs": "b03326f46ea1a86d2885ca379f81475b83912c0920ec66c94da6fb1edc24ca24",
+    "crates/araphor-analysis/src/graph/tests/contract.rs": "1b6b1a8a85314b51d745fbcaf132c326995f8285eb4ee8c8209e06c86101579b",
+    "crates/araphor-analysis/src/instance/tests.rs": "41f20f1d2c557b70410720155d5d489b40799409c7e52027c1c31a697b91146f",
+    "crates/araphor-query/src/definition.rs": "428b4de0bf230e907a2c71003c2707c25fb9d1751c8daf974a2858c827d691e9",
+    "crates/araphor-query/src/definition/package.rs": "56eaa2e0e67418f616f466403a52a80e03d69640deec51d83427696f9520f0fb",
+    "crates/araphor-query/src/definition/package/scope.rs": "004bb7f2512547000ee1d6b5ac331d39d574958cf984a30fd3afc043150d9955",
+    "crates/araphor-query/src/definition/physical.rs": "bde3120a76969985a0df9b6c0f1c96e2be01a4460b19ee646b390369e4b15b46",
+    "crates/araphor-query/src/definition/physical/guest.rs": "b7a4d763d242d70f00a357773c92f138b50cad6ad94c0b8994a94335bfa8af48",
+    "crates/araphor-query/src/definition/physical/sql.rs": "24249bd0b47c1a07a6143eb1fdae14c9bb52534b6dad49d7bd4058dfe7ea8b4a",
+    "crates/araphor-query/src/definition/tests.rs": "7ab4a7f8c02da7addc64501508247110c121cf76fbbbf5704d1f278841502f01",
+    "crates/araphor-query/src/definition/tests/execution.rs": "f46e974cd2365f08c430282b1c375431fcd3eb25508575396396d3690bc930f3",
+    "crates/araphor-query/src/definition/tests/execution/contract.rs": "cfe41831e28bbb9ad20e8c9fdaad91c296be6a787a9714e5722b4b13b8abac73",
+    "crates/araphor-query/src/definition/tests/parity.rs": "d1bc0c920c6b500d84fc08e2c744c62dfaedbb7dd8dcfa59f5f6f39bbcef5b04",
+    "crates/araphor-query/src/execution.rs": "aa77ccef3408a462f639501e7cb676020492c8ce8114edffc984a813a130b6bb",
+    "crates/araphor-query/src/execution/tables/tests.rs": "d9295a704d1384610aaed8e288178490984eaf80acd2d6df386cce251753e519",
+    "crates/araphor-query/src/execution/tests.rs": "083991b6f2ceead0650ed142f6858ad4bd004ccd9c893de713d8c9cee7602e55",
+    "crates/araphor-query/src/memory.rs": "cf06cf02b734cd0a21920fe9584ac2c387eecd5a90c9373873deccce259de2fe",
+    "crates/araphor-query/src/sources/mod.rs": "dbb114c7def9f173428e0f78e49559a55c843ee06282d614ea83cc1a8d51a201"
+  },
+  "previous_record": {
+    "path": "/tmp/araphor-finite-retirement-additional-20261019-9q83wlck/retirement-candidates.json",
+    "sha256": "328314e4028d8b874f018459610e1c5e07179fa93c586cf96e91966e47e71600",
+    "unchanged": true
+  },
+  "proposed_patch": {
+    "path": "/tmp/araphor-parameter-index-parity-20261019-0vw241ie/parameter-index.patch",
+    "sha256": "27ff9c2120eea496d5aa7d2df2a5a29e7390a3e6b95c299d40fddd735983670b",
+    "live_applied": true,
+    "focused_test": "definition::tests::execution::contract::sql_indexes_local_relations",
+    "test_result": "migration-contract55: sql_indexes_local_relations passed.",
+    "production_delta": {
+      "added": 1,
+      "removed": 1
+    },
+    "test_delta": {
+      "added": 110,
+      "removed": 0
+    },
+    "qualification": "Applied. The production binding uses the existing native index relation."
+  },
+  "candidate_source_sha256": {
+    "crates/araphor-query/src/definition/package.rs": {
+      "base": "24b870c995a0eac0fe2e278fe4460e2397108cca215d483205ec4ce8971969d0",
+      "after": "d51ccf42f71a3be84c3018d74f0bb64e47d1197f88225a5faec3d221e9f9cabc"
+    },
+    "crates/araphor-query/src/definition/tests/execution/contract.rs": {
+      "base": "882ee12f3e825be7d7d4124ed960fe900adbc93cfeb8cee7b98678434d034331",
+      "after": "83ea1c863421e34e578ec55c6ddb7ddd0ce22e7d8b016236634756dba59b19d0"
+    }
+  },
+  "audit_source": {
+    "path": "/tmp/araphor-parameter-index-parity-20261019-0vw241ie/retirement-candidates-conditional.json",
+    "sha256": "569043360288249e31d70970e81df87ac46714bf1481c360f25370282f94256f"
+  }
+}

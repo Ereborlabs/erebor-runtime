@@ -128,12 +128,14 @@ impl Inputs {
             AnalysisExtractLimits {
                 scan_bytes: engine.limits().scan_bytes,
                 input_bytes: engine.limits().input_bytes,
+                keys: engine.limits().extract_keys,
                 ..Default::default()
             },
             control.within(None)?,
             engine.limits().extract_timeout,
             now,
             Arc::clone(&memory_owner),
+            None,
         );
         state.config_mut().set_extension(Arc::clone(&source));
         let snapshot = session

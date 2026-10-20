@@ -4,7 +4,7 @@ use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt 
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
-use duckdb::{params, AccessMode, Config, Connection};
+use duckdb::{params, AccessMode};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 use uuid::Uuid;
@@ -255,7 +255,7 @@ impl AnalysisStore {
         if !saved.is_file() || saved.permissions().mode() & 0o077 != 0 {
             return self.reject("the analysis database file is not private");
         }
-        let mut connection = Self::open_native(&source)?;
+        let mut connection = Self::open_native(&source, self.storage, AccessMode::Automatic)?;
         if Self::read_meta_from(&connection, &source)? != *meta {
             return self.reject("the analysis identity changed during backup");
         }
@@ -387,7 +387,7 @@ impl AnalysisStore {
         }
         #[cfg(test)]
         self.crash_at("backup.copied");
-        Self::validate_bundle(&manifest, staged)?;
+        Self::validate_bundle(&manifest, staged, self.storage)?;
         let manifest_path = staged.join("manifest.json");
         let mut output = OpenOptions::new()
             .write(true)
@@ -467,7 +467,11 @@ impl AnalysisStore {
         Ok(())
     }
 
-    fn validate_bundle(manifest: &AnalysisBackupManifestV1, root: &Path) -> Result<(u64, usize)> {
+    fn validate_bundle(
+        manifest: &AnalysisBackupManifestV1,
+        root: &Path,
+        storage: StorageLimitsV1,
+    ) -> Result<(u64, usize)> {
         if manifest.schema_version != ANALYSIS_SCHEMA_VERSION as u32
             || Uuid::parse_str(&manifest.store_uuid).is_err()
             || manifest.database_bytes == 0
@@ -539,20 +543,7 @@ impl AnalysisStore {
         if count != manifest.segments.len() {
             return Self::reject_path(root, "the backup is missing a listed segment");
         }
-        let config = Config::default()
-            .with("temp_directory", "")
-            .and_then(|config| config.access_mode(AccessMode::ReadOnly))
-            .and_then(|config| config.enable_autoload_extension(false))
-            .and_then(|config| config.enable_external_access(false))
-            .and_then(|config| config.max_memory(&format!("{}B", super::NATIVE_MEMORY_BYTES)))
-            .and_then(|config| config.threads(2))
-            .context(AnalysisDatabaseSnafu {
-                operation: "bound backup validation",
-            })?;
-        let writer =
-            Connection::open_with_flags(&database, config).context(AnalysisDatabaseSnafu {
-                operation: "open backup validation",
-            })?;
+        let writer = Self::open_native(&database, storage, AccessMode::ReadOnly)?;
         let meta = Self::read_meta_from(&writer, &database)?;
         if meta.store_uuid.to_string() != manifest.store_uuid
             || meta.schema_version != manifest.schema_version
@@ -658,7 +649,7 @@ impl AnalysisStore {
             serde_json::from_slice(&bytes).context(JsonSnafu {
                 path: &manifest_path,
             })?;
-        let (trace_reserve, trace_slots) = Self::validate_bundle(&manifest, backup)?;
+        let (trace_reserve, trace_slots) = Self::validate_bundle(&manifest, backup, storage)?;
         for (index, entry) in fs::read_dir(backup)
             .context(IoSnafu { path: backup })?
             .enumerate()
@@ -746,7 +737,7 @@ impl AnalysisStore {
             .context(IoSnafu { path: &segments })?
             .sync_all()
             .context(IoSnafu { path: &segments })?;
-        Self::validate_bundle(&manifest, root)?;
+        Self::validate_bundle(&manifest, root, storage)?;
         File::open(root)
             .context(IoSnafu { path: root })?
             .sync_all()
@@ -1443,7 +1434,7 @@ mod tests {
             "UPDATE source_receipts SET contiguous_cursor = contiguous_cursor + 1",
             "DROP TABLE coverage",
         ] {
-            let writer = Connection::open(&database)?;
+            let writer = duckdb::Connection::open(&database)?;
             writer.execute_batch(sql)?;
             writer.execute_batch("CHECKPOINT")?;
             drop(writer);

@@ -2,6 +2,7 @@ use super::*;
 
 mod baseline;
 mod binding;
+mod contract;
 mod domain;
 mod fixture;
 

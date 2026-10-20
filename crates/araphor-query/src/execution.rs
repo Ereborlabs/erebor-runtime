@@ -8,7 +8,7 @@ use araphor_data::{
     AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
     AnalysisTableRequests, StorePositionV1,
 };
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{Array as _, RecordBatch, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::memory::{
     MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
@@ -52,10 +52,11 @@ pub struct Limits {
     pub input_bytes: usize,
     pub output_rows: usize,
     pub output_bytes: usize,
+    pub extract_keys: Option<usize>,
     pub extract_timeout: Option<Duration>,
     pub evaluate_timeout: Option<Duration>,
-    pub global_evaluations: usize,
-    pub tenant_evaluations: usize,
+    pub global_evaluations: Option<usize>,
+    pub tenant_evaluations: Option<usize>,
     pub global_streams: Option<usize>,
     pub tenant_streams: Option<usize>,
     pub input_capacity: Option<usize>,
@@ -72,14 +73,15 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            scan_bytes: 256 * 1024 * 1024,
-            input_bytes: 64 * 1024 * 1024,
-            output_rows: 200,
-            output_bytes: 1024 * 1024,
+            scan_bytes: usize::MAX,
+            input_bytes: usize::MAX,
+            output_rows: usize::MAX,
+            output_bytes: usize::MAX,
+            extract_keys: None,
             extract_timeout: None,
             evaluate_timeout: None,
-            global_evaluations: 2,
-            tenant_evaluations: 1,
+            global_evaluations: None,
+            tenant_evaluations: None,
             global_streams: None,
             tenant_streams: None,
             input_capacity: None,
@@ -103,9 +105,16 @@ impl Limits {
             || self.output_rows == 0
             || self.extract_timeout == Some(Duration::ZERO)
             || self.evaluate_timeout == Some(Duration::ZERO)
-            || self.global_evaluations == 0
-            || self.tenant_evaluations == 0
-            || self.tenant_evaluations > self.global_evaluations
+            || self
+                .global_evaluations
+                .is_some_and(|count| count == 0 || count > Semaphore::MAX_PERMITS)
+            || self
+                .tenant_evaluations
+                .is_some_and(|count| count == 0 || count > Semaphore::MAX_PERMITS)
+            || self
+                .tenant_evaluations
+                .zip(self.global_evaluations)
+                .is_some_and(|(tenant, global)| tenant > global)
             || self
                 .global_streams
                 .is_some_and(|count| count > Semaphore::MAX_PERMITS)
@@ -116,12 +125,12 @@ impl Limits {
                 .tenant_streams
                 .zip(self.global_streams)
                 .is_some_and(|(tenant, global)| tenant > global)
-            || self
-                .input_capacity
-                .is_some_and(|capacity| capacity < self.input_bytes)
-            || self
-                .output_capacity
-                .is_some_and(|capacity| capacity < self.output_bytes)
+            || self.input_capacity.is_some_and(|capacity| {
+                capacity == 0 || (self.input_bytes != usize::MAX && capacity < self.input_bytes)
+            })
+            || self.output_capacity.is_some_and(|capacity| {
+                capacity == 0 || (self.output_bytes != usize::MAX && capacity < self.output_bytes)
+            })
             || self.execution_capacity == Some(0)
         {
             return InvalidSnafu {
@@ -134,11 +143,12 @@ impl Limits {
 }
 
 struct TenantCapacity {
-    evaluations: Arc<Semaphore>,
+    evaluations: Option<Arc<Semaphore>>,
     streams: Option<Arc<Semaphore>>,
 }
 
 pub struct Permit {
+    evaluation: bool,
     _tenant: Arc<TenantCapacity>,
     _global: Option<OwnedSemaphorePermit>,
     _local: Option<OwnedSemaphorePermit>,
@@ -164,7 +174,7 @@ pub struct Engine {
     memory: Arc<Memory>,
     limits: Arc<Limits>,
     package_runtime: Arc<araphor_package_runtime::Runtime>,
-    evaluations: Arc<Semaphore>,
+    evaluations: Option<Arc<Semaphore>>,
     streams: Option<Arc<Semaphore>>,
     tenants: Mutex<BTreeMap<[u8; 16], Weak<TenantCapacity>>>,
     runtime: Option<tokio::runtime::Runtime>,
@@ -260,7 +270,9 @@ impl Engine {
             state,
             default_views: BTreeMap::new(),
             memory: Memory::new(limits.input_capacity, limits.output_capacity),
-            evaluations: Arc::new(Semaphore::new(limits.global_evaluations)),
+            evaluations: limits
+                .global_evaluations
+                .map(|count| Arc::new(Semaphore::new(count))),
             streams: limits
                 .global_streams
                 .map(|count| Arc::new(Semaphore::new(count))),
@@ -351,13 +363,13 @@ impl Engine {
     }
 
     pub async fn check_read(self: &Arc<Self>, snapshot: &Arc<ArrowSnapshot>) -> Result<()> {
-        self.check_read_scoped(snapshot, None).await
+        self.check_read_scoped(snapshot, ()).await
     }
 
     async fn check_read_scoped(
         self: &Arc<Self>,
         snapshot: &Arc<ArrowSnapshot>,
-        scope: Option<araphor_package_runtime::TaskTrackerToken>,
+        scope: impl Send + 'static,
     ) -> Result<()> {
         if snapshot.page.extraction.trace_reads().is_empty() {
             return Ok(());
@@ -381,7 +393,7 @@ impl Engine {
         .await
     }
 
-    pub(crate) async fn blocking<T: Send + 'static>(
+    pub async fn blocking<T: Send + 'static>(
         control: Arc<AnalysisReadControl>,
         lease: impl Send + 'static,
         operation: impl FnOnce() -> Result<T> + Send + 'static,
@@ -502,6 +514,7 @@ impl Engine {
             now,
             tables: Arc::default(),
             calls: None,
+            managed: None,
             workers: None,
             output_rows: self.limits.output_rows,
             output_bytes: self.limits.output_bytes,
@@ -529,7 +542,10 @@ impl Engine {
             .and_then(Weak::upgrade)
             .unwrap_or_else(|| {
                 let capacity = Arc::new(TenantCapacity {
-                    evaluations: Arc::new(Semaphore::new(self.limits.tenant_evaluations)),
+                    evaluations: self
+                        .limits
+                        .tenant_evaluations
+                        .map(|count| Arc::new(Semaphore::new(count))),
                     streams: self
                         .limits
                         .tenant_streams
@@ -548,18 +564,19 @@ impl Engine {
             }
             .build()
         };
-        let local = Arc::clone(&tenant.evaluations)
-            .acquire_owned()
-            .await
-            .map_err(error)?;
-        let global = Arc::clone(&self.evaluations)
-            .acquire_owned()
-            .await
-            .map_err(error)?;
+        let local = match &tenant.evaluations {
+            Some(semaphore) => Some(Arc::clone(semaphore).acquire_owned().await.map_err(error)?),
+            None => None,
+        };
+        let global = match &self.evaluations {
+            Some(semaphore) => Some(Arc::clone(semaphore).acquire_owned().await.map_err(error)?),
+            None => None,
+        };
         Ok(Permit {
+            evaluation: true,
             _tenant: tenant,
-            _global: Some(global),
-            _local: Some(local),
+            _global: global,
+            _local: local,
         })
     }
 
@@ -568,7 +585,7 @@ impl Engine {
         let (global, local) = if stream {
             (self.streams.as_ref(), tenant.streams.as_ref())
         } else {
-            (Some(&self.evaluations), Some(&tenant.evaluations))
+            (self.evaluations.as_ref(), tenant.evaluations.as_ref())
         };
         let error = |_| {
             BusySnafu {
@@ -585,6 +602,7 @@ impl Engine {
             .transpose()
             .map_err(error)?;
         Ok(Permit {
+            evaluation: !stream,
             _tenant: tenant,
             _global: global,
             _local: local,
@@ -641,9 +659,45 @@ pub struct Session {
     now: u64,
     pub(crate) tables: Arc<LocalTables>,
     pub(crate) calls: Option<Arc<crate::definition::CallContext>>,
+    pub(crate) managed: Option<araphor_data::ManagedRead>,
     pub(crate) workers: Option<araphor_package_runtime::TaskTracker>,
     output_rows: usize,
     output_bytes: usize,
+}
+
+pub(crate) struct CapturedPhysical {
+    physical: Arc<dyn ExecutionPlan>,
+    context: TaskContext,
+    pub(crate) snapshot: Arc<ArrowSnapshot>,
+    pub(crate) permit: Arc<Permit>,
+    control: Arc<AnalysisReadControl>,
+    timeout: Option<Duration>,
+    reservation: MemoryReservation,
+}
+
+pub(crate) struct PhysicalStream {
+    pub(crate) snapshot: Arc<ArrowSnapshot>,
+    pub(crate) stream: SendableRecordBatchStream,
+    pub(crate) permit: Arc<Permit>,
+    pub(crate) control: Arc<AnalysisReadControl>,
+    pub(crate) reservation: MemoryReservation,
+}
+
+impl CapturedPhysical {
+    pub(crate) fn start(self) -> Result<PhysicalStream> {
+        let control = Arc::new(self.control.within(self.timeout)?);
+        let mut config = self.context.session_config().clone();
+        config.set_extension(Arc::clone(&control));
+        let context = Arc::new(self.context.with_session_config(config));
+        let stream = execute_stream(self.physical, context).context(SqlSnafu)?;
+        Ok(PhysicalStream {
+            snapshot: self.snapshot,
+            stream,
+            permit: self.permit,
+            control,
+            reservation: self.reservation,
+        })
+    }
 }
 
 impl Session {
@@ -660,15 +714,17 @@ impl Session {
             AnalysisExtractLimits {
                 scan_bytes: self.engine.limits.scan_bytes,
                 input_bytes: self.engine.limits.input_bytes,
+                keys: self.engine.limits.extract_keys,
                 ..Default::default()
             },
             control.within(control.remaining()?)?,
             self.engine.limits.extract_timeout,
             self.now,
             Arc::clone(&self.memory),
+            self.managed.clone(),
         );
         let sources = sources.clone();
-        let scope = self.token();
+        let scope = self.token()?;
         Engine::blocking(control, scope, move || {
             capture.capture_metadata(&sources).context(SqlSnafu)
         })
@@ -684,20 +740,43 @@ impl Session {
             now,
             tables: Arc::clone(&self.tables),
             calls: None,
+            managed: None,
             workers: self.workers.clone(),
             output_rows: self.output_rows,
             output_bytes: self.output_bytes,
         }
     }
 
-    pub(crate) fn token(&self) -> Option<araphor_package_runtime::TaskTrackerToken> {
-        self.workers
-            .as_ref()
-            .map(araphor_package_runtime::TaskTracker::token)
+    pub(crate) fn token(
+        &self,
+    ) -> Result<(
+        Option<araphor_package_runtime::TaskTrackerToken>,
+        Option<araphor_package_runtime::TaskTrackerToken>,
+    )> {
+        if let Some(calls) = &self.calls {
+            let (token, scope) = calls.token().context(SqlSnafu)?;
+            Ok((Some(token), scope))
+        } else {
+            let token = self
+                .workers
+                .as_ref()
+                .map(araphor_package_runtime::TaskTracker::token);
+            if self
+                .workers
+                .as_ref()
+                .is_some_and(araphor_package_runtime::TaskTracker::is_closed)
+            {
+                return InvalidSnafu {
+                    field: "execution scope",
+                }
+                .fail();
+            }
+            Ok((token, None))
+        }
     }
 
     pub(crate) async fn check_read(&self, snapshot: &Arc<ArrowSnapshot>) -> Result<()> {
-        self.engine.check_read_scoped(snapshot, self.token()).await
+        self.engine.check_read_scoped(snapshot, self.token()?).await
     }
 
     pub(crate) fn output(&self) -> (usize, usize) {
@@ -792,15 +871,7 @@ impl Session {
         self.control.check()?;
         crate::definition::PackageCall::check_admission(plan).context(SqlSnafu)?;
         let tenant = self.engine.tenant(self.selection.tenant_id)?;
-        if permit
-            ._global
-            .as_ref()
-            .is_none_or(|permit| !Arc::ptr_eq(permit.semaphore(), &self.engine.evaluations))
-            || permit
-                ._local
-                .as_ref()
-                .is_none_or(|permit| !Arc::ptr_eq(permit.semaphore(), &tenant.evaluations))
-        {
+        if !permit.evaluation || !Arc::ptr_eq(&permit._tenant, &tenant) {
             return InvalidSnafu {
                 field: "evaluation permit",
             }
@@ -838,8 +909,16 @@ impl Session {
     ) -> Result<(Arc<ArrowSnapshot>, SendableRecordBatchStream)> {
         crate::definition::PackageCall::check_admission(plan).context(SqlSnafu)?;
         let permit = Arc::new(self.engine.reserve_evaluation(self.selection.tenant_id)?);
-        let (captured, stream, permit, control, reservation) =
-            self.start(plan, sources, read, permit).await?;
+        let PhysicalStream {
+            snapshot: captured,
+            stream,
+            permit,
+            control,
+            reservation,
+        } = self
+            .capture_plan(plan, sources, read, permit)
+            .await?
+            .start()?;
         let stream = Box::pin(self.bounded(
             stream,
             permit,
@@ -900,6 +979,22 @@ impl Session {
     }
 
     fn output_reservation(&self, physical: &Arc<dyn ExecutionPlan>) -> Result<MemoryReservation> {
+        if physical
+            .as_any()
+            .is::<datafusion::datasource::sink::DataSinkExec>()
+        {
+            // Native DML returns one UInt64 count after the sink commits.
+            let count = UInt64Array::from(vec![0]);
+            if self.output_rows < 1 || count.get_array_memory_size() > self.output_bytes {
+                return Err(crate::Error::Sql {
+                    source: DataFusionError::ResourcesExhausted("query output".into()),
+                });
+            }
+            return self
+                .memory
+                .reserve_output(count.get_buffer_memory_size())
+                .context(SqlSnafu);
+        }
         let package = physical
             .exists(|node| {
                 Ok(node
@@ -922,7 +1017,7 @@ impl Session {
             Arc::clone(&self.memory),
             Arc::clone(&self.control),
             self.now,
-            self.token().map(Arc::new),
+            self.workers.clone(),
         )
     }
 
@@ -970,7 +1065,7 @@ impl Session {
         };
         let plan = plan.clone();
         let planning = state.clone();
-        let plan = Engine::blocking(Arc::clone(&control), self.token(), move || {
+        let plan = Engine::blocking(Arc::clone(&control), self.token()?, move || {
             planning.optimize(&plan).context(SqlSnafu)
         })
         .await?;
@@ -985,24 +1080,18 @@ impl Session {
             .await
     }
 
-    pub(crate) async fn start(
+    pub(crate) async fn capture_plan(
         &self,
         plan: &LogicalPlan,
         sources: &AnalysisTableRequests,
         read: Read,
         permit: Arc<Permit>,
-    ) -> Result<(
-        Arc<ArrowSnapshot>,
-        SendableRecordBatchStream,
-        Arc<Permit>,
-        Arc<AnalysisReadControl>,
-        MemoryReservation,
-    )> {
+    ) -> Result<CapturedPhysical> {
         self.control.check()?;
         let mut state = self.state()?;
         state.config_mut().set_extension(Arc::clone(&permit));
         let physical = self.physical(plan, &state).await?;
-        self.start_physical(physical, state.task_ctx(), sources, read, permit)
+        self.capture_physical(physical, state.task_ctx(), sources, read, permit)
             .await
     }
 
@@ -1013,13 +1102,20 @@ impl Session {
         sources: &AnalysisTableRequests,
         read: Read,
         permit: Arc<Permit>,
-    ) -> Result<(
-        Arc<ArrowSnapshot>,
-        SendableRecordBatchStream,
-        Arc<Permit>,
-        Arc<AnalysisReadControl>,
-        MemoryReservation,
-    )> {
+    ) -> Result<PhysicalStream> {
+        self.capture_physical(physical, context, sources, read, permit)
+            .await?
+            .start()
+    }
+
+    pub(crate) async fn capture_physical(
+        &self,
+        physical: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
+        sources: &AnalysisTableRequests,
+        read: Read,
+        permit: Arc<Permit>,
+    ) -> Result<CapturedPhysical> {
         self.control.check()?;
         let reservation = self.output_reservation(&physical)?;
         let snapshot = SourceSnapshot::new(
@@ -1029,12 +1125,14 @@ impl Session {
             AnalysisExtractLimits {
                 scan_bytes: self.engine.limits.scan_bytes,
                 input_bytes: self.engine.limits.input_bytes,
+                keys: self.engine.limits.extract_keys,
                 ..Default::default()
             },
             self.control.within(self.control.remaining()?)?,
             self.engine.limits.extract_timeout,
             self.now,
             Arc::clone(&self.memory),
+            self.managed.clone(),
         );
         let mut config = context.session_config().clone();
         config.set_extension(Arc::clone(&permit));
@@ -1044,7 +1142,7 @@ impl Session {
                 .clone()
                 .unwrap_or_else(|| self.call_context(crate::definition::Invocation::default())),
         );
-        let context = Arc::new(TaskContext::new(
+        let context = TaskContext::new(
             context.task_id(),
             context.session_id(),
             config,
@@ -1052,7 +1150,7 @@ impl Session {
             context.aggregate_functions().clone(),
             context.window_functions().clone(),
             context.runtime_env(),
-        ));
+        );
         let mode = match read {
             Read::Snapshot => ReadMode::Snapshot,
             Read::Page(after) => ReadMode::Page(after),
@@ -1063,9 +1161,15 @@ impl Session {
         let captured = self
             .capture(snapshot, requests, bounds, mode, Arc::clone(&permit))
             .await?;
-        let control = Arc::new(self.control.within(self.engine.limits.evaluate_timeout)?);
-        let stream = execute_stream(physical, context).context(SqlSnafu)?;
-        Ok((captured, stream, permit, control, reservation))
+        Ok(CapturedPhysical {
+            physical,
+            context,
+            snapshot: captured,
+            permit,
+            control: Arc::clone(&self.control),
+            timeout: self.engine.limits.evaluate_timeout,
+            reservation,
+        })
     }
 
     pub(crate) async fn capture(
@@ -1077,7 +1181,7 @@ impl Session {
         permit: Arc<Permit>,
     ) -> Result<Arc<ArrowSnapshot>> {
         let control = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
-        let scope = self.token();
+        let scope = self.token()?;
         Engine::blocking(control, scope, move || {
             let _permit = permit;
             snapshot.capture(&requests, bounds, mode).context(SqlSnafu)

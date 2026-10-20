@@ -225,6 +225,28 @@ initialization. Its current Rust wrapper exposes no pending-query registration
 point. Complete cancellation qualification and removal of the remaining lock
 and interrupt polling are **Not done**.
 
+### Optional extraction key limit
+
+On 2026-10-19, the pending change removes the fixed 1,024-key quota from
+`AnalysisSelectionV1::valid`. The method keeps tenant, identifier, uniqueness,
+and trace validation. Grant checks keep their current owners.
+`AnalysisExtractLimits::keys` owns the optional quota. Query forwards
+`Limits::extract_keys` to metadata, captured input, package input, and change
+reads. Both fields default to `None`.
+
+The same resolver checks exact keys and nodes before its metadata shortcut.
+It checks the combined key count during tenant expansion. Native DuckDB
+`LIMIT NULL` supplies an unbounded SQL read when the quota is disabled.
+The pending tests use 1,025 absent context keys and two retained sources.
+They do not insert 1,025 database rows. Explicit `Some(1024)` still rejects
+an excessive key count. Verification and integration: **Not done**.
+
+The dependency resolver uses the same disabled extraction defaults. It adds
+no separate 64 MiB selection limit. Verification of this change is **Not done**.
+Dependency metadata is not charged to the Query Arrow reservation. This
+change does not complete quota removal, backup migration, or the 6,000-line
+production Rust reduction. Count the complete reduction after replacement.
+
 ### Subscription streams and shared validation
 
 Implementation and selected host qualification: **Done**. The complete

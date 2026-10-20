@@ -366,6 +366,7 @@ impl Memory {
         let Some(capacity) = self.output_capacity else {
             return self.reserve_output(0);
         };
+        let bytes = if bytes == usize::MAX { capacity } else { bytes };
         if bytes > capacity {
             return self.reserve_output(bytes);
         }
@@ -375,8 +376,9 @@ impl Memory {
 
     pub(crate) fn prepare_input(&self, bytes: usize) -> Result<MemoryReservation> {
         let Some(capacity) = self.input_capacity else {
-            return self.reserve_input(bytes);
+            return self.reserve_input(if bytes == usize::MAX { 0 } else { bytes });
         };
+        let bytes = if bytes == usize::MAX { capacity } else { bytes };
         if bytes > capacity {
             return self.reserve_input(bytes);
         }

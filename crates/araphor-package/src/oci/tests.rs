@@ -5,6 +5,12 @@ use araphor_analysis_sdk as sdk;
 #[test]
 fn oci_package_identity() -> TestResult {
     let mut package = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
+    package.artifacts[0].descriptor.exports[0].limits = sdk::Limits {
+        max_batches: 1024,
+        max_rows: 1_000_000,
+        max_bytes: 64 * 1024 * 1024,
+        max_checkpoint_bytes: 16 * 1024 * 1024,
+    };
     package.artifacts[0].implementations = vec![PackageImplementationV1::Native {
         export: "count".into(),
         artifact: (0_u8..=255).collect(),

@@ -182,10 +182,10 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            max_batches: 1024,
-            max_rows: 1_000_000,
-            max_bytes: 64 * 1024 * 1024,
-            max_checkpoint_bytes: 16 * 1024 * 1024,
+            max_batches: u32::MAX,
+            max_rows: u64::MAX,
+            max_bytes: u64::MAX,
+            max_checkpoint_bytes: u64::MAX,
         }
     }
 }

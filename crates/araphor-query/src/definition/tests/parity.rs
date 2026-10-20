@@ -56,8 +56,8 @@ fn returned(output: &DefinitionOutput) -> TestResult<&CallResult> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nonempty_tenant_guests_overlap() -> TestResult {
     let fixture = Fixture::limits(Limits {
-        global_evaluations: 2,
-        tenant_evaluations: 1,
+        global_evaluations: Some(2),
+        tenant_evaluations: Some(1),
         ..Default::default()
     })?;
     let descriptor = builtin::Discovery::package();
@@ -272,6 +272,7 @@ async fn preparation_cancellation_keeps_leases() -> TestResult {
 
     for cancel in [true, false] {
         let fixture = Fixture::limits(Limits {
+            tenant_evaluations: Some(1),
             input_capacity: Some(128 * 1024 * 1024),
             output_capacity: Some(16 * 1024 * 1024),
             ..Default::default()

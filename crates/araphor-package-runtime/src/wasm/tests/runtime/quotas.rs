@@ -9,7 +9,7 @@ fn default_quotas_execute_component() -> TestResult {
     let package = package();
     let limits = package.exports[0].limits;
     assert_eq!(WasmExecution::limits(limits, &runtime.limits), limits);
-    assert_eq!(limits.max_bytes, 64 * 1024 * 1024);
+    assert_eq!(limits.max_bytes, u64::MAX);
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let output = runtime.evaluate(
         &package,

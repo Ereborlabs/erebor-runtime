@@ -278,18 +278,17 @@ impl ClientGrpcOwner {
         };
         let stream = self.subscription(request, selection, &access).await?;
         let remaining = accepted.deadline_unix_ns.saturating_sub(Self::now()?);
-        let metadata = self
-            .data()?
-            .query
-            .memory()
-            .reserve_output(self.data()?.query.limits().output_bytes)
-            .map_err(|_| Self::query_code(Failure::Busy))?;
         let detail = Self::trace_detail(&state, &accepted);
         let detail_bytes = Wire::trace_detail_bytes(&detail);
         if detail_bytes > self.data()?.query.limits().output_bytes {
             return Err(Self::query_code(Failure::ResultTooLarge));
         }
-        metadata.resize(detail_bytes);
+        let metadata = self
+            .data()?
+            .query
+            .memory()
+            .reserve_output(detail_bytes)
+            .map_err(|_| Self::query_code(Failure::Busy))?;
         let encoder = TraceEncoder {
             expires: Instant::now()
                 + Duration::from_nanos(access.expires_ns().saturating_sub(Self::now()?)),

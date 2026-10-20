@@ -11,7 +11,7 @@ use datafusion::logical_expr::LogicalPlan;
 use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
 
-use crate::execution::{Engine, Read, Session};
+use crate::execution::{CapturedPhysical, Engine, PendingRead, PhysicalStream, Read, Session};
 use crate::planner::Planner;
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
@@ -23,8 +23,9 @@ mod tests;
 
 pub use call::PackageCall;
 pub(crate) use physical::CallContext;
-pub use physical::{CallResult, Invocation};
+pub use physical::{CallResult, ExecutionReceipt, Invocation};
 
+#[derive(Clone)]
 pub struct PreparedDefinition {
     pub resolved: ResolvedDefinition,
     pub plan: LogicalPlan,
@@ -36,6 +37,109 @@ pub struct DefinitionOutput {
     pub snapshot: Arc<crate::sources::ArrowSnapshot>,
     pub batches: Vec<RecordBatch>,
     pub calls: BTreeMap<u64, Arc<CallResult>>,
+}
+
+pub struct CapturedExecution {
+    captured: CapturedPhysical,
+    session: Session,
+    calls: Arc<CallContext>,
+    parent: Arc<AnalysisReadControl>,
+    pending: PendingRead,
+}
+
+impl CapturedExecution {
+    pub fn snapshot(&self) -> &crate::sources::ArrowSnapshot {
+        &self.captured.snapshot
+    }
+
+    pub async fn blocking<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&crate::sources::ArrowSnapshot, &AnalysisReadControl) -> Result<T>
+            + Send
+            + 'static,
+    ) -> Result<T> {
+        let snapshot = Arc::clone(&self.captured.snapshot);
+        let control = Arc::clone(&self.parent);
+        let lease = (
+            self.calls.token().context(SqlSnafu)?,
+            Arc::clone(&self.captured.permit),
+        );
+        Engine::blocking(Arc::clone(&control), lease, move || {
+            operation(&snapshot, &control)
+        })
+        .await
+    }
+
+    pub async fn execute(self) -> Result<DefinitionOutput> {
+        let Self {
+            captured,
+            session,
+            calls,
+            parent,
+            mut pending,
+        } = self;
+        let result = {
+            let execution = async {
+                parent.check()?;
+                let PhysicalStream {
+                    snapshot,
+                    stream,
+                    permit,
+                    control,
+                    reservation,
+                } = captured.start()?;
+                let stream = session.bounded(
+                    stream,
+                    permit,
+                    control,
+                    reservation,
+                    Some(Arc::clone(&snapshot)),
+                );
+                let batches = stream.try_collect().await.context(SqlSnafu)?;
+                session
+                    .control()
+                    .query_async(session.check_read(&snapshot))
+                    .await?;
+                session.control().check()?;
+                Ok(DefinitionOutput {
+                    snapshot,
+                    batches,
+                    calls: calls.results().context(SqlSnafu)?,
+                })
+            };
+            tokio::pin!(execution);
+            tokio::select! {
+                result = &mut execution => result,
+                stopped = parent.query_async(std::future::pending::<Result<DefinitionOutput>>()) => {
+                    let _cancelled = session.control().cancel();
+                    let _finished = execution.await;
+                    stopped
+                }
+            }
+        };
+        if result.is_err() {
+            let _cancelled = session.control().cancel();
+        }
+        calls.finish().await;
+        parent.check()?;
+        pending.active = false;
+        result
+    }
+
+    pub async fn cancel_and_join(self) -> Result<()> {
+        let Self {
+            captured,
+            session,
+            calls,
+            pending,
+            ..
+        } = self;
+        let result = session.control().cancel().map_err(crate::Error::from);
+        drop(captured);
+        calls.finish().await;
+        drop(pending);
+        result
+    }
 }
 
 impl Engine {
@@ -164,6 +268,36 @@ impl Session {
         definition: &PreparedDefinition,
         invocation: Invocation,
     ) -> Result<DefinitionOutput> {
+        self.capture_definition(definition, invocation)
+            .await?
+            .execute()
+            .await
+    }
+
+    pub async fn capture_definition(
+        &self,
+        definition: &PreparedDefinition,
+        invocation: Invocation,
+    ) -> Result<CapturedExecution> {
+        self.capture_invocation(definition, invocation, None).await
+    }
+
+    pub async fn capture_managed(
+        &self,
+        definition: &PreparedDefinition,
+        invocation: Invocation,
+        managed: araphor_data::ManagedRead,
+    ) -> Result<CapturedExecution> {
+        self.capture_invocation(definition, invocation, Some(managed))
+            .await
+    }
+
+    async fn capture_invocation(
+        &self,
+        definition: &PreparedDefinition,
+        invocation: Invocation,
+        managed: Option<araphor_data::ManagedRead>,
+    ) -> Result<CapturedExecution> {
         self.control().check()?;
         if definition.tenant != self.selection().tenant_id {
             return Err(PackageErrorCodeV1::Denied
@@ -175,6 +309,22 @@ impl Session {
                 field: "invocation identity",
             }
             .fail();
+        }
+        if let Some(managed) = &managed {
+            if !invocation.inputs.is_empty() || !invocation.checkpoints.is_empty() {
+                return Err(PackageErrorCodeV1::Invalid
+                    .error("managed invocation state")
+                    .into());
+            }
+            let spec = &managed.instance.spec;
+            if spec.tenant != self.selection().tenant_id
+                || spec.grant.selection != *self.selection()
+                || spec.definition != definition.resolved
+            {
+                return Err(PackageErrorCodeV1::Denied
+                    .error("managed invocation scope")
+                    .into());
+            }
         }
         let mut checkpoints = invocation
             .checkpoints
@@ -228,40 +378,60 @@ impl Session {
                     .into());
             }
         }
+        PackageCall::check_admission(&definition.plan).context(SqlSnafu)?;
         let mut session = self.clone();
+        session.managed = managed;
         session.control = Arc::new(self.control().operation()?);
+        let pending = PendingRead {
+            control: Arc::clone(session.control()),
+            active: true,
+        };
         let calls = session.call_context(invocation);
         session.calls = Some(Arc::clone(&calls));
-        let execution = async {
-            let (snapshot, stream) = session
-                .stream(&definition.plan, &definition.sources, Read::Snapshot)
-                .await?;
-            let batches = stream.try_collect().await.context(SqlSnafu)?;
-            session
-                .control()
-                .query_async(self.engine().check_read(&snapshot))
-                .await?;
-            session.control().check()?;
-            Ok(DefinitionOutput {
-                snapshot,
-                batches,
-                calls: calls.results().context(SqlSnafu)?,
-            })
-        };
-        tokio::pin!(execution);
-        let result = tokio::select! {
-            result = &mut execution => result,
-            stopped = self.control().query_async(std::future::pending::<Result<DefinitionOutput>>()) => {
-                let _cancelled = session.control().cancel();
-                let _finished = execution.await;
-                stopped
+        let result = {
+            let capture = async {
+                let permit = Arc::new(
+                    session
+                        .engine()
+                        .reserve_evaluation(session.selection().tenant_id)?,
+                );
+                session
+                    .capture_plan(
+                        &definition.plan,
+                        &definition.sources,
+                        Read::Snapshot,
+                        permit,
+                    )
+                    .await
+            };
+            tokio::pin!(capture);
+            tokio::select! {
+                result = &mut capture => result,
+                stopped = self.control().query_async(std::future::pending::<Result<CapturedPhysical>>()) => {
+                    let _cancelled = session.control().cancel();
+                    let _finished = capture.await;
+                    stopped
+                }
             }
         };
-        if result.is_err() {
-            let _cancelled = session.control().cancel();
+        let result = result.and_then(|captured| {
+            self.control().check()?;
+            Ok(captured)
+        });
+        match result {
+            Ok(captured) => Ok(CapturedExecution {
+                captured,
+                session,
+                calls,
+                parent: Arc::clone(self.control()),
+                pending,
+            }),
+            Err(error) => {
+                let _cancelled = session.control().cancel();
+                calls.finish().await;
+                self.control().check()?;
+                Err(error)
+            }
         }
-        calls.finish().await;
-        self.control().check()?;
-        result
     }
 }

@@ -1,7 +1,9 @@
 # Discovery Definition Review
 
-This guide covers Discovery definition admission and finite OCI execution.
-The definition selects reusable code and inputs. Admission starts no Discovery.
+This guide covers Discovery definition admission, finite OCI execution, and
+the new finite Instance owner. The definition selects reusable code and inputs.
+Admission starts no Discovery. Focused finite managed checks pass. The final
+Rust gate and complete migration remain **Not done**.
 
 ## Intended end state
 
@@ -154,8 +156,9 @@ checks the actual root return against that admission before publication.
 Complete typed returns remain in Update.calls. This profile publisher cannot
 commit package checkpoints, reasons, or evidence. Admission rejects reachable
 checkpoint contracts; publication rejects auxiliary returns even when the
-selected query rows do not change. Managed atomic
-state and auxiliary publication remain unimplemented. Authority changes drop
+selected query rows do not change. The finite Instance owner below supplies
+a separate atomic state and auxiliary publication path. The profile publisher
+does not use that path. Authority changes drop
 the private producer and join its workers before the subscription returns
 Denied. Discovery stop and source removal call `Subscription::cancel_and_join`.
 Ordinary Drop cancels the operation; Drop cannot wait for async cleanup.
@@ -176,10 +179,10 @@ change the latest selection.
 checks saved identities, content digests, store revisions, and exact image
 pins during store open. Inspection checks content and image pins again.
 
-Not implemented: starting, inspecting, or stopping a managed instance.
-Not implemented: durable instance saved state, progress, and restart recovery.
-Definition recovery restores definitions only. Finite execution returns proposed
-state to its caller; it does not commit that state.
+Definition recovery restores immutable definitions. Caller-owned finite
+execution returns proposed state without a write. The new finite Instance
+owner below connects saved state, progress, and recovery checks. Managed
+start, current inspection, stop, and automatic restart remain unimplemented.
 
 ```mermaid
 sequenceDiagram
@@ -204,10 +207,11 @@ activation or result.
 ## Finite execution
 
 [Session::execute_definition](../../crates/araphor-query/src/definition.rs) accepts an admitted definition and caller invocation state
-  -> [PackageCall::check_admission](../../crates/araphor-query/src/definition/call.rs) checks the admitted call children before optimization or source capture
-  -> [Session::start](../../crates/araphor-query/src/execution.rs) uses fixed execution time for native optimization and physical planning
+  -> [Session::capture_definition](../../crates/araphor-query/src/definition.rs) checks admitted call children before optimization or source capture
+  -> [Session::capture_plan](../../crates/araphor-query/src/execution.rs) uses fixed execution time for native optimization and physical planning
   -> [SubscriptionPlanner](../../crates/araphor-query/src/planner/subscription.rs) uses the native physical planner extension for PackageCall
-  -> [Session::start_physical](../../crates/araphor-query/src/execution.rs) captures declared sources once
+  -> [Session::capture_physical](../../crates/araphor-query/src/execution.rs) captures declared sources once and retains the physical plan, permit, and source view
+  -> [CapturedExecution::execute](../../crates/araphor-query/src/definition.rs) starts that captured physical plan once
   -> [PackageExec](../../crates/araphor-query/src/definition/physical.rs) collects complete Arrow inputs and parameters under one operation permit
   -> [SQL execution](../../crates/araphor-query/src/definition/physical/sql.rs) uses native physical children, or [Runtime::evaluate_reserved](../../crates/araphor-package-runtime/src/lib.rs) invokes the selected guest backend
   -> [CheckedEvaluation](../../crates/araphor-analysis-sdk/src/validation.rs) validates all outputs, proposed state, reasons, and evidence
@@ -341,29 +345,185 @@ sequenceDiagram
 ```
 
 This API does not authorize a durable commit. The caller retains responsibility
-for current authority and domain checks. Data retains atomic commit ownership.
-Public managed instances, supervision, and restart recovery remain in
-TODO 16. Package-issued internal SQL requires a future SDK capability; the
-current guest ABI supplies no database handle.
+for current authority and domain checks. The finite Instance owner below adds
+the authority and Data transaction route. Long-running supervision and public
+lifecycle operations remain in TODO 16. Package-issued internal SQL requires
+a future SDK capability; the current guest ABI supplies no database handle.
 
 Qualification is in progress for the current worktree. The physical execution
 cases are in [definition tests](../../crates/araphor-query/src/definition/tests/execution.rs).
 Entered-guest cancellation, worker drop, and capacity cases are in
 [runtime tests](../../crates/araphor-package-runtime/src/wasm/tests/runtime.rs).
 
-Backup removal is withdrawn. All 208 backup files and 34 deleted Control and
-E2E reference files are restored. Compatible migration requires a complete
+During recovery, backup removal was withdrawn. All 208 backup files and 34
+deleted Control and E2E reference files were restored. Compatible migration requires a complete
 source and test map before deletion. The finite call path does not establish
 graph publication, Discovery replay, durable commit, or permission-supervision
-parity. No deletion commit or push was made. Full workspace tests failed to
-build when the host disk filled; they did not pass.
+parity. At that point, no deletion commit or push was made. That workspace
+build stopped when the host disk filled; it did not pass.
 
-The later finite retirement removes 29 duplicate reference leaves after
-source comparison and focused qualification. The other 179 files remain
-unchanged. The recovery archive retains all 208 recovered files. Read the
-[retirement record](../plans/araphor-analysis-migration.md#retired-finite-reference-files)
-for the exact scope. The final Rust gate passes in `migration-final-ci42`.
-The complete migration remains **Not done**.
+The earlier finite retirement removed 29 duplicate reference leaves. Its final
+Rust gate passes in `migration-final-ci42` at commit `95e9bb4d`. That record does
+not qualify the later managed source. The additional finite retirement removes
+exactly four mapped leaves: Graph contract source and tests, model input, and
+model operation. The remaining 175 reference files keep their baseline content.
+The recovery archive retains all 208 recovered files. Read the
+[retirement records](../plans/araphor-analysis-migration.md#retired-finite-reference-files)
+and the [four-file record](../../recovery/araphor-analysis-managed-retirement-20261019.json)
+for the exact scope. The current final Rust gate and complete migration remain
+**Not done**.
+
+## Finite managed execution
+
+[Instance::admit](../../crates/araphor-analysis/src/instance/mod.rs) accepts an
+explicit Run grant, an instance ID, and an exact retained definition. It checks
+permission even for SQL with no image calls. It checks every image digest and
+trust decision, prepares the definition through Query, and saves immutable
+instance metadata through
+[AnalysisStore::admit_managed](../../crates/araphor-data/src/analysis/managed/read.rs).
+It starts no subscription or guest.
+
+Read these owners in order:
+
+1. [Instance::manifest](../../crates/araphor-analysis/src/instance/manifest.rs)
+   records each admitted call ID, image, package, export, target, artifact,
+   native argument text, and dependency IDs. The manifest has a format and
+   planner version. It stores no displayed or serialized logical plan.
+2. [Instance::run](../../crates/araphor-analysis/src/instance/mod.rs) checks
+   current generation and the exact attempt request before capture. It clones
+   the admitted SELECT and uses native `LogicalPlanBuilder::insert_into` to
+   add one private publication target.
+3. [Session::capture_managed](../../crates/araphor-query/src/definition.rs)
+   prepares one native physical plan and captures source rows and guarded
+   prior state through the same Data read connection. It returns before
+   execution. It rejects a different tenant, selection, definition, or supplied
+   caller input or checkpoint state.
+4. [CapturedExecution::blocking](../../crates/araphor-query/src/definition.rs)
+   holds the captured permit and worker token while Data registers the attempt.
+   [register_managed_attempt](../../crates/araphor-data/src/analysis/managed/commit.rs)
+   fixes the source receipt, prior heads, logical time, seed, and rebuild flag
+   before the native plan starts.
+5. [PackageExec](../../crates/araphor-query/src/definition/physical.rs) selects
+   captured prior state after it collects effective inputs and parameters.
+   [ManagedPrior::checkpoint](../../crates/araphor-data/src/analysis/managed/model.rs)
+   requires matching input revisions, coverage, parameter values and schema,
+   checkpoint version, and named state dataset schemas. Rebuild or a mismatch
+   resets state. Separate call sites retain separate state.
+6. [Publication::write_all](../../crates/araphor-analysis/src/instance/sink.rs)
+   retains selected Arrow batches and all complete call returns. It checks
+   each return against the admitted call. Native optimization can remove a
+   call; the sink publishes only calls that actually executed.
+7. [AnalysisStore::commit_managed](../../crates/araphor-data/src/analysis/managed/commit.rs)
+   checks the captured contract, current source and dependency revisions,
+   witnesses, generation, and prior heads. One transaction publishes selected
+   rows, actual call outputs, evidence, reasons, state, and progress. A failed
+   step leaves those heads unchanged. Its pending attempt can remain retained.
+8. [validate_managed](../../crates/araphor-data/src/analysis/managed/schema.rs)
+   checks retained definitions, call pins, result packets, heads, and reference
+   integrity during open. The storage API retains exact results and selected
+   Arrow data; it does not supply a public authorized history command.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Analysis
+    participant Query
+    participant Data
+    Caller->>Analysis: Run exact attempt request
+    Analysis->>Query: Capture native INSERT with admitted SELECT
+    Query->>Data: Read source cut and prior state once
+    Query-->>Analysis: Return captured execution handle
+    Analysis->>Data: Register immutable attempt under current authority
+    Analysis->>Query: Execute the same captured handle
+    Query->>Query: Execute native package calls and selected relation
+    Query->>Analysis: DataSink receives complete native stream
+    Analysis->>Data: Commit all returns and progress under current authority
+    Data-->>Analysis: Return immutable receipt
+    Analysis->>Analysis: Recheck current authority
+    Analysis-->>Caller: Return receipt
+```
+
+The publication target implements native `TableProvider::insert_into` and
+`DataSink`; its scan is Unsupported. DataFusion's `DataSinkExec` invokes the
+sink and emits the single UInt64 count result. Analysis `Publication::write_all`
+drains the native stream, checks selected row and byte limits, and retains the
+selected Arrow batches. Query checks the measured count array against its
+output limits and reserves its buffer before execution, before the sink can
+commit. This adds no parser, planner, or custom physical writer.
+Ordinary source reads still use SourceProvider. Package relation arguments
+still use the generic RelationPlanner described above.
+
+Run observes authority changes before execution and applies the grant expiry
+to its operation control. Cancellation signals that operation and waits for
+the same captured work and workers. The final write holds `commit_many` for
+the explicit grant and every exact image. Its final Data callback checks only
+control; it opens no second reader while the writer is held. Current authority
+is checked again before a receipt is returned. A denied acknowledgement leaves
+a successful Data commit retained.
+
+An exact completed retry returns its original receipt without another capture
+or execution. A changed request conflicts. A pending retry returns Incomplete;
+it cannot substitute a newer source cut after restart. Instance admission
+retains immutable metadata, and each attempt retains its capture contract.
+[Managed storage](../../crates/araphor-data/src/analysis/managed/schema.rs)
+retains binary Arrow packets and result references. Removal, pin release, and
+historical replay remain outside this finite API.
+
+[Query limits](../../crates/araphor-query/src/execution.rs) use `input_bytes`
+for the complete evaluation inputs, parameters, and prior state. The sink
+checks `output_rows` and `output_bytes` against the complete selected relation.
+`input_capacity`, `output_capacity`, and `execution_capacity` configure shared
+pools. Evaluation and stream counts are optional global and tenant limits.
+Bulk bounds default to the numeric maximum; optional limits default to None.
+These defaults do not preallocate that maximum.
+
+[SDK limits](../../crates/araphor-analysis-sdk/src/model.rs) retain separate
+`max_rows`, `max_batches`, `max_bytes`, and `max_checkpoint_bytes` contracts.
+Each call uses the minimum requested and model bounds; the runtime also applies its
+configured backend limits. SDK defaults impose no bulk quota.
+[Data extraction](../../crates/araphor-data/src/analysis/extraction.rs) and
+[native storage limits](../../crates/araphor-data/src/analysis/capacity.rs)
+retain their own configured bounds. `native_memory_bytes` and
+`native_temp_bytes` are optional and disabled by default.
+
+Query Memory retains captured prior buffers, package returns, and selected
+Arrow buffers for their actual use. The writer retains those leases until it
+exits. Data owns Arrow IPC serialization and transaction allocations; those
+allocations are not all charged to Query Memory. Configured Query and SDK
+limits are not a bound on all Rust heap allocation. The selected relation uses
+native Arrow schemas, including Map, dictionary, and zero-column batches.
+The remaining resource-boundary audit is **Not done**.
+
+Focused finite qualification passes: 8 SQL contract cases, 11 Data managed
+cases, 10 ordinary Instance cases, all 7 captured-execution cases, and both
+Graph contract cases. Read the
+[Instance tests](../../crates/araphor-analysis/src/instance/tests.rs),
+[managed capture tests](../../crates/araphor-query/src/definition/tests/managed.rs),
+and [Data transaction tests](../../crates/araphor-data/src/analysis/managed/tests.rs).
+These tests check state reuse/reset, atomic failure, exact retry, authority
+loss, configured pressure, crash, and recovery.
+
+Separate source-built native runs pass 4 Query and 4 Analysis cases, including
+the native Instance case. Their six artifacts have complete recorded source
+provenance. Strict workspace Clippy passes after the test-only corrections.
+The native57 provenance refresh passes in 31.395 seconds. All 116 recorded artifact inputs
+are hashed, and its six artifacts match build54 byte for byte on
+`x86_64-unknown-linux-gnu`. Exact records and run times are in the
+[finite qualification table](../plans/araphor-analysis-migration.md#finite-managed-source-focused-qualification).
+
+The required final Rust gate `migration-final-ci58` stopped during test compilation because the host disk was full. Formatting, workspace check, and strict Clippy passed. Gate59 passes these checks, 145 ordinary Analysis cases, and 333 ordinary Data cases. It stops at an OCI fixture that inherited changed SDK defaults. The corrected fixture supplies explicit limits and retains its golden digest. All 15 Package cases pass in `migration-oci-package60`. All eight source-built native Query and Analysis cases pass in the two native60 runs. The complete result is **Not done**. Long-running reactive supervision, per-port windows, public
+start/inspect/stop, authorized history, CLI/Control managed operations,
+historical replay, Data coordination polling, and remaining quota work stay
+open. Native input scope still needs declaration-only local-port origins and
+precise disjoint capture ranges. The old input executor remains until its
+finite and live assertions have current owners. The complete migration remains
+**Not done**.
+
+This finite API creates no long-running job. Subscription supervision, window
+completion, start/stop/resume/update/removal, current inspection, authorized
+history, and CLI/Control managed operations remain **Not done**.
+`Instance::admitted` returns immutable admission metadata; it is not a current
+status or history API.
 
 ## Migration boundaries
 
@@ -415,9 +575,10 @@ available while qualification is incomplete.
 
 Configured Wasm allocation limits remain separate from output contract
 limits. A transfer reservation is not a process memory or isolation guarantee.
-Native cancellation remains cooperative. Mandatory Query and Data bulk caps,
-managed state transactions, complete reactive producers, public lifecycle
-operations, and restart recovery remain open in the migration record.
+Native cancellation remains cooperative. The new disabled-default limits and
+finite managed transaction source require qualification. Complete reactive
+producers, public lifecycle operations, and automatic restart remain open in
+the migration record.
 Current-source qualification is **Not done** until the recorded commands pass.
 
 ## File schema

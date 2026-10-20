@@ -40,8 +40,8 @@ async fn fixture_cancellation_joins_guest() -> TestResult {
             input_capacity: Some(INPUT_BYTES),
             output_bytes: BYTES * 4,
             output_capacity: Some(BYTES * 4),
-            global_evaluations: 1,
-            tenant_evaluations: 1,
+            global_evaluations: Some(1),
+            tenant_evaluations: Some(1),
             ..Default::default()
         },
     )?);

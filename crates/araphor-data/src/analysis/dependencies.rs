@@ -2,8 +2,8 @@ use duckdb::params;
 use snafu::ResultExt as _;
 
 use super::{
-    AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, AnalysisStoreMetaV1,
-    AnalysisTableRequests, ProcessorScopeV1,
+    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
+    AnalysisStoreMetaV1, AnalysisTableRequests, ProcessorScopeV1,
 };
 use crate::{AnalysisDatabaseSnafu, Result, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION};
 
@@ -112,7 +112,12 @@ impl AnalysisStore {
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
             let (selection, _) =
-                self.resolve_selection(snapshot, selection, control, 64 * 1024 * 1024)?;
+                self.resolve_selection(
+                    snapshot,
+                    selection,
+                    control,
+                AnalysisExtractLimits::default(),
+                )?;
             let selection = selection.as_ref();
             drop(coordinator);
             let mut revision = self.selected_revision(selection, meta.commit_revision, control)?;

@@ -191,19 +191,21 @@ impl Changes {
             AnalysisExtractLimits {
                 scan_bytes: engine.limits().scan_bytes,
                 input_bytes: engine.limits().input_bytes,
+                keys: engine.limits().extract_keys,
                 ..Default::default()
             },
             stage.within(stage.remaining()?)?,
             engine.limits().extract_timeout,
             now,
             Arc::clone(session.memory()),
+            None,
         );
         let requests = Arc::clone(&self.requests);
         let bounds = self.bounds.clone();
         let mode = self.frontier.map_or(ReadMode::Snapshot, ReadMode::Changes);
         let worker = Arc::clone(&stage);
         let capture_permit = Arc::clone(&permit);
-        let scope = session.token();
+        let scope = session.token()?;
         let mut captured = Engine::blocking(stage, scope, move || {
             let _permit = capture_permit;
             capture

@@ -568,7 +568,7 @@ async fn planning_keeps_clock_change() {
 #[tokio::test]
 async fn native_first_clock_time() {
     let fixture = Fixture::new(Limits {
-        tenant_evaluations: 1,
+        tenant_evaluations: Some(1),
         ..Default::default()
     });
     let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap());

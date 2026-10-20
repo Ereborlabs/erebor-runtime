@@ -3,11 +3,11 @@ use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt 
 use std::path::Path;
 use std::sync::{atomic::Ordering, MutexGuard, RwLockReadGuard, TryLockError};
 
-use duckdb::{Config, Connection};
+use duckdb::{AccessMode, Config, Connection};
 use snafu::ResultExt as _;
 use tokio::sync::OwnedSemaphorePermit;
 
-use super::{AnalysisReadControl, AnalysisStore};
+use super::{AnalysisReadControl, AnalysisStore, StorageLimitsV1};
 use crate::{AnalysisBusySnafu, AnalysisDatabaseSnafu, AnalysisStateSnafu, IoSnafu, Result};
 
 pub(super) struct AnalysisLease {
@@ -152,7 +152,7 @@ impl AnalysisStore {
         if !file.is_file() || file.permissions().mode() & 0o077 != 0 {
             return self.reject("the analysis database file is not private");
         }
-        let mut connection = Self::open_native(&path)?;
+        let mut connection = Self::open_native(&path, self.storage, AccessMode::Automatic)?;
         let meta = Self::read_meta_from(&connection, &path)?;
         if meta.schema_version != super::ANALYSIS_SCHEMA_VERSION as u32
             || meta.store_uuid != self.store_uuid
@@ -203,26 +203,64 @@ impl AnalysisStore {
         Ok(())
     }
 
-    pub(super) fn open_native(path: &Path) -> Result<Connection> {
+    pub(super) fn open_native(
+        path: &Path,
+        storage: StorageLimitsV1,
+        access_mode: AccessMode,
+    ) -> Result<Connection> {
+        let readonly = access_mode == AccessMode::ReadOnly;
         let config = Config::default()
             .enable_autoload_extension(false)
             .context(AnalysisDatabaseSnafu {
                 operation: "disable extension loading",
             })?
+            .access_mode(access_mode)
+            .and_then(|config| config.threads(2))
+            .and_then(|config| config.with("wal_autocheckpoint", "16MiB"))
+            .and_then(|config| {
+                config.with(
+                    "max_temp_directory_size",
+                    storage
+                        .native_temp_bytes
+                        .map_or_else(|| "-1".to_owned(), |bytes| format!("{bytes}B")),
+                )
+            })
+            .and_then(|config| config.with("allocator_bulk_deallocation_flush_threshold", "0B"))
+            .context(AnalysisDatabaseSnafu {
+                operation: "configure native data resources",
+            })?;
+        let config = if readonly {
+            config.with("temp_directory", "")
+        } else {
+            Ok(config)
+        }
+        .context(AnalysisDatabaseSnafu {
+            operation: "configure native temporary directory",
+        })?;
+        let config = config
             .enable_external_access(false)
             .context(AnalysisDatabaseSnafu {
                 operation: "disable external access",
-            })?
-            .max_memory(&format!("{}B", super::NATIVE_MEMORY_BYTES))
-            .and_then(|config| config.threads(2))
-            .and_then(|config| config.with("wal_autocheckpoint", "16MiB"))
-            .and_then(|config| config.with("max_temp_directory_size", "128MiB"))
-            .and_then(|config| config.with("allocator_bulk_deallocation_flush_threshold", "0B"))
-            .context(AnalysisDatabaseSnafu {
-                operation: "bound native data resources",
             })?;
-        Connection::open_with_flags(path, config)
-            .context(AnalysisDatabaseSnafu { operation: "open" })
+        let config = if let Some(bytes) = storage.native_memory_bytes {
+            config.max_memory(&format!("{bytes}B"))
+        } else {
+            Ok(config)
+        }
+        .context(AnalysisDatabaseSnafu {
+            operation: "configure native memory limit",
+        })?;
+        let connection = Connection::open_with_flags(path, config)
+            .context(AnalysisDatabaseSnafu { operation: "open" })?;
+        if storage.native_memory_bytes.is_none() {
+            // DuckDB replaces unlimited memory with its default during database startup.
+            connection
+                .execute_batch("SET memory_limit = '-1'")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "disable native memory limit",
+                })?;
+        }
+        Ok(connection)
     }
 
     pub(super) fn writer(&self) -> Result<AnalysisConnection<'_>> {

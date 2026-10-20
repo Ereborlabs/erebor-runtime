@@ -27,6 +27,7 @@ mod extraction;
 mod graph;
 pub(crate) mod graph_rows;
 mod health;
+mod managed;
 mod notification;
 mod packages;
 mod progress;
@@ -54,6 +55,7 @@ pub use extraction::{
 };
 pub use graph_rows::CanonicalGraph;
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
+pub use managed::*;
 pub use notification::NotificationLookup;
 pub use packages::*;
 pub use progress::{
@@ -73,8 +75,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceReadPermi
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-pub(crate) const NATIVE_MEMORY_BYTES: usize = 128 * 1024 * 1024;
-pub const ANALYSIS_SCHEMA_VERSION: i64 = 26;
+pub const ANALYSIS_SCHEMA_VERSION: i64 = 27;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -296,7 +297,7 @@ impl AnalysisStore {
                 }
             }
         }
-        let mut writer = Self::open_native(&path)?;
+        let mut writer = Self::open_native(&path, storage, duckdb::AccessMode::Automatic)?;
         let metadata = fs::symlink_metadata(&path).context(IoSnafu { path: &path })?;
         if !metadata.is_file() {
             return AnalysisStateSnafu {
@@ -508,6 +509,11 @@ impl AnalysisStore {
                 .execute_batch(Self::PACKAGE_SCHEMA)
                 .context(AnalysisDatabaseSnafu {
                     operation: "create package state",
+                })?;
+            transaction
+                .execute_batch(Self::MANAGED_SCHEMA)
+                .context(AnalysisDatabaseSnafu {
+                    operation: "create native managed state",
                 })?;
             let initial_uuid = Uuid::new_v4().hyphenated().to_string();
             transaction

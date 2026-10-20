@@ -14,6 +14,20 @@ mod allocation;
 use allocation::ArrayBudget;
 
 impl Dataset {
+    /// Validate message lengths and the uncompressed IPC storage format.
+    pub fn validate_envelope(&self) -> Result<()> {
+        super::framing::IpcFrames::validate_envelope(&self.arrow_ipc)
+    }
+
+    /// Return the buffer bound for IPC decode and owned normalization.
+    /// Charge schema and dataset metadata with the decoded value.
+    pub fn decoding_bytes(ipc: &[u8], limits: Limits) -> Result<usize> {
+        if ipc.len() as u64 > limits.max_bytes {
+            return Err(Error::contract(ErrorCode::Limit, "encoded dataset bytes"));
+        }
+        super::framing::IpcFrames::decoding_bytes(ipc, limits)
+    }
+
     pub fn encoding_scratch(batch: &RecordBatch) -> Result<usize> {
         let arrays = batch
             .columns()
@@ -201,7 +215,7 @@ impl Codec {
         }
     }
 
-    fn remaining(&self, encode: bool) -> Limits {
+    pub(super) fn remaining(&self, encode: bool) -> Limits {
         let bytes = if self.aggregate {
             self.encoded.max(self.decoded)
         } else if encode {

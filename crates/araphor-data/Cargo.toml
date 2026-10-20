@@ -34,13 +34,14 @@ snafu.workspace = true
 time.workspace = true
 tempfile = { version = "3.23.0" }
 tokio.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["serde"] }
 zerocopy.workspace = true
 
 [build-dependencies]
 prost-build.workspace = true
 
 [dev-dependencies]
+flatbuffers = "=25.12.19"
 tempfile = "3.23.0"
 
 [lints]

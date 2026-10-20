@@ -14,7 +14,7 @@ struct Exchange {
     _scratch: MemoryReservation,
     _output: Arc<MemoryReservation>,
     _permit: Arc<Permit>,
-    _scope: Option<Arc<araphor_package_runtime::TaskTrackerToken>>,
+    _scope: Option<araphor_package_runtime::TaskTrackerToken>,
 }
 
 impl PackageExec {
@@ -79,9 +79,22 @@ impl PackageExec {
                         0
                     })
                     * 4;
-                owner
-                    .memory
-                    .reserve_output(usize::try_from(bytes).map_err(|_| limit())?)?
+                let reservation = if limits.max_bytes == u64::MAX
+                    || (model.checkpoint.is_some() && limits.max_checkpoint_bytes == u64::MAX)
+                {
+                    owner.memory.prepare_output(capacity)?
+                } else {
+                    owner
+                        .memory
+                        .reserve_output(usize::try_from(bytes).map_err(|_| limit())?)?
+                };
+                let transferred = u64::try_from(reservation.size() / 4).map_err(|_| limit())?;
+                if transferred == 0 {
+                    return Err(limit());
+                }
+                limits.max_bytes = transferred;
+                limits.max_checkpoint_bytes = limits.max_checkpoint_bytes.min(transferred);
+                reservation
             } else {
                 let reservation = owner.memory.prepare_output(
                     usize::try_from(u128::from(limits.max_bytes).min(capacity as u128))
@@ -97,13 +110,22 @@ impl PackageExec {
             owner.memory.reserve_output(0)?
         };
         let output = Arc::new(output);
-        let copy_bytes = owner.memory.output_capacity().map(|_| output.size());
+        let copy_bytes = owner.memory.output_capacity().map(|_| {
+            if wasm {
+                output.size() / 4
+            } else {
+                output.size()
+            }
+        });
         let lease = Exchange {
             _input: input,
             _scratch: scratch,
             _output: Arc::clone(&output),
             _permit: permit,
-            _scope: owner.scope.clone(),
+            _scope: owner
+                .scope
+                .as_ref()
+                .map(araphor_package_runtime::TaskTracker::token),
         };
         let (evaluation, result) = owner
             .runtime

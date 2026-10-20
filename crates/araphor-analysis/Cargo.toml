@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-trait = "0.1"
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 datafusion = { version = "=53.1.0", default-features = false, features = ["sql", "nested_expressions", "encoding_expressions", "string_expressions", "unicode_expressions", "recursive_protection"] }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }

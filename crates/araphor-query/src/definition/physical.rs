@@ -8,7 +8,6 @@ use araphor_data::AnalysisReadControl;
 use araphor_discovery_definition::ImagePin;
 use araphor_package::ModelRef;
 use araphor_package_runtime::{Prepared, Runtime, TaskTracker, TaskTrackerToken};
-use datafusion::arrow::compute::concat_batches;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
@@ -30,6 +29,8 @@ use crate::sources::SourceSnapshot;
 
 mod guest;
 mod sql;
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone, Debug)]
 pub struct Invocation {
@@ -47,12 +48,7 @@ impl Default for Invocation {
             seed: None,
             inputs: BTreeMap::new(),
             checkpoints: BTreeMap::new(),
-            limits: sdk::Limits {
-                max_batches: u32::MAX,
-                max_rows: u64::MAX,
-                max_bytes: u64::MAX,
-                max_checkpoint_bytes: u64::MAX,
-            },
+            limits: sdk::Limits::default(),
         }
     }
 }
@@ -63,6 +59,80 @@ pub struct CallResult {
     origin: Origin,
     _input: Arc<MemoryReservation>,
     _output: Arc<MemoryReservation>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExecutionReceipt {
+    snapshot: Arc<crate::sources::ArrowSnapshot>,
+    calls: BTreeMap<u64, Arc<CallResult>>,
+}
+
+impl ExecutionReceipt {
+    pub fn from_context(context: &TaskContext) -> Result<Self> {
+        let calls = context
+            .session_config()
+            .get_extension::<CallContext>()
+            .ok_or_else(|| internal("package execution context is absent"))?;
+        let source = context
+            .session_config()
+            .get_extension::<SourceSnapshot>()
+            .ok_or_else(|| internal("package source snapshot is absent"))?;
+        context
+            .session_config()
+            .get_extension::<AnalysisReadControl>()
+            .ok_or_else(|| internal("package execution control is absent"))?
+            .check()
+            .map_err(external)?;
+        Ok(Self {
+            snapshot: source.snapshot()?,
+            calls: calls.results()?,
+        })
+    }
+
+    pub fn snapshot(&self) -> &crate::sources::ArrowSnapshot {
+        &self.snapshot
+    }
+
+    pub fn calls(&self) -> &BTreeMap<u64, Arc<CallResult>> {
+        &self.calls
+    }
+
+    pub async fn blocking<T: Send + 'static>(
+        self,
+        context: &TaskContext,
+        lease: impl Send + 'static,
+        operation: impl FnOnce(&AnalysisReadControl) -> crate::Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let calls = context
+            .session_config()
+            .get_extension::<CallContext>()
+            .ok_or_else(|| internal("package execution context is absent"))?;
+        let control = context
+            .session_config()
+            .get_extension::<AnalysisReadControl>()
+            .ok_or_else(|| internal("package execution control is absent"))?;
+        let permit = context
+            .session_config()
+            .get_extension::<crate::execution::Permit>()
+            .ok_or_else(|| internal("package evaluation permit is absent"))?;
+        control.check().map_err(external)?;
+        let source = context
+            .session_config()
+            .get_extension::<SourceSnapshot>()
+            .ok_or_else(|| internal("package source snapshot is absent"))?;
+        if !Arc::ptr_eq(&self.snapshot, &source.snapshot()?) {
+            return Err(external(
+                araphor_data::PackageErrorCodeV1::Invalid.error("package execution receipt"),
+            ));
+        }
+        let worker = calls.token()?;
+        let stage = Arc::clone(&control);
+        crate::execution::Engine::blocking(control, (worker, permit, self, lease), move || {
+            operation(&stage)
+        })
+        .await
+        .map_err(external)
+    }
 }
 
 #[derive(Clone)]
@@ -139,7 +209,7 @@ pub(crate) struct CallContext {
     now: u64,
     workers: TaskTracker,
     calls: Mutex<BTreeMap<u64, CallState>>,
-    scope: Option<Arc<TaskTrackerToken>>,
+    scope: Option<TaskTracker>,
 }
 
 impl fmt::Debug for CallContext {
@@ -159,7 +229,7 @@ impl CallContext {
         memory: Arc<Memory>,
         control: Arc<AnalysisReadControl>,
         now: u64,
-        scope: Option<Arc<TaskTrackerToken>>,
+        scope: Option<TaskTracker>,
     ) -> Arc<Self> {
         Arc::new(Self {
             runtime,
@@ -171,6 +241,21 @@ impl CallContext {
             calls: Mutex::default(),
             scope,
         })
+    }
+
+    pub(crate) fn token(&self) -> Result<(TaskTrackerToken, Option<TaskTrackerToken>)> {
+        let _calls = self
+            .calls
+            .lock()
+            .map_err(|_| internal("package result lock is poisoned"))?;
+        if self.workers.is_closed() {
+            return Err(internal("package execution is closed"));
+        }
+        let scope = self.scope.as_ref().map(TaskTracker::token);
+        if self.scope.as_ref().is_some_and(TaskTracker::is_closed) {
+            return Err(internal("package parent execution is closed"));
+        }
+        Ok((self.workers.token(), scope))
     }
 
     pub fn results(&self) -> Result<BTreeMap<u64, Arc<CallResult>>> {
@@ -228,12 +313,17 @@ impl CallContext {
                 }
             };
         }
+        let scope = self.scope.as_ref().map(TaskTracker::token);
+        if self.scope.as_ref().is_some_and(TaskTracker::is_closed) {
+            return Err(internal("package parent execution is closed"));
+        }
         let token = self.workers.token();
         let owner = Arc::clone(self);
         let origin = Origin::new(&plan.call);
         let running = origin.clone();
         let future = async move {
             let _token = token;
+            let _scope = scope;
             let result = plan
                 .evaluate(Arc::clone(&owner), context)
                 .await
@@ -300,23 +390,13 @@ impl PackageExec {
                     .config()
                     .get_extension::<crate::execution::Permit>()
                     .ok_or_else(|| internal("package preparation permit is absent"))?;
-                let token = {
-                    let _calls = calls
-                        .calls
-                        .lock()
-                        .map_err(|_| internal("package result lock is poisoned"))?;
-                    if calls.workers.is_closed() {
-                        return Err(internal("package execution is closed"));
-                    }
-                    calls.workers.token()
-                };
-                let scope = calls.scope.clone();
+                let worker = calls.token()?;
                 let control = Arc::new(control.within(None).map_err(external)?);
                 let stage = Arc::clone(&control);
                 let bundle = Arc::clone(&call.bundle);
                 let package = call.package.clone();
                 let export = call.export.clone();
-                crate::execution::Engine::blocking(control, (token, scope), move || {
+                crate::execution::Engine::blocking(control, worker, move || {
                     let _permit = permit;
                     runtime
                         .prepare(bundle, package, export, &stage)
@@ -439,10 +519,41 @@ impl PackageExec {
                     &mut budget,
                 )
                 .await?;
-            Some(concat_batches(
-                &Arc::new(model.parameters.clone()),
-                &batches,
-            )?)
+            Some(Self::parameters(batches)?)
+        };
+        let checkpoint = match snapshot.managed() {
+            Some(managed) => {
+                let declaration = managed
+                    .instance()
+                    .spec
+                    .manifest
+                    .calls
+                    .get(&self.call.id)
+                    .ok_or_else(|| {
+                        external(
+                            araphor_data::PackageErrorCodeV1::Invalid.error("managed package call"),
+                        )
+                    })?;
+                if declaration.image != self.call.pin
+                    || declaration.package != self.call.package
+                    || declaration.export != self.call.export
+                    || declaration.arguments.as_slice() != self.call.arguments()
+                {
+                    return Err(external(
+                        araphor_data::PackageErrorCodeV1::Invalid
+                            .error("managed package declaration"),
+                    ));
+                }
+                managed
+                    .prior(self.call.id)
+                    .map(|prior| {
+                        prior.checkpoint(model, &inputs, parameters.as_ref(), managed.rebuild())
+                    })
+                    .transpose()
+                    .map_err(external)?
+                    .flatten()
+            }
+            None => owner.invocation.checkpoints.get(&self.call.id).cloned(),
         };
         let mut evaluation = sdk::Evaluation {
             export: self.call.export.clone(),
@@ -455,8 +566,17 @@ impl PackageExec {
                 seed: owner.invocation.seed,
                 limits,
             },
-            checkpoint: owner.invocation.checkpoints.get(&self.call.id).cloned(),
+            checkpoint,
         };
+        let configured = context
+            .session_config()
+            .get_extension::<crate::execution::Limits>()
+            .ok_or_else(|| internal("package execution limits are absent"))?;
+        if evaluation.allocated_bytes() > configured.input_bytes {
+            return Err(DataFusionError::ResourcesExhausted(
+                "package input bytes".into(),
+            ));
+        }
         for batch in evaluation
             .checkpoint
             .iter()
@@ -516,6 +636,19 @@ impl PackageExec {
             _input: input,
             _output: output_memory,
         })
+    }
+
+    fn parameters(batches: Vec<sdk::RecordBatch>) -> Result<sdk::RecordBatch> {
+        let invalid = || external(sdk::Error::contract(sdk::ErrorCode::Invalid, "parameters"));
+        let mut batches = batches.into_iter().filter(|batch| batch.num_rows() != 0);
+        let batch = batches
+            .next()
+            .filter(|batch| batch.num_rows() == 1)
+            .ok_or_else(invalid)?;
+        if batches.next().is_some() {
+            return Err(invalid());
+        }
+        Ok(batch)
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -73,3 +73,9 @@ pub use araphor_analysis_builtins::discovery::{
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use analysis::AnalysisCommitStage;
+
+pub use analysis::{
+    ManagedAttempt, ManagedCall, ManagedCapture, ManagedCommit, ManagedInstance, ManagedManifest,
+    ManagedPage, ManagedPrior, ManagedRead, ManagedReceipt, ManagedRequest, ManagedResult,
+    ManagedReturn, ManagedSelected, ManagedSpec,
+};

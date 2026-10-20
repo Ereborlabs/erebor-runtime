@@ -217,7 +217,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(super) fn package_sources_current(
+    pub(in crate::analysis) fn package_sources_current(
         reader: &Connection,
         sources: &[(String, u64)],
         control: &AnalysisReadControl,

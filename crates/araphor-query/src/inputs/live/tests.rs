@@ -87,7 +87,7 @@ impl Fixture {
             Limits {
                 input_capacity: Some(128 * 1024 * 1024),
                 output_capacity: Some(16 * 1024 * 1024),
-                tenant_evaluations: 1,
+                tenant_evaluations: Some(1),
                 ..Default::default()
             },
         )?;

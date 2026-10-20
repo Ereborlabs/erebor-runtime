@@ -11,8 +11,7 @@ use super::raw::{RawIdentity, TracePayload, TraceRecord};
 use super::segments::SegmentRange;
 use super::{
     AnalysisContextKeyV1, AnalysisGapV1, AnalysisReadControl, AnalysisSourceReceiptV1,
-    AnalysisStore, AnalysisStoreMetaV1, StorePositionV1, MAX_ANALYSIS_PAGE_BYTES,
-    MAX_ANALYSIS_PAGE_RECORDS,
+    AnalysisStore, AnalysisStoreMetaV1, StorePositionV1, MAX_ANALYSIS_PAGE_RECORDS,
 };
 use crate::{
     AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, EvidenceIntakeIdentityV1, EvidenceRecord,
@@ -25,14 +24,16 @@ mod graph;
 mod package;
 mod tables;
 
-const MAX_EXTRACT_KEYS: usize = 1024;
+#[cfg(test)]
 const MAX_SCAN_BYTES: usize = 256 * 1024 * 1024;
+#[cfg(test)]
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]
 pub struct AnalysisExtractLimits {
     pub scan_bytes: usize,
     pub input_bytes: usize,
+    pub keys: Option<usize>,
     pub page_bytes: usize,
     pub page_rows: usize,
 }
@@ -40,11 +41,32 @@ pub struct AnalysisExtractLimits {
 impl Default for AnalysisExtractLimits {
     fn default() -> Self {
         Self {
-            scan_bytes: MAX_SCAN_BYTES,
-            input_bytes: MAX_INPUT_BYTES,
-            page_bytes: MAX_ANALYSIS_PAGE_BYTES,
+            scan_bytes: usize::MAX,
+            input_bytes: usize::MAX,
+            keys: None,
+            page_bytes: usize::MAX,
             page_rows: MAX_ANALYSIS_PAGE_RECORDS,
         }
+    }
+}
+
+impl AnalysisExtractLimits {
+    fn check_keys(&self, selection: &AnalysisSelectionV1) -> Result<()> {
+        if self
+            .keys
+            .is_some_and(|keys| selection.key_count() > keys || selection.nodes.len() > keys)
+        {
+            return AnalysisInputTooLargeSnafu {
+                resource: "selected input keys",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    fn key_rows(&self, selected: usize) -> Option<i64> {
+        self.keys
+            .and_then(|keys| i64::try_from(keys.saturating_sub(selected).saturating_add(1)).ok())
     }
 }
 
@@ -260,10 +282,8 @@ impl AnalysisSelectionV1 {
                         .all(|seed| seed.tenant_id == self.tenant_id)
             })
             && (!self.targets_only || self.targets)
-            && self.nodes.len() <= MAX_EXTRACT_KEYS
             && self.nodes.iter().all(|node| crate::node_id_is_valid(node))
             && self.nodes.iter().collect::<BTreeSet<_>>().len() == self.nodes.len()
-            && self.key_count() <= MAX_EXTRACT_KEYS
             && self.binding_ids.iter().all(|id| *id != [0; 16])
             && self.binding_ids.iter().collect::<BTreeSet<_>>().len() == self.binding_ids.len()
             && self
@@ -950,7 +970,7 @@ impl AnalysisExtractionV1 {
             .ok_or_else(error)
     }
 
-    fn charge(&mut self, bytes: usize) -> Result<()> {
+    pub(in crate::analysis) fn charge(&mut self, bytes: usize) -> Result<()> {
         self.input_bytes = self
             .input_bytes
             .checked_add(bytes)
@@ -985,12 +1005,14 @@ impl AnalysisStore {
         snapshot: &Connection,
         selection: &'a AnalysisSelectionV1,
         control: &AnalysisReadControl,
-        limit: usize,
+        limits: AnalysisExtractLimits,
     ) -> Result<(Cow<'a, AnalysisSelectionV1>, usize)> {
         control.check()?;
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
         }
+        limits.check_keys(selection)?;
+        let limit = limits.input_bytes;
         if !selection.sources.is_all()
             && !selection.contexts.is_all()
             && !selection.traces.is_all()
@@ -1074,7 +1096,7 @@ impl AnalysisStore {
                     if !resolved.nodes.is_empty() && !resolved.nodes.contains(&source.node_id) {
                         continue;
                     }
-                    if resolved.key_count() == MAX_EXTRACT_KEYS {
+                    if limits.keys.is_some_and(|keys| resolved.key_count() >= keys) {
                         return Err(error());
                     }
                     let sources = resolved.sources.exact_mut().ok_or_else(|| {
@@ -1091,7 +1113,6 @@ impl AnalysisStore {
             }
         }
         if selection.contexts.is_all() {
-            let remaining = MAX_EXTRACT_KEYS - resolved.key_count();
             let mut statement = snapshot.prepare(
                 "SELECT owner_id, entity_key, lifetime_key, owner_revision FROM context_versions
                  WHERE tenant_id = ? AND (NOT ? OR owner_id = 'mithril-control/target')
@@ -1102,7 +1123,7 @@ impl AnalysisStore {
                     params![
                         selection.tenant_id.as_slice(),
                         selection.targets_only,
-                        (remaining + 1) as u32
+                        limits.key_rows(resolved.key_count())
                     ],
                     |row| {
                         Ok(AnalysisContextKeyV1 {
@@ -1125,7 +1146,7 @@ impl AnalysisStore {
                 if !key.valid() {
                     return self.reject("the tenant context key is invalid");
                 }
-                if resolved.contexts.as_slice().len() == remaining {
+                if limits.keys.is_some_and(|keys| resolved.key_count() >= keys) {
                     return Err(error());
                 }
                 let contexts = resolved.contexts.exact_mut().ok_or_else(|| {
@@ -1177,7 +1198,7 @@ impl AnalysisStore {
                     {
                         continue;
                     }
-                    if resolved.key_count() == MAX_EXTRACT_KEYS {
+                    if limits.keys.is_some_and(|keys| resolved.key_count() >= keys) {
                         return Err(error());
                     }
                     let traces = resolved.traces.exact_mut().ok_or_else(|| {
@@ -1210,14 +1231,13 @@ impl AnalysisStore {
                 })?;
             for source in resolved.sources.as_slice() {
                 control.check()?;
-                let remaining = MAX_EXTRACT_KEYS - resolved.key_count();
                 let rows = statement
                     .query_map(
                         params![
                             selection.tenant_id.as_slice(),
                             crate::DISCOVERY_SCHEMA_VERSION as u64,
                             source.key().as_slice(),
-                            (remaining + 1) as u32
+                            limits.key_rows(resolved.key_count())
                         ],
                         |row| row.get::<_, String>(0),
                     )
@@ -1232,7 +1252,7 @@ impl AnalysisStore {
                     if id.is_empty() || id.len() > 256 {
                         return self.reject("the discovery profile key is invalid");
                     }
-                    if resolved.key_count() == MAX_EXTRACT_KEYS {
+                    if limits.keys.is_some_and(|keys| resolved.key_count() >= keys) {
                         return Err(error());
                     }
                     let profiles = resolved.profiles.exact_mut().ok_or_else(|| {
@@ -1263,7 +1283,6 @@ impl AnalysisStore {
             ).context(AnalysisDatabaseSnafu { operation: "prepare graph result keys" })?;
             for source in resolved.sources.as_slice() {
                 control.check()?;
-                let remaining = MAX_EXTRACT_KEYS - resolved.key_count();
                 let rows = statement
                     .query_map(
                         params![
@@ -1271,7 +1290,7 @@ impl AnalysisStore {
                             crate::GRAPH_PROCESSOR,
                             crate::GRAPH_SCHEMA_VERSION,
                             source.key().as_slice(),
-                            (remaining + 1) as u32
+                            limits.key_rows(resolved.key_count())
                         ],
                         |row| row.get::<_, String>(0),
                     )
@@ -1286,7 +1305,7 @@ impl AnalysisStore {
                     if id.is_empty() || id.len() > 256 {
                         return self.reject("the graph result key is invalid");
                     }
-                    if resolved.key_count() == MAX_EXTRACT_KEYS {
+                    if limits.keys.is_some_and(|keys| resolved.key_count() >= keys) {
                         return Err(error());
                     }
                     let graphs = resolved.graphs.exact_mut().ok_or_else(|| {
@@ -1303,7 +1322,6 @@ impl AnalysisStore {
             }
         }
         if selection.obligations.is_all() {
-            let remaining = MAX_EXTRACT_KEYS - resolved.key_count();
             let mut statement = snapshot
                 .prepare(
                     "SELECT entity_key, lifetime_key, owner_revision FROM context_versions
@@ -1320,7 +1338,7 @@ impl AnalysisStore {
                     params![
                         selection.tenant_id.as_slice(),
                         crate::NOTIFICATION_STATE_OWNER,
-                        (remaining + 1) as u32
+                        limits.key_rows(resolved.key_count())
                     ],
                     |row| {
                         Ok(AnalysisContextKeyV1 {
@@ -1343,7 +1361,7 @@ impl AnalysisStore {
                 if !key.valid() {
                     return self.reject("the notification key is invalid");
                 }
-                if resolved.key_count() == MAX_EXTRACT_KEYS {
+                if limits.keys.is_some_and(|keys| resolved.key_count() >= keys) {
                     return Err(error());
                 }
                 let obligations = resolved.obligations.exact_mut().ok_or_else(|| {
@@ -1379,6 +1397,40 @@ impl AnalysisStore {
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
     ) -> Result<AnalysisPositionPageV1> {
+        self.read_tables_inner(selection, None, read, limits, control)
+            .map(|(page, _)| page)
+    }
+
+    pub fn read_managed_tables(
+        &self,
+        selection: &AnalysisSelectionV1,
+        managed: &super::ManagedRead,
+        read: AnalysisTableRead<'_>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<super::ManagedPage> {
+        if selection.tenant_id != managed.instance.spec.tenant
+            || !matches!(
+                read.mode,
+                AnalysisReadModeV1::Complete | AnalysisReadModeV1::Metadata
+            )
+        {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("managed capture scope"));
+        }
+        let (page, state) =
+            self.read_tables_inner(selection, Some(managed), read, limits, control)?;
+        let state = state.ok_or_else(|| self.state_error("the managed capture is absent"))?;
+        Ok(super::ManagedPage { page, state })
+    }
+
+    fn read_tables_inner(
+        &self,
+        selection: &AnalysisSelectionV1,
+        managed: Option<&super::ManagedRead>,
+        read: AnalysisTableRead<'_>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<(AnalysisPositionPageV1, Option<super::ManagedCapture>)> {
         control.check()?;
         let packages = read.inputs;
         let mode = match read.mode {
@@ -1460,7 +1512,7 @@ impl AnalysisStore {
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
             let (selection, key_bytes) =
-                self.resolve_selection(snapshot, selection, control, limits.input_bytes)?;
+                self.resolve_selection(snapshot, selection, control, limits)?;
             let selection = selection.as_ref();
             let mut capture = tables::Capture::new(&read, selection);
             let end = StorePositionV1 {
@@ -1497,6 +1549,7 @@ impl AnalysisStore {
             };
             output.charge(size_of::<AnalysisExtractionV1>())?;
             output.charge(key_bytes)?;
+            let mut managed = managed.map(|request| self.capture_managed(snapshot, request, read.now, &mut output, control)).transpose()?;
             if matches!(mode, AnalysisReadModeV1::Page(_) | AnalysisReadModeV1::Changes(_)) {
                 if let (Some(position), Some(floor)) = (after, output.replay_floor) {
                     if position < floor {
@@ -1734,7 +1787,9 @@ impl AnalysisStore {
                     output.remove_raw(&mut capture, &removal, control)?;
                 }
                 control.check()?;
-                return capture.finish(output, end, true, control);
+                let page = capture.finish(output, end, true, control)?;
+                if let Some(state) = &mut managed { state.seal(selection, &page.extraction); }
+                return Ok((page, managed));
             }
             if let Some(packages) = packages {
                 self.extract_packages(
@@ -1925,14 +1980,16 @@ impl AnalysisStore {
                     }
                 }
             }
-            if packages.is_some() {
+            if packages.is_some() || managed.is_some() {
                 self.extract_provenance(snapshot, selection.tenant_id, &mut output, control)?;
             }
             control.check()?;
-            capture.finish(output, after.unwrap_or(StorePositionV1 {
+            let page = capture.finish(output, after.unwrap_or(StorePositionV1 {
                     commit_revision: 0,
                     ordinal: 0,
-                }), exhausted, control)
+                }), exhausted, control)?;
+            if let Some(state) = &mut managed { state.seal(selection, &page.extraction); }
+            Ok((page, managed))
         })
     }
 
@@ -2073,6 +2130,8 @@ mod tests {
     };
     use araphor_analysis_sdk::arrow_array::{Array, BinaryArray, UInt32Array, UInt64Array};
 
+    const KEY_LIMIT: usize = 1024;
+
     type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
     fn read(
@@ -2186,6 +2245,40 @@ mod tests {
     }
 
     #[test]
+    fn extraction_default_budgets_unbounded() -> TestResult {
+        let limits = AnalysisExtractLimits::default();
+        assert_eq!(limits.scan_bytes, usize::MAX);
+        assert_eq!(limits.input_bytes, usize::MAX);
+        assert_eq!(limits.page_bytes, usize::MAX);
+        assert_eq!(limits.keys, None);
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("data"))?;
+        let mut output = read(
+            &store,
+            &AnalysisSelectionV1::new([1; 16], Vec::new()),
+            &[],
+            AnalysisReadModeV1::Metadata,
+            limits,
+            &AnalysisReadControl::default(),
+        )?
+        .extraction;
+        let before = output.input_bytes;
+        output.scan(MAX_SCAN_BYTES + 1)?;
+        output.charge(MAX_INPUT_BYTES + 1)?;
+        assert_eq!(output.scanned_bytes, MAX_SCAN_BYTES + 1);
+        assert_eq!(output.input_bytes, before + MAX_INPUT_BYTES + 1);
+        assert!(output.scan(usize::MAX).is_err());
+        assert!(output.charge(usize::MAX).is_err());
+        let control = AnalysisReadControl::default();
+        let mut row_bytes = 0;
+        assert!(output
+            .row_budget(&control, Some(&mut row_bytes))
+            .admit(crate::analysis::MAX_ANALYSIS_PAGE_BYTES + 1)?);
+        assert_eq!(row_bytes, crate::analysis::MAX_ANALYSIS_PAGE_BYTES + 1);
+        Ok(())
+    }
+
+    #[test]
     fn analysis_trace_key_limits() -> TestResult {
         let mut selection = AnalysisSelectionV1::new([1; 16], Vec::new());
         selection.traces = Selection::Exact(
@@ -2201,14 +2294,21 @@ mod tests {
                 .collect(),
         );
         assert!(selection.valid());
+        let limits = AnalysisExtractLimits {
+            keys: Some(KEY_LIMIT),
+            ..Default::default()
+        };
+        limits.check_keys(&selection)?;
         selection.binding_ids.push([5; 16]);
-        assert!(!selection.valid());
+        assert!(selection.valid());
+        assert!(limits.check_keys(&selection).is_err());
         selection
             .traces
             .exact_mut()
             .ok_or("exact traces absent")?
             .pop();
         assert!(selection.valid());
+        limits.check_keys(&selection)?;
         selection.binding_ids.push([5; 16]);
         assert!(!selection.valid());
         selection.binding_ids = vec![[0; 16]];
@@ -2231,9 +2331,14 @@ mod tests {
         }]);
         selection.results.push("result".into());
         selection.profiles = Selection::Exact(vec!["profile".into()]);
+        selection.graphs = Selection::Exact(vec!["graph".into()]);
+        selection.obligations = Selection::Exact(vec![AnalysisContextKeyV1 {
+            owner_id: crate::NOTIFICATION_STATE_OWNER.into(),
+            ..selection.contexts.as_slice()[0].clone()
+        }]);
         selection.binding_ids.push([5; 16]);
         selection.traces = Selection::Exact(
-            (1..=MAX_EXTRACT_KEYS as u128 - 5)
+            (1..=KEY_LIMIT as u128 - 7)
                 .map(|execution| TraceIdentityV1 {
                     tenant_id: [1; 16],
                     node_id: "trace-node".into(),
@@ -2244,16 +2349,24 @@ mod tests {
                 })
                 .collect(),
         );
-        selection.nodes = (0..MAX_EXTRACT_KEYS)
+        selection.nodes = (0..KEY_LIMIT)
             .map(|index| format!("node-{index}"))
             .collect();
+        let limits = AnalysisExtractLimits {
+            keys: Some(KEY_LIMIT),
+            ..Default::default()
+        };
         assert!(selection.valid());
+        assert!(limits.check_keys(&selection).is_ok());
         selection.results.push("extra".into());
-        assert!(!selection.valid());
+        assert!(selection.valid());
+        assert!(limits.check_keys(&selection).is_err());
         selection.results.pop();
         assert!(selection.valid());
+        assert!(limits.check_keys(&selection).is_ok());
         selection.nodes.push("extra-node".into());
-        assert!(!selection.valid());
+        assert!(selection.valid());
+        assert!(limits.check_keys(&selection).is_err());
     }
 
     #[test]
@@ -2300,16 +2413,24 @@ mod tests {
         exact.select_notifications(Selection::Exact(vec![key.clone()]))?;
         let mut reader = store.reader_until(&control)?;
         control.run(&mut reader, |snapshot| {
-            let (resolved, bytes) =
-                store.resolve_selection(snapshot, &exact, &control, usize::MAX)?;
+            let (resolved, bytes) = store.resolve_selection(
+                snapshot,
+                &exact,
+                &control,
+                AnalysisExtractLimits::default(),
+            )?;
             assert!(matches!(resolved, Cow::Borrowed(_)));
             assert_eq!(resolved.as_ref(), &exact);
             assert_eq!(bytes, 0);
 
             let mut expanded_sources = exact.clone();
             expanded_sources.sources = Selection::All;
-            let (resolved, bytes) =
-                store.resolve_selection(snapshot, &expanded_sources, &control, usize::MAX)?;
+            let (resolved, bytes) = store.resolve_selection(
+                snapshot,
+                &expanded_sources,
+                &control,
+                AnalysisExtractLimits::default(),
+            )?;
             assert_eq!(resolved.profiles(), &["profile:exact"]);
             assert_eq!(resolved.graphs(), &["graph:exact"]);
             assert_eq!(resolved.notification_keys(), &[key]);
@@ -2330,7 +2451,12 @@ mod tests {
         let mut reader = store.reader_until(&control)?;
         control.run(&mut reader, |snapshot| {
             assert!(store
-                .resolve_selection(snapshot, &disabled, &control, usize::MAX)
+                .resolve_selection(
+                    snapshot,
+                    &disabled,
+                    &control,
+                    AnalysisExtractLimits::default()
+                )
                 .is_ok());
             for selection in [
                 {
@@ -2344,8 +2470,12 @@ mod tests {
                     selection
                 },
             ] {
-                let (resolved, bytes) =
-                    store.resolve_selection(snapshot, &selection, &control, usize::MAX)?;
+                let (resolved, bytes) = store.resolve_selection(
+                    snapshot,
+                    &selection,
+                    &control,
+                    AnalysisExtractLimits::default(),
+                )?;
                 assert_eq!(resolved.as_ref(), &selection);
                 assert_eq!(bytes, 0);
             }
@@ -2381,10 +2511,12 @@ mod tests {
         exact.select_graphs(Selection::Exact(ids.clone()), None)?;
         let mut reader = fixture.store.reader_until(&control)?;
         control.run(&mut reader, |reader| {
-            let (resolved, _) =
-                fixture
-                    .store
-                    .resolve_selection(reader, &exact, &control, usize::MAX)?;
+            let (resolved, _) = fixture.store.resolve_selection(
+                reader,
+                &exact,
+                &control,
+                AnalysisExtractLimits::default(),
+            )?;
             assert_eq!(resolved.graphs(), ids);
             let mut read = Vec::new();
             GraphRows::visit_headers(
@@ -2405,10 +2537,12 @@ mod tests {
 
             let mut all = exact.clone();
             all.select_graphs(Selection::All, None)?;
-            let (resolved, _) =
-                fixture
-                    .store
-                    .resolve_selection(reader, &all, &control, usize::MAX)?;
+            let (resolved, _) = fixture.store.resolve_selection(
+                reader,
+                &all,
+                &control,
+                AnalysisExtractLimits::default(),
+            )?;
             assert_eq!(resolved.graphs(), &[replacement.result_id]);
             Ok(())
         })?;
@@ -3223,6 +3357,56 @@ mod tests {
     }
 
     #[test]
+    fn extraction_keys_disabled_default() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let mut selection = AnalysisSelectionV1::new([1; 16], Vec::new());
+        selection.contexts = Selection::Exact(
+            (0..=KEY_LIMIT)
+                .map(|revision| AnalysisContextKeyV1 {
+                    tenant_id: [1; 16],
+                    owner_id: "policy".into(),
+                    entity_key: vec![1],
+                    lifetime_key: vec![2],
+                    owner_revision: revision as u64,
+                })
+                .collect(),
+        );
+        assert!(selection.valid());
+        let control = AnalysisReadControl::default();
+        let fields = [("context_versions", &["body"][..])];
+        let page = read(
+            &store,
+            &selection,
+            &fields,
+            AnalysisReadModeV1::Metadata,
+            AnalysisExtractLimits::default(),
+            &control,
+        )?;
+        assert_eq!(page.extraction.missing_contexts.len(), KEY_LIMIT + 1);
+        assert_eq!(page.extraction.scanned_bytes, 0);
+        assert!(page.exhausted);
+        assert!(matches!(
+            read(
+                &store,
+                &selection,
+                &fields,
+                AnalysisReadModeV1::Metadata,
+                AnalysisExtractLimits {
+                    keys: Some(KEY_LIMIT),
+                    ..Default::default()
+                },
+                &control,
+            ),
+            Err(crate::Error::AnalysisInputTooLarge {
+                resource: "selected input keys",
+                ..
+            })
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn analysis_tenant_key_limits() -> TestResult {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
@@ -3230,7 +3414,7 @@ mod tests {
         store.accept_validated_batch(first.clone(), batch(1, 1, 10)?)?;
         let mut selection = AnalysisSelectionV1::tenant(first.tenant_id);
         selection.contexts = Selection::Exact(
-            (0..MAX_EXTRACT_KEYS - 1)
+            (0..KEY_LIMIT - 1)
                 .map(|revision| AnalysisContextKeyV1 {
                     tenant_id: first.tenant_id,
                     owner_id: "policy".into(),
@@ -3245,16 +3429,20 @@ mod tests {
             ("events", &["source_cursor"][..]),
             ("context_versions", &["body"][..]),
         ];
+        let limits = AnalysisExtractLimits {
+            keys: Some(KEY_LIMIT),
+            ..Default::default()
+        };
         let page = read(
             &store,
             &selection,
             &fields,
             AnalysisReadModeV1::Metadata,
-            AnalysisExtractLimits::default(),
+            limits,
             &control,
         )?;
         assert_eq!(page.extraction.sources.len(), 1);
-        assert_eq!(page.extraction.missing_contexts.len(), MAX_EXTRACT_KEYS - 1);
+        assert_eq!(page.extraction.missing_contexts.len(), KEY_LIMIT - 1);
         assert_eq!(page.extraction.scanned_bytes, 0);
         assert!(page.exhausted);
         let next = EvidenceIntakeIdentityV1 {
@@ -3268,7 +3456,7 @@ mod tests {
                 &selection,
                 &fields,
                 AnalysisReadModeV1::Metadata,
-                AnalysisExtractLimits::default(),
+                limits,
                 &control
             ),
             Err(crate::Error::AnalysisInputTooLarge {
@@ -3276,6 +3464,18 @@ mod tests {
                 ..
             })
         ));
+        let page = read(
+            &store,
+            &selection,
+            &fields,
+            AnalysisReadModeV1::Metadata,
+            AnalysisExtractLimits::default(),
+            &control,
+        )?;
+        assert_eq!(page.extraction.sources.len(), 2);
+        assert_eq!(page.extraction.missing_contexts.len(), KEY_LIMIT - 1);
+        assert_eq!(page.extraction.scanned_bytes, 0);
+        assert!(page.exhausted);
         let selection = AnalysisSelectionV1::tenant(first.tenant_id);
         assert!(matches!(
             read(
@@ -3502,7 +3702,7 @@ mod tests {
         ));
         let mut selection = AnalysisSelectionV1::new(
             identity.tenant_id,
-            (1..=MAX_EXTRACT_KEYS)
+            (1..=KEY_LIMIT)
                 .map(|epoch| EvidenceIntakeIdentityV1 {
                     source_epoch: epoch as u64,
                     ..identity.clone()
@@ -3515,10 +3715,16 @@ mod tests {
             .exact_mut()
             .ok_or("exact sources absent")?
             .push(EvidenceIntakeIdentityV1 {
-                source_epoch: MAX_EXTRACT_KEYS as u64 + 1,
+                source_epoch: KEY_LIMIT as u64 + 1,
                 ..identity
             });
-        assert!(!selection.valid());
+        assert!(selection.valid());
+        assert!(AnalysisExtractLimits {
+            keys: Some(KEY_LIMIT),
+            ..Default::default()
+        }
+        .check_keys(&selection)
+        .is_err());
         Ok(())
     }
 
@@ -3904,6 +4110,8 @@ mod tests {
         )?;
         assert_eq!(row_count(&empty, "events"), 0);
         let mut output = empty.extraction;
+        output.limits.scan_bytes = MAX_SCAN_BYTES;
+        output.limits.input_bytes = MAX_INPUT_BYTES;
         output.scan(MAX_SCAN_BYTES)?;
         assert!(matches!(
             output.scan(1),
