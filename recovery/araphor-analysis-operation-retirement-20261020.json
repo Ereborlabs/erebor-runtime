@@ -1,0 +1,410 @@
+{
+  "status": "The operation test leaf has qualified native replacements. Complete migration and the final Rust gate remain Not done.",
+  "recorded_at": "2026-10-20T21:38:28.958532+00:00",
+  "qualified_source_base": "9a3a21051266b83101f7ef808d209ff287d26a73",
+  "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+  "candidate_files": [
+    {
+      "path": "crates/araphor-analysis_back/src/model/operation/tests.rs",
+      "sha256": "60fba7a2bc1fca4cde9d1968fd63215fa405ef46f9f148f34fa91b37b85f265b",
+      "production_lines": 0,
+      "test_only": true,
+      "baseline_equal": true,
+      "archive_equal": true
+    }
+  ],
+  "source_and_assertion_map": {
+    "old_file": "crates/araphor-analysis_back/src/model/operation/tests.rs",
+    "old_test_count": 10,
+    "new_test_count": 8,
+    "existing_test_expansions": 1,
+    "production_line_delta": 0,
+    "leaf_gate": "All mapped native selectors pass. Only this test leaf is retired. Other model and legacy input-runner leaves remain.",
+    "functions": [
+      {
+        "old_function": "operation_inputs_match",
+        "old_line": 110,
+        "rules": [
+          "Typed resolved inputs keep data, revision, coverage, source revisions, contexts, witnesses, and dependencies.",
+          "SQL returns both outputs with no evidence, reasons, or checkpoint.",
+          "Bare, public, and datafusion.public body bindings return equal wire values."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::operation::operation_qualified_inputs"
+        ],
+        "notes": [
+          "The old input-only and SQL helper runners are obsolete. The test uses only native PackageCall/PackageExec."
+        ],
+        "qualification": "Pass in migration-operation-query115 on the recorded unchanged source."
+      },
+      {
+        "old_function": "reused_session_narrows_deadline",
+        "old_line": 218,
+        "rules": [
+          "A reused Session obeys a shorter deadline and returns AnalysisReadDeadline.",
+          "The parent control and evaluation capacity remain valid."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::operation::reused_session_deadline"
+        ],
+        "notes": [
+          "The test awaits the existing AnalysisReadControl::expired event. It adds no clock, polling, or sleep cushion."
+        ],
+        "qualification": "Pass in migration-operation-query115 on the recorded unchanged source."
+      },
+      {
+        "old_function": "operation_source_cleanup",
+        "old_line": 241,
+        "rules": [
+          "Held evaluation, input, and output capacity return Busy.",
+          "A failed native input cast releases reservations.",
+          "Success after pressure release returns the original values.",
+          "Failure does not write Data or retain evaluation capacity."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::operation::operation_error_classes",
+          "definition::tests::execution::physical_sql_failure_keeps_data",
+          "definition::tests::execution::physical_failure_keeps_session",
+          "definition::tests::execution::physical_tight_output_capacity"
+        ],
+        "notes": [
+          "Retained native SQL failure and buffer-alias tests also apply. No InputSet runner is retained."
+        ],
+        "qualification": "Pass in migration-operation-query115 on the recorded unchanged source."
+      },
+      {
+        "old_function": "pruned_source_evidence",
+        "old_line": 332,
+        "rules": [
+          "Two distinct source operations retain witnesses 1 and 2 for filtered, false, and unused-CTE inputs.",
+          "Equal returned rows and captured source cut give equal SDK input revisions.",
+          "An empty returned relation changes the SDK input revision."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::operation::pruned_revision_equivalence"
+        ],
+        "notes": [],
+        "qualification": "Pass in migration-operation-query115 on the recorded unchanged source."
+      },
+      {
+        "old_function": "operation_source_denial",
+        "old_line": 390,
+        "rules": [
+          "Undeclared catalog, old catalog-function syntax, private materialized names, and unused CTE source access fail.",
+          "An output cannot read its own output_result binding through an unused CTE.",
+          "Errors stay InvalidQuery, InvalidArguments, and NonRetryable.",
+          "Admission failure releases all configured capacity."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::operation::operation_scope_rejections"
+        ],
+        "notes": [
+          "PackageCode::Invalid is represented by Query Failure::InvalidQuery at the native boundary. Analysis delegates Query status and retry through Error::Query."
+        ],
+        "qualification": "Pass in migration-operation-query115 on the recorded unchanged source."
+      },
+      {
+        "old_function": "named_alias_revision",
+        "old_line": 436,
+        "rules": [
+          "A quoted forward alias reaches durable events.",
+          "An empty dependent relation retains its declared source scope.",
+          "A later source cursor changes the empty input revision, witnesses, and selected output rows."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::operation::named_alias_revision"
+        ],
+        "notes": [],
+        "qualification": "Pass in migration-operation-query115 on the recorded unchanged source."
+      },
+      {
+        "old_function": "declared_tables_override_canonical_names",
+        "old_line": 510,
+        "rules": [
+          "A declared events port can bind catalog and override the canonical events name.",
+          "Both resolved inputs return the same batches without event witnesses or source revisions.",
+          "Quoted uppercase names bind exactly; unquoted lowercase names cannot bind uppercase ports."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::operation::declared_port_case"
+        ],
+        "notes": [],
+        "qualification": "Pass in migration-operation-query115 on the recorded unchanged source."
+      },
+      {
+        "old_function": "operation_input_capacity",
+        "old_line": 541,
+        "rules": [
+          "Actual shared input pressure returns retryable Busy.",
+          "A configured model byte bound returns nonretryable InputTooLarge.",
+          "After release, native execution succeeds and all reservations return."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::operation::operation_error_classes",
+          "definition::tests::execution::combined_input_respects_limit"
+        ],
+        "notes": [
+          "The old whole-per-evaluation reservation and one-byte-pressure trigger are removed architecture mechanics. Native prepare_input prepays only available configured capacity and charges actual retained buffers. Default quotas remain disabled."
+        ],
+        "qualification": "Pass in migration-operation-query115 on the recorded unchanged source."
+      },
+      {
+        "old_function": "aggregate_output_rows_stop_before_reference_tables",
+        "old_line": 571,
+        "rules": [
+          "Two one-row model outputs exceed an aggregate one-row bound.",
+          "Evidence is not polled after the row limit fails.",
+          "Descriptor and invocation bounds are tested independently.",
+          "All configured capacity returns and Data remains unchanged."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::sql_limit_precedes_references"
+        ],
+        "notes": [
+          "The existing sql_limit_precedes_references test now runs once for each bound owner."
+        ],
+        "qualification": "Pass in migration-operation-query115 on the recorded unchanged source."
+      },
+      {
+        "old_function": "admitted_input_provenance",
+        "old_line": 613,
+        "rules": [
+          "SDK inputs remain in declared order.",
+          "Reordered declarations preserve exact per-name IPC data, revision, and coverage.",
+          "Removing one unused declaration preserves each remaining input.",
+          "Catalog and event revisions remain distinct.",
+          "Source revisions, dependency refs, witnesses, and context refs remain equal.",
+          "Prepared definition/source admission remains unchanged and reservations return after outputs drop."
+        ],
+        "native_tests": [
+          "definition::tests::execution::contract::operation::reordered_input_provenance"
+        ],
+        "notes": [
+          "PreparedDefinition::resolved and sources are read-only shared admission values. Their equality and retained charge replace mutable AdmittedExport byte accounting."
+        ],
+        "qualification": "Pass in migration-operation-query115 on the recorded unchanged source."
+      }
+    ]
+  },
+  "qualification": {
+    "migration-operation-build115": {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-analysis-sdk",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-package",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "araphor-component-build",
+        "-p",
+        "araphor-analysis-builtins",
+        "-p",
+        "mithril-control",
+        "-p",
+        "mithril-e2e",
+        "-p",
+        "erebor-runtime-session",
+        "-p",
+        "erebor-runtime-context",
+        "--all-features",
+        "--lib",
+        "--no-run"
+      ],
+      "started_utc": "2026-10-20T21:23:40.749189+00:00",
+      "elapsed_seconds": 262.684,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/physical.rs": "ba45f7a56a32b82fd42718cdc1960b402ec5255d5883fde17a0301ad76093d04",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "c3d014f88aca4f8f3152c662d94edb118d4606985c2089e91f3d8105aa3c3840",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "d61165cb988f265f0a1878c1c58bc3768e0cdc546ec7616da995dd860002aaa9"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-operation-build115.log",
+      "evidence_version": 2,
+      "head_before": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "head_after": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57"
+    },
+    "migration-operation-new115": {
+      "command": [
+        "target/debug/deps/araphor_query-c8742c21f1c7ffc0",
+        "definition::tests::execution::contract::operation::operation_qualified_inputs",
+        "definition::tests::execution::contract::operation::reused_session_deadline",
+        "definition::tests::execution::contract::operation::operation_scope_rejections",
+        "definition::tests::execution::contract::operation::pruned_revision_equivalence",
+        "definition::tests::execution::contract::operation::named_alias_revision",
+        "definition::tests::execution::contract::operation::declared_port_case",
+        "definition::tests::execution::contract::operation::reordered_input_provenance",
+        "definition::tests::execution::contract::operation::operation_error_classes",
+        "definition::tests::execution::contract::sql_limit_precedes_references",
+        "--exact"
+      ],
+      "started_utc": "2026-10-20T21:29:07.913800+00:00",
+      "elapsed_seconds": 7.265,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/physical.rs": "ba45f7a56a32b82fd42718cdc1960b402ec5255d5883fde17a0301ad76093d04",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "c3d014f88aca4f8f3152c662d94edb118d4606985c2089e91f3d8105aa3c3840",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "d61165cb988f265f0a1878c1c58bc3768e0cdc546ec7616da995dd860002aaa9"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-operation-new115.log",
+      "evidence_version": 2,
+      "head_before": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "head_after": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "e0c22b878d58d47463cb285ac8756c093d0ee1d6cd737bf94f3320d1d6c2605b"
+    },
+    "migration-operation-query115": {
+      "command": [
+        "target/debug/deps/araphor_query-c8742c21f1c7ffc0",
+        "definition::tests::execution::",
+        "definition::tests::guest::",
+        "--include-ignored"
+      ],
+      "started_utc": "2026-10-20T21:30:27.420066+00:00",
+      "elapsed_seconds": 128.85,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/physical.rs": "ba45f7a56a32b82fd42718cdc1960b402ec5255d5883fde17a0301ad76093d04",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "c3d014f88aca4f8f3152c662d94edb118d4606985c2089e91f3d8105aa3c3840",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "d61165cb988f265f0a1878c1c58bc3768e0cdc546ec7616da995dd860002aaa9"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-operation-query115.log",
+      "evidence_version": 2,
+      "head_before": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "head_after": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "e0c22b878d58d47463cb285ac8756c093d0ee1d6cd737bf94f3320d1d6c2605b"
+    },
+    "migration-operation-analysis115": {
+      "command": [
+        "target/debug/deps/araphor_analysis-53f064deff3acc77",
+        "instance::tests::finite::",
+        "instance::tests::selected_pressure_keeps_progress",
+        "instance::subscription::tests::failure_keeps_package_codes",
+        "instance::tests::prior_pressure_preserves_success",
+        "--include-ignored"
+      ],
+      "started_utc": "2026-10-20T21:32:37.972090+00:00",
+      "elapsed_seconds": 35.435,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/physical.rs": "ba45f7a56a32b82fd42718cdc1960b402ec5255d5883fde17a0301ad76093d04",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "c3d014f88aca4f8f3152c662d94edb118d4606985c2089e91f3d8105aa3c3840",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "d61165cb988f265f0a1878c1c58bc3768e0cdc546ec7616da995dd860002aaa9"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-operation-analysis115.log",
+      "evidence_version": 2,
+      "head_before": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "head_after": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57",
+      "binary_sha256": "33bec5b9c0e780e728ef18edad42ddef2fad4c54382ebfd688d5858dedda5a8f"
+    },
+    "migration-operation-clippy115": {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-analysis-sdk",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-package",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "araphor-component-build",
+        "-p",
+        "araphor-analysis-builtins",
+        "-p",
+        "mithril-control",
+        "-p",
+        "mithril-e2e",
+        "-p",
+        "erebor-runtime-session",
+        "-p",
+        "erebor-runtime-context",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "started_utc": "2026-10-20T21:30:31.262370+00:00",
+      "elapsed_seconds": 106.779,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/physical.rs": "ba45f7a56a32b82fd42718cdc1960b402ec5255d5883fde17a0301ad76093d04",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "c3d014f88aca4f8f3152c662d94edb118d4606985c2089e91f3d8105aa3c3840",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "d61165cb988f265f0a1878c1c58bc3768e0cdc546ec7616da995dd860002aaa9"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-operation-clippy115.log",
+      "evidence_version": 2,
+      "head_before": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "head_after": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57"
+    },
+    "migration-operation-fmt115": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "started_utc": "2026-10-20T21:30:35.277865+00:00",
+      "elapsed_seconds": 6.96,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-query/src/definition/physical.rs": "ba45f7a56a32b82fd42718cdc1960b402ec5255d5883fde17a0301ad76093d04",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "c3d014f88aca4f8f3152c662d94edb118d4606985c2089e91f3d8105aa3c3840",
+        "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "d61165cb988f265f0a1878c1c58bc3768e0cdc546ec7616da995dd860002aaa9"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-operation-fmt115.log",
+      "evidence_version": 2,
+      "head_before": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "head_after": "9a3a21051266b83101f7ef808d209ff287d26a73",
+      "wrapper_sha256": "24588fca8aabaa9efc7dcfb542aae8c9f0f6a77eb153a514ac2e928e920e2a57"
+    }
+  },
+  "qualified_owner_sha256": {
+    "crates/araphor-query/src/definition/physical.rs": "ba45f7a56a32b82fd42718cdc1960b402ec5255d5883fde17a0301ad76093d04",
+    "crates/araphor-query/src/definition/tests/execution/contract.rs": "c3d014f88aca4f8f3152c662d94edb118d4606985c2089e91f3d8105aa3c3840",
+    "crates/araphor-query/src/definition/tests/execution/contract/operation.rs": "d61165cb988f265f0a1878c1c58bc3768e0cdc546ec7616da995dd860002aaa9"
+  },
+  "root_corrections": [
+    "The multi-output fixture selects result explicitly. All complete input and output assertions remain.",
+    "PackageExec::collect returns the existing typed SDK Limit error for a configured input bound. Shared memory pressure stays Busy. Output bounds retain their existing error. Child conversion, cancellation and memory errors remain unchanged."
+  ],
+  "ownership": "Native PackageCall and PackageExec supply operation inputs, metadata, deadlines and typed results. No legacy input executor is restored.",
+  "recovery_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+  "recovery_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+  "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5",
+  "remaining_scope": "Other model rules, initial admission pressure retry, producer execution, public lifecycle and complete recovery integration remain Not done.",
+  "final_rust_gate": "Not done. Run the complete procedure after the final connected edit.",
+  "production_reduction_target": "Not done. This test-only retirement removes no production code.",
+  "remaining_reference": {
+    "before": 122,
+    "after": 121,
+    "byte_identical_to_baseline": 121,
+    "mismatches": []
+  }
+}

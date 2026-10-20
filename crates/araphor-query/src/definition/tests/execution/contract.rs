@@ -538,66 +538,73 @@ mod pressure;
 
 #[tokio::test]
 async fn sql_limit_precedes_references() -> TestResult {
-    let schema = Fixture::schema("value");
-    let model = sdk::Model::new(
-        "count",
-        Vec::new(),
-        vec![
-            sdk::Port::new("first", schema.clone()),
-            sdk::Port::new("second", schema),
-        ],
-    );
-    let image = bundle(model, SqlModelV1 {
-        outputs: BTreeMap::from([("first".into(), "SELECT CAST(1 AS BIGINT UNSIGNED) AS value".into()), ("second".into(), "SELECT CAST(2 AS BIGINT UNSIGNED) AS value".into())]),
-        evidence: Some("SELECT 'first' AS output_dataset, CAST(0 AS BIGINT UNSIGNED) AS output_row, 'unused' AS input_dataset, CAST(0 AS BIGINT UNSIGNED) AS input_row".into()),
-        ..Default::default()
-    });
-    let fixture = Fixture::limits(capacity_limits())?;
-    fixture.install(&image)?;
-    let mut prepared = fixture
-        .prepare(&Fixture::sql(
-            r#"SELECT * FROM "fixture"."r1".count('first')"#,
-        ))
-        .await?;
-    let polls = Arc::new(AtomicUsize::new(0));
-    let marked = Arc::clone(&polls);
-    let marker = create_udf(
-        "reference_marker",
-        vec![sdk::DataType::UInt64],
-        sdk::DataType::UInt64,
-        Volatility::Volatile,
-        Arc::new(move |arguments| {
-            marked.fetch_add(1, Ordering::SeqCst);
-            arguments
-                .first()
-                .cloned()
-                .ok_or_else(|| DataFusionError::Execution("reference marker argument".into()))
-        }),
-    );
-    let calls = Fixture::calls(&prepared.plan)?;
-    let evidence = LogicalPlanBuilder::from(calls[0].children[2].clone())
-        .project(vec![
-            col("output_dataset"),
-            marker.call(vec![col("output_row")]).alias("output_row"),
-            col("input_dataset"),
-            col("input_row"),
-        ])?
-        .build()?;
-    child(&mut prepared, 2, evidence)?;
-    let mut request = invocation("rows-before-evidence");
-    request.limits.max_rows = 1;
-    let before = fixture.engine.store().meta()?;
-    let error = fixture
-        .execute(&prepared, request)
-        .await
-        .err()
-        .ok_or("aggregate row limit ignored")?;
-    assert_eq!(crate::Failure::from(&error), crate::Failure::ResultTooLarge);
-    assert_eq!(polls.load(Ordering::SeqCst), 0);
-    assert_eq!(fixture.engine.store().meta()?, before);
-    drop(calls);
-    drop(prepared);
-    capacity_released(&fixture)?;
+    for model_limit in [false, true] {
+        let schema = Fixture::schema("value");
+        let mut model = sdk::Model::new(
+            "count",
+            Vec::new(),
+            vec![
+                sdk::Port::new("first", schema.clone()),
+                sdk::Port::new("second", schema),
+            ],
+        );
+        if model_limit {
+            model.limits.max_rows = 1;
+        }
+        let image = bundle(model, SqlModelV1 {
+            outputs: BTreeMap::from([("first".into(), "SELECT CAST(1 AS BIGINT UNSIGNED) AS value".into()), ("second".into(), "SELECT CAST(2 AS BIGINT UNSIGNED) AS value".into())]),
+            evidence: Some("SELECT 'first' AS output_dataset, CAST(0 AS BIGINT UNSIGNED) AS output_row, 'unused' AS input_dataset, CAST(0 AS BIGINT UNSIGNED) AS input_row".into()),
+            ..Default::default()
+        });
+        let fixture = Fixture::limits(capacity_limits())?;
+        fixture.install(&image)?;
+        let mut prepared = fixture
+            .prepare(&Fixture::sql(
+                r#"SELECT * FROM "fixture"."r1".count('first')"#,
+            ))
+            .await?;
+        let polls = Arc::new(AtomicUsize::new(0));
+        let marked = Arc::clone(&polls);
+        let marker = create_udf(
+            "reference_marker",
+            vec![sdk::DataType::UInt64],
+            sdk::DataType::UInt64,
+            Volatility::Volatile,
+            Arc::new(move |arguments| {
+                marked.fetch_add(1, Ordering::SeqCst);
+                arguments
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| DataFusionError::Execution("reference marker argument".into()))
+            }),
+        );
+        let calls = Fixture::calls(&prepared.plan)?;
+        let evidence = LogicalPlanBuilder::from(calls[0].children[2].clone())
+            .project(vec![
+                col("output_dataset"),
+                marker.call(vec![col("output_row")]).alias("output_row"),
+                col("input_dataset"),
+                col("input_row"),
+            ])?
+            .build()?;
+        child(&mut prepared, 2, evidence)?;
+        let mut request = invocation("rows-before-evidence");
+        if !model_limit {
+            request.limits.max_rows = 1;
+        }
+        let before = fixture.engine.store().meta()?;
+        let error = fixture
+            .execute(&prepared, request)
+            .await
+            .err()
+            .ok_or("aggregate row limit ignored")?;
+        assert_eq!(crate::Failure::from(&error), crate::Failure::ResultTooLarge);
+        assert_eq!(polls.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.engine.store().meta()?, before);
+        drop(calls);
+        drop(prepared);
+        capacity_released(&fixture)?;
+    }
     Ok(())
 }
 
@@ -1330,3 +1337,5 @@ async fn nested_inputs_keep_ranges() -> TestResult {
 mod origins;
 
 mod body_ports;
+
+mod operation;

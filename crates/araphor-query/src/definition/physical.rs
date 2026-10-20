@@ -680,6 +680,13 @@ impl PackageExec {
             .get(slot)
             .ok_or_else(|| internal("package physical child is absent"))?;
         let mut stream = execute_stream(Arc::clone(plan), Arc::clone(context))?;
+        let exceeded = || {
+            if input {
+                external(sdk::Error::contract(sdk::ErrorCode::Limit, "package input"))
+            } else {
+                limit()
+            }
+        };
         let schema = Arc::new(schema.clone());
         let mut batches = Vec::new();
         while let Some(batch) = owner
@@ -703,11 +710,11 @@ impl PackageExec {
                         .checked_mul(std::mem::size_of::<sdk::arrow_array::ArrayRef>())
                         .and_then(|headers| bytes.checked_add(headers))
                 })
-                .ok_or_else(limit)?;
-            memory.try_resize(metadata.checked_add(conversion).ok_or_else(limit)?)?;
+                .ok_or_else(exceeded)?;
+            memory.try_resize(metadata.checked_add(conversion).ok_or_else(exceeded)?)?;
             let batch =
                 sdk::Dataset::normalize_batch(batch, Arc::clone(&schema)).map_err(external)?;
-            budget.add(&batch)?;
+            budget.add(&batch).map_err(|_| exceeded())?;
             if input {
                 owner.memory.retain_input(&batch, memory)?;
             } else {
@@ -718,7 +725,7 @@ impl PackageExec {
         }
         if batches.is_empty() {
             let batch = sdk::RecordBatch::new_empty(schema);
-            budget.add(&batch)?;
+            budget.add(&batch).map_err(|_| exceeded())?;
             batches.push(batch);
         }
         Ok(batches)

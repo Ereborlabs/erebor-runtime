@@ -834,8 +834,29 @@ managed definition's source map. The native managed sink test checks that exact
 map identity. All 66 connected Instance cases and 44 managed Data cases pass
 across the original and corrected commands. These checks qualify the complete
 [memory and stream retirement](../../recovery/araphor-analysis-memory-retirement-20261020.json).
-The 122 remaining reference files are unchanged. Initial admission pressure
+At that retirement, the 122 remaining reference files are unchanged. Initial admission pressure
 retry, producer and public integration, and the final Rust gate remain open.
+
+## Native operation validation
+
+Read [PackageExec::collect](../../crates/araphor-query/src/definition/physical.rs)
+for batch collection under the captured execution. Native child streams supply
+Arrow batches. Normalization uses the declared SDK schema. Actual shared
+buffers retain their existing memory claims. A configured input bound returns
+the existing typed SDK Limit error; a shared pool failure returns Busy. Output
+limits keep their existing classification. No second executor is present.
+
+The [operation tests](../../crates/araphor-query/src/definition/tests/execution/contract/operation.rs)
+check full input metadata, qualified table names, exact declared scope, stable
+revisions, quoted aliases, input order, child deadlines, and capacity cleanup.
+The [output contract test](../../crates/araphor-query/src/definition/tests/execution/contract.rs)
+checks descriptor and invocation row limits before evidence execution.
+All 67 connected execution and guest cases and seven finite Analysis failure
+and pressure cases pass. These checks qualify the
+[operation test retirement](../../recovery/araphor-analysis-operation-retirement-20261020.json).
+The 121 remaining reference files and recovery archive are unchanged. Other
+model rules, complete producer integration, public lifecycle, and the final
+Rust gate remain open.
 
 ## In-process Wasm ownership
 
