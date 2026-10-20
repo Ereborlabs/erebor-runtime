@@ -369,7 +369,8 @@ exactly four mapped leaves: Graph contract source and tests, model input, and
 model operation. Eight more Wasm leaves and 15 finite Graph, SQL, Discovery,
 test, and asset leaves are retired. Eight more executor, component, atom,
 pager, and pure test leaves are removed after 50 focused replacement checks
-pass. The remaining 144 reference files keep
+pass. Fifteen more retained-query, authority, Wasm, and finite notification
+test leaves are removed after 89 focused checks pass. The remaining 129 files keep
 their baseline content.
 The recovery archive retains all 208 recovered files. Read the
 [retirement records](../plans/araphor-analysis-migration.md#retired-finite-reference-files)
@@ -377,7 +378,8 @@ and the [four-file record](../../recovery/araphor-analysis-managed-retirement-20
 and [Wasm record](../../recovery/araphor-analysis-wasm-retirement-20261020.json),
 [Graph record](../../recovery/araphor-analysis-graph-retirement-20261020.json),
 the [output record](../../recovery/araphor-analysis-output-retirement-20261020.json),
-and [native helper record](../../recovery/araphor-analysis-native-retirement-20261020.json)
+the [native helper record](../../recovery/araphor-analysis-native-retirement-20261020.json),
+and [retained-result record](../../recovery/araphor-analysis-retained-retirement-20261020.json)
 for the exact scope. The current final Rust gate and complete migration remain
 **Not done**.
 
@@ -442,6 +444,45 @@ All 50 mapped focused checks pass before the eight reference leaves are
 removed. The record pins the owner source and test binaries. No production
 code is added for this removal. The long-running lifecycle and complete final
 Rust gate remain **Not done**.
+
+## Retained result inspection
+
+[Instance::read_result](../../crates/araphor-analysis/src/instance/read.rs)
+accepts a current reader grant and exact instance/result IDs.
+  -> [Instance::inspect](../../crates/araphor-analysis/src/instance/read.rs) checks Inspect before the read and watches current authority events.
+  -> [Instance::retained](../../crates/araphor-analysis/src/instance/read.rs) checks stored selection coverage for the reader tenant.
+  -> [AnalysisStore::managed_result](../../crates/araphor-data/src/analysis/managed/read.rs) validates the retained call, receipt, descriptor, output, and exact instance binding.
+  -> [Instance::inspect](../../crates/araphor-analysis/src/instance/read.rs) checks current reader authority and expiry before disclosure.
+
+[Instance::query_result](../../crates/araphor-analysis/src/instance/read.rs)
+uses that same retained read.
+  -> [Session::query_local](../../crates/araphor-query/src/execution/local.rs) registers only the retained output datasets in a private native catalog.
+  -> [Session indexing](../../crates/araphor-query/src/execution/tables.rs) adds original row indices before filtering across Arrow batches.
+  -> [Planner](../../crates/araphor-query/src/planner/mod.rs) uses the existing native SQL parser and logical planner.
+  -> [Session::stream_local](../../crates/araphor-query/src/execution.rs) uses the native optimizer, physical planner, execution permit, and output bounds.
+  -> [LocalOutput](../../crates/araphor-query/src/execution/local.rs) retains the selected dataset and its metadata reservation.
+
+The catalog contains no inherited view, external catalog, undeclared local
+table, or durable source. Native admission rejects DDL, DML, multiple
+statements, and unused undeclared CTEs. A retained SELECT executes no historical
+package export and captures no current evidence source. Its configured bounds
+combine the native Session limits with the retained descriptor limits. Data
+already reads that descriptor during validation. No second descriptor read or
+current image execution trust check is required.
+
+Current Inspect authority is independent of the original writer principal,
+Run authority, and image execution trust. Authority loss cancels and drains the
+child operation. The parent request control remains usable. Complete results,
+state, reasons, evidence, and historical receipt revision survive newer writes.
+The [historical tests](../../crates/araphor-analysis/src/instance/tests/history.rs)
+check those rules. The [native local tests](../../crates/araphor-query/src/execution/tests/local.rs)
+also check catalog exclusion, original indices, empty metadata, native interval
+output, explicit limits, and last-alias memory release.
+
+These Rust library entry points pass focused qualification. Public Control and
+CLI result operations and direct expiration of a previously valid writer grant
+remain **Not done**. Keep the mixed Inspect, lifecycle, presentation, and codec
+reference files until their complete replacements pass.
 
 ## Finite managed execution
 

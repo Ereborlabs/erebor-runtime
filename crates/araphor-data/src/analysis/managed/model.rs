@@ -308,6 +308,7 @@ pub(super) struct Record {
 pub struct ManagedResult {
     pub context: ResultContext,
     pub output: sdk::Output,
+    pub limits: sdk::Limits,
     pub commit_revision: u64,
     pub current: bool,
 }

@@ -38,7 +38,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 144 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 129 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -54,7 +54,8 @@ Every replacement passes its required checks
 | Public callers | Restore current managed operations through Control, CLI, and lightweight E2E. Reference test modules remain available but are not a substitute for native integration tests. | Not done |
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
-| Final retirement | The earlier 56 leaves and 8 mapped executor, component, atom, pager, and test leaves are removed. The 144 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public transport and presentation remain open. | Finite checks pass |
+| Final retirement | The earlier 64 leaves and 15 mapped retained-query, authority, Wasm, and notification test leaves are removed. The 129 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -106,12 +107,13 @@ gRPC cases then pass in `migration-control-grpc75` in 14.209 seconds. The
 complete run takes 1,934.901 seconds and does not pass. Its failing group is
 now corrected; the final complete procedure remains pending.
 
-Retained-result Inspect and native local SQL replacement are in progress.
-The candidate uses a fresh reader grant and exact retained instance/result
-binding. The local native catalog contains only the retained datasets. Data
-supplies the retained descriptor limits without another descriptor read.
-The writer's invocation limits do not set the later reader's query limits.
-No reference file is removed for this candidate before its checks pass.
+Retained-result Inspect and native local SQL pass focused checks in
+`migration-retained-query76`, `migration-retained-analysis76`, and
+`migration-retained-data76`. The replacement uses a fresh reader grant and
+exact retained instance/result binding. The local native catalog contains only
+the retained datasets. Data supplies retained descriptor limits without another
+descriptor read. The writer's invocation limits do not set the later reader's
+query limits. The exact retirement record below identifies the removed leaves.
 
 Focused checks correct the stale catalog, retention, graph, and quota
 fixtures. Query now retains the initial SQL error receipt before delivery.
@@ -245,15 +247,15 @@ a long-running recovery supervisor.
 
 ### Production code ledger
 
-The current count71 follows the finite executor, component, atom, and pager retirement.
+The current count77 includes the retained-result replacement and its retirement.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 12,989 | 8,001 | +4,988 |
-| Original reduction baseline `7b7b407a` | 41,369 | 30,385 | +10,984 |
+| `6a25ba1b` | 13,248 | 8,154 | +5,094 |
+| Original reduction baseline `7b7b407a` | 41,479 | 30,389 | +11,090 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -262,12 +264,19 @@ Its Runtime correction adds one production line. This deliverable removes
 994 net production lines. The next 15-file retirement removes 1,062 reference
 production lines. Data request validation adds 19 production lines. This
 deliverable removes 1,043 net production lines. The later eight-file retirement
-removes 804 production lines and adds no production line. Another 16,984 net production
+removes 804 production lines and adds no production line. The retained-result
+replacement adds 259 production lines and removes 149 reference production
+lines. Its net change is +110. The separate Control correction removes four
+production lines. This work restores missing behavior; it does not yet reduce
+the complete production total. Another 17,090 net production
 lines must be removed relative to the current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count71.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count77.json`. Its selected source
 fingerprint is
+`eaa7a6646dcedf3590d62e48c5ea3c3004b420ee4683eccd26ed462e4db4427f`.
+The earlier count71 records the executor, component, atom, and pager retirement
+at +10,984 production lines from the original baseline. Its fingerprint is
 `ff4547f03bc8aa5701f8e0c1f063dab59a8fc208ec1738e9ace78bb28a5c3456`.
 The earlier count67 records the finite Graph, SQL, and Discovery retirement at
 +11,788 production lines from the original reduction baseline. Its fingerprint is
@@ -442,6 +451,43 @@ Strict Clippy passes for all affected targets and features in
 links resolve.
 Complete migration, reference removal, and the final Rust gate remain
 **Not done**.
+
+The [retained-result record](../../recovery/araphor-analysis-retained-retirement-20261020.json)
+then removes 15 complete leaves. The native local query replaces the old
+ModelRun dataset helper. Native authority events and worker joins replace the
+per-operation AuthorityWatch thread. Runtime and Query retain all 22 Wasm
+fixture and execution assertions. Current NotificationRouter tests retain the
+15 finite assertions from five removed test leaves. Notification production
+and same-service tenant isolation remain open.
+
+| Check | Result | Seconds |
+| --- | --- | ---: |
+| `migration-retained-build76` | Relevant targets compile | 80.114 |
+| `migration-retained-query76` | 12 local SQL, indexing, and actual guest parity cases pass | 14.523 |
+| `migration-retained-analysis76` | 37 Instance, authority, and notification cases pass; one native fixture case is ignored | 80.633 |
+| `migration-retained-data76` | All 12 managed result and atomic commit cases pass | 18.497 |
+| `migration-retirement-runtime76` | All 28 Wasm cases pass | 165.431 |
+| `migration-retained-clippy76` | Strict checks pass for all affected targets and features | 102.147 |
+
+The 89 focused cases pass before removal. The tests keep a complete historical
+return after newer commits and writer revocation. They check current Inspect
+denial, unchanged Data, original indices across Arrow batches, native interval
+output, empty schema metadata, exact configured row/byte/batch limits, and
+actual alias lifetime. Input arrays must be dropped before the full input pool
+can be reserved again. The final test checks that lifetime directly.
+
+The removed helper could override an explicit Engine row limit. A retained
+SELECT now honors the native Session limit and retained descriptor limit.
+The positive filtered-index case and explicit one-row rejection both pass.
+Default quotas remain disabled. No source reader, parser, planner, executor,
+clock, or polling task is added.
+
+There are now **79 retired files and 129 unchanged baseline files**. The
+complete archive retains all 208 original files. The 149 removed production
+lines are a gross reference count. The new authorized read and local query
+code is included in the production ledger. Public result presentation,
+codec parity, direct expired-writer proof, managed lifecycle, and complete
+final Rust qualification remain **Not done**.
 
 ## Root exports
 

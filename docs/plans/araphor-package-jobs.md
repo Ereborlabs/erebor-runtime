@@ -85,7 +85,9 @@ The historical full Rust gate `migration-final-ci42` covers the earlier 29
 retired leaves. Four additional reference files, eight Wasm leaves, and 15
 finite Graph, SQL, Discovery, test, and asset leaves are retired. Eight more
 executor, component, atom, pager, and pure test leaves are removed after 50
-focused replacement checks pass. There are now 64 retired files; 144 remain
+focused replacement checks pass. Fifteen more retained-query, authority, Wasm,
+and finite notification test leaves are removed after 89 checks pass.
+There are now 79 retired files; 129 remain
 unchanged. The recovery archive retains all 208 originals.
 The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish

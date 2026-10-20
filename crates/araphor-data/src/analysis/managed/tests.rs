@@ -256,6 +256,41 @@ fn request(id: &str) -> ManagedRequest {
 }
 
 #[test]
+fn retained_limits_keep_descriptor() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let fixture = Fixture::admit(&store)?;
+    let captured = fixture.capture(&store, false)?;
+    let request = request("limited-writer");
+    let attempt = store.register_managed_attempt(&captured, &request, || Ok(()))?;
+    let mut evaluations = [
+        fixture.evaluation(&request, 10, None)?,
+        fixture.evaluation(&request, 11, None)?,
+    ];
+    for evaluation in &mut evaluations {
+        evaluation.context.limits.max_rows = 2;
+    }
+    let receipt = fixture.publish(
+        &store,
+        &attempt,
+        &evaluations,
+        &[fixture.output(12)?, fixture.output(103)?],
+    )?;
+    for reference in receipt.results.values() {
+        let result = store.managed_result(
+            &fixture.instance,
+            &reference.result_id,
+            10,
+            &AnalysisReadControl::default(),
+        )?;
+        assert_eq!(result.context.context.limits.max_rows, 2);
+        assert_eq!(result.limits, fixture.model.limits);
+        assert!(result.limits.max_rows > 2);
+    }
+    Ok(())
+}
+
+#[test]
 fn managed_calls_commit_atomically() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");

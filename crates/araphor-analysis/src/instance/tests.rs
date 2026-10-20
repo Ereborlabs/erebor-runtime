@@ -14,6 +14,8 @@ use sdk::arrow_array::{Array as _, UInt64Array};
 
 use super::*;
 
+mod history;
+
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 struct Authority {

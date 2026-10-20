@@ -229,7 +229,7 @@ impl AnalysisStore {
             {
                 return Err(Code::Denied.error("managed result scope"));
             }
-            let output = Self::validate_managed_record(
+            let (output, limits) = Self::validate_managed_record(
                 reader,
                 instance.spec.tenant,
                 id,
@@ -240,6 +240,7 @@ impl AnalysisStore {
             Ok(ManagedResult {
                 context: record.context,
                 output,
+                limits,
                 commit_revision,
                 current: self.managed_current(
                     reader,
@@ -511,7 +512,7 @@ impl AnalysisStore {
         record: &Record,
         packet: &sdk::wire::Output,
         revision: u64,
-    ) -> Result<sdk::Output> {
+    ) -> Result<(sdk::Output, sdk::Limits)> {
         let attempt =
             Self::managed_attempt_from(reader, tenant, &record.instance, &record.attempt)?
                 .ok_or_else(|| Code::Missing.error("managed result attempt"))?;
@@ -590,6 +591,7 @@ impl AnalysisStore {
                 record.context.context.limits,
                 &record.rows,
             )
+            .map(|output| (output, model.limits))
             .context(crate::AnalysisContractSnafu)
     }
 }

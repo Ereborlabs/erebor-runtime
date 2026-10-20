@@ -15,6 +15,7 @@ use datafusion::logical_expr::{dml::InsertOp, LogicalPlanBuilder};
 use crate::Result;
 
 mod manifest;
+mod read;
 mod sink;
 
 #[cfg(test)]
