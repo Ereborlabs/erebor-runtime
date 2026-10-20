@@ -28,6 +28,10 @@ impl AnalysisStore {
             || request.id.chars().any(char::is_control)
             || request.time_utc_ns == 0
             || i64::try_from(request.time_utc_ns).is_err()
+            || request
+                .frontier
+                .as_ref()
+                .is_some_and(|frontier| frontier.cursor.is_empty())
         {
             return Err(Code::Invalid.error("managed attempt request"));
         }
@@ -68,6 +72,9 @@ impl AnalysisStore {
                 BTreeMap::new(),
             ));
         }
+        if request.frontier.is_some() {
+            Self::check_managed_pending(&transaction, spec.tenant, &spec.id)?;
+        }
         self.check_managed_capture(&transaction, capture, request.time_utc_ns)?;
         self.resolve_witnesses(&capture.witnesses, capture.revision)?;
         let revision = self.package_next(&transaction)?;
@@ -80,7 +87,7 @@ impl AnalysisStore {
         let bytes = serde_json::to_vec(&attempt).context(crate::PackageEncodingSnafu)?;
         transaction
             .execute(
-                "INSERT INTO managed_attempts VALUES (?, ?, ?, ?)",
+                "INSERT INTO managed_attempts VALUES (?, ?, ?, ?, 0)",
                 params![spec.tenant.as_slice(), spec.id, request.id, bytes],
             )
             .context(AnalysisDatabaseSnafu {
@@ -163,8 +170,8 @@ impl AnalysisStore {
                 operation: "advance managed progress",
             })?;
         attempt.receipt = Some(receipt.clone());
-        transaction.execute("UPDATE managed_attempts SET contract = ? WHERE tenant_id = ? AND instance_id = ? AND attempt_id = ?",
-            params![serde_json::to_vec(&attempt).context(crate::PackageEncodingSnafu)?, spec.tenant.as_slice(), spec.id, attempt.request.id])
+        transaction.execute("UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = ? AND attempt_id = ?",
+            params![serde_json::to_vec(&attempt).context(crate::PackageEncodingSnafu)?, revision, spec.tenant.as_slice(), spec.id, attempt.request.id])
             .context(AnalysisDatabaseSnafu { operation: "complete managed attempt" })?;
         self.check_logical(&transaction, spec.tenant, false)?;
         self.check_witnesses(&transaction, spec.tenant, input.now_utc_ns)?;
@@ -209,6 +216,8 @@ impl AnalysisStore {
             || meta.recovery_epoch != capture.recovery
             || meta.commit_revision < capture.revision
             || instance.generation != capture.generation
+            || instance.lifecycle != capture.lifecycle
+            || instance.running != capture.running
             || instance.progress != capture.progress
             || capture.prior.keys().ne(spec.manifest.calls.keys())
         {
@@ -272,7 +281,10 @@ impl AnalysisStore {
         let current =
             Self::managed_instance_from(reader, attempt.capture.tenant, &attempt.capture.instance)?
                 .ok_or_else(|| Code::Missing.error("managed publication instance"))?;
-        if current.generation != attempt.capture.generation || current.spec != input.attempt.1.spec
+        if current.generation != attempt.capture.generation
+            || current.lifecycle != attempt.capture.lifecycle
+            || current.running != attempt.capture.running
+            || current.spec != input.attempt.1.spec
         {
             return crate::AnalysisConflictSnafu.fail();
         }
@@ -421,6 +433,7 @@ impl AnalysisStore {
             crate::InputRevision::of(&(spec.tenant, &spec.id, &attempt.request.id, None::<u64>))
                 .context(crate::PackageEncodingSnafu)?;
         let receipt = ManagedReceipt {
+            frontier: attempt.request.frontier.clone(),
             instance: spec.id.clone(),
             attempt: attempt.request.id.clone(),
             commit_revision: revision,

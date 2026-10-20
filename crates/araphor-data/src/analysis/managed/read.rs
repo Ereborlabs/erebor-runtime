@@ -32,8 +32,8 @@ impl AnalysisStore {
         let revision = self.package_next(&transaction)?;
         transaction
             .execute(
-                "INSERT INTO managed_instances VALUES (?, ?, ?, ?, 0)",
-                params![spec.tenant.as_slice(), spec.id, bytes, revision],
+                "INSERT INTO managed_instances VALUES (?, ?, ?, ?, 0, false, ?)",
+                params![spec.tenant.as_slice(), spec.id, bytes, revision, revision],
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "insert managed instance",
@@ -61,6 +61,8 @@ impl AnalysisStore {
             spec: spec.clone(),
             generation: revision,
             progress: 0,
+            running: false,
+            lifecycle: revision,
         })
     }
 
@@ -81,22 +83,61 @@ impl AnalysisStore {
         tenant: [u8; 16],
         id: &str,
     ) -> Result<Option<ManagedInstance>> {
-        let row = reader.query_row("SELECT spec, generation, progress FROM managed_instances WHERE tenant_id = ? AND instance_id = ?", params![tenant.as_slice(), id], |row|
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, u64>(1)?, row.get::<_, u64>(2)?)))
+        let row = reader.query_row("SELECT spec, generation, progress, running, lifecycle FROM managed_instances WHERE tenant_id = ? AND instance_id = ?", params![tenant.as_slice(), id], |row|
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, u64>(1)?, row.get::<_, u64>(2)?, row.get::<_, bool>(3)?, row.get::<_, u64>(4)?)))
             .optional().context(AnalysisDatabaseSnafu { operation: "read managed instance" })?;
-        row.map(|(bytes, generation, progress)| {
-            let spec: ManagedSpec =
-                serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu)?;
-            if spec.tenant != tenant || spec.id != id {
-                return Err(Code::Invalid.error("managed instance key"));
+        row.map(|row| Self::managed_row(tenant, id, row))
+            .transpose()
+    }
+
+    /// The caller checks current authority before execution.
+    pub fn active_managed(&self, control: &AnalysisReadControl) -> Result<Vec<ManagedInstance>> {
+        let mut reader = self.reader_until(control)?;
+        control.run(&mut reader, |reader| {
+            let mut statement = reader.prepare("SELECT tenant_id, instance_id, spec, generation, progress, running, lifecycle FROM managed_instances WHERE running ORDER BY tenant_id, instance_id")
+                .context(AnalysisDatabaseSnafu { operation: "prepare active managed metadata" })?;
+            let mut rows = statement.query([])
+                .context(AnalysisDatabaseSnafu { operation: "read active managed metadata" })?;
+            let mut active = Vec::new();
+            while let Some(row) = rows.next()
+                .context(AnalysisDatabaseSnafu { operation: "read active managed row" })?
+            {
+                control.check()?;
+                let tenant = row.get::<_, Vec<u8>>(0)
+                    .context(AnalysisDatabaseSnafu { operation: "read active managed tenant" })?
+                    .try_into().map_err(|_| Code::Invalid.error("active managed tenant"))?;
+                let id: String = row.get(1)
+                    .context(AnalysisDatabaseSnafu { operation: "read active managed identity" })?;
+                let values = (
+                    row.get(2).context(AnalysisDatabaseSnafu { operation: "read active managed spec" })?,
+                    row.get(3).context(AnalysisDatabaseSnafu { operation: "read active managed generation" })?,
+                    row.get(4).context(AnalysisDatabaseSnafu { operation: "read active managed progress" })?,
+                    row.get(5).context(AnalysisDatabaseSnafu { operation: "read active managed running state" })?,
+                    row.get(6).context(AnalysisDatabaseSnafu { operation: "read active managed lifecycle" })?,
+                );
+                active.push(Self::managed_row(tenant, &id, values)?);
             }
-            Ok(ManagedInstance {
-                spec,
-                generation,
-                progress,
-            })
+            Ok(active)
         })
-        .transpose()
+    }
+
+    fn managed_row(
+        tenant: [u8; 16],
+        id: &str,
+        (bytes, generation, progress, running, lifecycle): (Vec<u8>, u64, u64, bool, u64),
+    ) -> Result<ManagedInstance> {
+        let spec: ManagedSpec =
+            serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu)?;
+        if spec.tenant != tenant || spec.id != id {
+            return Err(Code::Invalid.error("managed instance key"));
+        }
+        Ok(ManagedInstance {
+            spec,
+            generation,
+            progress,
+            running,
+            lifecycle,
+        })
     }
 
     pub(super) fn check_managed_images(reader: &Connection, spec: &ManagedSpec) -> Result<()> {
@@ -163,6 +204,58 @@ impl AnalysisStore {
         Ok(descriptor)
     }
 
+    pub fn managed_resume(
+        &self,
+        tenant: [u8; 16],
+        id: &str,
+        control: &AnalysisReadControl,
+    ) -> Result<(ManagedInstance, Option<ManagedFrontier>)> {
+        let mut reader = self.reader_until(control)?;
+        control.run(&mut reader, |reader| {
+            let instance = Self::managed_instance_from(reader, tenant, id)?
+                .ok_or_else(|| Code::Missing.error("managed resume instance"))?;
+            Self::check_managed_pending(reader, tenant, id)?;
+            let frontier = if instance.progress == 0 {
+                None
+            } else {
+                let bytes: Vec<u8> = reader.query_row(
+                    "SELECT contract FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND completed = ?",
+                    params![tenant.as_slice(), id, instance.progress], |row| row.get(0),
+                ).context(AnalysisDatabaseSnafu { operation: "read managed committed frontier" })?;
+                let attempt: Attempt = serde_json::from_slice(&bytes)
+                    .context(crate::PackageEncodingSnafu)?;
+                if attempt.capture.tenant != tenant || attempt.capture.instance != id
+                    || attempt.capture.generation != instance.generation
+                    || attempt.receipt.as_ref().is_none_or(|receipt| {
+                        receipt.instance != id || receipt.attempt != attempt.request.id
+                            || receipt.commit_revision != instance.progress
+                            || receipt.frontier != attempt.request.frontier
+                    }) {
+                    return Err(Code::Invalid.error("managed committed frontier"));
+                }
+                Some(attempt.request.frontier.ok_or_else(||
+                    Code::Incomplete.error("managed native frontier unavailable"))?)
+            };
+            control.check()?;
+            Ok((instance, frontier))
+        })
+    }
+
+    pub(super) fn check_managed_pending(
+        reader: &Connection,
+        tenant: [u8; 16],
+        id: &str,
+    ) -> Result<()> {
+        let pending: bool = reader.query_row(
+            "SELECT EXISTS(SELECT 1 FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND completed = 0)",
+            params![tenant.as_slice(), id], |row| row.get(0),
+        ).context(AnalysisDatabaseSnafu { operation: "read managed pending attempts" })?;
+        if pending {
+            return Err(Code::Incomplete.error("managed pending attempt"));
+        }
+        Ok(())
+    }
+
     pub fn managed_attempt(
         &self,
         tenant: [u8; 16],
@@ -181,6 +274,8 @@ impl AnalysisStore {
                 return Err(Code::Invalid.error("managed attempt generation"));
             }
             instance.progress = attempt.capture.progress;
+            instance.running = attempt.capture.running;
+            instance.lifecycle = attempt.capture.lifecycle;
             Ok(Some(ManagedAttempt(
                 attempt,
                 instance,

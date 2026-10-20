@@ -103,3 +103,47 @@ async fn fixtures_compare_complete_return() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn fixtures_repeat_saved_clock() -> TestResult {
+    let model = sdk::Model::new(
+        "evaluate",
+        Vec::new(),
+        vec![sdk::Port::new("data", Fixture::schema())],
+    );
+    let mut bundle = Fixture::bundle(
+        "sql",
+        model.clone(),
+        SqlModelV1 {
+            outputs: BTreeMap::from([(
+                "data".into(),
+                "SELECT CAST(CASE WHEN CURRENT_TIMESTAMP = TIMESTAMP '2000-01-01 00:00:00' THEN 1 ELSE 0 END AS BIGINT UNSIGNED) AS value".into(),
+            )]),
+            ..Default::default()
+        },
+    )?;
+    for (name, now, value) in [
+        ("matching", 946684800000000000, 1),
+        ("later", 946684801000000000, 0),
+    ] {
+        let mut evaluation = Fixture::evaluation(&model);
+        evaluation.context.id = name.into();
+        evaluation.context.time_utc_ns = now;
+        Fixture::save(
+            &mut bundle,
+            &evaluation,
+            &sdk::Output {
+                datasets: vec![Fixture::data("data", &[value])?],
+                ..Default::default()
+            },
+            None,
+        )?;
+    }
+    let fixture = Fixture::new(&bundle)?;
+    for _ in 0..2 {
+        let results = fixture.run(&bundle).await?;
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.passed));
+    }
+    Ok(())
+}

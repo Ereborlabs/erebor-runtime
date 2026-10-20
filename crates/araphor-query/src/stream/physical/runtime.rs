@@ -8,7 +8,8 @@ use datafusion::physical_plan::ExecutionPlan;
 use snafu::ResultExt as _;
 
 use super::{kernel::Kernel, Compiled, Mode, SubscribeExec};
-use crate::execution::{Engine, PhysicalStream, Read};
+use crate::definition::CapturedExecution;
+use crate::execution::{Engine, PendingRead, PhysicalStream, Read, Session};
 use crate::follow::Operation;
 use crate::sources::{ArrowSnapshot, Changes, JournalExec};
 use crate::stream::progress::{Progress, Wake};
@@ -29,7 +30,7 @@ pub(super) struct Runtime {
     evaluated: u64,
     exhausted: bool,
     ended: bool,
-    initial: Option<(Arc<crate::execution::Permit>, u64)>,
+    initial: Option<(Arc<crate::execution::Permit>, u64, Session)>,
 }
 
 struct Maintained {
@@ -43,7 +44,7 @@ impl Runtime {
         physical: &SubscribeExec,
         context: Arc<TaskContext>,
         run: Arc<Run>,
-        initial: Option<(Arc<crate::execution::Permit>, u64)>,
+        initial: Option<(Arc<crate::execution::Permit>, u64, Session)>,
         progress: Progress,
     ) -> Result<Self> {
         let maintained = match &physical.mode {
@@ -110,14 +111,16 @@ impl Runtime {
             return Ok(None);
         }
         if self.snapshot.is_none() {
-            return self.evaluate(false).await.map(Some);
+            if let Some(event) = self.evaluate(false).await? {
+                return Ok(Some(event));
+            }
         }
         if !self.run.follow {
             self.ended = true;
             return Ok(None);
         }
         if self.run.operation == Operation::Append && !self.exhausted {
-            return self.evaluate(false).await.map(Some);
+            return self.evaluate(false).await;
         }
         {
             match self
@@ -129,7 +132,7 @@ impl Runtime {
             {
                 Wake::Source => {
                     if self.changed().await? {
-                        return self.evaluate(false).await.map(Some);
+                        return self.evaluate(false).await;
                     }
                     return self.metadata_update(false).await.map(Some);
                 }
@@ -200,9 +203,9 @@ impl Runtime {
         }
     }
 
-    async fn evaluate(&mut self, clock_changed: bool) -> Result<Event> {
-        let (permit, now, reuse) = match self.initial.take() {
-            Some((permit, now)) => (permit, now, true),
+    async fn evaluate(&mut self, clock_changed: bool) -> Result<Option<Event>> {
+        let (permit, now, initial) = match self.initial.take() {
+            Some((permit, now, session)) => (permit, now, Some(session)),
             None => {
                 let permit = Arc::new(
                     self.run
@@ -216,20 +219,23 @@ impl Runtime {
                         )
                         .await?,
                 );
-                (permit, self.progress.begin()?, false)
+                (permit, self.progress.begin()?, None)
             }
         };
         let selection = self.run.window.map_or_else(
             || self.run.session.selection().clone(),
             |window| window.selection(self.run.session.selection(), now),
         );
-        if self.snapshot.is_none() && self.run.resume.is_some() {
+        if self.snapshot.is_none() && self.run.resume.is_some() && self.run.managed.is_none() {
             let (meta, _) = self.dependencies(selection.clone()).await?;
             self.check_store(&meta)?;
         }
-        let mut session = self.run.session.at(selection, now);
-        let calls = session.call_context(crate::definition::Invocation::default());
-        session.calls = Some(Arc::clone(&calls));
+        let reuse = initial.is_some();
+        let session = match initial {
+            Some(session) => session,
+            None => self.run.session(now, &permit).await?,
+        };
+        let calls = session.calls.clone().ok_or_else(Self::state_error)?;
         let execution = async {
             let output = if self.run.operation == Operation::Append {
                 let PhysicalStream {
@@ -299,18 +305,87 @@ impl Runtime {
                         state.task_ctx(),
                     )
                 };
+                let pending = PendingRead {
+                    control: Arc::clone(session.control()),
+                    active: true,
+                };
+                let captured = session
+                    .capture_physical(physical, context, &self.run.sources, Read::Snapshot, permit)
+                    .await?;
+                captured.reserve_complete(self.run.follow)?;
+                let captured = CapturedExecution::new(
+                    captured,
+                    session.clone(),
+                    Arc::clone(&calls),
+                    Arc::clone(self.run.session.control()),
+                    pending,
+                );
+                if let Some((_, publication)) = &self.run.managed {
+                    let snapshot = captured.snapshot();
+                    self.check_store(&snapshot.page.extraction.meta)?;
+                    let managed = snapshot.managed().ok_or_else(Self::state_error)?;
+                    if let Some(cursor) =
+                        self.run.resume.as_ref().filter(|_| self.snapshot.is_none())
+                    {
+                        if managed.source_revision() <= cursor.read_revision()
+                            && self.run.resume_expiry.is_none_or(|expiry| expiry > now)
+                        {
+                            let cursor = cursor.clone();
+                            let (captured, mut pending) = captured.into_parts();
+                            self.snapshot = Some(Arc::clone(&captured.snapshot));
+                            self.revision = cursor.read_revision();
+                            self.position = Some(cursor.position());
+                            self.evaluated = cursor.evaluated();
+                            self.exhausted = true;
+                            self.progress.captured(
+                                captured.snapshot.page.extraction.meta.commit_revision,
+                                self.run.resume_expiry,
+                            );
+                            drop(captured);
+                            pending.active = false;
+                            return Ok(None);
+                        }
+                    }
+                    let next_change = self
+                        .run
+                        .window
+                        .and_then(|window| window.expiry(snapshot.received_min))
+                        .into_iter()
+                        .chain(snapshot.next_change)
+                        .min();
+                    let frontier = araphor_data::ManagedFrontier {
+                        cursor: crate::follow::Cursor::new(
+                            &snapshot.page.extraction.meta,
+                            self.run.operation,
+                            self.run.binding,
+                            StorePositionV1 {
+                                commit_revision: 0,
+                                ordinal: 0,
+                            },
+                            now,
+                        )
+                        .encode()?,
+                        next_change,
+                    };
+                    let publication = Arc::clone(publication);
+                    let invocation = calls.invocation().clone();
+                    captured
+                        .blocking(move |snapshot, control| {
+                            publication.admit(snapshot, &invocation, &frontier, control)
+                        })
+                        .await?;
+                }
+                let (captured, mut pending) = captured.into_parts();
                 let PhysicalStream {
                     snapshot,
                     stream,
                     permit,
                     control,
                     reservation,
-                } = session
-                    .start_physical(physical, context, &self.run.sources, Read::Snapshot, permit)
-                    .await?;
+                } = captured.start()?;
                 self.check_store(&snapshot.page.extraction.meta)?;
                 self.snapshot = Some(Arc::clone(&snapshot));
-                Output {
+                let output = Output {
                     snapshot,
                     batches: None,
                     positions: Vec::new(),
@@ -328,16 +403,20 @@ impl Runtime {
                     stream,
                     self.run.follow.then_some(&mut self.content),
                 )
-                .await?
+                .await?;
+                pending.active = false;
+                output
             };
-            Ok::<_, crate::Error>(output)
+            Ok::<_, crate::Error>(Some(output))
         };
         let result = execution.await;
         if result.is_err() {
             let _cancelled = session.control().cancel();
         }
         calls.finish().await;
-        let output = result?;
+        let Some(output) = result? else {
+            return Ok(None);
+        };
         self.check_store(&output.snapshot.page.extraction.meta)?;
         self.revision = output.snapshot.page.extraction.meta.commit_revision;
         self.position = Some(output.position);
@@ -353,14 +432,14 @@ impl Runtime {
         self.evaluated = now;
         self.exhausted = self.run.operation == Operation::Replace
             || (output.snapshot.page.exhausted && !output.limited);
-        Ok(Event {
+        Ok(Some(Event {
             output,
             calls: calls.results().context(SqlSnafu)?,
             completed: true,
             evaluated: now,
             clock_changed,
             exhausted: self.exhausted,
-        })
+        }))
     }
 
     async fn metadata_update(&mut self, clock_changed: bool) -> Result<Event> {
@@ -372,7 +451,7 @@ impl Runtime {
                 .is_some_and(|snapshot| snapshot.next_change.is_some()))
             && clock_changed
         {
-            return self.evaluate(true).await;
+            return self.evaluate(true).await?.ok_or_else(Self::state_error);
         }
         let now = self.progress.time()?;
         let selection = self.run.window.map_or_else(

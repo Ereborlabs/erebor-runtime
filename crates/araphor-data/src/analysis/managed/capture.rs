@@ -76,6 +76,8 @@ impl AnalysisStore {
                 instance: instance.spec.id.clone(),
                 generation: instance.generation,
                 progress: instance.progress,
+                running: instance.running,
+                lifecycle: instance.lifecycle,
                 rebuild: request.rebuild,
                 prior: states,
                 store: output.meta.store_uuid,

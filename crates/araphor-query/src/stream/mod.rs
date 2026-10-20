@@ -23,6 +23,45 @@ pub(crate) struct Run {
     pub operation: crate::follow::Operation,
     pub window: Option<crate::follow::Window>,
     pub resume: Option<crate::follow::Cursor>,
+    pub binding: [u8; 32],
+    pub resume_expiry: Option<u64>,
+    pub managed: Option<(
+        crate::definition::PreparedDefinition,
+        Arc<dyn crate::follow::ManagedPublication>,
+    )>,
+}
+
+impl Run {
+    pub(crate) async fn session(&self, now: u64, permit: &Arc<Permit>) -> crate::Result<Session> {
+        let (invocation, managed) = match &self.managed {
+            Some((definition, publication)) => {
+                let publication = Arc::clone(publication);
+                let control = Arc::clone(self.session.control());
+                let worker = Arc::clone(&control);
+                let lease = (self.session.token()?, Arc::clone(permit));
+                let (invocation, managed) =
+                    crate::execution::Engine::blocking(control, lease, move || {
+                        publication.begin(&worker)
+                    })
+                    .await?;
+                definition.check_invocation(
+                    self.session.selection(),
+                    &invocation,
+                    Some(&managed),
+                )?;
+                (invocation, Some(managed))
+            }
+            None => (crate::definition::Invocation::default(), None),
+        };
+        let selection = self.window.map_or_else(
+            || self.session.selection().clone(),
+            |window| window.selection(self.session.selection(), now),
+        );
+        let mut session = self.session.at(selection, now);
+        session.managed = managed;
+        session.calls = Some(session.call_context(invocation));
+        Ok(session)
+    }
 }
 
 pub(super) struct Change {

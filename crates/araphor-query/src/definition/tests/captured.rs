@@ -30,6 +30,8 @@ const NOW: u64 = 1_700_000_000_123_456_789;
 const INPUT: usize = 4 * 1024 * 1024;
 const OUTPUT: usize = 1024 * 1024;
 
+mod managed;
+
 #[derive(Debug)]
 struct WriterGate {
     entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -39,11 +41,16 @@ struct WriterGate {
 #[derive(Debug, Default)]
 struct SinkState {
     admitted: AtomicBool,
+    begins: AtomicUsize,
+    admissions: AtomicUsize,
+    begin_gate: Option<WriterGate>,
+    admission_gate: Option<WriterGate>,
     input_evaluations: AtomicUsize,
     partitions: AtomicUsize,
     entries: AtomicUsize,
     commits: AtomicUsize,
     receipt: Mutex<Option<ExecutionReceipt>>,
+    frontier: Mutex<Option<araphor_data::ManagedFrontier>>,
     gate: Option<WriterGate>,
 }
 
@@ -52,6 +59,7 @@ struct Sink {
     schema: sdk::arrow_schema::SchemaRef,
     calls: Vec<PackageCall>,
     state: Arc<SinkState>,
+    managed: Option<araphor_data::ManagedInstance>,
 }
 
 impl DisplayAs for Sink {
@@ -236,6 +244,7 @@ async fn definition(fixture: &Fixture, state: Arc<SinkState>) -> TestResult<Prep
         schema: Arc::clone(plan.schema().inner()),
         calls,
         state,
+        managed: None,
     });
     definition.plan = LogicalPlanBuilder::insert_into(
         plan,
@@ -276,6 +285,7 @@ async fn native_count_precedes_commit() -> TestResult {
             schema: Arc::clone(definition.plan.schema().inner()),
             calls: Vec::new(),
             state: Arc::clone(&state),
+            managed: None,
         });
         definition.plan = LogicalPlanBuilder::insert_into(
             definition.plan,

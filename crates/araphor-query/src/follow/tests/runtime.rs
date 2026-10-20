@@ -597,6 +597,9 @@ async fn native_first_clock_time() {
             operation: Operation::Replace,
             window: None,
             resume: None,
+            binding: [0; 32],
+            resume_expiry: None,
+            managed: None,
         }));
     let logical =
         crate::planner::subscription::Subscribe::runtime(plan.as_ref().clone(), false).unwrap();
@@ -711,6 +714,9 @@ async fn native_page_follow_properties() {
                 operation: Operation::Append,
                 window: None,
                 resume: None,
+                binding: [0; 32],
+                resume_expiry: None,
+                managed: None,
             }));
         let logical =
             crate::planner::subscription::Subscribe::runtime(plan.as_ref().clone(), true).unwrap();

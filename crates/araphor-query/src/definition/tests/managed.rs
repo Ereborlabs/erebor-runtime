@@ -9,7 +9,7 @@ const NOW: u64 = 1_700_000_000_123_456_789;
 const CAPACITY: usize = 256 * 1024;
 
 impl Fixture {
-    fn managed(
+    pub(super) fn managed(
         &self,
         definition: &PreparedDefinition,
         selection: AnalysisSelectionV1,

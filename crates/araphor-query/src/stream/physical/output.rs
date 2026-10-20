@@ -1,8 +1,9 @@
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::mem::size_of;
+use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch};
+use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion::execution::memory_pool::MemoryReservation;
@@ -29,9 +30,9 @@ impl Output {
         let permit = self._permit.take().ok_or_else(|| crate::Error::Sql {
             source: DataFusionError::Internal("completed output permit is absent".into()),
         })?;
-        let memory = self._memory.new_empty();
+        let memory = self._memory.split(self._memory.size());
         let mut stream =
-            Box::pin(session.bounded(stream, permit, self._control.clone(), &self._memory, None));
+            Box::pin(session.bounded(stream, permit, self._control.clone(), &memory, None));
         let mut batches = Vec::<RecordBatch>::new();
         let mut arrays = 0usize;
         while let Some(batch) = stream.try_next().await.context(SqlSnafu)? {
@@ -44,7 +45,7 @@ impl Output {
             } else {
                 batches.capacity()
             };
-            self.charge(
+            Self::charge(
                 &memory,
                 capacity
                     .saturating_mul(size_of::<RecordBatch>())
@@ -70,7 +71,12 @@ impl Output {
         let unchanged = previous
             .as_ref()
             .is_some_and(|previous| **previous == digest);
-        self.charge(&memory, if unchanged { 0 } else { headers })?;
+        memory
+            .try_resize(if unchanged { 0 } else { headers })
+            .map_err(|source| crate::Error::Capacity {
+                resource: "shared output",
+                source,
+            })?;
         if let Some(previous) = previous {
             *previous = digest;
         }
@@ -79,11 +85,26 @@ impl Output {
         Ok(self)
     }
 
-    fn charge(&self, memory: &MemoryReservation, bytes: usize) -> Result<()> {
-        let credit = bytes.saturating_sub(memory.size()).min(self._memory.size());
-        self._memory.shrink(credit);
+    pub(crate) fn count_bytes(fingerprint: bool) -> Result<usize> {
+        let batch = RecordBatch::try_from_iter_with_nullable(vec![(
+            "count",
+            Arc::new(UInt64Array::from(vec![0])) as ArrayRef,
+            false,
+        )])
+        .map_err(DataFusionError::from)
+        .context(SqlSnafu)?;
+        let headers = size_of::<RecordBatch>() + size_of::<ArrayRef>();
+        Ok(headers
+            + if fingerprint {
+                Self::row_bytes(&batch, 0)? + size_of::<ScalarValue>()
+            } else {
+                0
+            })
+    }
+
+    fn charge(memory: &MemoryReservation, bytes: usize) -> Result<()> {
         memory
-            .try_resize(bytes)
+            .try_grow(bytes.saturating_sub(memory.size()))
             .map_err(|source| crate::Error::Capacity {
                 resource: "shared output",
                 source,
@@ -107,7 +128,7 @@ impl Output {
         for batch in batches {
             for row in 0..batch.num_rows() {
                 self._control.check()?;
-                self.charge(
+                Self::charge(
                     memory,
                     headers
                         .saturating_add(Self::row_bytes(batch, row)?)

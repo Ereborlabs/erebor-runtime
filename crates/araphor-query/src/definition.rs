@@ -48,6 +48,29 @@ pub struct CapturedExecution {
 }
 
 impl CapturedExecution {
+    pub(crate) fn new(
+        captured: CapturedPhysical,
+        session: Session,
+        calls: Arc<CallContext>,
+        parent: Arc<AnalysisReadControl>,
+        pending: PendingRead,
+    ) -> Self {
+        Self {
+            captured,
+            session,
+            calls,
+            parent,
+            pending,
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (CapturedPhysical, PendingRead) {
+        let Self {
+            captured, pending, ..
+        } = self;
+        (captured, pending)
+    }
+
     pub fn snapshot(&self) -> &crate::sources::ArrowSnapshot {
         &self.captured.snapshot
     }
@@ -299,7 +322,72 @@ impl Session {
         managed: Option<araphor_data::ManagedRead>,
     ) -> Result<CapturedExecution> {
         self.control().check()?;
-        if definition.tenant != self.selection().tenant_id {
+        definition.check_invocation(self.selection(), &invocation, managed.as_ref())?;
+        let mut session = self.clone();
+        session.managed = managed;
+        session.control = Arc::new(self.control().operation()?);
+        let pending = PendingRead {
+            control: Arc::clone(session.control()),
+            active: true,
+        };
+        let calls = session.call_context(invocation);
+        session.calls = Some(Arc::clone(&calls));
+        let result = {
+            let capture = async {
+                let permit = Arc::new(
+                    session
+                        .engine()
+                        .reserve_evaluation(session.selection().tenant_id)?,
+                );
+                session
+                    .capture_plan(
+                        &definition.plan,
+                        &definition.sources,
+                        Read::Snapshot,
+                        permit,
+                    )
+                    .await
+            };
+            tokio::pin!(capture);
+            tokio::select! {
+                result = &mut capture => result,
+                stopped = self.control().query_async(std::future::pending::<Result<CapturedPhysical>>()) => {
+                    let _cancelled = session.control().cancel();
+                    let _finished = capture.await;
+                    stopped
+                }
+            }
+        };
+        let result = result.and_then(|captured| {
+            self.control().check()?;
+            Ok(captured)
+        });
+        match result {
+            Ok(captured) => Ok(CapturedExecution::new(
+                captured,
+                session,
+                calls,
+                Arc::clone(self.control()),
+                pending,
+            )),
+            Err(error) => {
+                let _cancelled = session.control().cancel();
+                calls.finish().await;
+                self.control().check()?;
+                Err(error)
+            }
+        }
+    }
+}
+
+impl PreparedDefinition {
+    pub(crate) fn check_invocation(
+        &self,
+        selection: &araphor_data::AnalysisSelectionV1,
+        invocation: &Invocation,
+        managed: Option<&araphor_data::ManagedRead>,
+    ) -> Result<()> {
+        if self.tenant != selection.tenant_id {
             return Err(PackageErrorCodeV1::Denied
                 .error("definition execution tenant")
                 .into());
@@ -310,16 +398,16 @@ impl Session {
             }
             .fail();
         }
-        if let Some(managed) = &managed {
+        if let Some(managed) = managed {
             if !invocation.inputs.is_empty() || !invocation.checkpoints.is_empty() {
                 return Err(PackageErrorCodeV1::Invalid
                     .error("managed invocation state")
                     .into());
             }
             let spec = &managed.instance.spec;
-            if spec.tenant != self.selection().tenant_id
-                || spec.grant.selection != *self.selection()
-                || spec.definition != definition.resolved
+            if spec.tenant != selection.tenant_id
+                || spec.grant.selection != *selection
+                || spec.definition != self.resolved
             {
                 return Err(PackageErrorCodeV1::Denied
                     .error("managed invocation scope")
@@ -333,8 +421,7 @@ impl Session {
             .collect::<BTreeSet<_>>();
         let mut inputs = invocation.inputs.keys().copied().collect::<BTreeSet<_>>();
         if !checkpoints.is_empty() || !inputs.is_empty() {
-            definition
-                .plan
+            self.plan
                 .apply_with_subqueries(|plan| {
                     if let LogicalPlan::Extension(extension) = plan {
                         if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
@@ -378,60 +465,7 @@ impl Session {
                     .into());
             }
         }
-        PackageCall::check_admission(&definition.plan).context(SqlSnafu)?;
-        let mut session = self.clone();
-        session.managed = managed;
-        session.control = Arc::new(self.control().operation()?);
-        let pending = PendingRead {
-            control: Arc::clone(session.control()),
-            active: true,
-        };
-        let calls = session.call_context(invocation);
-        session.calls = Some(Arc::clone(&calls));
-        let result = {
-            let capture = async {
-                let permit = Arc::new(
-                    session
-                        .engine()
-                        .reserve_evaluation(session.selection().tenant_id)?,
-                );
-                session
-                    .capture_plan(
-                        &definition.plan,
-                        &definition.sources,
-                        Read::Snapshot,
-                        permit,
-                    )
-                    .await
-            };
-            tokio::pin!(capture);
-            tokio::select! {
-                result = &mut capture => result,
-                stopped = self.control().query_async(std::future::pending::<Result<CapturedPhysical>>()) => {
-                    let _cancelled = session.control().cancel();
-                    let _finished = capture.await;
-                    stopped
-                }
-            }
-        };
-        let result = result.and_then(|captured| {
-            self.control().check()?;
-            Ok(captured)
-        });
-        match result {
-            Ok(captured) => Ok(CapturedExecution {
-                captured,
-                session,
-                calls,
-                parent: Arc::clone(self.control()),
-                pending,
-            }),
-            Err(error) => {
-                let _cancelled = session.control().cancel();
-                calls.finish().await;
-                self.control().check()?;
-                Err(error)
-            }
-        }
+        PackageCall::check_admission(&self.plan).context(SqlSnafu)?;
+        Ok(())
     }
 }

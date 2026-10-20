@@ -17,6 +17,9 @@ use crate::Result;
 mod manifest;
 mod read;
 mod sink;
+mod subscription;
+
+pub use subscription::Subscription;
 
 #[cfg(test)]
 mod tests;
@@ -121,6 +124,9 @@ impl Instance {
         request: ManagedRequest,
         control: &AnalysisReadControl,
     ) -> Result<ManagedReceipt> {
+        if request.frontier.is_some() {
+            return Err(Code::Invalid.error("finite managed frontier").into());
+        }
         let grant = &self.admitted.spec.grant;
         let mut changes = self.authority.changes_for(grant);
         self.check()?;
@@ -200,6 +206,8 @@ impl Instance {
             owner: Arc::clone(self),
             schema,
             state: Arc::clone(&state),
+            witness_expiry: request.witness_expiry,
+            lifecycle: None,
         });
         let mut definition = self.prepared.clone();
         definition.plan = LogicalPlanBuilder::insert_into(

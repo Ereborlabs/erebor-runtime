@@ -687,6 +687,22 @@ pub(crate) struct PhysicalStream {
 }
 
 impl CapturedPhysical {
+    pub(crate) fn reserve_complete(&self, fingerprint: bool) -> Result<()> {
+        if self
+            .physical
+            .as_any()
+            .is::<datafusion::datasource::sink::DataSinkExec>()
+        {
+            self.reservation
+                .try_grow(crate::stream::Output::count_bytes(fingerprint)?)
+                .map_err(|source| crate::Error::Capacity {
+                    resource: "shared output",
+                    source,
+                })?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn start(self) -> Result<PhysicalStream> {
         let control = Arc::new(self.control.within(self.timeout)?);
         let mut config = self.context.session_config().clone();

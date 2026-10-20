@@ -56,8 +56,9 @@ were then retired. Eight more Wasm leaves and 15 finite Graph, SQL, Discovery,
 test, and asset leaves are retired. Eight executor, component, atom, pager,
 and pure test leaves are then removed after 50 focused replacement checks pass.
 Fifteen more retained-query, authority, Wasm, and finite notification test
-leaves are removed after 89 focused checks pass. There are now 79 retired
-files; 129 baseline files remain unchanged.
+leaves are removed after 89 focused checks pass. Two image/fixture leaves then
+retire after exact replacement tests pass. There are now 81 retired files;
+127 baseline files remain unchanged.
 The recovery archive
 retains all 208 originals. Read the
 [retirement record](araphor-analysis-migration.md#retired-finite-reference-files)
@@ -316,6 +317,10 @@ reduction. The record is `/tmp/araphor-sql-call-count1.json`.
   state, registers immutable attempts, and commits multi-call results and
   progress atomically. Completed retries recover the original receipt. No
   general service API starts, stops, or restores independent running instances.
+  The native Instance subscription now passes focused lifecycle, saved-cursor,
+  state, cancellation, and progress checks. The host and known failure handling
+  remain open. Read the
+  [subscription result](araphor-analysis-migration.md#native-managed-subscription-qualification).
 - **Required:** Create managed instances from admitted definitions. Each
   instance has its own lifetime, selected inputs, progress, and saved state.
 - **Reuse:** Query subscriptions and their native stream collection, current

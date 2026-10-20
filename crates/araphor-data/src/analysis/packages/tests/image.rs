@@ -268,3 +268,61 @@ fn package_image_recovery_checks_digest() -> TestResult {
     assert!(AnalysisStore::open(&root).is_err());
     Ok(())
 }
+
+#[test]
+fn package_image_large_roundtrip() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let mut bundle = image("large")?;
+    bundle.artifacts[0].implementations = vec![PackageImplementationV1::Native {
+        export: "model".into(),
+        artifact: vec![255; 33 * 1024 * 1024],
+        qualification: None,
+    }];
+    assert!(matches!(
+        bundle.artifacts[0].implementation("model"),
+        Err(araphor_package::Error::Package {
+            code: araphor_package::ErrorCode::Unsupported,
+            field: "model target",
+            ..
+        })
+    ));
+    let mut expected = PackageRevisionV1::from_artifact(&bundle.artifacts[0], [1; 16])?;
+    expected.artifact = bundle.artifacts[0].encode()?;
+    assert!(expected.artifact.len() > 32 * 1024 * 1024);
+    let installed = store.install_package_image([1; 16], &bundle, || Ok(()))?;
+    assert!(store.package_activation_page(None)?.is_empty());
+    let before = *store.subscribe_revision().borrow();
+    assert_eq!(
+        store.install_package_image([1; 16], &bundle, || Ok(()))?,
+        installed
+    );
+    assert!(
+        store.package_revision([1; 16], "image-root", "large")? == Some(expected),
+        "retained revision differs"
+    );
+    assert_eq!(*store.subscribe_revision().borrow(), before);
+    bundle
+        .artifacts
+        .sort_by_key(crate::PackageArtifactV1::reference);
+    drop(store);
+    let store = AnalysisStore::open(&root)?;
+    let restored = inspect(&store, Some("large"))?;
+    assert!(
+        restored.artifacts == bundle.artifacts,
+        "retained artifacts differ"
+    );
+    let digest = restored.digest()?;
+    let bytes = restored.encode()?;
+    assert!(bytes.len() > 32 * 1024 * 1024);
+    drop(restored);
+    let restored = PackageBundleV1::from_bytes(&bytes)?;
+    assert!(
+        restored.artifacts == bundle.artifacts,
+        "decoded artifacts differ"
+    );
+    assert_eq!(restored.digest()?, digest);
+    assert!(store.package_activation_page(None)?.is_empty());
+    Ok(())
+}

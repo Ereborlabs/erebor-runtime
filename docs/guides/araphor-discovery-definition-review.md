@@ -370,8 +370,9 @@ model operation. Eight more Wasm leaves and 15 finite Graph, SQL, Discovery,
 test, and asset leaves are retired. Eight more executor, component, atom,
 pager, and pure test leaves are removed after 50 focused replacement checks
 pass. Fifteen more retained-query, authority, Wasm, and finite notification
-test leaves are removed after 89 focused checks pass. The remaining 129 files keep
-their baseline content.
+test leaves are removed after 89 focused checks pass. Two more complete
+image/fixture leaves retire after exact replacement checks pass. The remaining
+127 files keep their baseline content.
 The recovery archive retains all 208 recovered files. Read the
 [retirement records](../plans/araphor-analysis-migration.md#retired-finite-reference-files)
 and the [four-file record](../../recovery/araphor-analysis-managed-retirement-20261019.json)
@@ -379,7 +380,8 @@ and [Wasm record](../../recovery/araphor-analysis-wasm-retirement-20261020.json)
 [Graph record](../../recovery/araphor-analysis-graph-retirement-20261020.json),
 the [output record](../../recovery/araphor-analysis-output-retirement-20261020.json),
 the [native helper record](../../recovery/araphor-analysis-native-retirement-20261020.json),
-and [retained-result record](../../recovery/araphor-analysis-retained-retirement-20261020.json)
+the [retained-result record](../../recovery/araphor-analysis-retained-retirement-20261020.json),
+and [image/fixture record](../../recovery/araphor-analysis-image-fixture-retirement-20261020.json)
 for the exact scope. The current final Rust gate and complete migration remain
 **Not done**.
 
@@ -635,6 +637,37 @@ completion, start/stop/resume/update/removal, current inspection, authorized
 history, and CLI/Control managed operations remain **Not done**.
 `Instance::admitted` returns immutable admission metadata; it is not a current
 status or history API.
+
+## Native managed subscriptions
+
+[Instance::subscribe](../../crates/araphor-analysis/src/instance/subscription.rs)
+accepts one current running lifecycle and one operation control.
+  -> [AnalysisStore::managed_resume](../../crates/araphor-data/src/analysis/managed/read.rs) reads committed progress and its native cursor. An unfinished attempt returns Incomplete.
+  -> [Run::session](../../crates/araphor-query/src/stream/mod.rs) checks the full invocation scope before it selects the SQL window.
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) captures the physical plan once. An unchanged resumed cut waits for source or window events.
+  -> [CapturedPhysical::reserve_complete](../../crates/araphor-query/src/execution.rs) reserves native count delivery before attempt registration.
+  -> [ManagedPublication::admit](../../crates/araphor-analysis/src/instance/subscription.rs) registers the exact captured attempt before native child execution.
+  -> [Publication::write_all](../../crates/araphor-analysis/src/instance/sink.rs) commits complete call returns, selected rows, saved state, and the native frontier through Data.
+  -> [Step](../../crates/araphor-analysis/src/instance/sink.rs) records the committed progress. Another stream cannot combine this new progress with its older selected cursor.
+
+[Subscription::cancel_and_join](../../crates/araphor-analysis/src/instance/subscription.rs)
+cancels the Query subscription and joins its actual workers. Data changes to
+the running state use an exact lifecycle comparison. Installation and
+admission remain inert. Analysis has no source clock or polling task.
+
+The focused Query selection passes 97 cases. All 27 selected Analysis cases
+pass, including the two source-built native cases. The native artifacts keep
+the same 116 source inputs and six artifact hashes as native57. The progress
+regression first fails on an actual duplicate commit: progress changes from
+10 to 12. With the progress check, this regression preserves metadata,
+frontier, results, saved state, and progress.
+
+The host that owns all running subscriptions is **Not implemented**. Durable
+known failure, suspension, capacity retry, renewal, public lifecycle commands,
+and automatic recovery admission remain open. An unfinished attempt remains
+Incomplete; this stream does not invent a new attempt after a failed step.
+The reference supervision files remain. The complete final Rust gate remains
+**Not done**.
 
 ## In-process Wasm ownership
 

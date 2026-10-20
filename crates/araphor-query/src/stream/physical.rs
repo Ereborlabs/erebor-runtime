@@ -57,7 +57,12 @@ struct Compiled {
     source: Arc<dyn ExecutionPlan>,
 }
 
-type Initial = (Arc<crate::execution::Permit>, u64, Progress);
+type Initial = (
+    Arc<crate::execution::Permit>,
+    u64,
+    crate::execution::Session,
+    Progress,
+);
 
 impl SubscribeExec {
     pub(crate) fn new(
@@ -192,7 +197,7 @@ impl SubscribeExec {
         let mut progress =
             Progress::new(run.session.engine().store(), Arc::clone(&run.clock), None);
         let now = progress.begin()?;
-        let session = run.session.at(run.session.selection().clone(), now);
+        let session = run.session(now, &permit).await?;
         let mut state = session.state()?;
         let logical = crate::planner::subscription::Subscribe::runtime(
             run.plan.as_ref().clone(),
@@ -208,7 +213,7 @@ impl SubscribeExec {
             .downcast_ref::<Self>()
             .ok_or_else(|| DataFusionError::Internal("subscription physical root changed".into()))
             .context(SqlSnafu)?;
-        subscription.execute_committed(0, state.task_ctx(), Some((permit, now, progress)))
+        subscription.execute_committed(0, state.task_ctx(), Some((permit, now, session, progress)))
     }
 
     pub(crate) fn execute_committed(
@@ -230,7 +235,7 @@ impl SubscribeExec {
             .context(SqlSnafu)?;
         run.session.control().check()?;
         let (initial, progress) = match initial {
-            Some((permit, now, progress)) => (Some((permit, now)), progress),
+            Some((permit, now, session, progress)) => (Some((permit, now, session)), progress),
             None => (
                 None,
                 Progress::new(run.session.engine().store(), Arc::clone(&run.clock), None),

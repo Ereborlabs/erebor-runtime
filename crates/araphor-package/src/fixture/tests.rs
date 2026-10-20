@@ -256,3 +256,34 @@ fn fixture_checks_expected_references() -> TestResult {
     ));
     Ok(())
 }
+
+#[test]
+fn fixture_context_roundtrip() -> TestResult {
+    let model = model(vec![sdk::Port::new("rows", schema())]);
+    for (name, now, value) in [
+        ("matching", 946684800000000000, 1.0),
+        ("later", 946684801000000000, 0.0),
+    ] {
+        let expected = sdk::Output {
+            datasets: vec![dataset("rows", vec![value])?],
+            ..Default::default()
+        };
+        let (mut saved, _, _) = fixture(model.clone(), &expected)?;
+        saved.name = name.into();
+        saved.time_utc_ns = now;
+        let restored: PackageFixtureV1 = serde_json::from_slice(&serde_json::to_vec(&saved)?)?;
+        assert_eq!(restored, saved);
+        let context = restored.evaluation_context(&model);
+        assert_eq!(context.time_utc_ns, now);
+        assert_eq!(context.seed, Some(u64::MAX));
+        assert_eq!(context.limits, model.limits);
+        let mut json = serde_json::to_value(&restored)?;
+        let fields = json.as_object_mut().ok_or("fixture object")?;
+        fields.remove("time_utc_ns");
+        fields.remove("seed");
+        let defaults: PackageFixtureV1 = serde_json::from_value(json)?;
+        assert_eq!(defaults.evaluation_context(&model).time_utc_ns, 0);
+        assert_eq!(defaults.evaluation_context(&model).seed, None);
+    }
+    Ok(())
+}

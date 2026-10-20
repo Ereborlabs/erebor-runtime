@@ -11,6 +11,7 @@ impl AnalysisStore {
         CREATE TABLE managed_instances (
             tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL, spec BLOB NOT NULL,
             generation UBIGINT NOT NULL, progress UBIGINT NOT NULL,
+            running BOOLEAN NOT NULL, lifecycle UBIGINT NOT NULL,
             PRIMARY KEY (tenant_id, instance_id)
         );
         CREATE TABLE managed_calls (
@@ -20,8 +21,10 @@ impl AnalysisStore {
         );
         CREATE TABLE managed_attempts (
             tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL, attempt_id VARCHAR NOT NULL,
-            contract BLOB NOT NULL, PRIMARY KEY (tenant_id, instance_id, attempt_id)
+            contract BLOB NOT NULL, completed UBIGINT NOT NULL,
+            PRIMARY KEY (tenant_id, instance_id, attempt_id)
         );
+        CREATE INDEX managed_completion ON managed_attempts (tenant_id, instance_id, completed);
         CREATE TABLE managed_edges (
             tenant_id BLOB NOT NULL, result_id VARCHAR NOT NULL, dependency_id VARCHAR NOT NULL,
             commit_revision UBIGINT NOT NULL,
@@ -80,7 +83,13 @@ impl AnalysisStore {
                 crate::PackageErrorCodeV1::Missing.error("managed recovery instance")
             })?;
             instance.spec.validate()?;
-            if instance.generation == 0 || instance.generation > head || instance.progress > head {
+            if instance.generation == 0
+                || instance.generation > head
+                || instance.progress > head
+                || instance.lifecycle < instance.generation
+                || instance.lifecycle > head
+                || (instance.lifecycle == instance.generation && instance.running)
+            {
                 return Self::reject_path(root, "the managed generation is invalid");
             }
             Self::check_managed_images(reader, &instance.spec)?;
@@ -148,7 +157,7 @@ impl AnalysisStore {
             return Self::reject_path(root, "the managed references are invalid");
         }
         let mut statement = reader
-            .prepare("SELECT tenant_id, instance_id, attempt_id FROM managed_attempts")
+            .prepare("SELECT tenant_id, instance_id, attempt_id, completed FROM managed_attempts")
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare recovered attempts",
             })?;
@@ -158,6 +167,7 @@ impl AnalysisStore {
                     row.get::<_, Vec<u8>>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, u64>(3)?,
                 ))
             })
             .context(AnalysisDatabaseSnafu {
@@ -167,7 +177,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "decode recovered attempts",
             })?;
-        for (tenant, instance, id) in rows {
+        for (tenant, instance, id, completed) in rows {
             let tenant = tenant
                 .try_into()
                 .map_err(|_| crate::PackageErrorCodeV1::Invalid.error("managed attempt tenant"))?;
@@ -177,12 +187,34 @@ impl AnalysisStore {
                 })?;
             let owner = Self::managed_instance_from(reader, tenant, &instance)?
                 .ok_or_else(|| crate::PackageErrorCodeV1::Missing.error("managed attempt owner"))?;
+            if completed
+                != attempt
+                    .receipt
+                    .as_ref()
+                    .map_or(0, |receipt| receipt.commit_revision)
+                || attempt
+                    .request
+                    .frontier
+                    .as_ref()
+                    .is_some_and(|frontier| frontier.cursor.is_empty())
+                || attempt
+                    .receipt
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.frontier != attempt.request.frontier)
+            {
+                return Self::reject_path(root, "the managed frontier receipt differs");
+            }
             let capture = &attempt.capture;
             if capture.store != meta.store_uuid
                 || capture.schema != meta.schema_version
                 || capture.recovery == 0
                 || capture.recovery > meta.recovery_epoch
                 || capture.generation != owner.generation
+                || capture.lifecycle < owner.generation
+                || capture.lifecycle > owner.lifecycle
+                || capture.lifecycle > capture.revision
+                || (capture.lifecycle == owner.generation && capture.running)
+                || (capture.lifecycle == owner.lifecycle && capture.running != owner.running)
                 || capture.progress > capture.revision
                 || capture.prior.keys().ne(owner.spec.manifest.calls.keys())
                 || attempt.request.id.is_empty()

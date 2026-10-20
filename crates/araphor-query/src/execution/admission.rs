@@ -5,7 +5,8 @@ use datafusion::common::ScalarValue;
 use datafusion::logical_expr::LogicalPlan;
 
 use super::Engine;
-use crate::follow::{Clock, Cursor, Subscription};
+use crate::definition::PreparedDefinition;
+use crate::follow::{Clock, Cursor, ManagedPublication, Subscription};
 use crate::sources::SourceSnapshot;
 use crate::{planner::Planner, Result};
 
@@ -53,6 +54,23 @@ impl Engine {
 }
 
 impl super::Session {
+    pub fn subscribe_managed(
+        self,
+        definition: PreparedDefinition,
+        publication: Arc<dyn ManagedPublication>,
+        binding: &[u8],
+        resume: Option<araphor_data::ManagedFrontier>,
+    ) -> Result<Subscription> {
+        Subscription::managed(
+            self,
+            definition,
+            publication,
+            binding,
+            resume,
+            Arc::new(crate::follow::SystemClock::default()),
+        )
+    }
+
     pub fn subscribe(
         self,
         plan: LogicalPlan,

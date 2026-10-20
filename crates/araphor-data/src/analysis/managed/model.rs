@@ -92,6 +92,8 @@ pub struct ManagedInstance {
     pub spec: ManagedSpec,
     pub generation: u64,
     pub progress: u64,
+    pub running: bool,
+    pub lifecycle: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -102,12 +104,20 @@ pub struct ManagedRead {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct ManagedFrontier {
+    pub cursor: Vec<u8>,
+    pub next_change: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ManagedRequest {
     pub id: String,
     pub time_utc_ns: u64,
     pub seed: Option<u64>,
     pub rebuild: bool,
     pub witness_expiry: u64,
+    pub frontier: Option<ManagedFrontier>,
 }
 
 #[derive(Clone, Debug)]
@@ -178,6 +188,8 @@ pub(super) struct Capture {
     pub instance: String,
     pub generation: u64,
     pub progress: u64,
+    pub running: bool,
+    pub lifecycle: u64,
     pub rebuild: bool,
     pub prior: BTreeMap<u64, Option<PackageResultRefV1>>,
     pub store: uuid::Uuid,
@@ -210,6 +222,17 @@ impl ManagedCapture {
     pub fn revision(&self) -> u64 {
         self.contract.revision
     }
+    pub fn source_revision(&self) -> u64 {
+        self.contract
+            .sources
+            .iter()
+            .map(|(_, revision)| *revision)
+            .max()
+            .unwrap_or(0)
+    }
+    pub fn time_utc_ns(&self) -> u64 {
+        self.contract.time_utc_ns
+    }
     pub fn rebuild(&self) -> bool {
         self.contract.rebuild
     }
@@ -240,6 +263,7 @@ pub struct ManagedPage {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManagedReceipt {
+    pub frontier: Option<ManagedFrontier>,
     pub instance: String,
     pub attempt: String,
     pub commit_revision: u64,

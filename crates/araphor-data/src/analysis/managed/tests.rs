@@ -16,6 +16,8 @@ use crate::{
     PackageImplementationV1, SqlModelV1, SqlReasonV1,
 };
 
+mod lifecycle;
+
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 struct Fixture {
@@ -24,6 +26,16 @@ struct Fixture {
 }
 
 impl Fixture {
+    fn current(&self, store: &AnalysisStore) -> TestResult<ManagedInstance> {
+        store
+            .managed_instance(
+                self.instance.spec.tenant,
+                &self.instance.spec.id,
+                &AnalysisReadControl::default(),
+            )?
+            .ok_or_else(|| "managed instance absent".into())
+    }
+
     fn admit(store: &AnalysisStore) -> TestResult<Self> {
         let scalar = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]);
         let mut rows = sdk::Port::new("rows", scalar.clone());
@@ -252,6 +264,7 @@ fn request(id: &str) -> ManagedRequest {
         seed: Some(7),
         rebuild: false,
         witness_expiry: u64::MAX,
+        frontier: None,
     }
 }
 
@@ -1581,3 +1594,5 @@ fn managed_witness_lifetime_check() -> TestResult {
     );
     Ok(())
 }
+
+mod frontier;

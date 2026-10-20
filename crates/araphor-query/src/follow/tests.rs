@@ -1302,6 +1302,9 @@ async fn native_append_execution() {
             operation: Operation::Append,
             window: None,
             resume: None,
+            binding: [0; 32],
+            resume_expiry: None,
+            managed: None,
         }));
     let logical = crate::planner::subscription::Subscribe::runtime(plan, true).unwrap();
     assert_eq!(logical.schema().inner(), &schema);
@@ -1522,6 +1525,9 @@ async fn native_subscribe_execution() {
             operation: Operation::Replace,
             window: None,
             resume: None,
+            binding: [0; 32],
+            resume_expiry: None,
+            managed: None,
         }));
     assert!(state
         .physical_optimizers()

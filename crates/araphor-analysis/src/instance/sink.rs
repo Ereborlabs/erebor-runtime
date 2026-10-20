@@ -24,6 +24,7 @@ use super::Instance;
 
 #[derive(Default)]
 pub(super) struct Step {
+    pub(super) progress: u64,
     pub(super) attempt: Option<ManagedAttempt>,
     pub(super) receipt: Option<ManagedReceipt>,
 }
@@ -33,6 +34,8 @@ pub(super) struct Publication {
     pub(super) owner: Arc<Instance>,
     pub(super) schema: sdk::arrow_schema::SchemaRef,
     pub(super) state: Arc<Mutex<Step>>,
+    pub(super) witness_expiry: u64,
+    pub(super) lifecycle: Option<u64>,
 }
 
 impl fmt::Debug for Publication {
@@ -213,10 +216,9 @@ impl DataSink for Publication {
                             },
                             || control.check(),
                         )?;
-                        state
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner())
-                            .receipt = Some(receipt);
+                        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+                        state.progress = receipt.commit_revision;
+                        state.receipt = Some(receipt);
                         Ok(())
                     },
                 )

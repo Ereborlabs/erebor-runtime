@@ -21,6 +21,7 @@ use crate::{InvalidSnafu, Result, SqlSnafu};
 mod clock;
 mod cursor;
 mod delivery;
+mod managed;
 mod window;
 
 #[cfg(test)]
@@ -30,6 +31,7 @@ pub use crate::stream::progress::{Progress, Wake};
 pub use clock::{Clock, SystemClock};
 pub use cursor::Cursor;
 pub use delivery::{Action, Consumer, Delivery};
+pub use managed::ManagedPublication;
 pub(crate) use window::Window;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
@@ -66,6 +68,21 @@ pub struct Subscription {
 impl Subscription {
     /// `sources` contains all original durable Data sources. Exclude registered local tables.
     pub fn new(
+        session: Session,
+        plan: Arc<LogicalPlan>,
+        sources: AnalysisTableRequests,
+        binding: &[u8],
+        resume: Option<Cursor>,
+        clock: Arc<dyn Clock>,
+        follow: bool,
+    ) -> Result<Self> {
+        Self::open(
+            session, plan, sources, binding, resume, clock, follow, None, None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open(
         mut session: Session,
         plan: Arc<LogicalPlan>,
         sources: AnalysisTableRequests,
@@ -73,6 +90,11 @@ impl Subscription {
         resume: Option<Cursor>,
         clock: Arc<dyn Clock>,
         follow: bool,
+        managed: Option<(
+            crate::definition::PreparedDefinition,
+            Arc<dyn ManagedPublication>,
+        )>,
+        resume_expiry: Option<u64>,
     ) -> Result<Self> {
         let workers = araphor_package_runtime::TaskTracker::new();
         session.workers = Some(workers.clone());
@@ -135,6 +157,9 @@ impl Subscription {
             operation,
             window,
             resume: resume.clone(),
+            binding,
+            resume_expiry,
+            managed,
         });
         let execution = Arc::clone(&run);
         let stream = futures_util::stream::once(async move {
@@ -145,7 +170,6 @@ impl Subscription {
         .try_flatten();
         let state = State {
             run,
-            binding,
             cursor: resume.clone(),
             started: false,
             stream: Box::pin(stream),
@@ -284,7 +308,6 @@ impl Drop for Subscription {
 
 struct State {
     run: Arc<Run>,
-    binding: [u8; 32],
     cursor: Option<Cursor>,
     started: bool,
     stream: OutputStream,
@@ -322,7 +345,7 @@ impl State {
             Cursor::new(
                 &snapshot.page.extraction.meta,
                 self.run.operation,
-                self.binding,
+                self.run.binding,
                 position,
                 evaluated,
             )

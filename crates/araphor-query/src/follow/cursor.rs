@@ -69,8 +69,11 @@ impl Cursor {
     pub fn read_revision(&self) -> u64 {
         self.revision
     }
+    pub(crate) fn evaluated(&self) -> u64 {
+        self.evaluated
+    }
 
-    pub(super) fn new(
+    pub(crate) fn new(
         meta: &AnalysisStoreMetaV1,
         operation: Operation,
         binding: [u8; 32],

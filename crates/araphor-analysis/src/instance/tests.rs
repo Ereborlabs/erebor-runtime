@@ -199,6 +199,7 @@ fn request(id: &str) -> ManagedRequest {
         seed: Some(7),
         rebuild: false,
         witness_expiry: u64::MAX,
+        frontier: None,
     }
 }
 
@@ -760,5 +761,643 @@ async fn prior_pressure_preserves_success() -> TestResult {
     assert_eq!(fixture.selected("prior-pressure", "pressure")?, [20]);
     assert_eq!(fixture.progress("prior-pressure")?, second.commit_revision);
     drop(fixture.query.memory().reserve_input(capacity)?);
+    Ok(())
+}
+
+impl Fixture {
+    fn start(&self, instance: &Instance) -> TestResult<u64> {
+        let current = instance.admitted();
+        Ok(self
+            .query
+            .store()
+            .set_managed_running(
+                current.spec.tenant,
+                &current.spec.id,
+                current.lifecycle,
+                true,
+                || Ok(()),
+            )?
+            .lifecycle)
+    }
+
+    fn context(&self, revision: u64) -> TestResult {
+        self.query
+            .store()
+            .commit_context(&araphor_data::AnalysisContextVersionV1 {
+                key: araphor_data::AnalysisContextKeyV1 {
+                    tenant_id: [1; 16],
+                    owner_id: "instance-context".into(),
+                    entity_key: vec![1],
+                    lifetime_key: vec![1],
+                    owner_revision: revision,
+                },
+                valid_from_utc_ns: None,
+                valid_until_utc_ns: None,
+                sensitivity: araphor_data::ContextSensitivityV1::Tenant,
+                body: vec![1],
+            })?;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn sql_subscription_keeps_receipts() -> TestResult {
+    use futures_util::StreamExt as _;
+
+    let fixture = Fixture::new(Default::default())?;
+    fixture.context(1)?;
+    let instance = fixture.admit("follow-sql", "SELECT CAST(7 AS BIGINT UNSIGNED) AS value WHERE EXISTS (SELECT 1 FROM context_versions)").await?;
+    let lifecycle = fixture.start(&instance)?;
+    let mut stream = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    assert_eq!(fixture.progress("follow-sql")?, 0);
+    let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("initial SQL receipt")??;
+    assert!(first.results.is_empty());
+    assert_eq!(fixture.selected("follow-sql", &first.attempt)?, [7]);
+    assert_eq!(fixture.progress("follow-sql")?, first.commit_revision);
+    assert!(futures_util::poll!(stream.next()).is_pending());
+    fixture.context(2)?;
+    let second = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("changed SQL receipt")??;
+    assert_ne!(first.attempt, second.attempt);
+    assert!(second.commit_revision > first.commit_revision);
+    assert_eq!(fixture.selected("follow-sql", &second.attempt)?, [7]);
+    assert_eq!(fixture.progress("follow-sql")?, second.commit_revision);
+    assert!(futures_util::poll!(stream.next()).is_pending());
+    stream.cancel_and_join().await?;
+    assert_eq!(fixture.selected("follow-sql", &first.attempt)?, [7]);
+    Ok(())
+}
+
+async fn managed_subscription(target: &str) -> TestResult {
+    use futures_util::StreamExt as _;
+
+    const INPUT: usize = 2 * 1024 * 1024;
+    const OUTPUT: usize = 32 * 1024 * 1024;
+    let fixture = Fixture::new(araphor_query::execution::Limits {
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
+        input_capacity: Some(INPUT),
+        output_capacity: Some(OUTPUT),
+        ..Default::default()
+    })?;
+    fixture.install(&bundle(target)?)?;
+    fixture.context(1)?;
+    let sql = r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(10 AS BIGINT UNSIGNED) AS value WHERE EXISTS (SELECT 1 FROM context_versions))) UNION ALL SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(20 AS BIGINT UNSIGNED) AS value WHERE EXISTS (SELECT 1 FROM context_versions)))"#;
+    let instance = fixture.admit("follow-state", sql).await?;
+    let lifecycle = fixture.start(&instance)?;
+    let mut stream = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("initial stateful receipt")??;
+    assert_eq!(fixture.selected("follow-state", &first.attempt)?, [10, 20]);
+    assert_eq!(first.results.len(), 2);
+    assert_eq!(
+        first.results.keys().copied().collect::<BTreeSet<_>>(),
+        instance
+            .admitted
+            .spec
+            .manifest
+            .calls
+            .keys()
+            .copied()
+            .collect(),
+    );
+    assert!(futures_util::poll!(stream.next()).is_pending());
+    fixture.context(2)?;
+    let second = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("changed stateful receipt")??;
+    assert_eq!(fixture.selected("follow-state", &second.attempt)?, [10, 20]);
+    assert_eq!(second.results.len(), 2);
+    assert_ne!(first.attempt, second.attempt);
+    let attempt = fixture
+        .query
+        .store()
+        .managed_attempt(
+            [1; 16],
+            "follow-state",
+            &second.attempt,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("registered follow attempt")?;
+    assert_eq!(attempt.receipt(), Some(&second));
+    assert_eq!(
+        second.results.keys().copied().collect::<BTreeSet<_>>(),
+        instance
+            .admitted
+            .spec
+            .manifest
+            .calls
+            .keys()
+            .copied()
+            .collect(),
+    );
+    for reference in second.results.values() {
+        let result = fixture.query.store().managed_result(
+            instance.admitted(),
+            &reference.result_id,
+            u64::MAX,
+            &AnalysisReadControl::default(),
+        )?;
+        assert_eq!(result.commit_revision, second.commit_revision);
+        assert_eq!(result.context.context.id, second.attempt);
+        assert_eq!(
+            result.context.context.time_utc_ns,
+            attempt.request().time_utc_ns as i64
+        );
+        assert!(result.output.checkpoint.is_some());
+    }
+    assert!(futures_util::poll!(stream.next()).is_pending());
+    stream.cancel_and_join().await?;
+    drop(fixture.query.reserve_evaluation([1; 16])?);
+    drop(fixture.query.memory().reserve_input(INPUT)?);
+    drop(fixture.query.memory().reserve_output(OUTPUT)?);
+    assert_eq!(fixture.progress("follow-state")?, second.commit_revision);
+    assert_eq!(first.results.len(), 2);
+    let readmitted = fixture.admit("follow-state", sql).await?;
+    let lifecycle = fixture.start(&readmitted)?;
+    let mut resumed = readmitted.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    fixture.context(3)?;
+    let third = tokio::time::timeout(Duration::from_secs(30), resumed.next())
+        .await?
+        .ok_or("resumed guest receipt")??;
+    assert!(third.commit_revision > second.commit_revision);
+    assert_ne!(third.attempt, second.attempt);
+    assert_eq!(
+        third.results.keys().copied().collect::<BTreeSet<_>>(),
+        readmitted
+            .admitted
+            .spec
+            .manifest
+            .calls
+            .keys()
+            .copied()
+            .collect()
+    );
+    assert_eq!(fixture.selected("follow-state", &third.attempt)?, [10, 20]);
+    assert!(third.frontier.is_some());
+    resumed.cancel_and_join().await?;
+    drop(fixture.query.reserve_evaluation([1; 16])?);
+    drop(fixture.query.memory().reserve_input(INPUT)?);
+    drop(fixture.query.memory().reserve_output(OUTPUT)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn wasm_subscription_one_step() -> TestResult {
+    managed_subscription("wasm").await
+}
+
+#[tokio::test]
+#[ignore = "requires source-built native artifacts in ARAPHOR_NATIVE_DIR"]
+async fn native_subscription_one_step() -> TestResult {
+    managed_subscription("native").await
+}
+
+#[tokio::test]
+async fn idle_subscription_checks_authority() -> TestResult {
+    use futures_util::StreamExt as _;
+
+    let fixture = Fixture::new(Default::default())?;
+    fixture.context(1)?;
+    let instance = fixture.admit("follow-authority", "SELECT CAST(7 AS BIGINT UNSIGNED) AS value WHERE EXISTS (SELECT 1 FROM context_versions)").await?;
+    let lifecycle = fixture.start(&instance)?;
+    let mut stream = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("authorized receipt")??;
+    assert!(futures_util::poll!(stream.next()).is_pending());
+    fixture.authority.set(false);
+    let error = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("authority failure")?
+        .err()
+        .ok_or("revoked subscription continued")?;
+    assert_eq!(
+        error.status_code(),
+        erebor_runtime_error::StatusCode::PermissionDenied
+    );
+    stream.cancel_and_join().await?;
+    assert_eq!(
+        fixture.progress("follow-authority")?,
+        receipt.commit_revision
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_frontier_survives_reopen() -> TestResult {
+    use futures_util::StreamExt as _;
+
+    let fixture = Fixture::new(Default::default())?;
+    fixture.context(1)?;
+    let sql =
+        "SELECT CAST(7 AS BIGINT UNSIGNED) AS value WHERE EXISTS (SELECT 1 FROM context_versions)";
+    let instance = fixture.admit("durable-sql", sql).await?;
+    let lifecycle = fixture.start(&instance)?;
+    let mut stream = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("durable first receipt")??;
+    stream.cancel_and_join().await?;
+    let frontier = first.frontier.clone().ok_or("committed native frontier")?;
+    let original = fixture
+        .query
+        .store()
+        .managed_attempt(
+            [1; 16],
+            "durable-sql",
+            &first.attempt,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("durable first attempt")?;
+    let original_time = original.request().time_utc_ns;
+    let Fixture {
+        directory,
+        query,
+        authority,
+        grant,
+    } = fixture;
+    drop(instance);
+    drop(query);
+    let fixture = Fixture {
+        query: Engine::new(
+            Arc::new(AnalysisStore::open(directory.path().join("data"))?),
+            Default::default(),
+        )?,
+        directory,
+        authority,
+        grant,
+    };
+    let (saved, resumed) = fixture.query.store().managed_resume(
+        [1; 16],
+        "durable-sql",
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(saved.progress, first.commit_revision);
+    assert_eq!(resumed, Some(frontier));
+    let instance = fixture.admit("durable-sql", sql).await?;
+    fixture.context(2)?;
+    let lifecycle = fixture.start(&instance)?;
+    let mut stream = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    let second = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("durable changed receipt")??;
+    assert_ne!(second.attempt, first.attempt);
+    assert!(second.commit_revision > first.commit_revision);
+    assert_eq!(fixture.selected("durable-sql", &first.attempt)?, [7]);
+    assert_eq!(fixture.selected("durable-sql", &second.attempt)?, [7]);
+    let original = fixture
+        .query
+        .store()
+        .managed_attempt(
+            [1; 16],
+            "durable-sql",
+            &first.attempt,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("retained durable attempt")?;
+    assert_eq!(original.request().time_utc_ns, original_time);
+    assert_eq!(original.receipt(), Some(&first));
+    stream.cancel_and_join().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_step_blocks_restart() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    let mut image = bundle("wasm")?;
+    let model = &mut image.artifacts[0].descriptor.exports[0];
+    model.name = "evaluate".into();
+    model.inputs.clear();
+    model.checkpoint = None;
+    model.parameters = sdk::Schema::new(vec![
+        sdk::Field::new("mode", sdk::DataType::Utf8, false),
+        sdk::Field::new("amount", sdk::DataType::UInt64, false),
+    ]);
+    let PackageImplementationV1::Wasm { exports, .. } = &mut image.artifacts[0].implementations[0]
+    else {
+        return Err("Wasm pending fixture absent".into());
+    };
+    *exports = vec!["evaluate".into()];
+    fixture.install(&image)?;
+    let instance = fixture
+        .admit(
+            "durable-pending",
+            r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'trap', amount => 0)"#,
+        )
+        .await?;
+    assert!(instance
+        .run(
+            request("entered-and-failed"),
+            &AnalysisReadControl::default()
+        )
+        .await
+        .is_err());
+    assert!(fixture
+        .query
+        .store()
+        .managed_attempt(
+            [1; 16],
+            "durable-pending",
+            "entered-and-failed",
+            &AnalysisReadControl::default()
+        )?
+        .ok_or("failed attempt")?
+        .receipt()
+        .is_none());
+    let lifecycle = fixture.start(&instance)?;
+    let before = fixture.query.store().meta()?;
+    let error = instance
+        .subscribe(
+            Arc::new(AnalysisReadControl::default()),
+            u64::MAX,
+            lifecycle,
+        )
+        .err()
+        .ok_or("pending work silently reopened")?;
+    assert!(matches!(
+        error,
+        crate::Error::Data {
+            source: araphor_data::Error::Package {
+                code: Code::Incomplete,
+                field: "managed pending attempt",
+                ..
+            }
+        }
+    ));
+    assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(fixture.progress("durable-pending")?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn stream_keeps_selected_lifecycle() -> TestResult {
+    use futures_util::StreamExt as _;
+
+    let fixture = Fixture::new(Default::default())?;
+    fixture.context(1)?;
+    let instance = fixture.admit("durable-lifecycle",
+        "SELECT CAST(7 AS BIGINT UNSIGNED) AS value WHERE EXISTS (SELECT 1 FROM context_versions)").await?;
+    let running = fixture.query.store().set_managed_running(
+        [1; 16],
+        "durable-lifecycle",
+        instance.admitted().lifecycle,
+        true,
+        || Ok(()),
+    )?;
+    let mut stream = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        running.lifecycle,
+    )?;
+    let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("lifecycle receipt")??;
+    let stopped = fixture.query.store().set_managed_running(
+        [1; 16],
+        "durable-lifecycle",
+        running.lifecycle,
+        false,
+        || Ok(()),
+    )?;
+    fixture.query.store().set_managed_running(
+        [1; 16],
+        "durable-lifecycle",
+        stopped.lifecycle,
+        true,
+        || Ok(()),
+    )?;
+    fixture.context(2)?;
+    let error = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("lifecycle fence result")?
+        .err()
+        .ok_or("stream adopted a later lifecycle")?;
+    assert!(
+        error.to_string().contains("managed instance lifecycle"),
+        "{error:?}"
+    );
+    assert_eq!(
+        fixture.progress("durable-lifecycle")?,
+        first.commit_revision
+    );
+    stream.cancel_and_join().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_requires_current_lifecycle() -> TestResult {
+    use futures_util::StreamExt as _;
+
+    let fixture = Fixture::new(Default::default())?;
+    fixture.context(1)?;
+    let instance = fixture
+        .admit(
+            "sealed-lifecycle",
+            "SELECT value FROM (VALUES (7)) AS rows(value)",
+        )
+        .await?;
+    let inactive = instance.admitted().lifecycle;
+    let before = fixture.query.store().meta()?;
+    let error = instance
+        .subscribe(Arc::new(AnalysisReadControl::default()), u64::MAX, inactive)
+        .err()
+        .ok_or("inactive subscription accepted")?;
+    assert!(matches!(
+        error,
+        crate::Error::Data {
+            source: araphor_data::Error::Package {
+                code: Code::Conflict,
+                field: "managed subscription lifecycle",
+                ..
+            }
+        }
+    ));
+    assert_eq!(fixture.query.store().meta()?, before);
+    let lifecycle = fixture.start(&instance)?;
+    let before = fixture.query.store().meta()?;
+    let error = instance
+        .subscribe(Arc::new(AnalysisReadControl::default()), u64::MAX, inactive)
+        .err()
+        .ok_or("stale subscription accepted")?;
+    assert!(matches!(
+        error,
+        crate::Error::Data {
+            source: araphor_data::Error::Package {
+                code: Code::Conflict,
+                field: "managed subscription lifecycle",
+                ..
+            }
+        }
+    ));
+    assert_eq!(fixture.query.store().meta()?, before);
+    let mut stream = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    let stopped = fixture.query.store().set_managed_running(
+        [1; 16],
+        "sealed-lifecycle",
+        lifecycle,
+        false,
+        || Ok(()),
+    )?;
+    let before = fixture.query.store().meta()?;
+    let error = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("stale stream ended without error")?
+        .err()
+        .ok_or("stopped stream executed")?;
+    assert!(
+        error.to_string().contains("managed instance lifecycle"),
+        "{error:?}"
+    );
+    stream.cancel_and_join().await?;
+    assert_eq!(fixture.query.store().meta()?, before);
+    let (current, frontier) = fixture.query.store().managed_resume(
+        [1; 16],
+        "sealed-lifecycle",
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(current.lifecycle, stopped.lifecycle);
+    assert!(!current.running);
+    assert_eq!(current.progress, 0);
+    assert!(frontier.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_keeps_selected_progress() -> TestResult {
+    use futures_util::StreamExt as _;
+
+    let fixture = Fixture::new(araphor_query::execution::Limits {
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
+        ..Default::default()
+    })?;
+    let package = bundle("sql")?;
+    fixture.install(&package)?;
+    fixture.context(1)?;
+    let instance = fixture.admit("sealed-progress", r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(10 AS BIGINT UNSIGNED) AS value WHERE EXISTS (SELECT 1 FROM context_versions)))"#).await?;
+    let lifecycle = fixture.start(&instance)?;
+    let active = Arc::new(AnalysisReadControl::default());
+    let waiting = Arc::new(AnalysisReadControl::default());
+    let mut stream = instance.subscribe(Arc::clone(&active), u64::MAX, lifecycle)?;
+    let mut stale = instance.subscribe(Arc::clone(&waiting), u64::MAX, lifecycle)?;
+    let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("initial progress receipt")??;
+    assert_eq!(fixture.selected("sealed-progress", &first.attempt)?, [10]);
+    assert!(futures_util::poll!(stream.next()).is_pending());
+    fixture.context(2)?;
+    let second = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("next progress receipt")??;
+    assert!(second.commit_revision > first.commit_revision);
+    assert_eq!(fixture.selected("sealed-progress", &second.attempt)?, [10]);
+    stream.cancel_and_join().await?;
+    waiting.check()?;
+
+    let store = fixture.query.store();
+    let control = AnalysisReadControl::default();
+    let before = store.meta()?;
+    let saved = store.managed_resume([1; 16], "sealed-progress", &control)?;
+    assert_eq!(saved.0.lifecycle, lifecycle);
+    assert!(saved.0.running);
+    assert_eq!(saved.0.progress, second.commit_revision);
+    let attempt = store
+        .managed_attempt([1; 16], "sealed-progress", &second.attempt, &control)?
+        .ok_or("saved progress attempt")?;
+    assert_eq!(attempt.receipt(), Some(&second));
+    let result = store.managed_result(
+        instance.admitted(),
+        &second
+            .results
+            .values()
+            .next()
+            .ok_or("stateful result")?
+            .result_id,
+        u64::MAX,
+        &control,
+    )?;
+    let model = &package.artifacts[0].descriptor.exports[0];
+    let output = sdk::wire::Output::encode_model(&result.output, model, result.limits)?;
+
+    let rejected = tokio::time::timeout(Duration::from_secs(30), stale.next())
+        .await?
+        .ok_or("stale progress stream ended")?;
+    stale.cancel_and_join().await?;
+    assert_eq!(fixture.progress("sealed-progress")?, second.commit_revision);
+    assert_eq!(store.meta()?, before);
+    assert_eq!(
+        store.managed_resume([1; 16], "sealed-progress", &control)?,
+        saved
+    );
+    let error = rejected.err().ok_or("stale progress stream published")?;
+    assert!(
+        error.to_string().contains("managed subscription progress"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.status_code(),
+        erebor_runtime_error::StatusCode::AlreadyExists
+    );
+    let retained = store
+        .managed_attempt([1; 16], "sealed-progress", &second.attempt, &control)?
+        .ok_or("retained progress attempt")?;
+    assert_eq!(retained.request(), attempt.request());
+    assert_eq!(retained.instance(), attempt.instance());
+    assert_eq!(retained.receipt(), attempt.receipt());
+    let retained = store.managed_result(
+        instance.admitted(),
+        &second
+            .results
+            .values()
+            .next()
+            .ok_or("retained stateful result")?
+            .result_id,
+        u64::MAX,
+        &control,
+    )?;
+    assert_eq!(retained.context, result.context);
+    assert_eq!(retained.commit_revision, result.commit_revision);
+    assert_eq!(retained.current, result.current);
+    assert_eq!(retained.limits, result.limits);
+    assert_eq!(
+        sdk::wire::Output::encode_model(&retained.output, model, retained.limits)?,
+        output
+    );
+    assert_eq!(fixture.selected("sealed-progress", &first.attempt)?, [10]);
+    assert_eq!(fixture.selected("sealed-progress", &second.attempt)?, [10]);
+    drop(fixture.query.reserve_evaluation([1; 16])?);
     Ok(())
 }

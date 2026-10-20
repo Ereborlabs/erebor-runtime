@@ -87,8 +87,9 @@ finite Graph, SQL, Discovery, test, and asset leaves are retired. Eight more
 executor, component, atom, pager, and pure test leaves are removed after 50
 focused replacement checks pass. Fifteen more retained-query, authority, Wasm,
 and finite notification test leaves are removed after 89 checks pass.
-There are now 79 retired files; 129 remain
-unchanged. The recovery archive retains all 208 originals.
+Two more complete image/fixture leaves are removed after their replacements
+pass. There are now 81 retired files; 127 remain unchanged. The recovery
+archive retains all 208 originals.
 The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish
 long-running lifecycle or automatic restart.
@@ -192,6 +193,16 @@ records the focused checks and resource limits.
 The complete final Rust gate remains **Not done**. Long-running
 supervision, start/inspect/stop/update/removal, public history, automatic
 restart, and complete migration remain **Not done**.
+
+Native managed subscription checks now pass. `Instance::subscribe` requires
+the exact running lifecycle and uses Query's existing native subscription.
+Data commits the native cursor with complete results and saved state. An
+unchanged resumed cut waits for Query source or window events. A stream cannot
+use another stream's newer progress with an older cursor. All 27 selected
+Analysis cases pass, including the source-built native cases. The host,
+known failure handling, public lifecycle operations, and complete final Rust
+gate remain **Not done**. Read the
+[migration result](araphor-analysis-migration.md#native-managed-subscription-qualification).
 
 ### Approved YAML authoring design
 

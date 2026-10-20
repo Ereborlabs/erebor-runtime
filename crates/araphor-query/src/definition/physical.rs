@@ -223,6 +223,10 @@ impl fmt::Debug for CallContext {
 }
 
 impl CallContext {
+    pub(crate) fn invocation(&self) -> &Invocation {
+        &self.invocation
+    }
+
     pub fn new(
         runtime: Arc<Runtime>,
         invocation: Invocation,
