@@ -1,6 +1,5 @@
 use std::{error::Error as StdError, fs, path::Path};
 
-use araphor_analysis_back::{DiscoveryOwner, InstalledAnalysis};
 use araphor_data::{
     AnalysisStore, DiscoveryInputManifestV1, EvidenceStoreOutcomeV1, ValidatedCoverageV1,
     ValidatedEvidenceBatchV1,
@@ -13,14 +12,17 @@ use crate::error::InvalidInputSnafu;
 pub fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
     let fixture = include_bytes!("../../fixtures/discovery/manifest.json");
     let input = DiscoveryInputManifestV1::try_from(fixture.as_slice())?;
-    let execution = InstalledAnalysis::testing(None, input.tenant_id)?;
-    let derived = DiscoveryOwner::derive_recorded(&input, &execution)?;
+    let pilot: serde_json::Value =
+        serde_json::from_slice(include_bytes!("../../fixtures/discovery/pilot.json"))?;
+    let expected_records = pilot["recorded_oracle"]["accepted"]
+        .as_u64()
+        .ok_or("the frozen accepted-record count is absent")?;
     let coverage = input.coverage.first().ok_or("coverage fixture is absent")?;
     let identity = coverage.stream.clone();
     ensure!(
         coverage.first_cursor == 1
             && coverage.last_cursor == 3
-            && coverage.expected_records == 3
+            && coverage.expected_records == expected_records
             && input.records.len() == 4
             && input.records[3] == input.records[0],
         InvalidInputSnafu {
@@ -123,7 +125,7 @@ pub fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
         before.receipt.identity == identity
             && before.receipt.contiguous_cursor == coverage.last_cursor
             && before.receipt.coverage_revision == coverage.coverage_revision
-            && before.retained_event_count == derived.snapshot.accepted_records
+            && before.retained_event_count == expected_records
             && before.latest_coverage_report.as_deref() == Some(coverage_bytes.as_slice()),
         InvalidInputSnafu {
             path: output,
@@ -171,7 +173,6 @@ pub fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
             "contiguous_cursor": before.receipt.contiguous_cursor,
             "coverage_revision": before.receipt.coverage_revision,
             "retained_event_count": before.retained_event_count,
-            "snapshot": derived.snapshot,
         }),
     )?;
     Ok(())

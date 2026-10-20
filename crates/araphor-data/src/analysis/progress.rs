@@ -333,6 +333,25 @@ impl AnalysisStore {
         scope: &ProcessorScopeV1,
         class: ProcessorClassV1,
         start_cursor: u64,
+        check: impl FnMut() -> Result<()>,
+    ) -> Result<u64> {
+        self.register_processor_with(scope, class, start_cursor, false, check)
+    }
+
+    pub fn ensure_optional_processor_guarded(
+        &self,
+        scope: &ProcessorScopeV1,
+        check: impl FnMut() -> Result<()>,
+    ) -> Result<u64> {
+        self.register_processor_with(scope, ProcessorClassV1::Optional, 1, true, check)
+    }
+
+    fn register_processor_with(
+        &self,
+        scope: &ProcessorScopeV1,
+        class: ProcessorClassV1,
+        start_cursor: u64,
+        keep_existing: bool,
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<u64> {
         if !scope.valid() || start_cursor == 0 {
@@ -362,7 +381,9 @@ impl AnalysisStore {
             })?;
         let meta = Self::read_meta_from(&transaction, &self.root.join("analysis.duckdb"))?;
         if let Some(existing) = existing {
-            if existing != (class.as_str().to_owned(), start_cursor, false) {
+            if existing.2
+                || (!keep_existing && existing != (class.as_str().to_owned(), start_cursor, false))
+            {
                 return AnalysisConflictSnafu.fail();
             }
             check()?;
@@ -1104,6 +1125,115 @@ mod tests {
             revision
         );
         assert_eq!(reopened.meta()?, committed);
+        Ok(())
+    }
+
+    #[test]
+    fn optional_registration_preserves_state() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let scope = ProcessorScopeV1 {
+            processor_id: "existing-required".into(),
+            method_version: 1,
+            identity: identity(1),
+        };
+        store.accept_validated_batch(
+            scope.identity.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: 1,
+                last_cursor: 1,
+                intake_utc_ns: 1,
+                framed_records: b"frame".to_vec().into(),
+                frame_ends: vec![5],
+            },
+        )?;
+        let revision = store.register_processor(&scope, ProcessorClassV1::Required, 2)?;
+        let health = store.processor_health(&scope)?;
+        let before = store.meta()?;
+        let mut notices = store.subscribe_revision();
+        assert_eq!(
+            store.ensure_optional_processor_guarded(&scope, || Ok(()))?,
+            revision
+        );
+        assert_eq!(store.processor_health(&scope)?, health);
+        assert_eq!(store.meta()?, before);
+        assert!(!notices.has_changed()?);
+        assert_eq!(
+            store.register_processor(&scope, ProcessorClassV1::Required, 2)?,
+            revision
+        );
+        assert!(matches!(
+            store.register_processor(&scope, ProcessorClassV1::Optional, 1),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        let control = crate::AnalysisReadControl::default();
+        control.cancel()?;
+        assert!(matches!(
+            store.ensure_optional_processor_guarded(&scope, || control.check()),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert_eq!(store.processor_health(&scope)?, health);
+        assert_eq!(store.meta()?, before);
+        assert!(!notices.has_changed()?);
+        let missing = ProcessorScopeV1 {
+            processor_id: "missing-optional".into(),
+            ..scope.clone()
+        };
+        assert!(matches!(
+            store.ensure_optional_processor_guarded(&missing, || control.check()),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert!(store.processor_health(&missing)?.is_none());
+        assert_eq!(store.meta()?, before);
+        assert!(!notices.has_changed()?);
+        let registered = store.ensure_optional_processor_guarded(&missing, || Ok(()))?;
+        assert!(registered > revision);
+        assert_eq!(
+            store
+                .processor_health(&missing)?
+                .ok_or("optional registration absent")?
+                .class,
+            ProcessorClassV1::Optional
+        );
+        let committed = store.meta()?;
+        notices.borrow_and_update();
+        assert_eq!(
+            store.ensure_optional_processor_guarded(&missing, || Ok(()))?,
+            registered
+        );
+        assert_eq!(
+            store.register_processor(&missing, ProcessorClassV1::Optional, 1)?,
+            registered
+        );
+        assert_eq!(store.meta()?, committed);
+        assert!(!notices.has_changed()?);
+        store.retire_required(&crate::ProcessorRetirementV1 {
+            scope: scope.clone(),
+            change_id: "retire-existing".into(),
+            reason: "Stop this required processor.".into(),
+            expected_cursor: 1,
+            cutoff_cursor: 1,
+        })?;
+        let retired = store.meta()?;
+        let retirement = store.processor_retirement(&scope)?;
+        notices.borrow_and_update();
+        assert!(matches!(
+            store.ensure_optional_processor_guarded(&scope, || Ok(())),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        assert_eq!(store.meta()?, retired);
+        assert_eq!(store.processor_retirement(&scope)?, retirement);
+        assert!(!notices.has_changed()?);
+        drop(store);
+        let reopened = AnalysisStore::open(root)?;
+        assert_eq!(reopened.processor_retirement(&scope)?, retirement);
+        assert!(matches!(
+            reopened.ensure_optional_processor_guarded(&scope, || Ok(())),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
         Ok(())
     }
 

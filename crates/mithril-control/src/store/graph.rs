@@ -1,4 +1,3 @@
-use araphor_analysis_back::GraphContextProvider;
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, GraphFactV1,
     GraphFactValueV1, GraphPolicyActivationV1, PolicyObservationProvenanceV1,
@@ -364,31 +363,6 @@ fn graph_fact(
         sensitivity: ContextSensitivityV1::Tenant,
         body,
     })
-}
-
-impl GraphContextProvider for ControlStore {
-    fn facts(
-        &self,
-        record: &araphor_data::DiscoveryRecordV1,
-    ) -> araphor_data::Result<Vec<AnalysisContextVersionV1>> {
-        self.graph_context(record)
-            .map_err(|source| araphor_data::Error::GraphContext {
-                source: Box::new(source),
-                location: snafu::Location::default(),
-            })
-    }
-
-    fn revision(
-        &self,
-        _source: &araphor_data::EvidenceIntakeIdentityV1,
-    ) -> araphor_data::Result<u64> {
-        self.evidence_lock()
-            .map(|inner| inner.state.commit_index)
-            .map_err(|source| araphor_data::Error::GraphContext {
-                source: Box::new(source),
-                location: snafu::Location::default(),
-            })
-    }
 }
 
 #[cfg(test)]

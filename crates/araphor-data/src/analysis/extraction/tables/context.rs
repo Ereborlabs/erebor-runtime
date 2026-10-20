@@ -24,6 +24,11 @@ impl Capture<'_> {
                 return Ok(false);
             }
         }
+        if self.read.projected("notification_routes").is_some()
+            && context.key.owner_id == crate::NOTIFICATION_ROUTE_OWNER
+        {
+            return self.notification_route(context, revision, budget);
+        }
         if self.read.projected("compiled_policies").is_some()
             && context.key.owner_id == "mithril-control/compiled-policy"
         {

@@ -1,5 +1,12 @@
 # Phase 7.5: Graphs, Findings, And Notifications
 
+Current command status, 2026-10-19: The old Analysis owner and its qualification
+harness have been removed. The cases `graph-notification`
+are no longer accepted by `mithril_discovery_test`. The commands and results
+below remain historical proof for their recorded source. They do not qualify
+the current replacement. Read the [current plan](../../../araphor-package-jobs.md)
+for the supported path and remaining work.
+
 Implement deterministic local detection, policy provenance, mandatory routing,
 and provider-neutral authority records inside Mithril Control.
 Extend the same owners with installable algorithms and detectors through one

@@ -1,6 +1,5 @@
 use std::sync::Mutex;
 
-use araphor_analysis_back::{GraphAndFindingOwner, GraphContextProvider};
 use araphor_data::*;
 
 use super::*;
@@ -46,8 +45,14 @@ fn control_notification_revocation_survives_restart_and_requires_new_revision() 
 #[test]
 fn control_notification_stage_isolation() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let data = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = finding_graph(data.clone())?;
+    let data = Arc::new(AnalysisStore::open_with_limits(
+        dir.path().join("data"),
+        Default::default(),
+        StorageLimitsV1 {
+            tenant_revisions: Some(32),
+            ..Default::default()
+        },
+    )?);
     let sink = Arc::new(Sink::default());
     let owner = ControlNotificationOwner::new(
         crate::ControlStore::open(dir.path().join("control"))?,
@@ -62,6 +67,19 @@ fn control_notification_stage_isolation() -> TestResult {
         10,
     )?
     .with_sink(sink.clone());
+    let blocked = owner.router().submit_concern(
+        &grant([1; 16]),
+        "primary",
+        UnconfirmedNotificationConcernV1 {
+            concern_id: [8; 16],
+            model_label: "review".into(),
+            summary: "Review this concern".into(),
+            context: Vec::new(),
+            sensitivity: ContextSensitivityV1::Tenant,
+            suggested_priority: NotificationPriorityV1::Info,
+        },
+        100,
+    )?;
     let other = grant([2; 16]);
     let concern = owner.router().submit_concern(
         &other,
@@ -79,12 +97,13 @@ fn control_notification_stage_isolation() -> TestResult {
     fill_context_quota(&data)?;
     for now in [150, 151] {
         assert!(matches!(
-            owner.process(&graph, now),
-            Err(crate::Error::Analysis { source, .. })
-                if matches!(*source, araphor_analysis_back::Error::Data { source: araphor_data::Error::StorageCapacity {
+            owner.deliver_obligation(blocked.key, now),
+            Err(crate::Error::NativeAnalysis { source, .. })
+                if matches!(*source, araphor_analysis::Error::Data { source: araphor_data::Error::StorageCapacity {
                     resource: "tenant retained revisions", ..
                 } })
         ));
+        owner.deliver_obligation(concern.key, now)?;
     }
     let calls = sink.calls.lock().map_err(|_| "sink lock")?;
     assert_eq!(calls.len(), 1);
@@ -135,42 +154,6 @@ fn policy(tenant: [u8; 16], route: &str) -> NotificationPolicyV1 {
     }
 }
 
-fn finding_graph(
-    data: Arc<AnalysisStore>,
-) -> std::result::Result<GraphAndFindingOwner, Box<dyn std::error::Error>> {
-    let source = EvidenceIntakeIdentityV1 {
-        tenant_id: [1; 16],
-        node_id: "node".into(),
-        node_boot_id: [2; 16],
-        label_epoch: 1,
-        source_id: [3; 16],
-        source_epoch: 1,
-    };
-    let wire = Vec::<u8>::try_from(&EvidenceRecord {
-        effect_family: 1,
-        operation: 1,
-        coverage_interval_id: vec![4; 16].into(),
-        ..Default::default()
-    })?;
-    let length = wire.len();
-    data.accept_validated_batch(
-        source,
-        ValidatedEvidenceBatchV1 {
-            cpu_id: 0,
-            first_cursor: 1,
-            last_cursor: 1,
-            intake_utc_ns: 1,
-            framed_records: wire.into(),
-            frame_ends: vec![length],
-        },
-    )?;
-    let installed = araphor_analysis_back::InstalledAnalysis::testing(Some(data.clone()), [1; 16])?;
-    let graph = GraphAndFindingOwner::new(data, Arc::new(Context), installed)?;
-    assert_eq!(graph.process(20)?, 1);
-    assert_eq!(graph.current_findings([1; 16])?.len(), 1);
-    Ok(graph)
-}
-
 fn fill_context_quota(data: &AnalysisStore) -> TestResult {
     for number in 0..1024u32 {
         match data.commit_context(&AnalysisContextVersionV1 {
@@ -195,17 +178,6 @@ fn fill_context_quota(data: &AnalysisStore) -> TestResult {
         }
     }
     Err("context quota was not reached".into())
-}
-
-struct Context;
-
-impl GraphContextProvider for Context {
-    fn facts(
-        &self,
-        _record: &DiscoveryRecordV1,
-    ) -> araphor_data::Result<Vec<AnalysisContextVersionV1>> {
-        Ok(Vec::new())
-    }
 }
 
 #[derive(Default)]

@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
-use araphor_analysis_sdk as sdk;
-use araphor_data::analysis::PackageRevisionV1;
 use araphor_data::{
-    AnalysisContextRefV1, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
-    EvidenceIntakeIdentityV1, PackageActionV1, PackageAuthorization, PackageBundleRef,
-    PackageBundleV1, PackageErrorCodeV1 as Code, PackageGrantV1, PackageImplementationV1,
-    Selection,
+    AnalysisContextRefV1, AnalysisReadControl, AnalysisSelectionV1, EvidenceIntakeIdentityV1,
+    PackageActionV1, PackageAuthorization, PackageBundleRef, PackageBundleV1,
+    PackageErrorCodeV1 as Code, PackageGrantV1, Selection,
 };
+use araphor_discovery_definition::{Definition, Program};
+use araphor_query::definition::{CallResult, PackageCall, PreparedDefinition};
 use araphor_query::execution::Engine;
-use araphor_query::follow::Subscription;
+use araphor_query::follow::{Subscription, Update};
+use datafusion::common::DataFusionError;
+use tokio::sync::OnceCell;
 
 use crate::Result;
 
@@ -21,8 +22,9 @@ pub struct Package {
     authority: Arc<dyn PackageAuthorization>,
     bundle: PackageBundleV1,
     digest: String,
-    sql: String,
-    tables: Vec<String>,
+    export: String,
+    output: String,
+    prepared: OnceCell<(PreparedDefinition, PackageCall)>,
     pub(crate) context: AnalysisContextRefV1,
 }
 
@@ -36,62 +38,12 @@ impl Package {
         output: &str,
     ) -> Result<Self> {
         bundle.validate()?;
-        let artifact = bundle.artifact(&bundle.root)?;
-        let model = artifact
-            .descriptor
-            .exports
-            .iter()
-            .find(|model| model.name == export)
-            .ok_or_else(|| Code::Missing.error("SQL export"))?;
-        let PackageImplementationV1::Sql { program, .. } = artifact.implementation(export)? else {
-            return Err(Code::Unsupported
-                .error("native SQL subscription target")
-                .into());
-        };
-        if model.input_mode != sdk::InputMode::Resolved
-            || !model.parameters.fields().is_empty()
-            || model.checkpoint.is_some()
-            || !program.checkpoint.is_empty()
-            || program.evidence.is_some()
-            || !program.reasons.is_empty()
-        {
-            return Err(Code::Unsupported.error("SQL subscription contract").into());
-        }
-        let schemas = AnalysisStore::table_schemas();
-        let mut tables = Vec::new();
-        for input in &model.inputs {
-            if !matches!(&input.source, sdk::InputSource::Table(sdk::TableRef::Named(name)) if name == &input.port.name)
-                || schemas.get(&input.port.name).is_none_or(|schema| {
-                    input.port.schema.fields().iter().any(|field| {
-                        schema
-                            .field_with_name(field.name())
-                            .map_or(true, |actual| actual != field.as_ref())
-                    })
-                })
-            {
-                return Err(Code::Unsupported
-                    .error("SQL subscription table binding")
-                    .into());
-            }
-            tables.push(input.port.name.clone());
-        }
-        let sql = program
-            .outputs
-            .get(output)
-            .cloned()
-            .ok_or_else(|| Code::Missing.error("SQL output"))?;
         let digest = bundle.digest()?;
         let retained = PackageBundleRef::retained(&bundle, &digest);
         let context = retained.context(grant.selection.tenant_id, export, output)?;
-        let revisions = PackageRevisionV1::from_bundle(&bundle, grant.selection.tenant_id)?;
         grant.remaining()?;
         let mut reference = None;
         authority.commit(&grant, PackageActionV1::Run, &retained, &mut || {
-            grant.remaining()?;
-            query.store().install_package(&revisions, || {
-                grant.remaining()?;
-                Ok(())
-            })?;
             reference = Some(
                 query
                     .store()
@@ -105,10 +57,10 @@ impl Package {
             grant,
             bundle,
             digest,
-            sql,
-            tables,
-            context: reference
-                .ok_or_else(|| Code::Denied.error("SQL package retention authority"))?,
+            export: export.into(),
+            output: output.into(),
+            prepared: OnceCell::new(),
+            context: reference.ok_or_else(|| Code::Denied.error("package retention authority"))?,
         };
         package.check()?;
         Ok(package)
@@ -145,11 +97,80 @@ impl Package {
                 || (!selection.sources.is_all() && !selection.sources.as_slice().contains(source))
                 || (!selection.nodes.is_empty() && !selection.nodes.contains(&source.node_id))
             {
-                return Err(Code::Denied.error("SQL source selection").into());
+                return Err(Code::Denied.error("package source selection").into());
             }
             selection.sources = Selection::Exact(vec![source.clone()]);
         }
         Ok(selection)
+    }
+
+    async fn prepared(&self) -> Result<&(PreparedDefinition, PackageCall)> {
+        self.prepared
+            .get_or_try_init(|| async {
+                self.check()?;
+                let definition = Definition {
+                    name: format!(
+                        "{}/{}/{}/{}",
+                        self.bundle.root.package_id,
+                        self.bundle.root.revision,
+                        self.export,
+                        self.output
+                    ),
+                    description: String::new(),
+                    labels: Default::default(),
+                    program: Program::call(&self.bundle.root, &self.export, &self.output)
+                        .map_err(araphor_data::Error::from)?,
+                };
+                let control = Arc::new(self.control()?);
+                let prepared = self
+                    .query
+                    .prepare_definition(
+                        self.grant.selection.tenant_id,
+                        &definition,
+                        Arc::clone(&control),
+                    )
+                    .await?;
+                if prepared.resolved.images.len() != 1
+                    || prepared.resolved.images[0].image != self.bundle.root
+                    || prepared.resolved.images[0].digest != self.digest
+                {
+                    return Err(Code::Denied.error("package image pin").into());
+                }
+                let mut root = None;
+                PackageCall::any(&prepared.plan, &mut |call| {
+                    let model = call
+                        .descriptor()
+                        .exports
+                        .iter()
+                        .find(|model| model.name == call.export())
+                        .ok_or_else(|| {
+                            DataFusionError::External(Box::new(
+                                Code::Missing.error("subscription export"),
+                            ))
+                        })?;
+                    if model.checkpoint.is_some() {
+                        return Err(DataFusionError::External(Box::new(
+                            Code::Unsupported.error("subscription checkpoint"),
+                        )));
+                    }
+                    if call.package() == &self.bundle.root
+                        && call.export() == self.export
+                        && call.output() == self.output
+                        && root.replace(call.clone()).is_some()
+                    {
+                        return Err(DataFusionError::External(Box::new(
+                            Code::Invalid.error("subscription root call"),
+                        )));
+                    }
+                    Ok(false)
+                })
+                .map_err(|source| araphor_query::Error::Sql { source })?;
+                let call = root.ok_or_else(|| Code::Invalid.error("subscription package call"))?;
+                control.check()?;
+                self.check()?;
+                Ok((prepared, call))
+            })
+            .await
     }
 
     pub async fn subscribe(
@@ -160,15 +181,39 @@ impl Package {
         let changes = self.changes();
         self.check()?;
         let selection = self.selection(source)?;
-        let (plan, sources) = self.query.prepare(&self.sql, Vec::new()).await?;
-        if sources.keys().any(|name| !self.tables.contains(name)) {
-            return Err(Code::Denied.error("undeclared SQL source").into());
-        }
-        let control = self.control()?;
-        let session = self.query.session(selection, &control, 0)?;
-        let stream = session.subscribe(plan, sources, self.digest.as_bytes(), follow)?;
+        let (prepared, _) = self.prepared().await?;
+        let binding = prepared
+            .resolved
+            .digest()
+            .map_err(araphor_data::Error::from)?;
+        let session = self.query.session(selection, &self.control()?, 0)?;
+        let stream = session.subscribe(
+            prepared.plan.clone(),
+            prepared.sources.clone(),
+            binding.as_bytes(),
+            follow,
+        )?;
         self.check()?;
         Ok(stream.until_change(changes))
+    }
+
+    pub(crate) fn check_return<'a>(&self, update: &'a Update) -> Result<&'a CallResult> {
+        let (_, call) = self
+            .prepared
+            .get()
+            .ok_or_else(|| Code::Invalid.error("subscription admission"))?;
+        let returned = update
+            .calls
+            .get(&call.id())
+            .filter(|returned| returned.belongs_to(call))
+            .ok_or_else(|| Code::Denied.error("subscription return identity"))?;
+        if update.calls.values().any(|returned| {
+            let output = returned.output();
+            output.checkpoint.is_some() || !output.reasons.is_empty() || !output.evidence.is_empty()
+        }) {
+            return Err(Code::Unsupported.error("discovery auxiliary return").into());
+        }
+        Ok(returned)
     }
 
     pub(crate) fn commit<T>(
@@ -186,12 +231,12 @@ impl Package {
                 let _remaining = self.grant.remaining()?;
                 output = Some(operation
                     .take()
-                    .ok_or_else(|| Code::Invalid.error("SQL publication callback"))?(
+                    .ok_or_else(|| Code::Invalid.error("package publication callback"))?(
                 )?);
                 Ok(())
             },
         )?;
-        output.ok_or_else(|| Code::Denied.error("SQL publication authority").into())
+        output.ok_or_else(|| Code::Denied.error("package publication authority").into())
     }
 }
 

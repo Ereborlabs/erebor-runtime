@@ -74,13 +74,6 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Araphor analysis failed: {source}"))]
-    Analysis {
-        #[snafu(source(from(araphor_analysis_back::Error, Box::new)))]
-        source: Box<araphor_analysis_back::Error>,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("Native analysis failed: {source}"))]
     NativeAnalysis {
         #[snafu(source(from(araphor_analysis::Error, Box::new)))]
@@ -225,12 +218,6 @@ impl From<araphor_query::Error> for Error {
     }
 }
 
-impl From<araphor_analysis_back::Error> for Error {
-    fn from(source: araphor_analysis_back::Error) -> Self {
-        AnalysisSnafu.into_error(source)
-    }
-}
-
 impl From<araphor_analysis::Error> for Error {
     fn from(source: araphor_analysis::Error) -> Self {
         NativeAnalysisSnafu.into_error(source)
@@ -286,7 +273,6 @@ impl ErrorExt for Error {
                 source.status_code()
             }
             Self::Query { source, .. } => source.status_code(),
-            Self::Analysis { source, .. } => source.status_code(),
             Self::NativeAnalysis { source, .. } => source.status_code(),
             Self::Observability { source, .. } => source.status_code(),
             Self::CoverageDecode { .. } => StatusCode::IllegalState,
@@ -336,7 +322,6 @@ impl ErrorExt for Error {
                 source.retry_hint()
             }
             Self::Query { source, .. } => source.retry_hint(),
-            Self::Analysis { source, .. } => source.retry_hint(),
             Self::NativeAnalysis { source, .. } => source.retry_hint(),
             Self::Observability { source, .. } => source.retry_hint(),
             Self::Io { source, .. } => RetryHint::from_io_error(source),

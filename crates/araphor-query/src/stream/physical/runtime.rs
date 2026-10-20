@@ -12,7 +12,7 @@ use crate::execution::{Engine, Read};
 use crate::follow::Operation;
 use crate::sources::{ArrowSnapshot, Changes, JournalExec};
 use crate::stream::progress::{Progress, Wake};
-use crate::stream::{Event, Output, Run};
+use crate::stream::{Event, Output, Run, StreamError};
 use crate::{Result, SqlSnafu};
 
 pub(super) struct Runtime {
@@ -52,7 +52,6 @@ impl Runtime {
                 compiled: Some(compiled),
             } if run.follow
                 && run.window.is_none()
-                && !run.sources.contains_key("notifications")
                 && run.sources.len() == 1
                 && run.sources.contains_key("events") =>
             {
@@ -100,7 +99,13 @@ impl Runtime {
         })
     }
 
-    pub(super) async fn next(&mut self) -> Result<Option<Event>> {
+    pub(super) async fn next(&mut self) -> std::result::Result<Option<Event>, StreamError> {
+        self.next_event()
+            .await
+            .map_err(|error| (error, self.snapshot.clone()))
+    }
+
+    async fn next_event(&mut self) -> Result<Option<Event>> {
         if self.ended {
             return Ok(None);
         }
@@ -161,15 +166,11 @@ impl Runtime {
             let worker = Arc::clone(&stage);
             let store = Arc::clone(self.run.session.engine().store());
             let selection = selection.clone();
-            let relations: &'static [&'static str] =
-                if self.run.sources.contains_key("discovery_state") {
-                    &["processor_progress", "processor_gaps", "analysis_results"]
-                } else {
-                    &[]
-                };
-            match Engine::blocking(stage, move || {
+            let run = Arc::clone(&self.run);
+            let scope = self.run.session.token();
+            match Engine::blocking(stage, scope, move || {
                 store
-                    .dependency_revision_for(&selection, relations, &worker)
+                    .dependency_revision_for(&selection, &run.sources, &worker)
                     .map_err(crate::Error::from)
             })
             .await
@@ -226,84 +227,105 @@ impl Runtime {
             let (meta, _) = self.dependencies(selection.clone()).await?;
             self.check_store(&meta)?;
         }
-        let session = self.run.session.at(selection, now);
-        let output = if self.run.operation == Operation::Append {
-            let (snapshot, mut stream, permit, control, reservation) = session
-                .start_physical(
-                    Arc::clone(&self.input),
-                    Arc::clone(&self.context),
-                    &self.run.sources,
-                    Read::Page(self.position),
+        let mut session = self.run.session.at(selection, now);
+        let calls = session.call_context(crate::definition::Invocation::default());
+        session.calls = Some(Arc::clone(&calls));
+        let execution = async {
+            let output = if self.run.operation == Operation::Append {
+                let (snapshot, mut stream, permit, control, reservation) = session
+                    .start_physical(
+                        Arc::clone(&self.input),
+                        Arc::clone(&self.context),
+                        &self.run.sources,
+                        Read::Page(self.position),
+                        permit,
+                    )
+                    .await?;
+                self.check_store(&snapshot.page.extraction.meta)?;
+                self.snapshot = Some(Arc::clone(&snapshot));
+                Output::page(
+                    &session,
+                    Arc::clone(&self.schema),
+                    &mut stream,
+                    control,
+                    reservation,
+                    snapshot,
                     permit,
                 )
-                .await?;
-            self.check_store(&snapshot.page.extraction.meta)?;
-            Output::page(
-                &session,
-                Arc::clone(&self.schema),
-                &mut stream,
-                control,
-                reservation,
-                snapshot,
-                permit,
-            )
-            .await?
-        } else if let Some(maintained) = &mut self.maintained {
-            let change = maintained.journal.capture(permit, now).await?;
-            let mut output = maintained.kernel.apply(change).await?;
-            let batches = output.batches.take().ok_or_else(Self::state_error)?;
-            output._control.check()?;
-            let reservation = session
-                .memory()
-                .prepare_output(session.output().1)
-                .context(SqlSnafu)?;
-            let input = std::mem::replace(&mut output._memory, reservation);
-            let stream = SubscribeExec::bind(
-                &self.input,
-                &maintained.compiled.aggregate,
-                batches,
-                Arc::clone(&self.context),
-            )
-            .context(SqlSnafu)?;
-            let output = output
-                .complete(&session, stream, Some(&mut self.content))
-                .await?;
-            drop(input);
-            output
-        } else {
-            let (physical, context) = if reuse {
-                (Arc::clone(&self.input), Arc::clone(&self.context))
-            } else {
-                let state = session.state()?;
-                (
-                    session.physical(&self.run.plan, &state).await?,
-                    state.task_ctx(),
+                .await?
+            } else if let Some(maintained) = &mut self.maintained {
+                let change = maintained.journal.capture(permit, now).await?;
+                let mut output = maintained.kernel.apply(change).await?;
+                if let Some(previous) = &self.snapshot {
+                    ArrowSnapshot::check_store(
+                        &previous.page.extraction.meta,
+                        &output.snapshot.page.extraction.meta,
+                    )?;
+                }
+                self.snapshot = Some(Arc::clone(&output.snapshot));
+                let batches = output.batches.take().ok_or_else(Self::state_error)?;
+                output._control.check()?;
+                let reservation = session
+                    .memory()
+                    .prepare_output(session.output().1)
+                    .context(SqlSnafu)?;
+                let input = std::mem::replace(&mut output._memory, reservation);
+                let stream = SubscribeExec::bind(
+                    &self.input,
+                    &maintained.compiled.aggregate,
+                    batches,
+                    Arc::clone(&self.context),
                 )
+                .context(SqlSnafu)?;
+                let output = output
+                    .complete(&session, stream, Some(&mut self.content))
+                    .await?;
+                drop(input);
+                output
+            } else {
+                let (physical, context) = if reuse {
+                    (Arc::clone(&self.input), Arc::clone(&self.context))
+                } else {
+                    let mut state = session.state()?;
+                    state.config_mut().set_extension(Arc::clone(&permit));
+                    (
+                        session.physical(&self.run.plan, &state).await?,
+                        state.task_ctx(),
+                    )
+                };
+                let (snapshot, stream, permit, control, reservation) = session
+                    .start_physical(physical, context, &self.run.sources, Read::Snapshot, permit)
+                    .await?;
+                self.check_store(&snapshot.page.extraction.meta)?;
+                self.snapshot = Some(Arc::clone(&snapshot));
+                Output {
+                    snapshot,
+                    batches: None,
+                    positions: Vec::new(),
+                    position: StorePositionV1 {
+                        commit_revision: 0,
+                        ordinal: 0,
+                    },
+                    limited: false,
+                    _memory: reservation,
+                    _permit: Some(permit),
+                    _control: control,
+                }
+                .complete(
+                    &session,
+                    stream,
+                    self.run.follow.then_some(&mut self.content),
+                )
+                .await?
             };
-            let (snapshot, stream, permit, control, reservation) = session
-                .start_physical(physical, context, &self.run.sources, Read::Snapshot, permit)
-                .await?;
-            self.check_store(&snapshot.page.extraction.meta)?;
-            Output {
-                snapshot,
-                batches: None,
-                positions: Vec::new(),
-                position: StorePositionV1 {
-                    commit_revision: 0,
-                    ordinal: 0,
-                },
-                limited: false,
-                _memory: reservation,
-                _permit: Some(permit),
-                _control: control,
-            }
-            .complete(
-                &session,
-                stream,
-                self.run.follow.then_some(&mut self.content),
-            )
-            .await?
+            Ok::<_, crate::Error>(output)
         };
+        let result = execution.await;
+        if result.is_err() {
+            let _cancelled = session.control().cancel();
+        }
+        calls.finish().await;
+        let output = result?;
         self.check_store(&output.snapshot.page.extraction.meta)?;
         self.revision = output.snapshot.page.extraction.meta.commit_revision;
         self.position = Some(output.position);
@@ -321,6 +343,7 @@ impl Runtime {
             || (output.snapshot.page.exhausted && !output.limited);
         Ok(Event {
             output,
+            calls: calls.results().context(SqlSnafu)?,
             completed: true,
             evaluated: now,
             clock_changed,
@@ -330,7 +353,11 @@ impl Runtime {
 
     async fn metadata_update(&mut self, clock_changed: bool) -> Result<Event> {
         let clock_changed = clock_changed || self.progress.clock_pending();
-        if (self.run.window.is_some() || self.run.sources.contains_key("notifications"))
+        if (self.run.window.is_some()
+            || self
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.next_change.is_some()))
             && clock_changed
         {
             return self.evaluate(true).await;
@@ -350,10 +377,11 @@ impl Runtime {
         self.run
             .session
             .control()
-            .query_async(self.run.session.engine().check_read(&snapshot))
+            .query_async(self.run.session.check_read(&snapshot))
             .await?;
         self.snapshot = Some(Arc::clone(&snapshot));
         Ok(Event {
+            calls: Default::default(),
             output: Output {
                 snapshot,
                 batches: None,

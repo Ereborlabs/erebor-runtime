@@ -24,6 +24,7 @@ mod tests;
 pub use live::InputOperation;
 pub use physical::InputSet;
 
+#[derive(Debug)]
 pub struct Inputs {
     ports: Vec<sdk::Port>,
     plans: Vec<PortPlan>,
@@ -34,6 +35,7 @@ pub struct Inputs {
     mode: sdk::InputMode,
 }
 
+#[derive(Debug)]
 struct PortPlan {
     slot: usize,
     window: Option<Window>,
@@ -42,6 +44,45 @@ struct PortPlan {
 }
 
 impl Inputs {
+    pub(crate) fn from_plans(
+        model: &sdk::Model,
+        plans: &[LogicalPlan],
+        origins: Vec<BTreeSet<SourceOrigin>>,
+    ) -> Result<Self> {
+        if plans.len() != model.inputs.len() || origins.len() != plans.len() {
+            return InvalidSnafu {
+                field: "package input plans",
+            }
+            .fail();
+        }
+        let plans = plans
+            .iter()
+            .zip(origins)
+            .enumerate()
+            .map(|(slot, (plan, origins))| {
+                Ok(PortPlan {
+                    slot,
+                    window: Window::infer(plan)?,
+                    plan: Arc::new(plan.clone()),
+                    origins,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            ports: model
+                .inputs
+                .iter()
+                .map(|input| input.port.clone())
+                .collect(),
+            plans,
+            sources: AnalysisTableRequests::new(),
+            packages: Vec::new(),
+            clock: false,
+            limits: model.limits,
+            mode: model.input_mode,
+        })
+    }
+
     pub fn admit(engine: &Engine, model: &sdk::Model) -> Result<Self> {
         let mut tables = SourceSnapshot::providers();
         for (slot, input) in model.inputs.iter().enumerate() {

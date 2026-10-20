@@ -126,8 +126,9 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
         .await?;
     let installed: PackageResponseV1 = serde_json::from_slice(&reply.result_json)?;
     assert_eq!(installed.image, Some(expected_image));
-    assert!(
-        installed.exports.is_empty() && installed.tests.is_empty() && installed.output.is_none()
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&reply.result_json)?,
+        serde_json::json!({"image": installed.image}),
     );
     assert_eq!(data.package_activation_page(None)?, activations);
     assert_eq!(data.discovery_enabled(), discovery);
@@ -140,11 +141,10 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
             })
             .await?;
         let response: PackageResponseV1 = serde_json::from_slice(&reply.result_json)?;
-        assert!(
-            response.image.is_none()
-                && response.exports.is_empty()
-                && response.tests.is_empty()
-                && response.output.is_none()
+        assert!(response.image.is_none());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&reply.result_json)?,
+            serde_json::json!({"definition": response.definition}),
         );
         let admitted = response.definition.ok_or("admitted definition absent")?;
         assert_eq!(admitted.definition, expected);

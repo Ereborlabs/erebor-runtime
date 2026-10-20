@@ -8,7 +8,6 @@ use futures_core::Stream;
 
 use crate::execution::{Permit, Session};
 use crate::sources::ArrowSnapshot;
-use crate::Result;
 
 pub(crate) mod physical;
 pub(crate) mod progress;
@@ -49,10 +48,13 @@ pub(crate) struct Output {
 
 pub(crate) struct Event {
     pub output: Output,
+    pub calls: std::collections::BTreeMap<u64, Arc<crate::definition::CallResult>>,
     pub completed: bool,
     pub evaluated: u64,
     pub clock_changed: bool,
     pub exhausted: bool,
 }
 
-pub(crate) type OutputStream = Pin<Box<dyn Stream<Item = Result<Event>> + Send>>;
+pub(crate) type StreamError = (crate::Error, Option<Arc<ArrowSnapshot>>);
+pub(crate) type OutputStream =
+    Pin<Box<dyn Stream<Item = std::result::Result<Event, StreamError>> + Send>>;

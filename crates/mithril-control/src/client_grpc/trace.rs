@@ -325,8 +325,12 @@ pub(super) struct TraceEncoder {
 }
 
 impl TraceEncoder {
-    fn frame(&self, update: &Update, payload: proto::trace_frame::Payload) -> proto::TraceFrame {
-        let extraction = &update.snapshot.page.extraction;
+    fn frame(
+        &self,
+        snapshot: &araphor_query::sources::ArrowSnapshot,
+        payload: proto::trace_frame::Payload,
+    ) -> proto::TraceFrame {
+        let extraction = &snapshot.page.extraction;
         proto::TraceFrame {
             schema_version: 1,
             trace_id: self.trace.to_vec(),
@@ -462,7 +466,7 @@ impl TraceEncoder {
             execution_id: execution,
             sequence,
             target_index: index as u32,
-            ..self.frame(update, payload)
+            ..self.frame(&update.snapshot, payload)
         })
     }
 }
@@ -546,11 +550,35 @@ impl Consumer for TraceEncoder {
             Action::Complete { .. } => proto::trace_frame::Payload::Result(self.result(update)),
             Action::Row(_) => return Err(Status::internal("Trace row state is invalid.")),
         };
-        let mut frame = self.frame(update, payload);
+        let mut frame = self.frame(&update.snapshot, payload);
         if let Some(bookmark) = bookmark {
             frame.bookmark = bookmark;
         }
         Ok(frame)
+    }
+
+    fn initial_error(
+        &mut self,
+        failure: Failure,
+        cause: &araphor_query::Error,
+        snapshot: &araphor_query::sources::ArrowSnapshot,
+        _operation: araphor_query::follow::Operation,
+        memory: &mut MemoryReservation,
+    ) -> Result<Self::Item, Status> {
+        self.detail = None;
+        ClientGrpcOwner::frame_memory(
+            memory,
+            Wire::receipt_bytes(snapshot).saturating_add(2048),
+            self.byte_limit,
+        )?;
+        Ok(self.frame(
+            snapshot,
+            proto::trace_frame::Payload::Error(ClientGrpcOwner::query_error(
+                failure,
+                Some(cause),
+                None,
+            )?),
+        ))
     }
 
     fn complete_after_checkpoint(&self, update: &Update) -> bool {

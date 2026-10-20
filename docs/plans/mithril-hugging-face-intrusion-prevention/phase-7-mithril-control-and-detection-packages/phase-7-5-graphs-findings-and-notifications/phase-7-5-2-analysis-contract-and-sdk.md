@@ -1,5 +1,12 @@
 # Phase 7.5.2: Analysis Contract And SDK
 
+Current command status, 2026-10-19: The old Analysis owner and its qualification
+harness have been removed. The cases `profile-restart`, `context-roundtrip`, `graph-notification`
+are no longer accepted by `mithril_discovery_test`. The commands and results
+below remain historical proof for their recorded source. They do not qualify
+the current replacement. Read the [current plan](../../../araphor-package-jobs.md)
+for the supported path and remaining work.
+
 Give authors one typed interface for reusable algorithms and detectors. Hide
 execution bindings behind an SDK. Move current algorithms into shared SDK code
 before package installation or Wasm execution. Parent: [7.5](README.md).

@@ -2,12 +2,10 @@ use std::path::PathBuf;
 
 use araphor_data::{PackageBundleV1, PackageRequestV1, PackageResponseV1};
 use clap::{Args, Subcommand};
-use snafu::{OptionExt as _, ResultExt as _};
+use snafu::ResultExt as _;
 
-use super::args::{Prepared, SelectionArgs};
-use super::error::{
-    ClientSnafu, InterruptedSnafu, InvalidSnafu, PackageSnafu, ProtocolSnafu, Result,
-};
+use super::args::Prepared;
+use super::error::{ClientSnafu, InterruptedSnafu, PackageSnafu, ProtocolSnafu, Result};
 use super::{wire, CommandRun};
 
 #[derive(Debug, Args)]
@@ -94,163 +92,6 @@ impl ImageArgs {
             definition: operation.encode().context(PackageSnafu)?,
             selection: None,
         }))
-    }
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct PackageArgs {
-    #[arg(long, global = true)]
-    scope: Option<String>,
-    #[command(flatten)]
-    selection: SelectionArgs,
-    #[command(subcommand)]
-    operation: PackageCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum PackageCommand {
-    /// Read the digest used in Control package trust pins.
-    Digest { path: PathBuf },
-    /// Admit a local OCI layout or archive and activate its supported exports.
-    Install {
-        path: PathBuf,
-        #[arg(long)]
-        parameters: Option<String>,
-    },
-    /// Read descriptors, dependencies, coverage, and readiness.
-    Inspect { package: String },
-    /// Query typed outputs from a current or historical result.
-    Query {
-        package: String,
-        export: String,
-        sql: String,
-        #[arg(long)]
-        result_id: Option<String>,
-    },
-    /// Evaluate active exports with an explicit retry identity.
-    Run {
-        package: String,
-        #[arg(long)]
-        export: Option<String>,
-        #[arg(long)]
-        evaluation_id: String,
-        #[arg(long)]
-        parameters: Option<String>,
-    },
-    /// Prepare and activate a new built revision.
-    Update { path: PathBuf },
-    /// Activate an admitted historical revision.
-    Rollback { package: String, revision: String },
-    /// Stop execution and retain referenced history.
-    Remove { package: String },
-    /// Run declared fixtures through the admitted evaluator.
-    Test {
-        package: String,
-        #[arg(long)]
-        fixture: Option<String>,
-    },
-}
-
-impl PackageArgs {
-    pub(super) fn prepare(&self) -> Result<Prepared> {
-        if let PackageCommand::Digest { path } = &self.operation {
-            if self.scope.is_some() || self.selection.selected() {
-                return InvalidSnafu {
-                    field: "digest does not accept a scope or input selection",
-                }
-                .fail();
-            }
-            let digest = PackageBundleV1::read(path)
-                .map_err(araphor_data::Error::from)
-                .context(PackageSnafu)?
-                .digest()
-                .map_err(araphor_data::Error::from)
-                .context(PackageSnafu)?;
-            return Ok(Prepared::PackageDigest(digest));
-        }
-        let scope_id = self
-            .scope
-            .clone()
-            .filter(|scope| !scope.is_empty())
-            .context(InvalidSnafu {
-                field: "package scope is required",
-            })?;
-        let operation = match &self.operation {
-            PackageCommand::Install { path, parameters } => PackageRequestV1::Install {
-                scope_id,
-                bundle: PackageBundleV1::read(path)
-                    .map_err(araphor_data::Error::from)
-                    .context(PackageSnafu)?,
-                parameters: Self::parameters(parameters)?,
-            },
-            PackageCommand::Inspect { package } => PackageRequestV1::Inspect {
-                scope_id,
-                package_id: package.clone(),
-            },
-            PackageCommand::Query {
-                package,
-                export,
-                sql,
-                result_id,
-            } => PackageRequestV1::Query {
-                scope_id,
-                package_id: package.clone(),
-                export: export.clone(),
-                sql: sql.clone(),
-                result_id: result_id.clone(),
-            },
-            PackageCommand::Run {
-                package,
-                export,
-                evaluation_id,
-                parameters,
-            } => PackageRequestV1::Run {
-                scope_id,
-                package_id: package.clone(),
-                export: export.clone(),
-                evaluation_id: evaluation_id.clone(),
-                parameters: Self::parameters(parameters)?,
-            },
-            PackageCommand::Update { path } => PackageRequestV1::Update {
-                scope_id,
-                bundle: PackageBundleV1::read(path)
-                    .map_err(araphor_data::Error::from)
-                    .context(PackageSnafu)?,
-            },
-            PackageCommand::Rollback { package, revision } => PackageRequestV1::Rollback {
-                scope_id,
-                package_id: package.clone(),
-                revision: revision.clone(),
-            },
-            PackageCommand::Remove { package } => PackageRequestV1::Remove {
-                scope_id,
-                package_id: package.clone(),
-            },
-            PackageCommand::Test { package, fixture } => PackageRequestV1::Test {
-                scope_id,
-                package_id: package.clone(),
-                fixture: fixture.clone(),
-            },
-            PackageCommand::Digest { .. } => unreachable!("digest is a local operation"),
-        };
-        Ok(Prepared::Package(wire::PackageOperationRequest {
-            definition: operation.encode().context(PackageSnafu)?,
-            selection: Some((&self.selection).try_into()?),
-        }))
-    }
-
-    fn parameters(value: &Option<String>) -> Result<Option<serde_json::Value>> {
-        value
-            .as_deref()
-            .map(|value| {
-                serde_json::from_str(value).map_err(|_| {
-                    InvalidSnafu {
-                        field: "package parameter JSON",
-                    }
-                    .build()
-                })
-            })
-            .transpose()
     }
 }
 
@@ -468,10 +309,7 @@ mod tests {
 
     #[test]
     fn image_cli_archive_request() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let bundle = araphor_analysis_back::AnalysisPackageOwner::required_bundles()
-            .into_iter()
-            .next()
-            .ok_or("package fixture absent")?;
+        let bundle = araphor_analysis::Package::discovery_bundle()?;
         let path =
             std::env::temp_dir().join(format!("araphor-image-{}.oci.tar", uuid::Uuid::new_v4()));
         std::fs::write(&path, bundle.encode()?)?;
@@ -508,48 +346,29 @@ mod tests {
     }
 
     #[test]
-    fn package_cli_incomplete_commands() {
+    fn legacy_package_cli_is_rejected() {
         for args in [
             vec!["araphor", "package"],
             vec!["araphor", "package", "install"],
             vec!["araphor", "package", "run", "denials"],
             vec!["araphor", "package", "rollback", "denials"],
             vec!["araphor", "package", "inspect", "denials", "--unknown"],
+            vec!["araphor", "package", "digest", "image.oci.tar"],
+            vec![
+                "araphor", "package", "inspect", "denials", "--scope", "team",
+            ],
+            vec![
+                "araphor",
+                "package",
+                "run",
+                "denials",
+                "--scope",
+                "team",
+                "--evaluation-id",
+                "retry-1",
+            ],
         ] {
             assert!(Cli::try_parse_from(args).is_err());
         }
-    }
-
-    #[test]
-    fn package_cli_shared_contract() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let cli = Cli::try_parse_from([
-            "araphor",
-            "package",
-            "run",
-            "denials",
-            "--scope",
-            "team",
-            "--evaluation-id",
-            "retry-1",
-            "--parameters",
-            "{\"threshold\":3}",
-        ])?;
-        let Command::Investigate(command) = cli.command else {
-            return Err("package command absent".into());
-        };
-        let Prepared::Package(request) = command.prepare()? else {
-            return Err("package request absent".into());
-        };
-        let operation: PackageRequestV1 = PackageRequestV1::from_bytes(&request.definition)?;
-        assert!(
-            matches!(operation, PackageRequestV1::Run { scope_id, package_id, evaluation_id, .. }
-            if scope_id == "team" && package_id == "denials" && evaluation_id == "retry-1")
-        );
-        let cli = Cli::try_parse_from(["araphor", "package", "inspect", "denials"])?;
-        let Command::Investigate(command) = cli.command else {
-            return Err("package command absent".into());
-        };
-        assert!(command.prepare().is_err());
-        Ok(())
     }
 }

@@ -139,7 +139,7 @@ impl InputOperation {
         let store = Arc::clone(self.engine.store());
         let active = self.active.clone();
         let control = Arc::clone(&self.control);
-        let current = Engine::blocking(Arc::clone(&control), move || {
+        let current = Engine::blocking(Arc::clone(&control), (), move || {
             Ok(store.package_activation_until(&active.key, &control)? == Some(active))
         })
         .await?;
@@ -151,7 +151,7 @@ impl InputOperation {
         let store = Arc::clone(self.engine.store());
         let active = self.active.clone();
         let control = Arc::clone(&self.control);
-        Engine::blocking(Arc::clone(&control), move || {
+        Engine::blocking(Arc::clone(&control), (), move || {
             store
                 .package_current(&active, now, changed, &control)?
                 .map(|(body, deadline)| {
@@ -186,7 +186,7 @@ impl InputOperation {
         let store = Arc::clone(self.engine.store());
         let active = self.active.clone();
         let control = Arc::clone(&self.control);
-        let deadline = Engine::blocking(Arc::clone(&control), move || {
+        let deadline = Engine::blocking(Arc::clone(&control), (), move || {
             store
                 .package_input_current(
                     &active,
@@ -323,7 +323,7 @@ impl InputOperation {
         let before = self.active.clone();
         let receipt = receipt.clone();
         let control = Arc::clone(&self.control);
-        let completed = Engine::blocking(Arc::clone(&control), move || {
+        let completed = Engine::blocking(Arc::clone(&control), (), move || {
             store
                 .package_completed(&before, &receipt, &control)
                 .map_err(crate::Error::from)

@@ -67,8 +67,6 @@ const CONTAINER: &str = "worker";
 const NODE_ID: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 mod actor;
-#[cfg(test)]
-mod graph_notification;
 
 pub(crate) struct Kubernetes {
     lifecycle: Option<LifecycleGuard<'static, KubernetesState>>,

@@ -38,7 +38,6 @@ pub use client_grpc::{ClientGrpcConfig, ClientGrpcOwner, ClientStream};
 pub use client_listener::{ClientListener, ClientListenerConfig};
 pub use config::{ControlConfig, ControlRuntimeParts, EvidenceAdmissionLimits};
 pub use decommission::*;
-pub use discovery::*;
 pub use error::{Error, Result};
 pub use evidence::*;
 pub use notification::*;
@@ -53,11 +52,3 @@ pub use store::{
     startup_absence_proof_digest, ControlContextOwner, ControlStore, ControlStoreHealthV1,
 };
 pub use trust::*;
-
-#[cfg(test)]
-#[test]
-#[ignore]
-fn araphor_component_compiler() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    araphor_analysis_back::AnalysisPackageOwner::run_compiler_worker()?;
-    Ok(())
-}

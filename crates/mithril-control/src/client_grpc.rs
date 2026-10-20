@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use araphor_analysis_back::AnalysisPackageOwner;
 use araphor_data::AnalysisStore;
 use araphor_query::execution::{Engine, Limits};
 use erebor_runtime_error::StatusCode;
@@ -53,7 +52,6 @@ pub struct ClientGrpcOwner {
 struct ClientData {
     store: Arc<AnalysisStore>,
     query: Arc<Engine>,
-    packages: Arc<AnalysisPackageOwner>,
     output_timeout: Duration,
 }
 
@@ -80,11 +78,9 @@ impl ClientGrpcOwner {
                 let runtime = control.analysis_packages(Some(config.query))?;
                 runtime.bind_client(auth.clone())?;
                 let query = runtime.query.clone();
-                let packages = runtime.owner.clone();
                 Ok::<_, crate::Error>(ClientData {
                     store,
                     query,
-                    packages,
                     output_timeout,
                 })
             })
@@ -94,10 +90,6 @@ impl ClientGrpcOwner {
             auth,
             data,
         })
-    }
-
-    pub fn package_owner(&self) -> Option<Arc<AnalysisPackageOwner>> {
-        self.data.as_ref().map(|data| data.packages.clone())
     }
 
     fn data(&self) -> Result<&ClientData, Status> {

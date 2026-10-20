@@ -203,7 +203,8 @@ impl Changes {
         let mode = self.frontier.map_or(ReadMode::Snapshot, ReadMode::Changes);
         let worker = Arc::clone(&stage);
         let capture_permit = Arc::clone(&permit);
-        let mut captured = Engine::blocking(stage, move || {
+        let scope = session.token();
+        let mut captured = Engine::blocking(stage, scope, move || {
             let _permit = capture_permit;
             capture
                 .read(&requests, &bounds, mode, &worker)
@@ -211,7 +212,7 @@ impl Changes {
         })
         .await?;
         control.check()?;
-        engine.check_read(&captured.receipt).await?;
+        session.check_read(&captured.receipt).await?;
         if let Some(previous) = &self.meta {
             super::ArrowSnapshot::check_store(previous, &captured.receipt.page.extraction.meta)?;
         }

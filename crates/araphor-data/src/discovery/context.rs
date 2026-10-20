@@ -3,15 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use super::model::{require, same, InputByteLimit};
+use super::model::{require, same};
 use super::*;
 use crate::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, Error, Result};
-
-pub const CONTEXT_DOCUMENT_BYTES: usize = 32 * 1024;
-pub const CONTEXT_PACKET_BYTES: usize = 256 * 1024;
-pub const CONTEXT_DOCUMENTS: usize = 1024;
-pub const CONTEXT_REVISIONS: usize = 8192;
-pub const CONTEXT_SOURCE_DOCUMENTS: usize = 16;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -98,9 +92,7 @@ impl DiscoveryContextDocumentV1 {
                 && (self.kind != DiscoveryContextKindV1::ReviewedAssessment
                     || self.approver.is_some()),
             "context document",
-        )?;
-        serde_json::to_writer(InputByteLimit(CONTEXT_DOCUMENT_BYTES), self)
-            .context(crate::DiscoveryEncodingSnafu)
+        )
     }
 }
 
@@ -108,10 +100,6 @@ impl TryFrom<&[u8]> for DiscoveryContextDocumentV1 {
     type Error = Error;
 
     fn try_from(bytes: &[u8]) -> Result<Self> {
-        require(
-            bytes.len() <= CONTEXT_DOCUMENT_BYTES,
-            "context document bytes",
-        )?;
         let document: Self =
             serde_json::from_slice(bytes).context(crate::DiscoveryEncodingSnafu)?;
         document.validate()?;
@@ -127,19 +115,8 @@ pub struct DiscoveryContextRevisionV1 {
 }
 
 impl DiscoveryContextRevisionV1 {
-    pub fn validate_history(
-        &self,
-        previous: Option<&Self>,
-        document_count: u64,
-        revision_count: u64,
-    ) -> Result<()> {
+    pub fn validate_history(&self, previous: Option<&Self>) -> Result<()> {
         self.validate()?;
-        require(
-            revision_count < CONTEXT_REVISIONS as u64
-                && document_count <= CONTEXT_DOCUMENTS as u64
-                && (previous.is_some() || document_count < CONTEXT_DOCUMENTS as u64),
-            "context history bounds",
-        )?;
         if let Some(previous) = previous {
             require(
                 previous.document.tenant_id == self.document.tenant_id
@@ -159,9 +136,7 @@ impl DiscoveryContextRevisionV1 {
 
     pub fn validate(&self) -> Result<()> {
         self.document.validate()?;
-        require(self.imported_utc_ns > 0, "context import time")?;
-        serde_json::to_writer(InputByteLimit(CONTEXT_DOCUMENT_BYTES), self)
-            .context(crate::DiscoveryEncodingSnafu)
+        require(self.imported_utc_ns > 0, "context import time")
     }
 }
 
@@ -191,10 +166,6 @@ impl TryFrom<&AnalysisContextVersionV1> for DiscoveryContextRevisionV1 {
     type Error = Error;
 
     fn try_from(context: &AnalysisContextVersionV1) -> Result<Self> {
-        require(
-            context.body.len() <= CONTEXT_DOCUMENT_BYTES,
-            "context revision bytes",
-        )?;
         let revision: Self =
             serde_json::from_slice(&context.body).context(crate::DiscoveryEncodingSnafu)?;
         same(

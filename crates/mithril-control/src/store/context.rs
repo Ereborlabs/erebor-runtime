@@ -11,8 +11,10 @@ use snafu::ResultExt as _;
 use super::{ControlStore, ControlStoreInner, ControlStoreState, PolicyRolloutKeyV1};
 use crate::{error::JsonSnafu, AllowedNodeIdentity, Result};
 
+#[cfg(test)]
 pub(super) struct ContextLimit<W>(pub(super) usize, pub(super) W);
 
+#[cfg(test)]
 impl<W: std::io::Write> std::io::Write for ContextLimit<W> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let remaining = self
@@ -442,6 +444,7 @@ impl ControlContextOwner {
 }
 
 impl ControlStore {
+    #[cfg(test)]
     pub(crate) fn subscribe_revision(&self) -> Result<tokio::sync::watch::Receiver<u64>> {
         Ok(self.lock()?.changes.subscribe())
     }
@@ -856,8 +859,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = ControlStore::open(directory.path().join("control"))?;
         let data = AnalysisStore::open(directory.path().join("data"))?;
-        let mut changes = araphor_analysis_back::DiscoveryContextProvider::changes(&store)?
-            .ok_or("context watch absent")?;
+        let mut changes = store.subscribe_revision()?;
         assert!(!changes.has_changed()?);
         assert_eq!(data.meta()?.commit_revision, 0);
         store.install_trust_generation(TrustGenerationV1 {

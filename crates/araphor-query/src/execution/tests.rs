@@ -84,7 +84,7 @@ async fn blocking_cancel_joins_worker(
     let (entered, ready) = tokio::sync::oneshot::channel();
     let (release, held) = std::sync::mpsc::channel();
     let mut worker = tokio::spawn(async move {
-        Engine::blocking(stage, move || {
+        Engine::blocking(stage, (), move || {
             let _entered = entered.send(());
             held.recv().map_err(|source| crate::Error::Sql {
                 source: datafusion::common::DataFusionError::External(Box::new(source)),
@@ -108,6 +108,69 @@ async fn blocking_cancel_joins_worker(
 }
 
 #[tokio::test]
+async fn blocking_drop_orders_cleanup(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Returned(Arc<AtomicBool>);
+    impl Drop for Returned {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+    struct Lease {
+        dropped: Arc<AtomicBool>,
+        report: Option<tokio::sync::oneshot::Sender<bool>>,
+        _token: araphor_package_runtime::TaskTrackerToken,
+    }
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            let dropped = self.dropped.load(Ordering::Acquire);
+            if let Some(report) = self.report.take() {
+                let _reported = report.send(dropped);
+            }
+            assert!(dropped, "returned resource outlived the worker lease");
+        }
+    }
+
+    let tracker = araphor_package_runtime::TaskTracker::new();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let (report, observed) = tokio::sync::oneshot::channel();
+    let lease = Lease {
+        dropped: Arc::clone(&dropped),
+        report: Some(report),
+        _token: tracker.token(),
+    };
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let mut work = Box::pin(Engine::blocking(
+        Arc::new(AnalysisReadControl::default()),
+        lease,
+        move || {
+            let _entered = entered.send(());
+            held.recv().map_err(|source| crate::Error::Sql {
+                source: datafusion::common::DataFusionError::External(Box::new(source)),
+            })?;
+            Ok(Returned(dropped))
+        },
+    ));
+    tokio::select! {
+        result = &mut work => {
+            let _result = result?;
+            return Err("blocking operation completed before release".into());
+        }
+        ready = ready => ready?,
+    }
+    drop(work);
+    tracker.close();
+    assert_eq!(tracker.len(), 1);
+    release.send(())?;
+    tracker.wait().await;
+    assert!(observed.await?);
+    Ok(())
+}
+
+#[tokio::test]
 async fn blocking_deadline_keeps_parent(
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let parent = control();
@@ -115,7 +178,7 @@ async fn blocking_deadline_keeps_parent(
     let worker_stage = Arc::clone(&stage);
     let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let ended = Arc::clone(&stopped);
-    let error = Engine::blocking(stage, move || {
+    let error = Engine::blocking(stage, (), move || {
         while worker_stage.check().is_ok() {
             std::thread::yield_now();
         }
@@ -1808,4 +1871,72 @@ fn native_tables_keep_data() {
         )
         .unwrap();
     assert_eq!(value(&session.collect_local(Arc::new(plan)).unwrap()), 0);
+}
+
+#[derive(Debug)]
+struct PlanningGate {
+    entered: Arc<Notify>,
+    release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl datafusion::optimizer::OptimizerRule for PlanningGate {
+    fn name(&self) -> &str {
+        "planning_gate"
+    }
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _: &dyn datafusion::optimizer::OptimizerConfig,
+    ) -> NativeResult<datafusion::common::tree_node::Transformed<LogicalPlan>> {
+        if let Some(release) = self.release.lock().unwrap().take() {
+            self.entered.notify_one();
+            release
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
+        }
+        Ok(datafusion::common::tree_node::Transformed::no(plan))
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn planning_cancel_joins_worker(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use futures_util::StreamExt as _;
+
+    let mut fixture = Fixture::new(Limits::default());
+    let (plan, sources) = fixture
+        .engine
+        .prepare("SELECT * FROM catalog", Vec::new())
+        .await?;
+    let entered = Arc::new(Notify::new());
+    let (release, held) = std::sync::mpsc::channel();
+    let engine =
+        Arc::get_mut(&mut fixture.engine).ok_or("engine shared before rule registration")?;
+    let mut rules = engine.state.optimizers().to_vec();
+    rules.push(Arc::new(PlanningGate {
+        entered: Arc::clone(&entered),
+        release: std::sync::Mutex::new(Some(held)),
+    }));
+    engine.state = super::SessionStateBuilder::new_from_existing(engine.state.clone())
+        .with_optimizer_rules(rules)
+        .build();
+    let session = fixture.engine.session(
+        AnalysisSelectionV1::tenant([1; 16]),
+        &AnalysisReadControl::default(),
+        1,
+    )?;
+    let mut subscription = session.subscribe(plan, sources, b"planning", true)?;
+    tokio::select! {
+        () = entered.notified() => {}
+        result = subscription.next() => return Err(format!("planner completed before release: {result:?}").into()),
+    }
+    let mut joined = Box::pin(subscription.cancel_and_join());
+    assert!(futures_util::poll!(joined.as_mut()).is_pending());
+    assert!(fixture.engine.reserve_evaluation([1; 16]).is_err());
+    release.send(())?;
+    tokio::time::timeout(Duration::from_secs(5), joined).await??;
+    drop(fixture.engine.reserve_evaluation([1; 16])?);
+    drop(fixture.engine.memory().reserve_input(128 * 1024 * 1024)?);
+    drop(fixture.engine.memory().reserve_output(16 * 1024 * 1024)?);
+    Ok(())
 }

@@ -1,5 +1,12 @@
 # Wasm Execution Review
 
+Current command status, 2026-10-19: The old Analysis owner and its qualification
+harness have been removed. The cases `analysis-packages`, `context-roundtrip`, `profile-restart`, `graph-notification`
+are no longer accepted by `mithril_discovery_test`. The commands and results
+below remain historical proof for their recorded source. They do not qualify
+the current replacement. Read the [current plan](../../../araphor-package-jobs.md)
+for the supported path and remaining work.
+
 This guide follows the installed component path for
 [Wasm Execution](phase-7-5-4-wasm-execution.md). The package owner executes
 compiled algorithms. Existing host owners retain permission, evidence,
@@ -15,40 +22,40 @@ Restart and identical retry preserve the committed result.
 ## Implementation review flow
 
 [PackageArtifactV1::implementation](../../../../../crates/araphor-data/src/package/bundle.rs) Package admission selects a component artifact
-  -> [CompileBudget](../../../../../crates/araphor-data/src/package/wasm/admission.rs) the execution owner checks its contract version, imports, and declared features
-  -> [WasmExecution::compiled](../../../../../crates/araphor-data/src/package/wasm/cache.rs) Wasmtime validates and prepares the component under compilation limits
-  -> [AnalysisPackageOwner::install](../../../../../crates/araphor-data/src/package/lifecycle.rs) the package owner records target compatibility before activation
+  -> [CompileBudget](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/admission.rs) the execution owner checks its contract version, imports, and declared features
+  -> [WasmExecution::compiled](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/cache.rs) Wasmtime validates and prepares the component under compilation limits
+  -> [AnalysisPackageOwner::install](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/lifecycle.rs) the package owner records target compatibility before activation
 
-[AnalysisPackageOwner::evaluate_artifact](../../../../../crates/araphor-data/src/package/execution.rs) The scheduler invokes an admitted export
-  -> [QueryOwner::evaluate_component](../../../../../crates/araphor-data/src/query/model/component.rs) the host reserves input and schema scratch before it encodes the input
-  -> [WasmExecution::evaluate_prepared](../../../../../crates/araphor-data/src/package/wasm.rs) the execution owner receives the owned wire input
-  -> [WasmExecution::invoke](../../../../../crates/araphor-data/src/package/wasm/execution.rs) the host creates an evaluation instance with explicit limits and authorized inputs
-  -> [WasmExecution::invoke](../../../../../crates/araphor-data/src/package/wasm/execution.rs) generated WIT bindings transfer bounded batches and the prior checkpoint
-  -> [WasmExecution::invoke](../../../../../crates/araphor-data/src/package/wasm/execution.rs) the component returns declared outputs, evidence references, and next checkpoint
+[AnalysisPackageOwner::evaluate_artifact](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/execution.rs) The scheduler invokes an admitted export
+  -> [QueryOwner::evaluate_component](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/model/component.rs) the host reserves input and schema scratch before it encodes the input
+  -> [WasmExecution::evaluate_prepared](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm.rs) the execution owner receives the owned wire input
+  -> [WasmExecution::invoke](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/execution.rs) the host creates an evaluation instance with explicit limits and authorized inputs
+  -> [WasmExecution::invoke](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/execution.rs) generated WIT bindings transfer bounded batches and the prior checkpoint
+  -> [WasmExecution::invoke](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/execution.rs) the component returns declared outputs, evidence references, and next checkpoint
   -> [Package::validate_output](../../../../../crates/araphor-analysis-sdk/src/validation.rs) host validation passes the complete result to the existing commit path
-  -> [EvaluationPermit](../../../../../crates/araphor-data/src/package/wasm/execution.rs) the execution owner releases the instance and temporary buffers
+  -> [EvaluationPermit](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/execution.rs) the execution owner releases the instance and temporary buffers
 
-[WasmExecution::invoke](../../../../../crates/araphor-data/src/package/wasm/execution.rs) The component traps, exceeds a limit, or receives cancellation
-  -> [GuestState](../../../../../crates/araphor-data/src/package/wasm/execution.rs) the host interrupts execution and checks cancellation
-  -> [InstalledAnalysis::evaluate](../../../../../crates/araphor-data/src/package/installed.rs) the host discards uncommitted output and releases resources
+[WasmExecution::invoke](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/execution.rs) The component traps, exceeds a limit, or receives cancellation
+  -> [GuestState](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/execution.rs) the host interrupts execution and checks cancellation
+  -> [InstalledAnalysis::evaluate](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed.rs) the host discards uncommitted output and releases resources
 
-[AnalysisPackageOwner::reconcile_group](../../../../../crates/araphor-data/src/package/supervision.rs) The generic package scheduler receives the error
-  -> [AnalysisPackageOwner::failed](../../../../../crates/araphor-data/src/package/supervision.rs) the package owner records typed failure and marks retained results stale without replacing output or checkpoint
+[AnalysisPackageOwner::reconcile_group](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/supervision.rs) The generic package scheduler receives the error
+  -> [AnalysisPackageOwner::failed](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/supervision.rs) the package owner records typed failure and marks retained results stale without replacing output or checkpoint
 
-[InstalledAnalysis::evaluate](../../../../../crates/araphor-data/src/package/installed.rs) A domain adapter receives the error
-  -> [DiscoveryOwner::process](../../../../../crates/araphor-data/src/discovery/live.rs) and [GraphAndFindingOwner::process](../../../../../crates/araphor-data/src/graph/live.rs) the adapter returns the error to its existing owner failure and coverage path
+[InstalledAnalysis::evaluate](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed.rs) A domain adapter receives the error
+  -> [DiscoveryOwner::process](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/discovery/live.rs) and [GraphAndFindingOwner::process](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/live.rs) the adapter returns the error to its existing owner failure and coverage path
 
 The generic package scheduler uses the same evaluator. Its named source inputs
 and dependency inputs come from
-[ModelOperation::inputs](../../../../../crates/araphor-data/src/query/model/operation.rs).
+[ModelOperation::inputs](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/model/operation.rs).
 The discovery and graph adapters prepare their authorized domain inputs.
 These adapters do not run through the generic table scheduler.
-[InstalledAnalysis::evaluate](../../../../../crates/araphor-data/src/package/installed.rs)
+[InstalledAnalysis::evaluate](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed.rs)
 checks these domain inputs and invokes `evaluate_artifact`.
 Host-prepared exports with Table outputs use this path after package admission.
 Discovery and graph outputs still require their domain adapter checks.
 
-[InstalledAnalysis::active](../../../../../crates/araphor-data/src/package/installed/read.rs)
+[InstalledAnalysis::active](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/read.rs)
 selects the requested installed, active export under the shared lifecycle lock
 for an unpinned call. Evaluation reads only its complete root dependency bundle
 and checks the selected grant and trust before and after computation.
@@ -56,7 +63,7 @@ An unrelated package grant is not checked for this exact call. Explicit
 snapshots still pin all supported active exports in the scope. Pinned and
 historical calls keep their selected exports. An active export that cannot use
 host-prepared inputs returns `Unsupported`.
-The [exact selection test](../../../../../crates/araphor-data/src/package/installed/read/tests.rs)
+The [exact selection test](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/read/tests.rs)
 checks complete dependency admission and both revocation cases.
 
 ## Build and installation
@@ -64,7 +71,7 @@ checks complete dependency admission and both revocation cases.
 [ComponentBuilder](../../../../../crates/araphor-component-build/src/lib.rs)
 packages an author-built core module as a component. The generated
 [guest bindings](../../../../../crates/araphor-analysis-sdk/src/guest.rs)
-and [host bindings](../../../../../crates/araphor-data/src/package/wasm/bindings.rs)
+and [host bindings](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/bindings.rs)
 use the same versioned WebAssembly Interface Types
 ([WIT contract](../../../../../crates/araphor-analysis-sdk/src/bindings/analysis.wit)).
 The [detector example](../../../../../crates/araphor-detector-example/README.md)
@@ -107,7 +114,7 @@ All packages use the exact OCI manifest's `sha256:` identity for trust pins.
 The canonical Araphor config and manifest subset permits identity reconstruction
 after loading the immutable package closure. There is no previous JSON bundle
 or bare hexadecimal trust-pin fallback.
-[Immutable revision writes](../../../../../crates/araphor-data/src/package/lifecycle/revisions.rs)
+[Immutable revision writes](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/lifecycle/revisions.rs)
 retain one descriptor and raw executable buffers. An identical dependency uses
 the saved bytes after checked descriptor, artifact, and dependency comparison.
 Arrow metadata map order cannot change a digest or identical install record.
@@ -117,16 +124,16 @@ for format, bounds, request framing, trust, and current verification status.
 The proof records below retain their original source and format. They do not
 qualify subsequent OCI changes unless a current record states that result.
 
-The [installation response correction](../../../../../crates/araphor-data/src/package/lifecycle.rs)
+The [installation response correction](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/lifecycle.rs)
 passes its admitted bundle to
-[inspection](../../../../../crates/araphor-data/src/package/inspect.rs) and
-[freshness checks](../../../../../crates/araphor-data/src/package/freshness.rs)
+[inspection](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/inspect.rs) and
+[freshness checks](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/freshness.rs)
 while the lifecycle lock remains held. The root, package, and revision select
 the borrowed artifact. Other roots and standalone operations read storage.
 Activations, results, grants, and dependency inputs remain current. Successful
 transactional storage and immutable revision checks replace immediate artifact
 readback for this response only. Later reads retain corruption detection.
-The [metadata retry tests](../../../../../crates/araphor-data/src/package/tests/wasm/metadata.rs)
+The [metadata retry tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/wasm/metadata.rs)
 compare complete Install and Inspect responses after installation, retry, and
 reopen. Read the [final installed lifecycle record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
 for the source-bound proof of this response path.
@@ -138,7 +145,7 @@ The [public client](../../../../../crates/erebor-runtime-client/src/araphor/pack
 uses the package message limit on this API.
 The ordinary query API retains its existing limit.
 
-[Required package startup](../../../../../crates/araphor-data/src/package/required.rs)
+[Required package startup](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/required.rs)
 keeps existing activations. It does not replace their code after a host rebuild.
 The [Control authority](../../../../../crates/mithril-control/src/service/packages.rs)
 admits internal packages against the current executable's bundle pins. Changed
@@ -177,26 +184,26 @@ The internal Control grant accepts only required bundle digests for configured
 tenants. External packages use the bound `ClientAuth` owner.
 The listener binds this authority before it starts discovery processing.
 
-[WasmExecution](../../../../../crates/araphor-data/src/package/wasm.rs)
+[WasmExecution](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm.rs)
 owns the engine, generated linker, code cache, compiler permit, and evaluation
 count. Each call creates a separate Wasmtime store.
 One engine ticker advances interruption epochs. Store cancellation and mutable
 state remain separate. The ticker stops when its last owner drops.
 
-Read the [installed guest overlap test](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/concurrency.rs)
+Read the [installed guest overlap test](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/tests/runtime/concurrency.rs)
 before the test-only
-[GuestEntry gate](../../../../../crates/araphor-data/src/package/wasm/execution.rs).
+[GuestEntry gate](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/execution.rs).
 The gate signals entry from the actual WIT `cancelled` import.
 The test waits for both entry signals before it releases either call.
 The release wait uses the remaining guest deadline. The host then applies its
 normal call-count and cancellation checks.
-The [existing cancellation test](../../../../../crates/araphor-data/src/package/wasm/tests/runtime.rs)
+The [existing cancellation test](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/tests/runtime.rs)
 sets `release: None` and keeps its cancellation assertion.
 
-[CompilerChild](../../../../../crates/araphor-data/src/package/wasm/compiler.rs)
+[CompilerChild](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/compiler.rs)
 starts the current executable in compiler mode with a cleared environment.
 The entry point runs before the application runtime.
-The [CompilerInput request](../../../../../crates/araphor-data/src/package/wasm/compiler/input.rs)
+The [CompilerInput request](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/compiler/input.rs)
 carries a version, fuel mode, and component bytes through standard input.
 The child uses the same fuel mode as the parent engine.
 The reply contains a bounded image and its digest.
@@ -205,13 +212,13 @@ Cancellation or deadline kills and reaps the child.
 The compiler permit remains held until the I/O threads finish.
 
 The one unsafe image load is in
-[CompilerImage::component_reserved](../../../../../crates/araphor-data/src/package/wasm/compiler/image.rs).
+[CompilerImage::component_reserved](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/compiler/image.rs).
 Its input comes from the fresh host compiler with the same engine configuration.
 The compiler boundary rejects a malformed reply, incorrect digest, or oversized
 image before this load. The cache reserves the exact source and image byte charge
 before host deserialization. A failed load releases the reservation.
 
-[WasmExecution::prepare](../../../../../crates/araphor-data/src/package/wasm.rs)
+[WasmExecution::prepare](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm.rs)
 returns one handle that retains the charged code entry. The package execution
 owner prepares this handle before the query evaluation deadline starts. The
 owner passes the same handle to guest invocation. Invocation does not repeat
@@ -313,7 +320,7 @@ checkpoint state stay unchanged. The
 keeps the raw join assertions and checks canonical rows, exact reason details,
 evidence links, and checkpoint state.
 
-[QueryOwner::evaluate_component](../../../../../crates/araphor-data/src/query/model/component.rs)
+[QueryOwner::evaluate_component](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/model/component.rs)
 reserves input, IPC, and schema-message scratch before encoding. It includes
 declared schemas when an input has no batches. The owner encodes once, reduces
 the charge to retained input and wire capacities, and moves the wire into
@@ -324,7 +331,7 @@ The shared evaluator checks its local query deadline after output validation.
 An expired output cannot return as a retained result.
 Extraction closes durable readers before computation.
 
-[InstalledSnapshot](../../../../../crates/araphor-data/src/package/installed/snapshot.rs)
+[InstalledSnapshot](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/snapshot.rs)
 holds one validated bundle per root in shared Arc ownership. Bundle capacities
 and snapshot pins hold retained-input leases. `InstalledEvaluation` also holds
 a lease for its copied descriptor and revision. The last owner releases each
@@ -334,9 +341,9 @@ generation, revision, and grants. Cached bundle bytes do not cache permission.
 Native graph extraction and seeded traversal retain their existing byte limits
 and whole-version permission checks.
 
-[GraphAndFindingOwner::process](../../../../../crates/araphor-data/src/graph/live.rs)
+[GraphAndFindingOwner::process](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/live.rs)
 retains one installed snapshot in the existing operation state.
-[InstalledAnalysis::snapshot_reusing](../../../../../crates/araphor-data/src/package/installed/read.rs)
+[InstalledAnalysis::snapshot_reusing](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/read.rs)
 reads fresh activations under the shared lifecycle lock for each live window.
 Bundle reuse requires the same owner, scope, and tenant. A retained root must
 have a current activation with the same key, generation, revision, and metadata.
@@ -345,28 +352,28 @@ Each reused Arc keeps the same immutable root and complete dependency closure.
 The previous snapshot drops before new roots load. Unused bundle leases release
 when their last owner drops. Explicit pinned and historical handles keep their
 existing selection rules. The
-[bundle reuse tests](../../../../../crates/araphor-data/src/package/installed/read/tests/retained/reusing.rs)
+[bundle reuse tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/read/tests/retained/reusing.rs)
 check current grants, active roots, scope, tenant, generation, and capacity
 release before a new root loads.
 
-[InstalledAnalysis::descriptors and prepared_models](../../../../../crates/araphor-data/src/package/installed/read.rs)
+[InstalledAnalysis::descriptors and prepared_models](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/read.rs)
 keep the complete immutable package descriptor. Dependency declarations can
 refer to SQL exports. Snapshot pins select prepared models by package, revision,
 and export. Graph derivation and retained-reference selection share this
 iterator. The graph adapter keeps exact descriptor equality and SDK output
 validation. The
-[package regression](../../../../../crates/araphor-data/src/package/installed/read/tests/descriptors.rs)
+[package regression](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/read/tests/descriptors.rs)
 checks the complete contract and direct and snapshot evaluation. The
-[graph regression](../../../../../crates/araphor-data/src/graph/tests/installed/current/descriptors.rs)
+[graph regression](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/installed/current/descriptors.rs)
 checks mixed exports and complete graph equality.
 
-[Adapter](../../../../../crates/araphor-data/src/discovery/sdk/mod.rs)
+[Adapter](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/discovery/sdk/mod.rs)
 executes atoms, merge, groups, and compare through installed components.
 The host checks exact keys, attribution, accounting, coverage, and prevention
 claims against original records.
 The shared context selector remains a host operation.
 
-[GraphDerivation](../../../../../crates/araphor-data/src/graph/derive/adapter/mod.rs)
+[GraphDerivation](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/derive/adapter/mod.rs)
 selects installed graph exports by their declared schemas.
 It does not restrict package IDs to the current HF detectors.
 [GraphReplayInputV1::normalized and manifest](../../../../../crates/araphor-data/src/graph/input.rs)
@@ -374,26 +381,26 @@ share input preparation between derivation and refresh. Normalization keeps the
 existing full record and context conflict checks. It orders and removes duplicate
 coverage ranges, keys, and gaps. It excludes the reserved package sidecar from
 fact input. `manifest` constructs the same exact retained references.
-[GraphAndFindingOwner::derive](../../../../../crates/araphor-data/src/graph/derive.rs)
+[GraphAndFindingOwner::derive](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/derive.rs)
 pins and authorizes the tenant before normalization. `derive_selected` then
 validates the input, checks required packages, and runs the selected installed
 exports. The normal refresh path uses this same preparation.
-[Graph validation](../../../../../crates/araphor-data/src/graph/derive/adapter/validation.rs)
+[Graph validation](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/derive/adapter/validation.rs)
 checks exact subject identities, parent facts, direct cause, evidence, confirmed
 findings, and qualified coverage.
 A package cannot increase authority or proof through an output claim.
 
-[GraphDerivation::apply_output](../../../../../crates/araphor-data/src/graph/derive/adapter/output.rs)
+[GraphDerivation::apply_output](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/derive/adapter/output.rs)
 adds Arrow dataset and reason bytes across the selected packages.
 The aggregate limit is 4 MiB.
-[WindowBytes::check](../../../../../crates/araphor-data/src/graph/derive/finish.rs)
+[WindowBytes::check](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/derive/finish.rs)
 counts the serialized graph snapshot after host validation. The checked writer
 creates no output buffer. It stops above the existing 4 MiB JSON limit and
 returns `GraphInvalid` with field `graph output bytes`. Historical stored reads
 do not use this derivation check.
-[GraphAndFindingOwner::commit_bounded_window](../../../../../crates/araphor-data/src/graph/commit.rs)
+[GraphAndFindingOwner::commit_bounded_window](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/commit.rs)
 selects the existing
-[window split](../../../../../crates/araphor-data/src/graph/chunks.rs)
+[window split](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/chunks.rs)
 only for `GraphInvalid` with field `graph output bytes`.
 The rejected window commits no output. Every other error returns to the caller.
 The commit owner adds position metadata and keeps its final serialized-byte
@@ -407,16 +414,16 @@ Existing notification routes and human deadlines remain host-owned.
 Host graph assembly already sorts retained evidence and removes duplicates.
 Canonical publication preserves that historical finding JSON.
 Generic package `Run` results retain SDK candidate and reason-detail IPC through
-[AnalysisPackageOwner::encode_output](../../../../../crates/araphor-data/src/package/output.rs).
+[AnalysisPackageOwner::encode_output](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/output.rs).
 The candidate and reason-detail IPC bytes change when publication removes
 duplicate references or changes their order. Generic results do not use the legacy graph
 reason mapping. An identical saved
-[Run retry](../../../../../crates/araphor-data/src/package/evaluation.rs)
+[Run retry](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/evaluation.rs)
 returns its original receipt before it prepares a new computation.
 
 ## Commit and recovery
 
-[InstalledAnalysis::authorize](../../../../../crates/araphor-data/src/package/installed/commit.rs)
+[InstalledAnalysis::authorize](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/commit.rs)
 compares activation generation, revision, and metadata before a domain commit.
 `commit_many` holds current authority for the complete selected root set.
 Exports with different grants retain separate authority entries even when their
@@ -436,25 +443,25 @@ and restore. The previous discovery format can omit package references.
 New graph context requires valid references.
 Artifact collection retains these saved roots.
 
-[InstalledAnalysis::pin_at](../../../../../crates/araphor-data/src/package/installed/history.rs)
+[InstalledAnalysis::pin_at](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/history.rs)
 replays retained code and parameters under current permission and trust.
 It reads current activations even when the caller holds an old snapshot.
 A historical handle cannot commit.
-[GraphAndFindingOwner::installed_refs](../../../../../crates/araphor-data/src/graph/installed.rs)
+[GraphAndFindingOwner::installed_refs](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/installed.rs)
 reads the bounded native header to obtain the source identity.
 It does not reconstruct graph rows for this reference read.
 The graph commit retains and validates its exact package provenance sidecar.
 The visible input manifest excludes only this sidecar key. The sidecar remains
 in the atomic context references and artifact collection inputs.
 
-[GraphAndFindingOwner::commit_window](../../../../../crates/araphor-data/src/graph/window.rs)
+[GraphAndFindingOwner::commit_window](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/window.rs)
 checks retained-input expiry before it reuses a completed graph check.
 The provider notice and coverage revision must match the saved per-result
-metadata. [installed_current](../../../../../crates/araphor-data/src/graph/installed.rs)
+metadata. [installed_current](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/installed.rs)
 then compares all compatible installed references and checks current permission.
 Update, removal, a new compatible export, or revocation cannot use this shortcut.
 
-[commit_bounded_window](../../../../../crates/araphor-data/src/graph/commit.rs)
+[commit_bounded_window](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/commit.rs)
 can also skip guest execution after a provider notice changes. This path applies
 only to a normal refresh. The selected input must validate, and its normalized
 manifest must match the retained result. The saved coverage revision must equal
@@ -463,48 +470,48 @@ match, including exports, roots, revisions, generations, and parameters.
 [window_context](../../../../../crates/araphor-data/src/graph/input.rs)
 checks complete immutable context values before this decision. A change to raw
 body bytes, validity times, or sensitivity under the same key fails this check.
-[acknowledge_window](../../../../../crates/araphor-data/src/graph/commit.rs)
+[acknowledge_window](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/commit.rs)
 holds current activation and commit authority through `authorize`, then calls
 `mark_graph_notice` for the same immutable window head.
 
-[WindowRun](../../../../../crates/araphor-data/src/graph/window.rs)
+[WindowRun](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/window.rs)
 keeps advance and force flags through chunk processing. Both flags bypass the
 pre-guest reuse check. Failed-source recovery uses force.
-[Expiry](../../../../../crates/araphor-data/src/graph/expiry.rs) runs before reuse
+[Expiry](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/expiry.rs) runs before reuse
 and keeps its existing proof downgrade and original package references.
-The [notice reuse tests](../../../../../crates/araphor-data/src/graph/tests/notices/reuse.rs)
+The [notice reuse tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/notices/reuse.rs)
 observe the real guest import. They check a notice-only skip, a later fact
 replacement, forced execution, raw-context rejection, and recovery. A newer
 report for an unrelated interval runs the guest even when manifest coverage
 keys stay empty.
 
 When a changed notice produces the same graph,
-[commit_bounded_window](../../../../../crates/araphor-data/src/graph/commit.rs)
+[commit_bounded_window](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/commit.rs)
 checks current commit authority and saves the captured notice through
 [mark_graph_notice](../../../../../crates/araphor-data/src/analysis/progress/notices.rs).
 The guarded update applies only to the same retained window head and immutable
 commit revision. It changes no result body, receipt, quota, progress, or deadline.
 A provider change during the check remains pending for the next pass.
 Discovery uses the same metadata update owner and keeps its monotone notice rule.
-The [notice tests](../../../../../crates/araphor-data/src/graph/tests/notices.rs)
+The [notice tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/notices.rs)
 use the production graph owner and installed components.
-The [authority tests](../../../../../crates/araphor-data/src/graph/tests/installed/current/authority.rs)
+The [authority tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/installed/current/authority.rs)
 check both an unchanged notice and a changed notice without changed facts.
-The [activation tests](../../../../../crates/araphor-data/src/graph/tests/installed/current.rs)
+The [activation tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/installed/current.rs)
 check updates, added compatible exports, removal, history, and exact health.
-The [metadata tests](../../../../../crates/araphor-data/src/analysis/progress/notices/tests.rs)
+The [metadata tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/analysis/progress/notices/tests.rs)
 check separate windows, old-head rejection, immutable metadata, and retry.
 
-[GraphAndFindingOwner::refresh_source](../../../../../crates/araphor-data/src/graph/live.rs)
+[GraphAndFindingOwner::refresh_source](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/live.rs)
 reads current window bounds through
 [graph_window_bounds](../../../../../crates/araphor-data/src/analysis/graph/windows.rs).
 The native query filters the tenant and source before it ranks window heads.
 The bounds read validates the selected header without reconstructing its rows.
-[window_heads](../../../../../crates/araphor-data/src/graph/window.rs) uses
+[window_heads](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/window.rs) uses
 `graph_window_page` to select possible overlapping ranges. The checked header
 decides exact overlap before the owner reconstructs rows. A page retains its
 continuation ID when the candidate does not overlap.
-The [window read tests](../../../../../crates/araphor-data/src/analysis/graph/windows/tests.rs)
+The [window read tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/analysis/graph/windows/tests.rs)
 check selection, continuation, history, and corruption. The
 [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) records final qualification.
 
@@ -524,7 +531,7 @@ checkpoint bytes. Missing required coverage remains explicit.
 Removal retains its tombstone and does not reinstall a required package on
 restart. Expiry reduces retained proof without executing removed code.
 
-The [package lifecycle test](../../../../../crates/araphor-data/src/package/tests/wasm/lifecycle.rs)
+The [package lifecycle test](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/wasm/lifecycle.rs)
 uses its test authority to observe the revision 2 receipt after the commit.
 The test checks the Wasm target, output value 7, and immutable receipt fields.
 The returned response can mark the saved result stale after a clock change.
@@ -536,7 +543,7 @@ Compilation accepts at most 8 MiB of component source and a 32 MiB image.
 The compiler has a 1 GiB address-space limit, 30-second CPU hard limit,
 and 45-second wall deadline. Structural scan limits also apply.
 Host domain calls have a finite 60-second outer deadline for a cold cache.
-[QueryLimits](../../../../../crates/araphor-data/src/query/mod.rs) defaults to a
+[QueryLimits](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/mod.rs) defaults to a
 one-second evaluation timeout. The query owner uses its configured timeout.
 This query deadline applies after compilation. A configured Wasm timeout can
 shorten the inherited caller deadline.
@@ -545,7 +552,7 @@ host call or canonical application binary interface (ABI) operation finishes
 before the host checks the
 control deadline again. An expired call cannot commit.
 
-[WasmLimits](../../../../../crates/araphor-data/src/query/wasm.rs) contains six
+[WasmLimits](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/wasm.rs) contains six
 optional quotas. Every field defaults to `None`. An omitted or `null` field
 leaves that additional Wasm quota unset.
 
@@ -580,19 +587,19 @@ Local OCI packages and package transport have no separate aggregate size cap.
 Read the [current storage guide](../../../../guides/araphor-binary-package-storage-review.md#local-oci-transport-and-admission)
 for exact byte identity, format checks, runtime limits, and store charges.
 
-The [code cache](../../../../../crates/araphor-data/src/package/wasm/cache.rs)
+The [code cache](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/cache.rs)
 has an 80 MiB byte limit and a 16-entry limit.
 The cache index and prepared handles share each code entry. The byte and entry
 charges stay live until the last reference drops. Cache eviction or clearing
 cannot release the charge for retained code. Admission removes only entries
 that have no other reference. Admission returns `AnalysisBusy` when live code
 prevents a new reservation. The byte and entry limits do not change.
-The [cache lifetime test](../../../../../crates/araphor-data/src/package/wasm/cache.rs)
+The [cache lifetime test](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/cache.rs)
 checks both limits, cloned cache indexes, retained handles, and final release.
-The [prepared execution test](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/prepared.rs)
+The [prepared execution test](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/tests/runtime/prepared.rs)
 clears the index and holds the compiler permit. The saved handle still executes
 the real component and returns value 42. A foreign engine rejects the handle.
-The [execution error](../../../../../crates/araphor-data/src/package/wasm/execution.rs)
+The [execution error](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/execution.rs)
 also retains a charged handle. Wasmtime backtrace frames retain compiled modules.
 The original error source drops before the handle. The host classifies the
 original trap before it adds the handle. Display, the source chain, and the
@@ -612,17 +619,17 @@ evaluator keeps its 64 MiB target. These settings do not limit process RSS.
 The [native limit test](../../../../../crates/araphor-data/src/analysis/capacity.rs)
 checks the settings, rejects an allocation above the buffer limit, and confirms
 that the failed insert stores no row. The
-[restore test](../../../../../crates/araphor-data/src/graph/tests/traversal/recovery.rs)
+[restore test](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/traversal/recovery.rs)
 compares all four saved component revisions before an owner can reinstall them.
-The [supervisor](../../../../../crates/araphor-data/src/package/supervision.rs)
+The [supervisor](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/supervision.rs)
 reuses each admitted bundle for the prepared-export check.
 
 Review the committed Rust cases beside
-[runtime isolation](../../../../../crates/araphor-data/src/package/wasm/tests/runtime.rs),
-[compiler limits](../../../../../crates/araphor-data/src/package/wasm/compiler/tests.rs),
-[package lifecycle](../../../../../crates/araphor-data/src/package/tests/wasm/lifecycle.rs),
-[dependency replacement](../../../../../crates/araphor-data/src/package/tests/wasm/flow.rs),
-[domain history](../../../../../crates/araphor-data/src/graph/tests/installed.rs),
+[runtime isolation](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/tests/runtime.rs),
+[compiler limits](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/compiler/tests.rs),
+[package lifecycle](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/wasm/lifecycle.rs),
+[dependency replacement](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/wasm/flow.rs),
+[domain history](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/installed.rs),
 and [context recovery](../../../../../crates/araphor-data/src/analysis/packages/tests/context/validation.rs).
 The production [SDK detector case](../../../../../crates/mithril-e2e/src/discovery/packages/wasm.rs)
 installs over TLS, reopens a new owner with an empty cache, replays, retries,
@@ -632,13 +639,13 @@ and revokes trust.
 
 | Algorithm | Installed execution proof | Host boundary |
 | --- | --- | --- |
-| AR-01: atoms and accounting | [Discovery captured results](../../../../../crates/araphor-data/src/discovery/derive/tests/baseline.rs) | Exact record identity, attribution, accounting, and coverage checks |
-| AR-02: merge and display groups | [Discovery captured results](../../../../../crates/araphor-data/src/discovery/derive/tests/baseline.rs) | Host selection and retained profile identity |
-| AR-03: baseline comparison | [Discovery captured results](../../../../../crates/araphor-data/src/discovery/derive/tests/baseline.rs) | Exact baseline and current profile revisions |
-| AR-04: context integration | [Context round trip](../../../../../crates/mithril-e2e/src/discovery/roundtrip/context.rs) and [installed context component](../../../../../crates/mithril-e2e/src/discovery/roundtrip/context/component.rs) | Host permission, cutoff, selected records, and omissions |
-| AR-05: HF-PROC-001 | [Graph captured results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs) | Exact identities, parent facts, and native evidence |
-| AR-06: HF-DW-001 | [Graph captured results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs) | Credential identity, evidence, confirmation, and coverage |
-| AR-07: HF-XNODE-001 | [Graph captured results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs) | Cross-node causality remains unqualified; retain current Kubernetes proof limits |
+| AR-01: atoms and accounting | [Discovery captured results](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/discovery/derive/tests/baseline.rs) | Exact record identity, attribution, accounting, and coverage checks |
+| AR-02: merge and display groups | [Discovery captured results](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/discovery/derive/tests/baseline.rs) | Host selection and retained profile identity |
+| AR-03: baseline comparison | [Discovery captured results](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/discovery/derive/tests/baseline.rs) | Exact baseline and current profile revisions |
+| AR-04: context integration | [Context round trip](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/mithril-e2e/src/discovery/roundtrip/context.rs) and [installed context component](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/mithril-e2e/src/discovery/roundtrip/context/component.rs) | Host permission, cutoff, selected records, and omissions |
+| AR-05: HF-PROC-001 | [Graph captured results](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/baseline.rs) | Exact identities, parent facts, and native evidence |
+| AR-06: HF-DW-001 | [Graph captured results](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/baseline.rs) | Credential identity, evidence, confirmation, and coverage |
+| AR-07: HF-XNODE-001 | [Graph captured results](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/baseline.rs) | Cross-node causality remains unqualified; retain current Kubernetes proof limits |
 
 The captured-result tests use installed components from the shared algorithm
 source. AR-04 sends the host-selected packet through a real component. The
@@ -646,18 +653,18 @@ qualification case checks the returned rows, revision, coverage, cutoff, and
 omissions. The component does not select or authorize context.
 
 The [cached discovery fixture](../../../../../crates/araphor-data/src/discovery/derive.rs)
-and [cached graph fixture](../../../../../crates/araphor-data/src/graph/tests.rs)
+and [cached graph fixture](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests.rs)
 use a mutex. Each test or fixture operation holds one guard through its
 component calls. Production query capacity stays unchanged.
 The [metadata deadline test](../../../../../crates/araphor-data/src/analysis/read.rs)
 includes the native graph snapshot read. It checks typed expiry, released read
 slots, unchanged metadata, and a successful fresh read.
 
-The [graph replay fixture](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay.rs)
+The [graph replay fixture](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/mithril-e2e/src/discovery/graph_notification/replay.rs)
 retains one graph owner before intake accepts sources. The same owner processes
 sources, reads snapshots, and refreshes context. Reopen paths drop the owner
 before they close stores. The directory drops last. The
-[owner lifetime tests](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/lifetime.rs)
+[owner lifetime tests](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/mithril-e2e/src/discovery/graph_notification/replay/lifetime.rs)
 check required registration, cursor wrap, context replacement, historical
 findings, and source isolation. The registration test fails on the original
 fixture. The complete CLI case has DEBUG step timings and an INFO whole-case
@@ -666,13 +673,13 @@ These diagnostics add no timing threshold.
 
 Review these boundary tests with the algorithm cases:
 
-- [Focused graph boundary tests](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/tests/transport.rs)
+- [Focused graph boundary tests](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/mithril-e2e/src/discovery/graph_notification/replay/tests/transport.rs)
   check transport, output rejection, rollback, replay, routing, delivery, restart,
   agent limits, and human acknowledgement in eight ordinary Rust tests.
   The commit and notification modules are siblings of the transport module.
   Each test shows its production calls and assertions. Helpers prepare inputs
   and initial resources only.
-- [Focused host boundary tests](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/tests/context.rs)
+- [Focused host boundary tests](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/mithril-e2e/src/discovery/graph_notification/replay/tests/context.rs)
   retain all 12 cards, device denial, policy history, local input proof, node
   isolation, provider facts, and read scope in nine more ordinary Rust tests.
   The other modules are siblings of the context module.
@@ -681,22 +688,22 @@ Review these boundary tests with the algorithm cases:
   retains combined-source checks, all read and send records, and large inputs.
   The focused tests keep visible production calls and assertions.
 
-- [Installed guest overlap](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/concurrency.rs)
+- [Installed guest overlap](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/tests/runtime/concurrency.rs)
   uses the shipped Discovery `groups` component for two tenants. Both tenant
   snapshots retain the same installed owner. The test checks separate
   evaluation IDs, group keys, and sample identities. It checks member indexes
   `[0, 1]` and aggregate counts 5 and 18. Each output has no checkpoint,
   evidence, or reason.
-- [Multiple input batches](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/batches.rs)
+- [Multiple input batches](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/tests/runtime/batches.rs)
   includes an empty batch and verifies the computed total.
-- [Checkpoint recovery](../../../../../crates/araphor-data/src/package/tests/wasm/checkpoint.rs)
+- [Checkpoint recovery](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/wasm/checkpoint.rs)
   verifies prior state, restart, and an old retry after a later state commit.
-- [Native graph component input](../../../../../crates/araphor-data/src/query/analysis/tests/component.rs)
+- [Native graph component input](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/analysis/tests/component.rs)
   verifies bounded traversal rows and an empty replacement through a component.
 - [Graph package references](../../../../../crates/araphor-data/src/analysis/graph_rows/tests/packages.rs)
   reject a wrong result key or corrupt sidecar before commit. A valid commit
   and retry retain the same visible graph and package references.
-- [Graph output splitting](../../../../../crates/araphor-data/src/graph/tests/bounded.rs)
+- [Graph output splitting](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/bounded.rs)
   uses installed components with 256 records and 67 facts. The test requires
   the exact whole-window aggregate byte error, unchanged metadata, and no
   partial finding commit. The test requires split processing to consume all
@@ -704,12 +711,12 @@ Review these boundary tests with the algorithm cases:
   finding with exact evidence. Each stored result must stay within 4 MiB.
   The retained final proof is
   `/tmp/araphor-wasm-rust-ci-ordered-v59.json`.
-- [Domain commit fences](../../../../../crates/araphor-data/src/package/installed/commit/tests/changes.rs)
+- [Domain commit fences](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/commit/tests/changes.rs)
   verify that Run renewal and supervisor suspension cannot change an activation
   during the commit callback.
-- [Cache accounting](../../../../../crates/araphor-data/src/package/wasm/fixtures/tests.rs)
+- [Cache accounting](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/fixtures/tests.rs)
   checks each source and mapped image charge and retains all five components.
-- [Output deadline](../../../../../crates/araphor-data/src/query/model/tests/clock.rs)
+- [Output deadline](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/model/tests/clock.rs)
   rejects a result after the local deadline while the caller deadline remains
   valid. The next call can obtain the released memory lease.
 
@@ -748,10 +755,10 @@ unset. Configured resource-failure tests remain separate required checks.
 
 The commands above are required checks. They do not record a pass.
 
-The [qualification server owner](../../../../../crates/mithril-e2e/src/discovery/graph_notification.rs)
+The [qualification server owner](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/mithril-e2e/src/discovery/graph_notification.rs)
 awaits shutdown on success or failure and retains the original error.
 Its expired-certificate test requires both stores to reopen after failure.
-The [replay fixture](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay.rs)
+The [replay fixture](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/mithril-e2e/src/discovery/graph_notification/replay.rs)
 closes owners before its temporary root and releases the completed incident
 fixture before independent density and window checks. The
 [command entry point](../../../../../crates/mithril-e2e/src/bin/mithril_discovery_test.rs)
@@ -788,7 +795,7 @@ validates the final result against the complete input and commits no page.
 The opaque record-comparison string uses the existing full-record digest.
 Host validation still compares complete records for duplicate conflicts.
 
-The [rare-case helper](../../../../../crates/araphor-data/src/discovery/derive/tests/corpus.rs)
+The [rare-case helper](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/discovery/derive/tests/corpus.rs)
 checks exact groups and all eleven comparison fields against a 64-record
 baseline. The full corpus retains all 21 normal and duplicate replay cases.
 

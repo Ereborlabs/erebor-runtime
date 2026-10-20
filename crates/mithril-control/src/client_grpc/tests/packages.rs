@@ -410,10 +410,8 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
 async fn package_rpc_authority_trust() -> TestResult {
     let fixture = Fixture::new()?;
     let bundle = bundle();
-    let operation = PackageRequestV1::Install {
-        scope_id: "test".into(),
+    let operation = PackageRequestV1::InstallImage {
         bundle: bundle.clone(),
-        parameters: None,
     };
     assert_eq!(
         fixture
@@ -454,31 +452,22 @@ async fn package_rpc_authority_trust() -> TestResult {
             bundle_digest: bundle.digest()?,
         }])?;
     let installed = fixture.package(operation, true).await?;
-    assert_eq!(installed.package_id, "api.fixture");
-    assert!(installed.exports.iter().all(|export| export.active));
+    assert_eq!(installed.image, Some(bundle.metadata()?));
+    assert!(installed.definition.is_none());
     let inspected = fixture
         .package(
-            PackageRequestV1::Inspect {
-                scope_id: "test".into(),
+            PackageRequestV1::InspectImage {
                 package_id: "api.fixture".into(),
+                revision: Some("1".into()),
             },
             false,
         )
         .await?;
-    assert_eq!(inspected.exports.len(), 1);
+    assert_eq!(inspected.image, installed.image);
     fixture.service.auth.replace_package_managers(Vec::new())?;
     assert_eq!(
         fixture
-            .package(
-                PackageRequestV1::Run {
-                    scope_id: "test".into(),
-                    package_id: "api.fixture".into(),
-                    export: None,
-                    evaluation_id: "denied".into(),
-                    parameters: None,
-                },
-                true
-            )
+            .package(PackageRequestV1::InstallImage { bundle }, true)
             .await
             .err()
             .map(|error| error.code()),
@@ -492,11 +481,6 @@ fn package_response_encoding() -> TestResult {
     let response = PackageResponseV1 {
         definition: None,
         image: None,
-        scope_id: "test".into(),
-        package_id: "api.fixture".into(),
-        exports: Vec::new(),
-        tests: Vec::new(),
-        output: None,
     };
     let bytes = ClientGrpcOwner::package_response(&response)?;
     assert_eq!(
@@ -582,8 +566,10 @@ async fn image_rpc_install_is_not_execution() -> TestResult {
         .is_none());
     let installed = fixture.package(operation.clone(), true).await?;
     assert_eq!(installed.image, Some(bundle.metadata()?));
-    assert!(
-        installed.exports.is_empty() && installed.tests.is_empty() && installed.output.is_none()
+    assert!(installed.definition.is_none());
+    assert_eq!(
+        serde_json::to_value(&installed)?,
+        serde_json::json!({"image": bundle.metadata()?}),
     );
     assert_eq!(data.package_activation_page(None)?, activations);
     let revision = *data.subscribe_revision().borrow();

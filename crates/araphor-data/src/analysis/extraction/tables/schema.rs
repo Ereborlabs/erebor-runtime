@@ -70,6 +70,10 @@ impl Capture<'_> {
                     "tenant_id,notification_id,notification_revision",
                     "Retained notification obligation. Overdue uses the captured query time.",
                 ),
+                "notification_routes" => (
+                    "tenant_id,route_id,route_revision",
+                    "Retained approved notification route. The current authority must permit each delivery.",
+                ),
                 _ => (
                     "tenant_id,graph_result_id",
                     "Retained graph version. Evidence and coverage limits remain part of its result.",
@@ -142,6 +146,7 @@ impl Capture<'_> {
         insert("policy_observations", Self::observation_fields());
         insert("graph_manifest", Self::graph_fields());
         insert("notifications", Self::notification_fields());
+        insert("notification_routes", Self::notification_route_fields());
         schemas
     }
 }

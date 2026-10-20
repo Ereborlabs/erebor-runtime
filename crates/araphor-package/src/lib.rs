@@ -1,6 +1,7 @@
 mod admission;
 mod bundle;
 mod error;
+mod fixture;
 mod formats;
 mod metadata;
 pub mod native;

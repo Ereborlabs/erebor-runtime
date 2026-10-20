@@ -1,6 +1,5 @@
 use super::*;
 use crate::error::DiscoverySnafu;
-use araphor_analysis_back::DiscoveryContextProvider;
 use araphor_data::{
     DiscoveryContextBindingV1, DiscoveryContextJoinV1, DiscoveryContextUnavailableV1,
     DiscoveryPinnedContextV1, DiscoveryPolicyKeyV1, DiscoveryPolicyRevisionV1, DiscoveryRecordV1,
@@ -185,36 +184,5 @@ impl ControlStore {
         } else {
             Ok(unresolved(Missing::MissingWorkloadFact))
         }
-    }
-}
-
-impl DiscoveryContextProvider for ControlStore {
-    fn changes(&self) -> araphor_data::Result<Option<tokio::sync::watch::Receiver<u64>>> {
-        self.subscribe_revision().map(Some).map_err(|source| {
-            araphor_data::Error::DiscoveryContext {
-                source: Box::new(source),
-                location: snafu::Location::default(),
-            }
-        })
-    }
-
-    fn revision(
-        &self,
-        _source: &araphor_data::EvidenceIntakeIdentityV1,
-    ) -> araphor_data::Result<u64> {
-        self.evidence_lock()
-            .map(|inner| inner.state.commit_index)
-            .map_err(|source| araphor_data::Error::DiscoveryContext {
-                source: Box::new(source),
-                location: snafu::Location::default(),
-            })
-    }
-
-    fn context(&self, record: &DiscoveryRecordV1) -> araphor_data::Result<DiscoveryContextJoinV1> {
-        self.discovery_context(record)
-            .map_err(|source| araphor_data::Error::DiscoveryContext {
-                source: Box::new(source),
-                location: snafu::Location::default(),
-            })
     }
 }

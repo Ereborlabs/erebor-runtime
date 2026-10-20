@@ -214,7 +214,7 @@ fn state_survives_raw_retention() -> TestResult {
         Default::default(),
     )?;
     let baseline: serde_json::Value = serde_json::from_slice(include_bytes!(
-        "../../../../../../araphor-analysis_back/src/discovery/tests/baseline/atoms.json"
+        "../../../../discovery/validation/tests/fixtures/atoms.json"
     ))?;
     let mut profile = profile();
     profile.snapshot = serde_json::from_value(baseline["original"]["snapshot"].clone())?;

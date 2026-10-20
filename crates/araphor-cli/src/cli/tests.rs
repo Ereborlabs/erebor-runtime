@@ -492,8 +492,9 @@ fn shared_command_tree() {
             "audit",
             "catalog",
             "daemon",
+            "definition",
             "filesystem",
-            "package",
+            "image",
             "policy",
             "policyset",
             "run",
@@ -506,6 +507,23 @@ fn shared_command_tree() {
         ]
     );
     assert!(Cli::try_parse_from(["araphor", "araphor", "sql", "SELECT 1"]).is_err());
+    assert!(Cli::try_parse_from(["araphor", "package", "inspect", "denials"]).is_err());
+    for command in ["image", "definition"] {
+        assert!(
+            Cli::try_parse_from(["araphor", command, "inspect", "denials", "--unknown",]).is_err()
+        );
+        assert!(Cli::try_parse_from([
+            "araphor",
+            command,
+            "inspect",
+            "denials",
+            "--revision",
+            "r1",
+            "--revision",
+            "r2",
+        ])
+        .is_err());
+    }
 }
 
 #[test]
@@ -513,7 +531,8 @@ fn transport_options_are_separate() -> Result<(), Box<dyn std::error::Error>> {
     for command in [
         vec!["sql", "SELECT 1"],
         vec!["catalog"],
-        vec!["package", "--scope", "production", "inspect", "denials"],
+        vec!["image", "inspect", "denials"],
+        vec!["definition", "inspect", "denials"],
         vec![
             "trace",
             "--recipe",

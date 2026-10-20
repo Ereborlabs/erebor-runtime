@@ -143,7 +143,7 @@ impl Kernel {
             }
         }
         control
-            .query_async(self.session.engine().check_read(&snapshot))
+            .query_async(self.session.check_read(&snapshot))
             .await?;
         let columns = finalize_aggregation(&mut self.accumulators, &AggregateMode::Single)
             .context(SqlSnafu)?;

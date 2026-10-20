@@ -14,6 +14,7 @@ use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::Inputs;
+use crate::memory::Memory;
 use crate::sources::{ArrowSnapshot, SourceOrigin, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
@@ -23,6 +24,131 @@ pub(super) struct PortScope {
 }
 
 impl Inputs {
+    pub(crate) fn check_supplied(&self, supplied: &[sdk::Input]) -> Result<()> {
+        let mut names = std::collections::BTreeSet::new();
+        if supplied.len() != self.ports.len()
+            || supplied.iter().any(|input| {
+                !names.insert(input.data.name.as_str())
+                    || !self.ports.iter().any(|port| port.name == input.data.name)
+            })
+            || self.plans.iter().any(|port| {
+                port.origins.is_empty()
+                    || port
+                        .origins
+                        .iter()
+                        .any(|origin| !matches!(origin, SourceOrigin::Local(_)))
+            })
+        {
+            return Err(araphor_data::PackageErrorCodeV1::Invalid
+                .error("supplied input scope")
+                .into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn supplied_inputs(
+        &self,
+        inputs: &mut [sdk::Input],
+        supplied: &[sdk::Input],
+    ) -> Result<()> {
+        self.check_supplied(supplied)?;
+        if inputs.len() != self.ports.len() {
+            return Err(araphor_data::PackageErrorCodeV1::Invalid
+                .error("supplied input count")
+                .into());
+        }
+        for port in &self.ports {
+            let actual = inputs
+                .iter_mut()
+                .find(|input| input.data.name == port.name)
+                .ok_or_else(|| araphor_data::PackageErrorCodeV1::Invalid.error("supplied input"))?;
+            let expected = supplied
+                .iter()
+                .find(|input| input.data.name == port.name)
+                .ok_or_else(|| araphor_data::PackageErrorCodeV1::Invalid.error("supplied input"))?;
+            let schema = Arc::new(port.schema.clone());
+            if actual
+                .data
+                .batches
+                .iter()
+                .chain(&expected.data.batches)
+                .any(|batch| batch.schema() != schema)
+                || !Self::same_rows(&actual.data.batches, &expected.data.batches)
+            {
+                return Err(araphor_data::PackageErrorCodeV1::Invalid
+                    .error("supplied input rows")
+                    .into());
+            }
+            actual.revision.clone_from(&expected.revision);
+            actual.coverage.clone_from(&expected.coverage);
+        }
+        Ok(())
+    }
+
+    fn same_rows(actual: &[sdk::RecordBatch], expected: &[sdk::RecordBatch]) -> bool {
+        let mut left = actual.iter().filter(|batch| batch.num_rows() > 0);
+        let mut right = expected.iter().filter(|batch| batch.num_rows() > 0);
+        let (mut a, mut b) = (left.next(), right.next());
+        let (mut ai, mut bi) = (0, 0);
+        while let (Some(av), Some(bv)) = (a, b) {
+            let count = (av.num_rows() - ai).min(bv.num_rows() - bi);
+            if av.slice(ai, count) != bv.slice(bi, count) {
+                return false;
+            }
+            ai += count;
+            bi += count;
+            if ai == av.num_rows() {
+                a = left.next();
+                ai = 0;
+            }
+            if bi == bv.num_rows() {
+                b = right.next();
+                bi = 0;
+            }
+        }
+        a.is_none() && b.is_none()
+    }
+
+    pub(crate) fn input_for(
+        &self,
+        data: sdk::Dataset,
+        snapshot: &ArrowSnapshot,
+        slot: usize,
+        physical: &Arc<dyn ExecutionPlan>,
+        inherited: &[sdk::Input],
+        memory: &Memory,
+    ) -> Result<sdk::Input> {
+        let port = self.plans.get(slot).ok_or_else(|| {
+            InvalidSnafu {
+                field: "package input slot",
+            }
+            .build()
+        })?;
+        let sources = port
+            .origins
+            .iter()
+            .filter_map(|origin| origin.durable().map(|name| (name.to_owned(), None)))
+            .collect();
+        let selection = SourceSnapshot::selection(&snapshot.selection, &sources)?;
+        let mut requests = sources.clone();
+        let bounds = SourceSnapshot::requests(&mut requests, std::slice::from_ref(physical))
+            .context(SqlSnafu)?;
+        let selection =
+            if sources.contains_key("trace_output") || sources.contains_key("trace_measurements") {
+                selection
+            } else {
+                SourceSnapshot::prune_selection(selection, &bounds)
+            };
+        self.input(
+            data,
+            snapshot,
+            &PortScope { slot, selection },
+            inherited,
+            None,
+            memory,
+        )
+    }
+
     pub(super) fn scopes(
         &self,
         original: &AnalysisSelectionV1,
@@ -70,6 +196,7 @@ impl Inputs {
         scope: &PortScope,
         inherited: &[sdk::Input],
         package: Option<&sdk::Coverage>,
+        memory: &Memory,
     ) -> Result<sdk::Input> {
         let port = self
             .plans
@@ -245,6 +372,18 @@ impl Inputs {
             })?
             .schema();
         {
+            let _scratch = if memory.input_capacity().is_some() {
+                let bytes = data.batches.iter().try_fold(0usize, |bytes, batch| {
+                    let scratch = sdk::wire::Dataset::encoding_scratch(batch)
+                        .context(araphor_data::AnalysisContractSnafu)?;
+                    bytes.checked_add(scratch).ok_or_else(|| {
+                        araphor_data::PackageErrorCodeV1::Limit.error("input encoding scratch")
+                    })
+                })?;
+                Some(memory.reserve_input(bytes).context(SqlSnafu)?)
+            } else {
+                None
+            };
             let mut writer = StreamWriter::try_new(&mut hash, &schema)
                 .map_err(sdk::Error::from)
                 .context(araphor_data::AnalysisContractSnafu)?;
@@ -327,5 +466,152 @@ impl Inputs {
             },
             limits,
         })
+    }
+}
+
+#[cfg(test)]
+mod supplied {
+    use super::*;
+
+    use datafusion::arrow::array::UInt64Array;
+    use datafusion::logical_expr::LogicalPlanBuilder;
+
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    fn input(
+        values: &[u64],
+    ) -> std::result::Result<sdk::Input, Box<dyn std::error::Error + Send + Sync>> {
+        let schema = Arc::new(sdk::Schema::new(vec![sdk::Field::new(
+            "value",
+            sdk::DataType::UInt64,
+            false,
+        )]));
+        Ok(sdk::Input {
+            data: sdk::Dataset {
+                name: "input".into(),
+                batches: vec![sdk::RecordBatch::try_new(
+                    schema,
+                    vec![Arc::new(UInt64Array::from(values.to_vec()))],
+                )?],
+            },
+            revision: sdk::Revision {
+                owner: "saved".into(),
+                id: "revision".into(),
+                window: None,
+            },
+            coverage: sdk::Coverage {
+                state: sdk::CoverageState::Gapped,
+                limits: vec!["SAVED_GAP".into()],
+            },
+        })
+    }
+
+    fn scope(origins: &[SourceOrigin]) -> Result<Inputs> {
+        let model = sdk::Model::new(
+            "call",
+            vec![sdk::Port::new(
+                "input",
+                sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]),
+            )],
+            Vec::new(),
+        );
+        Inputs::from_plans(
+            &model,
+            &[LogicalPlanBuilder::empty(false).build().context(SqlSnafu)?],
+            vec![origins.iter().cloned().collect()],
+        )
+    }
+
+    #[test]
+    fn supplied_scope_is_local() -> TestResult {
+        let expected = input(&[1])?;
+        for origins in [
+            Vec::new(),
+            vec![SourceOrigin::Durable("events".into())],
+            vec![SourceOrigin::Package(0)],
+            vec![
+                SourceOrigin::Local("fixture".into()),
+                SourceOrigin::Durable("context_versions".into()),
+            ],
+        ] {
+            assert!(scope(&origins)?
+                .check_supplied(std::slice::from_ref(&expected))
+                .is_err());
+        }
+        let scope = scope(&[SourceOrigin::Local("fixture".into())])?;
+        scope.check_supplied(std::slice::from_ref(&expected))?;
+        assert!(scope.check_supplied(&[]).is_err());
+        assert!(scope
+            .check_supplied(&[expected.clone(), expected.clone()])
+            .is_err());
+        let mut foreign = expected;
+        foreign.data.name = "other".into();
+        assert!(scope.check_supplied(&[foreign]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn supplied_rows_are_exact() -> TestResult {
+        let scope = scope(&[SourceOrigin::Local("fixture".into())])?;
+        let expected = input(&[1, 2, 3])?;
+        let mut actual = input(&[1])?;
+        actual.data.batches.extend(input(&[2, 3])?.data.batches);
+        actual.revision.id = "computed".into();
+        scope.supplied_inputs(
+            std::slice::from_mut(&mut actual),
+            std::slice::from_ref(&expected),
+        )?;
+        assert_eq!(actual.revision, expected.revision);
+        assert_eq!(actual.coverage, expected.coverage);
+        for values in [&[1, 3, 2][..], &[1, 2][..], &[1, 2, 3, 4][..]] {
+            assert!(scope
+                .supplied_inputs(&mut [input(values)?], std::slice::from_ref(&expected))
+                .is_err());
+        }
+        scope.supplied_inputs(&mut [input(&[])?], &[input(&[])?])?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn encoding_scratch_respects_pressure() -> TestResult {
+        use crate::execution::{Engine, Read};
+        use araphor_data::{AnalysisReadControl, AnalysisStore};
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let directory = tempfile::tempdir()?;
+        let engine = Engine::new(
+            Arc::new(AnalysisStore::open(directory.path().join("data"))?),
+            Default::default(),
+        )?;
+        let (plan, sources) = engine.prepare("SELECT 1 AS value", Vec::new()).await?;
+        let session = engine.session(
+            AnalysisSelectionV1::tenant([1; 16]),
+            &AnalysisReadControl::default(),
+            1,
+        )?;
+        let (snapshot, stream) = session.stream(&plan, &sources, Read::Snapshot).await?;
+        drop(stream);
+        let data = input(&vec![7; 1024])?.data;
+        let scratch = sdk::wire::Dataset::encoding_scratch(&data.batches[0])?;
+        assert!(scratch > 0);
+        let capacity = scratch * 2;
+        let memory = Memory::new(Some(capacity), None);
+        let held = memory.reserve_input(scratch + 1)?;
+        let scope = scope(&[SourceOrigin::Local("fixture".into())])?;
+        let physical: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(data.batches[0].schema()));
+        let error = scope
+            .input_for(data.clone(), &snapshot, 0, &physical, &[], &memory)
+            .err()
+            .ok_or("input serializer exceeded available scratch")?;
+        assert!(format!("{error:?}").contains("araphor input"));
+        drop(memory.reserve_input(scratch - 1)?);
+        drop(held);
+        let first = scope.input_for(data.clone(), &snapshot, 0, &physical, &[], &memory)?;
+        drop(memory.reserve_input(capacity)?);
+        let disabled = Memory::new(None, None);
+        let second = scope.input_for(data, &snapshot, 0, &physical, &[], &disabled)?;
+        assert_eq!(first.revision, second.revision);
+        assert_eq!(first.coverage, second.coverage);
+        Ok(())
     }
 }

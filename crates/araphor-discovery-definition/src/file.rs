@@ -15,6 +15,7 @@ use sqlparser::parser::Parser;
 
 use crate::error::{InvalidSnafu, IoSnafu, SqlSnafu, YamlScanSnafu, YamlSnafu};
 use crate::{Definition, Program, Result, Source};
+use araphor_package::PackageRefV1;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -163,6 +164,24 @@ impl FileSource {
             return InvalidSnafu { field: "source" }.fail();
         }
         Ok(text)
+    }
+}
+
+impl Program {
+    pub fn call(image: &PackageRefV1, export: &str, output: &str) -> Result<Self> {
+        let call = Call {
+            package: image.package_id.clone(),
+            revision: image.revision.clone(),
+            export: export.into(),
+            inputs: BTreeMap::new(),
+            parameters: BTreeMap::new(),
+            output: Some(output.into()),
+        };
+        Ok(Self::Sql {
+            source: Source::Inline {
+                inline: call.sql(Path::new("."))?,
+            },
+        })
     }
 }
 

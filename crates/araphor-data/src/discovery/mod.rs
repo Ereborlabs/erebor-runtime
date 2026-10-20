@@ -6,6 +6,7 @@ mod derive;
 mod model;
 mod native;
 mod profile;
+mod validation;
 
 pub use compiled::CompiledPolicyContextV1;
 pub use context::*;

@@ -9,13 +9,6 @@ use crate::Result;
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum BundleMetadata {
     InstallImage {},
-    Install {
-        scope_id: String,
-        parameters: Option<serde_json::Value>,
-    },
-    Update {
-        scope_id: String,
-    },
 }
 
 #[derive(Deserialize)]
@@ -28,9 +21,7 @@ impl PackageRequestV1 {
     pub fn encode(&self) -> Result<Vec<u8>> {
         let metadata = serde_json::to_vec(self).context(crate::PackageEncodingSnafu)?;
         let archive = match self {
-            Self::InstallImage { bundle }
-            | Self::Install { bundle, .. }
-            | Self::Update { bundle, .. } => bundle.encode()?,
+            Self::InstallImage { bundle } => bundle.encode()?,
             _ => Vec::new(),
         };
         let mut encoder = Encoder::new(Vec::new());
@@ -58,25 +49,14 @@ impl PackageRequestV1 {
         }
         let operation: Operation<'_> =
             serde_json::from_slice(metadata).context(crate::PackageEncodingSnafu)?;
-        if matches!(operation.operation, "install_image" | "install" | "update") {
-            let metadata: BundleMetadata =
+        if operation.operation == "install_image" {
+            let _: BundleMetadata =
                 serde_json::from_slice(metadata).context(crate::PackageEncodingSnafu)?;
             if archive.is_empty() {
                 return Err(Code::Invalid.error("package request archive"));
             }
             let bundle = PackageBundleV1::from_bytes(archive)?;
-            Ok(match metadata {
-                BundleMetadata::InstallImage {} => Self::InstallImage { bundle },
-                BundleMetadata::Install {
-                    scope_id,
-                    parameters,
-                } => Self::Install {
-                    scope_id,
-                    parameters,
-                    bundle,
-                },
-                BundleMetadata::Update { scope_id } => Self::Update { scope_id, bundle },
-            })
+            Ok(Self::InstallImage { bundle })
         } else {
             if !archive.is_empty() {
                 return Err(Code::Invalid.error("package request archive"));

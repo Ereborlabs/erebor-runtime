@@ -67,6 +67,7 @@ impl Inputs {
         }
         let permit = Arc::new(engine.reserve_evaluation(session.selection().tenant_id)?);
         let mut state = session.state()?;
+        state.config_mut().set_extension(Arc::clone(&permit));
         let mut physical = Vec::<Arc<dyn ExecutionPlan>>::with_capacity(self.plans.len());
         for input in &self.plans {
             physical.push(session.physical(&input.plan, &state).await?);
@@ -253,7 +254,14 @@ impl Inputs {
                 .then(|| source.package_coverage(input.slot))
                 .transpose()
                 .context(SqlSnafu)?;
-            let value = self.input(data, &snapshot, scope, &inherited, coverage.as_ref())?;
+            let value = self.input(
+                data,
+                &snapshot,
+                scope,
+                &inherited,
+                coverage.as_ref(),
+                &memory_owner,
+            )?;
             let indexed_schema = Session::indexed_schema(&port.schema)?;
             let indexed = session.index_batches(
                 Arc::clone(&indexed_schema),

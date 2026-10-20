@@ -206,66 +206,13 @@ pub enum PackageRequestV1 {
         package_id: String,
         revision: Option<String>,
     },
-    Install {
-        scope_id: String,
-        #[serde(skip_serializing)]
-        bundle: PackageBundleV1,
-        parameters: Option<serde_json::Value>,
-    },
-    Inspect {
-        scope_id: String,
-        package_id: String,
-    },
-    Run {
-        scope_id: String,
-        package_id: String,
-        export: Option<String>,
-        evaluation_id: String,
-        parameters: Option<serde_json::Value>,
-    },
-    Update {
-        scope_id: String,
-        #[serde(skip_serializing)]
-        bundle: PackageBundleV1,
-    },
-    Rollback {
-        scope_id: String,
-        package_id: String,
-        revision: String,
-    },
-    Remove {
-        scope_id: String,
-        package_id: String,
-    },
-    Test {
-        scope_id: String,
-        package_id: String,
-        fixture: Option<String>,
-    },
-    Query {
-        scope_id: String,
-        package_id: String,
-        export: String,
-        result_id: Option<String>,
-        sql: String,
-    },
 }
 
 impl PackageRequestV1 {
     pub fn action(&self) -> PackageActionV1 {
         match self {
-            Self::AdmitDefinition { .. } | Self::InstallImage { .. } | Self::Install { .. } => {
-                PackageActionV1::Install
-            }
-            Self::InspectDefinition { .. }
-            | Self::InspectImage { .. }
-            | Self::Inspect { .. }
-            | Self::Query { .. } => PackageActionV1::Inspect,
-            Self::Run { .. } => PackageActionV1::Run,
-            Self::Update { .. } => PackageActionV1::Update,
-            Self::Rollback { .. } => PackageActionV1::Rollback,
-            Self::Remove { .. } => PackageActionV1::Remove,
-            Self::Test { .. } => PackageActionV1::Test,
+            Self::AdmitDefinition { .. } | Self::InstallImage { .. } => PackageActionV1::Install,
+            Self::InspectDefinition { .. } | Self::InspectImage { .. } => PackageActionV1::Inspect,
         }
     }
 }
@@ -277,55 +224,6 @@ pub struct PackageResponseV1 {
     pub definition: Option<araphor_discovery_definition::ResolvedDefinition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<araphor_package::PackageImageV1>,
-    pub scope_id: String,
-    pub package_id: String,
-    pub exports: Vec<PackageExportStatusV1>,
-    pub tests: Vec<PackageTestResultV1>,
-    pub output: Option<sdk::wire::Output>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackageExportStatusV1 {
-    pub descriptor: sdk::Model,
-    pub revision: String,
-    pub targets: Vec<String>,
-    pub readiness: PackageReadinessV1,
-    pub active: bool,
-    pub activation_revision: u64,
-    pub results: Vec<PackageReceiptV1>,
-    pub fixtures: Vec<String>,
-}
-
-impl PackageExportStatusV1 {
-    pub fn new(
-        artifact: &super::PackageArtifactV1,
-        model: &sdk::Model,
-        active: &crate::analysis::PackageActivationV1,
-        readiness: PackageReadinessV1,
-        results: Vec<PackageReceiptV1>,
-    ) -> Self {
-        Self {
-            descriptor: model.clone(),
-            revision: active.revision.clone(),
-            targets: artifact
-                .implementations
-                .iter()
-                .filter(|target| target.implements(&model.name))
-                .map(|target| target.target().into())
-                .collect(),
-            readiness,
-            active: active.active,
-            activation_revision: active.generation,
-            results,
-            fixtures: artifact
-                .fixtures
-                .iter()
-                .filter(|fixture| fixture.export == model.name)
-                .map(|fixture| fixture.name.clone())
-                .collect(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -343,26 +241,6 @@ pub enum PackageReadinessV1 {
         code: PackageErrorCodeV1,
         field: String,
     },
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackageReceiptV1 {
-    pub target: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub artifact: Option<PackageArtifactIdentityV1>,
-    pub result_id: String,
-    pub commit_revision: u64,
-    pub input_revisions: Vec<sdk::Revision>,
-    pub coverage: sdk::Coverage,
-    pub stale: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackageTestResultV1 {
-    pub fixture: String,
-    pub passed: bool,
 }
 
 #[cfg(test)]

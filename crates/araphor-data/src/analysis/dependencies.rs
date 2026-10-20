@@ -2,7 +2,8 @@ use duckdb::params;
 use snafu::ResultExt as _;
 
 use super::{
-    AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, AnalysisStoreMetaV1, ProcessorScopeV1,
+    AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, AnalysisStoreMetaV1,
+    AnalysisTableRequests, ProcessorScopeV1,
 };
 use crate::{AnalysisDatabaseSnafu, Result, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION};
 
@@ -86,13 +87,13 @@ impl AnalysisStore {
         selection: &AnalysisSelectionV1,
         control: &AnalysisReadControl,
     ) -> Result<(AnalysisStoreMetaV1, u64)> {
-        self.dependency_revision_for(selection, &[], control)
+        self.dependency_revision_for(selection, &AnalysisTableRequests::new(), control)
     }
 
     pub fn dependency_revision_for(
         &self,
         selection: &AnalysisSelectionV1,
-        relations: &[&str],
+        tables: &AnalysisTableRequests,
         control: &AnalysisReadControl,
     ) -> Result<(AnalysisStoreMetaV1, u64)> {
         control.check()?;
@@ -100,6 +101,11 @@ impl AnalysisStore {
             return self
                 .reject("the dependency selection is invalid or includes unsupported results");
         }
+        let relations: &[&str] = if tables.contains_key("discovery_state") {
+            &["processor_progress", "processor_gaps", "analysis_results"]
+        } else {
+            &[]
+        };
         let coordinator = self.read_coordinator(control)?;
         let all_traces = selection.traces.is_all();
         let mut reader = self.reader_until(control)?;
@@ -379,10 +385,10 @@ mod tests {
         let source = identity(1, 1);
         store.accept_validated_batch(source.clone(), batch(1, 10))?;
         let selection = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]);
-        let relations = ["processor_progress", "processor_gaps", "analysis_results"];
+        let tables = AnalysisTableRequests::from([("discovery_state".into(), None)]);
         let state = |store: &AnalysisStore| -> Result<(u64, u64)> {
             store
-                .dependency_revision_for(&selection, &relations, &AnalysisReadControl::default())
+                .dependency_revision_for(&selection, &tables, &AnalysisReadControl::default())
                 .map(|(meta, revision)| (meta.commit_revision, revision))
         };
         assert_eq!(state(&store)?, (1, 1));

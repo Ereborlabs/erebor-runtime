@@ -30,9 +30,7 @@ pub use capability::{CompileRecordV1, PlatformProbeV1};
 pub use closure::ClosureLedgerV1;
 pub use digest::DigestV1;
 pub use discovery::{
-    run_discovery_offline, run_discovery_storage_contract, AnalysisPackageQualification,
-    DataStoreQualification, DiscoveryQualificationRunner, GraphNotificationQualification,
-    QueryFollowQualification,
+    run_discovery_storage_contract, DataStoreQualification, QueryFollowQualification,
 };
 pub use effect::{
     run_effect_child, EffectHealthV1, EffectPhysicalProbeBundleV1, EffectTestRunner,
@@ -54,11 +52,3 @@ pub use runner::{
     BenchmarkModeV1, CapabilityProbeBundleV1, KernelQualificationBundleV1,
     KernelQualificationRunner, OpenBenchmarkBundleV1, PhysicalCapabilityProbeBundleV1,
 };
-
-#[cfg(test)]
-#[test]
-#[ignore]
-fn araphor_component_compiler() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    araphor_analysis_back::AnalysisPackageOwner::run_compiler_worker()?;
-    Ok(())
-}

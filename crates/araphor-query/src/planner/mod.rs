@@ -30,12 +30,37 @@ pub struct Planner<'a> {
 }
 
 #[derive(Debug, Default)]
-struct SourceDemand {
+pub(crate) struct SourceDemand {
     origins: Mutex<BTreeSet<SourceOrigin>>,
+    scopes: Mutex<Vec<BTreeSet<SourceOrigin>>>,
     active: AtomicBool,
 }
 
 impl SourceDemand {
+    pub(crate) fn capture<T>(
+        &self,
+        plan: impl FnOnce() -> Result<T>,
+    ) -> Result<(T, BTreeSet<SourceOrigin>)> {
+        self.scopes
+            .lock()
+            .map_err(|_| crate::Error::Sql {
+                source: DataFusionError::Internal("source scope lock is poisoned".into()),
+            })?
+            .push(BTreeSet::new());
+        let result = plan();
+        let origins = self
+            .scopes
+            .lock()
+            .map_err(|_| crate::Error::Sql {
+                source: DataFusionError::Internal("source scope lock is poisoned".into()),
+            })?
+            .pop()
+            .ok_or_else(|| crate::Error::Sql {
+                source: DataFusionError::Internal("source scope is absent".into()),
+            })?;
+        result.map(|plan| (plan, origins))
+    }
+
     fn collect(plan: &LogicalPlan) -> NativeResult<BTreeSet<SourceOrigin>> {
         let mut origins = BTreeSet::new();
         plan.apply_with_subqueries(|plan| {
@@ -66,10 +91,19 @@ impl RelationPlanner for SourceDemand {
         let plan = context.plan(relation);
         self.active.store(false, Ordering::Relaxed);
         let plan = plan?;
+        let origins = Self::collect(&plan)?;
         self.origins
             .lock()
             .map_err(|_| DataFusionError::Internal("source demand lock is poisoned".into()))?
-            .extend(Self::collect(&plan)?);
+            .extend(origins.iter().cloned());
+        for scope in self
+            .scopes
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source scope lock is poisoned".into()))?
+            .iter_mut()
+        {
+            scope.extend(origins.iter().cloned());
+        }
         Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
             plan, None,
         ))))
@@ -100,6 +134,16 @@ impl<'a> Planner<'a> {
         statement: Statement,
         parameters: Vec<ScalarValue>,
     ) -> Result<(LogicalPlan, BTreeSet<SourceOrigin>)> {
+        self.build_with_demand(statement, parameters, Arc::new(SourceDemand::default()))
+            .await
+    }
+
+    pub(crate) async fn build_with_demand(
+        self,
+        statement: Statement,
+        parameters: Vec<ScalarValue>,
+        demand: Arc<SourceDemand>,
+    ) -> Result<(LogicalPlan, BTreeSet<SourceOrigin>)> {
         let limits = self
             .state
             .config()
@@ -126,7 +170,6 @@ impl<'a> Planner<'a> {
             }
             .build());
         }
-        let demand = Arc::new(SourceDemand::default());
         let mut state = self.state.clone();
         state
             .register_relation_planner(demand.clone())

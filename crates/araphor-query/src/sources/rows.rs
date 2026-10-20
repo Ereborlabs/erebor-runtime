@@ -152,6 +152,15 @@ impl Captured {
 }
 
 impl SourceSnapshot {
+    pub(crate) fn snapshot(&self) -> Result<Arc<ArrowSnapshot>> {
+        self.captured
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?
+            .as_ref()
+            .map(|captured| Arc::clone(&captured.receipt))
+            .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))
+    }
+
     pub(crate) fn received_min(&self, range: (u64, u64)) -> Result<Option<u64>> {
         let captured = self
             .captured
@@ -211,6 +220,7 @@ impl SourceSnapshot {
         let targets = sources.contains_key("targets");
         let context = sources.contains_key("context")
             || sources.contains_key("context_versions")
+            || sources.contains_key("notification_routes")
             || sources.contains_key("compiled_policies")
             || targets;
         if !sources.contains_key("events")
@@ -332,11 +342,7 @@ impl SourceSnapshot {
         mode: ReadMode,
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<Captured> {
-        let reservation = if matches!(mode, ReadMode::Changes(_) | ReadMode::Metadata) {
-            self.memory.prepare_input(self.limits.input_bytes)?
-        } else {
-            self.memory.reserve_input(self.limits.input_bytes)?
-        };
+        let reservation = self.memory.prepare_input(self.limits.input_bytes)?;
         let mut limits = self.limits;
         limits.input_bytes = reservation.size();
         let constrained = limits.input_bytes < self.limits.input_bytes;

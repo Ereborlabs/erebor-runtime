@@ -19,6 +19,83 @@ use crate::parser::Parser;
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[tokio::test]
+async fn snapshot_shares_local_capacity() -> TestResult {
+    use datafusion::arrow::array::{ArrayRef, UInt64Array};
+
+    let capacity = 64 * 1024;
+    let fixture = Fixture::new_with_limits(Limits {
+        input_bytes: capacity,
+        input_capacity: Some(capacity),
+        ..Default::default()
+    })?;
+    fixture.commit(&fixture.source, 1, 10_000)?;
+    let batch =
+        RecordBatch::try_from_iter([("value", Arc::new(UInt64Array::from(vec![7])) as ArrayRef)])?;
+    let mut providers = SourceSnapshot::providers();
+    providers.insert(
+        "parameters".into(),
+        super::SourceProvider::local("parameters", batch.schema()),
+    );
+    let state = fixture.engine.catalog(providers)?;
+    let plan = fixture.engine.plan(
+        &state,
+        Parser::default().parse("SELECT source_cursor, value FROM events CROSS JOIN parameters")?,
+        vec![],
+    )?;
+    let sources = BTreeMap::from([("events".into(), None)]);
+    let mut session = fixture
+        .engine
+        .session(fixture.selection(), &fixture.control()?, 20_000)?;
+    session.register("parameters", batch.schema(), std::slice::from_ref(&batch))?;
+    drop(batch);
+    let memory = session.memory();
+    let available = memory.prepare_input(capacity)?;
+    assert!(available.size() > 1 && available.size() < capacity);
+    drop(available);
+
+    let (receipt, stream) = session.stream(&plan, &sources, Read::Snapshot).await?;
+    let batches = stream.try_collect::<Vec<_>>().await?;
+    assert_eq!(cell(&batches, 0), ScalarValue::UInt64(Some(1)));
+    assert_eq!(cell(&batches, 1), ScalarValue::UInt64(Some(7)));
+    assert_eq!(receipt.witnesses.len(), 1);
+    drop((receipt, batches));
+
+    let pressure = memory.prepare_input(capacity)?;
+    pressure.shrink(1);
+    assert!(memory.reserve_input(2).is_err());
+    let error = session
+        .stream(&plan, &sources, Read::Snapshot)
+        .await
+        .err()
+        .ok_or("snapshot exceeded the remaining shared input capacity")?;
+    assert_eq!(crate::Failure::from(&error), crate::Failure::Busy);
+    let mut source: &(dyn std::error::Error + 'static) = &error;
+    loop {
+        if matches!(
+            source.downcast_ref::<crate::Error>(),
+            Some(crate::Error::Capacity {
+                resource: "shared input",
+                ..
+            })
+        ) {
+            break;
+        }
+        source = source
+            .source()
+            .ok_or_else(|| format!("missing shared input capacity error: {error:?}"))?;
+    }
+    assert!(memory.reserve_input(2).is_err());
+    drop(pressure);
+
+    let (receipt, stream) = session.stream(&plan, &sources, Read::Snapshot).await?;
+    let batches = stream.try_collect::<Vec<_>>().await?;
+    assert_eq!(cell(&batches, 1), ScalarValue::UInt64(Some(7)));
+    drop((receipt, batches, session));
+    drop(fixture.engine.memory().reserve_input(capacity)?);
+    Ok(())
+}
+
+#[tokio::test]
 async fn unbounded_extraction_cancels() -> TestResult {
     let fixture = Fixture::new_with_limits(Limits::default())?;
     assert_eq!(fixture.engine.limits().extract_timeout, None);

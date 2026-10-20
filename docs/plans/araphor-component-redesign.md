@@ -25,6 +25,36 @@ Caller migration compiles across Query, Analysis, Control, and E2E. Functional
 qualification is **Not done**. The checks below apply to their recorded
 source states.
 
+### Current backup removal
+
+The user authorizes the complete migration on 2026-10-19. The
+[Analysis migration record](araphor-analysis-migration.md) covers every
+production reference file and the required test transfers. It separates
+implemented finite boundaries from remaining reactive publication,
+managed state, recovery, and public callers. Removal remains **Not done**.
+
+The user requires complete review and migration of compatible functionality
+before deletion of `araphor-analysis_back`. The initial removal did not meet
+that requirement. All 208 backup files and 34 deleted reference adapter and
+test files are restored. The backup remains outside current execution; do not
+restore its planners, source sweeps, compiler process, or polling tasks.
+
+The later finite retirement removes 29 duplicate reference leaves after
+source comparison and focused qualification. The other 179 files remain
+unchanged. The recovery archive retains all 208 recovered files. Read the
+[retirement record](araphor-analysis-migration.md#retired-finite-reference-files)
+for the exact scope. The final Rust gate passes in `migration-final-ci42`.
+The complete migration remains **Not done**.
+
+The [package plan](araphor-package-jobs.md#backup-removal-and-current-ownership)
+records the current correction. A file and function inventory must map each
+compatible domain rule to its active owner and tests before final deletion.
+Native and Wasm evaluator copies and finite notification operations alone do
+not establish that coverage. Migration and removal: **Not done**. The earlier
+11,664-line delivery reduction and 5,668-line complete reduction are withdrawn
+because they counted the premature deletion. No deletion commit or push was
+made. Full workspace tests did not complete because the host disk filled.
+
 ### Current user requirements
 
 The [feature parity TODO](araphor-feature-parity-todo.md) compares the accepted
@@ -1886,14 +1916,14 @@ program runs in one existing
 [Engine::wait](../../crates/araphor-query/src/execution.rs) future. Earlier
 qualification records remain attached to their recorded source.
 
-[AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis_back/src/package/execution.rs) selects the exact installed SQL export
-  -> [AnalysisPackageOwner::evaluate_artifact](../../crates/araphor-analysis_back/src/package/execution.rs) moves its bundle Arc, export index, evaluation, retained input set, and child control into the future
-  -> [ModelRun::evaluate](../../crates/araphor-analysis_back/src/model/execute.rs) awaits current trace-read checks and validates the SDK evaluation
-  -> [ModelRun::new](../../crates/araphor-analysis_back/src/model/operation.rs) creates the complete Session, shared evaluation permit, and output reservation
+[AnalysisPackageOwner::evaluate_artifact](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/execution.rs) selects the exact installed SQL export
+  -> [AnalysisPackageOwner::evaluate_artifact](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/execution.rs) moves its bundle Arc, export index, evaluation, retained input set, and child control into the future
+  -> [ModelRun::evaluate](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/execute.rs) awaits current trace-read checks and validates the SDK evaluation
+  -> [ModelRun::new](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/operation.rs) creates the complete Session, shared evaluation permit, and output reservation
   -> [Session::stream_local](../../crates/araphor-query/src/execution.rs) executes each admitted output, checkpoint, evidence, and reason plan in stage order
-  -> [ModelRun::query](../../crates/araphor-analysis_back/src/model/execute.rs) reserves conversion growth and normalizes each native batch before the next poll
-  -> [ModelRun::evaluate](../../crates/araphor-analysis_back/src/model/execute.rs) checks complete output, control, and current trace-read authority
-  -> [SqlModelOutputV1::retain](../../crates/araphor-analysis_back/src/model.rs) retains the output metadata and buffer claims for the caller
+  -> [ModelRun::query](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/execute.rs) reserves conversion growth and normalizes each native batch before the next poll
+  -> [ModelRun::evaluate](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/execute.rs) checks complete output, control, and current trace-read authority
+  -> [SqlModelOutputV1::retain](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model.rs) retains the output metadata and buffer claims for the caller
 
 The per-stage synchronous dispatch and raw result vector are deleted. Native
 local streams share the run's permit. Each stream releases unused output
@@ -1902,7 +1932,7 @@ batches remain available for row references and output tables. The SQL future
 borrows the descriptor and admitted program from its owned bundle. Native and
 Wasm invocation remain synchronous under their existing guards.
 
-[SqlDatasetOutputV1::query](../../crates/araphor-analysis_back/src/model/datasets.rs)
+[SqlDatasetOutputV1::query](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/datasets.rs)
 keeps the checked synchronous dataset-only API. The
 [SDK metadata owner](../../crates/araphor-analysis-sdk/src/evaluation.rs) replaces
 the separate input and dataset-result metadata estimators. Its schema headers,
@@ -1991,7 +2021,7 @@ No speed result is claimed.
 ### Analysis build inputs
 
 Implementation and selected host verification: **Done**.
-[build.rs](../../crates/araphor-analysis_back/build.rs) reads only Cargo's TARGET.
+[build.rs](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/build.rs) reads only Cargo's TARGET.
 Its rerun declaration now names build.rs. Cargo no longer scans the complete
 Analysis package for build-script inputs. The checked Cargo fingerprint names
 only build.rs; the emitted native target stays x86_64-unknown-linux-gnu.
@@ -2188,7 +2218,7 @@ Discovery receives Busy from a source page
 Discovery receives stop during a blocking page
   -> Discovery joins that page before the service returns
 
-The [source-pass owner](../../crates/araphor-analysis_back/src/discovery/live.rs)
+The [source-pass owner](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/live.rs)
 uses the existing [Progress](../../crates/araphor-query/src/stream/progress.rs)
 owner from SQL follow and live package inputs. It registers the watches before
 the pass. It does not call captured with an end-of-pass Data revision.
@@ -2197,7 +2227,7 @@ does not end the complete source pass. The service visits later sources and
 keeps the earliest seal deadline. Existing package input offers and their
 actual commit-receipt checks remain separate.
 
-The [context provider](../../crates/araphor-analysis_back/src/discovery/mod.rs)
+The [context provider](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/mod.rs)
 supplies an optional watch. None is valid only when context changes already
 produce a Data notice. [ControlStore](../../crates/mithril-control/src/store/discovery_context.rs)
 supplies its existing revision watch directly. Late Control context therefore
@@ -2211,7 +2241,7 @@ page without a Data revision. Discovery requests that next page before it
 waits. An unchanged page ends the attempt. The seventeen-profile test keeps
 the Data revision and all retained profile bytes fixed.
 
-[InstalledAnalysis](../../crates/araphor-analysis_back/src/package/installed.rs)
+[InstalledAnalysis](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/installed.rs)
 retains its owner Memory scope. Discovery assigns its own operation scope.
 Each finite evaluation uses Memory.child for separate native consumer IDs.
 Children share the owner's release counter. A prior retained result therefore
@@ -2662,10 +2692,10 @@ execution with Query-owned Inputs and InputSet. Package lifecycle, executable
 admission, backend execution, checkpoint selection, authority, and the Data
 commit compare-and-swap checks keep their existing owners.
 
-[AdmittedExport::admit](../../crates/araphor-analysis_back/src/model.rs) admits the installed export
+[AdmittedExport::admit](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model.rs) admits the installed export
   -> [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) retains native plans, original provider origins, and input dependency order
 
-[AnalysisPackageOwner::prepare_model](../../crates/araphor-analysis_back/src/package/evaluation/preparation.rs) checks current authority and reads the admitted Inputs directly
+[AnalysisPackageOwner::prepare_model](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/evaluation/preparation.rs) checks current authority and reads the admitted Inputs directly
   -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) plans all physical children at one frozen time
   -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) combines the prepared source columns and time ranges in one capture
   -> [AnalysisStore::extract_mode](../../crates/araphor-data/src/analysis/extraction.rs) fixes one Data read transaction for the original source receipts
@@ -2674,7 +2704,7 @@ commit compare-and-swap checks keep their existing owners.
   -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) materializes each completed port with one dataset-global row index before dependent SQL runs
   -> [Inputs::input](../../crates/araphor-query/src/inputs/receipt.rs) assigns per-port revisions and coverage from the original source scopes and reference origins
   -> [InputSet](../../crates/araphor-query/src/inputs/physical.rs) returns declared input order, retained tables, and complete provenance
-  -> [ModelRun::prepared](../../crates/araphor-analysis_back/src/model/operation.rs) supplies the retained input set to model execution
+  -> [ModelRun::prepared](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/operation.rs) supplies the retained input set to model execution
 
 SourceOrigin distinguishes durable canonical tables, materialized port slots,
 and exact package-output slots. Typed port providers have unknown native
@@ -3310,8 +3340,8 @@ A zero-column Arrow batch must retain its row count for `COUNT(*)`.
 
 One operation does not grant every statement access to every relation. Keep
 the current stage-specific relation sets from
-[model relation construction](../../crates/araphor-analysis_back/src/model.rs)
-and [model evaluation](../../crates/araphor-analysis_back/src/model/execute.rs):
+[model relation construction](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model.rs)
+and [model evaluation](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/execute.rs):
 
 | Statement | Allowed relations |
 | --- | --- |
@@ -3551,7 +3581,7 @@ these transferred lessons in the affected test groups:
 - Preserve reordered and non-prefix column projections after replacing a scan
   source. Check column values, names, types, metadata, and output order.
 - Preserve both witnesses in the existing
-  [pruned source evidence case](../../crates/araphor-analysis_back/src/model/operation/tests.rs),
+  [pruned source evidence case](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/operation/tests.rs),
   including `operation = 7 AND false`.
 - Keep a run's captured revision while new data arrives. Preserve independent
   cursors for repeated scans, joins, and a second invocation.

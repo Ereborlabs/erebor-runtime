@@ -104,6 +104,16 @@ impl AnalysisReadControl {
         Ok(self.child(deadline))
     }
 
+    /// Create separate cancellation state. The caller forwards parent cancellation.
+    pub fn operation(&self) -> Result<Self> {
+        self.check()?;
+        Ok(Self {
+            #[cfg(any(test, feature = "test-fixtures"))]
+            read_step: Arc::clone(&self.read_step),
+            ..Self::at(self.deadline, Arc::clone(&self.monitor))
+        })
+    }
+
     pub fn cancel(&self) -> Result<()> {
         self.cancelled.store(true, Ordering::Release);
         self.cancelled_event.notify_waiters();
@@ -570,6 +580,23 @@ mod tests {
             Err(crate::Error::AnalysisReadDeadline { .. })
         ));
         parent.check()?;
+        Ok(())
+    }
+
+    #[test]
+    fn operation_cancellation_is_separate() -> TestResult {
+        let parent = AnalysisReadControl::with_timeout(Duration::from_secs(60))?;
+        let operation = parent.operation()?;
+        assert_eq!(operation.deadline, parent.deadline);
+        assert!(Arc::ptr_eq(&operation.monitor, &parent.monitor));
+        operation.cancel()?;
+        assert!(matches!(
+            operation.check(),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        parent.check()?;
+        parent.cancel()?;
+        assert!(parent.operation().is_err());
         Ok(())
     }
 

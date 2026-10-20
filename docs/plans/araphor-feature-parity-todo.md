@@ -15,6 +15,12 @@ code from the stopped attempts is an unverified draft. The local backup is
 
 ## Intended end state
 
+The user authorizes the complete reference migration on 2026-10-19. The
+[Analysis migration record](araphor-analysis-migration.md) maps all 95
+production source files, root exports, required rules, and test families.
+It is the source checklist for retirement. Keep the reference unchanged
+until replacements pass qualification. Complete migration: **Not done**.
+
 Keep the accepted package, SDK, graph, detector, and notification behavior.
 Run SQL through native DataFusion parsing, logical planning, optimization,
 physical planning, and execution. Query subscriptions supply data changes and
@@ -36,19 +42,45 @@ The call fails, loses permission, or is cancelled
 
 ## What already works
 
-The accepted work covers native graph storage, SDK contracts, package
-operations, Wasm execution, and native execution. These features remain in
-Data, Query, SDK, builtins, and the retained Analysis crate. Control still
-uses the retained package, graph, and notification owners.
+The backup deletion is withdrawn after the user identifies missing compatible
+functionality. All 208 backup files and 34 deleted Control and E2E reference
+files are restored from `6a25ba1b`. The current production wiring does not
+reconnect the old execution owners. Migration and removal remain **Not done**.
+A complete file and function map must replace assumptions about compatibility.
+
+The later finite retirement removes 29 duplicate reference leaves after
+source comparison and focused qualification. The other 179 files remain
+unchanged. The recovery archive retains all 208 recovered files. Read the
+[retirement record](araphor-analysis-migration.md#retired-finite-reference-files)
+for the exact scope. The final Rust gate passes in `migration-final-ci42`.
+The complete migration remains **Not done**.
+The items below that describe removed paths refer to the stopped draft, not
+a qualified replacement. No deletion commit or push was made.
+
+
+Data retains native graph storage, history, traversal, atomic transactions,
+and evidence validation. The SDK and builtins retain typed contracts and the
+three detector computations. Compatible native and Wasm evaluators now belong
+to Package Runtime. Active Analysis retains finite notification authorization,
+state, delivery, and acknowledgement operations.
+
+The user directs removal of `araphor-analysis_back` before completion of finite
+OCI execution. That crate and its old activation API, duplicate model planner,
+source sweeps, recorded preview bridge, and periodic graph and notification
+tasks are disconnected in the draft. The reference files are restored. Current
+functional qualification is incomplete. Automatic graph and notification production and the old activation
+and replay workflows are not supplied by this deletion. Their TODOs remain
+open. Historical source links below select the last committed backup.
 
 The new Query already supplies native SQL planning, canonical Arrow tables,
 one shared input capture, snapshot queries, subscriptions, cursors,
 cancellation, and buffer lifetime checks. These do not need another
 implementation.
 
-The new Analysis currently exports only DiscoveryOwner and a restricted SQL
-Package adapter. Most of the remaining work connects existing behavior to
-this new design. Some work below corrects specific regressions.
+Active Analysis exports the reactive Discovery owner, its SQL package adapter,
+and finite notification operations. Native Query has the general OCI physical
+call path. Most remaining work connects these finite operations to managed
+subscriptions and Data commits. Some work below corrects specific regressions.
 
 A profile is the saved behavior summary for one Discovery interval. Saved
 state means the package checkpoint. Input evidence references identify the
@@ -60,7 +92,9 @@ Complete items 14, 15, and 16 in that order, before items 1-13. These are
 separate deliverables. Reuse the compatible old code needed for each one.
 The user authorized the OCI image as a separate crate, then the definition
 file. Image content, installation, inspection, and definition admission are
-**Done**. Running instances and package-call execution remain **Not done**.
+**Done**. Running instances remain **Not done**. Native finite package-call
+execution is implemented. Its current qualification and remaining managed
+requirements are in the [migration record](araphor-analysis-migration.md).
 
 ### 14. OCI package image
 
@@ -69,13 +103,13 @@ file. Image content, installation, inspection, and definition admission are
 - **Now:** `araphor-package` owns the existing OCI codec and static package
   contracts. The `image install` request retains an image without activation.
   Data owns the durable image root and its exact dependency closure. The old
-  `package` commands still use the retained execution owner.
+  activation-oriented `package` commands are removed.
 - **Required:** Keep the package as reusable, versioned code. Installing it
   must not start a Discovery. A definition and a running instance select how
   that code is used.
 - **Reuse:** Existing Data OCI admission and storage, SDK contracts,
-  InstalledAnalysis, and the compatible evaluators in
-  [the retained package family](../../crates/araphor-analysis_back/src/package/mod.rs).
+  and the compatible evaluators reused from
+  [the historical package family](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/mod.rs).
   Change the installation/activation connection; do not write another
   artifact format or package evaluator.
 
@@ -86,7 +120,7 @@ Recorded specifications:
 - [x] Retain declared Arrow input/output schemas, multiple named datasets,
   parameters, typed reasons, evidence, and the optional saved-state contract.
   Keep these contracts in the existing SDK.
-- [ ] Execute the declared SQL, Wasm, or native implementation. Native Rust
+- [x] Execute the declared SQL, Wasm, or native implementation. Native Rust
   calls run inside Araphor's process. Do not add fallback to another target
   or a separate package execution process.
 - [ ] Keep input bindings, query windows, current grants, progress, and
@@ -105,8 +139,10 @@ Recorded specifications:
 Image content, installation, and inspection: **Done**. The affected checks
 pass. Read the
 [image review](../guides/araphor-binary-package-storage-review.md#image-installation-without-execution)
-for the source route. The execution and instance requirements above remain
-open. This delivery adds no execution engine, subscription, or timer.
+for the source route. The image delivery added no execution engine,
+subscription, or timer. The current native execution and its qualification
+are in the [migration record](araphor-analysis-migration.md). Managed state
+and instance requirements above remain open.
 
 The image delivery adds 615 production Rust lines from `41815177`. The count
 excludes tests, comments, documents, and blank lines. Moved code adds zero to
@@ -138,7 +174,7 @@ Recorded specifications:
 - [x] A native SQL package function identifies the image, exact revision, and
   export. Native subquery arguments supply inputs. Native scalar arguments
   supply parameters. SQL supplies filters and windows.
-- [ ] SQL defines its filters, joins, grouping, and windows. PRQL compiles to
+- [x] SQL defines its filters, joins, grouping, and windows. PRQL compiles to
   SQL. Package calls stay inside that SQL. Both forms reach native SQL
   parsing, logical planning, optimization, physical planning, and execution.
 - [x] Use native DataFusion and existing dependencies wherever they supply
@@ -219,14 +255,15 @@ Formatting and affected-crate Clippy with warnings denied pass. The source
 and command record is `/tmp/araphor-sql-call-verification1.json`.
 Full workspace CI, benchmarks, and physical Kubernetes checks did not run.
 
-Complete package execution: **Not done**. SQL and PRQL reach native physical
-planning during admission. Query binds package inputs, parameters, output,
-and dependency contracts into a native `PackageCall` logical node. SQL
-body plans with no package-call node also reach native physical planning.
-The package-call node
-has no physical executor. An execution attempt returns `Unsupported`; it
-does not return empty output. The unchecked execution requirement above
-remains open with running instances. Read the
+The preceding admission delivery had no PackageCall physical executor.
+Execution returned `Unsupported`. Current Query uses the native PackageExec
+extension for finite SQL, Wasm, and native calls. One source capture supplies
+Arrow inputs, parameters, and prior state. SDK checks cover all returned
+datasets, proposed state, reasons, and evidence. Admission checks precede
+native optimization. Results have read-only accessors and private attribution.
+The [migration record](araphor-analysis-migration.md) gives current tests and
+remaining work. Complete managed execution remains **Not done**. Atomic
+publication, durable state reuse, and restart recovery remain open. Read the
 [definition review](../guides/araphor-discovery-definition-review.md).
 
 Previous qualification at `318a3259`: **Done**. All 73 distinct cases passed.
@@ -309,6 +346,25 @@ capability is not defined; the current ABI does not supply that capability.
 Any such API must preserve the same captured view and requires a separate
 concrete design.
 
+## Historical qualification that still requires migration
+
+The restored reference retains the old activation, model, source-sweep,
+recorded-preview, and graph-production tests. Their assertions must be checked
+for compatible domain rules before retirement. These tests are not current
+replacement proof. Compatible backend loader, Wasm cache,
+resource, cancellation, and notification state assertions move beside their
+current owners. Current Data store, Query follow, image and definition TLS,
+permission, immutable revision, and storage-recovery checks remain active.
+The Data storage-contract case uses the frozen expected fixture count; it
+no longer calls the removed host Discovery algorithm as its oracle.
+
+The replacement still needs the old detector output and proof assembly,
+authorized graph publication, recorded profile replay and refresh, complete
+context and baseline adapter cases, automatic notification subscriptions,
+retry event exposure, and managed state/progress recovery. TODOs 4-10 and 16
+retain those requirements. The three detector computations and Data validation
+contracts remain. Their presence does not qualify a complete producing path.
+
 ## Earlier parity TODOs
 
 ### 1. Package operations and saved state
@@ -316,29 +372,33 @@ concrete design.
 - **Before:** Install, inspect, test, run, update, roll back, and remove SQL,
   Wasm, and native packages. Pass parameters, dependencies, and saved state.
   Return named outputs, reasons, and evidence.
-- **Now:** These operations still run through analysis_back. The new Analysis
-  Package adapter accepts only a restricted SQL model.
+- **Now:** Image and definition install/inspection use current owners. Finite
+  native Query execution accepts Arrow input, parameters, and prior state.
+  The old activation, update, rollback, removal, and restart APIs are removed.
+  Managed instance state and lifecycle are not implemented.
 - **Required:** Support the same operations through active Analysis. Preserve
   exact retries, failed-update rollback, permissions, restart, and atomic saved
   state. Separate package installation from Discovery start as described in
-  items 14-16. Keep the complete backup available.
-- **Reuse:** The compatible [package family](../../crates/araphor-analysis_back/src/package/mod.rs),
-  [model execution](../../crates/araphor-analysis_back/src/model/execute.rs),
-  and [output checks](../../crates/araphor-analysis_back/src/model/output.rs).
-  Package supervision already uses Query Inputs::watch. Keep Data package
-  storage and SDK contracts in their current crates.
+  items 14-16. The backup source remains available in Git.
+- **Reuse:** The compatible [package family](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/mod.rs),
+  [model execution](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/execute.rs),
+  and [output checks](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/output.rs).
+  The old Query Inputs::watch supervision is historical reference only. Keep
+  Data package storage and SDK contracts in their current crates. Do not
+  restore the old model planner or activation supervisor.
 
 ### 2. Installed package calls in SQL
 
 - **Before:** The package owner selected and called the installed SQL, Wasm,
   or native implementation.
-- **Now:** The general evaluator still works in analysis_back. The new
-  Discovery SQL path does not expose general installed exports as SQL calls.
+- **Now:** Native Query admits exact installed export calls and has a physical
+  extension for SQL, Wasm, and native execution. Focused qualification is in
+  progress. Managed restart state and publication remain open.
 - **Required:** Let a SQL query call an installed export and use its declared
   outputs. Use the same native planning and execution route. Preserve
   parameters, saved state, permissions, and the exact artifact revision.
-- **Reuse:** [InstalledAnalysis](../../crates/araphor-analysis_back/src/package/installed.rs),
-  [target dispatch](../../crates/araphor-analysis_back/src/package/execution.rs),
+- **Reuse:** [InstalledAnalysis](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/installed.rs),
+  [target dispatch](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/execution.rs),
   and compatible native/Wasm runtime code. Connect these at the native Query
   execution boundary. Do not create another package lifecycle.
 
@@ -369,7 +429,7 @@ concrete design.
   must then save the final profile and its evidence. Later data must enter the
   next interval. No host clock loop is permitted.
 - **Reuse:** The profile construction, evidence selection, and closing rules
-  in [old Discovery live code](../../crates/araphor-analysis_back/src/discovery/live.rs).
+  in [old Discovery live code](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/live.rs).
   Reuse Data's existing profile commits. Replace the old scheduling and raw
   input reads with Query subscription input and window events.
 
@@ -383,9 +443,9 @@ concrete design.
 - **Required:** Record the exact data, facts, and code used for each profile.
   A package change must not merge results from incompatible implementations
   into the same interval.
-- **Reuse:** [Installed reference checks](../../crates/araphor-analysis_back/src/discovery/installed.rs)
+- **Reuse:** [Installed reference checks](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/installed.rs)
   and source_context in
-  [old Discovery live code](../../crates/araphor-analysis_back/src/discovery/live.rs).
+  [old Discovery live code](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/live.rs).
   Adapt their recorded description to the selected SQL export. Keep context
   and result storage in Data.
 
@@ -393,29 +453,31 @@ concrete design.
 
 - **Before:** Callers could process available input, refresh a profile, read
   the profile, and reproduce it from its recorded data and code.
-- **Now:** Those operations remain in analysis_back. The new Discovery owner
-  exposes its continuous run path but not these equivalent operations.
+- **Now:** Data retains profiles and native Query supplies finite execution.
+  The old host replay and refresh adapters are removed. Equivalent current
+  profile execution and replay operations remain unimplemented.
 - **Required:** Supply these operations through new Analysis. All execution
   and replay input must come from Query subscriptions. Missing historical
   input or code must produce an explicit unavailable result.
 - **Reuse:** profile and refresh validation from
-  [old live code](../../crates/araphor-analysis_back/src/discovery/live.rs),
-  plus [replay validation and input capture](../../crates/araphor-analysis_back/src/discovery/replay.rs).
-  The retained replay reader already uses a finite Query subscription.
-  Do not bring back the old process loop.
+  [old live code](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/live.rs),
+  plus [replay validation and input capture](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/replay.rs).
+  The historical replay reader used a finite Query subscription. Reuse that
+  boundary, not the old process loop.
 
 ### 7. Context selection, display groups, and baseline comparison
 
 - **Before:** Callers could import and select permitted context, group behavior
   records for display, and compare current behavior with a reviewed baseline.
-- **Now:** These operations still exist in analysis_back and builtins. They
-  are not exposed through the new Analysis path.
+- **Now:** Builtin computations and Data context contracts remain. The old
+  Analysis adapters and Control recorded preview bridge are removed. Complete
+  equivalent operations are not exposed through current Analysis.
 - **Required:** Preserve their results and permission checks in new Analysis.
   Connect Control preview and the existing callers to that path.
-- **Reuse:** [Context policy](../../crates/araphor-analysis_back/src/discovery/context.rs),
-  [SDK context checks](../../crates/araphor-analysis_back/src/discovery/sdk/context.rs),
-  [snapshot/group adapter](../../crates/araphor-analysis_back/src/discovery/sdk/snapshot.rs),
-  and [comparison adapter](../../crates/araphor-analysis_back/src/discovery/sdk/compare.rs).
+- **Reuse:** [Context policy](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/context.rs),
+  [SDK context checks](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/sdk/context.rs),
+  [snapshot/group adapter](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/sdk/snapshot.rs),
+  and [comparison adapter](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/sdk/compare.rs).
   Keep shared computations in their existing package crates. Use existing
   native SQL computation where it already supplies the operation.
 
@@ -437,14 +499,16 @@ concrete design.
 
 - **Before:** Graph processing selected source windows, called installed
   detectors, checked proof, and committed graph and finding results.
-- **Now:** This still works through analysis_back. Control starts it every
-  second. The old owner scans sources and reads its input windows separately.
+- **Now:** Data retains graph contracts, validation, commits, history, and
+  traversal. Builtins retain the three detector computations. The old graph
+  producer and Control timer are removed. Current Query subscriptions do not
+  yet drive authorized graph assembly and publication.
 - **Required:** Query subscriptions must supply the selected event, context,
   coverage, package, and window changes. Preserve detector results, graph
   replacement, recovery, expiry, and operation with Discovery disabled.
-- **Reuse:** Compatible [derivation](../../crates/araphor-analysis_back/src/graph/derive.rs),
-  [installed selection](../../crates/araphor-analysis_back/src/graph/installed.rs),
-  [commit checks](../../crates/araphor-analysis_back/src/graph/commit.rs),
+- **Reuse:** Compatible [derivation](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/graph/derive.rs),
+  [installed selection](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/graph/installed.rs),
+  [commit checks](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/graph/commit.rs),
   and graph proof/read code. Replace the scheduling in graph/live.rs and the
   input read in graph/input.rs. Keep Data graph storage and the three detector
   packages in their current crates.
@@ -453,12 +517,14 @@ concrete design.
 
 - **Before:** The router created obligations, delivered notifications, retried
   failed delivery, escalated overdue work, and recorded acknowledgements.
-- **Now:** The same state logic still works through analysis_back. Control
-  calls it every second. Query already exposes notification rows and
-  acknowledgement deadlines, but not every retry deadline.
+- **Now:** Active Analysis retains authorization, obligation state, delivery,
+  escalation, and acknowledgement operations and their domain tests. Control
+  delegates finite operations to it. The old periodic router is removed.
+  Query exposes notification rows and acknowledgement deadlines, but not every
+  retry deadline. Automatic subscriptions remain unimplemented.
 - **Required:** Data, route, permission, retry, and acknowledgement events must
   trigger the existing operations. Preserve restart and disclosure checks.
-- **Reuse:** The [notification family](../../crates/araphor-analysis_back/src/notification/mod.rs),
+- **Reuse:** The [notification family](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/notification/mod.rs),
   including schedule, send, complete_attempt, and acknowledge. Replace the
   Control timer with Query events and exact deadlines. Keep delivery rules
   and durable notification records with their existing owners.
@@ -467,25 +533,28 @@ concrete design.
 
 - **Before:** Control passed configured Wasm and native options to the package
   runtime.
-- **Now:** The option types still exist, but Control constructs the package
-  owner with defaults. Explicit runtime options no longer reach it.
+- **Now:** Query owns Package Runtime construction through its Limits value.
+  Runtime Wasm and native quotas default to disabled. Control configuration
+  must still be checked for complete propagation through this route.
 - **Required:** Pass the configured Analysis options at first construction.
   Check them when the runtime is reused. Omitted quotas must stay disabled.
-- **Reuse:** [AnalysisLimits](../../crates/araphor-analysis_back/src/limits.rs)
+- **Reuse:** [AnalysisLimits](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/limits.rs)
   and new_with_limits in the
-  [package owner](../../crates/araphor-analysis_back/src/package/owner.rs).
+  [package owner](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/owner.rs).
   Correct the [Control configuration route](../../crates/mithril-control/src/service/packages.rs).
 
 ### 12. Data and Wasm cancellation without periodic checks
 
 - **Before:** Data used repeated lock and interruption checks. Wasm used a
   periodic epoch tick to interrupt execution.
-- **Now:** Those waits remain, including the five-millisecond Wasm tick.
+- **Now:** Package Runtime waits for cancellation, an exact deadline, or
+  completion. The recurring Wasm epoch tick and compiler process are removed.
+  Data lock and interruption waits still require their own audit.
 - **Required:** Wait for lock release, cancellation, completion, or an actual
   deadline. Preserve interruption and reject cancelled output. Do not poll.
 - **Reuse:** Compatible Wasm admission, cache, execution, and cleanup code.
   Replace EpochTicker in
-  [Wasm execution](../../crates/araphor-analysis_back/src/package/wasm/execution.rs)
+  [Wasm execution](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/wasm/execution.rs)
   and the periodic waits in
   [Data read control](../../crates/araphor-data/src/analysis/read.rs).
 
@@ -501,7 +570,9 @@ concrete design.
   their configuration and disabled path. Do not add another resource owner.
   This includes [Query limits](../../crates/araphor-query/src/execution.rs),
   [SDK limits](../../crates/araphor-analysis-sdk/src/model.rs),
-  Data extraction limits, and the retained Wasm compiler limits.
+  Data extraction limits, and current runtime configured-limit checks. The
+  former compiler address-space option returns Unsupported for in-process
+  compilation.
 
 ## Checks for completion
 

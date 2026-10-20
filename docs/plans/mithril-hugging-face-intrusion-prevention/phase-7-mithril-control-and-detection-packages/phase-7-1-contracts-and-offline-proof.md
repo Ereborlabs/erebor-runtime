@@ -1,5 +1,12 @@
 # Phase 7.1: Contracts And DuckDB Proof
 
+Current command status, 2026-10-19: The old Analysis owner and its qualification
+harness have been removed. The cases `offline-exact`
+are no longer accepted by `mithril_discovery_test`. The commands and results
+below remain historical proof for their recorded source. They do not qualify
+the current replacement. Read the [current plan](../../araphor-package-jobs.md)
+for the supported path and remaining work.
+
 Freeze the data and investigation contracts before live storage changes.
 
 ## Intended end state

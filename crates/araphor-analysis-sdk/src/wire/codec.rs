@@ -14,7 +14,7 @@ mod allocation;
 use allocation::ArrayBudget;
 
 impl Dataset {
-    pub(crate) fn encoding_scratch(batch: &RecordBatch) -> Result<usize> {
+    pub fn encoding_scratch(batch: &RecordBatch) -> Result<usize> {
         let arrays = batch
             .columns()
             .iter()

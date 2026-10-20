@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::PackageErrorCodeV1 as Code;
-use super::{InstalledRefV1, PackageBundleRef, PackageImplementationV1, PackageRefV1};
+use super::{InstalledRefV1, PackageBundleRef, PackageRefV1};
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -85,14 +85,15 @@ impl PackageBundleRef<'_> {
 
     fn check_output(&self, export: &str, output: &str) -> Result<()> {
         self.bundle().validate()?;
-        let PackageImplementationV1::Sql { program, .. } = self
-            .bundle()
-            .artifact(&self.bundle().root)?
-            .implementation(export)?
-        else {
-            return Err(Code::Unsupported.error("native package context target"));
-        };
-        if !program.outputs.contains_key(output) {
+        let artifact = self.bundle().artifact(&self.bundle().root)?;
+        let model = artifact
+            .descriptor
+            .exports
+            .iter()
+            .find(|model| model.name == export)
+            .ok_or_else(|| Code::Missing.error("native package context export"))?;
+        artifact.implementation(export)?;
+        if !model.outputs.iter().any(|port| port.name == output) {
             return Err(Code::Missing.error("native package context output"));
         }
         Ok(())

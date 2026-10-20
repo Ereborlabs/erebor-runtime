@@ -350,6 +350,26 @@ impl Consumer for QueryEncoder {
         Ok(frame)
     }
 
+    fn initial_error(
+        &mut self,
+        failure: Failure,
+        cause: &araphor_query::Error,
+        snapshot: &araphor_query::sources::ArrowSnapshot,
+        operation: araphor_query::follow::Operation,
+        memory: &mut MemoryReservation,
+    ) -> Result<Self::Item, Status> {
+        ClientGrpcOwner::frame_memory(
+            memory,
+            Wire::receipt_bytes(snapshot).saturating_add(2048),
+            self.byte_limit,
+        )?;
+        let mut frame = Wire::header(snapshot, operation, false);
+        frame.payload = Some(proto::query_frame::Payload::Error(
+            ClientGrpcOwner::query_error(failure, Some(cause), None)?,
+        ));
+        Ok(frame)
+    }
+
     fn complete_after_checkpoint(&self, _update: &Update) -> bool {
         false
     }

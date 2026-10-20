@@ -138,8 +138,11 @@ dependencies = [
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
  "araphor-data",
+ "araphor-discovery-definition",
+ "araphor-package",
  "araphor-query",
  "datafusion",
+ "erebor-interceptor-abi",
  "erebor-runtime-error",
  "futures-util",
  "serde",
@@ -189,47 +192,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "araphor-analysis_back"
-version = "0.1.0"
-dependencies = [
- "araphor-analysis-builtins",
- "araphor-analysis-sdk",
- "araphor-data",
- "araphor-query",
- "arrow-cast",
- "arrow-ipc",
- "arrow-json",
- "arrow-schema",
- "crc32c",
- "duckdb",
- "erebor-interceptor-abi",
- "erebor-runtime-error",
- "futures-util",
- "libloading",
- "minicbor",
- "object 0.40.0",
- "prost",
- "rustix 1.1.4",
- "schemars 1.2.2",
- "serde",
- "serde_arrow",
- "serde_json",
- "sha2 0.10.9",
- "snafu",
- "tempfile",
- "time",
- "tokio",
- "uuid",
- "wasmparser",
- "wasmtime",
- "wat",
-]
-
-[[package]]
 name = "araphor-cli"
 version = "0.1.0"
 dependencies = [
- "araphor-analysis_back",
+ "araphor-analysis",
  "araphor-data",
  "araphor-discovery-definition",
  "clap",
@@ -396,6 +362,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "araphor-package-runtime"
+version = "0.1.0"
+dependencies = [
+ "araphor-analysis-builtins",
+ "araphor-analysis-sdk",
+ "araphor-data",
+ "araphor-package",
+ "erebor-runtime-error",
+ "futures-util",
+ "libloading",
+ "object 0.40.0",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "wasmparser",
+ "wasmtime",
+ "wat",
+]
+
+[[package]]
 name = "araphor-process-component"
 version = "0.1.0"
 dependencies = [
@@ -412,6 +403,7 @@ dependencies = [
  "araphor-data",
  "araphor-discovery-definition",
  "araphor-package",
+ "araphor-package-runtime",
  "arrow-buffer",
  "async-trait",
  "chrono",
@@ -5067,7 +5059,6 @@ dependencies = [
  "araphor-analysis",
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
- "araphor-analysis_back",
  "araphor-data",
  "araphor-discovery-definition",
  "araphor-observability",
@@ -5125,8 +5116,6 @@ version = "0.1.0"
 dependencies = [
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
- "araphor-analysis_back",
- "araphor-component-build",
  "araphor-data",
  "araphor-detector-example",
  "araphor-discovery-definition",
@@ -7466,6 +7455,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",

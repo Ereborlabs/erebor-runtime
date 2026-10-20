@@ -57,7 +57,7 @@ impl Output {
         }
         drop(stream);
         self._control
-            .query_async(session.engine().check_read(&self.snapshot))
+            .query_async(session.check_read(&self.snapshot))
             .await?;
         let headers = batches
             .capacity()

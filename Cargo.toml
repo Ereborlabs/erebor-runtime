@@ -23,10 +23,10 @@ members = [
     "crates/mithril-control",
     "crates/araphor-data",
     "crates/araphor-package",
+    "crates/araphor-package-runtime",
     "crates/araphor-discovery-definition",
     "crates/araphor-query",
     "crates/araphor-analysis",
-    "crates/araphor-analysis_back",
     "crates/araphor-analysis-sdk",
     "crates/araphor-analysis-builtins",
     "crates/araphor-analysis-builtins/components/discovery",
@@ -140,9 +140,6 @@ opt-level = 1
 opt-level = 1
 
 [profile.test.package.araphor-query]
-opt-level = 1
-
-[profile.test.package.araphor-analysis_back]
 opt-level = 1
 
 [profile.test.package.araphor-analysis-sdk]

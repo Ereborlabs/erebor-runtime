@@ -15,7 +15,7 @@ use snafu::ResultExt as _;
 use crate::execution::{Permit, Session};
 use crate::sources::ArrowSnapshot;
 use crate::stream::physical::{Fingerprint, SubscribeExec};
-use crate::stream::{Event, Output, OutputStream, Run};
+use crate::stream::{Event, Output, OutputStream, Run, StreamError};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
 mod clock;
@@ -42,6 +42,7 @@ pub enum Operation {
 pub struct Update {
     pub snapshot: Arc<ArrowSnapshot>,
     pub batches: Option<Vec<RecordBatch>>,
+    pub calls: std::collections::BTreeMap<u64, Arc<crate::definition::CallResult>>,
     pub cursor: Cursor,
     pub operation: Operation,
     pub exhausted: bool,
@@ -54,6 +55,7 @@ pub struct Update {
 
 pub struct Subscription {
     session: Arc<Session>,
+    workers: araphor_package_runtime::TaskTracker,
     schema: SchemaRef,
     moving: Option<u64>,
     resume: Option<Cursor>,
@@ -61,12 +63,10 @@ pub struct Subscription {
     stream: Pin<Box<dyn Stream<Item = std::result::Result<Update, StreamError>> + Send>>,
 }
 
-type StreamError = (crate::Error, Option<Arc<ArrowSnapshot>>);
-
 impl Subscription {
     /// `sources` contains all original durable Data sources. Exclude registered local tables.
     pub fn new(
-        session: Session,
+        mut session: Session,
         plan: Arc<LogicalPlan>,
         sources: AnalysisTableRequests,
         binding: &[u8],
@@ -74,11 +74,14 @@ impl Subscription {
         clock: Arc<dyn Clock>,
         follow: bool,
     ) -> Result<Self> {
+        let workers = araphor_package_runtime::TaskTracker::new();
+        session.workers = Some(workers.clone());
         let session = Arc::new(session);
         let engine = session.engine();
         let selection = session.selection();
         let control = session.control();
         control.check()?;
+        crate::definition::PackageCall::check_admission(&plan).context(SqlSnafu)?;
         if !selection.valid() || (!follow && resume.is_some()) {
             return InvalidSnafu {
                 field: "cursor request",
@@ -105,14 +108,12 @@ impl Subscription {
             });
         }
         let clocks = Window::clocks(&plan)?;
-        let source_clock = sources.contains_key("notifications");
         let window = if follow {
             Window::from_plan(&plan)?
         } else {
             None
         };
         let operation = if clocks == 0
-            && !source_clock
             && crate::planner::subscription::Subscribe::appendable(&plan).context(SqlSnafu)?
         {
             Operation::Append
@@ -136,9 +137,12 @@ impl Subscription {
             resume: resume.clone(),
         });
         let execution = Arc::clone(&run);
-        let stream =
-            futures_util::stream::once(async move { SubscribeExec::open(execution).await })
-                .try_flatten();
+        let stream = futures_util::stream::once(async move {
+            SubscribeExec::open(execution)
+                .await
+                .map_err(|error| (error, None))
+        })
+        .try_flatten();
         let state = State {
             run,
             binding,
@@ -152,8 +156,9 @@ impl Subscription {
             match state.next().await {
                 Ok(Some(update)) => Some((Ok(update), Some(state))),
                 Ok(None) => None,
-                Err(mut error) => {
-                    let receipt = if !state.started
+                Err((mut error, receipt)) => {
+                    let receipt = if receipt.is_none()
+                        && !state.started
                         && state.cursor.is_some()
                         && crate::Failure::from(&error) == crate::Failure::CursorExpired
                     {
@@ -161,18 +166,14 @@ impl Subscription {
                             let now = state.run.clock.now_ns()?;
                             let control = AnalysisReadControl::default()
                                 .within(state.run.session.engine().limits().extract_timeout)?;
-                            state
-                                .run
-                                .session
-                                .engine()
-                                .session_on(
-                                    state.run.session.selection().clone(),
-                                    &control,
-                                    now,
-                                    Arc::clone(state.run.session.memory()),
-                                )?
-                                .metadata(&state.run.sources)
-                                .await
+                            let mut session = state.run.session.engine().session_on(
+                                state.run.session.selection().clone(),
+                                &control,
+                                now,
+                                Arc::clone(state.run.session.memory()),
+                            )?;
+                            session.workers = state.run.session.workers.clone();
+                            session.metadata(&state.run.sources).await
                         }
                         .await;
                         match capture {
@@ -183,7 +184,7 @@ impl Subscription {
                             }
                         }
                     } else {
-                        None
+                        receipt
                     };
                     Some((Err((error, receipt)), None))
                 }
@@ -192,12 +193,9 @@ impl Subscription {
         .boxed();
         Ok(Self {
             session,
+            workers,
             schema,
-            moving: if follow {
-                window.map(|_| 1_000).or(source_clock.then_some(1))
-            } else {
-                None
-            },
+            moving: if follow { window.map(|_| 1_000) } else { None },
             resume,
             operation,
             stream,
@@ -211,18 +209,36 @@ impl Subscription {
             let _cancelled = control.cancel();
         });
         let inner = std::mem::replace(&mut self.stream, Box::pin(futures_util::stream::empty()));
-        let mut stream = inner.take_until(changed);
-        self.stream = futures_util::stream::poll_fn(move |context| {
-            match Pin::new(&mut stream).poll_next(context) {
-                Poll::Ready(None) if stream.take_result().is_some() => Poll::Ready(Some(Err((
-                    crate::Error::Data {
-                        source: araphor_data::Error::AnalysisReadDenied {
-                            location: snafu::location!(),
-                        },
-                    },
-                    None,
-                )))),
-                next => next,
+        let stream = inner.take_until(changed);
+        let workers = self.workers.clone();
+        self.stream = futures_util::stream::unfold(Some(stream), move |stream| {
+            let workers = workers.clone();
+            async move {
+                let mut stream = stream?;
+                match stream.next().await {
+                    Some(update) => Some((update, Some(stream))),
+                    None => {
+                        let denied = stream.take_result().is_some();
+                        drop(stream);
+                        if denied {
+                            workers.close();
+                            workers.wait().await;
+                            Some((
+                                Err((
+                                    crate::Error::Data {
+                                        source: araphor_data::Error::AnalysisReadDenied {
+                                            location: snafu::location!(),
+                                        },
+                                    },
+                                    None,
+                                )),
+                                None,
+                            ))
+                        } else {
+                            None
+                        }
+                    }
+                }
             }
         })
         .boxed();
@@ -234,6 +250,13 @@ impl Subscription {
     }
     pub fn moving_resolution_ns(&self) -> Option<u64> {
         self.moving
+    }
+
+    pub async fn cancel_and_join(mut self) -> Result<()> {
+        let result = self.cancel();
+        self.workers.close();
+        self.workers.wait().await;
+        result
     }
 
     pub fn cancel(&mut self) -> Result<()> {
@@ -269,9 +292,10 @@ struct State {
 }
 
 impl State {
-    async fn next(&mut self) -> Result<Option<Update>> {
+    async fn next(&mut self) -> std::result::Result<Option<Update>, StreamError> {
         let Some(Event {
             output,
+            calls,
             completed,
             evaluated,
             clock_changed,
@@ -290,7 +314,9 @@ impl State {
             ..
         } = output;
         if let Some(cursor) = &self.cursor {
-            cursor.check_store(&snapshot.page.extraction.meta)?;
+            cursor
+                .check_store(&snapshot.page.extraction.meta)
+                .map_err(|error| (error, Some(Arc::clone(&snapshot))))?;
         }
         let cursor = if completed {
             Cursor::new(
@@ -301,10 +327,15 @@ impl State {
                 evaluated,
             )
         } else {
-            self.cursor.clone().ok_or_else(|| crate::Error::Sql {
-                source: datafusion::common::DataFusionError::Internal(
-                    "subscription cursor is absent".into(),
-                ),
+            self.cursor.clone().ok_or_else(|| {
+                (
+                    crate::Error::Sql {
+                        source: datafusion::common::DataFusionError::Internal(
+                            "subscription cursor is absent".into(),
+                        ),
+                    },
+                    Some(Arc::clone(&snapshot)),
+                )
             })?
         };
         self.started = true;
@@ -312,6 +343,7 @@ impl State {
         Ok(Some(Update {
             snapshot,
             batches,
+            calls,
             cursor,
             operation: self.run.operation,
             exhausted,

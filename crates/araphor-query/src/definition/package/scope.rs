@@ -15,7 +15,6 @@ use datafusion::logical_expr::{AggregateUDF, Expr, ScalarUDF, TableSource, Windo
 pub(super) struct Scope<'a> {
     pub provider: &'a dyn ContextProvider,
     pub tables: &'a BTreeMap<String, Arc<dyn TableProvider>>,
-    pub sources: &'a BTreeMap<String, Arc<dyn TableProvider>>,
 }
 
 impl ContextProvider for Scope<'_> {
@@ -28,11 +27,7 @@ impl ContextProvider for Scope<'_> {
                 .schema()
                 .is_none_or(|schema| schema == options.catalog.default_schema)
         {
-            if let Some(table) = self
-                .tables
-                .get(name.table())
-                .or_else(|| self.sources.get(name.table()))
-            {
+            if let Some(table) = self.tables.get(name.table()) {
                 return Ok(provider_as_source(Arc::clone(table)));
             }
         }

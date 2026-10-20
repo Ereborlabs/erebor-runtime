@@ -6,11 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-test-fixtures = ["araphor-data/test-fixtures"]
+test-fixtures = ["araphor-data/test-fixtures", "araphor-package-runtime/test-fixtures"]
 
 [dependencies]
 araphor-discovery-definition = { path = "../araphor-discovery-definition" }
 araphor-package = { path = "../araphor-package" }
+araphor-package-runtime = { path = "../araphor-package-runtime" }
 araphor-data = { path = "../araphor-data" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 async-trait = "0.1"
@@ -31,6 +32,7 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+araphor-package-runtime = { path = "../araphor-package-runtime", features = ["test-fixtures"] }
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 crc32c.workspace = true
 araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }

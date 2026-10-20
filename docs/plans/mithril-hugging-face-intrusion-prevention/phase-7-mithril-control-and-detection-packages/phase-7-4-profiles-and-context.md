@@ -1,5 +1,12 @@
 # Phase 7.4: Deterministic Profiles And Context
 
+Current command status, 2026-10-19: The old Analysis owner and its qualification
+harness have been removed. The cases `context-roundtrip`, `profile-restart`
+are no longer accepted by `mithril_discovery_test`. The commands and results
+below remain historical proof for their recorded source. They do not qualify
+the current replacement. Read the [current plan](../../araphor-package-jobs.md)
+for the supported path and remaining work.
+
 Implement continuous discovery over the shared retained data.
 
 ## Intended end state

@@ -28,7 +28,6 @@ impl Output {
         snapshot: Arc<ArrowSnapshot>,
         permit: Arc<Permit>,
     ) -> Result<Self> {
-        let engine = session.engine();
         let (output_rows, output_bytes) = session.output();
         let width = schema.fields().len();
         let projection = (0..width).collect::<Vec<_>>();
@@ -196,7 +195,7 @@ impl Output {
         } else {
             snapshot.page.scanned_through
         };
-        control.query_async(engine.check_read(&snapshot)).await?;
+        control.query_async(session.check_read(&snapshot)).await?;
         let retained = positions
             .capacity()
             .saturating_mul(size_of::<StorePositionV1>())

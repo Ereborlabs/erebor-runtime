@@ -446,6 +446,7 @@ impl MtlsFixture {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn control_with_store(
         &self,
         store: ControlStore,

@@ -15,6 +15,12 @@ use datafusion::physical_plan::collect;
 use super::{PackageCall, PreparedDefinition};
 use crate::execution::{Engine, Limits};
 
+mod collision;
+mod execution;
+mod guest;
+mod parity;
+mod subscription;
+
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 struct Fixture {
@@ -24,10 +30,14 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> TestResult<Self> {
+        Self::limits(Limits::default())
+    }
+
+    fn limits(limits: Limits) -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         Ok(Self {
-            engine: Engine::new(store, Limits::default())?,
+            engine: Engine::new(store, limits)?,
             _directory: directory,
         })
     }
@@ -84,8 +94,8 @@ impl Fixture {
                     program: SqlModelV1 {
                         outputs: BTreeMap::from([("result".into(), "SELECT source.value + parameters.increment AS value FROM source CROSS JOIN parameters".into())]),
                         checkpoint: BTreeMap::from([("state".into(), "SELECT value AS total FROM output_result".into())]),
-                        evidence: Some("SELECT 'result' AS output_dataset, CAST(0 AS BIGINT UNSIGNED) AS output_row, 'source' AS input_dataset, __row_index AS input_row FROM source".into()),
-                        reasons: vec![SqlReasonV1 { output: "result".into(), code: "fixture.note".into(), sql: "SELECT CAST(0 AS BIGINT UNSIGNED) AS output_row, value FROM output_result".into() }],
+                        evidence: Some("SELECT 'result' AS output_dataset, __row_index AS output_row, 'source' AS input_dataset, __row_index AS input_row FROM source".into()),
+                        reasons: vec![SqlReasonV1 { output: "result".into(), code: "fixture.note".into(), sql: "SELECT __row_index AS output_row, value FROM output_result".into() }],
                     },
                 }],
                 fixtures: Vec::new(),
@@ -131,6 +141,48 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn package_debug_omits_payload() -> TestResult {
+    let mut bundle = Fixture::bundle();
+    let PackageImplementationV1::Sql { program, .. } = &mut bundle.artifacts[0].implementations[0]
+    else {
+        return Err("SQL fixture absent".into());
+    };
+    program
+        .outputs
+        .get_mut("result")
+        .ok_or("SQL output absent")?
+        .push_str(&format!(" /* {} */", "PRIVATE_PACKAGE_BODY".repeat(4096)));
+    for (bundle, definition) in [
+        (bundle, Fixture::definition()),
+        (
+            execution::component("wasm", "count-input")?,
+            Fixture::sql(
+                r#"SELECT * FROM "runtime-fixture"."1"."count-input"(
+                input => (SELECT CAST(7 AS BIGINT UNSIGNED) AS value),
+                mode => 'sum-input', amount => 0)"#,
+            ),
+        ),
+    ] {
+        let fixture = Fixture::installed(&bundle)?;
+        let prepared = fixture.prepare(&definition).await?;
+        let calls = Fixture::calls(&prepared.plan)?;
+        assert_eq!(calls.len(), 1);
+        let call = &calls[0];
+        assert_eq!(
+            format!("{call:?}"),
+            format!(
+                "PackageCall: {}@{} {}/{}",
+                call.package().package_id,
+                call.package().revision,
+                call.export(),
+                call.output(),
+            ),
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_package_call_contract() -> TestResult {
     let bundle = Fixture::bundle();
     let fixture = Fixture::installed(&bundle)?;
@@ -151,7 +203,7 @@ async fn native_package_call_contract() -> TestResult {
     assert_eq!(call.descriptor(), &bundle.artifacts[0].descriptor);
     assert_eq!(call.schema().as_arrow(), &Fixture::schema("value"));
     let inputs = call.inputs();
-    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs.len(), 6);
     let sources = crate::sources::SourceSnapshot::providers();
     let source = sources["events"].schema();
     let expected = sdk::Schema::new(vec![source
@@ -180,10 +232,32 @@ async fn native_package_call_contract() -> TestResult {
         .downcast_ref::<sdk::arrow_array::UInt64Array>()
         .ok_or("UInt64 parameter required")?;
     assert_eq!(increment.value(0), 2);
-    let Err(error) = state.create_physical_plan(&prepared.plan).await else {
-        return Err("package execution must remain unsupported".into());
-    };
-    assert_eq!(crate::Failure::native(&error), crate::Failure::Unsupported);
+    state.create_physical_plan(&prepared.plan).await?;
+    let output = fixture
+        .execute(&prepared, execution::invocation("contract"))
+        .await?;
+    assert_eq!(output.calls.len(), 1);
+    assert_eq!(
+        output
+            .batches
+            .iter()
+            .map(sdk::RecordBatch::num_rows)
+            .sum::<usize>(),
+        0
+    );
+    assert_eq!(
+        output
+            .calls
+            .values()
+            .next()
+            .ok_or("call output absent")?
+            .output()
+            .checkpoint
+            .as_ref()
+            .ok_or("checkpoint absent")?
+            .version,
+        2
+    );
     Ok(())
 }
 
@@ -299,7 +373,7 @@ async fn native_package_descriptor_inputs() -> TestResult {
     let prepared = fixture.prepare(&definition).await?;
     let calls = Fixture::calls(&prepared.plan)?;
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].inputs().len(), 2);
+    assert_eq!(calls[0].inputs().len(), 6);
     assert!(calls[0].inputs()[0]
         .display_indent()
         .to_string()
@@ -362,7 +436,10 @@ async fn native_definition_captured_file() -> TestResult {
     let path = fixture._directory.path().join("definition.yaml");
     let source = fixture._directory.path().join("query.sql");
     std::fs::write(&source, "SELECT source_cursor FROM events")?;
-    std::fs::write(&path, "name: count-events\ndescription: Count selected events.\nlabels:\n  team: security\nsql:\n  file: query.sql\n")?;
+    std::fs::write(
+        &path,
+        "name: count-events\ndescription: Count selected events.\nlabels:\n  team: security\nsql:\n  file: query.sql\n",
+    )?;
     let captured = Definition::read(&path)?;
     let admitted = fixture
         .engine
@@ -402,7 +479,10 @@ async fn native_definition_call_file() -> TestResult {
         &source,
         "SELECT source_cursor AS value FROM events WHERE source_cursor > 100",
     )?;
-    std::fs::write(&path, "name: count-events\ndescription: Count selected events.\nlabels:\n  team: security\ncall:\n  package: fixture\n  revision: r1\n  export: count\n  inputs:\n    source:\n      file: query.sql\n  parameters:\n    increment: 18446744073709551615\n  output: result\n")?;
+    std::fs::write(
+        &path,
+        "name: count-events\ndescription: Count selected events.\nlabels:\n  team: security\ncall:\n  package: fixture\n  revision: r1\n  export: count\n  inputs:\n    source:\n      file: query.sql\n  parameters:\n    increment: 18446744073709551615\n  output: result\n",
+    )?;
     let captured = Definition::read(&path)?;
     assert_eq!(captured.name, "count-events");
     assert_eq!(captured.description, "Count selected events.");
@@ -423,7 +503,7 @@ async fn native_definition_call_file() -> TestResult {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].output(), "result");
     assert_eq!(calls[0].schema().as_arrow(), &Fixture::schema("value"));
-    assert_eq!(calls[0].inputs().len(), 2);
+    assert_eq!(calls[0].inputs().len(), 6);
     let display = calls[0].inputs()[0].display_indent().to_string();
     assert!(display.contains("100"), "{display}");
     assert!(!display.contains("absent"), "{display}");
@@ -444,8 +524,25 @@ async fn native_definition_call_file() -> TestResult {
         .downcast_ref::<sdk::arrow_array::UInt64Array>()
         .ok_or("UInt64 parameter required")?;
     assert_eq!(increment.value(0), u64::MAX);
+    let output = fixture
+        .execute(&prepared, execution::invocation("captured-call-file"))
+        .await?;
+    assert_eq!(output.calls.len(), 1);
+    assert_eq!(
+        output
+            .batches
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        0
+    );
     for value in ["'2 + 1'", "null"] {
-        std::fs::write(&path, format!("name: count-events\ncall:\n  package: fixture\n  revision: r1\n  export: count\n  inputs:\n    source: SELECT source_cursor AS value FROM events\n  parameters:\n    increment: {value}\n"))?;
+        std::fs::write(
+            &path,
+            format!(
+                "name: count-events\ncall:\n  package: fixture\n  revision: r1\n  export: count\n  inputs:\n    source: SELECT source_cursor AS value FROM events\n  parameters:\n    increment: {value}\n"
+            ),
+        )?;
         let definition = Definition::read(&path)?;
         assert!(fixture.prepare(&definition).await.is_err(), "{value}");
     }
@@ -454,13 +551,15 @@ async fn native_definition_call_file() -> TestResult {
 
 #[tokio::test]
 async fn native_package_wasm_contract() -> TestResult {
-    let mut bundle = Fixture::bundle();
-    bundle.artifacts[0].implementations = vec![PackageImplementationV1::Wasm {
-        exports: vec!["count".into()],
-        artifact: vec![0, 97, 115, 109, 1, 0, 0, 0],
-    }];
+    let bundle = execution::component("wasm", "count-input")?;
     let fixture = Fixture::installed(&bundle)?;
-    let prepared = fixture.prepare(&Fixture::definition()).await?;
+    let prepared = fixture
+        .prepare(&Fixture::sql(
+            r#"SELECT * FROM "runtime-fixture"."1"."count-input"(
+            input => (SELECT CAST(7 AS BIGINT UNSIGNED) AS value),
+            mode => 'sum-input', amount => 0)"#,
+        ))
+        .await?;
     let calls = Fixture::calls(&prepared.plan)?;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].descriptor(), &bundle.artifacts[0].descriptor);
@@ -469,10 +568,17 @@ async fn native_package_wasm_contract() -> TestResult {
     let state = fixture
         .engine
         .catalog(crate::sources::SourceSnapshot::providers())?;
-    let Err(error) = state.create_physical_plan(&prepared.plan).await else {
-        return Err("Wasm execution must remain unsupported".into());
-    };
-    assert_eq!(crate::Failure::native(&error), crate::Failure::Unsupported);
+    state.create_physical_plan(&prepared.plan).await?;
+    let output = fixture
+        .execute(&prepared, execution::invocation("wasm-contract"))
+        .await?;
+    assert_eq!(output.calls.len(), 1);
+    let values = output.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<sdk::arrow_array::UInt64Array>()
+        .ok_or("UInt64 output required")?;
+    assert_eq!(values.values().as_ref(), &[7]);
     Ok(())
 }
 
@@ -564,7 +670,7 @@ async fn native_package_locked_dependency() -> TestResult {
         .iter()
         .find(|call| call.package() == &bundle.root)
         .ok_or("consumer call absent")?;
-    assert_eq!(call.inputs().len(), 3);
+    assert_eq!(call.inputs().len(), 7);
     assert_eq!(
         call.inputs()[1].schema().as_arrow(),
         &bundle.artifacts[0].descriptor.exports[0].inputs[1]
@@ -724,7 +830,7 @@ async fn native_package_input_order() -> TestResult {
         let calls = Fixture::calls(&prepared.plan)?;
         assert_eq!(calls.len(), 1);
         let inputs = calls[0].inputs();
-        assert_eq!(inputs.len(), 3);
+        assert_eq!(inputs.len(), 7);
         for (slot, input) in bundle.artifacts[0].descriptor.exports[0]
             .inputs
             .iter()
@@ -941,7 +1047,7 @@ async fn native_package_multiple_calls() -> TestResult {
         let mut increments = Vec::new();
         for call in &calls {
             let inputs = call.inputs();
-            assert_eq!(inputs.len(), 2);
+            assert_eq!(inputs.len(), 6);
             let batches = collect(
                 state.create_physical_plan(inputs[1]).await?,
                 state.task_ctx(),
@@ -966,12 +1072,9 @@ async fn native_package_multiple_calls() -> TestResult {
                 .iter()
                 .any(|display| display.contains("10") && !display.contains("100")));
         } else {
-            assert!(
-                calls
-                    .iter()
-                    .any(|call| Fixture::calls(call.inputs()[0])
-                        .is_ok_and(|nested| nested.len() == 1))
-            );
+            assert!(calls.iter().any(|call| {
+                Fixture::calls(call.inputs()[0]).is_ok_and(|nested| nested.len() == 1)
+            }));
         }
     }
     Ok(())
@@ -988,7 +1091,10 @@ async fn native_package_recursion_rejected() -> TestResult {
             else {
                 return Err("SQL fixture absent".into());
             };
-            program.outputs.insert("result".into(), recursive.into());
+            program.outputs.insert(
+                "result".into(),
+                r#"SELECT * FROM "fixture"."r1".count(source => (SELECT value FROM source), increment => 2)"#.into(),
+            );
             artifact.descriptor.exports.push(sdk::Model::new(
                 "safe",
                 vec![],
@@ -1126,11 +1232,14 @@ async fn native_package_lexical_scope() -> TestResult {
     ] {
         let prepared = own.prepare(&Fixture::sql(sql)).await?;
         let calls = Fixture::calls(&prepared.plan)?;
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].export(), export);
-        assert_eq!(calls[0].schema().as_arrow(), &Fixture::schema("value"));
-        let inputs = calls[0].inputs();
-        assert_eq!(inputs.len(), 1);
+        assert_eq!(calls.len(), if export == "count" { 2 } else { 1 });
+        let call = calls
+            .iter()
+            .find(|call| call.export() == export)
+            .ok_or("caller export absent")?;
+        assert_eq!(call.schema().as_arrow(), &Fixture::schema("value"));
+        let inputs = call.inputs();
+        assert_eq!(inputs.len(), 2);
         let state = own
             .engine
             .catalog(crate::sources::SourceSnapshot::providers())?;
@@ -1197,10 +1306,86 @@ async fn native_package_body_optimization() -> TestResult {
         } else {
             let prepared = prepared?;
             assert_eq!(prepared.plan.schema().as_arrow(), &Fixture::schema("value"));
-            assert_eq!(Fixture::calls(&prepared.plan)?.len(), 1);
+            let calls = Fixture::calls(&prepared.plan)?;
+            assert_eq!(calls.len(), 2);
+            let root = calls
+                .iter()
+                .find(|call| call.export() == "count")
+                .ok_or("root call absent")?;
+            let nested = calls
+                .iter()
+                .find(|call| call.export() == "inner")
+                .ok_or("nested call absent")?;
+            assert_ne!(root.id(), nested.id());
+            let children = root.inputs();
+            let body_calls = Fixture::calls(children[2])?;
+            assert_eq!(body_calls.len(), 1);
+            assert_eq!(body_calls[0].id(), nested.id());
             assert_eq!(prepared.resolved.images[0].digest, bundle.digest()?);
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unused_call_follows_native() -> TestResult {
+    let mut bundle = Fixture::bundle();
+    let PackageImplementationV1::Sql { program, .. } = &mut bundle.artifacts[0].implementations[0]
+    else {
+        return Err("SQL fixture absent".into());
+    };
+    program.outputs.insert(
+        "result".into(),
+        "SELECT CAST('wrong' AS BIGINT UNSIGNED) AS value".into(),
+    );
+    let fixture = Fixture::installed(&bundle)?;
+    let called = Fixture::definition();
+    let Err(error) = fixture.prepare(&called).await else {
+        return Err("called invalid body must fail native optimization".into());
+    };
+    let message = format!("{error:?}").to_ascii_lowercase();
+    assert!(
+        message.contains("cast") && message.contains("wrong"),
+        "{error:?}"
+    );
+    let prepared = fixture
+        .prepare(&Fixture::sql(format!(
+            "WITH unused AS ({}) SELECT CAST(1 AS BIGINT UNSIGNED) AS untouched",
+            called.program.sql()?,
+        )))
+        .await?;
+    assert!(Fixture::calls(&prepared.plan)?.is_empty());
+    assert!(prepared.sources.contains_key("events"));
+    assert_eq!(prepared.resolved.images.len(), 1);
+    assert_eq!(prepared.resolved.images[0].image, bundle.root);
+    assert_eq!(prepared.resolved.images[0].digest, bundle.digest()?);
+    fixture.event(1)?;
+    let output = fixture
+        .execute(&prepared, execution::invocation("unused-call"))
+        .await?;
+    assert!(output.calls.is_empty());
+    assert_eq!(output.snapshot.page.extraction.sources.len(), 1);
+    assert_eq!(
+        output.snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        1,
+    );
+    assert_eq!(
+        output
+            .batches
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        1,
+    );
+    let batch = output.batches.first().ok_or("native result absent")?;
+    let values = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<sdk::arrow_array::UInt64Array>()
+        .ok_or("UInt64 result required")?;
+    assert_eq!(values.value(0), 1);
     Ok(())
 }
 
@@ -1215,5 +1400,17 @@ async fn native_package_prql_call() -> TestResult {
     assert_eq!(Fixture::calls(&prepared.plan)?.len(), 1);
     assert_eq!(prepared.resolved.images[0].image, Fixture::bundle().root);
     assert!(prepared.resolved.sql.contains(r#""fixture"."r1".count"#));
+    let output = fixture
+        .execute(&prepared, execution::invocation("prql"))
+        .await?;
+    assert_eq!(output.calls.len(), 1);
+    assert_eq!(
+        output
+            .batches
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        0
+    );
     Ok(())
 }

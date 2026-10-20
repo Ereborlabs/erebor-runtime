@@ -284,17 +284,7 @@ impl AnalysisStore {
                 crate::DiscoveryContextRevisionV1::try_from(&stored)
             })
             .transpose()?;
-        let (documents, revisions): (u64, u64) = reader
-            .query_row(
-                "SELECT COUNT(DISTINCT entity_key), COUNT(*) FROM context_versions
-             WHERE tenant_id = ? AND owner_id = ?",
-                params![key.tenant_id.as_slice(), key.owner_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read discovery document bounds",
-            })?;
-        imported.validate_history(previous.as_ref(), documents, revisions)?;
+        imported.validate_history(previous.as_ref())?;
         Ok(())
     }
 }

@@ -48,6 +48,36 @@ The replacement and complete production Rust reduction remain **Not done**.
 The [subscription stream result](araphor-component-redesign.md#subscription-streams-and-shared-validation)
 records the fresh owner, compatible reuse, selected checks, and remaining work.
 
+### Backup removal and current ownership
+
+The user authorizes continuation of the complete migration on 2026-10-19.
+Use the [Analysis migration record](araphor-analysis-migration.md) for the
+complete source and function map. Move compatible finite rules. Rewrite
+other behavior through native plans and Query subscriptions. Keep the
+reference source until replacements pass their required checks.
+
+On 2026-10-19, the user requires compatible functionality to move before the
+backup crate is deleted. The initial removal did not establish complete
+coverage. That removal is withdrawn. All 208 backup files match the local
+`6a25ba1b` commit. The 34 deleted Control and E2E reference files are restored.
+The backup is a reference; current execution must not call its old planners,
+source sweeps, compiler process, or periodic tasks.
+
+The native loader and Wasm evaluator are copied to Package Runtime. Finite
+notification operations are copied to active Analysis. These moves do not
+establish complete graph, Discovery, durable commit, permission, or replay
+parity. A file and function inventory must identify each compatible rule,
+its current owner and tests, or the work required to move it. Old caller
+coupling alone does not justify deleting domain behavior.
+
+Backup migration and removal: **Not done**. Finite OCI execution qualification
+is also **Not done**. Formatting, workspace compilation, and strict Clippy
+passed before source restoration. Full workspace tests failed to build because
+the host disk filled. They did not pass. The previous 11,664-line delivery
+reduction and 5,668-line complete reduction describe the withdrawn deletion;
+they are not current results. Recount only after compatible migration and
+qualification. No deletion commit or push was made.
+
 ### First deliverable: definition files and running instances
 
 The user requires this work before the earlier feature parity TODOs. Implement
@@ -79,6 +109,62 @@ each exact installed image once for the admission. Data and Control retain
 the existing immutable snapshot, permission, and trust checks. Admission
 starts no Discovery. This change does not implement the running-instance
 lifecycle or the physical package-call executor.
+
+### Finite OCI calls through native execution
+
+The user authorizes this execution work on 2026-10-19. Managed instances
+remain the next deliverable. This work does not approve the earlier draft
+Jobs storage or root-packet proposals.
+
+```text
+A caller executes one prepared definition with invocation state
+  -> Query fixes logical time for native optimization and physical planning
+  -> native physical planning creates PackageExec for each admitted call
+  -> Query captures the declared source view once
+  -> PackageExec collects complete Arrow inputs and scalar parameters
+  -> native SQL plans or the selected Wasm or native evaluator compute outputs
+  -> the existing SDK validates all datasets, state, reasons, and evidence
+  -> Query returns selected Arrow batches and complete proposed call results
+  -> Data remains the only durable commit owner
+
+A call fails or the operation is cancelled
+  -> Query returns no complete definition result
+  -> runtime cancellation wakes from an event and joins active guest work
+  -> Data receives no automatic state, output, or progress write
+```
+
+Query owns the DataFusion extension operator and the captured call context.
+`araphor-package-runtime` owns compatible native loader and Wasm evaluator
+code reused from the restored reference backup. No current owner depends on
+`araphor-analysis_back`. Runtime imports neither Query nor Analysis. This boundary prevents a crate dependency cycle. Runtime has
+no scheduler, source reader, or durable writer.
+
+SQL body plans remain native logical and physical children. Temporary input,
+parameter, output, and prior-state tables use the existing source provider.
+These tables share the captured source view and fixed execution clock. A
+child call uses the existing operation permit. It does not enter the
+synchronous Query bridge or acquire a second permit.
+
+Each admitted call has a distinct identity. Readers of that call share its
+complete result. Separate call sites have separate proposed state. The finite
+caller supplies prior state by admitted call identity. These identities are
+not a managed-instance restart contract. That contract remains in TODO 16.
+
+Wasm interruption waits for cancellation, an exact configured deadline, or
+completion. No recurring epoch timer runs. Compilation uses Wasmtime inside
+the process. The new execution path does not use the backup compiler or
+its polling timer. Runtime quotas default to disabled. Explicit image, model, caller,
+and Query quotas retain their existing checks. The former compiler address
+space quota returns Unsupported because the compiler no longer has a separate
+process. Native cancellation remains cooperative. Active Wasmtime compilation
+must finish before cancellation can join that worker. Explicit cancellation
+through execute_definition joins logical and guest work before return. A
+caller that drops the complete async future cannot wait for cleanup in Drop;
+worker tokens still retain executable and operation resources through teardown.
+
+Implementation qualification: **Not done**. The implementation and focused
+checks are in progress. Running instances, atomic composed-step commits,
+permission supervision, progress, and restart recovery remain **Not done**.
 
 ### Approved YAML authoring design
 

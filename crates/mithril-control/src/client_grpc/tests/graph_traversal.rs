@@ -115,8 +115,8 @@ async fn graph_traversal_cross_tenant_seed_denied() -> TestResult {
 
 #[tokio::test]
 async fn graph_traversal_grpc_receipt() -> TestResult {
-    let mut fixture = Fixture::new()?;
-    fixture.service.control = fixture.service.control.clone().with_graph()?;
+    let fixture = Fixture::new()?;
+    fixture.service.data()?.store.enable_graph_owner()?;
     let request = fixture.request(
         proto::QueryRequest {
             sql: "SELECT COUNT(*) FROM graph_subjects".into(),

@@ -3,7 +3,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use araphor_data::{EvidenceIntakeIdentityV1, PackageErrorCodeV1 as Code};
+use araphor_data::{
+    EvidenceIntakeIdentityV1, PackageErrorCodeV1 as Code, ProcessorScopeV1, DISCOVERY_PROCESSOR,
+    DISCOVERY_SCHEMA_VERSION,
+};
 use araphor_query::follow::Update;
 use futures_util::stream::SelectAll;
 use futures_util::{Stream, StreamExt as _};
@@ -12,6 +15,7 @@ use tokio::sync::watch;
 
 use crate::{Package, Result};
 
+mod output;
 mod publication;
 use publication::Publication;
 
@@ -65,37 +69,51 @@ impl DiscoveryOwner {
 
     pub async fn run(self: Arc<Self>, mut stop: watch::Receiver<bool>) -> Result<()> {
         let mut streams = self.sources().await?;
-        loop {
-            if *stop.borrow_and_update() {
-                return Ok(());
-            }
-            tokio::select! {
-                biased;
-                changed = stop.changed() => {
-                    if changed.is_err() || *stop.borrow_and_update() { return Ok(()); }
+        let result = async {
+            loop {
+                if *stop.borrow_and_update() {
+                    return Ok(());
                 }
-                update = streams.next() => {
-                    let Some((pipeline, update)) = update else { return Ok(()); };
-                    let update = update?;
-                    let tenant = match &pipeline {
-                        Pipeline::Sources(tenant) => *tenant,
-                        Pipeline::Profile(source) => source.tenant_id,
-                    };
-                    let package = self.package(tenant)?;
-                    package.check()?;
-                    match pipeline {
-                        Pipeline::Sources(_) if update.batches.is_some() => {
-                            self.derive(&mut streams, tenant, &update).await?;
+                tokio::select! {
+                    biased;
+                    changed = stop.changed() => {
+                        if changed.is_err() || *stop.borrow_and_update() { return Ok(()); }
+                    }
+                    update = streams.next() => {
+                        let Some((pipeline, update)) = update else { return Ok(()); };
+                        let update = update?;
+                        let tenant = match &pipeline {
+                            Pipeline::Sources(tenant) => *tenant,
+                            Pipeline::Profile(source) => source.tenant_id,
+                        };
+                        let package = self.package(tenant)?;
+                        package.check()?;
+                        match pipeline {
+                            Pipeline::Sources(_) if update.batches.is_some() => {
+                                self.derive(&mut streams, tenant, &update).await?;
+                            }
+                            Pipeline::Sources(_) => {}
+                            Pipeline::Profile(_) => match Self::publish(Arc::clone(package), update).await {
+                                Ok(_) | Err(crate::Error::Data { source: araphor_data::Error::AnalysisConflict { .. } }) => {}
+                                Err(error) => return Err(error),
+                            },
                         }
-                        Pipeline::Sources(_) => {}
-                        Pipeline::Profile(_) => match Self::publish(Arc::clone(package), update).await {
-                            Ok(_) | Err(crate::Error::Data { source: araphor_data::Error::AnalysisConflict { .. } }) => {}
-                            Err(error) => return Err(error),
-                        },
                     }
                 }
             }
         }
+        .await;
+        let joined = futures_util::future::join_all(
+            streams
+                .into_iter()
+                .map(|entry| entry.stream.cancel_and_join()),
+        )
+        .await;
+        result?;
+        for result in joined {
+            result?;
+        }
+        Ok(())
     }
 
     fn package(&self, tenant: [u8; 16]) -> Result<&Arc<Package>> {
@@ -119,10 +137,18 @@ impl DiscoveryOwner {
                 if source.tenant_id == tenant && !sources.contains(source))
         };
         if streams.iter().any(|entry| !retained(entry)) {
-            *streams = std::mem::take(streams)
-                .into_iter()
-                .filter(retained)
-                .collect();
+            let (keep, removed): (Vec<_>, Vec<_>) =
+                std::mem::take(streams).into_iter().partition(retained);
+            *streams = keep.into_iter().collect();
+            let joined = futures_util::future::join_all(
+                removed
+                    .into_iter()
+                    .map(|entry| entry.stream.cancel_and_join()),
+            )
+            .await;
+            for result in joined {
+                result?;
+            }
         }
         let active = streams
             .iter()
@@ -132,9 +158,35 @@ impl DiscoveryOwner {
         for source in sources {
             let pipeline = Pipeline::Profile(source.clone());
             if !active.contains(&pipeline) {
+                let stream = package.subscribe(Some(&source), true).await?;
+                let registration = Arc::clone(package);
+                let scope = ProcessorScopeV1 {
+                    processor_id: DISCOVERY_PROCESSOR.into(),
+                    method_version: u64::from(DISCOVERY_SCHEMA_VERSION),
+                    identity: source.clone(),
+                };
+                match tokio::task::spawn_blocking(move || {
+                    registration.commit(|| {
+                        registration
+                            .query
+                            .store()
+                            .ensure_optional_processor_guarded(&scope, || {
+                                registration.grant.remaining().map(|_| ())
+                            })
+                    })
+                })
+                .await
+                .context(crate::error::TaskSnafu)?
+                {
+                    Ok(_) => {}
+                    Err(crate::Error::Data {
+                        source: araphor_data::Error::AnalysisConflict { .. },
+                    }) => continue,
+                    Err(error) => return Err(error),
+                }
                 streams.push(PipelineStream {
                     key: pipeline,
-                    stream: package.subscribe(Some(&source), true).await?,
+                    stream,
                 });
             }
         }
@@ -176,6 +228,12 @@ impl DiscoveryOwner {
     }
 
     async fn publish(package: Arc<Package>, update: Update) -> Result<usize> {
+        if update.batches.is_some() || !update.calls.is_empty() {
+            package.check_return(&update)?;
+        }
+        if update.batches.is_none() {
+            return Ok(0);
+        }
         package.query.check_read(&update.snapshot).await?;
         let mut rows = Vec::new();
         for batch in update.batches.iter().flatten() {

@@ -13,12 +13,8 @@ struct Cli {
     config: PathBuf,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if araphor_analysis_back::AnalysisPackageOwner::run_worker_if_requested()? {
-        return Ok(());
-    }
+fn main() {
     start();
-    Ok(())
 }
 
 #[tokio::main]

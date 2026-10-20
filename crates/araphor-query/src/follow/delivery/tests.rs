@@ -14,6 +14,13 @@ enum Item {
     Checkpoint,
     Health,
     Error,
+    InitialError {
+        store: [u8; 16],
+        epoch: u64,
+        revision: u64,
+        operation: Operation,
+        failure: Failure,
+    },
     Complete,
 }
 
@@ -107,6 +114,28 @@ impl Consumer for Encoder {
     }
     fn complete_after_checkpoint(&self, _: &Update) -> bool {
         false
+    }
+
+    fn initial_error(
+        &mut self,
+        failure: Failure,
+        cause: &Error,
+        snapshot: &ArrowSnapshot,
+        operation: Operation,
+        memory: &mut MemoryReservation,
+    ) -> std::result::Result<Item, Failure> {
+        assert_eq!(failure, Failure::from(cause));
+        let meta = &snapshot.page.extraction.meta;
+        Self::encode(
+            Item::InitialError {
+                store: *meta.store_uuid.as_bytes(),
+                epoch: meta.recovery_epoch,
+                revision: meta.commit_revision,
+                operation,
+                failure,
+            },
+            memory,
+        )
     }
     fn deadline_completes(&self) -> bool {
         false
@@ -209,6 +238,243 @@ async fn phases_and_conversion_lifetime() {
     assert!(fixture.engine.memory().reserve_output(capacity).is_err());
     assert!(delivery.next().await.is_none());
     assert!(fixture.engine.memory().reserve_output(capacity).is_ok());
+}
+
+#[tokio::test]
+async fn initial_failure_keeps_receipt(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use araphor_data::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion::logical_expr::{col, create_udf, LogicalPlanBuilder, Volatility};
+
+    let fixture = Fixture::new();
+    let before = fixture.engine.store().meta()?;
+    let store = Arc::clone(fixture.engine.store());
+    let fail = create_udf(
+        "fail_after_capture",
+        vec![DataType::Utf8],
+        DataType::Int64,
+        Volatility::Volatile,
+        Arc::new(move |_| {
+            store
+                .commit_context(&AnalysisContextVersionV1 {
+                    key: AnalysisContextKeyV1 {
+                        tenant_id: [1; 16],
+                        owner_id: "fixture".into(),
+                        entity_key: vec![1],
+                        lifetime_key: vec![1],
+                        owner_revision: 1,
+                    },
+                    valid_from_utc_ns: None,
+                    valid_until_utc_ns: None,
+                    sensitivity: ContextSensitivityV1::Tenant,
+                    body: vec![1],
+                })
+                .map_err(|source| DataFusionError::External(Box::new(source)))?;
+            Err(DataFusionError::Execution(
+                "fixture evaluation failure".into(),
+            ))
+        }),
+    );
+    let (plan, sources) = fixture
+        .engine
+        .prepare("SELECT relation FROM catalog LIMIT 1", Vec::new())
+        .await?;
+    let plan = LogicalPlanBuilder::from(plan)
+        .project(vec![fail.call(vec![col("relation")]).alias("value")])?
+        .build()?;
+    let inner = fixture
+        .engine
+        .session(
+            AnalysisSelectionV1::tenant([1; 16]),
+            &AnalysisReadControl::default(),
+            1_000_000_000,
+        )?
+        .subscribe(plan, sources, b"initial failure", false)?;
+    let mut delivery = Delivery::new(
+        inner,
+        Encoder {
+            authority: Arc::clone(&fixture.authority),
+            fail: false,
+        },
+        None,
+        Duration::from_secs(10),
+        None,
+    )?;
+    assert_eq!(
+        next(&mut delivery).await,
+        Ok(Item::InitialError {
+            store: *before.store_uuid.as_bytes(),
+            epoch: before.recovery_epoch,
+            revision: before.commit_revision,
+            operation: Operation::Replace,
+            failure: Failure::EvaluationFailed,
+        })
+    );
+    assert!(fixture.engine.store().meta()?.commit_revision > before.commit_revision);
+    assert_eq!(delivery.frame_bytes(), 8);
+    let input = fixture
+        .engine
+        .limits()
+        .input_capacity
+        .ok_or("configured input capacity")?;
+    let output = fixture
+        .engine
+        .limits()
+        .output_capacity
+        .ok_or("configured output capacity")?;
+    assert!(fixture.engine.memory().reserve_input(input).is_ok());
+    assert!(fixture.engine.memory().reserve_output(output).is_err());
+    assert_eq!(next(&mut delivery).await, Err(Failure::EvaluationFailed));
+    assert!(delivery.next().await.is_none());
+    assert!(fixture.engine.memory().reserve_output(output).is_ok());
+    let mut recovered = fixture
+        .delivery(Duration::from_secs(10), false, false)
+        .await;
+    for item in [Item::Metadata, Item::Row, Item::Checkpoint, Item::Complete] {
+        assert_eq!(next(&mut recovered).await, Ok(item));
+    }
+    assert!(recovered.next().await.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn package_checkpoint_releases_capacity(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use araphor_analysis_sdk as sdk;
+    use araphor_discovery_definition::{Definition, Program, Source};
+    use araphor_package::{
+        PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1,
+    };
+
+    let capacity = 64 * 1024;
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let engine = Engine::new(
+        Arc::clone(&store),
+        Limits {
+            output_bytes: capacity,
+            output_capacity: Some(capacity),
+            ..Default::default()
+        },
+    )?;
+    let mut model = sdk::Model::new(
+        "evaluate",
+        Vec::new(),
+        vec![sdk::Port::new(
+            "data",
+            sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]),
+        )],
+    );
+    model.parameters = sdk::Schema::new(vec![
+        sdk::Field::new("mode", sdk::DataType::Utf8, false),
+        sdk::Field::new("amount", sdk::DataType::UInt64, false),
+    ]);
+    model.limits.max_bytes = (capacity / 4) as u64;
+    store.install_package_image(
+        [1; 16],
+        &PackageBundleV1 {
+            schema_version: 1,
+            root: PackageRefV1 {
+                package_id: "runtime-fixture".into(),
+                revision: "1".into(),
+            },
+            artifacts: vec![PackageArtifactV1 {
+                descriptor: sdk::Package::new("runtime-fixture", "1", vec![model]),
+                implementations: vec![PackageImplementationV1::Wasm {
+                    exports: vec!["evaluate".into()],
+                    artifact: araphor_analysis_builtins::components::RUNTIME.to_vec(),
+                }],
+                fixtures: Vec::new(),
+            }],
+        },
+        || Ok(()),
+    )?;
+    let control = AnalysisReadControl::default();
+    let definition = Definition {
+        name: "package-delivery".into(),
+        description: String::new(),
+        labels: Default::default(),
+        program: Program::Sql {
+            source: Source::Inline {
+                inline: r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'echo',
+                amount => (SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) FROM context_versions))"#
+                    .into(),
+            },
+        },
+    };
+    let prepared = engine
+        .prepare_definition([1; 16], &definition, Arc::new(control.within(None)?))
+        .await?;
+    let session = engine.session(
+        AnalysisSelectionV1::tenant([1; 16]),
+        &control,
+        1_000_000_000,
+    )?;
+    let permit = Arc::new(engine.reserve_evaluation([1; 16])?);
+    let mut state = session.state()?;
+    state.config_mut().set_extension(Arc::clone(&permit));
+    drop(session.physical(&prepared.plan, &state).await?);
+    drop((state, permit));
+    assert!(engine.guest_cached(araphor_analysis_builtins::components::RUNTIME)?);
+    drop(engine.reserve_evaluation([1; 16])?);
+    drop(engine.memory().reserve_output(capacity)?);
+    let clock = Arc::new(TestClock {
+        changes: watch::channel(1_000_000_000).0,
+        reads: AtomicUsize::new(0),
+    });
+    let subscription = Subscription::new(
+        session,
+        Arc::new(prepared.plan),
+        prepared.sources,
+        b"package delivery",
+        None,
+        clock,
+        true,
+    )?;
+    let mut delivery = Delivery::new(
+        subscription,
+        Encoder {
+            authority: Arc::new(Authority {
+                valid: AtomicBool::new(true),
+                changes: watch::channel(0).0,
+            }),
+            fail: false,
+        },
+        None,
+        Duration::from_secs(30),
+        None,
+    )?;
+    for item in [Item::Metadata, Item::Row, Item::Checkpoint] {
+        assert_eq!(next(&mut delivery).await, Ok(item));
+    }
+    drop(
+        engine
+            .memory()
+            .reserve_output(capacity - delivery.frame_bytes())?,
+    );
+    store.commit_context(&araphor_data::AnalysisContextVersionV1 {
+        key: araphor_data::AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "delivery".into(),
+            entity_key: vec![1],
+            lifetime_key: vec![1],
+            owner_revision: 1,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: araphor_data::ContextSensitivityV1::Tenant,
+        body: vec![1],
+    })?;
+    for item in [Item::Row, Item::Checkpoint] {
+        assert_eq!(next(&mut delivery).await, Ok(item));
+    }
+    drop(
+        engine
+            .memory()
+            .reserve_output(capacity - delivery.frame_bytes())?,
+    );
+    Ok(())
 }
 
 #[tokio::test]

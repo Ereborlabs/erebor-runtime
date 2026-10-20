@@ -4,14 +4,7 @@ use clap::{CommandFactory as _, Parser, ValueEnum};
 
 #[derive(Clone, PartialEq, ValueEnum)]
 enum Case {
-    AnalysisPackages,
-    AnalysisPackagesNative,
-    OfflineExact,
     StorageContract,
-    EvidenceRestart,
-    ContextRoundtrip,
-    ProfileRestart,
-    OwnerIsolation,
     DataStoreRecovery,
     DataStoreStartup,
     DataStoreLoad,
@@ -20,7 +13,6 @@ enum Case {
     DataStoreRollout,
     DataStoreInspect,
     QueryFollow,
-    GraphNotification,
 }
 
 #[derive(Parser)]
@@ -67,9 +59,6 @@ impl Cli {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if araphor_analysis_back::AnalysisPackageOwner::run_worker_if_requested()? {
-        return Ok(());
-    }
     let cli = Cli::parse();
     if let Err(error) = cli.validate() {
         error.exit();
@@ -84,23 +73,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let result = match cli.case {
-        Case::AnalysisPackagesNative => {
-            mithril_e2e::AnalysisPackageQualification::new(cli.output_directory)
-                .run_native()
-                .await
-        }
-        Case::AnalysisPackages => {
-            mithril_e2e::AnalysisPackageQualification::new(cli.output_directory)
-                .run()
-                .await
-        }
-        Case::GraphNotification => {
-            mithril_e2e::GraphNotificationQualification::new(cli.output_directory)
-                .run()
-                .await
-        }
-        Case::OfflineExact => mithril_e2e::run_discovery_offline(&cli.output_directory)
-            .map_err(Box::<dyn std::error::Error>::from),
         Case::QueryFollow => {
             mithril_e2e::QueryFollowQualification::new(cli.output_directory)
                 .run()
@@ -144,26 +116,6 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             .inspect(&root, *tenant.as_bytes(), cli.baseline.as_deref()),
             _ => Err("inspection requires a data directory and tenant".into()),
         },
-        Case::EvidenceRestart => {
-            mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
-                .evidence_restart()
-                .await
-        }
-        Case::ContextRoundtrip => {
-            mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
-                .context_roundtrip()
-                .await
-        }
-        Case::ProfileRestart => {
-            mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
-                .profile_restart()
-                .await
-        }
-        Case::OwnerIsolation => {
-            mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
-                .owner_isolation()
-                .await
-        }
     };
     result?;
     println!("Araphor discovery check passed; see result.json for its proof boundary");
@@ -171,50 +123,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
-#[test]
-#[ignore]
-fn araphor_component_compiler() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    araphor_analysis_back::AnalysisPackageOwner::run_compiler_worker()?;
-    Ok(())
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn profile_restart_arguments_scoped() -> Result<(), clap::Error> {
-        let base = [
-            "qualification",
-            "--case",
-            "profile-restart",
-            "--output-directory",
-            "/tmp/profile",
-        ];
-        let cli = Cli::try_parse_from(base)?;
-        cli.validate()?;
-        assert!(cli.case == Case::ProfileRestart);
-        let wrong = Cli::try_parse_from(base.into_iter().chain(["--tenants", "2"]))?;
-        assert!(wrong.validate().is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn owner_isolation_arguments_scoped() -> Result<(), clap::Error> {
-        let base = [
-            "qualification",
-            "--case",
-            "owner-isolation",
-            "--output-directory",
-            "/tmp/isolation",
-        ];
-        let cli = Cli::try_parse_from(base)?;
-        cli.validate()?;
-        assert!(cli.case == Case::OwnerIsolation);
-        let wrong = Cli::try_parse_from(base.into_iter().chain(["--tenants", "2"]))?;
-        assert!(wrong.validate().is_err());
-        Ok(())
-    }
 
     #[test]
     fn query_follow_arguments_are_scoped() -> Result<(), clap::Error> {

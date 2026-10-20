@@ -1,5 +1,12 @@
 # Phase 7.3: Trusted Query And Commit-Driven Follow
 
+Current command status, 2026-10-19: The old Analysis owner and its qualification
+harness have been removed. The cases `profile-restart`
+are no longer accepted by `mithril_discovery_test`. The commands and results
+below remain historical proof for their recorded source. They do not qualify
+the current replacement. Read the [current plan](../../araphor-package-jobs.md)
+for the supported path and remaining work.
+
 Provide the internal read engine for retained and live data.
 
 ## Intended end state

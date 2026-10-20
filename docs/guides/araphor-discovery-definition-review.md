@@ -1,7 +1,7 @@
 # Discovery Definition Review
 
-This guide covers the Discovery definition file and its admission route. The
-definition selects reusable code and inputs. Admission starts no Discovery.
+This guide covers Discovery definition admission and finite OCI execution.
+The definition selects reusable code and inputs. Admission starts no Discovery.
 
 ## Intended end state
 
@@ -88,8 +88,11 @@ the parent schemas in that same traversal. Native `ViewTable` and
 occurs before optimization; an unexpected scan filter or fetch is an error.
 `DataFrame::with_column` adds the zero-based index with native `row_number`.
 This operation generates no SQL. Existing configured Query quotas still
-apply to indexed and bound plans. The package planner retains each distinct
-native plan once for analysis, optimization, and physical validation.
+apply to indexed and bound plans. Every surviving package body is a child of
+its native PackageCall. The root optimizer and physical planner check these
+children. No separate registry repeats those passes. Native SQL can discard
+an unused common table expression. Its admitted image pin and source capture
+remain part of the definition contract.
 
 The native SQL body planner needs a separate table scope for each call.
 [Scope](../../crates/araphor-query/src/definition/package/scope.rs) supplies
@@ -103,14 +106,18 @@ the required package table scope to the native SQL planner.
 
 -> [PackageCall](../../crates/araphor-query/src/definition/call.rs)
 retains the exact image, export, selected output, and SDK descriptor. Its
-logical children are the actual input plans and the native parameter plan.
+logical children are the actual input plans, native parameter plan, and SQL
+output, checkpoint, evidence, and reason plans when the export uses SQL.
 Its schema is the selected SDK output schema.
-One identity key supplies equality, ordering, and hashing for native plan
-operations. The key includes the root image digest and the selected export.
+The identity key includes the root image digest, selected export, and local
+call ID. An admission token prevents native optimization or the result cache
+from combining separate admissions. The token does not enter the stable plan
+hash. Cursor bindings thus remain stable after the same definition is admitted
+again. Separate call sites keep separate state after optimization.
 The node preserves the package execution contract for typed output, saved
 state, and evidence. A scalar UDF does not supply that contract.
-Partial: the node has no physical executor. Native physical planning returns
-an explicit unsupported error for a package-call execution attempt.
+[PackageExec](../../crates/araphor-query/src/definition/physical.rs) implements
+the native physical extension. Read the finite execution route below.
 
 The former Discovery function resolver and its crate are removed. Native
 [SQL view declarations](../../crates/araphor-analysis-builtins/src/discovery/sql.rs)
@@ -124,6 +131,34 @@ use the generic relation planner described above.
 retains the complete live SQL program in the existing package format. Native
 SQL CTE scopes bind its input relations. Image assembly adds no executor,
 subscription, or source reader.
+
+[Package::subscribe](../../crates/araphor-analysis/src/package.rs) uses
+[Program::call](../../crates/araphor-discovery-definition/src/file.rs) to
+construct the same native call as the YAML form. Package retains one admitted
+definition and root call in a Tokio OnceCell. Source subscriptions reuse that
+admission. Query plans the declared input relations and executes each update
+through PackageExec. Analysis does not extract SQL bodies or interpret input
+schemas. The installed image revision and digest must match the retained
+package. Package construction no longer installs an image.
+The cached call creates no durable definition or Data revision. Explicit
+definition admission remains a separate operation.
+
+[DiscoveryOwner::derive](../../crates/araphor-analysis/src/discovery/mod.rs)
+admits a lazy source subscription before it registers the processor. Data
+registration preserves an existing required processor and rejects retirement.
+The subscription receives its first poll after registration. Package execution
+does not need an initial evaluation only to register the processor.
+
+[DiscoveryOwner::publish](../../crates/araphor-analysis/src/discovery/mod.rs)
+checks the actual root return against that admission before publication.
+Complete typed returns remain in Update.calls. This profile publisher cannot
+commit package checkpoints, reasons, or evidence. Admission rejects reachable
+checkpoint contracts; publication rejects auxiliary returns even when the
+selected query rows do not change. Managed atomic
+state and auxiliary publication remain unimplemented. Authority changes drop
+the private producer and join its workers before the subscription returns
+Denied. Discovery stop and source removal call `Subscription::cancel_and_join`.
+Ordinary Drop cancels the operation; Drop cannot wait for async cleanup.
 
 -> [ClientAuth::commit_definition](../../crates/mithril-control/src/client_auth/packages.rs)
 holds the current permission lock through the Data write. This owner checks
@@ -142,8 +177,9 @@ checks saved identities, content digests, store revisions, and exact image
 pins during store open. Inspection checks content and image pins again.
 
 Not implemented: starting, inspecting, or stopping a managed instance.
-Not implemented: physical package-call execution, instance saved state,
-progress, and restart recovery. Definition recovery restores definitions only.
+Not implemented: durable instance saved state, progress, and restart recovery.
+Definition recovery restores definitions only. Finite execution returns proposed
+state to its caller; it does not commit that state.
 
 ```mermaid
 sequenceDiagram
@@ -164,6 +200,225 @@ sequenceDiagram
 
 Queries with no package calls require no image lookup. Data commits no
 activation or result.
+
+## Finite execution
+
+[Session::execute_definition](../../crates/araphor-query/src/definition.rs) accepts an admitted definition and caller invocation state
+  -> [PackageCall::check_admission](../../crates/araphor-query/src/definition/call.rs) checks the admitted call children before optimization or source capture
+  -> [Session::start](../../crates/araphor-query/src/execution.rs) uses fixed execution time for native optimization and physical planning
+  -> [SubscriptionPlanner](../../crates/araphor-query/src/planner/subscription.rs) uses the native physical planner extension for PackageCall
+  -> [Session::start_physical](../../crates/araphor-query/src/execution.rs) captures declared sources once
+  -> [PackageExec](../../crates/araphor-query/src/definition/physical.rs) collects complete Arrow inputs and parameters under one operation permit
+  -> [SQL execution](../../crates/araphor-query/src/definition/physical/sql.rs) uses native physical children, or [Runtime::evaluate_reserved](../../crates/araphor-package-runtime/src/lib.rs) invokes the selected guest backend
+  -> [CheckedEvaluation](../../crates/araphor-analysis-sdk/src/validation.rs) validates all outputs, proposed state, reasons, and evidence
+  -> [DefinitionOutput](../../crates/araphor-query/src/definition.rs) returns selected query batches, the captured receipt, and complete call results
+
+[Session::execute_definition](../../crates/araphor-query/src/definition.rs) receives an error or cancellation
+  -> [AnalysisReadControl::operation](../../crates/araphor-data/src/analysis/read.rs) stops the separate invocation control
+  -> [CallContext::finish](../../crates/araphor-query/src/definition/physical.rs) closes call registration and waits for the native task tracker
+  -> Data receives no automatic result, state, or progress write
+
+The finite caller creates the invocation identity, seed, caller limits, and
+prior checkpoint map. An invocation has separate cancellation state. Query
+forwards parent cancellation and waits for active work. An ordinary invocation
+error does not cancel the parent Session. The map uses admitted call identities.
+Unknown checkpoint identities and state for a stateless export are rejected
+before source capture. A call identity is not a durable instance identity. Admission retains unoptimized plans so
+execution clocks are not folded at admission. Native optimization and physical
+planning use the fixed session time during execution.
+
+[Engine::new](../../crates/araphor-query/src/execution.rs) disables native
+leaf-expression pushdown for DataFusion 53.1. That rule can leave a stale
+join schema and make projection optimization fail. The
+[upstream issue](https://github.com/apache/datafusion/issues/22895) records
+the native configuration workaround. The other native optimizer rules remain
+active. The struct-join regression checks selected rows, checkpoint, evidence,
+and reason details. Enable this option only after an engine upgrade passes
+that regression and the Discovery integration tests.
+
+Cold Wasm preparation occurs in the native physical extension planner. It
+uses the parent request control before the evaluation timeout starts. The
+physical node retains an opaque prepared-code pin for the exact Runtime,
+image object, package, and export. Execution cannot substitute code from
+another runtime or image. Definition admission performs structural validation
+without compilation. Ordinary SQL retains its existing planning timeout.
+
+The preparation worker holds the existing evaluation permit and call tracker
+token. Explicit cancellation waits for that worker. Dropping an execution
+future cancels its control; the worker retains its permit until it exits.
+An active synchronous Wasmtime compilation cannot be interrupted. This
+boundary does not provide a compiler process memory quota.
+
+[Subscription](../../crates/araphor-query/src/follow/mod.rs) owns a shared
+Tokio task tracker. Session carries its handle through each native execution.
+Native logical optimization runs in the existing tracked blocking worker.
+Query then calls the native QueryPlanner for asynchronous physical planning.
+This is the same order as SessionState::create_physical_plan. Cancellation
+joins the optimizer worker and cold preparation. Physical planning does not
+hold a blocking worker while it waits for a compiler worker. No second planner
+or runtime is added.
+The guest exchange, cold preparation, and source-read closures retain parent
+tokens until their actual workers exit. Per-call trackers still join each
+finite evaluation. Blocking workers transfer their result through a native
+oneshot channel before they release their lease. If the receiver is dropped,
+the worker drops the result before it releases the token. Completed returns
+and captured snapshots contain no parent
+token. A caller can retain a delivered Update while subscription shutdown
+completes.
+
+PackageCall retains one shared copy of its admitted native children after
+DataFusion binds parameters and reconstructs schemas. Public
+stream and subscription entries reject changed input or SQL body plans before
+optimization. Native TableScan equality excludes its provider. The admission
+check also compares the original provider identities. This check includes
+native view bodies. Internal optimized plans
+are not compared with the original children. DataFusion can change aliases and
+share equivalent expressions. The check prevents a caller from changing image
+code or inputs while retaining a cached admitted call identity.
+
+PackageExec owns the complete typed evaluation and result. It executes once
+for one admitted call, across all input batches and physical partitions.
+Readers share that result. Separate call sites retain separate state. The
+cache holds weak handles to running work and strong handles to complete
+results. Dropping a reader does not create a cache cycle. Cancellation does
+not retry an abandoned call.
+
+[Inputs](../../crates/araphor-query/src/inputs/mod.rs) retains the admitted
+source scopes before optimization. Empty relations and unused common table
+expressions retain their source revision contract. Native source providers
+supply Arrow buffers from the captured view. SQL output and prior-state
+relations bind temporary port slots in that same view. Package SQL opens no
+second live read and uses no synchronous Query bridge.
+
+[AnalysisStore::dependency_revision_for](../../crates/araphor-data/src/analysis/dependencies.rs)
+accepts the admitted table requests. Data resolves its projected tables to
+storage relations. Query passes those requests through the existing revision
+read. Query does not select Discovery storage dependencies.
+
+[Memory](../../crates/araphor-query/src/memory.rs) retains input, output,
+checkpoint, and reason buffers through their actual Arrow lifetimes. A
+retained result keeps its metadata reservations. Plans with PackageExec do
+not prepay a second public output budget before the complete call result is
+retained. Actual configured capacity checks remain active.
+
+The runtime crate owns executable loading and invocation. It has no Query or
+Analysis dependency. Compatible backend code came from the
+[earlier execution owner](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/execution.rs).
+The backup crate is restored as reference until compatible migration is complete.
+Runtime retains its own backend code.
+[NativeLibrary](../../crates/araphor-package-runtime/src/native/loading.rs)
+keeps file and code pins through invocation, output copy, and producer release.
+Native calls run inside the process. Native cancellation remains cooperative;
+a native guest that ignores cancellation can delay completion.
+
+[WasmExecution](../../crates/araphor-package-runtime/src/wasm.rs) creates its
+engine on demand. The new runtime compiles with native Wasmtime inside the
+process. Production execution has no compiler child.
+[EpochWatch](../../crates/araphor-package-runtime/src/wasm/execution.rs)
+waits for cancellation, deadline, or completion events. It has no periodic
+ticker. The runtime uses the existing TaskTracker for worker teardown.
+Runtime quotas default to disabled. An explicit compiler address-space quota
+returns Unsupported because compilation runs inside the process. Active
+compilation must finish before cancellation can join its worker. Explicit
+cancellation through execute_definition joins active work. Dropping the whole
+async future cannot wait for cleanup in Drop; worker tokens retain code and
+operation resources through teardown.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Query
+    participant Runtime
+    participant Data
+    Caller->>Query: Execute prepared definition and prior state
+    Query->>Data: Capture selected inputs and revisions
+    Data-->>Query: Return one Arrow source view
+    Query->>Query: Execute native SQL physical children
+    Query->>Runtime: Invoke selected Wasm or native code
+    Runtime-->>Query: Return complete SDK result
+    Query->>Query: Validate and finish active workers
+    Query-->>Caller: Return batches and proposed call states
+```
+
+This API does not authorize a durable commit. The caller retains responsibility
+for current authority and domain checks. Data retains atomic commit ownership.
+Public managed instances, supervision, and restart recovery remain in
+TODO 16. Package-issued internal SQL requires a future SDK capability; the
+current guest ABI supplies no database handle.
+
+Qualification is in progress for the current worktree. The physical execution
+cases are in [definition tests](../../crates/araphor-query/src/definition/tests/execution.rs).
+Entered-guest cancellation, worker drop, and capacity cases are in
+[runtime tests](../../crates/araphor-package-runtime/src/wasm/tests/runtime.rs).
+
+Backup removal is withdrawn. All 208 backup files and 34 deleted Control and
+E2E reference files are restored. Compatible migration requires a complete
+source and test map before deletion. The finite call path does not establish
+graph publication, Discovery replay, durable commit, or permission-supervision
+parity. No deletion commit or push was made. Full workspace tests failed to
+build when the host disk filled; they did not pass.
+
+The later finite retirement removes 29 duplicate reference leaves after
+source comparison and focused qualification. The other 179 files remain
+unchanged. The recovery archive retains all 208 recovered files. Read the
+[retirement record](../plans/araphor-analysis-migration.md#retired-finite-reference-files)
+for the exact scope. The final Rust gate passes in `migration-final-ci42`.
+The complete migration remains **Not done**.
+
+## Migration boundaries
+
+The [migration record](../plans/araphor-analysis-migration.md) maps each
+reference source file and its required tests. The reference crate remains
+available while qualification is incomplete.
+
+- [CallResult::belongs_to](../../crates/araphor-query/src/definition/physical.rs)
+  checks an immutable admission token, tenant, image pin, package/export,
+  and call identity.
+  Domain adapters must use this check before they attribute a return to a
+  package. A call ID alone is not sufficient across separate admissions.
+  CallResult keeps evaluation and output private. Read-only accessors prevent
+  caller changes from retaining the private execution attribution.
+- [Subscription updates](../../crates/araphor-query/src/follow/mod.rs) retain
+  complete call returns for each evaluated step. Unchanged selected rows do
+  not suppress proposed package state, reasons, or evidence.
+  [Delivery](../../crates/araphor-query/src/follow/delivery.rs) releases those
+  returns after it encodes the checkpoint. A retained receipt does not hold
+  buffers for the next step. An initial execution failure keeps the captured
+  snapshot for error delivery. Delivery checks current read authority before
+  it emits the error frame and terminal status. This path creates no checkpoint.
+- [Guest exchange](../../crates/araphor-query/src/definition/physical/guest.rs)
+  reserves configured transfer capacity before guest execution. The blocking
+  worker owns the existing evaluation permit and memory lease until it exits.
+  Native decoding uses one combined SDK byte budget, including saved state.
+  Wasmtime uses the acquired copy budget as host-call fuel before it lifts
+  guest output into host buffers. Input revision hashing reserves SDK encoding
+  scratch before it starts the Arrow IPC writer.
+  Disabled capacities reserve no maximum-sized temporary buffer.
+- [Fixture qualification](../../crates/araphor-analysis/src/qualification/mod.rs)
+  selects an exact installed image and checks Test authority and trust. Its
+  inputs and parameters use native table providers. A supplied input revision
+  or coverage value is accepted only for a declared local input whose schema
+  and complete rows match native execution. Durable input provenance cannot
+  be replaced through this path.
+- [Graph](../../crates/araphor-analysis/src/graph/mod.rs) validates detector
+  input binding, proof, and output attribution. It has no reader, scheduler,
+  activation registry, or execution engine. Data retains the graph transaction.
+- [Context](../../crates/araphor-analysis/src/context/selection.rs) captures
+  retained document revisions once, then uses a native relational plan for
+  selection, ordering, conflicts, and omissions. Finite capture uses a stream;
+  it does not create a temporary subscription that cancels its caller.
+- [Notification consumption](../../crates/araphor-analysis/src/notification/reactive.rs)
+  uses native eligibility SQL and the existing finite router methods. Data
+  publishes exact retry and grant-expiry deadlines from the captured route
+  and attempt history. Query owns the waits. This API does not start a service
+  or implement managed instance recovery.
+
+Configured Wasm allocation limits remain separate from output contract
+limits. A transfer reservation is not a process memory or isolation guarantee.
+Native cancellation remains cooperative. Mandatory Query and Data bulk caps,
+managed state transactions, complete reactive producers, public lifecycle
+operations, and restart recovery remain open in the migration record.
+Current-source qualification is **Not done** until the recorded commands pass.
 
 ## File schema
 
@@ -282,9 +537,28 @@ filter value >= 2
 ## Ownership and verification
 
 The definition crate owns portable file and snapshot types. Data owns durable
-storage. Query owns planning. Control owns current permission and transport.
-CLI owns command parsing and output. No new owner depends on
-`araphor-analysis_back`. The old package route remains available separately.
+storage. Query owns planning and finite execution. Package Runtime owns native
+and Wasm invocation. Control owns current permission and transport. CLI owns
+command parsing and output. The stopped draft disconnected `araphor-analysis_back`,
+its package lifecycle commands, and its polling execution owners. Historical
+source links use the fixed revision `6a25ba1b34dbaa0a553b1883058938683ce7aaab`.
+
+[NotificationRouter](../../crates/araphor-analysis/src/notification/mod.rs)
+retains the compatible notification operations in current Analysis.
+[route_finding](../../crates/araphor-analysis/src/notification/routing.rs)
+accepts one exact changed finding reference.
+[deliver_obligation](../../crates/araphor-analysis/src/notification/delivery.rs)
+accepts one obligation key. These operations retain current authorization,
+durable attempts, human acknowledgement, and historical finding references.
+[ControlNotificationOwner](../../crates/mithril-control/src/notification.rs)
+delegates those finite requests. Neither owner scans all tenants or schedules
+a polling clock. Automatic graph production and notification subscriptions
+remain **Not done**. Data retains graph history, traversal, and notification
+records. The current work does not replace the removed graph scheduler with
+another scheduler.
+
+Qualification of the current deletion and migrated operations is in progress.
+The verification counts below describe earlier source states.
 
 Read the [definition tests](../../crates/araphor-discovery-definition/src/tests.rs),
 [YAML tests](../../crates/araphor-discovery-definition/src/file/tests.rs),

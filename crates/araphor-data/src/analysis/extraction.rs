@@ -991,26 +991,6 @@ impl AnalysisStore {
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
         }
-        if (selection.graphs.is_all()
-            || !selection.graphs.as_slice().is_empty()
-            || selection.graph_traversal.is_some())
-            && !self.graph_enabled()
-        {
-            return crate::AnalysisUnavailableSnafu {
-                relation: "graph owner disabled",
-            }
-            .fail();
-        }
-        if (selection.obligations.is_all() || !selection.obligations.as_slice().is_empty())
-            && !self
-                .notification_owner
-                .load(std::sync::atomic::Ordering::Acquire)
-        {
-            return crate::AnalysisUnavailableSnafu {
-                relation: "notification owner disabled",
-            }
-            .fail();
-        }
         if !selection.sources.is_all()
             && !selection.contexts.is_all()
             && !selection.traces.is_all()
@@ -1849,6 +1829,7 @@ impl AnalysisStore {
                 capture.graph(id, &graph, header.subject_count, header.edge_count,
                     revision, sensitivity, None, &mut output.sink(control))?;
             }
+            let mut routes = BTreeMap::new();
             for key in selection.obligations.as_slice() {
                 control.check()?;
                 let (context, revision) = Self::read_context_from(snapshot, &self.root, key)?
@@ -1884,7 +1865,40 @@ impl AnalysisStore {
                     })
                 }) { continue; }
                 output.reference_context(&context.key, revision, AnalysisReferenceOriginV1::Notification)?;
-                capture.notification(&obligation, finding.as_ref(), revision, &mut output.sink(control))?;
+                let mut retry_utc_ns = None;
+                for kind in [crate::NotificationDeliveryKindV1::Finding,
+                    crate::NotificationDeliveryKindV1::FailureEscalation,
+                    crate::NotificationDeliveryKindV1::AcknowledgementEscalation]
+                {
+                    let Some(reference) = obligation.delivery_route(kind) else { continue; };
+                    let route = match routes.entry((reference.route_id.clone(), reference.revision)) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                        let key = AnalysisContextKeyV1 {
+                            tenant_id: obligation.key.tenant_id,
+                            owner_id: crate::NOTIFICATION_ROUTE_OWNER.into(),
+                            entity_key: reference.route_id.as_bytes().to_vec(),
+                            lifetime_key: b"route".to_vec(),
+                            owner_revision: reference.revision,
+                        };
+                        let route = Self::read_context_from(snapshot, &self.root, &key)?
+                            .map(|(context, revision)| {
+                                output.scan(context.body.len())?;
+                                output.charge(context.body.capacity().saturating_mul(2))?;
+                                output.reference_context(&key, revision, AnalysisReferenceOriginV1::Notification)?;
+                                crate::ApprovedNotificationRouteV1::try_from(&context)
+                            }).transpose()?;
+                            entry.insert(route)
+                        }
+                        std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                    };
+                    let deadline = route.as_ref()
+                        .and_then(|route| obligation.retry_utc_ns(kind, &route.policy));
+                    if let Some(deadline) = deadline {
+                        retry_utc_ns = Some(retry_utc_ns.map_or(deadline, |old: u64| old.min(deadline)));
+                    }
+                }
+                capture.notification(&obligation, finding.as_ref(), revision, retry_utc_ns,
+                    &mut output.sink(control))?;
             }
             for id in &selection.results {
                 control.check()?;
@@ -2330,10 +2344,10 @@ mod tests {
                     selection
                 },
             ] {
-                assert!(matches!(
-                    store.resolve_selection(snapshot, &selection, &control, usize::MAX),
-                    Err(crate::Error::AnalysisUnavailable { .. })
-                ));
+                let (resolved, bytes) =
+                    store.resolve_selection(snapshot, &selection, &control, usize::MAX)?;
+                assert_eq!(resolved.as_ref(), &selection);
+                assert_eq!(bytes, 0);
             }
             Ok(())
         })?;
@@ -2355,6 +2369,8 @@ mod tests {
         replacement.created_utc_ns += 1;
         replacement.body = serde_json::to_vec(&snapshot)?;
         fixture.store.commit_graph(&replacement, false)?;
+        fixture.store.release_graph_owner();
+        assert!(!fixture.store.graph_enabled());
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
         let source = fixture.snapshot.scope.identity.clone();
         let ids = vec![

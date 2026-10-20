@@ -354,6 +354,14 @@ impl Memory {
         Self::reserve(&self.output, bytes, self.output_capacity)
     }
 
+    pub(crate) fn input_capacity(&self) -> Option<usize> {
+        self.input_capacity
+    }
+
+    pub(crate) fn output_capacity(&self) -> Option<usize> {
+        self.output_capacity
+    }
+
     pub(crate) fn prepare_output(&self, bytes: usize) -> Result<MemoryReservation> {
         let Some(capacity) = self.output_capacity else {
             return self.reserve_output(0);

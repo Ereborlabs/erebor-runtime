@@ -1,0 +1,779 @@
+{
+  "conflicts": {
+    "access": {
+      "can_import": true,
+      "can_review": true,
+      "grant_revision": 1,
+      "principal": "operator",
+      "purpose": "inspect retained denial",
+      "sensitivities": [
+        "Tenant"
+      ],
+      "subject": {
+        "entity_key": [119, 111, 114, 107, 101, 114],
+        "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+        "owner_id": "inventory",
+        "owner_revision": 1,
+        "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+      },
+      "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+    },
+    "available_documents": 2,
+    "conflicts": [
+      {
+        "document_ids": [
+          "contradictory-owner",
+          "worker-runbook"
+        ],
+        "kind": "RUNBOOK"
+      }
+    ],
+    "cutoff_utc_ns": 3000,
+    "documents": [
+      {
+        "document_id": "contradictory-owner",
+        "document_revision": 1,
+        "imported_utc_ns": 2500,
+        "key": {
+          "entity_key": [99, 111, 110, 116, 114, 97, 100, 105, 99, 116, 111, 114, 121, 45, 111, 119, 110, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "discovery-context-v1",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "kind": "RUNBOOK",
+        "origin": "another owner",
+        "sensitivity": "Tenant",
+        "trust": "UNREVIEWED"
+      },
+      {
+        "document_id": "worker-runbook",
+        "document_revision": 1,
+        "imported_utc_ns": 2500,
+        "key": {
+          "entity_key": [119, 111, 114, 107, 101, 114, 45, 114, 117, 110, 98, 111, 111, 107],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "discovery-context-v1",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "kind": "RUNBOOK",
+        "origin": "operator supplied",
+        "sensitivity": "Tenant",
+        "trust": "UNREVIEWED"
+      }
+    ],
+    "from_utc_ns": 1000,
+    "method": {
+      "id": "credential-read",
+      "revision": 1
+    },
+    "missing_facts": [],
+    "omissions": {},
+    "owner_facts": [
+      {
+        "context": {
+          "body": [114, 101, 116, 97, 105, 110, 101, 100, 32, 111, 119, 110, 101, 114, 32, 102, 97, 99, 116],
+          "key": {
+            "entity_key": [119, 111, 114, 107, 101, 114],
+            "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+            "owner_id": "coverage",
+            "owner_revision": 1,
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          },
+          "sensitivity": "Tenant",
+          "valid_from_utc_ns": 1000,
+          "valid_until_utc_ns": null
+        },
+        "kind": "SOURCE_HEALTH",
+        "recorded_utc_ns": 2000,
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "trust": "REVIEWED"
+      },
+      {
+        "context": {
+          "body": [114, 101, 116, 97, 105, 110, 101, 100, 32, 111, 119, 110, 101, 114, 32, 102, 97, 99, 116],
+          "key": {
+            "entity_key": [119, 111, 114, 107, 101, 114],
+            "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+            "owner_id": "policy",
+            "owner_revision": 1,
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          },
+          "sensitivity": "Tenant",
+          "valid_from_utc_ns": 1000,
+          "valid_until_utc_ns": null
+        },
+        "kind": "POLICY_PROVENANCE",
+        "recorded_utc_ns": 2000,
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "trust": "REVIEWED"
+      }
+    ],
+    "question": "What supports the denial?",
+    "records": [
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 1,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      },
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 2,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      },
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 3,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      }
+    ],
+    "selector_version": 1,
+    "source_counts": {
+      "another owner": 1,
+      "operator supplied": 1
+    }
+  },
+  "denied": {
+    "access": {
+      "can_import": true,
+      "can_review": true,
+      "grant_revision": 1,
+      "principal": "operator",
+      "purpose": "inspect retained denial",
+      "sensitivities": [],
+      "subject": {
+        "entity_key": [119, 111, 114, 107, 101, 114],
+        "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+        "owner_id": "inventory",
+        "owner_revision": 1,
+        "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+      },
+      "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+    },
+    "available_documents": 0,
+    "conflicts": [],
+    "cutoff_utc_ns": 3000,
+    "documents": [],
+    "from_utc_ns": 1000,
+    "method": {
+      "id": "credential-read",
+      "revision": 1
+    },
+    "missing_facts": [
+      "POLICY_PROVENANCE_UNAVAILABLE",
+      "SOURCE_HEALTH_UNAVAILABLE"
+    ],
+    "omissions": {
+      "DOCUMENT_ACCESS_DENIED": 1,
+      "EVIDENCE_OUTSIDE_WINDOW_OR_UNDATED": 1,
+      "FACT_ACCESS_DENIED": 1,
+      "FACT_OUTSIDE_WINDOW_OR_UNDATED": 1
+    },
+    "owner_facts": [],
+    "question": "What supports the denial?",
+    "records": [
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 2,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      },
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 3,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      }
+    ],
+    "selector_version": 1,
+    "source_counts": {}
+  },
+  "initial": {
+    "access": {
+      "can_import": true,
+      "can_review": true,
+      "grant_revision": 1,
+      "principal": "operator",
+      "purpose": "inspect retained denial",
+      "sensitivities": [
+        "Tenant"
+      ],
+      "subject": {
+        "entity_key": [119, 111, 114, 107, 101, 114],
+        "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+        "owner_id": "inventory",
+        "owner_revision": 1,
+        "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+      },
+      "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+    },
+    "available_documents": 1,
+    "conflicts": [],
+    "cutoff_utc_ns": 3000,
+    "documents": [
+      {
+        "document_id": "worker-runbook",
+        "document_revision": 1,
+        "imported_utc_ns": 2500,
+        "key": {
+          "entity_key": [119, 111, 114, 107, 101, 114, 45, 114, 117, 110, 98, 111, 111, 107],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "discovery-context-v1",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "kind": "RUNBOOK",
+        "origin": "operator supplied",
+        "sensitivity": "Tenant",
+        "trust": "UNREVIEWED"
+      }
+    ],
+    "from_utc_ns": 1000,
+    "method": {
+      "id": "credential-read",
+      "revision": 1
+    },
+    "missing_facts": [],
+    "omissions": {
+      "DOCUMENT_AFTER_CUTOFF": 1
+    },
+    "owner_facts": [
+      {
+        "context": {
+          "body": [114, 101, 116, 97, 105, 110, 101, 100, 32, 111, 119, 110, 101, 114, 32, 102, 97, 99, 116],
+          "key": {
+            "entity_key": [119, 111, 114, 107, 101, 114],
+            "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+            "owner_id": "coverage",
+            "owner_revision": 1,
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          },
+          "sensitivity": "Tenant",
+          "valid_from_utc_ns": 1000,
+          "valid_until_utc_ns": null
+        },
+        "kind": "SOURCE_HEALTH",
+        "recorded_utc_ns": 2000,
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "trust": "REVIEWED"
+      },
+      {
+        "context": {
+          "body": [114, 101, 116, 97, 105, 110, 101, 100, 32, 111, 119, 110, 101, 114, 32, 102, 97, 99, 116],
+          "key": {
+            "entity_key": [119, 111, 114, 107, 101, 114],
+            "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+            "owner_id": "policy",
+            "owner_revision": 1,
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          },
+          "sensitivity": "Tenant",
+          "valid_from_utc_ns": 1000,
+          "valid_until_utc_ns": null
+        },
+        "kind": "POLICY_PROVENANCE",
+        "recorded_utc_ns": 2000,
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "trust": "REVIEWED"
+      }
+    ],
+    "question": "What supports the denial?",
+    "records": [
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 1,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      },
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 2,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      },
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 3,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      }
+    ],
+    "selector_version": 1,
+    "source_counts": {
+      "operator supplied": 1
+    }
+  },
+  "later": {
+    "access": {
+      "can_import": true,
+      "can_review": true,
+      "grant_revision": 1,
+      "principal": "operator",
+      "purpose": "inspect retained denial",
+      "sensitivities": [
+        "Tenant"
+      ],
+      "subject": {
+        "entity_key": [119, 111, 114, 107, 101, 114],
+        "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+        "owner_id": "inventory",
+        "owner_revision": 1,
+        "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+      },
+      "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+    },
+    "available_documents": 1,
+    "conflicts": [],
+    "cutoff_utc_ns": 4000,
+    "documents": [
+      {
+        "document_id": "worker-runbook",
+        "document_revision": 2,
+        "imported_utc_ns": 4000,
+        "key": {
+          "entity_key": [119, 111, 114, 107, 101, 114, 45, 114, 117, 110, 98, 111, 111, 107],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "discovery-context-v1",
+          "owner_revision": 2,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "kind": "RUNBOOK",
+        "origin": "operator supplied",
+        "sensitivity": "Tenant",
+        "trust": "REVIEWED"
+      }
+    ],
+    "from_utc_ns": 1000,
+    "method": {
+      "id": "credential-read",
+      "revision": 1
+    },
+    "missing_facts": [],
+    "omissions": {},
+    "owner_facts": [
+      {
+        "context": {
+          "body": [114, 101, 116, 97, 105, 110, 101, 100, 32, 111, 119, 110, 101, 114, 32, 102, 97, 99, 116],
+          "key": {
+            "entity_key": [119, 111, 114, 107, 101, 114],
+            "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+            "owner_id": "coverage",
+            "owner_revision": 1,
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          },
+          "sensitivity": "Tenant",
+          "valid_from_utc_ns": 1000,
+          "valid_until_utc_ns": null
+        },
+        "kind": "SOURCE_HEALTH",
+        "recorded_utc_ns": 2000,
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "trust": "REVIEWED"
+      },
+      {
+        "context": {
+          "body": [114, 101, 116, 97, 105, 110, 101, 100, 32, 111, 119, 110, 101, 114, 32, 102, 97, 99, 116],
+          "key": {
+            "entity_key": [119, 111, 114, 107, 101, 114],
+            "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+            "owner_id": "policy",
+            "owner_revision": 1,
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          },
+          "sensitivity": "Tenant",
+          "valid_from_utc_ns": 1000,
+          "valid_until_utc_ns": null
+        },
+        "kind": "POLICY_PROVENANCE",
+        "recorded_utc_ns": 2000,
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "trust": "REVIEWED"
+      }
+    ],
+    "question": "What supports the denial?",
+    "records": [
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 1,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      },
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 2,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      },
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 3,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      }
+    ],
+    "selector_version": 1,
+    "source_counts": {
+      "operator supplied": 1
+    }
+  },
+  "missing": {
+    "access": {
+      "can_import": true,
+      "can_review": true,
+      "grant_revision": 1,
+      "principal": "operator",
+      "purpose": "inspect retained denial",
+      "sensitivities": [
+        "Tenant"
+      ],
+      "subject": {
+        "entity_key": [119, 111, 114, 107, 101, 114],
+        "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+        "owner_id": "inventory",
+        "owner_revision": 1,
+        "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+      },
+      "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+    },
+    "available_documents": 1,
+    "conflicts": [],
+    "cutoff_utc_ns": 3000,
+    "documents": [
+      {
+        "document_id": "worker-runbook",
+        "document_revision": 1,
+        "imported_utc_ns": 2500,
+        "key": {
+          "entity_key": [119, 111, 114, 107, 101, 114, 45, 114, 117, 110, 98, 111, 111, 107],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "discovery-context-v1",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "kind": "RUNBOOK",
+        "origin": "operator supplied",
+        "sensitivity": "Tenant",
+        "trust": "UNREVIEWED"
+      }
+    ],
+    "from_utc_ns": 1000,
+    "method": {
+      "id": "credential-read",
+      "revision": 1
+    },
+    "missing_facts": [
+      "SOURCE_HEALTH_UNAVAILABLE"
+    ],
+    "omissions": {
+      "EVIDENCE_OUTSIDE_WINDOW_OR_UNDATED": 1,
+      "FACT_OUTSIDE_WINDOW_OR_UNDATED": 1
+    },
+    "owner_facts": [
+      {
+        "context": {
+          "body": [114, 101, 116, 97, 105, 110, 101, 100, 32, 111, 119, 110, 101, 114, 32, 102, 97, 99, 116],
+          "key": {
+            "entity_key": [119, 111, 114, 107, 101, 114],
+            "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+            "owner_id": "policy",
+            "owner_revision": 1,
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          },
+          "sensitivity": "Tenant",
+          "valid_from_utc_ns": 1000,
+          "valid_until_utc_ns": null
+        },
+        "kind": "POLICY_PROVENANCE",
+        "recorded_utc_ns": 2000,
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        },
+        "trust": "REVIEWED"
+      }
+    ],
+    "question": "What supports the denial?",
+    "records": [
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 2,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      },
+      {
+        "proof_kind": "SYNTHETIC",
+        "received_utc_ns": 2000,
+        "record_id": {
+          "cpu_id": 0,
+          "durable_cursor": 3,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4],
+            "node_id": "node-a",
+            "source_epoch": 1,
+            "source_id": [0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6],
+            "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+          }
+        },
+        "subject": {
+          "entity_key": [119, 111, 114, 107, 101, 114],
+          "lifetime_key": [0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22],
+          "owner_id": "inventory",
+          "owner_revision": 1,
+          "tenant_id": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        }
+      }
+    ],
+    "selector_version": 1,
+    "source_counts": {
+      "operator supplied": 1
+    }
+  }
+}

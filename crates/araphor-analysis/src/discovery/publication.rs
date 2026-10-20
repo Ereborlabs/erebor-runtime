@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use araphor_data::analysis::PreparedProfile;
 use araphor_data::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisResultCommitV1, DiscoveryProfileV1,
-    DiscoverySnapshotRowV1, EvidenceIntakeIdentityV1, PackageErrorCodeV1 as Code, ProcessorClassV1,
-    ProcessorScopeV1, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
+    DiscoverySnapshotRowV1, EvidenceIntakeIdentityV1, PackageErrorCodeV1 as Code, ProcessorScopeV1,
+    DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
 };
 use araphor_query::follow::Update;
 use serde::Deserialize;
@@ -55,12 +55,10 @@ impl Publication {
             return Ok(0);
         }
         if !self.processor_present {
-            package.commit(|| {
-                store.register_processor_guarded(&scope, ProcessorClassV1::Optional, 1, || {
-                    package.grant.remaining().map(|_| ())
-                })
-            })?;
-            return Ok(0);
+            return Err(araphor_data::Error::AnalysisConflict {
+                location: snafu::location!(),
+            }
+            .into());
         }
         if self.expected_cursor < self.retained_floor {
             package.commit(|| {

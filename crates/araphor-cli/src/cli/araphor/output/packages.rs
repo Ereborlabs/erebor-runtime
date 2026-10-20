@@ -4,13 +4,10 @@ use araphor_data::PackageResponseV1;
 use snafu::ResultExt as _;
 
 use super::*;
-use crate::cli::araphor::error::{AnalysisSnafu, PackageSnafu};
+use crate::cli::araphor::error::{PackageSnafu, ProtocolSnafu};
 
 impl Output {
-    pub(in crate::cli::araphor) fn package(
-        &self,
-        mut response: PackageResponseV1,
-    ) -> Result<Vec<u8>> {
+    pub(in crate::cli::araphor) fn package(&self, response: PackageResponseV1) -> Result<Vec<u8>> {
         if let Some(definition) = &response.definition {
             let revision = definition
                 .digest()
@@ -46,72 +43,10 @@ impl Output {
             }
             return Ok(text.into_bytes());
         }
-        let output = response
-            .output
-            .take()
-            .map(|output| {
-                araphor_analysis_back::AnalysisPackageOwner::output_rows(&output)
-                    .context(AnalysisSnafu)
-            })
-            .transpose()?;
-        if matches!(self.mode, OutputMode::Jsonl) {
-            let mut document = serde_json::to_value(&response).context(EncodeSnafu)?;
-            if let Some(output) = output {
-                document["output"] = output;
-            }
-            return Self::json("package", &document);
+        ProtocolSnafu {
+            field: "image or definition response",
         }
-        let mut text = format!(
-            "package\t{}\nscope\t{}\nexport\trevision\tactive\treadiness\n",
-            Self::text(&response.package_id),
-            Self::text(&response.scope_id)
-        );
-        for export in response.exports {
-            let readiness = serde_json::to_string(&export.readiness).context(EncodeSnafu)?;
-            let _ = writeln!(
-                text,
-                "{}\t{}\t{}\t{}",
-                Self::text(&export.descriptor.name),
-                Self::text(&export.revision),
-                export.active,
-                Self::text(&readiness)
-            );
-            for result in export.results {
-                let coverage = serde_json::to_string(&result.coverage).context(EncodeSnafu)?;
-                let _ = writeln!(
-                    text,
-                    "result\t{}\ttarget={}\tartifact={}\tstale={}\tcoverage={}",
-                    Self::text(&result.result_id),
-                    Self::text(&result.target),
-                    result
-                        .artifact
-                        .as_ref()
-                        .map_or("", |artifact| artifact.digest.as_str()),
-                    result.stale,
-                    Self::text(&coverage)
-                );
-            }
-        }
-        if let Some(serde_json::Value::Object(datasets)) = output {
-            for (name, rows) in datasets {
-                let _ = writeln!(text, "dataset\t{}", Self::text(&name));
-                if let Some(rows) = rows.as_array() {
-                    for row in rows {
-                        let value = serde_json::to_string(row).context(EncodeSnafu)?;
-                        let _ = writeln!(text, "{}", Self::text(&value));
-                    }
-                }
-            }
-        }
-        for fixture in response.tests {
-            let _ = writeln!(
-                text,
-                "test\t{}\tpassed={}",
-                Self::text(&fixture.fixture),
-                fixture.passed
-            );
-        }
-        Ok(text.into_bytes())
+        .fail()
     }
 }
 
@@ -130,11 +65,6 @@ mod tests {
         let response = PackageResponseV1 {
             definition: Some(definition.clone()),
             image: None,
-            scope_id: String::new(),
-            package_id: String::new(),
-            exports: Vec::new(),
-            tests: Vec::new(),
-            output: None,
         };
         for mode in [OutputMode::Jsonl, OutputMode::Table] {
             let bytes = Output::new(Some(mode), false).package(response.clone())?;
@@ -148,19 +78,10 @@ mod tests {
 
     #[tokio::test]
     async fn image_output_metadata() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let image = araphor_analysis_back::AnalysisPackageOwner::required_bundles()
-            .into_iter()
-            .next()
-            .ok_or("package fixture absent")?
-            .metadata()?;
+        let image = araphor_analysis::Package::discovery_bundle()?.metadata()?;
         let response = PackageResponseV1 {
             definition: None,
             image: Some(image.clone()),
-            scope_id: String::new(),
-            package_id: image.root.package_id.clone(),
-            exports: Vec::new(),
-            tests: Vec::new(),
-            output: Some(Default::default()),
         };
         let bytes = Output::new(Some(OutputMode::Jsonl), false).package(response.clone())?;
         let document: serde_json::Value = serde_json::from_slice(&bytes)?;

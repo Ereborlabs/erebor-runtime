@@ -43,8 +43,9 @@ async fn image_install_roundtrip() -> Result<()> {
         .await?;
     let installed: PackageResponseV1 = serde_json::from_slice(&reply.result_json)?;
     assert_eq!(installed.image, Some(expected.clone()));
-    assert!(
-        installed.exports.is_empty() && installed.tests.is_empty() && installed.output.is_none()
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&reply.result_json)?,
+        serde_json::json!({"image": installed.image}),
     );
     assert_eq!(data.package_activation_page(None)?, before);
     let revision = *data.subscribe_revision().borrow();

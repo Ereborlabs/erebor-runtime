@@ -5,6 +5,7 @@ use crate::{ContextSensitivityV1, FindingSeverityV1, GraphRevisionV1, Result};
 mod delivery;
 mod obligation;
 mod route;
+mod schedule;
 mod subject;
 pub use delivery::*;
 pub use obligation::*;

@@ -43,12 +43,6 @@ impl ClientGrpcOwner {
             | PackageRequestV1::InspectImage { .. }) => {
                 self.image_request(grant, image, control).await?
             }
-            operation => self
-                .data()?
-                .packages
-                .execute(grant, operation, control)
-                .await
-                .map_err(Self::package_failure)?,
         };
         access.check().map_err(Self::auth_failure)?;
         let result_json = Self::package_response(&response)?;
@@ -122,7 +116,7 @@ impl ClientGrpcOwner {
             _ => {
                 return Err(Status::invalid_argument(
                     "The definition operation is invalid.",
-                ))
+                ));
             }
         };
         grant.remaining().map_err(Self::image_failure)?;
@@ -131,13 +125,8 @@ impl ClientGrpcOwner {
             .map_err(Self::image_failure)?;
         control.check().map_err(Self::failure)?;
         Ok(PackageResponseV1 {
-            package_id: String::new(),
-            scope_id: String::new(),
             image: None,
             definition: Some(definition),
-            exports: Vec::new(),
-            tests: Vec::new(),
-            output: None,
         })
     }
 
@@ -195,12 +184,7 @@ impl ClientGrpcOwner {
             control.check()?;
             Ok(PackageResponseV1 {
                 definition: None,
-                scope_id: String::new(),
-                package_id: image.root.package_id.clone(),
                 image: Some(image),
-                exports: Vec::new(),
-                tests: Vec::new(),
-                output: None,
             })
         })
         .await
@@ -211,23 +195,6 @@ impl ClientGrpcOwner {
     fn image_failure(error: araphor_data::Error) -> Status {
         let details = match &error {
             araphor_data::Error::Package { code, field, .. } => Some((*code, *field)),
-            _ => None,
-        };
-        let status = Self::failure(error);
-        match details {
-            Some((code, field)) => Self::package_status(status, code, field),
-            None => status,
-        }
-    }
-
-    fn package_failure(error: araphor_analysis_back::Error) -> Status {
-        let details = match &error {
-            araphor_analysis_back::Error::Data {
-                source: araphor_data::Error::Package { code, field, .. },
-            } => Some((*code, *field)),
-            araphor_analysis_back::Error::PackageNative {
-                code, operation, ..
-            } => Some((*code, *operation)),
             _ => None,
         };
         let status = Self::failure(error);

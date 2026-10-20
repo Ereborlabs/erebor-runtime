@@ -1,15 +1,13 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 
-use araphor_analysis_back::{AnalysisPackageOwner, InstalledAnalysis};
 use araphor_data::PackageAuthorization;
-use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, PackageActionV1, PackageGrantV1};
+use araphor_data::{AnalysisSelectionV1, PackageActionV1, PackageGrantV1};
 use araphor_query::execution::{Engine, Limits};
 
 use super::ControlPlane;
 
 pub(crate) struct ControlPackages {
-    pub(crate) owner: Arc<AnalysisPackageOwner>,
     pub(crate) query: Arc<Engine>,
     authority: Arc<ControlPackageAuthority>,
     limits: Limits,
@@ -65,12 +63,9 @@ impl ControlPlane {
                     })
             })
             .collect::<crate::Result<BTreeSet<_>>>()?;
-        let mut bundles = AnalysisPackageOwner::required_bundles();
-        bundles.push(araphor_analysis::Package::discovery_bundle()?);
-        let pins = bundles
-            .iter()
-            .map(|bundle| bundle.digest().map_err(araphor_data::Error::from))
-            .collect::<araphor_data::Result<BTreeSet<_>>>()?;
+        let bundle = araphor_analysis::Package::discovery_bundle()?;
+        let digest = bundle.digest().map_err(araphor_data::Error::from)?;
+        let pins = BTreeSet::from([digest.clone()]);
         let authority = Arc::new(ControlPackageAuthority {
             tenants,
             pins,
@@ -87,36 +82,23 @@ impl ControlPlane {
                 .build()
             })?
             .register_views(araphor_analysis_builtins::discovery::sql::VIEWS_SQL)?;
-        let owner = AnalysisPackageOwner::new(query.clone(), authority.clone())?;
-        #[cfg(test)]
-        let owner = {
-            let mut owner = owner;
-            owner.prepare_test_code()?;
-            owner
-        };
-        let owner = Arc::new(owner);
         for tenant in &authority.tenants {
-            owner.ensure_required(
-                &authority.grant(*tenant),
-                &AnalysisReadControl::with_timeout(std::time::Duration::from_secs(120))?,
-            )?;
+            let grant = authority.grant(*tenant);
+            let retained = araphor_data::PackageBundleRef::retained(&bundle, &digest);
+            authority.commit(&grant, PackageActionV1::Install, &retained, &mut || {
+                query
+                    .store()
+                    .install_package_image(*tenant, &bundle, || grant.remaining().map(|_| ()))?;
+                Ok(())
+            })?;
         }
         let runtime = Arc::new(ControlPackages {
-            owner,
             query,
             authority,
             limits,
         });
         *installed = Some(runtime.clone());
         Ok(runtime)
-    }
-
-    pub fn installed_analysis(&self) -> crate::Result<InstalledAnalysis> {
-        InstalledAnalysis::new(
-            self.analysis_packages(None)?.owner.clone(),
-            AnalysisPackageOwner::DOMAIN_SCOPE,
-        )
-        .map_err(Into::into)
     }
 }
 

@@ -260,7 +260,7 @@ fn raw_changes_snapshot() -> TestResult {
 fn raw_changes_retirement() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("analysis");
-    let store = AnalysisStore::open(&root)?;
+    let store = AnalysisStore::open_retention(&root)?;
     let source = crate::analysis::tests::identity();
     let next = EvidenceIntakeIdentityV1 {
         source_epoch: 2,
@@ -393,7 +393,7 @@ fn raw_changes_retirement() -> TestResult {
 #[test]
 fn raw_changes_binding() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("analysis"))?;
+    let store = AnalysisStore::open_retention(directory.path().join("analysis"))?;
     let source = crate::analysis::tests::identity();
     let mut selection = AnalysisSelectionV1::tenant(source.tenant_id);
     selection.binding_ids.push([9; 16]);
@@ -439,7 +439,8 @@ fn raw_changes_binding() -> TestResult {
         [1]
     );
     assert_eq!(page.extraction.sources[0].receipt.contiguous_cursor, 3);
-    EvidenceRetentionOwner::new(&store).retain(&source, u64::MAX)?;
+    let retired = EvidenceRetentionOwner::new(&store).retain(&source, u64::MAX)?;
+    assert_eq!(retired.removed_records, 3);
     let removed = read(
         &store,
         &selection,
@@ -590,7 +591,7 @@ fn trace_changes_retirement() -> TestResult {
     use crate::analysis::raw::tests::{trace_intent, trace_terminal};
 
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("analysis"))?;
+    let store = AnalysisStore::open_retention(directory.path().join("analysis"))?;
     let intent = trace_intent()?;
     let identity = &intent.bindings[0].identity;
     let state = store.accept_trace(&intent)?;

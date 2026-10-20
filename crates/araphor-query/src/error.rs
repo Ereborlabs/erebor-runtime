@@ -51,6 +51,20 @@ pub enum Failure {
 }
 
 impl Failure {
+    fn package(code: araphor_data::PackageErrorCodeV1) -> Self {
+        use araphor_data::PackageErrorCodeV1;
+        match code {
+            PackageErrorCodeV1::Invalid => Self::InvalidQuery,
+            PackageErrorCodeV1::Limit => Self::InputTooLarge,
+            PackageErrorCodeV1::Denied => Self::Denied,
+            PackageErrorCodeV1::Unsupported => Self::Unsupported,
+            PackageErrorCodeV1::Missing | PackageErrorCodeV1::Incomplete => {
+                Self::StorageUnavailable
+            }
+            PackageErrorCodeV1::Conflict => Self::EvaluationFailed,
+        }
+    }
+
     fn contract(error: &araphor_analysis_sdk::Error) -> Self {
         use araphor_analysis_sdk::ErrorCode;
         match error.code() {
@@ -71,6 +85,7 @@ impl Failure {
                 _ => Self::InvalidQuery,
             },
             Error::AnalysisContract { source, .. } => Self::contract(source),
+            Error::Package { code, .. } => Self::package(*code),
             Error::AnalysisInputTooLarge { .. } => Self::InputTooLarge,
             Error::AnalysisReadDenied { .. } => Self::Denied,
             Error::AnalysisUnavailable { .. } => Self::Unsupported,
@@ -87,6 +102,20 @@ impl Failure {
         }
     }
 
+    fn runtime(error: &araphor_package_runtime::Error) -> Self {
+        use araphor_package_runtime::Error;
+        match error {
+            Error::Data { source } => Self::data(source),
+            Error::AnalysisContract { source, .. } => Self::contract(source),
+            Error::AnalysisBusy { .. } => Self::Busy,
+            Error::PackageNative { code, .. } | Error::PackageWasm { code, .. } => {
+                Self::package(*code)
+            }
+            Error::Io { .. } => Self::StorageUnavailable,
+            Error::Worker { .. } | Error::WorkerResult { .. } => Self::EvaluationFailed,
+        }
+    }
+
     pub fn native(error: &datafusion::error::DataFusionError) -> Self {
         let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
         while let Some(source) = current {
@@ -95,6 +124,9 @@ impl Failure {
             }
             if let Some(source) = source.downcast_ref::<araphor_data::Error>() {
                 return Self::data(source);
+            }
+            if let Some(source) = source.downcast_ref::<araphor_package_runtime::Error>() {
+                return Self::runtime(source);
             }
             if let Some(source) = source.downcast_ref::<araphor_analysis_sdk::Error>() {
                 return Self::contract(source);
@@ -136,6 +168,9 @@ impl Error {
                 return Some(error);
             }
             if let Some(error) = source.downcast_ref::<araphor_data::Error>() {
+                return Some(error);
+            }
+            if let Some(error) = source.downcast_ref::<araphor_package_runtime::Error>() {
                 return Some(error);
             }
             if let Some(error) = source.downcast_ref::<araphor_analysis_sdk::Error>() {
@@ -244,13 +279,17 @@ mod tests {
             (ErrorCode::Limit, Failure::InputTooLarge),
             (ErrorCode::Failed, Failure::EvaluationFailed),
         ] {
-            for wrapper in 0..3 {
+            for wrapper in 0..4 {
                 let contract = SdkError::contract(code, "private contract field");
                 let (status, retry) = (contract.status_code(), contract.retry_hint());
                 let source: Box<dyn std::error::Error + Send + Sync> = match wrapper {
                     0 => Box::new(contract),
                     1 => Box::new(Error::Contract { source: contract }),
-                    _ => Box::new(araphor_data::Error::AnalysisContract {
+                    2 => Box::new(araphor_data::Error::AnalysisContract {
+                        source: contract,
+                        location: snafu::location!(),
+                    }),
+                    _ => Box::new(araphor_package_runtime::Error::AnalysisContract {
                         source: contract,
                         location: snafu::location!(),
                     }),
@@ -267,5 +306,88 @@ mod tests {
                 assert_eq!(error.output_msg(), "SQL operation failed");
             }
         }
+    }
+
+    #[test]
+    fn runtime_errors_keep_categories() {
+        use araphor_data::PackageErrorCodeV1 as Code;
+        use araphor_package_runtime::Error as RuntimeError;
+
+        for native in [false, true] {
+            for (code, failure, status) in [
+                (
+                    Code::Invalid,
+                    Failure::InvalidQuery,
+                    StatusCode::InvalidArguments,
+                ),
+                (
+                    Code::Limit,
+                    Failure::InputTooLarge,
+                    StatusCode::InvalidArguments,
+                ),
+                (Code::Denied, Failure::Denied, StatusCode::PermissionDenied),
+                (
+                    Code::Unsupported,
+                    Failure::Unsupported,
+                    StatusCode::Unsupported,
+                ),
+                (
+                    Code::Incomplete,
+                    Failure::StorageUnavailable,
+                    StatusCode::Unavailable,
+                ),
+            ] {
+                let source = Box::new(std::io::Error::other("backend detail"));
+                let runtime = if native {
+                    RuntimeError::PackageNative {
+                        code,
+                        operation: "test native operation",
+                        source,
+                        location: snafu::location!(),
+                    }
+                } else {
+                    RuntimeError::PackageWasm {
+                        code,
+                        operation: "test Wasm operation",
+                        source,
+                        location: snafu::location!(),
+                    }
+                };
+                let error = Error::Sql {
+                    source: DataFusionError::Shared(std::sync::Arc::new(DataFusionError::Context(
+                        "physical package".into(),
+                        Box::new(DataFusionError::External(Box::new(runtime))),
+                    ))),
+                };
+                assert_eq!(Failure::from(&error), failure, "{code:?}/{native}");
+                assert_eq!(error.status_code(), status, "{code:?}/{native}");
+                assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
+                assert_eq!(error.output_msg(), "SQL operation failed");
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_capacity_can_retry() {
+        let runtime = araphor_package_runtime::Error::AnalysisBusy {
+            resource: "component evaluations",
+            requested: 1,
+            location: snafu::location!(),
+        };
+        let error = Error::Sql {
+            source: DataFusionError::External(Box::new(runtime)),
+        };
+        assert_eq!(Failure::from(&error), Failure::Busy);
+        assert_eq!(error.status_code(), StatusCode::Unavailable);
+        assert_eq!(error.retry_hint(), RetryHint::Retryable);
+
+        let runtime = araphor_package_runtime::Error::from(
+            araphor_data::PackageErrorCodeV1::Denied.error("runtime grant"),
+        );
+        let error = Error::Sql {
+            source: DataFusionError::External(Box::new(runtime)),
+        };
+        assert_eq!(Failure::from(&error), Failure::Denied);
+        assert_eq!(error.status_code(), StatusCode::PermissionDenied);
     }
 }

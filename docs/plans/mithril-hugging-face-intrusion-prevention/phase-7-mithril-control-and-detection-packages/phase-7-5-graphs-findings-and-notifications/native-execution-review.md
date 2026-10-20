@@ -1,5 +1,12 @@
 # Native execution implementation review
 
+Current command status, 2026-10-19: The old Analysis owner and its qualification
+harness have been removed. The cases `graph-notification`
+are no longer accepted by `mithril_discovery_test`. The commands and results
+below remain historical proof for their recorded source. They do not qualify
+the current replacement. Read the [current plan](../../../araphor-package-jobs.md)
+for the supported path and remaining work.
+
 This guide covers installed Rust native plugins in Araphor's process. The
 implementation uses the existing analysis contract, authorization owners, and
 durable commit path. Read the [native execution plan](phase-7-5-5-native-execution.md)
@@ -20,25 +27,25 @@ for exact source cuts, terminal proof, and limits.
 
 ## Implementation review flow
 
-[install](../../../../../crates/araphor-data/src/package/lifecycle.rs) Admission evaluates an installed native plugin
-  -> [Qualification](../../../../../crates/araphor-data/src/package/native/artifact.rs) the package owner checks platform, CPU, system libraries, and ABI requirements
-  -> [NativeExecution::admit](../../../../../crates/araphor-data/src/package/native/mod.rs) the package owner validates the admitted native library and its dependencies
+[install](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/lifecycle.rs) Admission evaluates an installed native plugin
+  -> [Qualification](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/artifact.rs) the package owner checks platform, CPU, system libraries, and ABI requirements
+  -> [NativeExecution::admit](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/mod.rs) the package owner validates the admitted native library and its dependencies
   -> [Bundle::implementation](../../../../../crates/araphor-data/src/package/bundle.rs) the package owner uses the plugin's declared native implementation
 
-[InstalledAnalysis::evaluate](../../../../../crates/araphor-data/src/package/installed.rs) The scheduler invokes the export
-  -> [evaluate_native](../../../../../crates/araphor-data/src/query/model/component.rs) the package owner supplies authorized typed batches to the Rust native adapter
+[InstalledAnalysis::evaluate](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed.rs) The scheduler invokes the export
+  -> [evaluate_native](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/model/component.rs) the package owner supplies authorized typed batches to the Rust native adapter
   -> [Invocation::call](../../../../../crates/araphor-analysis-sdk/src/native/mod.rs) the SDK adapter calls the compiled algorithm through the native interface
   -> [Decoder](../../../../../crates/araphor-analysis-sdk/src/native/decode.rs) the adapter returns bounded outputs and its next checkpoint
-  -> [commit authorization](../../../../../crates/araphor-data/src/package/installed/commit.rs) host validation submits the result through the existing atomic commit path
+  -> [commit authorization](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/commit.rs) host validation submits the result through the existing atomic commit path
   -> [commit_package](../../../../../crates/araphor-data/src/analysis/packages/commit.rs) AnalysisStore commits the result and checkpoint together
 
-[NativeExecution::evaluate](../../../../../crates/araphor-data/src/package/native/mod.rs) Native computation returns an error or finishes after cancellation
-  -> [NativeLibrary](../../../../../crates/araphor-data/src/package/native/loading.rs) the package owner rejects its output and releases evaluation resources
-  -> [evaluation](../../../../../crates/araphor-data/src/package/evaluation.rs) AnalysisStore retains the prior active revision and committed state
-  -> [evaluation](../../../../../crates/araphor-data/src/package/evaluation.rs) retry uses the same declared implementation and operation identity
+[NativeExecution::evaluate](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/mod.rs) Native computation returns an error or finishes after cancellation
+  -> [NativeLibrary](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/loading.rs) the package owner rejects its output and releases evaluation resources
+  -> [evaluation](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/evaluation.rs) AnalysisStore retains the prior active revision and committed state
+  -> [evaluation](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/evaluation.rs) retry uses the same declared implementation and operation identity
 
-[native fault fixture](../../../../../crates/araphor-data/src/package/tests/native/restart.rs) A native fault terminates Araphor
-  -> [in-process call](../../../../../crates/araphor-data/src/package/native/loading.rs) the process cannot perform worker recovery
+[native fault fixture](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/native/restart.rs) A native fault terminates Araphor
+  -> [in-process call](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/loading.rs) the process cannot perform worker recovery
   -> [AnalysisStore::open](../../../../../crates/araphor-data/src/analysis/mod.rs) restart restores the prior complete durable commit
   -> [Bundle::implementation](../../../../../crates/araphor-data/src/package/bundle.rs) the package owner does not select Wasm as a fallback
 
@@ -70,7 +77,7 @@ embedded dependency bytes with digests. The legacy optional metadata shape
 remains readable. Readability does not prove that a legacy native artifact can
 execute.
 
-[Qualification::inspect](../../../../../crates/araphor-data/src/package/native/artifact.rs)
+[Qualification::inspect](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/artifact.rs)
 reads object metadata without loading plugin code. Admission checks the exact
 runtime build target, dynamic object format, architecture, byte order, and
 pointer width. It checks declared CPU features and the ABI contract version.
@@ -88,22 +95,22 @@ an unreachable provider. The ELF runtime search path permits the approved
 
 | Owner | State and lifetime | Inputs and effects | Contract tests |
 | --- | --- | --- | --- |
-| [AnalysisPackageOwner](../../../../../crates/araphor-data/src/package/owner.rs) | The constructor creates the execution owners, lifecycle lock, and four operation permits. The owner closes local resources on drop. Lifecycle operations change admitted and active revisions. | Install, run, update, rollback, and remove use existing authority and store owners. | [lifecycle](../../../../../crates/araphor-data/src/package/tests/native/lifecycle.rs), [failures](../../../../../crates/araphor-data/src/package/tests/native/failures.rs) |
-| [NativeExecution](../../../../../crates/araphor-data/src/package/native/mod.rs) | The package owner creates this owner with native limits. Each evaluation creates a local library lifetime. | Admission validates metadata. Evaluation returns owned SDK output or a typed error. | [native loader tests](../../../../../crates/araphor-data/src/package/native/loading.rs) |
-| [NativeLibrary](../../../../../crates/araphor-data/src/package/native/loading.rs) | One evaluation owns the root library, system library handles, retained files, and private directory. Drop closes these resources after output copying and producer release. | Load reads exact retained files. Call invokes the ABI table. | [sealed closure, replacement, and ABI tests](../../../../../crates/araphor-data/src/package/native/loading.rs) |
-| [QueryBudget](../../../../../crates/araphor-data/src/query/model/component.rs) | The query owner reserves input and output capacity. Input and result leases release capacity on drop. | Typed input extraction and bounded output construction consume existing query capacity. | [component tests](../../../../../crates/araphor-data/src/query/model/component/tests.rs) |
-| [InstalledEvaluation](../../../../../crates/araphor-data/src/package/installed.rs) | Evaluation retains the admitted revision, actual artifact identity, output lease, and operation permit until the result drops. | Current authority and exact revision checks precede execution and commit. | [interruption](../../../../../crates/araphor-data/src/package/tests/native/interruption.rs), [checkpoint](../../../../../crates/araphor-data/src/package/tests/native/checkpoint.rs) |
-| [AnalysisStore](../../../../../crates/araphor-data/src/analysis/packages/commit.rs) | Durable state outlives the process. Existing commit and recovery owners change this state. | One commit records results, checkpoints, progress, and retained references. | [checkpoint](../../../../../crates/araphor-data/src/package/tests/native/checkpoint.rs), [restart](../../../../../crates/araphor-data/src/package/tests/native/restart.rs) |
+| [AnalysisPackageOwner](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/owner.rs) | The constructor creates the execution owners, lifecycle lock, and four operation permits. The owner closes local resources on drop. Lifecycle operations change admitted and active revisions. | Install, run, update, rollback, and remove use existing authority and store owners. | [lifecycle](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/native/lifecycle.rs), [failures](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/native/failures.rs) |
+| [NativeExecution](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/mod.rs) | The package owner creates this owner with native limits. Each evaluation creates a local library lifetime. | Admission validates metadata. Evaluation returns owned SDK output or a typed error. | [native loader tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/loading.rs) |
+| [NativeLibrary](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/loading.rs) | One evaluation owns the root library, system library handles, retained files, and private directory. Drop closes these resources after output copying and producer release. | Load reads exact retained files. Call invokes the ABI table. | [sealed closure, replacement, and ABI tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/loading.rs) |
+| [QueryBudget](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/model/component.rs) | The query owner reserves input and output capacity. Input and result leases release capacity on drop. | Typed input extraction and bounded output construction consume existing query capacity. | [component tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/model/component/tests.rs) |
+| [InstalledEvaluation](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed.rs) | Evaluation retains the admitted revision, actual artifact identity, output lease, and operation permit until the result drops. | Current authority and exact revision checks precede execution and commit. | [interruption](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/native/interruption.rs), [checkpoint](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/native/checkpoint.rs) |
+| [AnalysisStore](../../../../../crates/araphor-data/src/analysis/packages/commit.rs) | Durable state outlives the process. Existing commit and recovery owners change this state. | One commit records results, checkpoints, progress, and retained references. | [checkpoint](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/native/checkpoint.rs), [restart](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/native/restart.rs) |
 
 Closing a library handle does not remove an installed revision. Package removal
 and rollback use the existing lifecycle owner. Retained historical references
 preserve the exact target and artifact when those fields are available. Read
-[history](../../../../../crates/araphor-data/src/package/installed/history.rs)
+[history](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/history.rs)
 for the legacy reference rules and mismatch rejection.
 
 ## Supervisor preparation and cancellation
 
-[The supervisor](../../../../../crates/araphor-data/src/package/supervision.rs)
+[The supervisor](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/supervision.rs)
 loads bundles, checks admission, and skips prepared exports inside its existing
 blocking task. These operations do not block the async runtime thread. The
 supervisor groups exports by tenant, scope, and root. It creates one group
@@ -120,7 +127,7 @@ The same owner passes the operation control to the failure-status transaction.
 The transaction checks cancellation before commit. A cancelled failure cannot
 change readiness metadata or mark retained results stale. Successful result
 commits retain their existing authorization and generation checks.
-[The interruption tests](../../../../../crates/araphor-data/src/package/tests/interruption.rs)
+[The interruption tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/interruption.rs)
 poll after stop and check responsive cancellation before admission release,
 a pending shutdown join, three available operation permits while admission is
 held, four after task exit, and unchanged activation and complete result records.
@@ -153,7 +160,7 @@ sequenceDiagram
     Store-->>Owner: Durable receipt
 ```
 
-[Graph input extraction](../../../../../crates/araphor-data/src/query/analysis.rs)
+[Graph input extraction](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/analysis.rs)
 returns frozen subject, relationship, and manifest rows. Database readers remain
 local to [extraction](../../../../../crates/araphor-data/src/analysis/extraction.rs).
 The extraction call closes these readers before native computation starts.
@@ -161,11 +168,11 @@ The input owner and its query lease remain alive while the adapter borrows the
 arrays. Graph traversal and input selection retain the existing authorization
 and coverage rules.
 
-The [native query path](../../../../../crates/araphor-data/src/query/model/component.rs)
+The [native query path](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/model/component.rs)
 reserves retained arrays and adapter allocation capacity. The reservation then
 shrinks to retained input capacity. This path does not use the Wasm input byte
 quota or a Wasm IPC writer. The
-[query evaluator](../../../../../crates/araphor-data/src/query/model.rs)
+[query evaluator](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/model.rs)
 checks output capacity and the evaluation deadline. A returned result retains
 its output lease. Reviewers must release a result before another result needs
 the same bounded capacity.
@@ -180,8 +187,8 @@ not encode and decode Arrow IPC for transport.
 The [decoder](../../../../../crates/araphor-analysis-sdk/src/native/decode.rs)
 accounts for aggregate rows, batches, and bytes. Output limits are independent
 of input limits. The adapter validates dataset schemas and checkpoint bounds.
-The [graph adapter](../../../../../crates/araphor-data/src/graph/derive/adapter/mod.rs)
-and [discovery adapter](../../../../../crates/araphor-data/src/discovery/sdk/mod.rs)
+The [graph adapter](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/derive/adapter/mod.rs)
+and [discovery adapter](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/discovery/sdk/mod.rs)
 retain domain validation for evidence, reasons, coverage, and graph results.
 Successful ABI decoding does not grant commit authority.
 
@@ -221,7 +228,7 @@ independent output capacity cases.
 
 ## Loading limits and platform evidence
 
-On Linux, [FilePin](../../../../../crates/araphor-data/src/package/native/files.rs)
+On Linux, [FilePin](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/files.rs)
 copies packaged root and dependency bytes into sealed memory files. Private
 file-descriptor links retain the sibling `$ORIGIN` layout. Seals prevent writes,
 growth, and truncation of these packaged files. System library pins retain the
@@ -241,7 +248,7 @@ Current runtime evidence concerns Linux x86-64 GNU only. The source target
 checks do not constitute qualification for every target on which Araphor can
 compile.
 
-[NativeLimits](../../../../../crates/araphor-data/src/package/native/mod.rs)
+[NativeLimits](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/mod.rs)
 defaults `memory_bytes` and `cpu_seconds` to `None`. Zero is invalid. A positive
 hard-cap request returns `Unsupported` for native admission and evaluation.
 The same configuration does not disable SQL or Wasm. Query capacity, output
@@ -250,14 +257,14 @@ call that never returns cannot be forcibly stopped by these checks.
 
 ## Authority, retry, and recovery
 
-[Installed execution](../../../../../crates/araphor-data/src/package/installed.rs)
+[Installed execution](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed.rs)
 checks grants, scope, trust, revision, and control before and after computation.
-The [commit gate](../../../../../crates/araphor-data/src/package/installed/commit.rs)
+The [commit gate](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed/commit.rs)
 uses the shared lifecycle lock and rejects a stale activation generation,
 revision, or authority. Historical evaluations cannot commit. Domain owners
 commit graph and discovery results through their existing supported APIs.
 
-The [run owner](../../../../../crates/araphor-data/src/package/evaluation.rs)
+The [run owner](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/evaluation.rs)
 binds retry identity to the declared target and actual native artifact closure.
 A changed request conflicts with the existing operation. A returned error
 does not commit the proposed output or checkpoint. Failure metadata can record
@@ -265,8 +272,8 @@ staleness without replacing the prior complete result.
 
 Update prepares a new immutable revision before activation. Rollback uses the
 existing install path for the retained revision. No new rebuild API exists.
-Read [activation](../../../../../crates/araphor-data/src/package/lifecycle/activation.rs)
-and [revisions](../../../../../crates/araphor-data/src/package/lifecycle/revisions.rs)
+Read [activation](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/lifecycle/activation.rs)
+and [revisions](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/lifecycle/revisions.rs)
 for parameter, state, and revision rules. A plugin type change requires a
 different declared plugin revision; no runtime preference selects the change.
 
@@ -287,12 +294,12 @@ commands and terminal results.
 | --- | --- | --- |
 | Source build and folder | [builder tests](../../../../../crates/araphor-component-build/src/lib.rs): separate native manifest, exact exports, dependency paths and preserved Wasm encoding. | Six final native libraries compile. Compilation does not prove installed execution. |
 | ABI | [SDK tests](../../../../../crates/araphor-analysis-sdk/src/native/tests.rs): complete typed output, malformed output release, cancellation, panic, and layout. | 63 SDK tests and strict all-target clippy pass. Final workspace CI session 25541 passes. |
-| Loader closure | [artifact](../../../../../crates/araphor-data/src/package/native/artifact.rs) and [loading tests](../../../../../crates/araphor-data/src/package/native/loading.rs): platform, symbol versions, reachable providers, sibling loading, sealed files, replacement, SONAME, and typed ABI rejection. | The 18-test gate passes. The later diagnostic fixture correction also passes 18 tests in session 66984. Final source clippy passes in session 25541. Installed runtime proof remains separate. |
-| Lifecycle | [native tests](../../../../../crates/araphor-data/src/package/tests/native/mod.rs): install, update, rollback, removal, checkpoint, denial, cancellation, and restart. | Seven lifecycle tests pass in the final 33-test cut. The separate real panic and SIGABRT restart test also passes with the final artifacts. |
-| Four discovery exports | [native discovery tests](../../../../../crates/araphor-data/src/discovery/sdk/native.rs): populated atoms, merge, groups, compare, reordered inputs, missing context, and coverage. | Both tests pass with the final SDK, loader, and libraries. |
-| Three graph exports | [native graph tests](../../../../../crates/araphor-data/src/graph/derive/adapter/tests/native.rs): complete and gapped inputs, trusted Rust/Wasm/native wire output, evidence, reasons, checkpoints, and derived results. | Complete parity and graph derivation pass after the new test releases its earlier output guards. |
-| Large native Arrow input | [large process test](../../../../../crates/araphor-data/src/graph/derive/adapter/tests/native/large.rs): 185 typed records, retained identities, full output and checkpoint parity through the actual native library. | The final 185-record proof passes. No benchmark or speed claim follows from this case. |
-| Installed production APIs | [native qualification](../../../../../crates/mithril-e2e/src/discovery/packages/native.rs) and [case owner](../../../../../crates/mithril-e2e/src/discovery/packages.rs): authored BurstDetector folder, no Python, native graph packages, exact artifact references, and restart. | Native analysis-packages, context-roundtrip, and profile-restart pass with the retained binary. The complete graph-notification case passes in session 64467. Its packages retain their declared Wasm type; actual native plugins pass separately in session 8227. |
+| Loader closure | [artifact](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/artifact.rs) and [loading tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/loading.rs): platform, symbol versions, reachable providers, sibling loading, sealed files, replacement, SONAME, and typed ABI rejection. | The 18-test gate passes. The later diagnostic fixture correction also passes 18 tests in session 66984. Final source clippy passes in session 25541. Installed runtime proof remains separate. |
+| Lifecycle | [native tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/native/mod.rs): install, update, rollback, removal, checkpoint, denial, cancellation, and restart. | Seven lifecycle tests pass in the final 33-test cut. The separate real panic and SIGABRT restart test also passes with the final artifacts. |
+| Four discovery exports | [native discovery tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/discovery/sdk/native.rs): populated atoms, merge, groups, compare, reordered inputs, missing context, and coverage. | Both tests pass with the final SDK, loader, and libraries. |
+| Three graph exports | [native graph tests](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/derive/adapter/tests/native.rs): complete and gapped inputs, trusted Rust/Wasm/native wire output, evidence, reasons, checkpoints, and derived results. | Complete parity and graph derivation pass after the new test releases its earlier output guards. |
+| Large native Arrow input | [large process test](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/derive/adapter/tests/native/large.rs): 185 typed records, retained identities, full output and checkpoint parity through the actual native library. | The final 185-record proof passes. No benchmark or speed claim follows from this case. |
+| Installed production APIs | [native qualification](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/mithril-e2e/src/discovery/packages/native.rs) and [case owner](../../../../../crates/mithril-e2e/src/discovery/packages.rs): authored BurstDetector folder, no Python, native graph packages, exact artifact references, and restart. | Native analysis-packages, context-roundtrip, and profile-restart pass with the retained binary. The complete graph-notification case passes in session 64467. Its packages retain their declared Wasm type; actual native plugins pass separately in session 8227. |
 
 The final artifact directory is `/tmp/araphor-native-built-20261013-final`.
 The author build log is `/tmp/araphor-native-build-20261013-final.log`. These

@@ -346,3 +346,37 @@ call:
     }
     Ok(())
 }
+
+#[test]
+fn native_call_quotes_metadata() -> TestResult {
+    let image = PackageRefV1 {
+        package_id: "fixture\".id".into(),
+        revision: "r\"1".into(),
+    };
+    let definition = Definition {
+        name: "native-call".into(),
+        description: String::new(),
+        labels: BTreeMap::new(),
+        program: Program::call(&image, "co\"unt", "row's")?,
+    };
+    let query = Call::query(definition.program.source().inline()?)?;
+    let SetExpr::Select(select) = *query.body else {
+        return Err("native SELECT".into());
+    };
+    let TableFactor::Table { name, .. } = &select.from[0].relation else {
+        return Err("native relation".into());
+    };
+    assert_eq!(
+        name.0
+            .iter()
+            .map(|part| part.as_ident().map(|ident| ident.value.as_str()))
+            .collect::<Option<Vec<_>>>(),
+        Some(vec!["fixture\".id", "r\"1", "co\"unt"])
+    );
+    let args = Fixture::args(&definition)?;
+    assert_eq!(args.len(), 1);
+    assert!(matches!(&args[0],
+        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(value)))
+            if value.value == SqlValue::SingleQuotedString("row's".into())));
+    Ok(())
+}

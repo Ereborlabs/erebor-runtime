@@ -1,0 +1,117 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use araphor_analysis_builtins::{graph as algorithm, Rows};
+use araphor_analysis_sdk as sdk;
+use araphor_data::{
+    AnalysisContractSnafu, ContextSensitivityV1, DeclaredFindingReasonV1, DiscoveryCoverageStateV1,
+    DiscoveryRecordIdV1, DiscoveryRecordV1, EvidenceRecord, FindingReasonV1, FindingSeverityV1,
+    FindingStateV1, FindingV1, GraphBranchStateV1, GraphBranchV1, GraphCauseV1, GraphEdgeKeyV1,
+    GraphEdgeTypeV1, GraphEdgeV1, GraphEffectV1, GraphEncodingSnafu, GraphFactV1, GraphFactValueV1,
+    GraphInvalidSnafu, GraphPackageCheckpointV1, GraphPackageStateV1, GraphPhysicalResultV1,
+    GraphReplayInputV1, GraphRevisionV1, GraphSnapshotV1, GraphSubjectAuthorityV1,
+    GraphSubjectKeyV1, GraphSubjectKindV1, GraphValidate, GraphVersionV1, LocalSubjectBindingV1,
+    OperationResultAuthorityV1, PolicyObservationProvenanceV1, PolicyProvenanceStateV1,
+    ProcessorScopeV1, ProofIntegrityV1, ProofQualityV1, Result, TemporalCoverageV1,
+    GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, GRAPH_WINDOW_BYTES, GRAPH_WINDOW_NS,
+    GRAPH_WINDOW_RECORDS, GRAPH_WITNESS_TTL_NS,
+};
+use araphor_query::definition::{CallResult, PackageCall};
+use erebor_interceptor_abi::{
+    EffectPhysicalResultV1, KernelEffectFamilyV1, KernelEffectOperationV1,
+};
+use snafu::ResultExt as _;
+
+mod edges;
+mod expiry;
+mod facts;
+mod finding;
+mod finish;
+mod identity;
+mod output;
+mod policy;
+mod projection;
+mod proof;
+mod validation;
+
+#[cfg(test)]
+mod tests;
+
+pub struct Graph<'a> {
+    input: &'a GraphReplayInputV1,
+    revision: GraphRevisionV1,
+    subjects: BTreeSet<GraphSubjectKeyV1>,
+    edges: BTreeMap<GraphEdgeKeyV1, GraphEdgeV1>,
+    branches: Vec<GraphBranchV1>,
+    findings: BTreeMap<String, FindingV1>,
+    facts: Vec<GraphFactV1>,
+    packages: Vec<(sdk::Package, GraphPackageStateV1)>,
+}
+
+impl<'a> Graph<'a> {
+    pub fn new(input: &'a GraphReplayInputV1) -> Result<Self> {
+        input.validate()?;
+        let revision = input.manifest();
+        revision.validate(input.source.tenant_id)?;
+        let facts = input
+            .facts
+            .iter()
+            .map(GraphFactV1::try_from)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            input,
+            revision,
+            subjects: BTreeSet::new(),
+            edges: BTreeMap::new(),
+            branches: Vec::new(),
+            findings: BTreeMap::new(),
+            facts,
+            packages: Vec::new(),
+        })
+    }
+
+    pub fn supports(model: &sdk::Model) -> bool {
+        let expected = algorithm::Detector::Process.descriptor();
+        let expected = &expected.exports[0];
+        model
+            .inputs
+            .iter()
+            .map(|input| &input.port)
+            .eq(expected.inputs.iter().map(|input| &input.port))
+            && model.outputs == expected.outputs
+            && model.checkpoint == expected.checkpoint
+    }
+
+    pub fn apply(mut self, call: &PackageCall, result: &CallResult) -> Result<Self> {
+        let package = call.descriptor();
+        let evaluation = result.evaluation();
+        if !result.belongs_to(call)
+            || call.tenant() != self.input.source.tenant_id
+            || call.package().package_id != package.id
+            || call.package().revision != package.revision
+            || call.export() != evaluation.export
+            || self
+                .packages
+                .iter()
+                .any(|(previous, _)| previous.id == package.id)
+        {
+            return GraphInvalidSnafu {
+                field: "graph package call",
+            }
+            .fail();
+        }
+        let model = package
+            .exports
+            .iter()
+            .find(|model| model.name == call.export())
+            .filter(|model| Self::supports(model))
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph export contract",
+                }
+                .build()
+            })?;
+        self.check_inputs(model, evaluation)?;
+        self.apply_output(package, evaluation, result.output())?;
+        Ok(self)
+    }
+}

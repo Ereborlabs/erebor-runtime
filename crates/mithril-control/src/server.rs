@@ -84,8 +84,6 @@ pub async fn serve(
         result = server => result.context(ServeSnafu { address }),
         never = maintenance.run_retention() => match never {},
         never = maintenance.run_context() => match never {},
-        never = maintenance.run_graph() => match never {},
-        never = maintenance.run_notifications() => match never {},
     }
 }
 

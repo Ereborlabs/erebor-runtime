@@ -1,5 +1,32 @@
 # Local Analysis Packages
 
+Current operation status, 2026-10-19: The old package owner has been removed.
+Use `image` to retain code and `definition` to admit SQL, PRQL, or a YAML call.
+Installation and admission start no Discovery. The
+[current plan](../../../araphor-package-jobs.md)
+records finite execution and the remaining running-instance work.
+
+These image commands are current:
+
+```sh
+araphor image digest ./denials
+araphor --profile ./operator.json image install ./denials
+araphor --profile ./operator.json image inspect denials.repeated --revision 1
+```
+
+The old `package` command group is unavailable. Its `run`, `query`, `update`,
+`rollback`, `test`, and `remove` operations have no current CLI replacement.
+Image installation accepts no scope, input selection, or parameters. Put input
+bindings and parameters in the definition. Running instances, automatic source
+replacement, and durable instance retry and checkpoint recovery remain
+**Not done**.
+
+The old owner procedure and results below are retained as historical material.
+Its schema 21, archive cap, compiler process, activation, and durable result
+statements do not describe the current image path. Current images have no
+mandatory archive-size cap. Wasmtime compiles inside the host process. A
+configured compiler address-space quota returns Unsupported.
+
 Use these operations with the existing authenticated
 [Araphor client](../../../araphor-observability/phase-3-cli-api-and-console.md).
 The CLI and agents call the same package owner. Read the
@@ -37,7 +64,7 @@ to unset. Compiler, cache, SDK, shared query, caller, and commit guards remain.
 Read the [open production gates](phase-7-5-4-wasm-execution.md#historical-records)
 before using this implementation.
 
-Configure these quotas in `client.investigation.query.wasm` in the existing
+Configure these quotas in `client.investigation.query.package.wasm` in the existing
 Control configuration. The
 [Control configuration](../../../../../crates/mithril-control/src/config.rs),
 [client listener](../../../../../crates/mithril-control/src/client_listener.rs),
@@ -50,13 +77,15 @@ in the complete configuration:
   "client": {
     "investigation": {
       "query": {
-        "wasm": {
-          "fuel": null,
-          "memory_bytes": null,
-          "data_bytes": null,
-          "timeout": null,
-          "allocation_bytes": null,
-          "host_calls": null
+        "package": {
+          "wasm": {
+            "fuel": null,
+            "memory_bytes": null,
+            "data_bytes": null,
+            "timeout": null,
+            "allocation_bytes": null,
+            "host_calls": null
+          }
         }
       }
     }
@@ -101,6 +130,9 @@ uses explicit versioned source facts. A production package must bind its source
 SQL to the intended authorized query views.
 
 ## Authorize and install
+
+The commands in this section are historical. Use the image commands above for
+the current installation and inspection path.
 
 First compute the OCI manifest digest:
 

@@ -7,14 +7,10 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-araphor-discovery-definition = { path = "../araphor-discovery-definition" }
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
 araphor-query = { path = "../araphor-query", features = ["test-fixtures"] }
-araphor-analysis_back = { path = "../araphor-analysis_back", features = ["test-fixtures"] }
-araphor-component-build = { path = "../araphor-component-build" }
-araphor-detector-example = { path = "../araphor-detector-example" }
 araphor-observability = { path = "../araphor-observability", features = ["test-support"] }
 arrow-schema = "=58.4.0"
 axum.workspace = true
@@ -67,6 +63,8 @@ uuid.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]
+araphor-discovery-definition = { path = "../araphor-discovery-definition" }
+araphor-detector-example = { path = "../araphor-detector-example" }
 rmp-serde.workspace = true
 rusqlite.workspace = true
 mithril-e2e-macros = { path = "../mithril-e2e-macros" }

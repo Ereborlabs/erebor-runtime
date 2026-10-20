@@ -1,0 +1,186 @@
+{
+  "schema_version": 3,
+  "tenant_id": [ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2 ],
+  "source_revision": "synthetic-discovery-corpus-v1",
+  "proof_kind": "SYNTHETIC",
+  "coverage": [
+    {
+      "stream": {
+        "tenant_id": [ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2 ],
+        "node_id": "node-a",
+        "node_boot_id": [ 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4 ],
+        "label_epoch": 1,
+        "source_id": [ 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6 ],
+        "source_epoch": 1
+      },
+      "cpu_id": 0,
+      "first_cursor": 1,
+      "last_cursor": 3,
+      "expected_records": 3,
+      "coverage_revision": 1,
+      "coverage_interval_id": [ 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8 ],
+      "state": "HEALTHY",
+      "gap_reasons": []
+    }
+  ],
+  "contexts": [
+    {
+      "record_id": {
+        "stream": {
+          "tenant_id": [ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2 ],
+          "node_id": "node-a",
+          "node_boot_id": [ 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4 ],
+          "label_epoch": 1,
+          "source_id": [ 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6 ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 1
+      },
+      "subject_revision": "workload-uid-a/revision-1",
+      "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "configuration_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "process_instance_id": [ 0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22 ],
+      "entry_instance_id": [ 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 0, 0, 0, 24 ],
+      "binding_id": [ 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 0, 0, 0, 0, 26 ],
+      "role_id": 1,
+      "state_id": 1,
+      "entry_rule_id": 1,
+      "catalog_revision": 1,
+      "static_key": {
+        "workload_selector_id": "worker",
+        "protected_scope_id": "33333333-3333-4333-8333-333333333333",
+        "execution_set_id": "44444444-4444-4444-8444-444444444444",
+        "entry_kind": "CONTAINER_START",
+        "role_id": "converter",
+        "process_state_id": "base",
+        "effect_family": 2,
+        "operation_id": "OPEN_READ",
+        "object_selector": "CLASS:PROJECTED_TOKEN",
+        "binding_lifecycle": "ACTIVE",
+        "operation": 2,
+        "operation_argument": 0,
+        "argument_wildcard": false
+      },
+      "policy_revision": {
+        "profile_id": "11111111-1111-4111-8111-111111111111",
+        "profile_version": 1,
+        "source_revision_id": "synthetic-policy-v1",
+        "signed_profile_digest": "synthetic-signed-profile-v1"
+      }
+    },
+    {
+      "record_id": {
+        "stream": {
+          "tenant_id": [ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2 ],
+          "node_id": "node-a",
+          "node_boot_id": [ 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4 ],
+          "label_epoch": 1,
+          "source_id": [ 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6 ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 2
+      },
+      "subject_revision": "workload-uid-a/revision-1",
+      "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "configuration_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "process_instance_id": [ 0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 22 ],
+      "entry_instance_id": [ 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 0, 0, 0, 24 ],
+      "binding_id": [ 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 0, 0, 0, 0, 26 ],
+      "role_id": 1,
+      "state_id": 1,
+      "entry_rule_id": 1,
+      "catalog_revision": 1,
+      "static_key": {
+        "workload_selector_id": "worker",
+        "protected_scope_id": "33333333-3333-4333-8333-333333333333",
+        "execution_set_id": "44444444-4444-4444-8444-444444444444",
+        "entry_kind": "CONTAINER_START",
+        "role_id": "converter",
+        "process_state_id": "base",
+        "effect_family": 2,
+        "operation_id": "OPEN_READ",
+        "object_selector": "CLASS:PROJECTED_TOKEN",
+        "binding_lifecycle": "ACTIVE",
+        "operation": 2,
+        "operation_argument": 0,
+        "argument_wildcard": false
+      },
+      "policy_revision": {
+        "profile_id": "11111111-1111-4111-8111-111111111111",
+        "profile_version": 1,
+        "source_revision_id": "synthetic-policy-v1",
+        "signed_profile_digest": "synthetic-signed-profile-v1"
+      }
+    }
+  ],
+  "records": [
+    {
+      "id": {
+        "stream": {
+          "tenant_id": [ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2 ],
+          "node_id": "node-a",
+          "node_boot_id": [ 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4 ],
+          "label_epoch": 1,
+          "source_id": [ 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6 ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 1
+      },
+      "original_kernel_sequence": 101,
+      "wire_record": [ 0, 0, 0, 119, 8, 233, 7, 16, 162, 31, 26, 16, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8, 32, 9, 40, 10, 50, 16, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 12, 58, 16, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 14, 66, 16, 0, 0, 0, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 16, 74, 16, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0, 18, 88, 19, 96, 9, 104, 1, 112, 2, 120, 2, 128, 1, 25, 136, 1, 25, 144, 1, 1, 162, 74, 144, 84 ]
+    },
+    {
+      "id": {
+        "stream": {
+          "tenant_id": [ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2 ],
+          "node_id": "node-a",
+          "node_boot_id": [ 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4 ],
+          "label_epoch": 1,
+          "source_id": [ 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6 ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 2
+      },
+      "original_kernel_sequence": 102,
+      "wire_record": [ 0, 0, 0, 119, 8, 234, 7, 16, 164, 31, 26, 16, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8, 32, 9, 40, 10, 50, 16, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 12, 58, 16, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 14, 66, 16, 0, 0, 0, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 16, 74, 16, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0, 18, 88, 19, 96, 9, 104, 1, 112, 2, 120, 2, 128, 1, 25, 136, 1, 25, 144, 1, 1, 152, 122, 130, 104 ]
+    },
+    {
+      "id": {
+        "stream": {
+          "tenant_id": [ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2 ],
+          "node_id": "node-a",
+          "node_boot_id": [ 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4 ],
+          "label_epoch": 1,
+          "source_id": [ 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6 ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 3
+      },
+      "original_kernel_sequence": 103,
+      "wire_record": [ 0, 0, 0, 119, 8, 235, 7, 16, 166, 31, 26, 16, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8, 32, 9, 40, 10, 50, 16, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 12, 58, 16, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 14, 66, 16, 0, 0, 0, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 16, 74, 16, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0, 18, 88, 19, 96, 9, 104, 1, 112, 2, 120, 2, 128, 1, 25, 136, 1, 25, 144, 1, 1, 114, 206, 161, 211 ]
+    },
+    {
+      "id": {
+        "stream": {
+          "tenant_id": [ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2 ],
+          "node_id": "node-a",
+          "node_boot_id": [ 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4 ],
+          "label_epoch": 1,
+          "source_id": [ 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6 ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 1
+      },
+      "original_kernel_sequence": 101,
+      "wire_record": [ 0, 0, 0, 119, 8, 233, 7, 16, 162, 31, 26, 16, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8, 32, 9, 40, 10, 50, 16, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 12, 58, 16, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 14, 66, 16, 0, 0, 0, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 16, 74, 16, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0, 18, 88, 19, 96, 9, 104, 1, 112, 2, 120, 2, 128, 1, 25, 136, 1, 25, 144, 1, 1, 162, 74, 144, 84 ]
+    }
+  ],
+  "exclusions": [],
+  "lifecycle": []
+}

@@ -28,6 +28,7 @@ const STORE_SCHEMA_VERSION: u32 = 9;
 
 mod authority;
 mod context;
+#[cfg(test)]
 mod discovery_context;
 mod graph;
 pub use context::ControlContextOwner;
@@ -4676,10 +4677,6 @@ mod tests {
         );
         assert_eq!(pin.control_commit_index, store.commit_index());
         assert_eq!(
-            araphor_analysis_back::DiscoveryContextProvider::revision(&store, &record.id.stream)?,
-            store.commit_index()
-        );
-        assert_eq!(
             pin.binding.policy_revision.source_revision_id,
             source.policy_source_revision_id
         );
@@ -4809,12 +4806,6 @@ mod tests {
                     | "catalog_digest"
             ) {
                 assert!(store.discovery_context(&changed).is_err(), "{scenario}");
-                let Err(araphor_data::Error::DiscoveryContext { source, .. }) =
-                    araphor_analysis_back::DiscoveryContextProvider::context(&store, &changed)
-                else {
-                    return Err("the context provider lost the Control error source".into());
-                };
-                assert!(source.downcast_ref::<crate::Error>().is_some());
                 if scenario != "kernel_sequence" {
                     let Err(error) = native_context_rows(&store, &changed) else {
                         return Err("the native query accepted an invalid catalog".into());

@@ -11,8 +11,9 @@ use futures_core::Stream;
 use tokio::sync::watch;
 use tokio::time::{Instant, Sleep};
 
-use super::{Cursor, Subscription, Update};
+use super::{Cursor, Operation, Subscription, Update};
 use crate::execution::Session;
+use crate::sources::ArrowSnapshot;
 use crate::{Error, Failure, Result};
 
 pub enum Action<'a> {
@@ -46,6 +47,14 @@ pub trait Consumer: Send + Unpin + 'static {
         receipt: &Update,
         memory: &mut MemoryReservation,
     ) -> std::result::Result<Self::Item, Self::Error>;
+    fn initial_error(
+        &mut self,
+        failure: Failure,
+        cause: &Error,
+        snapshot: &ArrowSnapshot,
+        operation: Operation,
+        memory: &mut MemoryReservation,
+    ) -> std::result::Result<Self::Item, Self::Error>;
     fn complete_after_checkpoint(&self, update: &Update) -> bool;
     fn deadline_completes(&self) -> bool;
 }
@@ -69,6 +78,7 @@ pub struct Delivery<C: Consumer> {
     consumer: Option<C>,
     update: Option<Update>,
     last: Option<Update>,
+    error_receipt: Option<(Arc<ArrowSnapshot>, Operation)>,
     cursor: Option<Cursor>,
     phase: Option<Phase>,
     row: usize,
@@ -112,6 +122,7 @@ impl<C: Consumer> Delivery<C> {
             consumer: Some(consumer),
             update: None,
             last: None,
+            error_receipt: None,
             phase: None,
             row: 0,
             metadata: false,
@@ -163,6 +174,7 @@ impl<C: Consumer> Delivery<C> {
         self.inner = None;
         self.update = None;
         self.last = None;
+        self.error_receipt = None;
         self.checking = None;
         self.initial = None;
         self.failure = None;
@@ -179,6 +191,7 @@ impl<C: Consumer> Delivery<C> {
 
     fn discard_rows(update: &mut Update) {
         update.batches = None;
+        update.calls.clear();
         update.positions = Vec::new();
         update._memory.free();
     }
@@ -196,10 +209,16 @@ impl<C: Consumer> Delivery<C> {
 
     fn check(&mut self, health: bool) -> bool {
         let engine = Arc::clone(self.session.engine());
-        let Some(receipt) = self.update.as_ref().or(self.last.as_ref()) else {
+        let snapshot = self
+            .update
+            .as_ref()
+            .or(self.last.as_ref())
+            .map(|receipt| &receipt.snapshot)
+            .or_else(|| self.error_receipt.as_ref().map(|(snapshot, _)| snapshot));
+        let Some(snapshot) = snapshot else {
             return false;
         };
-        let snapshot = Arc::clone(&receipt.snapshot);
+        let snapshot = Arc::clone(snapshot);
         self.checking = Some(Box::pin(async move {
             let health = if health {
                 let store = Arc::clone(engine.store());
@@ -307,7 +326,9 @@ impl<C: Consumer> Delivery<C> {
                         return this.finish(error);
                     }
                     if this.last.is_none() {
-                        if let (Some(snapshot), Some(cursor)) = (receipt, this.cursor.as_ref()) {
+                        if let (Some(snapshot), Some(cursor)) =
+                            (receipt.as_ref(), this.cursor.as_ref())
+                        {
                             let memory = match this.session.memory().reserve_output(0) {
                                 Ok(memory) => memory,
                                 Err(error) => {
@@ -315,8 +336,9 @@ impl<C: Consumer> Delivery<C> {
                                 }
                             };
                             this.last = Some(Update {
-                                snapshot,
+                                snapshot: Arc::clone(snapshot),
                                 batches: None,
+                                calls: Default::default(),
                                 cursor: cursor.clone(),
                                 operation: inner.operation,
                                 exhausted: false,
@@ -326,6 +348,8 @@ impl<C: Consumer> Delivery<C> {
                                 limited: false,
                                 _memory: memory,
                             });
+                        } else if let Some(snapshot) = receipt {
+                            this.error_receipt = Some((snapshot, inner.operation));
                         } else {
                             let error = consumer.code(code);
                             return this.finish(error);
@@ -381,9 +405,6 @@ impl<C: Consumer> Delivery<C> {
         if let Some(initial) = this.initial.take() {
             this.conversion = initial;
         }
-        let Some(receipt) = this.update.as_ref().or(this.last.as_ref()) else {
-            return this.internal(consumer, "the disclosure receipt is absent");
-        };
         let action = match phase {
             Phase::Metadata => Action::Metadata,
             Phase::Row => Action::Row(this.row),
@@ -408,7 +429,21 @@ impl<C: Consumer> Delivery<C> {
                 last: this.cursor.as_ref(),
             },
         };
-        let item = consumer.encode(action, receipt, &mut this.conversion);
+        let item = if let Some(receipt) = this.update.as_ref().or(this.last.as_ref()) {
+            consumer.encode(action, receipt, &mut this.conversion)
+        } else if let (
+            Action::Error {
+                failure,
+                cause: Some(cause),
+                ..
+            },
+            Some((snapshot, operation)),
+        ) = (action, this.error_receipt.as_ref())
+        {
+            consumer.initial_error(failure, cause, snapshot, *operation, &mut this.conversion)
+        } else {
+            return this.internal(consumer, "the disclosure receipt is absent");
+        };
         let item = match item {
             Ok(item) => item,
             Err(error) => return this.finish(error),

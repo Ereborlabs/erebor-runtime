@@ -200,7 +200,9 @@ impl SubscribeExec {
         )
         .context(SqlSnafu)?;
         state.config_mut().set_extension(run);
-        let physical = session.physical(&logical, &state).await?;
+        let mut planning = state.clone();
+        planning.config_mut().set_extension(Arc::clone(&permit));
+        let physical = session.physical(&logical, &planning).await?;
         let subscription = physical
             .as_any()
             .downcast_ref::<Self>()
@@ -344,6 +346,7 @@ impl ExecutionPlan for SubscribeExec {
         let stream = self
             .execute_committed(partition, context, None)
             .map_err(|source| DataFusionError::External(Box::new(source)))?
+            .map_err(|(source, _)| source)
             .map_ok(
                 |super::Event {
                      output:

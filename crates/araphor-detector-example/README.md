@@ -6,9 +6,9 @@ selected record ordinals as evidence. Different lifetimes remain separate.
 The `example-burst.THRESHOLD` reason has UInt64 `threshold` and `count` details.
 The next `graph.state.v1` checkpoint records the selected row count.
 
-The host supplies the normalized `records`, `facts`, and `manifest` inputs.
-The graph owner retains identity, evidence, coverage, finding, and notification
-checks. The result has `confirmed: false` and the `CONTEXTUAL_ACTIVITY` limit.
+The caller supplies the normalized `records`, `facts`, and `manifest` inputs.
+The SDK checks the returned datasets, evidence, reasons, and checkpoint.
+The result has `confirmed: false` and the `CONTEXTUAL_ACTIVITY` limit.
 A match does not establish malicious intent or grant response authority.
 
 ## Build the folder
@@ -47,12 +47,18 @@ the [package operations guide](../../docs/plans/mithril-hugging-face-intrusion-p
 for the grant and trust format.
 
 ```sh
-rtk proxy araphor package digest /tmp/araphor-burst-package
-rtk proxy araphor --profile ./operator.json package --scope analysis install /tmp/araphor-burst-package --parameters '{"example-burst":{"detect":{"threshold":3}}}'
-rtk proxy araphor --profile ./operator.json package --scope analysis inspect example-burst
+rtk proxy araphor image digest /tmp/araphor-burst-package
+rtk proxy araphor --profile ./operator.json image install /tmp/araphor-burst-package
+rtk proxy araphor --profile ./operator.json image inspect example-burst --revision 1
 ```
 
-The graph owner supplies the authorized prepared inputs when it invokes the
-installed detector. The operator needs no Rust compiler. Installation runs no hook
-and does not rebuild Araphor. Restart and retry use the package owner's durable
-receipts and checkpoints.
+Installation retains the exact image. It starts no Discovery and supplies no
+input bindings or parameters. Set `threshold` in a definition call. The
+[definition guide](../../docs/guides/araphor-discovery-definition-review.md)
+shows the SQL, PRQL, and YAML forms. Installation runs no hook and does not
+rebuild Araphor.
+
+The former graph owner supplied inputs and retained durable receipts and
+checkpoints. That owner has been removed. Its restart and retry results are
+historical proof. Reactive graph execution and running instances remain
+**Not done** in the [current plan](../../docs/plans/araphor-package-jobs.md).

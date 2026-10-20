@@ -1,8 +1,10 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
+use araphor_data::AnalysisStore;
 
 mod sql;
+mod subscriptions;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -32,6 +34,7 @@ impl PackageAuthorization for Authority {
 fn fixture() -> TestResult<(tempfile::TempDir, Package)> {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    store.install_package_image([1; 16], &Package::discovery_bundle()?, || Ok(()))?;
     let query = Engine::new(store, Default::default())?;
     let grant = PackageGrantV1 {
         principal: "fixture".into(),

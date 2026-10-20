@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use araphor_analysis_back::{GraphAndFindingOwner, NotificationRouter};
+use araphor_analysis::NotificationRouter;
 use araphor_data::{
     AnalysisStore, NotificationAuthorization, NotificationFailureV1, NotificationGrantV1,
     NotificationPolicyV1, NotificationSink, NotificationSinkResultV1,
@@ -208,11 +208,23 @@ impl ControlNotificationOwner {
     pub fn authority(&self) -> &ConfiguredNotificationAuthority {
         &self.authority
     }
-    pub fn process(&self, graph: &GraphAndFindingOwner, now: u64) -> Result<usize> {
-        let routing = self.router.route(graph, now);
-        let delivery = self.router.deliver(graph, self.sink.as_ref(), now);
-        routing?;
-        Ok(delivery?)
+    pub fn route_finding(
+        &self,
+        tenant: [u8; 16],
+        reference: &araphor_data::NotificationFindingRefV1,
+        now: u64,
+    ) -> Result<usize> {
+        Ok(self.router.route_finding(tenant, reference, now)?)
+    }
+
+    pub fn deliver_obligation(
+        &self,
+        key: araphor_data::NotificationKeyV1,
+        now: u64,
+    ) -> Result<usize> {
+        Ok(self
+            .router
+            .deliver_obligation(key, self.sink.as_ref(), now)?)
     }
 }
 

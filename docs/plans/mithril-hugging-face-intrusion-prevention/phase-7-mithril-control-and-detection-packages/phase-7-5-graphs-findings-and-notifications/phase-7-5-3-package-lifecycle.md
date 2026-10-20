@@ -1,5 +1,12 @@
 # Phase 7.5.3: Package Lifecycle
 
+Current command status, 2026-10-19: The old Analysis owner and its qualification
+harness have been removed. The cases `analysis-packages`
+are no longer accepted by `mithril_discovery_test`. The commands and results
+below remain historical proof for their recorded source. They do not qualify
+the current replacement. Read the [current plan](../../../araphor-package-jobs.md)
+for the supported path and remaining work.
+
 Install, compose, inspect, update, and remove analysis packages through one
 owner. Parent: [7.5](README.md). Require 7.5.2 and the authenticated client API
 from [Observability 3](../../../araphor-observability/phase-3-cli-api-and-console.md).
