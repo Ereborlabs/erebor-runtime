@@ -445,36 +445,36 @@ fn catalog_native_preflight() -> TestResult {
 fn catalog_content_contract() -> TestResult {
     let expected: [[u8; 32]; 8] = [
         [
-            131, 168, 212, 239, 229, 114, 72, 34, 139, 90, 11, 124, 60, 208, 175, 139, 147, 104,
-            187, 12, 58, 187, 208, 222, 13, 27, 192, 61, 121, 112, 226, 35,
+            202, 207, 15, 47, 117, 247, 52, 72, 66, 236, 51, 109, 72, 106, 252, 247, 172, 252, 41,
+            202, 7, 244, 156, 209, 100, 95, 27, 136, 213, 73, 98, 205,
         ],
         [
-            239, 110, 14, 159, 42, 113, 193, 232, 254, 31, 116, 3, 100, 92, 246, 27, 128, 110, 152,
-            185, 206, 15, 31, 205, 48, 56, 122, 172, 239, 177, 206, 237,
+            243, 249, 54, 29, 26, 46, 254, 195, 117, 228, 130, 68, 215, 246, 147, 245, 60, 147,
+            130, 152, 119, 54, 54, 131, 233, 92, 110, 55, 140, 1, 144, 162,
         ],
         [
-            42, 97, 39, 224, 186, 164, 84, 111, 20, 138, 5, 235, 14, 67, 99, 51, 104, 11, 34, 162,
-            129, 49, 226, 236, 94, 187, 62, 125, 188, 91, 133, 11,
+            198, 42, 119, 72, 66, 247, 73, 77, 60, 86, 97, 27, 243, 110, 227, 135, 212, 244, 208,
+            193, 24, 90, 227, 243, 58, 90, 223, 220, 72, 192, 98, 236,
         ],
         [
-            25, 59, 1, 84, 134, 50, 130, 62, 10, 79, 69, 60, 172, 187, 140, 101, 218, 113, 20, 56,
-            130, 69, 88, 233, 100, 253, 134, 222, 149, 105, 204, 112,
+            150, 39, 58, 42, 156, 86, 200, 251, 71, 240, 165, 181, 228, 240, 248, 151, 43, 15, 238,
+            170, 192, 196, 22, 251, 68, 107, 176, 177, 242, 42, 230, 244,
         ],
         [
-            253, 189, 12, 91, 114, 113, 156, 100, 22, 252, 30, 167, 170, 5, 189, 126, 159, 61, 58,
-            21, 213, 40, 132, 120, 22, 13, 42, 183, 221, 184, 118, 24,
+            121, 244, 171, 148, 243, 232, 189, 106, 194, 219, 204, 38, 240, 105, 213, 228, 87, 231,
+            113, 181, 165, 111, 242, 102, 174, 136, 119, 232, 249, 140, 127, 160,
         ],
         [
-            59, 254, 7, 154, 218, 181, 179, 215, 162, 203, 114, 103, 230, 156, 255, 253, 155, 97,
-            24, 114, 37, 39, 2, 243, 106, 244, 122, 57, 191, 150, 151, 85,
+            180, 99, 159, 191, 162, 26, 193, 18, 29, 204, 231, 128, 45, 180, 14, 42, 191, 18, 110,
+            186, 230, 198, 75, 246, 18, 217, 232, 25, 197, 187, 26, 202,
         ],
         [
-            71, 37, 112, 167, 0, 159, 163, 95, 14, 142, 213, 53, 252, 40, 219, 25, 102, 24, 37, 12,
-            61, 136, 47, 152, 245, 62, 243, 48, 158, 206, 236, 122,
+            45, 82, 116, 46, 183, 163, 234, 197, 227, 169, 237, 216, 58, 105, 102, 40, 237, 75, 52,
+            181, 171, 10, 203, 88, 77, 35, 203, 10, 4, 80, 46, 70,
         ],
         [
-            174, 186, 58, 93, 189, 162, 140, 155, 176, 250, 87, 9, 136, 96, 129, 0, 188, 51, 196,
-            253, 201, 90, 188, 110, 68, 211, 245, 206, 142, 232, 195, 130,
+            63, 68, 154, 133, 17, 193, 210, 46, 134, 37, 188, 196, 231, 72, 86, 33, 34, 77, 30,
+            222, 30, 7, 140, 119, 50, 173, 244, 161, 253, 16, 55, 105,
         ],
     ];
     use std::hash::Hash as _;
@@ -832,7 +832,20 @@ fn retirement_map_charges_once() -> TestResult {
     assert!(captured.receipt.page.tables.is_empty());
     assert!(captured.receipt.page.removals.is_empty());
     assert_eq!(captured.removals.len(), 1);
-    assert_eq!(captured.source_bytes, 0);
+    assert_eq!(captured.tables.len(), 1);
+    let (schema, columns, batches, binding) = captured
+        .tables
+        .get(&super::SourceOrigin::Durable("events".into()))
+        .ok_or("admitted empty table is absent")?;
+    assert!(schema.fields().is_empty());
+    assert!(schema.metadata().is_empty());
+    assert!(columns.is_empty());
+    assert!(batches.is_empty());
+    assert!(binding.is_none());
+    let table_metadata = size_of::<(super::SourceOrigin, super::Table)>()
+        + size_of::<araphor_analysis_sdk::Schema>()
+        + "events".len();
+    assert_eq!(captured.source_bytes, table_metadata);
     let gaps = captured
         .removals
         .get(&AnalysisStreamIdentityV1::Evidence(identity.clone()))
@@ -847,10 +860,10 @@ fn retirement_map_charges_once() -> TestResult {
     let removed = size_of::<(AnalysisStreamIdentityV1, Vec<AnalysisGapV1>)>()
         + identity.node_id.len()
         + gaps.capacity() * size_of::<AnalysisGapV1>();
-    assert_eq!(captured._memory.size(), removed);
+    assert_eq!(captured._memory.size(), removed + table_metadata);
     let receipt = Arc::clone(&captured.receipt);
     let metadata = receipt._metadata.size();
-    let available = memory.reserve_input(capacity - metadata - removed)?;
+    let available = memory.reserve_input(capacity - metadata - removed - table_metadata)?;
     assert!(memory.reserve_input(1).is_err());
     drop(available);
     drop(captured);

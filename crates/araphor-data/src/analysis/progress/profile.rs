@@ -58,6 +58,9 @@ impl AnalysisStore {
             true,
             Some(&prepared.profile),
             None,
+            &[],
+            &[],
+            &[],
             false,
             &mut check,
         )
@@ -86,6 +89,9 @@ impl AnalysisStore {
             false,
             Some(&prepared.profile),
             None,
+            &[],
+            &[],
+            &[],
             false,
             &mut || Ok(()),
         )

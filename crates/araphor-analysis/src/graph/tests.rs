@@ -22,9 +22,9 @@ impl Graph<'_> {
         let inputs = model
             .inputs
             .iter()
-            .zip(self.projection()?)
+            .zip(self.projection())
             .map(|(input, values)| {
-                Rows::encode(&input.port, &values, model.limits).map(|data| sdk::Input {
+                Rows::encode(&input.port, values, model.limits).map(|data| sdk::Input {
                     data,
                     revision: sdk::Revision {
                         owner: "captured".into(),

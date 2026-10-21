@@ -74,6 +74,8 @@ pub(super) enum ContextSource {
     Compiled(String),
     Trust(u64),
     Rollout(PolicyRolloutKeyV1),
+    Candidate(String),
+    Acknowledgement(PolicyRolloutKeyV1, u64),
     Target(String),
     Request([u8; 16]),
     Approval([u8; 16]),
@@ -84,7 +86,7 @@ pub(super) enum ContextSource {
 pub(super) type ContextChanges = Vec<(ContextSource, bool)>;
 
 pub(super) struct ContextIndex {
-    sources: BTreeMap<ContextSource, u64>,
+    pub(super) sources: BTreeMap<ContextSource, u64>,
     changes: tokio::sync::watch::Sender<u64>,
 }
 
@@ -103,6 +105,15 @@ impl ContextIndex {
         }
         for id in state.rollout_states.keys() {
             sources.insert(ContextSource::Rollout(id.clone()), revision);
+        }
+        for id in state.bundles.keys() {
+            sources.insert(ContextSource::Candidate(id.clone()), revision);
+        }
+        for (id, version) in state.policy_acknowledgement_results.keys() {
+            sources.insert(
+                ContextSource::Acknowledgement(id.clone(), *version),
+                revision,
+            );
         }
         for id in state.target_snapshots.keys() {
             sources.insert(ContextSource::Target(id.clone()), revision);
@@ -291,6 +302,29 @@ impl ContextSource {
                         rollout,
                     )
                 })
+            }
+            Self::Candidate(id) => {
+                let bundle = state.bundles.get(id)?;
+                selected(&bundle.candidate.tenant_id)?;
+                super::graph::GraphCandidate::capture(inner, id)
+            }
+            Self::Acknowledgement(id, version) => {
+                let result = state
+                    .policy_acknowledgement_results
+                    .get(&(id.clone(), *version))?;
+                let ack = &result.acknowledgement;
+                let tenant = selected(&ack.tenant_id)?;
+                Some(ControlStore::encode_context(
+                    &inner.root,
+                    AnalysisContextKeyV1 {
+                        tenant_id: tenant,
+                        owner_id: "mithril-control/activation-ack".into(),
+                        entity_key: id.candidate_content_id.as_bytes().to_vec(),
+                        lifetime_key: id.node_id.as_bytes().to_vec(),
+                        owner_revision: *version,
+                    },
+                    ack,
+                ))
             }
             Self::Target(id) => {
                 let snapshot = state.target_snapshots.get(id)?;
@@ -483,7 +517,7 @@ impl ControlStore {
         Ok((revision, records))
     }
 
-    fn encode_context(
+    pub(super) fn encode_context(
         path: &std::path::Path,
         key: AnalysisContextKeyV1,
         fact: &impl Serialize,
@@ -653,7 +687,7 @@ mod tests {
                 })
             };
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
-        assert_eq!(owner.reconcile()?, snapshots.len() * (facts.len() + 3));
+        assert_eq!(owner.reconcile()?, snapshots.len() * (facts.len() + 4));
         assert_eq!(data.meta()?.commit_revision, 1);
         assert_eq!(owner.revision, Some(authority));
         for snapshot in &snapshots {
@@ -692,7 +726,7 @@ mod tests {
         let store = ControlStore::open(store_path)?;
         let data = Arc::new(AnalysisStore::open(data_path)?);
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
-        assert_eq!(owner.reconcile()?, snapshots.len() * (facts.len() + 3));
+        assert_eq!(owner.reconcile()?, snapshots.len() * (facts.len() + 4));
         assert_eq!(owner.reconcile()?, 0);
         assert_eq!(data.meta()?, before);
         assert_eq!(store.commit_index(), authority);
@@ -751,7 +785,7 @@ mod tests {
             tenant_id: source.tenant_id.clone(),
         }];
         let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
-        assert_eq!(owner.reconcile()?, 4);
+        assert_eq!(owner.reconcile()?, 5);
         let artifact = signed_artifact(&document, 2)?;
         let refreshed = rollout_transaction(
             &source,
@@ -772,7 +806,7 @@ mod tests {
         )?;
         assert!(notices.has_changed()?);
         notices.borrow_and_update();
-        assert_eq!(owner.reconcile()?, 3);
+        assert_eq!(owner.reconcile()?, 4);
         assert_eq!(data.meta()?.commit_revision, 2);
         let proof_key = |digest: &str| AnalysisContextKeyV1 {
             tenant_id: tenant,
@@ -845,7 +879,7 @@ mod tests {
         let store = ControlStore::open(control_path)?;
         let data = Arc::new(AnalysisStore::open(data_path)?);
         let mut owner = ControlContextOwner::new(store, data.clone(), &allowed)?;
-        assert_eq!(owner.reconcile()?, 6);
+        assert_eq!(owner.reconcile()?, 8);
         assert_eq!(owner.reconcile()?, 0);
         assert_eq!(data.meta()?, before);
         assert_eq!(data.context_version(&retained.key)?, Some(retained));

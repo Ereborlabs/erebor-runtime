@@ -40,7 +40,7 @@ impl Package {
         bundle.validate()?;
         let digest = bundle.digest()?;
         let retained = PackageBundleRef::retained(&bundle, &digest);
-        let context = retained.context(grant.selection.tenant_id, export, output)?;
+        let context = retained.context(grant.selection.tenant_id, &bundle.root, export, output)?;
         grant.remaining()?;
         let mut reference = None;
         authority.commit(&grant, PackageActionV1::Run, &retained, &mut || {

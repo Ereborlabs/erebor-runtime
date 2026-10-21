@@ -12,7 +12,7 @@ SELECT
 FROM (
     SELECT marked.*,
         SUM(boundary) OVER (
-            PARTITION BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id
+            PARTITION BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, coverage_revision
             ORDER BY source_cursor ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         ) AS range_id
     FROM (
@@ -115,7 +115,7 @@ FROM (
                 ) AS joined
             ) AS qualified
             WINDOW position AS (
-                PARTITION BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id
+                PARTITION BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, coverage_revision
                 ORDER BY source_cursor
             )
         ) AS previous

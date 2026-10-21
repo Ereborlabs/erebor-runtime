@@ -16,6 +16,7 @@ use super::{InstalledRefV1, PackageBundleRef, PackageRefV1};
 pub(crate) struct NativePackageContext {
     pub(crate) root: PackageRefV1,
     digest: String,
+    package: PackageRefV1,
     export: String,
     output: String,
 }
@@ -24,16 +25,18 @@ impl PackageBundleRef<'_> {
     pub fn context(
         &self,
         tenant: [u8; 16],
+        package: &PackageRefV1,
         export: &str,
         output: &str,
     ) -> Result<AnalysisContextVersionV1> {
         if tenant == [0; 16] {
             return Err(Code::Invalid.error("native package context tenant"));
         }
-        self.check_output(export, output)?;
+        self.check_output(package, export, output)?;
         let body = serde_json::to_vec(&NativePackageContext {
             root: self.bundle().root.clone(),
             digest: self.digest().into(),
+            package: package.clone(),
             export: export.into(),
             output: output.into(),
         })
@@ -80,12 +83,12 @@ impl PackageBundleRef<'_> {
         if reference.root != self.bundle().root || reference.digest != self.digest() {
             return Err(Code::Invalid.error("native package bundle digest"));
         }
-        self.check_output(&reference.export, &reference.output)
+        self.check_output(&reference.package, &reference.export, &reference.output)
     }
 
-    fn check_output(&self, export: &str, output: &str) -> Result<()> {
+    fn check_output(&self, package: &PackageRefV1, export: &str, output: &str) -> Result<()> {
         self.bundle().validate()?;
-        let artifact = self.bundle().artifact(&self.bundle().root)?;
+        let artifact = self.bundle().artifact(package)?;
         let model = artifact
             .descriptor
             .exports

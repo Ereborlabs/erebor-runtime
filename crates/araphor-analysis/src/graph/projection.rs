@@ -12,7 +12,7 @@ impl Graph<'_> {
             }
             .fail();
         }
-        for (input, expected) in model.inputs.iter().zip(self.projection()?) {
+        for (input, expected) in model.inputs.iter().zip(self.projection()) {
             let actual = evaluation
                 .inputs
                 .iter()
@@ -26,7 +26,7 @@ impl Graph<'_> {
             let rows: Vec<serde_json::Value> =
                 Rows::decode(&input.port, &actual.data, evaluation.context.limits)
                     .context(AnalysisContractSnafu)?;
-            if rows != expected {
+            if rows != *expected {
                 return GraphInvalidSnafu {
                     field: "graph input binding",
                 }
@@ -36,7 +36,11 @@ impl Graph<'_> {
         Ok(())
     }
 
-    pub(super) fn projection(&self) -> Result<[Vec<serde_json::Value>; 3]> {
+    pub(super) fn projection(&self) -> &[Vec<serde_json::Value>; 3] {
+        &self.projection
+    }
+
+    pub(super) fn build_projection(&self) -> Result<[Vec<serde_json::Value>; 3]> {
         let records = self
             .input
             .records

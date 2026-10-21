@@ -40,6 +40,9 @@ fn graph_typed_commit_rejects_metadata() -> TestResult {
         .commit_graph_snapshot(
             fixture.request.clone(),
             CanonicalGraph::new(fixture.snapshot.clone())?,
+            &[],
+            &[],
+            &[],
             true,
             || Ok(()),
         )
@@ -57,6 +60,9 @@ fn graph_typed_commit_rejects_metadata() -> TestResult {
             .commit_graph_snapshot(
                 request,
                 CanonicalGraph::new(fixture.snapshot.clone())?,
+                &[],
+                &[],
+                &[],
                 true,
                 || Ok(()),
             )

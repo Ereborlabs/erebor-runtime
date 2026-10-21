@@ -48,7 +48,8 @@ fn package_context_retains_closure() -> TestResult {
         || Ok(()),
     )?;
     assert_eq!(store.meta()?, installed);
-    let context = PackageBundleRef::new(&bundle)?.context([1; 16], "model", "rows")?;
+    let context =
+        PackageBundleRef::new(&bundle)?.context([1; 16], &bundle.root, "model", "rows")?;
     let reference = store.intern_context(&context)?;
     let pinned = store.meta()?;
     assert_eq!(store.intern_context(&context)?, reference);
@@ -113,7 +114,8 @@ fn package_context_tenant_scope() -> TestResult {
             || Ok(()),
         )?;
     }
-    let context = PackageBundleRef::new(&bundle)?.context([2; 16], "model", "rows")?;
+    let context =
+        PackageBundleRef::new(&bundle)?.context([2; 16], &bundle.root, "model", "rows")?;
     store.intern_context(&context)?;
     store.collect_package_admissions()?;
     assert!(store
@@ -141,7 +143,8 @@ fn package_context_checks_artifact() -> TestResult {
         &PackageRevisionV1::from_bundle(&bundle, [1; 16])?,
         || Ok(()),
     )?;
-    let context = PackageBundleRef::new(&bundle)?.context([1; 16], "model", "rows")?;
+    let context =
+        PackageBundleRef::new(&bundle)?.context([1; 16], &bundle.root, "model", "rows")?;
     let original: serde_json::Value = serde_json::from_slice(&context.body)?;
     let initial = store.meta()?;
     for change in 0..7 {
@@ -185,5 +188,60 @@ fn package_context_checks_artifact() -> TestResult {
     assert!(store.context_version(&context.key).is_err());
     drop(store);
     assert!(AnalysisStore::open(&root).is_err());
+    Ok(())
+}
+
+#[test]
+fn package_context_pins_dependency_artifact() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let bundle = bundle()?;
+    store.install_package_image([1; 16], &bundle, || Ok(()))?;
+    let retained = PackageBundleRef::new(&bundle)?;
+    let dependency = PackageRefV1 {
+        package_id: "native-dependency".into(),
+        revision: "v1".into(),
+    };
+    let context = retained.context([1; 16], &dependency, "model", "rows")?;
+    let root_context = retained.context([1; 16], &bundle.root, "model", "rows")?;
+    assert_ne!(context.key, root_context.key);
+    let body: serde_json::Value = serde_json::from_slice(&context.body)?;
+    assert_eq!(body["root"], serde_json::to_value(&bundle.root)?);
+    assert_eq!(body["package"], serde_json::to_value(&dependency)?);
+    let pin = store.intern_context(&context)?;
+    for (package, export, output) in [
+        (
+            PackageRefV1 {
+                package_id: "missing".into(),
+                revision: "v1".into(),
+            },
+            "model",
+            "rows",
+        ),
+        (
+            PackageRefV1 {
+                revision: "missing".into(),
+                ..dependency.clone()
+            },
+            "model",
+            "rows",
+        ),
+        (dependency.clone(), "missing", "rows"),
+        (dependency.clone(), "model", "missing"),
+    ] {
+        assert!(retained.context([1; 16], &package, export, output).is_err());
+    }
+    let before = store.meta()?;
+    let mut forged = context.clone();
+    let mut body = body;
+    body["package"]["revision"] = "missing".into();
+    forged.body = serde_json::to_vec(&body)?;
+    forged.key.entity_key = crate::Qualification::digest(&forged.body).into_bytes();
+    assert!(store.intern_context(&forged).is_err());
+    assert_eq!(store.meta()?, before);
+    drop(store);
+    let store = AnalysisStore::open(root)?;
+    assert_eq!(store.context_version(&pin.key)?, Some(context));
     Ok(())
 }

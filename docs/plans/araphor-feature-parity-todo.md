@@ -816,3 +816,16 @@ The actual regression first fails, then passes with all 45 focused cases.
 Read the [bounded result](araphor-analysis-migration.md#saved-input-identity-includes-discarded-origins).
 No reference file retires. The 105 remaining files and full archive are
 unchanged. The complete migration and final Rust procedure remain **Not done**.
+
+
+## Finite native Graph source status
+
+The finite production Graph source and Discovery SDK bridge are qualified.
+Five complete reference leaves retire; 108 files are retired and 100 unchanged
+reference files remain. Read the
+[bounded result](araphor-analysis-migration.md#finite-native-graph-source-retirement)
+and [retirement record](../../recovery/araphor-native-graph-source-retirement-20261021.json).
+This closes the prior test-only Graph input boundary for one finite refresh.
+Automatic Graph advancement and recovery, Discovery live and replay ownership,
+remaining quotas and polling, full migration, required net reduction, and the
+final shared Rust procedure remain **Not done**.

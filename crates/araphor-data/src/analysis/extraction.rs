@@ -1486,8 +1486,11 @@ impl AnalysisStore {
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
         }
-        if read.requests.contains_key("discovery_state") && !selection.binding_ids.is_empty() {
-            return Err(crate::PackageErrorCodeV1::Denied.error("complete discovery source scope"));
+        if (read.requests.contains_key("discovery_state")
+            || read.requests.contains_key("graph_state"))
+            && !selection.binding_ids.is_empty()
+        {
+            return Err(crate::PackageErrorCodeV1::Denied.error("complete processor source scope"));
         }
         if packages.is_some_and(|inputs| inputs.authorized.tenant_id != selection.tenant_id) {
             return Err(crate::PackageErrorCodeV1::Denied.error("dependency tenant"));
@@ -1590,6 +1593,7 @@ impl AnalysisStore {
                 )?;
                 output.charge(added)?;
                 self.extract_discovery_state(snapshot, &receipt, &read, &mut output, &mut capture, control)?;
+                self.extract_graph_state(snapshot, &receipt, &read, &mut output, &mut capture, control)?;
                 output.sources.push(AnalysisSourceSnapshotV1 {
                     receipt,
                     expired,
@@ -1893,6 +1897,7 @@ impl AnalysisStore {
                 capture.graph(id, &graph, header.subject_count, header.edge_count,
                     revision, sensitivity, None, &mut output.sink(control))?;
             }
+            self.extract_graph_coverage(snapshot, &read, &mut output, &mut capture, control)?;
             let mut routes = BTreeMap::new();
             for key in selection.obligations.as_slice() {
                 control.check()?;
@@ -4348,9 +4353,17 @@ mod tests {
             pin_commit_us,
             usage_us
         );
-        eprintln!("history_bytes={} recent_scan={} recent_input={} recent_us={} sparse_scan={} sparse_input={} sparse_us={} debug={}",
-            72 * 1024 * 1024, recent.extraction.scanned_bytes, recent.extraction.input_bytes, recent_us,
-            sparse.extraction.scanned_bytes, sparse.extraction.input_bytes, sparse_us, cfg!(debug_assertions));
+        eprintln!(
+            "history_bytes={} recent_scan={} recent_input={} recent_us={} sparse_scan={} sparse_input={} sparse_us={} debug={}",
+            72 * 1024 * 1024,
+            recent.extraction.scanned_bytes,
+            recent.extraction.input_bytes,
+            recent_us,
+            sparse.extraction.scanned_bytes,
+            sparse.extraction.input_bytes,
+            sparse_us,
+            cfg!(debug_assertions)
+        );
         Ok(())
     }
 }

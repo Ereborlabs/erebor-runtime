@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use araphor_data::{AnalysisReadControl, AnalysisTableRequests, PackageErrorCodeV1};
 use araphor_discovery_definition::{Definition, ResolvedDefinition};
 use datafusion::arrow::array::RecordBatch;
+use datafusion::catalog::TableProvider as _;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::logical_expr::LogicalPlan;
@@ -301,19 +302,14 @@ impl Engine {
         };
         let providers = tables
             .iter()
-            .map(|(name, (table, _))| {
-                (
-                    name.clone(),
-                    if table
-                        .as_any()
-                        .downcast_ref::<crate::sources::SourceProvider>()
-                        .is_some_and(|source| source.retained_source().is_some())
-                    {
-                        Arc::clone(table)
-                    } else {
+            .map(|(name, table)| {
+                let provider = match table {
+                    crate::execution::TableBinding::Rows { table, .. } => {
                         crate::sources::SourceProvider::local(name, table.schema())
-                    },
-                )
+                    }
+                    crate::execution::TableBinding::Provider(provider) => Arc::clone(provider),
+                };
+                (name.clone(), provider)
             })
             .collect();
         let registered = Arc::clone(&tables);
@@ -342,7 +338,7 @@ impl Engine {
         };
         let count = registered
             .values()
-            .filter(|(table, _)| admitted(table).is_some())
+            .filter(|table| admitted(&table.provider()).is_some())
             .count();
         let source_bytes = count
             .checked_mul(std::mem::size_of::<Arc<crate::sources::RetainedSource>>())
@@ -370,8 +366,11 @@ impl Engine {
             .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
         let bindings_memory = memory.reserve_input(transient).context(SqlSnafu)?;
         let mut bindings = Vec::with_capacity(count);
-        for (table, _) in registered.values() {
-            if let Some(source) = admitted(table) {
+        for table in registered
+            .values()
+            .map(crate::execution::TableBinding::provider)
+        {
+            if let Some(source) = admitted(&table) {
                 bindings.push(source);
             }
         }

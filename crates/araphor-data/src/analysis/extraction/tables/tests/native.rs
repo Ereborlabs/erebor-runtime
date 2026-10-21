@@ -520,7 +520,7 @@ fn context_notification_fields() -> TestResult {
             signed_profile_digest: "b".repeat(64),
         })?,
     };
-    fixture.store.commit_context(&target_context)?;
+    let target_revision = fixture.store.commit_context(&target_context)?;
     let obligation = NotificationObligationV1 {
         schema_version: 1,
         key: NotificationKeyV1 {
@@ -647,8 +647,21 @@ fn context_notification_fields() -> TestResult {
         column::<BinaryArray>(versions, "body")?.value(0),
         context.body
     );
+    assert_eq!(
+        column::<UInt64Array>(versions, "commit_revision")?.value(0),
+        context_revision
+    );
     let document_row = row(&page, "context", 0)?;
     let target_row = row(&page, "context", 1)?;
+    assert_eq!(
+        column::<UInt64Array>(&document_row, "commit_revision")?.value(0),
+        context_revision
+    );
+    assert_eq!(
+        column::<UInt64Array>(&target_row, "commit_revision")?.value(0),
+        target_revision
+    );
+    assert!(page.extraction.meta.commit_revision > target_revision);
     let documents = &document_row;
     assert_eq!(
         column::<StringArray>(documents, "kind")?.value(0),

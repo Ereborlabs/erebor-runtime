@@ -1,5 +1,7 @@
 use super::*;
 
+mod targets;
+
 use sdk::arrow_array::{BinaryArray, StringArray, UInt64Array};
 
 #[tokio::test]
@@ -41,27 +43,30 @@ async fn native_rows_preserve_metadata() -> TestResult {
         vec![sdk::Port::new("snapshot", schema)],
     );
     let descriptor = sdk::Package::new("typed-result", "1", vec![model]);
-    let fixture = Fixture::installed(PackageBundleV1 {
-        schema_version: 1,
-        root: PackageRefV1 {
-            package_id: descriptor.id.clone(),
-            revision: descriptor.revision.clone(),
-        },
-        artifacts: vec![PackageArtifactV1 {
-            descriptor,
-            implementations: vec![PackageImplementationV1::Sql {
-                export: "snapshot".into(),
-                program: araphor_package::SqlModelV1 {
-                    outputs: BTreeMap::from([(
-                        "snapshot".into(),
-                        format!("SELECT {projection} FROM payload"),
-                    )]),
-                    ..Default::default()
-                },
+    let fixture = Fixture::installed(
+        PackageBundleV1 {
+            schema_version: 1,
+            root: PackageRefV1 {
+                package_id: descriptor.id.clone(),
+                revision: descriptor.revision.clone(),
+            },
+            artifacts: vec![PackageArtifactV1 {
+                descriptor,
+                implementations: vec![PackageImplementationV1::Sql {
+                    export: "snapshot".into(),
+                    program: araphor_package::SqlModelV1 {
+                        outputs: BTreeMap::from([(
+                            "snapshot".into(),
+                            format!("SELECT {projection} FROM payload"),
+                        )]),
+                        ..Default::default()
+                    },
+                }],
+                fixtures: Vec::new(),
             }],
-            fixtures: Vec::new(),
-        }],
-    })?;
+        },
+        Limits::default(),
+    )?;
     let (call, result) = fixture
         .call(
             "snapshot",

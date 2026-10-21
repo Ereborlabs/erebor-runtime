@@ -186,23 +186,61 @@ impl AnalysisStore {
         frozen: &std::collections::BTreeSet<u64>,
     ) -> Result<Vec<(u64, Vec<u8>)>> {
         self.read_snapshot(|snapshot| {
-            let latest: Option<(u64, Vec<u8>)> = snapshot.query_row(
-                "SELECT revision, report FROM coverage WHERE tenant_id = ? AND stream_key = ? ORDER BY revision DESC LIMIT 1",
-                params![source.tenant_id.as_slice(), source.key().as_slice()], |row| Ok((row.get(0)?, row.get(1)?)),
-            ).optional().context(AnalysisDatabaseSnafu { operation: "read current graph coverage" })?;
-            let mut versions = std::collections::BTreeMap::new();
-            if let Some((revision, report)) = latest { versions.insert(revision, report); }
-            for revision in frozen {
-                if versions.contains_key(revision) { continue; }
-                let report: Option<Vec<u8>> = snapshot.query_row(
-                    "SELECT report FROM coverage WHERE tenant_id = ? AND stream_key = ? AND revision = ?",
-                    params![source.tenant_id.as_slice(), source.key().as_slice(), revision], |row| row.get(0),
-                ).optional().context(AnalysisDatabaseSnafu { operation: "read frozen graph coverage" })?;
-                let report = report.ok_or_else(|| self.state_error("the frozen graph coverage is absent"))?;
-                versions.insert(*revision, report);
-            }
-            Ok(versions.into_iter().collect())
+            self.graph_coverage_from(snapshot, source, frozen, |_, _| Ok(()))
         })
+    }
+
+    pub(in crate::analysis) fn graph_coverage_from(
+        &self,
+        snapshot: &Connection,
+        source: &EvidenceIntakeIdentityV1,
+        frozen: &std::collections::BTreeSet<u64>,
+        preflight: impl FnOnce(usize, usize) -> Result<()>,
+    ) -> Result<Vec<(u64, Vec<u8>)>> {
+        let selected =
+            serde_json::to_string(frozen).context(crate::JsonSnafu { path: &self.root })?;
+        let select = "FROM coverage WHERE tenant_id = ? AND stream_key = ?
+            AND (revision = (SELECT max(revision) FROM coverage WHERE tenant_id = ? AND stream_key = ?)
+                OR revision IN (SELECT unnest(CAST(? AS UBIGINT[]))))";
+        let key = source.key();
+        let (count, bytes): (usize, usize) = snapshot.query_row(
+            &format!("SELECT count(*)::UBIGINT, coalesce(sum(octet_length(report)), 0)::UBIGINT {select}"),
+            params![source.tenant_id.as_slice(), key.as_slice(), source.tenant_id.as_slice(), key.as_slice(), selected],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "bound captured graph coverage" })?;
+        preflight(count, bytes)?;
+        let mut statement = snapshot
+            .prepare(&format!(
+                "SELECT revision, report {select} ORDER BY revision"
+            ))
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare captured graph coverage",
+            })?;
+        let rows = statement
+            .query_map(
+                params![
+                    source.tenant_id.as_slice(),
+                    key.as_slice(),
+                    source.tenant_id.as_slice(),
+                    key.as_slice(),
+                    selected
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read captured graph coverage",
+            })?
+            .collect::<std::result::Result<Vec<(u64, Vec<u8>)>, _>>()
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode captured graph coverage",
+            })?;
+        if frozen.iter().any(|revision| {
+            rows.binary_search_by_key(revision, |(revision, _)| *revision)
+                .is_err()
+        }) {
+            return self.reject("the frozen graph coverage is absent");
+        }
+        Ok(rows)
     }
 
     pub fn graph_snapshot(

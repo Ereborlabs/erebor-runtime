@@ -22,6 +22,9 @@ fn graph_authority_rolls_back() -> TestResult {
             fixture.store.commit_graph_snapshot(
                 metadata,
                 CanonicalGraph::new(fixture.snapshot.clone())?,
+                &[],
+                &[],
+                &[],
                 true,
                 || control.check(),
             )
@@ -129,11 +132,23 @@ fn graph_window_head_is_exact() -> TestResult {
         .commit_graph(&fixture.request, true, || Ok(()))?;
     let mut snapshot = fixture.snapshot.clone();
     snapshot.previous_result_id = Some(fixture.request.result_id.clone());
+    snapshot
+        .findings
+        .first_mut()
+        .ok_or("fixture finding")?
+        .required_action = Some("inspect-updated-effect".into());
     let mut first = fixture.request.clone();
     first.result_id = "graph:head-first".into();
     first.expected_cursor = first.consumed_cursor;
     first.body = serde_json::to_vec(&snapshot)?;
     let second = fixture.store.commit_graph(&first, false, || Ok(()))?;
+    assert!(second.commit_revision > original.commit_revision);
+    assert_eq!(
+        fixture
+            .store
+            .graph_result(fixture.snapshot.scope.identity.tenant_id, &first.result_id)?,
+        Some(snapshot.clone())
+    );
     let before = fixture.store.meta()?;
     let mut stale = first.clone();
     stale.result_id = "graph:head-stale".into();
@@ -179,8 +194,14 @@ fn graph_window_head_is_exact() -> TestResult {
         original
     );
     snapshot.previous_result_id = Some(first.result_id.clone());
+    snapshot
+        .findings
+        .first_mut()
+        .ok_or("fixture finding")?
+        .required_action = Some("inspect-followup-effect".into());
     stale.body = serde_json::to_vec(&snapshot)?;
-    fixture.store.commit_graph(&stale, false, || Ok(()))?;
+    let third = fixture.store.commit_graph(&stale, false, || Ok(()))?;
+    assert!(third.commit_revision > second.commit_revision);
     assert_eq!(
         fixture
             .store

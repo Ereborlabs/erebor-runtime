@@ -41,7 +41,7 @@ struct PortPlan {
     window: Option<Window>,
     plan: Arc<LogicalPlan>,
     origins: BTreeSet<SourceOrigin>,
-    retained: Option<usize>,
+    identity: Option<SourceOrigin>,
 }
 
 impl Inputs {
@@ -61,21 +61,21 @@ impl Inputs {
             .zip(origins)
             .enumerate()
             .map(|(slot, (plan, origins))| {
+                let identity = Self::identity(plan).filter(|origin| {
+                    origins.len() == 1
+                        && origins.contains(origin)
+                        && (matches!(origin, SourceOrigin::Port(_))
+                            || matches!(
+                                &model.inputs[slot].source,
+                                sdk::InputSource::Table(sdk::TableRef::Named(_))
+                            ))
+                });
                 Ok(PortPlan {
                     slot,
                     window: Window::infer(plan)?,
                     plan: Arc::new(plan.clone()),
-                    retained: if matches!(
-                        &model.inputs[slot].source,
-                        sdk::InputSource::Table(sdk::TableRef::Named(_))
-                    ) {
-                        Self::retained_slot(plan).filter(|slot| {
-                            origins.len() == 1 && origins.contains(&SourceOrigin::Package(*slot))
-                        })
-                    } else {
-                        None
-                    },
                     origins,
+                    identity,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -126,31 +126,27 @@ impl Inputs {
         Self::from_plans(model, plans, origins).map(Some)
     }
 
-    fn retained_slot(plan: &LogicalPlan) -> Option<usize> {
+    fn identity(plan: &LogicalPlan) -> Option<SourceOrigin> {
         match plan {
+            LogicalPlan::Extension(extension) => extension.node.as_any()
+                .downcast_ref::<crate::sources::SourcePort>().map(|source| SourceOrigin::Port(source.slot)),
             LogicalPlan::TableScan(scan) if scan.filters.is_empty() && scan.fetch.is_none() => {
                 let provider = source_as_provider(&scan.source).ok()?;
                 let provider = provider.as_any().downcast_ref::<SourceProvider>()?;
-                let schema = provider.schema();
-                if scan.projected_schema.as_arrow() != schema.as_ref()
-                    || scan.projection.as_ref().is_some_and(|projection| {
-                        projection.iter().copied().ne(0..schema.fields().len())
-                    })
-                {
+                let source = provider.retained_source()?;
+                let expected = &source.schema;
+                let indices = scan.projection.as_deref();
+                if scan.projected_schema.as_arrow() != expected.as_ref()
+                    || indices.is_some_and(|indices| indices.iter().copied().ne(0..expected.fields().len())) {
                     return None;
                 }
-                provider.retained_source().map(|source| source.slot)
+                Some(SourceOrigin::Package(source.slot))
             }
-            LogicalPlan::Projection(projection)
-                if projection.schema.as_arrow() == projection.input.schema().as_arrow()
-                    && projection
-                        .expr
-                        .iter()
-                        .all(|expr| matches!(expr, Expr::Column(_))) =>
-            {
-                Self::retained_slot(&projection.input)
-            }
-            LogicalPlan::SubqueryAlias(alias) => Self::retained_slot(&alias.input),
+            LogicalPlan::Projection(projection) if projection.schema.as_arrow() == projection.input.schema().as_arrow()
+                && projection.expr.iter().enumerate().all(|(index, expr)| {
+                    matches!(expr, Expr::Column(column) if projection.input.schema().index_of_column(column).ok() == Some(index))
+                }) => Self::identity(&projection.input),
+            LogicalPlan::SubqueryAlias(alias) => Self::identity(&alias.input),
             _ => None,
         }
     }
@@ -202,12 +198,17 @@ impl Inputs {
                 };
                 origins.extend(crate::planner::Planner::sources(&plan)?);
                 let window = Window::infer(&plan)?;
+                let identity = Self::identity(&plan).filter(|origin| {
+                    matches!(origin, SourceOrigin::Port(_))
+                        && origins.len() == 1
+                        && origins.contains(origin)
+                });
                 plans.push(PortPlan {
                     slot,
                     window,
                     plan: Arc::new(plan),
                     origins,
-                    retained: None,
+                    identity,
                 });
             }
         }

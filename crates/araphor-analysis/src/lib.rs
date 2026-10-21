@@ -10,7 +10,7 @@ mod qualification;
 pub use context::{Context, ContextLimits};
 pub use discovery::DiscoveryOwner;
 pub use error::{Error, Result};
-pub use graph::Graph;
+pub use graph::{Graph, GraphFacts, GraphPublication};
 pub use instance::{Instance, InstanceHost, Subscription as InstanceSubscription};
 pub use notification::{NotificationRouter, NotificationUpdate};
 pub use package::Package;

@@ -40,12 +40,19 @@ impl Detector {
         declaration.get_or_init(|| self.build_descriptor())
     }
 
+    pub fn inputs() -> &'static [sdk::Port] {
+        static INPUTS: OnceLock<Vec<sdk::Port>> = OnceLock::new();
+        INPUTS.get_or_init(|| {
+            vec![
+                Rows::port::<Observation>("records", "graph.observation.v1"),
+                Rows::port::<Fact>("facts", "graph.fact.v1"),
+                Rows::port::<Manifest>("manifest", "graph.manifest.v1"),
+            ]
+        })
+    }
+
     fn build_descriptor(self) -> sdk::Package {
-        let inputs = vec![
-            Rows::port::<Observation>("records", "graph.observation.v1"),
-            Rows::port::<Fact>("facts", "graph.fact.v1"),
-            Rows::port::<Manifest>("manifest", "graph.manifest.v1"),
-        ];
+        let inputs = Self::inputs().to_vec();
         let mut findings = Rows::port::<Finding>("findings", "graph.finding-candidate.v1");
         findings.kind = sdk::OutputKind::Findings;
         findings.evidence_required = true;

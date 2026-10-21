@@ -5,8 +5,8 @@ use araphor_analysis_sdk as sdk;
 use araphor_data::analysis::PackageResultRefV1;
 use araphor_data::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisInputTables, AnalysisPositionPageV1,
-    AnalysisReadModeV1, AnalysisSelectionV1, AnalysisStreamIdentityV1, AnalysisTableRead,
-    AnalysisTableRequests, AnalysisWitnessV1, Selection,
+    AnalysisReadControl, AnalysisReadModeV1, AnalysisSelectionV1, AnalysisStreamIdentityV1,
+    AnalysisTableRead, AnalysisTableRequests, AnalysisWitnessV1, Selection,
 };
 use datafusion::arrow::array::{RecordBatch, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
@@ -199,6 +199,84 @@ impl Captured {
 }
 
 impl SourceSnapshot {
+    pub async fn blocking<T: Send + 'static>(
+        self: &Arc<Self>,
+        context: &datafusion::execution::TaskContext,
+        lease: impl Send + 'static,
+        operation: impl FnOnce(&Arc<Self>, &AnalysisReadControl) -> crate::Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let config = context.session_config();
+        let source = config
+            .get_extension::<Self>()
+            .ok_or_else(|| DataFusionError::Execution("source snapshot is absent".into()))?;
+        if !Arc::ptr_eq(self, &source) {
+            return Err(DataFusionError::Execution(
+                "source execution context differs".into(),
+            ));
+        }
+        let calls = config
+            .get_extension::<crate::definition::CallContext>()
+            .ok_or_else(|| DataFusionError::Execution("execution context is absent".into()))?;
+        let control = config
+            .get_extension::<AnalysisReadControl>()
+            .ok_or_else(|| DataFusionError::Execution("execution control is absent".into()))?;
+        let permit = config
+            .get_extension::<crate::execution::Permit>()
+            .ok_or_else(|| DataFusionError::Execution("evaluation permit is absent".into()))?;
+        control.check().map_err(Self::data_error)?;
+        let worker = calls.token()?;
+        let stage = Arc::clone(&control);
+        crate::execution::Engine::blocking(control, (permit, lease, worker), move || {
+            operation(&source, &stage)
+        })
+        .await
+        .map_err(|source| DataFusionError::External(Box::new(source)))
+    }
+
+    pub fn time_utc_ns(&self) -> u64 {
+        self.now
+    }
+
+    pub fn with_table<T>(
+        &self,
+        name: &str,
+        read: impl FnOnce(&SchemaRef, &[RecordBatch]) -> Result<T>,
+    ) -> Result<T> {
+        let captured = self
+            .captured
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
+        let captured = captured
+            .as_ref()
+            .ok_or_else(|| DataFusionError::Execution("source snapshot was not captured".into()))?;
+        let (schema, _, batches, _) = captured
+            .tables
+            .get(&SourceOrigin::Durable(name.to_owned()))
+            .ok_or_else(|| DataFusionError::Execution("captured source table is absent".into()))?;
+        read(schema, batches)
+    }
+
+    pub(crate) fn input_bounds(
+        &self,
+        plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+    ) -> Result<ScanBounds> {
+        let mut requests = {
+            let captured = self.captured.lock().map_err(|_| {
+                DataFusionError::Internal("source snapshot lock is poisoned".into())
+            })?;
+            captured
+                .as_ref()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("source snapshot was not captured".into())
+                })?
+                .tables
+                .keys()
+                .filter_map(|origin| origin.durable().map(|name| (name.to_owned(), None)))
+                .collect()
+        };
+        Self::requests(&mut requests, std::slice::from_ref(plan), None)
+    }
+
     pub(crate) fn snapshot(&self) -> Result<Arc<ArrowSnapshot>> {
         self.captured
             .lock()
@@ -243,7 +321,9 @@ impl SourceSnapshot {
             || targets;
         if !sources.contains_key("events")
             && !sources.contains_key("coverage")
+            && !sources.contains_key("graph_coverage")
             && !sources.contains_key("discovery_state")
+            && !sources.contains_key("graph_state")
             && !sources.contains_key("notifications")
             && !graph
             && !discovery
@@ -305,7 +385,7 @@ impl SourceSnapshot {
         Ok(selection)
     }
 
-    pub(crate) fn bind_port(
+    pub fn bind_port(
         &self,
         port: usize,
         schema: SchemaRef,
@@ -326,7 +406,19 @@ impl SourceSnapshot {
             DataFusionError::Execution("the source snapshot was not captured before binding".into())
         })?;
         let origin = SourceOrigin::Port(port);
-        if captured.tables.contains_key(&origin) {
+        if let Some((previous, _, rows, binding)) = captured.tables.get(&origin) {
+            if previous == &schema
+                && rows == &batches
+                && input
+                    .zip(binding.as_deref())
+                    .is_some_and(|(input, binding)| {
+                        input.data.name == binding.data.name
+                            && input.revision == binding.revision
+                            && input.coverage == binding.coverage
+                    })
+            {
+                return Ok(());
+            }
             return Err(DataFusionError::Execution(
                 "the materialized port is already bound".into(),
             ));
@@ -518,28 +610,34 @@ impl SourceSnapshot {
             .checked_add(added)
             .filter(|bytes| *bytes <= limits.input_bytes)
             .ok_or_else(overflow)?;
-        let native = std::mem::take(&mut page.tables);
+        let mut native = std::mem::take(&mut page.tables);
         let packages = std::mem::take(&mut page.packages);
         let removals = std::mem::take(&mut page.removals);
         let mut tables = BTreeMap::new();
         let mut source_bytes = 0usize;
-        for (name, batches) in native {
-            let Some(first) = batches.first() else {
+        for (name, columns) in requests {
+            let Some(columns) = columns else {
                 continue;
             };
-            let schema = Arc::clone(first.schema_ref());
-            let indices = requests
-                .get(&name)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| {
-                    DataFusionError::Internal("the captured table was not requested".into())
-                })?
-                .iter()
-                .copied()
-                .collect::<Vec<_>>();
+            let indices = columns.iter().copied().collect::<Vec<_>>();
+            let batches = native.remove(name).unwrap_or_default();
+            let schema = match batches.first() {
+                Some(first) => Arc::clone(first.schema_ref()),
+                None => Arc::new(
+                    Self::schemas()
+                        .get(name)
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "the captured table has no native source schema".into(),
+                            )
+                        })?
+                        .project(&indices)?,
+                ),
+            };
             for batch in &batches {
                 self.memory.retain_input(batch, &reservation)?;
             }
+            let name = name.clone();
             source_bytes = source_bytes
                 .saturating_add(Captured::table_bytes(&schema, &batches))
                 .saturating_add(name.capacity());

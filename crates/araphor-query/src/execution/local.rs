@@ -71,9 +71,9 @@ impl Session {
             session.register(&data.name, schema, &batches)?;
         }
         let schema = Arc::new(MemorySchemaProvider::new());
-        for (name, (table, _)) in session.tables.iter() {
+        for (name, table) in session.tables.iter() {
             schema
-                .register_table(name.clone(), table.clone())
+                .register_table(name.clone(), table.provider())
                 .context(SqlSnafu)?;
         }
         let mut state = session.state()?;

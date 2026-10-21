@@ -1113,3 +1113,17 @@ cases and connected checks pass. Read the
 [bounded result](araphor-analysis-migration.md#saved-input-identity-includes-discarded-origins).
 No reference file retires. Complete migration and final Rust qualification
 remain **Not done**.
+
+
+## Finite Graph and Discovery native calls
+
+The finite Graph source uses native Query children and exact OCI calls. Its
+sink validates all three detector returns and commits one guarded graph window
+without advancing the processor cursor. Discovery uses the same native call
+and sealed-return owners. Five complete reference leaves retire after their
+replacement gates pass. There are now 108 retired and 100 unchanged files.
+Read the [bounded result](araphor-analysis-migration.md#finite-native-graph-source-retirement)
+and [retirement record](../../recovery/araphor-native-graph-source-retirement-20261021.json).
+Automatic Graph advancement and recovery, remaining long-running ownership,
+full migration, required net reduction, and the final shared Rust procedure
+remain **Not done**.

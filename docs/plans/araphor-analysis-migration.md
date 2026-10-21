@@ -1827,3 +1827,48 @@ The correction adds two production lines and no owner. No reference file retires
 all 105 remaining files and the full archive are unchanged. The production total
 is +14,335 from the original baseline. The complete migration, required net
 reduction and final shared Rust procedure remain **Not done**.
+
+
+## Finite native Graph source retirement
+
+The production finite Graph source now replaces the earlier test-only adapter
+limit. `GraphPublication` captures the declared native source children once,
+binds the three complete detector inputs through Query `SourcePort`, and
+executes the exact admitted OCI calls through `PackageExec`. Captured Control
+facts use the original context rows and consulted candidate and ACK references.
+The Graph sink validates all three actual returns and commits through the
+existing guarded Data transaction. This route sets `advance = false`.
+
+The following complete reference leaves retire after replacement qualification:
+
+- `graph/derive.rs`, `graph/coverage.rs`, and `graph/derive/adapter/mod.rs`.
+- `discovery/sdk/mod.rs` and `discovery/sdk/native.rs`.
+
+The Discovery replacement uses declared native inputs, sealed `CallResult`
+validation, and the existing Data provenance guards. Two actual Wasm/native
+cases compare all four Discovery exports and their complete returned contracts.
+Query owns invocation identity and evaluation time. The old private adapter
+and its custom evaluation identity and time are not retained as public policy.
+
+The selected qualification contains 255 distinct passing crate and test names,
+including eight actual native cases. Final connected compilation and strict
+Clippy pass. The last affected Data, Control, Analysis, and Query cases pass;
+final formatting also passes. The record preserves earlier failures and their
+later passing exact test names. Read the
+[retirement record](../../recovery/araphor-native-graph-source-retirement-20261021.json)
+for source hashes, native artifact provenance, commands, logs, and custody.
+The [reading route](../guides/araphor-discovery-definition-review.md#finite-native-graph-source-and-publication)
+explains the current production boundaries.
+
+This removes 512 reference production lines. There are now 108 retired files
+and 100 remaining files. Each remaining file matches the recovery baseline;
+the complete archive is unchanged. The latest production count is +10,642
+from the recovery baseline and +16,636 from the original baseline. The change
+from the prior committed count is +2,301, including these reference deletions.
+These figures do not meet the required net reduction.
+
+Replacement and retirement of these five leaves are **Done**. Automatic Graph
+advancement, producer recovery, Discovery live and replay ownership, remaining
+resource and polling work, the complete migration, the required net reduction,
+and the final shared Rust procedure remain **Not done**. This finite route
+adds no public Graph recovery API for a lost acknowledgement.

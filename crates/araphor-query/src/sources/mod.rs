@@ -35,7 +35,9 @@ use crate::memory::Memory;
 #[cfg(test)]
 mod bounds;
 mod journal;
+mod port;
 mod rows;
+pub use port::{PortSource, SourcePort};
 mod schema;
 #[cfg(test)]
 mod tests;
@@ -193,7 +195,7 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
     }
 }
 
-pub(crate) struct SourceSnapshot {
+pub struct SourceSnapshot {
     store: Arc<AnalysisStore>,
     selection: AnalysisSelectionV1,
     inputs: Option<Arc<InputCapture>>,
@@ -606,9 +608,14 @@ impl TableProvider for SourceProvider {
                 .ok_or_else(|| {
                     DataFusionError::Execution("local input tables are absent".into())
                 })?;
-            let (table, _) = tables
+            let crate::execution::TableBinding::Rows { table, .. } = tables
                 .get(name)
-                .ok_or_else(|| DataFusionError::Execution("local input table is absent".into()))?;
+                .ok_or_else(|| DataFusionError::Execution("local input table is absent".into()))?
+            else {
+                return Err(DataFusionError::Execution(
+                    "local input is not a row table".into(),
+                ));
+            };
             if table.schema() != self.schema {
                 return Err(DataFusionError::Execution(
                     "local input schema changed".into(),

@@ -651,7 +651,22 @@ pub enum Read {
     Page(Option<StorePositionV1>),
 }
 
-pub(crate) type LocalTables = BTreeMap<String, (Arc<dyn TableProvider>, usize)>;
+#[derive(Clone)]
+pub(crate) enum TableBinding {
+    Rows { table: Arc<MemTable>, bytes: usize },
+    Provider(Arc<dyn TableProvider>),
+}
+
+impl TableBinding {
+    pub(crate) fn provider(&self) -> Arc<dyn TableProvider> {
+        match self {
+            Self::Rows { table, .. } => table.clone(),
+            Self::Provider(provider) => Arc::clone(provider),
+        }
+    }
+}
+
+pub(crate) type LocalTables = BTreeMap<String, TableBinding>;
 
 #[derive(Clone)]
 pub struct Session {
@@ -808,15 +823,15 @@ impl Session {
         &self.memory
     }
 
-    pub(crate) fn engine(&self) -> &Arc<Engine> {
+    pub fn engine(&self) -> &Arc<Engine> {
         &self.engine
     }
 
-    pub(crate) fn selection(&self) -> &AnalysisSelectionV1 {
+    pub fn selection(&self) -> &AnalysisSelectionV1 {
         &self.selection
     }
 
-    pub(crate) fn control(&self) -> &Arc<AnalysisReadControl> {
+    pub fn control(&self) -> &Arc<AnalysisReadControl> {
         &self.control
     }
 
@@ -852,7 +867,10 @@ impl Session {
             .tables
             .iter()
             .filter(|(key, _)| key.as_str() != name)
-            .fold(bytes, |total, (_, (_, bytes))| total.saturating_add(*bytes));
+            .fold(bytes, |total, (_, table)| match table {
+                TableBinding::Rows { bytes, .. } => total.saturating_add(*bytes),
+                TableBinding::Provider(_) => total,
+            });
         if held > self.engine.limits.input_bytes {
             return Err(crate::Error::Sql {
                 source: DataFusionError::ResourcesExhausted("local input bytes".into()),
@@ -865,7 +883,19 @@ impl Session {
                 .retain_input(batch, &reservation)
                 .context(SqlSnafu)?;
         }
-        Arc::make_mut(&mut self.tables).insert(name.to_owned(), (Arc::new(table), bytes));
+        Arc::make_mut(&mut self.tables).insert(
+            name.to_owned(),
+            TableBinding::Rows {
+                table: Arc::new(table),
+                bytes,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn register_table(&mut self, name: &str, provider: Arc<dyn TableProvider>) -> Result<()> {
+        self.control.check()?;
+        Arc::make_mut(&mut self.tables).insert(name.to_owned(), TableBinding::Provider(provider));
         Ok(())
     }
 
@@ -919,7 +949,7 @@ impl Session {
         let schema = Arc::new(port.schema);
         let table = crate::sources::SourceProvider::retained(reference, schema, memory)?;
         self.control.check()?;
-        Arc::make_mut(&mut self.tables).insert(name.into(), (table, 0));
+        Arc::make_mut(&mut self.tables).insert(name.into(), TableBinding::Provider(table));
         Ok(())
     }
 

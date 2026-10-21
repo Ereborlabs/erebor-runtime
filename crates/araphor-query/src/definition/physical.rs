@@ -103,19 +103,6 @@ impl ExecutionReceipt {
         lease: impl Send + 'static,
         operation: impl FnOnce(&AnalysisReadControl) -> crate::Result<T> + Send + 'static,
     ) -> Result<T> {
-        let calls = context
-            .session_config()
-            .get_extension::<CallContext>()
-            .ok_or_else(|| internal("package execution context is absent"))?;
-        let control = context
-            .session_config()
-            .get_extension::<AnalysisReadControl>()
-            .ok_or_else(|| internal("package execution control is absent"))?;
-        let permit = context
-            .session_config()
-            .get_extension::<crate::execution::Permit>()
-            .ok_or_else(|| internal("package evaluation permit is absent"))?;
-        control.check().map_err(external)?;
         let source = context
             .session_config()
             .get_extension::<SourceSnapshot>()
@@ -125,13 +112,9 @@ impl ExecutionReceipt {
                 araphor_data::PackageErrorCodeV1::Invalid.error("package execution receipt"),
             ));
         }
-        let worker = calls.token()?;
-        let stage = Arc::clone(&control);
-        crate::execution::Engine::blocking(control, (worker, permit, self, lease), move || {
-            operation(&stage)
-        })
-        .await
-        .map_err(external)
+        source
+            .blocking(context, (self, lease), move |_, control| operation(control))
+            .await
     }
 }
 
@@ -165,6 +148,17 @@ impl Origin {
             && self.model.package == call.package
             && self.model.export == call.export
             && self.call == call.id
+    }
+}
+
+impl PackageCall {
+    pub fn same_call(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.admission, &other.admission)
+            && self.tenant == other.tenant
+            && self.pin == other.pin
+            && self.package == other.package
+            && self.export == other.export
+            && self.id == other.id
     }
 }
 

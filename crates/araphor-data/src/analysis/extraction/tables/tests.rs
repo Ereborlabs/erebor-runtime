@@ -36,11 +36,11 @@ fn schema_contract() -> TestResult {
         ),
         (
             "context",
-            "9bedf8f1dbd69eecff2bf1d24b6b19889f10683d763ac8ff40ea34f916367e2d",
+            "3a99a9cf616c1c6ffc5ebc74deb59b1a3b50be0339cdc5125a01ba0a8d2233e9",
         ),
         (
             "context_versions",
-            "f8bd877560d97083e6a1b5684ef8014a9c494f2fcb6842ae36a464a7e45ab2dd",
+            "e67ef19cd6290b70041a2091d8345503c0228e7ebd43d4c71062a16acfd38e78",
         ),
         (
             "correlation_packages",
@@ -67,8 +67,16 @@ fn schema_contract() -> TestResult {
             "a38f863f769c36713df2596d5a31cae38cb66341aa743a222a0a3dceae049811",
         ),
         (
+            "graph_coverage",
+            "3a9401f56d9fb017ad8b7344dc5affacaee3cebdd9fa8016ea05870cb0c1a879",
+        ),
+        (
             "graph_manifest",
-            "0cbea412d4f3ed7b138fda4c1543a4548f0be7a4d168f85b447446f84da20c89",
+            "30ec5662638f395a6245ace0f2142bb407fb5354ed4772139b6268e9b26482cd",
+        ),
+        (
+            "graph_state",
+            "be410750acbcbd3016299acd864357e90ad468ef973ca64e9e7b8f6657aa6fb1",
         ),
         (
             "graph_subjects",

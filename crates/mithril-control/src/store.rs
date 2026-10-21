@@ -2943,7 +2943,9 @@ fn apply_transaction(
                 ..
             } = result.as_ref();
             validate_policy_acknowledgement(state, result, path)?;
-            state.policy_acknowledgement_results.insert(
+            context::ContextSource::insert(
+                &mut changes,
+                &mut state.policy_acknowledgement_results,
                 (
                     PolicyRolloutKeyV1 {
                         candidate_content_id: acknowledgement.candidate_content_id.clone(),
@@ -2952,6 +2954,7 @@ fn apply_transaction(
                     rollout_state.transition_version,
                 ),
                 result.as_ref().clone(),
+                |(id, version)| context::ContextSource::Acknowledgement(id, version),
             );
             context::ContextSource::insert(
                 &mut changes,
@@ -3743,9 +3746,12 @@ fn apply_rollout_transaction(
         context::ContextSource::Target,
     );
     for bundle in &rollout.bundles {
-        state.bundles.insert(
+        context::ContextSource::insert(
+            changes,
+            &mut state.bundles,
             bundle.candidate.candidate_content_id.clone(),
             bundle.clone(),
+            context::ContextSource::Candidate,
         );
     }
     for rollout_state in &rollout.rollout_states {

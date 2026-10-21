@@ -19,6 +19,8 @@ mod discovery;
 mod discovery_state;
 mod events;
 mod graph;
+mod graph_state;
+pub(super) use graph_state::GraphState;
 mod metadata;
 mod notification;
 mod schema;
@@ -40,6 +42,7 @@ pub(super) struct Capture<'a> {
     received_min: Option<u64>,
     next_change: Option<u64>,
     packages: BTreeMap<usize, (Arc<sdk::Schema>, Vec<RecordBatch>, sdk::Coverage)>,
+    pub(super) graph_coverage: std::collections::BTreeSet<(crate::EvidenceIntakeIdentityV1, u64)>,
 }
 
 impl<'a> Capture<'a> {
@@ -56,6 +59,7 @@ impl<'a> Capture<'a> {
             received_min: None,
             next_change: None,
             packages: BTreeMap::new(),
+            graph_coverage: Default::default(),
         }
     }
 

@@ -232,6 +232,9 @@ impl ExtensionPlanner for SubscriptionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(source) = node.as_any().downcast_ref::<crate::sources::SourcePort>() {
+            return source.plan(physical_inputs).map(Some);
+        }
         if let Some(call) = node
             .as_any()
             .downcast_ref::<crate::definition::PackageCall>()

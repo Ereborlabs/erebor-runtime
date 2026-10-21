@@ -20,7 +20,7 @@ impl Capture<'_> {
             None
         };
         for relation in ["context_versions", "context"] {
-            if !self.context_row(relation, context, document.as_ref(), budget)? {
+            if !self.context_row(relation, context, revision, document.as_ref(), budget)? {
                 return Ok(false);
             }
         }
@@ -281,6 +281,7 @@ impl Capture<'_> {
             &mut self,
             relation: &str,
             context: &AnalysisContextVersionV1,
+            revision: u64,
             document: Option<&DiscoveryContextRevisionV1>,
             budget: &mut ReadBudget<'_>,
         );
@@ -295,6 +296,7 @@ impl Capture<'_> {
             valid_until_utc_ns => UInt64(true):context.valid_until_utc_ns,
             sensitivity => Utf8(false):Some(<&str>::from(context.sensitivity)),
             body => Binary(false):Some(&context.body),
+            commit_revision => UInt64(false):Some(revision),
         }
         row(self, relation, budget);
         setup {

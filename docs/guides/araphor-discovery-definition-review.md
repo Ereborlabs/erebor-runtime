@@ -1561,3 +1561,76 @@ and connected checks pass. Read the
 [qualification record](../../recovery/araphor-retained-origin-qualification-20261020.json).
 No reference file retires. The complete migration and final Rust procedure
 remain **Not done**.
+
+
+## Finite native Graph source and publication
+
+This production route replaces the earlier test-only Graph input boundary.
+It covers one `GraphPublication::refresh`; it does not advance the processor
+cursor or establish automatic producer recovery. Read these owners in order:
+
+1. [GraphPublication](../../crates/araphor-analysis/src/graph/native.rs) checks
+   the Run grant, complete source scope, exact image set, and current image
+   trust. It rejects foreign call admissions before execution. Canonical
+   coverage comes from the Engine rather than a caller table with the same name.
+2. [SourcePort](../../crates/araphor-query/src/sources/port.rs) retains native
+   child plans and a private typed binding identity.
+   [PortExec](../../crates/araphor-analysis/src/graph/native/node.rs) enters the
+   shared [capture](../../crates/araphor-analysis/src/graph/native/capture.rs).
+   It consumes the six actual child streams once and derives the three complete
+   SDK inputs from one cut. Canonical record checks use that same captured
+   source. Ordinary tables remain TableProviders; the existing package relation
+   planner resolves OCI computations without a second SQL parser.
+3. [Captured Control context](../../crates/mithril-control/src/store/graph/retained.rs)
+   and [Control facts](../../crates/mithril-control/src/store/graph.rs) use the
+   captured arrays and original per-row revisions. Consulted references retain
+   the candidate and ACK versions that produced each policy fact. Complete ACK
+   histories remain available. An unrelated profile does not add a reference.
+4. [PackageExec and ExecutionReceipt](../../crates/araphor-query/src/definition/physical.rs)
+   execute the native plan and retain complete SQL, Wasm, or native returns.
+   Private admission identity binds each `CallResult` to its actual call.
+   Metadata passes through only for one exact identity origin. Cleanup drains
+   already-started shared futures and joins their workers; it does not rerun calls.
+5. The [Graph sink](../../crates/araphor-analysis/src/graph/native/sink.rs) wraps
+   the selected native plan through insert-only DML. Native `DataSinkExec` owns
+   invocation and the one-row count. The Graph sink drains selected batches,
+   checks configured row and byte totals, requires all three actual returns,
+   and applies their complete SDK output through `Graph::apply` and `finish`.
+6. [Data graph publication](../../crates/araphor-data/src/analysis/progress.rs)
+   checks the fresh source cut, exact window head, witnesses, context versions,
+   and package references in one transaction. The final authority and control
+   callback runs after the commit hook and before commit. Failure rolls back.
+   This finite call uses `advance = false`.
+
+[SourceSnapshot::blocking](../../crates/araphor-query/src/sources/rows.rs) keeps
+actual capture, permit, control, and worker ownership through the joined writer.
+The existing Query input pool charges retained arrays, frame copies, and capture
+metadata. Complete call results retain their actual buffer reservations. The
+native count is checked and reserved before the writer runs. These bounds do
+not cover every temporary Rust allocation or Data writer serialization buffer.
+
+The Run grant, admitted images, witness deadline, outer Session control, and
+native operation control are checked at the final write boundary. A benign
+authority notice requires a current check and keeps the same capture. Denial
+cancels and joins execution. An exact immutable retry returns the original
+receipt only for the same request and references, with current authority.
+A fresh semantic no-op first checks the current cut and head, then returns the
+prior graph result. A later query or disclosure error can follow a successful
+commit; no new public Graph recovery API for a lost acknowledgement is added.
+
+[Discovery return validation](../../crates/araphor-analysis/src/discovery/output.rs)
+uses sealed native call results and existing Data provenance guards. The
+[actual Wasm/native comparisons](../../crates/araphor-analysis/src/discovery/output/tests/native/targets.rs)
+cover all four exports and complete returned contracts. Query owns invocation
+identity and evaluation time; this route adds no custom Graph or Discovery clock.
+
+Read the [capture and identity cases](../../crates/araphor-analysis/src/graph/native/tests.rs),
+[complete payload and 258-report history cases](../../crates/araphor-analysis/src/graph/native/tests/gates.rs),
+[Data atomic publication cases](../../crates/araphor-data/src/analysis/graph_rows/tests/atomic.rs),
+and [captured Control proof cases](../../crates/mithril-control/src/store/graph/tests/retained.rs).
+SQL fixture cases test known returns and boundary checks; actual detector
+algorithm qualification uses Wasm and source-built native artifacts.
+The [retirement record](../../recovery/araphor-native-graph-source-retirement-20261021.json)
+records the passing gates and five retired leaves. Automatic Graph advancement,
+producer recovery, complete migration, required net reduction, and the final
+shared Rust procedure remain **Not done**.

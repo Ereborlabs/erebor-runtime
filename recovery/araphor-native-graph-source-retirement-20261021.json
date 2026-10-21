@@ -1,0 +1,1796 @@
+{
+  "status": "Done for the five named whole leaves. Complete migration, the requested net production reduction, and the final shared Rust procedure are Not done.",
+  "recorded_at": "2026-10-21T06:01:53.239472+00:00",
+  "qualified_source_base": "0fbc542f2645d724bc850ab539b51872b2568237",
+  "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+  "candidate_files": [
+    {
+      "path": "crates/araphor-analysis_back/src/graph/derive.rs",
+      "sha256": "40f15869fcb93cf8a960d1b5d2deaa3ee11a32b84429ea62cfd993132bc979b6",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_lines": 116
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/graph/coverage.rs",
+      "sha256": "65f45d0b69938276205896100769d1c554e26f94c31042bced5271542d07cf49",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_lines": 75
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/graph/derive/adapter/mod.rs",
+      "sha256": "faccbec2eb26b9a7d9fa330eb2ce1866dc0b46807266fb5e87b2d891787b5034",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_lines": 171
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/sdk/mod.rs",
+      "sha256": "7696caaabd4c70df8e689823088deccab657ead6cd0a81ba180a24431995aec2",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_lines": 150
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/sdk/native.rs",
+      "sha256": "54c95094c5666bbfc1bef866af7f9641430a1cbfea30db563111006666072dfe",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_lines": 0
+    }
+  ],
+  "qualified_owner_sha256": {
+    "crates/araphor-analysis-builtins/src/discovery/sql/coverage_ranges.sql": "dab3e631394b486f44247885806003218b516b29433b637e76b3258540a7791d",
+    "crates/araphor-analysis-builtins/src/graph/contract.rs": "b03a2e8d6c0c9f5ce436bd711ee106037745d3d872735fcba116defd0ae55e80",
+    "crates/araphor-analysis-builtins/src/rows.rs": "862a39b6af593c3e6bd9721cc1ce80b7dbd10df593e83b7027657872bb4e7de7",
+    "crates/araphor-analysis/src/discovery/output/tests.rs": "cde3696849f71c627fac58aa63db7aeb5c28af72280bc6af7ca89d83406b9e5f",
+    "crates/araphor-analysis/src/discovery/output/tests/native.rs": "5e2b72455e25bc5cf0e9e51672610970b9509e9996ecf74e507341717b191547",
+    "crates/araphor-analysis/src/discovery/output/tests/native/targets.rs": "df86c0489257b37c04d22500d3624fd7017d52cb3ce2a7714aeec5ab568d031b",
+    "crates/araphor-analysis/src/graph/mod.rs": "62b1a5d4dc6dae0e5154fbc4e6ad23f3355662eac900dfbe49d2c95a0dca0942",
+    "crates/araphor-analysis/src/graph/native.rs": "438578e7ac1b6bb5020cfd7c4b7b42145aa52352bef245b0a27f5c44d6f2bdec",
+    "crates/araphor-analysis/src/graph/native/capture.rs": "4f6cb9c029526633225d90135ed778e0279efbd17c0974677d122425936dd415",
+    "crates/araphor-analysis/src/graph/native/node.rs": "f87948376f7f3a27257aad7ee0b299d6a0c881b16aec3a81eacb04a5af75de8c",
+    "crates/araphor-analysis/src/graph/native/sink.rs": "39a5ccaa49f776db4399efcf7bda7e50f9208c3ec402cd770375dc2a3d71e638",
+    "crates/araphor-analysis/src/graph/native/tests.rs": "4e1e7c4fa772471644743473be26db520adca5df7d6076156f6b6efc8bf1a3f2",
+    "crates/araphor-analysis/src/graph/native/tests/gates.rs": "316f332e81f61ce016990465917e0de67f4735c25221c26acd2577b87d9d9a7e",
+    "crates/araphor-analysis/src/graph/native/tests/gates/source.rs": "7a9cf77bfe5b14d66fb1664df226e0570623623cec44c52799e6f6674c4fe834",
+    "crates/araphor-analysis/src/graph/projection.rs": "fa527b6294ab86a6a63a192f3f167e0d7d08bd71c204b5c8b04771b4535a781d",
+    "crates/araphor-analysis/src/graph/tests.rs": "a9fd3cd5f3fc38719aaa9232101c09d88104725ccc6abd57d3611eba48108ab1",
+    "crates/araphor-analysis/src/graph/tests/binding.rs": "db9a97bafccb1d3bb80e792d86855276686e304d063079642f55b49f6a237b81",
+    "crates/araphor-analysis/src/graph/tests/defaults.rs": "5e41850e45b6a62bc46ac48df72669c413fc9f65cea9a66e97aeecb013a64d53",
+    "crates/araphor-analysis/src/lib.rs": "cb52b1d3804e6f6ca0d76f15018e7de27ee22c10c0ef715a843d53a4825bbdec",
+    "crates/araphor-analysis/src/package.rs": "91e314fd55a680b76febe2ba0b69c8c6f7db2e4df3fbea5be786922a5fade9b0",
+    "crates/araphor-data/src/analysis/context.rs": "1007aa827a2cffc6b91441f1fbde4b4f2f90d6e65d93e34b8aaba5842dd7d85b",
+    "crates/araphor-data/src/analysis/context/write.rs": "82b357a28b5953c304d34e07e381a31bc9f0591a752389ca044185bc0084faab",
+    "crates/araphor-data/src/analysis/dependencies.rs": "65f1b0837c85487d0cfef7c691ed1caf2d46ebf493ace3a980c7ec098ff1d9a6",
+    "crates/araphor-data/src/analysis/extraction.rs": "5a0b4047db6dfd714a2f6423f3e8f7ca7f4f476274dcaf2e332933adc7be2f4b",
+    "crates/araphor-data/src/analysis/extraction/graph.rs": "a2819f028146ba8265852a15d7872445b11fdefade9957cc960f8427f65c5c2a",
+    "crates/araphor-data/src/analysis/extraction/tables/context.rs": "958a74426b9bba32eb51a612d6f0d0a98c7b1896b0eac2e640229bd2afd0146c",
+    "crates/araphor-data/src/analysis/extraction/tables/graph.rs": "91c6e8a73b465113f10d3748e6ddfeb5b3b09cde92c6bbdeb689b7a76a236f79",
+    "crates/araphor-data/src/analysis/extraction/tables/graph_state.rs": "db5791330842816437b68f35d1dd5c472769521018ac3f89c261fcca9119cfbf",
+    "crates/araphor-data/src/analysis/extraction/tables/metadata.rs": "9b0a85de069261eb8affec1a576ad42f0370f0f9e5884adf3169fbefd2ed0b43",
+    "crates/araphor-data/src/analysis/extraction/tables/mod.rs": "4889f336cbac2a311f1feb5afae577ceb9cd027b8ed84865b362f1d8abf84661",
+    "crates/araphor-data/src/analysis/extraction/tables/schema.rs": "1df102f0a820036f5c828e61b9e5daf8acf1c55e1d6621ac1a8196d8ffe16ef1",
+    "crates/araphor-data/src/analysis/extraction/tables/tests.rs": "8e93ed449ed0148cdc558577169ce3de5b98278a523d0cc9f3eaf6581b0bade2",
+    "crates/araphor-data/src/analysis/extraction/tables/tests/native.rs": "426c3df585cb5704bfc5a8a5fd21e3ffa37a2b65b35c11557775cc7c605c01ff",
+    "crates/araphor-data/src/analysis/graph.rs": "a73f56e991265987e48eb21b4947fdf63f6ac6ebc8950da43d1d0627fd8e12dd",
+    "crates/araphor-data/src/analysis/graph_rows/tests.rs": "1b4087f5c69242faeefae7c7a118283d19d6c8ab96c5e91c839684f6c6d2c385",
+    "crates/araphor-data/src/analysis/graph_rows/tests/atomic.rs": "3c80bbaac00d3664e8705f3e0febd546b6e11be08314e87d0aa85dee8cce228d",
+    "crates/araphor-data/src/analysis/graph_rows/tests/bounds.rs": "43da63e23252c204a208bc9e1561aedbe7deda40151a697aad94b8e91e2339e8",
+    "crates/araphor-data/src/analysis/graph_rows/tests/guards.rs": "98855e0144789e7b0ba13ca7c5f7733f307fb147f73c8c95b704820fdfa823d8",
+    "crates/araphor-data/src/analysis/graph_rows/tests/packages.rs": "7360f351046be59479b606122fc0df92becbad1cc8de2421934a21b8d2d95df5",
+    "crates/araphor-data/src/analysis/mod.rs": "064c903eca83c50cbda524556bdb973a04c7836750f69b61d621e57808b41b78",
+    "crates/araphor-data/src/analysis/packages/tests/context/native.rs": "63ee19c051722f87889fd4ecf4403e9a62bb9b950957bd164b5d20776ddb94c4",
+    "crates/araphor-data/src/analysis/progress.rs": "ec2df1e2500c640da0e82d4c69c3d4699e432a32e86f5d190dcbcf6cb8de3c1a",
+    "crates/araphor-data/src/analysis/progress/notices.rs": "2232f99599a18abda49767f7392d5f5bdd5dd2ff64ae7d368e1a334ae2297fa2",
+    "crates/araphor-data/src/analysis/progress/profile.rs": "d51cf5c9b590ac0e9d8affff53e5e63ce101e1c34cbe321e8ed4f763f6b79ae5",
+    "crates/araphor-data/src/package/provenance.rs": "2b172c19d4647e0f492bd30965046e7389bd3758b9b118efc92ef3d46c7c0028",
+    "crates/araphor-query/src/definition.rs": "c0f4bbf6530b8015aaf6a6a0ac0607d7881befc478be5e765af251029770fbfd",
+    "crates/araphor-query/src/definition/physical.rs": "ff63de9d14dddd75e5d8504d46321e03d4531cd9448718adce65660c0f18089a",
+    "crates/araphor-query/src/execution.rs": "87d0fc0ab0105b208f7ef87082b1447bf87adfae9e6e7589809af3c75e2dc005",
+    "crates/araphor-query/src/execution/local.rs": "90178c3ac5c8d9f7946009e8c2cdcfd03c1fb1641501d9c0595f56b08d7de867",
+    "crates/araphor-query/src/inputs/mod.rs": "00366a2d8ad626bfffaf4b12908846e18aba2925e39fb4d33179245180e4a4dd",
+    "crates/araphor-query/src/inputs/receipt.rs": "0acd268c82a04cc64dcd765c0e3a57ac9700890eaa881f07633fded96f72842e",
+    "crates/araphor-query/src/planner/mod.rs": "792dd35ed7b004e1750abec3ebf2ffefe64b5516dc5c368d51ec74acbe6571d4",
+    "crates/araphor-query/src/planner/subscription.rs": "dd117d353199d78cd80a84dabed0fcea6b72cb9657c09094e866c5fae1cfc010",
+    "crates/araphor-query/src/sources/bounds.rs": "56ca602777c234251f7e8fa619609e61ff3af3fbd9f2d9618f0b70bbd7b1b91f",
+    "crates/araphor-query/src/sources/mod.rs": "80c33a5e3179fd48fbc762f332332359016e50fce650da8d4aac9e9a3a236365",
+    "crates/araphor-query/src/sources/port.rs": "1b5ad13402cd823b77b5a0c7915414fc1a0deff337dcc29c6556d7ca99b70aa1",
+    "crates/araphor-query/src/sources/rows.rs": "3e9e06fbe1a4fe37a018457a3abcee87e48d443ceb1a36ac0e21902105068956",
+    "crates/araphor-query/src/sources/rows/tests.rs": "83da776e82e3a16b37cb1e03f118c03b54b8052d8e866726c71ad5ad1e872f72",
+    "crates/araphor-query/src/sources/tests.rs": "9287406a0a1284f543a37c02bba22abae25d85f740772c308fad5e32c6001088",
+    "crates/mithril-control/src/store.rs": "18c30184fbff1f741543a6ed9e82c6b211c8f04ce6cfc0ef42fd6547cfd8adfa",
+    "crates/mithril-control/src/store/context.rs": "78a1af812faf0238dda5cc884306a3fbb2c980f62810b73fde9c61a2765a0d31",
+    "crates/mithril-control/src/store/graph.rs": "1a7741aab6313ecf5b6e92382873de25a7ecda051f59627cb7769dd8b8683589",
+    "crates/mithril-control/src/store/graph/retained.rs": "19621259575c125bf03e3a4d95bc64f89657a735c45ee31076a1d0ca593d8337",
+    "crates/mithril-control/src/store/graph/tests/retained.rs": "df5b32da94ba05ab737d7f91d8547b8745bc71e1640744081e7cd2b40f352d62"
+  },
+  "replacement": {
+    "graph/derive.rs": "The native SourcePort children, shared physical projection and existing PackageExec supply actual declared detector calls. Query owns invocation identity and capture time.",
+    "graph/coverage.rs": "Native coverage SQL and the captured exact historical report pairs supply selected ranges, source positions, state and six-part input revision.",
+    "graph/derive/adapter/mod.rs": "The native Graph source, sealed package returns and Graph DataSink use the existing domain validation and one Data transaction.",
+    "discovery/sdk/mod.rs": "Declared native package ports and sealed CallResult validation replace the unused private Adapter and legacy host Evaluation factory.",
+    "discovery/sdk/native.rs": "Two actual Wasm/native package-call tests retain the four exports, complete returned contracts, metadata and resource release."
+  },
+  "qualification": {
+    "migration-graph-core174": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "graph::native::tests::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 147.682,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-core174.json",
+      "record_sha256": "f41f968fdc33b89659f8bc2400f4b22d87b43180e96257a91d550f2875ba917b",
+      "log": "/tmp/araphor-oci-execution/migration-graph-core174.log",
+      "log_sha256": "0f0332f2d7039a297ef0f82327a8fe0f9e6d96cb0b743b94c2bb43dff0ad9328",
+      "source_manifest_sha256": "33b795f743ecdf87cdd4ad8a3dc723f939d2636561c6f7a23eb1ebe8470fdaf6"
+    },
+    "migration-graph-discovery-domains174": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "graph::tests::",
+        "discovery::output::tests::",
+        "instance::tests::retained::origins::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 177.059,
+      "exit_code": 101,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-discovery-domains174.json",
+      "record_sha256": "db4129df71e8d8421e8fd8b793084d9a923d0b75cb0d21da1133056687a90281",
+      "log": "/tmp/araphor-oci-execution/migration-graph-discovery-domains174.log",
+      "log_sha256": "1bcf1c647e95492765b45a5b96d6009dbcbb81a544e17648aa7303f0b136fb9f",
+      "source_manifest_sha256": "33b795f743ecdf87cdd4ad8a3dc723f939d2636561c6f7a23eb1ebe8470fdaf6"
+    },
+    "migration-graph-credential174": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/mithril_control-627f8993e292f425",
+        "store::graph::tests::retained::retained_credential_selectors",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 1.502,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-credential174.json",
+      "record_sha256": "4c87be62700c0d17926c71d619533d2bd016e6b7b58712de2d68c897a285d83f",
+      "log": "/tmp/araphor-oci-execution/migration-graph-credential174.log",
+      "log_sha256": "5fe5d9a4f6cbd2d46ad4ddf55836f90e6afae6d29b7da5d07213e86b492e0028",
+      "source_manifest_sha256": "33b795f743ecdf87cdd4ad8a3dc723f939d2636561c6f7a23eb1ebe8470fdaf6"
+    },
+    "migration-graph-control179": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "ARAPHOR_NATIVE_DIR=/tmp/araphor-graph-native-current163",
+        "ARAPHOR_NATIVE_TARGET=x86_64-unknown-linux-gnu",
+        "target/debug/deps/mithril_control-627f8993e292f425",
+        "store::graph::tests::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 60.413,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-control179.json",
+      "record_sha256": "d2806904de359ef9bf8fe078eb3ca15741b3ffad387258a4b1da6b9e6a9fbf45",
+      "log": "/tmp/araphor-oci-execution/migration-graph-control179.log",
+      "log_sha256": "0ff73b099a9e7db09da4510b8a2adb3dbea49d81d29de2844220b663f4c99825",
+      "source_manifest_sha256": "6f81ec721783cdceaca5bbc92d46bb5e77042fcaa7853beebcc8430a26f5a3d6"
+    },
+    "migration-graph-query172": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_query-20b5305718963d88",
+        "sources::",
+        "inputs::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 33.374,
+      "exit_code": 101,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-query172.json",
+      "record_sha256": "2ab5a007bdc09be4a0d11c22d8f6ec41637a3ea12e38a57e146f6dd5a1021537",
+      "log": "/tmp/araphor-oci-execution/migration-graph-query172.log",
+      "log_sha256": "8bf1dce9a098c351d6b11b00a1d26248b1b2005dd28232899ae494ecec5ac2f6",
+      "source_manifest_sha256": "f7b076eca192740c59c241a724e5272035e1046bcc6e08a3f6542e9e24e3ce13"
+    },
+    "migration-graph-query179": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_query-20b5305718963d88",
+        "sources::rows::tests::retirement_map_charges_once",
+        "sources::bounds::input_bounds_require_capture",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 2.187,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-query179.json",
+      "record_sha256": "46de72fa13345b3beb2656642150658fd483d3ce315a36757a8f800442f3851a",
+      "log": "/tmp/araphor-oci-execution/migration-graph-query179.log",
+      "log_sha256": "0ae9728a82fd2617fcfa7cc89361a130e6e9f07e10dcdcb0deec5dfb048495e5",
+      "source_manifest_sha256": "6f81ec721783cdceaca5bbc92d46bb5e77042fcaa7853beebcc8430a26f5a3d6"
+    },
+    "migration-graph-builtins169": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_analysis_builtins-da05e1b493733dd6",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 0.134,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-builtins169.json",
+      "record_sha256": "f6187f4118852bf6092d7a7a6a4a1fbf831559c79f17c45000835b9f20531b10",
+      "log": "/tmp/araphor-oci-execution/migration-graph-builtins169.log",
+      "log_sha256": "69f07ecfbdfe12bef1244306e58022aeaf918a4acceff55ed63f60f1398ec50b",
+      "source_manifest_sha256": "f547043e977a340e7056713704eacedfe562e9efb08507c0df7ba2016bced7c3"
+    },
+    "migration-discovery-support-analysis174": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "package::tests::sql::recorded::recorded_rejects_relational_conflicts",
+        "package::tests::sql::recorded::merge::merge_rejects_conflicts",
+        "package::tests::sql::recorded::merge::merge_checks_counter_overflow",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 9.654,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-discovery-support-analysis174.json",
+      "record_sha256": "3d9a9d9f24aa700725664dbccb40b1fbe59aa3ea250c0389727281b8e853c873",
+      "log": "/tmp/araphor-oci-execution/migration-discovery-support-analysis174.log",
+      "log_sha256": "2eb0cc9a9a47958ec91665239e716b7165d3e865f750fde5c54f41057fb14369",
+      "source_manifest_sha256": "33b795f743ecdf87cdd4ad8a3dc723f939d2636561c6f7a23eb1ebe8470fdaf6"
+    },
+    "migration-discovery-support-data174": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_data-ef29af64b90b2937",
+        "discovery::validation::tests::recorded_rejects_host_changes",
+        "discovery::validation::tests::recorded_rejects_coverage_upgrade",
+        "discovery::validation::tests::merge_groups_preserve_attribution",
+        "discovery::validation::tests::comparison_keeps_source_proof",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 0.102,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-discovery-support-data174.json",
+      "record_sha256": "8f351c312f7faaf086245e660c770c5b850554da97c4e401c1c60bb052d7469e",
+      "log": "/tmp/araphor-oci-execution/migration-discovery-support-data174.log",
+      "log_sha256": "ee5d0cc2fdc65fc96556f6d31f08d13af441603e724d2212c22680a6d3a13ca1",
+      "source_manifest_sha256": "33b795f743ecdf87cdd4ad8a3dc723f939d2636561c6f7a23eb1ebe8470fdaf6"
+    },
+    "migration-discovery-support-query174": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_query-20b5305718963d88",
+        "definition::tests::execution::physical_call_cancellation_joins",
+        "definition::tests::captured::capture_cancel_joins_reader",
+        "definition::tests::captured::native_writer_cancel_joins",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 14.361,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-discovery-support-query174.json",
+      "record_sha256": "d864ad7541f59c02ded923247d691a7cf1d6c003cf8d79f000ab3ba71d751164",
+      "log": "/tmp/araphor-oci-execution/migration-discovery-support-query174.log",
+      "log_sha256": "cc20e0e938cdfe97a559a5230822012fea8f0f5f86a4b5798ae0be90a75a5dc1",
+      "source_manifest_sha256": "33b795f743ecdf87cdd4ad8a3dc723f939d2636561c6f7a23eb1ebe8470fdaf6"
+    },
+    "migration-graph-data175": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_data-ef29af64b90b2937",
+        "analysis::graph_rows::tests::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 66.836,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-data175.json",
+      "record_sha256": "6465bba2f5baf5738e71a5a871647e6c0c5401d67e7c2b202bc787079272fa65",
+      "log": "/tmp/araphor-oci-execution/migration-graph-data175.log",
+      "log_sha256": "8091d5e63d1774bfcb6bd6dc1de3e2db8d4843fca92adfc375efcc6cad44777c",
+      "source_manifest_sha256": "a9295ddb638cc6d7638f035d019481dbe0b50a5ad0401e7589a8a47272ac5024"
+    },
+    "migration-graph-windows179": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "graph::tests::windows::",
+        "graph::native::tests::captures_once_and_refreshes",
+        "graph::native::tests::sql_capture_and_refresh",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 38.426,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-windows179.json",
+      "record_sha256": "26ad85afc1caa466bdfa5bfce65f00f70c4bb3bd13b488eac4b575323f328a6e",
+      "log": "/tmp/araphor-oci-execution/migration-graph-windows179.log",
+      "log_sha256": "121846d857cf7c59cb2aa663e0c35c23a3c6feb76b3562b125d35773be28cc3c",
+      "source_manifest_sha256": "6f81ec721783cdceaca5bbc92d46bb5e77042fcaa7853beebcc8430a26f5a3d6"
+    },
+    "migration-graph-discovery-targets175": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "ARAPHOR_NATIVE_DIR=/tmp/araphor-graph-native-current163",
+        "ARAPHOR_NATIVE_TARGET=x86_64-unknown-linux-gnu",
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "graph::tests::execution::",
+        "graph::native::tests::native_graph_source_targets",
+        "discovery::output::tests::native::targets::",
+        "--ignored",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 85.796,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-discovery-targets175.json",
+      "record_sha256": "3fe2b0c00a99306d29f95f6d2cb36ae32179a583db281ab79c3883ab89350ad7",
+      "log": "/tmp/araphor-oci-execution/migration-graph-discovery-targets175.log",
+      "log_sha256": "be73937a71266e44a4e48f54252bdc1aa3c8db82286dce07fd89a7873c3d09eb",
+      "source_manifest_sha256": "a9295ddb638cc6d7638f035d019481dbe0b50a5ad0401e7589a8a47272ac5024"
+    },
+    "migration-graph-data179": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_data-ef29af64b90b2937",
+        "analysis::extraction::tables::tests::native::graph_event_coverage_fields",
+        "analysis::extraction::tables::tests::native::context_notification_fields",
+        "analysis::extraction::tables::tests::schema_contract",
+        "analysis::tests::analysis_store_coverage_receipt",
+        "analysis::graph_rows::tests::atomic::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 6.207,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-data179.json",
+      "record_sha256": "32598601e2509e06adb5d35d6a34124e6db253ccabf53485167451f101ec166e",
+      "log": "/tmp/araphor-oci-execution/migration-graph-data179.log",
+      "log_sha256": "0d7e428a12b087ac515d6efc31a50c74f9bbae33ac28a19e45ad5e37d8f29bf5",
+      "source_manifest_sha256": "6f81ec721783cdceaca5bbc92d46bb5e77042fcaa7853beebcc8430a26f5a3d6"
+    },
+    "migration-graph-native-build179": {
+      "command": [
+        "env",
+        "CARGO_BUILD_JOBS=2",
+        "CARGO_NET_OFFLINE=true",
+        "RUST_TEST_THREADS=2",
+        "CARGO_INCREMENTAL=0",
+        "CARGO_PROFILE_DEV_DEBUG=1",
+        "CARGO_PROFILE_TEST_DEBUG=1",
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-analysis-builtins",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "--all-features",
+        "--lib",
+        "--bin",
+        "araphor",
+        "--no-run"
+      ],
+      "elapsed_seconds": 322.607,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-native-build179.json",
+      "record_sha256": "77dae3015023b85330fc76b9466606d0a36d53cdd5ef76e28d19244623d4599a",
+      "log": "/tmp/araphor-oci-execution/migration-graph-native-build179.log",
+      "log_sha256": "479c1a85b16bdc2e0703932699d553cef15b68610297dddf043a7db630b12748",
+      "source_manifest_sha256": "6f81ec721783cdceaca5bbc92d46bb5e77042fcaa7853beebcc8430a26f5a3d6"
+    },
+    "migration-graph-clippy179": {
+      "command": [
+        "env",
+        "CARGO_BUILD_JOBS=2",
+        "CARGO_NET_OFFLINE=true",
+        "CARGO_INCREMENTAL=0",
+        "CARGO_PROFILE_DEV_DEBUG=1",
+        "CARGO_PROFILE_TEST_DEBUG=1",
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-analysis-builtins",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "elapsed_seconds": 33.458,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-clippy179.json",
+      "record_sha256": "7fffc9de5f5eb73d131eeddfea345a0567d99096a2773dfd51d4ecf9f3fba6ca",
+      "log": "/tmp/araphor-oci-execution/migration-graph-clippy179.log",
+      "log_sha256": "e69e1859fb01fdc850b556a6bd234077c1144d45492a09732a496134b2c49d2e",
+      "source_manifest_sha256": "6f81ec721783cdceaca5bbc92d46bb5e77042fcaa7853beebcc8430a26f5a3d6"
+    },
+    "migration-graph-fmt180": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "elapsed_seconds": 5.763,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "head_after": "0fbc542f2645d724bc850ab539b51872b2568237",
+      "binary_sha256": null,
+      "record": "/tmp/araphor-oci-execution/migration-graph-fmt180.json",
+      "record_sha256": "0784d03a7747cff28751662c3fd4dfa086643b3b29ba6169d007a9533bef80aa",
+      "log": "/tmp/araphor-oci-execution/migration-graph-fmt180.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_manifest_sha256": "66c64c6588ccd78fca04340885a751e27b8dfa64d46eb98d8bc12de948cae23f"
+    }
+  },
+  "passing_test_names": [
+    [
+      "araphor_analysis",
+      "discovery::output::tests::baseline::comparison_matches_corpus"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::baseline::duplicates_keep_context_projection"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::baseline::merge_matches_corpus"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::baseline::recorded_crosses_old_boundary"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::baseline::recorded_matches_corpus"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::forged::comparison_requires_trusted_inputs"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::forged::recorded_rejects_coverage_upgrade"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::forged::recorded_rejects_forged_proof"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::forged::results_reject_foreign_attribution"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::native::context_content_changes_revision"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::native::durable_record_projection"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::native::native_rows_preserve_metadata"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::native::targets::native_atoms_match_wasm"
+    ],
+    [
+      "araphor_analysis",
+      "discovery::output::tests::native::targets::native_snapshots_match_wasm"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::benign_notice_keeps_capture"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::cancel_joins_projection_capacity"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::captures_once_and_refreshes"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::denied_notice_joins"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::duplicate_records_are_rejected"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::empty_window_is_inert"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::extra_origin_changes_metadata"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::fallback_has_no_keys"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::final_cancel_rolls_back"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::frame_copy_is_reserved"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::gates::graph_canonical_fields_rejected"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::gates::graph_complete_port_payloads"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::gates::graph_coverage_258_history"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::gates::graph_duplicate_exports_rejected"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::gates::graph_extra_export_order"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::gates::graph_malformed_report_rejected"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::gates::graph_partial_coverage_reports"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::gates::source::frozen_keys_preserve_source"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::gates::source::retained_floor_is_gapped"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::keeps_frozen_coverage"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::native_graph_source_targets"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::overlap_keeps_selected_facts"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::projected_events_are_valid"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::rejects_changed_coverage_fields"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::rejects_foreign_event_call"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::rejects_missing_frozen_coverage"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::requires_all_detectors"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::requires_all_returns"
+    ],
+    [
+      "araphor_analysis",
+      "graph::native::tests::sql_capture_and_refresh"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::baseline::graph_credential_baseline"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::baseline::graph_kubernetes_baseline"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::baseline::graph_native_baseline"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::binding::expiry_downgrades_all_proofs"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::binding::input_binding_accepts_batches"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::binding::input_binding_preserves_order"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::binding::input_requires_canonical_manifest"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::binding::owned_input_preserves_semantic_binding"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::binding::result_requires_exact_image"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::candidate_evidence_is_exact"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::candidate_reason_is_exact"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::candidate_reason_matches_contract"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::candidate_rejects_authority_upgrade"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::candidate_rejects_missing_coverage"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::candidate_requires_host_validation"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::contract::descriptor_preserves_owners"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::contract::support_requires_exact_ports"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::declared_detector_retains_details"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::defaults::graph_accepts_large_window"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::defaults::graph_accepts_retained_facts"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::defaults::graph_omits_record_ceiling"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::defaults::graph_preserves_boottime_horizon"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::contradictions_require_same_operation"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::credential_versions_preserve_conflict"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::history_preserves_exact_generation"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::kubernetes_preserves_partial_stages"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::missing_lifetime_stays_unknown"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::mmap_cannot_borrow_completion"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::operation_results_stay_separate"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::parent_requires_exact_lifetime"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::physical_results_keep_stages"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::policy_requires_retained_ack"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::replay_is_byte_identical"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::restricted_context_stays_restricted"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::shared_principal_stays_contextual"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::domain::subject_lifetime_is_native"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::execution::baseline::native_credential_baseline"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::execution::baseline::native_kubernetes_baseline"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::execution::baseline::native_process_baseline"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::execution::native_graph_adapter"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::execution::native_graph_pressure"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::execution::sql_graph_adapter"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::execution::sql_graph_pressure"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::execution::wasm_graph_adapter"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::execution::wasm_graph_pressure"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::windows::graph_window_metadata"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::windows::graph_window_replacement"
+    ],
+    [
+      "araphor_analysis",
+      "graph::tests::windows::graph_window_selection"
+    ],
+    [
+      "araphor_analysis",
+      "instance::tests::retained::origins::retained_origins_require_identity"
+    ],
+    [
+      "araphor_analysis",
+      "package::tests::sql::recorded::merge::merge_checks_counter_overflow"
+    ],
+    [
+      "araphor_analysis",
+      "package::tests::sql::recorded::merge::merge_rejects_conflicts"
+    ],
+    [
+      "araphor_analysis",
+      "package::tests::sql::recorded::recorded_rejects_relational_conflicts"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "discovery::tests::checked_input_keeps_json_errors"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "discovery::tests::declaration_clones_keep_ports"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "discovery::tests::native_record_roundtrip"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "discovery::tests::record_pages_keep_proof"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "discovery::tests::sdk_bounded_derivation"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "discovery::tests::sdk_conflicting_record"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "discovery::tests::sdk_derivation_fixture"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "graph::tests::credential_exact_and_missing"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "graph::tests::detector_declarations_stay_independent"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "graph::tests::fact_reference_is_exact"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "graph::tests::kubernetes_retains_missing_proof"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "graph::tests::process_context_classifications"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "graph::tests::process_replay_checkpoint"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "graph::tests::record_index_keeps_fact_ordinals"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "rows::tests::declared_row_limits"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "rows::tests::exact_rows"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "rows::tests::invalid_rows"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "rows::tests::row_byte_limit"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "rows::tests::row_error_precedence"
+    ],
+    [
+      "araphor_analysis_builtins",
+      "rows::tests::rows_fit_payload_bound"
+    ],
+    [
+      "araphor_data",
+      "analysis::extraction::tables::tests::native::context_notification_fields"
+    ],
+    [
+      "araphor_data",
+      "analysis::extraction::tables::tests::native::graph_event_coverage_fields"
+    ],
+    [
+      "araphor_data",
+      "analysis::extraction::tables::tests::schema_contract"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::atomic::absent_context_cut_fenced"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::atomic::graph_context_union_matches"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::atomic::graph_contexts_commit_atomically"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::atomic::unchanged_refresh_keeps_receipt"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::atomic::unchanged_requires_live_witness"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::bounds::final_header_bounds"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::bounds::graph_typed_commit_rejects_metadata"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::defaults::configured_graph_rollback"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::defaults::extracted_provenance_defaults"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::defaults::native_metadata_defaults"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::defaults::native_ordinal_format"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::defaults::native_result_defaults"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::defaults::native_row_defaults"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::defaults::native_traversal_defaults"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::defaults::native_window_overlap"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::defaults::native_witness_defaults"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::encoding::native_header_finding_bound"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::encoding::native_header_integer_format"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::encoding::native_header_metadata_current_format"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::encoding::native_json_encoding_bounds"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::encoding::native_json_encoding_roundtrip"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::encoding::native_json_string_spans"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::guards::generic_graph_requires_guard"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::guards::graph_authority_rolls_back"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::guards::graph_notice_checks_authority"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::guards::graph_retry_checks_authority"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::guards::graph_window_head_is_exact"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::headers::native_header_batch_bounds"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::native_borrowed_columns"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::native_finding_tenant"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::native_retry_rejects_corruption"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::native_row_read_cancel"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::native_rows_integrity"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::native_selected_byte_bounds"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::packages::graph_appender_constraint_rollback"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::packages::graph_typed_commit_matches_bytes"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::schema::native_schema_integrity"
+    ],
+    [
+      "araphor_data",
+      "analysis::graph_rows::tests::schema::native_schema_reopen"
+    ],
+    [
+      "araphor_data",
+      "analysis::tests::analysis_store_coverage_receipt"
+    ],
+    [
+      "araphor_data",
+      "discovery::validation::tests::comparison_keeps_source_proof"
+    ],
+    [
+      "araphor_data",
+      "discovery::validation::tests::merge_groups_preserve_attribution"
+    ],
+    [
+      "araphor_data",
+      "discovery::validation::tests::recorded_rejects_coverage_upgrade"
+    ],
+    [
+      "araphor_data",
+      "discovery::validation::tests::recorded_rejects_host_changes"
+    ],
+    [
+      "araphor_query",
+      "definition::tests::captured::capture_cancel_joins_reader"
+    ],
+    [
+      "araphor_query",
+      "definition::tests::captured::native_writer_cancel_joins"
+    ],
+    [
+      "araphor_query",
+      "definition::tests::execution::contract::inputs::captured_trace_revocation"
+    ],
+    [
+      "araphor_query",
+      "definition::tests::execution::contract::inputs::catalog_input_contract"
+    ],
+    [
+      "araphor_query",
+      "definition::tests::execution::contract::inputs::durable_input_indices"
+    ],
+    [
+      "araphor_query",
+      "definition::tests::execution::contract::inputs::generated_input_scope"
+    ],
+    [
+      "araphor_query",
+      "definition::tests::execution::contract::inputs::input_clocks_share_time"
+    ],
+    [
+      "araphor_query",
+      "definition::tests::execution::contract::inputs::input_receipts_stay_scoped"
+    ],
+    [
+      "araphor_query",
+      "definition::tests::execution::physical_call_cancellation_joins"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::busy_retains_cut_stage"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::capture_preserves_clock_notice"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::clock_demand_survives_busy"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::clocks_select_input_recapture"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::closed_clock_ends_wait"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::commit_quiet_source_change"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::completion_checks_time_generation"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::completion_renews_stage"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::completion_requires_matching_receipt"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::concurrent_commit_rearms_capture"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::drop_retains_input_capacity"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::expired_capture_keeps_unknown"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::fresh_cut_suppresses_unchanged"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::global_notice_invalidates_cut"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::idle_clock_waits_for_data"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::idle_stage_renews_on_event"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::quiet_cancel_expiry_release"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::raw_recapture_renews_lease"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::restart_skips_input_capacity"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::source_deadline_fires_once"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::stable_clock_recaptures_quietly"
+    ],
+    [
+      "araphor_query",
+      "inputs::live::tests::window_expires_without_commit"
+    ],
+    [
+      "araphor_query",
+      "inputs::receipt::supplied::encoding_scratch_respects_pressure"
+    ],
+    [
+      "araphor_query",
+      "inputs::receipt::supplied::supplied_rows_are_exact"
+    ],
+    [
+      "araphor_query",
+      "inputs::receipt::supplied::supplied_scope_is_local"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::catalog_keeps_batch_limit"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::dependent_ports_share_indices"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::disjoint_ports_exclude_gap_witness"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::function_does_not_inherit_table"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::inherited_witness_expiry_wins"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::input_failure_releases_capacity"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::materialized_name_is_not_durable"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::native_clocks_share_time"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::native_function_input"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::port_receipts_stay_scoped"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::ports_keep_cursor_union"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::provided_input_missing_preserves_control"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::pruned_source_keeps_witness_scope"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::quiet_check_skips_runtime"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::raw_witness_limit_precedes_input_return"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::retained_trace_cut_checks_revocation"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::window_keeps_nanosecond_grant"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::windows_keep_port_expiry"
+    ],
+    [
+      "araphor_query",
+      "inputs::tests::zero_inputs_need_no_capacity"
+    ],
+    [
+      "araphor_query",
+      "sources::bounds::cursor_bounds_keep_scope"
+    ],
+    [
+      "araphor_query",
+      "sources::bounds::input_bounds_require_capture"
+    ],
+    [
+      "araphor_query",
+      "sources::bounds::local_source_has_no_bounds"
+    ],
+    [
+      "araphor_query",
+      "sources::bounds::native_bounds_keep_scope"
+    ],
+    [
+      "araphor_query",
+      "sources::bounds::native_fixed_time_bounds"
+    ],
+    [
+      "araphor_query",
+      "sources::bounds::physical_projection_requests"
+    ],
+    [
+      "araphor_query",
+      "sources::journal::tests::retirement_keeps_new_rows"
+    ],
+    [
+      "araphor_query",
+      "sources::rows::package::tests::bound_metadata_is_charged"
+    ],
+    [
+      "araphor_query",
+      "sources::rows::package::tests::port_metadata_is_bounded"
+    ],
+    [
+      "araphor_query",
+      "sources::rows::tests::catalog_content_contract"
+    ],
+    [
+      "araphor_query",
+      "sources::rows::tests::catalog_native_preflight"
+    ],
+    [
+      "araphor_query",
+      "sources::rows::tests::notification::obligation_source_deadline"
+    ],
+    [
+      "araphor_query",
+      "sources::rows::tests::receipt_releases_binary_scratch"
+    ],
+    [
+      "araphor_query",
+      "sources::rows::tests::retirement_map_charges_once"
+    ],
+    [
+      "araphor_query",
+      "sources::rows::tests::witnesses_keep_source_receipt"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::capture_borrows_projected_columns"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::clock_prunes_history"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::cursor_scan_keeps_frames"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::empty_filter_progress"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::exact_ranges_preserve_receipt"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::filter_capture_keeps_cuts"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::native_capture_isolated"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::native_intake_keeps_uint64_range"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::native_ports_share_cut"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::native_source_demands"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::native_stream_keeps_metadata"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::raw_projection_skips_decode"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::scan_bounds_union"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::snapshot_shares_local_capacity"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::source_scope_and_time"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::time_bounds_preserve_precision"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::unbounded_extraction_cancels"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::unused_source_receipts"
+    ],
+    [
+      "araphor_query",
+      "sources::tests::zero_column_counts"
+    ],
+    [
+      "mithril_control",
+      "store::graph::tests::control_graph_control_store_qualifies_immutable_generation_chain"
+    ],
+    [
+      "mithril_control",
+      "store::graph::tests::retained::graph_captures_control_proofs"
+    ],
+    [
+      "mithril_control",
+      "store::graph::tests::retained::retained_credential_selectors"
+    ],
+    [
+      "mithril_control",
+      "store::graph::tests::retained::retained_graph_conflicts"
+    ],
+    [
+      "mithril_control",
+      "store::graph::tests::retained::retained_graph_history"
+    ],
+    [
+      "mithril_control",
+      "store::graph::tests::retained::retained_graph_notice_rollback"
+    ],
+    [
+      "mithril_control",
+      "store::graph::tests::retained::retained_graph_reviews"
+    ]
+  ],
+  "distinct_passed_tests": 255,
+  "qualification_scope": "The passing test names are the union of the named focused records. The final source passed the eight-root build, strict Clippy, formatting, and the affected Data9, Control7, Analysis5 and Query2 checks. Earlier records retain their exact source manifests. This is not a full workspace CI pass.",
+  "failure_corrections": [
+    "Valid empty captured tables were absent from the private source map. Capture now retains their canonical projected schema. The retained-map test checks the added metadata charge and full release.",
+    "The no-op branch omitted last cursor, input positions and retained witness validity. Existing window replacement failed. The three exact guards and the witness-boundary test passed; immutable original retries remain unchanged.",
+    "Control test setup opened a second exclusive store lease and retained large unboxed futures. It now uses the same owner and boxed fixture futures. The actual publication passed with the default test stack.",
+    "Credential selectors now come from the exact retained typed artifact: CLASS selectors and only their linked PATH selectors. Tests keep raw-prefix, unrelated-path and stale-version rejection.",
+    "The native input test expected pre-execution fixture batch boundaries. It now constructs the exact configured 200-row native batches and retains strict RecordBatch vector equality. A concat-only proposal was rejected and was not applied.",
+    "The final strict Clippy run corrected unreachable usize::MAX guards, needless borrows, tuple type complexity and item placement without adding lint allowances."
+  ],
+  "known_limits": [
+    "The Graph path is finite and nonadvancing. Automatic source membership, frontier advancement, window expiry and recovery are not qualified.",
+    "Custom exports that inspect the former source-hash Evaluation ID or maximum-record ingestion time are not qualified for identical legacy output. No extra clock or Evaluation owner was added.",
+    "A fresh semantic no-op returns the original head receipt. It does not store a second offered result ID. Exact immutable retry applies to the original Data request.",
+    "Discovery replay, installed intervals and live producers remain in Back until their own replacement checks pass.",
+    "No polling, automatic tenant consumer, or new memory quota was added. Image installation and definition admission remain inert."
+  ],
+  "custody": {
+    "original_files": 208,
+    "remaining_files": 100,
+    "unchanged_sha256": {
+      "crates/araphor-analysis_back/Cargo.toml": "10fbe9898caff2c285d731c9f8aec11e53e15069cc1a25d94cd4bfadd9333d5e",
+      "crates/araphor-analysis_back/build.rs": "b4af3242681913fa6f548b417c4ad511cfa885ab42f98ef47eb748ebfd6c4052",
+      "crates/araphor-analysis_back/src/discovery/installed.rs": "06a3d98bd5359114ea32a94a7d20d4234909f72ef8a9a1da8e3cc7406bc1dc4f",
+      "crates/araphor-analysis_back/src/discovery/live/tests/events.rs": "a1aa7d17b5f315fa6ac068512bf4f7460d500cd840add34195542c019ef738f8",
+      "crates/araphor-analysis_back/src/discovery/live.rs": "4f267c2c5745d2a13eeec66ad290d8dc47600c3f14e73d24b3349695514660f3",
+      "crates/araphor-analysis_back/src/discovery/mod.rs": "7708b2a6402b7ea221d79cd33f44ffffe26a467eec1754a3d9af4c43bc27eb6d",
+      "crates/araphor-analysis_back/src/discovery/replay.rs": "0105edd2a71be18925168aee890cfe040150d77f155db4ca9bc8f7ed511ac797",
+      "crates/araphor-analysis_back/src/discovery/tests/corpus.rs": "5a0a93727437d199419be68c300171571a82629b4f918094695db1a015dfd1ae",
+      "crates/araphor-analysis_back/src/discovery/tests/crash.rs": "179a7ba924c29a09db9f61d356baaf3f026b1dddba72598255193dd635e5946d",
+      "crates/araphor-analysis_back/src/discovery/tests/notice_storage.rs": "92ccd82e419f39803d2c8c3afdbcf5068711628738cd8aeb548e45c9ee5e2fdc",
+      "crates/araphor-analysis_back/src/discovery/tests.rs": "2219e417108ab618c56612d1b743c394d9ee9716768098968f0c14043d0e26d0",
+      "crates/araphor-analysis_back/src/graph/chunks.rs": "ca2be0fcce880537c78435772c0c22e34bdf1d89dc84333c04756520fe8cdc44",
+      "crates/araphor-analysis_back/src/graph/commit.rs": "2eb3fc651fc48e1797bd9a4334a77a272b3ff4c42e428135eb7ef0ccf0d584da",
+      "crates/araphor-analysis_back/src/graph/derive/adapter/tests/native/large.rs": "5276bf3a42aa63fc2703752a96d34c6733dc4817307ff19778036bb153d5ceb4",
+      "crates/araphor-analysis_back/src/graph/derive/adapter/tests/native.rs": "1e57b6321970f7ebd54381d45a5656ba283a338427a044eecfc34e9832530142",
+      "crates/araphor-analysis_back/src/graph/derive/adapter/tests.rs": "73caf0286129e902b9bde480a8387608c016991d14c6d9b58c665ec052760027",
+      "crates/araphor-analysis_back/src/graph/expiry.rs": "9de5ccb229c17b2bf0cc3df27fd5d3c8bda4ef452ffed9b4ac86eeb6ee91452d",
+      "crates/araphor-analysis_back/src/graph/input.rs": "5eb27e102466c68369c159df6370acde056008b6bfc833678100745a62834f6f",
+      "crates/araphor-analysis_back/src/graph/installed.rs": "f79fb9b420f40c5c52cb9d7c25ad80a2378b4c967d42f73d57fabe13fcae93a8",
+      "crates/araphor-analysis_back/src/graph/live.rs": "07f1882de8b6acf3d2406988031819270a25b20eb7874e5501598fe767bd2f54",
+      "crates/araphor-analysis_back/src/graph/mod.rs": "06098cb3598969445a9c240f443e333a101d52ed226881f97c9d8332f5bb4a9f",
+      "crates/araphor-analysis_back/src/graph/tests/bounded.rs": "73ef12f1c6d114ac9353e5efe5ac3239ce7ffdb477e84eeb3ae445e89ce6caff",
+      "crates/araphor-analysis_back/src/graph/tests/evidence_recovery.rs": "b3c10f06261f83267942d6c8d9c236bd0be8615cee0e71a390d31518e561e3cc",
+      "crates/araphor-analysis_back/src/graph/tests/installed/current/authority.rs": "20ad1f3bb1e159a88372776374644aae875f67e24cc098a0ca81bea7650caf02",
+      "crates/araphor-analysis_back/src/graph/tests/installed/current/descriptors.rs": "da1987b6bd7eefb05674344edc79c46eb5dc0ab9567e7cdc3a199d3737582c0a",
+      "crates/araphor-analysis_back/src/graph/tests/installed/current.rs": "99984204f4891c17d48a662519cbbd7d904a4e142690c0d97bf932a60e0da0e8",
+      "crates/araphor-analysis_back/src/graph/tests/installed.rs": "2acc3f56f68b47d5da82cb685a60bf588e446d821b2a9859dfe96647aebe6517",
+      "crates/araphor-analysis_back/src/graph/tests/native_storage.rs": "f6bfd7c015f7dc81ed6fdbc57410302b6069594effb33207e2d76b99f2073b2d",
+      "crates/araphor-analysis_back/src/graph/tests/notice_storage.rs": "385af44b54fbbb05948472beb1a7680a9607e6c7d16d5361960d647a6e6c903c",
+      "crates/araphor-analysis_back/src/graph/tests/notices/reuse.rs": "0a981562da5e6d5a262b676a3ed6d59fe25ba27e900fe643efd039ad375bcef5",
+      "crates/araphor-analysis_back/src/graph/tests/notices.rs": "4f48e35d91c2073a91f7f7c2ec842ed6de3c7ae9c104597ec15fd034f0d3712a",
+      "crates/araphor-analysis_back/src/graph/tests/paging.rs": "99aabc61d9baffc058e2b03e815af154ef70d9afb32193cf52ea16115c426140",
+      "crates/araphor-analysis_back/src/graph/tests/processing.rs": "7a5a4083f734000ca4f2b2e93128eb7295b53ed07856273fa8e6605608e48964",
+      "crates/araphor-analysis_back/src/graph/tests/source_recovery.rs": "ea740cf6d3882de1eaf9215783ed3418a9c375522e05771f7fa510698bc07a2e",
+      "crates/araphor-analysis_back/src/graph/tests/storage_contract.rs": "faa4b68db29a633815065991e5ed842ee23ded986ebe4b09af443df5158c2660",
+      "crates/araphor-analysis_back/src/graph/tests/storage_recovery.rs": "949354264d63515e55a63aaf2dc37ed9f3bb09835f6df9bb3ca373cf8fc1200a",
+      "crates/araphor-analysis_back/src/graph/tests/traversal/bindings.rs": "7b161c4205e16056f3f075cf5963e1530f6729b51b57e032bc7f1690cd60857e",
+      "crates/araphor-analysis_back/src/graph/tests/traversal/fixtures.rs": "6f83a28706e07691ce474fcd30916fb84ba41e10597ebf54e215d4ca9e2315b5",
+      "crates/araphor-analysis_back/src/graph/tests/traversal/limits.rs": "e0ff399c55c1723384e63840c66bf4365ecf63dbcb2c20d708e315d17bde3388",
+      "crates/araphor-analysis_back/src/graph/tests/traversal/recovery.rs": "a40101930d8173bd8e50326b64f61ce683ad7a587e8e987a42cd46a453a4019a",
+      "crates/araphor-analysis_back/src/graph/tests/traversal.rs": "f9825f0c1b5470f06961bb967ca24a75999bafc0d6cc99cc746bd6c93f05dc1b",
+      "crates/araphor-analysis_back/src/graph/tests/window_expiry.rs": "e6361027fe98f04fcfceab32d4448f29fed2d140dd5163d9ebad240e369e6461",
+      "crates/araphor-analysis_back/src/graph/tests.rs": "aef7e06b10598b0c8a632079bcba19eb72083ec87c9e6217378b0f30d9944355",
+      "crates/araphor-analysis_back/src/graph/window.rs": "2a071d6d78a496512c57a1fdc621d19eb3fe45b947907653dc12d1aae6df7ba7",
+      "crates/araphor-analysis_back/src/lib.rs": "7cf389ee80a1f8045f2e1527605d987acad764eea9aa8aff7ee827af3dec8d32",
+      "crates/araphor-analysis_back/src/notification/delivery.rs": "e4ea5b2db6a44bb2238af62c5c0f3fbce0eb69c28151014b29b1b7296a061374",
+      "crates/araphor-analysis_back/src/notification/mod.rs": "21c1833d428d93bed8d37888b99105a67f4906e0def0b2e44ed81eca91e31193",
+      "crates/araphor-analysis_back/src/notification/routing.rs": "8cae9995f7d64932b803688b3754ed291e53d5e5d97b3bee6ccb994743c4cd3b",
+      "crates/araphor-analysis_back/src/notification/tests/isolation.rs": "a2085ae74f6c152db49a22c5b924a249e3169efaeadf3aebdda3d612ca8c630f",
+      "crates/araphor-analysis_back/src/notification/tests.rs": "59c05c3dacd2829856dbc3f09d5f5aef3e0168a992ed9e8f38f635e28b3f57ee",
+      "crates/araphor-analysis_back/src/package/evaluation/preparation/tests.rs": "1d31b1b65f1dca8796cd2abb9d1504c137b98a6692bbb99be4611b165c718082",
+      "crates/araphor-analysis_back/src/package/evaluation/preparation.rs": "cc56a4a5f19150bdf701205b956e489270ee5dad3293dfa837715a1daf507f58",
+      "crates/araphor-analysis_back/src/package/evaluation.rs": "d98e34288204f63f6790b8ec5a4a8ea68ecc3c00b6928193b8c9aa853179e35f",
+      "crates/araphor-analysis_back/src/package/execution.rs": "fbfad552b6a023444c40bd27430a0959980cf774f6bd4172222b79874944dd2c",
+      "crates/araphor-analysis_back/src/package/fixtures/tests.rs": "4a6f1e3b717cd2150fe4702e5a089152a77136f9b827bec868149348648fcfc3",
+      "crates/araphor-analysis_back/src/package/fixtures.rs": "7de2f60f3ffee3c0c78d4d8dd1b85c44bfdf993406cf7e83ae54f4622c54df25",
+      "crates/araphor-analysis_back/src/package/freshness.rs": "54829d6f387bbaf107b7862ca3ce5ea4dffd12dd16bcd779e056a8bc1a423e0b",
+      "crates/araphor-analysis_back/src/package/inspect.rs": "0e57adaaae3e2a8f1a8db5a98e73b2d5fa9ce6ac1e820818da62cc1d98646ffc",
+      "crates/araphor-analysis_back/src/package/installed/commit/tests/changes.rs": "43939a4fd3d627b543c1557a9284b334860465994740d0e03b11c9c61515c02f",
+      "crates/araphor-analysis_back/src/package/installed/commit/tests.rs": "3d397a54601ce1691acdd997c35c0ba2009dd3603b89313c6d72890ce8d69a3a",
+      "crates/araphor-analysis_back/src/package/installed/commit.rs": "748ef327fce597795b70f41fcc620dc7152410a64e10e09e23b1c6b81e7f2438",
+      "crates/araphor-analysis_back/src/package/installed/history.rs": "f0717d973432cfad491692c963fb5ca106a0bba58d2e1094bbb309a2db02ad9c",
+      "crates/araphor-analysis_back/src/package/installed/read/tests/descriptors.rs": "938f48f4b9bff0cdb07745ef216fb16b9c1e3e0f3727589331eb6f8bf1c09f34",
+      "crates/araphor-analysis_back/src/package/installed/read/tests/prepared.rs": "541646c9b356060f1f8cf49d8e7b9c796f5314bb817794ea789e6ad010aadf9a",
+      "crates/araphor-analysis_back/src/package/installed/read/tests/retained.rs": "4c56e971e5483d73afba0ae050c9d4f9a5a15633afeff93a2ca1432e5069cb3b",
+      "crates/araphor-analysis_back/src/package/installed/read/tests.rs": "e4b3058e05abc54f55aa04ab9941c6ec7d8e6427d682a7d898d83d6074538812",
+      "crates/araphor-analysis_back/src/package/installed/read.rs": "a6896b13fa365d891277315ceefc974696cde48200a57dd3e7680f74ce2670f3",
+      "crates/araphor-analysis_back/src/package/installed/snapshot.rs": "4e4020e87cfb51c62f1e1a69c88d3e616e8753423afe406fe14205ca3e68fb89",
+      "crates/araphor-analysis_back/src/package/installed.rs": "56cebcffd8b5d2acb3e7695d665a298c4125407a71d60c1c839ee7aae9dbec15",
+      "crates/araphor-analysis_back/src/package/lifecycle/activation.rs": "3af882c9ff691add4ba79f3d6d432d345c6f305bcca45cac5730433df3407340",
+      "crates/araphor-analysis_back/src/package/lifecycle/tests/admissions.rs": "1817de94012d79e1f52c06d6795bd8e790bfc73cf69a9c3dce97d6cc9c60f6c8",
+      "crates/araphor-analysis_back/src/package/lifecycle/tests/recovery.rs": "933c3412bea8ddadad5ba4911aba095479ff293b6784b4fdc4de238ad1820d22",
+      "crates/araphor-analysis_back/src/package/lifecycle/tests.rs": "9a5ba344d4cbad9ac7afe85cee772aaa1dc790b3a054a3717387bb86e0f8e28e",
+      "crates/araphor-analysis_back/src/package/lifecycle.rs": "3eead700b99bf7da9f395029d6f6dfdbf89640b455a06053eae935dabaa0a2a7",
+      "crates/araphor-analysis_back/src/package/mod.rs": "a4353b5c4f352d2398badee9df5519034551beb58e4b84fef4ed49dba0fd0f42",
+      "crates/araphor-analysis_back/src/package/owner.rs": "914bf9f8c8dc33c2a76ef1bb63d77404cf90533cf759be7f82db31b64d13c230",
+      "crates/araphor-analysis_back/src/package/removal/tests.rs": "fffb976f5f861370acc066c666ea025ca422c8f76eb4943cbca29f6ac2678dac",
+      "crates/araphor-analysis_back/src/package/removal.rs": "b2ab91dd99eeb16f804a68e1b7f378e96f9945d085520859c15d0ffff371e8e1",
+      "crates/araphor-analysis_back/src/package/required/testing.rs": "81d489bc76fbad37b31c1e4e950222ca430ac8557930ce28d7a181a863731e5d",
+      "crates/araphor-analysis_back/src/package/required.rs": "2467bf9491e1cc79fd2d11d4bc8c3330b6309ee0ef00728307c7a6de2fa4b9fe",
+      "crates/araphor-analysis_back/src/package/supervision/tests.rs": "523971e6bbb7f818d5c07c042d4aa24f6b81c653d993b976dc16075de1cf5030",
+      "crates/araphor-analysis_back/src/package/supervision.rs": "904829268853c3f766887c91cd2f1b2c24a82540c845d93313796791508839db",
+      "crates/araphor-analysis_back/src/package/tests/admission/cycles.rs": "7cb5db8897478d2c8036b9f5aef23466dc20c518db22018765d9a744e16c9b57",
+      "crates/araphor-analysis_back/src/package/tests/admission.rs": "5a9f0e84a5817bfaea8eb1b5c40a13427a230b7747431403960411fe4530a421",
+      "crates/araphor-analysis_back/src/package/tests/fixture.rs": "98f27f1855c514abb24b1e62fe8f756fa3fe1496e993496b08c1baa5f2a0ac07",
+      "crates/araphor-analysis_back/src/package/tests/interruption.rs": "da4e16503d6e3fb7edfab53d8867a6edd383fd8c877a62a91c506ec5e6f0087d",
+      "crates/araphor-analysis_back/src/package/tests/lifecycle.rs": "12163c93e5e6e72584842e740cff6e5829e8f75210e45d8afdb7d0e0fb176092",
+      "crates/araphor-analysis_back/src/package/tests/native/failures.rs": "b40a39c512f5451d8ddce5071936b68769f2b026c8e641803e6b1cc6dcd0f74f",
+      "crates/araphor-analysis_back/src/package/tests/native/interruption.rs": "097dad5819bfb1e442ee3085e7afad76c4b3862f29b4ab703a835b228433b5cd",
+      "crates/araphor-analysis_back/src/package/tests/native/lifecycle.rs": "be680599327fdf9f8d412ad987db6d3c6d2fbe84b114e2caac545966a3e314dd",
+      "crates/araphor-analysis_back/src/package/tests/native/mod.rs": "3fc3fbd95758d9a50e46519187ee63d44a6759b4f44a598d6e6429cc34849173",
+      "crates/araphor-analysis_back/src/package/tests/native/restart.rs": "439c19c05f411b8d412386b06b889692d8f331a52e4635889757db1d4b02623c",
+      "crates/araphor-analysis_back/src/package/tests/relations.rs": "67f2bb2c9f293e7c72f29096e0378e407dedb4e415a686bd4d4e91d5009fb989",
+      "crates/araphor-analysis_back/src/package/tests/wasm/flow.rs": "4b996fb576f982dab9081aebbb76c59da920fd31fc677c151a7ef68a42fded53",
+      "crates/araphor-analysis_back/src/package/tests/wasm/interruption.rs": "c34eb3047d48ed67aa3df64b0c751fb4cb884ca13cf3a22ca48d87d967f06709",
+      "crates/araphor-analysis_back/src/package/tests/wasm/lifecycle.rs": "1f115f7a9a6772a72a6a8d4074ecae38ecb7cd2ef33108b669b6f9f1fda59ccc",
+      "crates/araphor-analysis_back/src/package/tests/wasm/metadata.rs": "fbbcc694437c00928646d9334f079b8d0ddf5c2197fc28d5ace18fdaa8cece9a",
+      "crates/araphor-analysis_back/src/package/tests/wasm.rs": "856cea86136cb776c60a3de9f0853b5dc186fcfc78b4941a8db6fe83969aaa23",
+      "crates/araphor-analysis_back/src/package/tests.rs": "001e578c222dfc8ab58488b2a38a28715da76eb33b6ad19cb83b627754085547",
+      "crates/araphor-analysis_back/src/testing.rs": "8f237cef1fda8e88709022ca8bdb5a1cf0ffb562c6501de703be6a0547725c6f"
+    },
+    "recovery_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+    "recovery_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+    "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5"
+  },
+  "custody_before": {
+    "record": "/tmp/araphor-back-custody179-before.json",
+    "sha256": "5a00e591800903414ead60bff24f64b4cc1ea8ad886e24c880bc458bb5bc7117"
+  },
+  "custody_after": {
+    "record": "/tmp/araphor-back-custody179-after.json",
+    "sha256": "5d6c2163d4a7e8828992c4ef5b817067ab79748e46f039dbeb9d8744496496b4"
+  },
+  "production_count": {
+    "record": "/tmp/araphor-oci-execution-count180.json",
+    "sha256": "ff399411cbde5060caf87edd7db1a52830d896eed26ac8034bf80ed1c33c750b",
+    "selected_worktree_sha256": "cafd12ef33837793b6b859f532e9d8b2089e250f04d6219ca5bb3318385d48f4",
+    "counter_binary_sha256": "ce08a285665db81fd003ae2dfd22f176b9d0647028cd0a7b26aa0e45dc2f8a9f",
+    "wrapper_sha256": "62a1a2cc8ef114834aafc46a8aa10d555e3f156e05b39595f2cb57376a24a75c",
+    "methodology": [
+      "Compare baseline file content with current file content under crates/ and docs/.",
+      "Include tracked .rs and .md paths and all new Rust files in araphor-data, araphor-query, araphor-analysis, and araphor-analysis-sdk.",
+      "Exclude other untracked source trees.",
+      "Count a line only when line.strip() is nonempty. Report after minus before.",
+      "Read added files with an empty baseline and deleted files with empty current content.",
+      "Disable rename detection. A move between counted paths cancels in the total.",
+      "Count tests paths, tests and *_tests modules, *-e2e crates, and the test-only analysis/crash.rs module as test Rust.",
+      "In other Rust files, use syn Rust syntax spans for cfg(test) items, parameters, fields, expressions, locals and match arms. An attributed parameter never excludes its function body.",
+      "Exclude test-fixtures and test-support gated code as test Rust, including their external helper modules. Other feature-gated code remains production Rust.",
+      "Retain all nonblank code, comment, and documentation lines in the inventory.",
+      "These counts do not prove semantic simplification. Review compressed formatting and retained behavior separately.",
+      "This report selects Rust files only. Documentation, manifests and lockfiles are excluded.",
+      "Explicitly exclude model/schema.rs in both Analysis paths because the whole file has crate-level cfg(test). Count120 misclassified its two attribute/import lines as production. The real model retirement removes306 production lines, not308.",
+      "Include new Rust files under araphor-package, araphor-cli, mithril-control, mithril-e2e, araphor-discovery-effects, araphor-analysis_back and araphor-discovery-definition in addition to the original roots.",
+      "Use production_code for results: syntax token lines excluding blank lines, comments, documentation and test/test-support/test-fixtures code according to the established counter.",
+      "Added/deleted totals sum positive/negative per-file production-code size changes, not textual diff insertions/deletions. File moves cancel in the overall net.",
+      "The source hashes identify the measured snapshot; no repository files are written or staged."
+    ],
+    "comparisons": [
+      {
+        "base": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+        "production_code_added": 20093,
+        "production_code_deleted": 9451,
+        "production_code_net": 10642
+      },
+      {
+        "base": "7b7b407adf347d389984553a4d212bfce37b75b5",
+        "production_code_added": 46965,
+        "production_code_deleted": 30329,
+        "production_code_net": 16636
+      }
+    ],
+    "retired_leaf_production_lines": 512,
+    "bundle_production_net": 2301,
+    "remaining_deletions_for_6000_goal": 22636
+  },
+  "required_final_verification": {
+    "command": [
+      "bash",
+      ".github/scripts/verify-rust-ci.sh"
+    ],
+    "status": "Not done for this source. Run after the last connected edit before final handoff."
+  },
+  "native_artifacts": {
+    "platform": "Linux-6.8.0-142-generic-x86_64-with-glibc2.39",
+    "libc": [
+      "glibc",
+      "2.39"
+    ],
+    "native_target": "x86_64-unknown-linux-gnu",
+    "builder_sha256": "815d62636ec7373955f54476a0a18d48aa4e6dc95221f85f9b031b92b11d167f",
+    "artifacts": {
+      "credentials.so": {
+        "sha256": "81f8bb7dd83049e13d8b046a798c1482795a530d56d4865168fbdb991928c4be",
+        "bytes": 4659888
+      },
+      "detector.so": {
+        "sha256": "914315ef35210eb07c22054c3a29a55e3ef40c810e249715b41faa466e13a13b",
+        "bytes": 4070696
+      },
+      "discovery.so": {
+        "sha256": "ee11f85d1eaeedfd5275312cfca57b98668a414f5048de860e70b424a684aa12",
+        "bytes": 5678536
+      },
+      "kubernetes.so": {
+        "sha256": "7feef107555f6de0996cacb995852282cdbec53e2f32a63679e55605fb5b09ff",
+        "bytes": 4659848
+      },
+      "process.so": {
+        "sha256": "b2cebcba52e4db30216b281815b2684f237906aaa9f82afc6a25b289cd33578a",
+        "bytes": 4659744
+      },
+      "runtime.so": {
+        "sha256": "f4e5028ae104f209592612221c4e2c4b0d31e1641147fe728f9b2050ceb64956",
+        "bytes": 5975832
+      }
+    },
+    "elapsed_seconds": 32.29440934001468,
+    "source_unchanged": true,
+    "record": "/tmp/araphor-graph-native163.json",
+    "record_sha256": "93f12a6f194a25055752685da1215037d4debdc0523fcd34ef1732bf58e6b2a3",
+    "source_inputs": 117,
+    "all_source_inputs_match_qualified_tree": true
+  },
+  "source_reviews": [
+    {
+      "path": "/tmp/araphor-graph-three-leaf-map-20261021-bk3ruix0/REVIEW.md",
+      "sha256": "ab867090ebcd517ecd0c0bef4a544e401a6ccf91429e2365f2087b93c79d99e4",
+      "scope": "Read-only source review. Root qualified the linked tests and corrected the recorded no-op defect."
+    },
+    {
+      "path": "/tmp/araphor-discovery-sdk-qualification-20261021-aicygsfk/REVIEW.md",
+      "sha256": "d4f44c75734d0c731c10caa6e40438cbc2e009b66e4186a30db351de58f5ed08",
+      "scope": "Read-only source review. Root qualified the linked tests and corrected the recorded no-op defect."
+    },
+    {
+      "path": "/tmp/araphor-graph-final-safety-20261021-ci9fxf0e/REVIEW.md",
+      "sha256": "f009cfc97710327c5d53d8ba5398421078d32c0a8f43fce4251bdb4389932109",
+      "scope": "Read-only source review. Root qualified the linked tests and corrected the recorded no-op defect."
+    }
+  ]
+}

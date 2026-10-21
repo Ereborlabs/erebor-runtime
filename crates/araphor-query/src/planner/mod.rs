@@ -89,11 +89,21 @@ impl SourceDemand {
         Ok(())
     }
 
-    fn collect(plan: &LogicalPlan) -> NativeResult<BTreeSet<SourceOrigin>> {
+    fn collect(plan: &LogicalPlan, scoped: bool) -> NativeResult<BTreeSet<SourceOrigin>> {
         let mut origins = BTreeSet::new();
         let mut ports = BTreeSet::new();
         plan.apply_with_subqueries(|plan| {
             if let LogicalPlan::Extension(extension) = plan {
+                if let Some(source) = extension
+                    .node
+                    .as_any()
+                    .downcast_ref::<crate::sources::SourcePort>()
+                {
+                    origins.insert(SourceOrigin::Port(source.slot));
+                    if scoped {
+                        return Ok(TreeNodeRecursion::Jump);
+                    }
+                }
                 if let Some(call) = extension
                     .node
                     .as_any()
@@ -140,8 +150,12 @@ impl RelationPlanner for SourceDemand {
         let plan = context.plan(relation);
         self.active.store(false, Ordering::Relaxed);
         let plan = plan?;
-        let origins = Self::collect(&plan)?;
+        let origins = Self::collect(&plan, true)?;
         self.record(&origins, std::iter::empty())?;
+        self.origins
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source demand lock is poisoned".into()))?
+            .extend(Self::collect(&plan, false)?);
         Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
             plan, None,
         ))))
@@ -154,7 +168,7 @@ impl<'a> Planner<'a> {
     }
 
     pub(crate) fn sources(plan: &LogicalPlan) -> Result<BTreeSet<SourceOrigin>> {
-        SourceDemand::collect(plan).context(crate::SqlSnafu)
+        SourceDemand::collect(plan, true).context(crate::SqlSnafu)
     }
 
     pub async fn build(
@@ -228,7 +242,7 @@ impl<'a> Planner<'a> {
             std::mem::take(&mut *demand.origins.lock().map_err(|_| crate::Error::Sql {
                 source: DataFusionError::Internal("source demand lock is poisoned".into()),
             })?);
-        origins.extend(Self::sources(&plan)?);
+        origins.extend(SourceDemand::collect(&plan, false).context(crate::SqlSnafu)?);
         Ok((plan, origins))
     }
 

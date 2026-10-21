@@ -1016,3 +1016,55 @@ fn exact_ranges_preserve_receipt() -> TestResult {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn capture_borrows_projected_columns() -> TestResult {
+    use super::ReadMode;
+    use datafusion::physical_plan::collect;
+    let fixture = Fixture::new()?;
+    fixture.commit(&fixture.source, 1, 10_001)?;
+    let mut state = fixture.engine.catalog(SourceSnapshot::providers())?;
+    let columns = "tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,cpu_id,source_cursor,framed_record,commit_revision,ordinal";
+    let (plan, mut requests) = fixture
+        .engine
+        .prepare(&format!("SELECT {columns} FROM events"), vec![])
+        .await?;
+    let physical = state.create_physical_plan(&plan).await?;
+    let received = SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical), None)?;
+    assert_eq!(
+        requests["events"].as_ref().ok_or("event columns")?.len(),
+        11
+    );
+    assert_ne!(requests["events"], Some((0..11).collect()));
+    let source = SourceSnapshot::new(
+        Arc::clone(&fixture.store),
+        fixture.selection(),
+        None,
+        Default::default(),
+        fixture.control()?,
+        Some(Duration::from_secs(5)),
+        20_000,
+        Arc::clone(fixture.engine.memory()),
+        None,
+    );
+    let receipt = source.capture(&requests, received, ReadMode::Snapshot)?;
+    source.with_table("events", |schema, batches| {
+        assert_eq!(schema.fields().len(), 11);
+        assert_eq!(
+            schema
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<BTreeSet<_>>(),
+            columns.split(',').collect()
+        );
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        Ok(())
+    })?;
+    state.config_mut().set_extension(source);
+    let batches = collect(physical, state.task_ctx()).await?;
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    assert!(batches.iter().all(|batch| batch.num_columns() == 11));
+    assert_eq!(receipt.witnesses.len(), 1);
+    Ok(())
+}

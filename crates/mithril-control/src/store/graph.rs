@@ -6,8 +6,12 @@ use araphor_data::{
 
 use super::*;
 
-impl ControlStore {
-    pub fn graph_context(
+mod retained;
+pub(super) use retained::GraphCandidate;
+use retained::GraphContext;
+
+impl GraphContext {
+    pub fn facts(
         &self,
         record: &araphor_data::DiscoveryRecordV1,
     ) -> Result<Vec<AnalysisContextVersionV1>> {
@@ -61,42 +65,25 @@ impl ControlStore {
             .ok()
             .map(uuid::Uuid::from_bytes)
             .map(|id| id.to_string());
-        let inner = self.evidence_lock()?;
         let mut facts = Vec::new();
-        for ((key, version), result) in &inner.state.policy_acknowledgement_results {
+        for ((key, version), ack) in &self.acknowledgements {
             if key.node_id != stream.node_id {
                 continue;
             }
-            let ack = &result.acknowledgement;
-            let Some(bundle) = inner.state.bundles.get(&key.candidate_content_id) else {
+            let Some(material) = self.candidates.get(&key.candidate_content_id) else {
                 continue;
             };
-            let candidate = &bundle.candidate;
-            let Some(source) = inner
-                .state
-                .source_revisions
-                .get(&candidate.policy_source_revision_id)
-            else {
-                continue;
-            };
-            let Some(artifact) = inner
-                .state
-                .compiled_artifacts
-                .get(&candidate.policy_source_revision_id)
-            else {
-                continue;
-            };
-            if source.tenant_id != tenant
+            let candidate = &material.candidate;
+            if material.source_tenant != tenant
                 || candidate.tenant_id != tenant
-                || artifact.header.profile_id != catalog.profile_id
-                || artifact.header.profile_version != catalog.profile_version
-                || artifact.header.policy_document_digest != catalog.policy_document_digest
+                || material.profile_id != catalog.profile_id
+                || material.profile_version != catalog.profile_version
+                || material.policy_digest != catalog.policy_document_digest
             {
                 continue;
             }
-            let Some(cell) = artifact
-                .compiled_profile
-                .compiled_cells
+            let Some(cell) = material
+                .cells
                 .iter()
                 .find(|cell| cell.key == catalog.static_key)
             else {
@@ -122,10 +109,8 @@ impl ControlStore {
                             && authority.as_ref().is_none_or(|authority| {
                                 authority == &catalog.static_key.protected_scope_id
                             })
-                            && artifact
-                                .policy_document
-                                .protected_universe
-                                .execution_set_ids
+                            && material
+                                .execution_sets
                                 .contains(&catalog.static_key.execution_set_id)
                     })
                 })
@@ -237,37 +222,30 @@ impl ControlStore {
                 continue;
             }
             if ack.profile_generation_ref_id.is_none()
-                && inner.state.policy_acknowledgement_results.iter().any(
-                    |((other_key, _), other)| {
-                        other_key == key
-                            && other.acknowledgement.profile_generation_ref_id.is_some()
-                            && other.acknowledgement.profile_generation_ref_id
-                                == wire.profile_generation_ref_id
-                    },
-                )
+                && self.acknowledgements.iter().any(|((other_key, _), other)| {
+                    other_key == key
+                        && other.profile_generation_ref_id.is_some()
+                        && other.profile_generation_ref_id == wire.profile_generation_ref_id
+                })
             {
                 continue;
             }
             if state == PolicyProvenanceStateV1::Missing
-                && inner.state.policy_acknowledgement_results.iter().any(
-                    |((other_key, _), other)| {
-                        let other = &other.acknowledgement;
-                        other_key == key
-                            && other.state == PolicyActivationStateV1::Active
-                            && other.profile_generation_ref_id.is_some()
-                            && other.profile_generation_ref_id == wire.profile_generation_ref_id
-                            && other.tenant_id == tenant
-                            && other.node_id == stream.node_id
-                            && other.node_boot_id.as_slice() == stream.node_boot_id
-                            && other.label_epoch == stream.label_epoch
-                            && other.policy_source_revision_id
-                                == candidate.policy_source_revision_id
-                            && other.target_snapshot_digest == candidate.target_snapshot_digest
-                            && other.node_bound_generation_digest.is_some()
-                            && other.readback_digest.is_some()
-                            && other.probe_result_digest.is_some()
-                    },
-                )
+                && self.acknowledgements.iter().any(|((other_key, _), other)| {
+                    other_key == key
+                        && other.state == PolicyActivationStateV1::Active
+                        && other.profile_generation_ref_id.is_some()
+                        && other.profile_generation_ref_id == wire.profile_generation_ref_id
+                        && other.tenant_id == tenant
+                        && other.node_id == stream.node_id
+                        && other.node_boot_id.as_slice() == stream.node_boot_id
+                        && other.label_epoch == stream.label_epoch
+                        && other.policy_source_revision_id == candidate.policy_source_revision_id
+                        && other.target_snapshot_digest == candidate.target_snapshot_digest
+                        && other.node_bound_generation_digest.is_some()
+                        && other.readback_digest.is_some()
+                        && other.probe_result_digest.is_some()
+                })
             {
                 continue;
             }
@@ -297,17 +275,9 @@ impl ControlStore {
                     reviewed_policy_revision: candidate.policy_source_revision_id.clone(),
                 },
             )?);
-            if artifact
-                .policy_document
-                .classifier_bindings
-                .iter()
-                .any(|classifier| {
-                    classifier.object_class_id == catalog.static_key.object_selector
-                        && matches!(
-                            classifier.selector,
-                            crate::ObjectClassifierSelectorV1::ProjectedServiceAccountToken { .. }
-                        )
-                })
+            if material
+                .credential_objects
+                .contains(&catalog.static_key.object_selector)
             {
                 if let Ok(object_id) = <[u8; 16]>::try_from(wire.exact_object_id.as_ref()) {
                     facts.push(graph_fact(
@@ -365,8 +335,51 @@ fn graph_fact(
     })
 }
 
+impl araphor_analysis::GraphFacts for super::context::ControlContextOwner {
+    fn facts(
+        &self,
+        contexts: &[arrow_array::RecordBatch],
+        records: &[araphor_data::DiscoveryRecordV1],
+    ) -> araphor_data::Result<(
+        Vec<AnalysisContextVersionV1>,
+        Vec<araphor_data::AnalysisContextRefV1>,
+    )> {
+        let (context, mut proofs) = GraphContext::capture(contexts, records)?;
+        let mut facts = Vec::new();
+        for record in records {
+            facts.extend(context.facts(record).map_err(|source| {
+                araphor_data::Error::GraphContext {
+                    source: Box::new(source),
+                    location: snafu::location!(),
+                }
+            })?);
+        }
+        let consulted = facts
+            .iter()
+            .filter(|fact| fact.key.owner_id == "mithril-control/policy-ack")
+            .flat_map(|fact| {
+                let original = |owner: &str, revision| AnalysisContextKeyV1 {
+                    tenant_id: fact.key.tenant_id,
+                    owner_id: owner.into(),
+                    entity_key: fact.key.entity_key.clone(),
+                    lifetime_key: records[0].id.stream.node_id.as_bytes().to_vec(),
+                    owner_revision: revision,
+                };
+                [
+                    original("mithril-control/policy-candidate", 1),
+                    original("mithril-control/activation-ack", fact.key.owner_revision),
+                ]
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        proofs.retain(|proof| consulted.contains(&proof.key));
+        Ok((facts, proofs))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    mod retained;
+
     use super::super::tests::{
         kubernetes_target, rollout_transaction, signed_artifact, source_revision,
     };
@@ -386,7 +399,61 @@ mod tests {
         ),
         Box<dyn std::error::Error>,
     > {
-        let store = ControlStore::open(path)?;
+        fixture_version(path, 1)
+    }
+
+    fn fixture_version(
+        path: &std::path::Path,
+        version: u64,
+    ) -> std::result::Result<
+        (
+            ControlStore,
+            araphor_data::DiscoveryRecordV1,
+            PolicyBundleV1,
+            PolicyRolloutStateV1,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        populate_version(ControlStore::open(path)?, version)
+    }
+
+    fn populate_version(
+        store: ControlStore,
+        version: u64,
+    ) -> std::result::Result<
+        (
+            ControlStore,
+            araphor_data::DiscoveryRecordV1,
+            PolicyBundleV1,
+            PolicyRolloutStateV1,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        let mut document = PolicyDocumentV1::parse(
+            std::path::Path::new("policy-v1.yaml"),
+            include_bytes!("../../tests/fixtures/policy-v1.yaml"),
+        )?;
+        document.metadata.profile_version = version;
+        document.rollout.rollout_generation = version;
+        if version > 1 {
+            document.metadata.profile_id = uuid::Uuid::from_u128(u128::from(version)).to_string();
+        }
+        populate_document(store, document)
+    }
+
+    fn populate_document(
+        store: ControlStore,
+        document: PolicyDocumentV1,
+    ) -> std::result::Result<
+        (
+            ControlStore,
+            araphor_data::DiscoveryRecordV1,
+            PolicyBundleV1,
+            PolicyRolloutStateV1,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        let version = document.metadata.profile_version;
         store.register_node_physical_session(
             "node-a",
             &[1; 16],
@@ -397,12 +464,18 @@ mod tests {
             true,
             1,
         )?;
-        let document = PolicyDocumentV1::parse(
-            std::path::Path::new("policy-v1.yaml"),
-            include_bytes!("../../tests/fixtures/policy-v1.yaml"),
+        let mut source = source_revision(
+            &document,
+            PolicySourceStateV1::Accepted,
+            version,
+            if version == 1 { '8' } else { '9' },
         )?;
-        let source = source_revision(&document, PolicySourceStateV1::Accepted, 1, '8')?;
-        let artifact = signed_artifact(&document, 1)?;
+        if version > 1 {
+            source.object_uid = uuid::Uuid::from_u128(u128::from(version)).to_string();
+            source.object_name = format!("profile-{version}");
+            source.policy_source_revision_id = format!("{version:064x}");
+        }
+        let artifact = signed_artifact(&document, version)?;
         let static_key = artifact
             .compiled_profile
             .compiled_cells
@@ -436,8 +509,8 @@ mod tests {
             &artifact,
             vec![(target, None)],
             PolicyDeliveryOperationV1::Activate,
-            1,
-            1,
+            version,
+            version,
             &ed25519_dalek::SigningKey::from_bytes(&[7; 32]),
         )?;
         let bundle = rollout.bundles.first().ok_or("bundle")?.clone();
@@ -595,7 +668,11 @@ mod tests {
     fn control_graph_control_store_qualifies_immutable_generation_chain() -> TestResult {
         let directory = tempfile::tempdir()?;
         let (store, record, bundle, mut rollout) = fixture(directory.path())?;
-        assert!(store.graph_context(&record)?.is_empty());
+        let data = Arc::new(araphor_data::AnalysisStore::open(
+            directory.path().join("data"),
+        )?);
+        let mut copy = retained::owner(&store, Arc::clone(&data), record.id.stream.tenant_id)?;
+        assert!(retained::facts(&mut copy, &data, &record)?.is_empty());
         acknowledge(
             &store,
             &bundle,
@@ -612,7 +689,7 @@ mod tests {
             Some(8),
             '1',
         )?;
-        assert!(policies(&store.graph_context(&record)?)?
+        assert!(policies(&retained::facts(&mut copy, &data, &record)?)?
             .iter()
             .all(|policy| policy.state == PolicyProvenanceStateV1::Missing));
         acknowledge(
@@ -623,7 +700,7 @@ mod tests {
             Some(7),
             '1',
         )?;
-        assert!(policies(&store.graph_context(&record)?)?
+        assert!(policies(&retained::facts(&mut copy, &data, &record)?)?
             .iter()
             .all(|policy| policy.state != PolicyProvenanceStateV1::Contradicted));
         acknowledge(
@@ -634,7 +711,7 @@ mod tests {
             Some(8),
             '4',
         )?;
-        let facts = store.graph_context(&record)?;
+        let facts = retained::facts(&mut copy, &data, &record)?;
         let selected = policies(&facts)?;
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].state, PolicyProvenanceStateV1::Exact);
@@ -675,20 +752,24 @@ mod tests {
             Some(8),
             '5',
         )?;
-        let mixed = policies(&store.graph_context(&record)?)?;
+        let mixed = policies(&retained::facts(&mut copy, &data, &record)?)?;
         assert_eq!(mixed.len(), 2);
         assert_ne!(
             mixed[0].node_bound_generation_digest,
             mixed[1].node_bound_generation_digest
         );
         for fact in original {
-            assert!(store.graph_context(&record)?.contains(&fact));
+            assert!(retained::facts(&mut copy, &data, &record)?.contains(&fact));
         }
         let mut foreign = record.clone();
         foreign.id.stream.node_boot_id = [99; 16];
-        assert!(store.graph_context(&foreign).is_err());
+        assert!(retained::facts(&mut copy, &data, &foreign).is_err());
         let directory = tempfile::tempdir()?;
         let (store, record, bundle, mut rollout) = fixture(directory.path())?;
+        let data = Arc::new(araphor_data::AnalysisStore::open(
+            directory.path().join("data"),
+        )?);
+        let mut copy = retained::owner(&store, Arc::clone(&data), record.id.stream.tenant_id)?;
         acknowledge(
             &store,
             &bundle,
@@ -698,7 +779,7 @@ mod tests {
             '1',
         )?;
         assert_eq!(
-            policies(&store.graph_context(&record)?)?
+            policies(&retained::facts(&mut copy, &data, &record)?)?
                 .first()
                 .ok_or("stale")?
                 .state,

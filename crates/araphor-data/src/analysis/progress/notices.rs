@@ -1,3 +1,5 @@
+use duckdb::Connection;
+
 use super::*;
 
 impl AnalysisStore {
@@ -92,7 +94,26 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "begin analysis notice",
             })?;
-        let changed = transaction
+        self.notice_rows(&transaction, scope, result_id, revision, facts, coverage)?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        if graph {
+            self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
+        }
+        check()?;
+        self.commit_metadata(transaction, "commit analysis notice")
+    }
+
+    pub(super) fn notice_rows(
+        &self,
+        writer: &Connection,
+        scope: &ProcessorScopeV1,
+        result_id: &str,
+        revision: u64,
+        facts: u64,
+        coverage: u64,
+    ) -> Result<()> {
+        let graph = scope.processor_id == crate::GRAPH_PROCESSOR;
+        let changed = writer
             .execute(
                 "UPDATE analysis_results AS target SET
                     facts_revision = CASE WHEN ? THEN ? ELSE GREATEST(facts_revision, ?) END,
@@ -126,11 +147,6 @@ impl AnalysisStore {
         if changed != 1 {
             return AnalysisConflictSnafu.fail();
         }
-        #[cfg(any(test, feature = "test-fixtures"))]
-        if graph {
-            self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
-        }
-        check()?;
-        self.commit_metadata(transaction, "commit analysis notice")
+        Ok(())
     }
 }

@@ -133,7 +133,7 @@ impl AnalysisStore {
                 .reject("the dependency selection is invalid or includes unsupported results");
         }
         let mut relations = managed.map_or_else(Vec::new, |_| selection.source_revisions(0));
-        if tables.contains_key("discovery_state") {
+        if tables.contains_key("discovery_state") || tables.contains_key("graph_state") {
             relations.extend(
                 ["processor_progress", "processor_gaps", "analysis_results"]
                     .map(|name| (name.into(), 0)),

@@ -2,7 +2,7 @@ use duckdb::{params, OptionalExt as _};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use super::{AnalysisContextKeyV1, AnalysisStore};
+use super::{AnalysisContextKeyV1, AnalysisReadControl, AnalysisStore};
 use crate::{
     AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStreamIdentityV1,
     EvidenceIntakeIdentityV1, JsonSnafu, Result,
@@ -81,16 +81,26 @@ pub struct AnalysisResultCommitV1 {
 
 impl AnalysisResultCommitV1 {
     pub(super) fn request_meta(&self) -> std::result::Result<Vec<u8>, serde_json::Error> {
+        self.request_meta_refs(self.context_revision, &self.context_refs, &[])
+    }
+
+    fn request_meta_refs(
+        &self,
+        context_revision: u64,
+        references: &[AnalysisContextRefV1],
+        sources: &[(String, u64)],
+    ) -> std::result::Result<Vec<u8>, serde_json::Error> {
         serde_json::to_vec(&(
             &self.scope,
             self.expected_cursor,
             self.consumed_cursor,
             self.coverage_revision,
-            self.context_revision,
+            context_revision,
             &self.result_id,
             self.created_utc_ns,
             &self.witnesses,
-            &self.context_refs,
+            references,
+            sources,
         ))
     }
 
@@ -108,8 +118,10 @@ impl AnalysisResultCommitV1 {
             u64,
             Vec<AnalysisWitnessV1>,
             Vec<AnalysisContextRefV1>,
+            Vec<(String, u64)>,
         );
-        let (_, _, _, _, _, _, _, witnesses, contexts): Metadata = serde_json::from_slice(bytes)?;
+        let (_, _, _, _, _, _, _, witnesses, contexts, _sources): Metadata =
+            serde_json::from_slice(bytes)?;
         Ok((witnesses, contexts))
     }
 }
@@ -556,7 +568,18 @@ impl AnalysisStore {
         if input.scope.processor_id == crate::GRAPH_PROCESSOR {
             return self.reject("the graph result requires a guarded graph commit");
         }
-        self.commit_progress(input, None, true, None, None, false, &mut || Ok(()))
+        self.commit_progress(
+            input,
+            None,
+            true,
+            None,
+            None,
+            &[],
+            &[],
+            &[],
+            false,
+            &mut || Ok(()),
+        )
     }
 
     pub fn commit_graph(
@@ -569,13 +592,20 @@ impl AnalysisStore {
             return self.reject("the graph result owner is invalid");
         }
         let graph = crate::GraphSnapshotV1::try_from(input.body.as_slice())?;
-        self.commit_graph_inner(input, &graph, advance, false, &mut check)
+        self.commit_graph_inner(input, &graph, &[], &[], &[], advance, false, &mut check)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The graph commit includes the exact captured source and context inputs."
+    )]
     pub fn commit_graph_snapshot(
         &self,
         mut input: AnalysisResultCommitV1,
         prepared: super::graph_rows::CanonicalGraph,
+        contexts: &[super::AnalysisContextVersionV1],
+        proofs: &[AnalysisContextRefV1],
+        sources: &[(String, u64)],
         advance: bool,
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
@@ -587,13 +617,22 @@ impl AnalysisStore {
         }
         let (graph, body) = prepared.into_parts();
         input.body = body;
-        self.commit_graph_inner(&input, &graph, advance, true, &mut check)
+        self.commit_graph_inner(
+            &input, &graph, contexts, proofs, sources, advance, true, &mut check,
+        )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The typed graph commit shares one transaction with its exact context inputs."
+    )]
     fn commit_graph_inner(
         &self,
         input: &AnalysisResultCommitV1,
         graph: &crate::GraphSnapshotV1,
+        contexts: &[super::AnalysisContextVersionV1],
+        proofs: &[AnalysisContextRefV1],
+        sources: &[(String, u64)],
         advance: bool,
         canonical: bool,
         check: &mut dyn FnMut() -> Result<()>,
@@ -631,7 +670,18 @@ impl AnalysisStore {
         {
             return self.reject("the graph input manifest, witnesses, or progress differ");
         }
-        self.commit_progress(input, None, advance, None, Some(graph), canonical, check)
+        self.commit_progress(
+            input,
+            None,
+            advance,
+            None,
+            Some(graph),
+            contexts,
+            proofs,
+            sources,
+            canonical,
+            check,
+        )
     }
 
     #[cfg(test)]
@@ -650,6 +700,9 @@ impl AnalysisStore {
             true,
             Some(&profile),
             None,
+            &[],
+            &[],
+            &[],
             false,
             &mut || Ok(()),
         )
@@ -666,9 +719,18 @@ impl AnalysisStore {
         if !profile.sealed {
             return self.reject("the historical profile is not sealed");
         }
-        self.commit_progress(input, None, false, Some(&profile), None, false, &mut || {
-            Ok(())
-        })
+        self.commit_progress(
+            input,
+            None,
+            false,
+            Some(&profile),
+            None,
+            &[],
+            &[],
+            &[],
+            false,
+            &mut || Ok(()),
+        )
     }
 
     #[expect(
@@ -682,6 +744,9 @@ impl AnalysisStore {
         advance: bool,
         profile: Option<&crate::DiscoveryProfileV1>,
         graph: Option<&crate::GraphSnapshotV1>,
+        contexts: &[super::AnalysisContextVersionV1],
+        proofs: &[AnalysisContextRefV1],
+        sources: &[(String, u64)],
         canonical: bool,
         check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
@@ -693,32 +758,6 @@ impl AnalysisStore {
         }) {
             return self.reject("the profile header or references differ from its commit");
         }
-        let header = if let Some(graph) = graph {
-            let package_key =
-                crate::GraphSnapshotV1::package_key(&graph.scope.identity, &input.result_id);
-            if graph.scope != input.scope
-                || graph.input_manifest.context
-                    != input
-                        .context_refs
-                        .iter()
-                        .filter(|reference| reference.key != package_key)
-                        .map(|reference| reference.key.clone())
-                        .collect::<Vec<_>>()
-            {
-                return self.reject("the graph manifest differs from its result commit");
-            }
-            ProfileHeader {
-                stream_key: Some(input.scope.identity.key()),
-                method_version: Some(input.scope.method_version),
-                interval_id: Some(graph.first_cursor.to_string()),
-                profile_revision: None,
-                facts_revision: Some(graph.context_notice_revision),
-                coverage_revision: Some(input.coverage_revision),
-                first_cursor: Some(graph.first_cursor),
-            }
-        } else {
-            profile.map(ProfileHeader::from).unwrap_or_default()
-        };
         if !input.scope.valid()
             || input.result_id.is_empty()
             || input.body.is_empty()
@@ -739,6 +778,49 @@ impl AnalysisStore {
         {
             return self.reject("the analysis result or progress bounds are invalid");
         }
+        if (graph.is_none() && (!contexts.is_empty() || !proofs.is_empty() || !sources.is_empty()))
+            || sources.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+            || sources.iter().any(|(relation, _)| relation.is_empty())
+            || contexts.windows(2).any(|pair| pair[0].key >= pair[1].key)
+            || contexts.iter().any(|context| {
+                !context.valid() || context.key.tenant_id != input.scope.identity.tenant_id
+            })
+            || proofs.windows(2).any(|pair| pair[0].key >= pair[1].key)
+            || proofs.iter().any(|reference| {
+                !reference.key.valid()
+                    || reference.key.tenant_id != input.scope.identity.tenant_id
+                    || reference.commit_revision == 0
+            })
+        {
+            return self.reject("the graph publication contexts are invalid");
+        }
+        let mut expected_keys = std::collections::BTreeSet::new();
+        if let Some(graph) = graph {
+            if graph.scope != input.scope {
+                return self.reject("the graph manifest differs from its result commit");
+            }
+            expected_keys.extend(graph.input_manifest.context.iter());
+            let package_key =
+                crate::GraphSnapshotV1::package_key(&graph.scope.identity, &input.result_id);
+            if let Some(reference) = input
+                .context_refs
+                .iter()
+                .find(|reference| reference.key == package_key)
+            {
+                expected_keys.insert(&reference.key);
+            }
+            for context in contexts {
+                if crate::PackageBundleRef::provenance(context)?.is_some() {
+                    expected_keys.insert(&context.key);
+                } else {
+                    let fact = crate::GraphFactV1::try_from(context)?;
+                    if !expected_keys.contains(&context.key) || !graph.graph.facts.contains(&fact) {
+                        return self.reject("the proposed fact differs from the graph manifest");
+                    }
+                }
+            }
+            expected_keys.extend(proofs.iter().map(|reference| &reference.key));
+        }
         let witness_deadline = input
             .created_utc_ns
             .checked_add(MAX_WITNESS_AGE_NS)
@@ -753,7 +835,6 @@ impl AnalysisStore {
             return self.reject("the result has a foreign or invalid witness");
         }
         let path = self.root.join("analysis.duckdb");
-        let request = input.request_meta().context(JsonSnafu { path: &path })?;
         let graph_header = graph
             .map(|graph| {
                 if canonical {
@@ -791,6 +872,79 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read immutable result",
             })?;
+        if existing.is_none() {
+            let revision = Self::read_meta_from(&transaction, &self.root)?.commit_revision;
+            if sources.iter().any(|(_, captured)| *captured > revision)
+                || !Self::package_sources_current(
+                    &transaction,
+                    sources,
+                    &AnalysisReadControl::default(),
+                )?
+            {
+                return AnalysisConflictSnafu.fail();
+            }
+        }
+        let mut context_write = None;
+        let inserted =
+            self.context_rows(&transaction, contexts, false, None, &mut context_write)?;
+        let mut references = std::borrow::Cow::Borrowed(input.context_refs.as_slice());
+        if !inserted.is_empty() || !proofs.is_empty() {
+            references.to_mut().extend(inserted);
+            references.to_mut().extend_from_slice(proofs);
+            references
+                .to_mut()
+                .sort_by(|left, right| left.key.cmp(&right.key));
+            if references
+                .windows(2)
+                .any(|pair| pair[0].key == pair[1].key && pair[0] != pair[1])
+            {
+                return AnalysisConflictSnafu.fail();
+            }
+            references.to_mut().dedup();
+        }
+        if graph.is_some_and(|_| {
+            !expected_keys
+                .iter()
+                .copied()
+                .eq(references.iter().map(|reference| &reference.key))
+        }) {
+            return self.reject("the graph manifest differs from its result commit");
+        }
+        let context_revision = references
+            .iter()
+            .map(|reference| reference.commit_revision)
+            .max()
+            .unwrap_or(0);
+        if input.context_revision
+            != input
+                .context_refs
+                .iter()
+                .map(|reference| reference.commit_revision)
+                .max()
+                .unwrap_or(0)
+        {
+            return self.reject("the result context revision differs from its captured references");
+        }
+        let header = if let Some(graph) = graph {
+            ProfileHeader {
+                stream_key: Some(input.scope.identity.key()),
+                method_version: Some(input.scope.method_version),
+                interval_id: Some(graph.first_cursor.to_string()),
+                profile_revision: None,
+                facts_revision: Some(graph.context_notice_revision),
+                coverage_revision: Some(input.coverage_revision),
+                first_cursor: Some(graph.first_cursor),
+            }
+        } else {
+            profile.map(ProfileHeader::from).unwrap_or_default()
+        };
+        let request = if contexts.is_empty() && proofs.is_empty() && sources.is_empty() {
+            input.request_meta()
+        } else {
+            input.request_meta_refs(context_revision, &references, sources)
+        }
+        .context(JsonSnafu { path: &path })?;
+
         let replacing = existing.is_some() && previous.is_some();
         if let Some((tenant, stored, retained, revision)) = existing {
             let (Some(tenant), Some(stored), Some(mut retained)) = (tenant, stored, retained)
@@ -901,8 +1055,8 @@ impl AnalysisStore {
         if available != expected {
             return self.reject("the processor result skips unavailable raw input");
         }
-        let mut context_revision = 0;
-        for reference in &input.context_refs {
+        let mut checked_context = 0;
+        for reference in references.as_ref() {
             let Some((_, revision)) =
                 Self::read_context_from(&transaction, &self.root, &reference.key)?
             else {
@@ -911,12 +1065,68 @@ impl AnalysisStore {
             if revision != reference.commit_revision {
                 return self.reject("the result context commit revision differs");
             }
-            context_revision = context_revision.max(revision);
+            checked_context = checked_context.max(revision);
         }
-        if input.context_revision != context_revision {
+        if context_revision != checked_context {
             return self.reject("the result context revision differs from its references");
         }
         let witness_segments = self.resolve_witnesses(&input.witnesses, revision)?;
+        if !advance {
+            if let Some((graph, previous)) = graph.and_then(|graph| {
+                graph
+                    .previous_result_id
+                    .as_deref()
+                    .map(|previous| (graph, previous))
+            }) {
+                let retained = super::graph_rows::GraphRows::read_header(
+                    &transaction,
+                    input.scope.identity.tenant_id,
+                    previous,
+                )?
+                .ok_or_else(|| self.state_error("the expected graph header is absent"))?;
+                let retained =
+                    super::graph_rows::GraphRows::read(&transaction, previous, &retained)?;
+                let (metadata, retained_revision): (Option<Vec<u8>>, u64) = transaction.query_row(
+                    "SELECT CASE WHEN octet_length(request_meta) <= ? THEN request_meta ELSE NULL END,
+                        commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
+                    params![MAX_RESULT_BYTES as u64, input.scope.identity.tenant_id.as_slice(), previous],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).context(AnalysisDatabaseSnafu { operation: "read graph no-op attribution" })?;
+                let metadata = metadata
+                    .ok_or_else(|| self.state_error("the graph attribution exceeds its bound"))?;
+                let (_, retained_refs) = AnalysisResultCommitV1::request_refs(&metadata)
+                    .context(JsonSnafu { path: &path })?;
+                if retained.last_cursor == graph.last_cursor
+                    && retained.input_manifest == graph.input_manifest
+                    && retained.graph == graph.graph
+                    && retained.findings == graph.findings
+                    && retained.packages == graph.packages
+                    && retained.input_positions == graph.input_positions
+                    && retained.witness_deadline_utc_ns > input.created_utc_ns
+                    && retained_refs == references.as_ref()
+                {
+                    if context_write.is_some() {
+                        return self.reject("the unchanged graph added context versions");
+                    }
+                    self.notice_rows(
+                        &transaction,
+                        &input.scope,
+                        previous,
+                        retained_revision,
+                        graph.context_notice_revision,
+                        input.coverage_revision,
+                    )?;
+                    #[cfg(any(test, feature = "test-fixtures"))]
+                    self.run_commit_hook(super::AnalysisCommitStage::BeforeResultCommit)?;
+                    check()?;
+                    self.commit_metadata(transaction, "commit unchanged graph notice")?;
+                    return Ok(AnalysisResultReceiptV1 {
+                        commit_revision: retained_revision,
+                        consumed_cursor: input.consumed_cursor,
+                    });
+                }
+            }
+        }
         let revision = Self::read_meta_from(&transaction, &path)?
             .commit_revision
             .checked_add(1)
@@ -995,7 +1205,7 @@ impl AnalysisStore {
             &input.result_id,
             &input.witnesses,
             &witness_segments,
-            &input.context_refs,
+            &references,
         )?;
         if advance {
             transaction
@@ -1006,7 +1216,7 @@ impl AnalysisStore {
                 params![
                     input.consumed_cursor,
                     input.coverage_revision,
-                    input.context_revision,
+                    context_revision,
                     input.consumed_cursor,
                     input.result_id,
                     input.scope.processor_id,
@@ -1023,13 +1233,16 @@ impl AnalysisStore {
         if graph.is_some() {
             relations.extend(["graph_subjects", "graph_relationships", "graph_findings"]);
         }
+        if context_write.is_some() {
+            relations.push("context_versions");
+        }
         if advance {
             relations.push("processor_progress");
         }
         if !input.witnesses.is_empty() {
             relations.push("evidence_refs");
         }
-        if !input.context_refs.is_empty() {
+        if !references.is_empty() {
             relations.push("context_refs");
         }
         self.check_logical(

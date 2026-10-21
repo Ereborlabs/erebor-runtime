@@ -57,6 +57,21 @@ impl Capture<'_> {
         if !self.scope.permits_graph(graph) {
             return Ok(true);
         }
+        if self.read.requests.contains_key("graph_coverage") {
+            for key in &graph.input_manifest.coverage {
+                if !self
+                    .graph_coverage
+                    .contains(&(key.source.clone(), key.report_revision))
+                {
+                    budget.charge(
+                        size_of::<(crate::EvidenceIntakeIdentityV1, u64)>()
+                            + key.source.node_id.len(),
+                    )?;
+                    self.graph_coverage
+                        .insert((key.source.clone(), key.report_revision));
+                }
+            }
+        }
         for evidence in &graph.input_manifest.evidence {
             budget.grow(&mut self.witnesses)?;
             budget.charge(evidence.stream.node_id.len())?;
@@ -350,6 +365,8 @@ impl Capture<'_> {
         first_cursor => UInt64(false): Some(graph.first_cursor),
         last_cursor => UInt64(false): Some(graph.last_cursor),
         previous_result_id => Utf8(true): graph.previous_result_id.as_deref(),
+        context_notice_revision => UInt64(false): Some(graph.context_notice_revision),
+        witness_deadline_utc_ns => UInt64(false): Some(graph.witness_deadline_utc_ns),
         subject_count => UInt64(false): Some(u64::try_from(subject_count).map_err(|_| overflow())?),
         relationship_count => UInt64(false): Some(u64::try_from(relationship_count).map_err(|_| overflow())?),
         max_hops => UInt32(false): Some(0),

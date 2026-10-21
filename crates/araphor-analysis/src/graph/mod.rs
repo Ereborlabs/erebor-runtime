@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use araphor_analysis_builtins::{graph as algorithm, Rows};
@@ -27,6 +28,8 @@ mod facts;
 mod finding;
 mod finish;
 mod identity;
+mod native;
+pub use native::{GraphFacts, GraphPublication};
 mod output;
 mod policy;
 mod projection;
@@ -37,7 +40,8 @@ mod validation;
 mod tests;
 
 pub struct Graph<'a> {
-    input: &'a GraphReplayInputV1,
+    input: Cow<'a, GraphReplayInputV1>,
+    projection: [Vec<serde_json::Value>; 3],
     revision: GraphRevisionV1,
     subjects: BTreeSet<GraphSubjectKeyV1>,
     edges: BTreeMap<GraphEdgeKeyV1, GraphEdgeV1>,
@@ -45,10 +49,15 @@ pub struct Graph<'a> {
     findings: BTreeMap<String, FindingV1>,
     facts: Vec<GraphFactV1>,
     packages: Vec<(sdk::Package, GraphPackageStateV1)>,
+    _memory: Option<datafusion::execution::memory_pool::MemoryReservation>,
 }
 
 impl<'a> Graph<'a> {
     pub fn new(input: &'a GraphReplayInputV1) -> Result<Self> {
+        Self::from_input(Cow::Borrowed(input))
+    }
+
+    fn from_input(input: Cow<'a, GraphReplayInputV1>) -> Result<Self> {
         input.validate()?;
         let revision = input.manifest();
         revision.validate(input.source.tenant_id)?;
@@ -57,8 +66,9 @@ impl<'a> Graph<'a> {
             .iter()
             .map(GraphFactV1::try_from)
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self {
+        let mut graph = Self {
             input,
+            projection: std::array::from_fn(|_| Vec::new()),
             revision,
             subjects: BTreeSet::new(),
             edges: BTreeMap::new(),
@@ -66,7 +76,10 @@ impl<'a> Graph<'a> {
             findings: BTreeMap::new(),
             facts,
             packages: Vec::new(),
-        })
+            _memory: None,
+        };
+        graph.projection = graph.build_projection()?;
+        Ok(graph)
     }
 
     pub fn supports(model: &sdk::Model) -> bool {
@@ -113,5 +126,13 @@ impl<'a> Graph<'a> {
         self.check_inputs(model, evaluation)?;
         self.apply_output(package, evaluation, result.output())?;
         Ok(self)
+    }
+}
+
+impl TryFrom<GraphReplayInputV1> for Graph<'static> {
+    type Error = araphor_data::Error;
+
+    fn try_from(input: GraphReplayInputV1) -> Result<Self> {
+        Self::from_input(Cow::Owned(input))
     }
 }

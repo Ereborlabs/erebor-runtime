@@ -33,13 +33,72 @@ impl Rows {
         bounds: sdk::Limits,
     ) -> sdk::Result<sdk::Dataset> {
         Self::check_port(port)?;
+        let (bytes, _) = Self::capacity(values, bounds)?;
+        Self::encode_capacity(port, values, bounds, bytes)
+    }
+
+    pub fn capacity<T: Serialize>(
+        values: &[T],
+        bounds: sdk::Limits,
+    ) -> sdk::Result<(usize, usize)> {
         if bounds.max_batches == 0 || values.len() as u64 > bounds.max_rows {
             return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row count"));
         }
-        let mut builder = BinaryBuilder::new();
-        let limit = usize::try_from(bounds.max_bytes)
-            .unwrap_or(usize::MAX)
-            .min(i32::MAX as usize);
+        let mut size = RowSize {
+            bytes: 0,
+            limit: usize::try_from(bounds.max_bytes)
+                .unwrap_or(usize::MAX)
+                .min(i32::MAX as usize),
+        };
+        for value in values {
+            serde_json::to_writer(&mut size, value).map_err(|source| {
+                if source.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge) {
+                    sdk::Error::contract(sdk::ErrorCode::Limit, "row bytes")
+                } else {
+                    sdk::Error::Encoding {
+                        source,
+                        location: snafu::location!(),
+                    }
+                }
+            })?;
+        }
+        let array = Self::array_bytes(values.len(), size.bytes)?;
+        if array as u64 > bounds.max_bytes {
+            return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row bytes"));
+        }
+        let allocation = array
+            .checked_add(8192.min(size.bytes))
+            .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Limit, "row allocation"))?;
+        Ok((size.bytes, allocation))
+    }
+
+    fn array_bytes(rows: usize, bytes: usize) -> sdk::Result<usize> {
+        rows.checked_add(1)
+            .and_then(|rows| rows.checked_mul(std::mem::size_of::<i32>()))
+            .and_then(|offsets| offsets.checked_add(bytes))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<BinaryArray>()))
+            .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Limit, "row allocation"))
+    }
+
+    pub fn encode_capacity<T: Serialize>(
+        port: &sdk::Port,
+        values: &[T],
+        bounds: sdk::Limits,
+        bytes: usize,
+    ) -> sdk::Result<sdk::Dataset> {
+        Self::check_port(port)?;
+        if bounds.max_batches == 0
+            || values.len() as u64 > bounds.max_rows
+            || bytes > i32::MAX as usize
+            || Self::array_bytes(values.len(), bytes)? as u64 > bounds.max_bytes
+        {
+            return Err(sdk::Error::contract(
+                sdk::ErrorCode::Limit,
+                "row allocation",
+            ));
+        }
+        let mut builder = BinaryBuilder::with_capacity(values.len(), bytes);
+        let limit = bytes;
         for value in values {
             let remaining = limit - builder.values_slice().len();
             let result = {
@@ -65,8 +124,7 @@ impl Rows {
             }
             builder.append_value(b"");
         }
-        let mut array = builder.finish();
-        array.shrink_to_fit();
+        let array = builder.finish();
         if array.get_array_memory_size() as u64 > bounds.max_bytes {
             return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row bytes"));
         }
@@ -160,6 +218,26 @@ impl Rows {
         {
             return Err(sdk::Error::contract(sdk::ErrorCode::Invalid, "row port"));
         }
+        Ok(())
+    }
+}
+
+struct RowSize {
+    bytes: usize,
+    limit: usize,
+}
+
+impl Write for RowSize {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self
+            .bytes
+            .checked_add(bytes.len())
+            .filter(|bytes| *bytes <= self.limit)
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::FileTooLarge))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }

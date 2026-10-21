@@ -28,7 +28,7 @@ fn graph_appender_constraint_rollback() -> TestResult {
     assert!(matches!(
         fixture
             .store
-            .commit_graph_snapshot(request, prepared, true, || Ok(())),
+            .commit_graph_snapshot(request, prepared, &[], &[], &[], true, || Ok(())),
         Err(crate::Error::AnalysisDatabase { .. })
     ));
     assert_eq!(fixture.store.meta()?, before);
@@ -97,6 +97,9 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
     let actual = typed.store.commit_graph_snapshot(
         metadata.clone(),
         CanonicalGraph::new(typed.snapshot.clone())?,
+        &[],
+        &[],
+        &[],
         true,
         || Ok(()),
     )?;
@@ -105,6 +108,9 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
         typed.store.commit_graph_snapshot(
             metadata.clone(),
             CanonicalGraph::new(typed.snapshot.clone())?,
+            &[],
+            &[],
+            &[],
             true,
             || Ok(()),
         )?,
@@ -158,9 +164,15 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
     changed.findings[0].limits.push("RETRY_CHANGED".into());
     changed.findings[0].limits.sort();
     assert!(matches!(
-        typed
-            .store
-            .commit_graph_snapshot(metadata, CanonicalGraph::new(changed)?, true, || Ok(())),
+        typed.store.commit_graph_snapshot(
+            metadata,
+            CanonicalGraph::new(changed)?,
+            &[],
+            &[],
+            &[],
+            true,
+            || Ok(())
+        ),
         Err(crate::Error::AnalysisConflict { .. })
     ));
     assert_eq!(typed.store.meta()?.commit_revision, receipt.commit_revision);

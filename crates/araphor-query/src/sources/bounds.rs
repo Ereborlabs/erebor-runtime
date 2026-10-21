@@ -208,3 +208,50 @@ async fn physical_projection_requests() {
         Some(BTreeSet::from([operation, cursor]))
     );
 }
+
+#[tokio::test]
+async fn input_bounds_require_capture() {
+    let fixture = Fixture::new();
+    let source = SourceSnapshot::new(
+        Arc::clone(fixture._engine.store()),
+        AnalysisSelectionV1::tenant([1; 16]),
+        None,
+        Default::default(),
+        Default::default(),
+        None,
+        1,
+        Arc::clone(fixture._engine.memory()),
+        None,
+    );
+    let physical = fixture
+        .plan("SELECT owner_id FROM context_versions", vec![])
+        .await;
+    assert!(source.input_bounds(&physical).is_err());
+    let mut requests = BTreeMap::from([("context_versions".to_owned(), None)]);
+    let bounds =
+        SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical), None).unwrap();
+    let captured = source
+        .capture(&requests, bounds, super::ReadMode::Snapshot)
+        .unwrap();
+    source
+        .with_table("context_versions", |schema, batches| {
+            assert_eq!(schema.fields().len(), 1);
+            assert_eq!(schema.field(0).name(), "owner_id");
+            assert!(batches.is_empty());
+            Ok(())
+        })
+        .unwrap();
+    assert!(source.input_bounds(&physical).is_ok());
+    let events = fixture
+        .plan("SELECT source_cursor FROM events", vec![])
+        .await;
+    let error = source.input_bounds(&events).unwrap_err();
+    assert!(
+        matches!(error, datafusion::common::DataFusionError::Execution(message)
+        if message == "the physical source was not admitted")
+    );
+    assert_eq!(
+        source.snapshot().unwrap().page.extraction.meta,
+        captured.page.extraction.meta
+    );
+}

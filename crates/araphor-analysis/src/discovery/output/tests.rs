@@ -9,7 +9,7 @@ use araphor_data::*;
 use araphor_discovery_definition::{Definition, Program, Source};
 use araphor_package::{PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1};
 use araphor_query::definition::Invocation;
-use araphor_query::execution::Engine;
+use araphor_query::execution::{Engine, Limits};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::logical_expr::LogicalPlan;
 use serde::Serialize;
@@ -20,6 +20,12 @@ mod native;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+#[derive(Clone, Copy)]
+enum Target {
+    Wasm,
+    Native,
+}
+
 struct Fixture {
     query: Arc<Engine>,
     bundle: PackageBundleV1,
@@ -28,7 +34,57 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> TestResult<Self> {
+        Self::target(Target::Wasm, Limits::default())
+    }
+
+    fn target(target: Target, limits: Limits) -> TestResult<Self> {
         let descriptor = builtin::Discovery::package();
+        let exports = descriptor
+            .exports
+            .iter()
+            .map(|model| model.name.clone())
+            .collect::<Vec<_>>();
+        let implementation = match target {
+            Target::Wasm => PackageImplementationV1::Wasm {
+                exports,
+                artifact: araphor_analysis_builtins::components::DISCOVERY.to_vec(),
+            },
+            Target::Native => {
+                let directory = std::env::var_os("ARAPHOR_NATIVE_DIR")
+                    .ok_or("ARAPHOR_NATIVE_DIR is required")?;
+                let artifact = std::fs::read(
+                    std::path::PathBuf::from(directory)
+                        .join(format!("discovery.{}", std::env::consts::DLL_EXTENSION)),
+                )?;
+                let qualification = araphor_package::Qualification::inspect(
+                    &artifact,
+                    exports,
+                    std::env::var("ARAPHOR_NATIVE_TARGET")?,
+                )?;
+                PackageImplementationV1::Native {
+                    export: "atoms".into(),
+                    artifact,
+                    qualification: Some(qualification),
+                }
+            }
+        };
+        assert_eq!(
+            implementation.target(),
+            match target {
+                Target::Wasm => "wasm",
+                Target::Native => "native",
+            }
+        );
+        let identity = implementation.identity()?.ok_or("artifact identity")?;
+        assert!(!identity.digest.is_empty());
+        assert_eq!(
+            identity.closure_digest.is_some(),
+            matches!(target, Target::Native)
+        );
+        assert_eq!(
+            identity.platform.is_some(),
+            matches!(target, Target::Native)
+        );
         let bundle = PackageBundleV1 {
             schema_version: 1,
             root: PackageRefV1 {
@@ -36,27 +92,20 @@ impl Fixture {
                 revision: descriptor.revision.clone(),
             },
             artifacts: vec![PackageArtifactV1 {
-                implementations: vec![PackageImplementationV1::Wasm {
-                    exports: descriptor
-                        .exports
-                        .iter()
-                        .map(|model| model.name.clone())
-                        .collect(),
-                    artifact: araphor_analysis_builtins::components::DISCOVERY.to_vec(),
-                }],
+                implementations: vec![implementation],
                 descriptor,
                 fixtures: Vec::new(),
             }],
         };
-        Self::installed(bundle)
+        Self::installed(bundle, limits)
     }
 
-    fn installed(bundle: PackageBundleV1) -> TestResult<Self> {
+    fn installed(bundle: PackageBundleV1, limits: Limits) -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         store.install_package_image(Self::input()?.tenant_id, &bundle, || Ok(()))?;
         Ok(Self {
-            query: Engine::new(store, Default::default())?,
+            query: Engine::new(store, limits)?,
             bundle,
             _directory: directory,
         })
@@ -92,24 +141,27 @@ impl Fixture {
             "1",
             vec![sdk::Model::new(call.export(), ports.clone(), ports)],
         );
-        Self::installed(PackageBundleV1 {
-            schema_version: 1,
-            root: PackageRefV1 {
-                package_id: descriptor.id.clone(),
-                revision: descriptor.revision.clone(),
-            },
-            artifacts: vec![PackageArtifactV1 {
-                descriptor,
-                implementations: vec![PackageImplementationV1::Sql {
-                    export: call.export().into(),
-                    program: araphor_package::SqlModelV1 {
-                        outputs,
-                        ..Default::default()
-                    },
+        Self::installed(
+            PackageBundleV1 {
+                schema_version: 1,
+                root: PackageRefV1 {
+                    package_id: descriptor.id.clone(),
+                    revision: descriptor.revision.clone(),
+                },
+                artifacts: vec![PackageArtifactV1 {
+                    descriptor,
+                    implementations: vec![PackageImplementationV1::Sql {
+                        export: call.export().into(),
+                        program: araphor_package::SqlModelV1 {
+                            outputs,
+                            ..Default::default()
+                        },
+                    }],
+                    fixtures: Vec::new(),
                 }],
-                fixtures: Vec::new(),
-            }],
-        })
+            },
+            Limits::default(),
+        )
     }
 
     fn input() -> araphor_data::Result<DiscoveryInputManifestV1> {
@@ -203,6 +255,85 @@ impl Fixture {
             .execute_definition(&prepared, Invocation::default())
             .await?;
         let result = output.calls.remove(&call.id()).ok_or("call return")?;
+        assert!(output.calls.is_empty());
+        assert!(result.belongs_to(&call));
+        assert_eq!(call.descriptor(), descriptor);
+        assert_eq!(call.package(), &self.bundle.root);
+        assert_eq!(call.image().image, self.bundle.root);
+        assert_eq!(call.image().digest, self.bundle.digest()?);
+        let implementation = self
+            .bundle
+            .artifact(call.package())?
+            .implementation(export)?;
+        assert!(matches!(implementation.target(), "sql" | "wasm" | "native"));
+        assert_eq!(
+            implementation.identity()?.is_some(),
+            implementation.target() != "sql"
+        );
+        let evaluation = result.evaluation();
+        assert_eq!(evaluation.export, export);
+        assert!(!evaluation.context.id.is_empty());
+        assert_eq!(evaluation.context.time_utc_ns, 0);
+        assert_eq!(evaluation.context.seed, None);
+        assert_eq!(evaluation.context.limits, model.limits);
+        assert!(evaluation.parameters.is_none());
+        assert!(evaluation.checkpoint.is_none());
+        assert_eq!(evaluation.inputs.len(), inputs.len());
+        for expected in &inputs {
+            let actual = evaluation.input(&expected.name)?;
+            let schema = Arc::new(
+                model
+                    .inputs
+                    .iter()
+                    .find(|input| input.port.name == expected.name)
+                    .ok_or("input")?
+                    .port
+                    .schema
+                    .clone(),
+            );
+            let expected = datafusion::arrow::compute::concat_batches(&schema, &expected.batches)?;
+            // Query sets the native batch size to 200 rows.
+            let expected = if expected.num_rows() == 0 {
+                vec![expected]
+            } else {
+                (0..expected.num_rows())
+                    .step_by(200)
+                    .map(|offset| expected.slice(offset, (expected.num_rows() - offset).min(200)))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(actual.data.batches, expected);
+            assert!(!actual.revision.owner.is_empty());
+            assert!(!actual.revision.id.is_empty());
+        }
+        let returned = result.output();
+        descriptor
+            .check_evaluation(evaluation)?
+            .validate_output(returned)?;
+        assert_eq!(returned.datasets.len(), model.outputs.len());
+        assert_eq!(
+            returned
+                .datasets
+                .iter()
+                .map(|data| &data.name)
+                .collect::<std::collections::BTreeSet<_>>(),
+            model
+                .outputs
+                .iter()
+                .map(|port| &port.name)
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        assert!(returned.evidence.is_empty());
+        assert!(returned.reasons.is_empty());
+        assert!(returned.checkpoint.is_none());
+        if implementation.target() != "sql" {
+            let expected = builtin::Discovery::evaluate(evaluation)?;
+            assert_eq!(
+                serde_json::to_value(sdk::wire::Output::encode(
+                    descriptor, evaluation, &expected
+                )?)?,
+                serde_json::to_value(sdk::wire::Output::encode(descriptor, evaluation, returned)?)?
+            );
+        }
         Ok((call, result))
     }
 

@@ -131,7 +131,7 @@ fn graph_accepts_retained_facts() -> TestResult {
         .descriptor()
         .exports
         .remove(0);
-    let values = graph.projection()?;
+    let values = graph.projection();
     assert!(Rows::encode(
         &model.inputs[1].port,
         &values[1],

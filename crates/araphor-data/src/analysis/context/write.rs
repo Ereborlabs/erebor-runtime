@@ -78,49 +78,85 @@ impl AnalysisStore {
                 return self.reject("the context version identity or bounds are invalid");
             }
         }
-        let path = self.root.join("analysis.duckdb");
         let mut writer_guard = self.writer()?;
         let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin context version",
         })?;
-        let mut references = Vec::with_capacity(inputs.len());
-        let mut tenants = std::collections::BTreeSet::new();
-        let check_tenants = self.storage.logical_max_bytes.is_some()
+        let mut revision = None;
+        let references =
+            self.context_rows(&transaction, inputs, intern, expected, &mut revision)?;
+        let Some(revision) = revision else {
+            check()?;
+            return Ok(references);
+        };
+        if self.storage.logical_max_bytes.is_some()
             || self.storage.tenant_max_bytes.is_some()
             || self.storage.retained_revisions.is_some()
-            || self.storage.tenant_revisions.is_some();
-        let mut revision = None;
+            || self.storage.tenant_revisions.is_some()
+        {
+            let tenants = references
+                .iter()
+                .filter(|reference| reference.commit_revision == revision)
+                .map(|reference| reference.key.tenant_id)
+                .collect::<std::collections::BTreeSet<_>>();
+            for tenant in tenants {
+                self.check_logical(&transaction, tenant, false)?;
+            }
+        }
+        Self::record_revision(&transaction, revision, &["context_versions"])?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(super::super::AnalysisCommitStage::BeforeContextCommit)?;
+        #[cfg(test)]
+        self.crash_at("context.before");
+        check()?;
+        self.commit_metadata(transaction, "commit context version")?;
+        #[cfg(test)]
+        self.crash_at("context.after");
+        self.revision.send_replace(revision);
+        Ok(references)
+    }
+
+    pub(in crate::analysis) fn context_rows(
+        &self,
+        writer: &Connection,
+        inputs: &[AnalysisContextVersionV1],
+        intern: bool,
+        expected: Option<u64>,
+        revision: &mut Option<u64>,
+    ) -> Result<Vec<AnalysisContextRefV1>> {
+        let path = self.root.join("analysis.duckdb");
+        let mut references = Vec::with_capacity(inputs.len());
         for input in inputs {
             let key = &input.key;
             let imported = (key.owner_id == "discovery-context-v1")
                 .then(|| crate::DiscoveryContextRevisionV1::try_from(input))
                 .transpose()?;
-            Self::validate_context_packages(&transaction, &self.root, input)?;
-            if let Some(reference) = self.context_retry(&transaction, input, intern)? {
+            Self::validate_context_packages(writer, &self.root, input)?;
+            if let Some(reference) = self.context_retry(writer, input, intern)? {
                 references.push(reference);
                 continue;
             }
             self.storage.check_context(input.body.len() as u64)?;
-            self.context_expected(&transaction, key, expected)?;
+            self.context_expected(writer, key, expected)?;
             if let Some(imported) = imported {
-                self.context_import(&transaction, key, &imported)?;
+                self.context_import(writer, key, &imported)?;
             }
-            let current = match revision {
+            let current = match *revision {
                 Some(revision) => revision,
                 None => {
-                    let current = Self::read_meta_from(&transaction, &path)?
+                    let current = Self::read_meta_from(writer, &path)?
                         .commit_revision
                         .checked_add(1)
                         .ok_or_else(|| {
                             self.state_error("the analysis commit revision is exhausted")
                         })?;
-                    revision = Some(current);
+                    *revision = Some(current);
                     current
                 }
             };
             let sensitivity: &'static str = input.sensitivity.into();
-            transaction
+            writer
                 .execute(
                     "INSERT INTO context_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
@@ -139,31 +175,11 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert context version",
                 })?;
-            if check_tenants {
-                tenants.insert(key.tenant_id);
-            }
             references.push(AnalysisContextRefV1 {
                 key: key.clone(),
                 commit_revision: current,
             });
         }
-        let Some(revision) = revision else {
-            check()?;
-            return Ok(references);
-        };
-        for tenant in tenants {
-            self.check_logical(&transaction, tenant, false)?;
-        }
-        Self::record_revision(&transaction, revision, &["context_versions"])?;
-        #[cfg(any(test, feature = "test-fixtures"))]
-        self.run_commit_hook(super::super::AnalysisCommitStage::BeforeContextCommit)?;
-        #[cfg(test)]
-        self.crash_at("context.before");
-        check()?;
-        self.commit_metadata(transaction, "commit context version")?;
-        #[cfg(test)]
-        self.crash_at("context.after");
-        self.revision.send_replace(revision);
         Ok(references)
     }
 

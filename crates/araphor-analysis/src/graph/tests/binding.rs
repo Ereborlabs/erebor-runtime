@@ -29,7 +29,7 @@ fn input_binding_preserves_order() -> TestResult {
     let package = algorithm::Detector::Credentials.descriptor();
     let model = &package.exports[0];
     let mut evaluation = graph.evaluation_for(model)?;
-    let [mut records, _, _] = graph.projection()?;
+    let [mut records, _, _] = graph.projection().clone();
     records.swap(0, 1);
     evaluation.inputs[0].data = Rows::encode(&model.inputs[0].port, &records, model.limits)?;
     assert!(matches!(
@@ -40,7 +40,7 @@ fn input_binding_preserves_order() -> TestResult {
         })
     ));
     let mut evaluation = graph.evaluation_for(model)?;
-    let [_, mut facts, _] = graph.projection()?;
+    let [_, mut facts, _] = graph.projection().clone();
     let reviewed = facts
         .iter_mut()
         .find(|fact| fact["reviewed"] == serde_json::Value::Bool(true))
@@ -248,5 +248,34 @@ fn expiry_downgrades_all_proofs() -> TestResult {
         .all(|package| { package.state == GraphPackageStateV1::CoverageInsufficient }));
     assert_eq!(expired, Graph::expire(&previous, "graph:previous", 7)?);
     expired.validate()?;
+    Ok(())
+}
+
+#[test]
+fn owned_input_preserves_semantic_binding() -> TestResult {
+    let input = credential_input()?.normalized()?;
+    let graph = Graph::try_from(input)?;
+    let pointers = graph.projection().each_ref().map(|rows| rows.as_ptr());
+    for detector in [
+        algorithm::Detector::Process,
+        algorithm::Detector::Credentials,
+        algorithm::Detector::Kubernetes,
+    ] {
+        let package = detector.descriptor();
+        let model = &package.exports[0];
+        let mut evaluation = graph.evaluation_for(model)?;
+        for input in &mut evaluation.inputs {
+            let batch = input.data.batches.remove(0);
+            input.data.batches = (0..batch.num_rows())
+                .map(|row| batch.slice(row, 1))
+                .collect();
+            input.data.batches.push(batch.slice(0, 0));
+        }
+        graph.check_inputs(model, &evaluation)?;
+        assert_eq!(
+            graph.projection().each_ref().map(|rows| rows.as_ptr()),
+            pointers
+        );
+    }
     Ok(())
 }

@@ -34,7 +34,31 @@ impl Inputs {
             port.origins
                 .iter()
                 .any(|origin| origin.durable() == Some("events"))
+                || Self::event_source(&port.plan)
         })
+    }
+
+    fn event_source(plan: &datafusion::logical_expr::LogicalPlan) -> bool {
+        use datafusion::common::tree_node::TreeNodeRecursion;
+        let mut found = false;
+        let _result = plan.apply_with_subqueries(|plan| {
+            if let datafusion::logical_expr::LogicalPlan::TableScan(scan) = plan {
+                if let Ok(provider) = datafusion::datasource::source_as_provider(&scan.source) {
+                    if let Some(source) = provider
+                        .as_any()
+                        .downcast_ref::<crate::sources::SourceProvider>()
+                    {
+                        found |= source.origin.durable() == Some("events");
+                    }
+                }
+            }
+            Ok(if found {
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        });
+        found
     }
 
     pub(crate) fn check_supplied(&self, supplied: &[sdk::Input]) -> Result<()> {
@@ -137,6 +161,31 @@ impl Inputs {
             }
             .build()
         })?;
+        if let Some(identity) = &port.identity {
+            let input = source
+                .captured_input(identity)
+                .context(SqlSnafu)?
+                .ok_or_else(|| {
+                    araphor_data::PackageErrorCodeV1::Incomplete.error("bound input metadata")
+                })?;
+            let schema = &self.ports[slot].schema;
+            if (matches!(identity, SourceOrigin::Port(_)) && input.data.name != data.name)
+                || data
+                    .batches
+                    .iter()
+                    .any(|batch| batch.schema().as_ref() != schema)
+                || !Self::same_rows(&data.batches, &input.data.batches)
+            {
+                return Err(araphor_data::PackageErrorCodeV1::Invalid
+                    .error("bound input rows")
+                    .into());
+            }
+            return Ok(sdk::Input {
+                data,
+                revision: input.revision.clone(),
+                coverage: input.coverage.clone(),
+            });
+        }
         let snapshot = source.snapshot().context(SqlSnafu)?;
         let mut bound = Vec::new();
         for origin in &port.origins {
@@ -152,28 +201,13 @@ impl Inputs {
             .filter_map(|origin| origin.durable().map(|name| (name.to_owned(), None)))
             .collect();
         let selection = SourceSnapshot::selection(&snapshot.selection, &sources)?;
-        let mut requests = sources.clone();
-        let bounds = SourceSnapshot::requests(&mut requests, std::slice::from_ref(physical), None)
-            .context(SqlSnafu)?;
+        let bounds = source.input_bounds(physical).context(SqlSnafu)?;
         let selection =
             if sources.contains_key("trace_output") || sources.contains_key("trace_measurements") {
                 selection
             } else {
                 SourceSnapshot::prune_selection(selection, &bounds)
             };
-        if let Some(slot) = port.retained {
-            let input = source
-                .captured_input(&SourceOrigin::Package(slot))
-                .context(SqlSnafu)?
-                .ok_or_else(|| {
-                    araphor_data::PackageErrorCodeV1::Incomplete.error("retained input metadata")
-                })?;
-            return Ok(sdk::Input {
-                data,
-                revision: input.revision.clone(),
-                coverage: input.coverage.clone(),
-            });
-        }
         self.input(
             data,
             &snapshot,

@@ -6,6 +6,134 @@ use super::*;
 mod traversal;
 
 impl AnalysisStore {
+    pub(super) fn extract_graph_state(
+        &self,
+        snapshot: &Connection,
+        receipt: &AnalysisSourceReceiptV1,
+        read: &AnalysisTableRead<'_>,
+        output: &mut AnalysisExtractionV1,
+        capture: &mut tables::Capture<'_>,
+        control: &AnalysisReadControl,
+    ) -> Result<()> {
+        if read.projected("graph_state").is_none() {
+            return Ok(());
+        }
+        control.check()?;
+        let source = &receipt.identity;
+        let key = source.key();
+        output.charge(key.capacity())?;
+        let state = snapshot
+            .query_row(
+                "SELECT p.class, p.start_cursor, p.consumed_cursor, p.resume_floor,
+                p.retired, NULLIF(p.result_id, '') FROM source_receipts s
+             LEFT JOIN processor_progress p ON p.tenant_id = s.tenant_id
+                AND p.stream_key = s.stream_key AND p.processor_id = ? AND p.method_version = ?
+             WHERE s.tenant_id = ? AND s.stream_key = ?",
+                params![
+                    crate::GRAPH_PROCESSOR,
+                    u64::from(crate::GRAPH_SCHEMA_VERSION),
+                    source.tenant_id.as_slice(),
+                    key.as_slice()
+                ],
+                |row| {
+                    Ok(tables::GraphState {
+                        class: row.get(0)?,
+                        start: row.get(1)?,
+                        consumed: row.get(2)?,
+                        resumed: row.get(3)?,
+                        retired: row.get(4)?,
+                        result: row.get(5)?,
+                    })
+                },
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read captured graph progress",
+            })?;
+        output.charge(
+            state.class.as_ref().map_or(0, String::capacity)
+                + state.result.as_ref().map_or(0, String::capacity),
+        )?;
+        capture.graph_state(receipt, &state, &mut output.sink(control))?;
+        Ok(())
+    }
+
+    pub(super) fn extract_graph_coverage(
+        &self,
+        snapshot: &Connection,
+        read: &AnalysisTableRead<'_>,
+        output: &mut AnalysisExtractionV1,
+        capture: &mut tables::Capture<'_>,
+        control: &AnalysisReadControl,
+    ) -> Result<()> {
+        if read.projected("graph_coverage").is_none() {
+            return Ok(());
+        }
+        let frozen = std::mem::take(&mut capture.graph_coverage);
+        let sources = std::mem::take(&mut output.sources);
+        for source in &sources {
+            control.check()?;
+            let selected = frozen
+                .iter()
+                .filter(|(identity, _)| *identity == source.receipt.identity)
+                .map(|(_, revision)| *revision)
+                .collect();
+            let reports = self.graph_coverage_from(
+                snapshot,
+                &source.receipt.identity,
+                &selected,
+                |count, bytes| {
+                    output.scan(bytes)?;
+                    output.charge(
+                        bytes
+                            .checked_add(
+                                count.checked_mul(size_of::<(u64, Vec<u8>)>()).ok_or_else(
+                                    || self.state_error("the coverage allocation overflows"),
+                                )?,
+                            )
+                            .ok_or_else(|| self.state_error("the coverage allocation overflows"))?,
+                    )
+                },
+            )?;
+            for (revision, bytes) in reports {
+                control.check()?;
+                let mut receipt = source.receipt.clone();
+                receipt.coverage_revision = revision;
+                let report =
+                    tables::Capture::coverage_report(&bytes, &receipt, &mut output.sink(control))?;
+                capture.coverage(
+                    "graph_coverage",
+                    &receipt,
+                    ("receipt", "reported"),
+                    None,
+                    None,
+                    &mut output.sink(control),
+                )?;
+                for interval in &report.intervals {
+                    capture.coverage(
+                        "graph_coverage",
+                        &receipt,
+                        ("interval", &interval.state),
+                        None,
+                        Some(interval),
+                        &mut output.sink(control),
+                    )?;
+                }
+            }
+            if source.receipt.coverage_revision == 0 {
+                capture.coverage(
+                    "graph_coverage",
+                    &source.receipt,
+                    ("receipt", "unknown"),
+                    None,
+                    None,
+                    &mut output.sink(control),
+                )?;
+            }
+        }
+        output.sources = sources;
+        Ok(())
+    }
+
     pub(super) fn graph_input(
         &self,
         snapshot: &Connection,

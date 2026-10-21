@@ -1,8 +1,36 @@
 use super::*;
-use crate::{AnalysisSourceSnapshotV1, CoverageInterval, CoverageReport};
+use crate::{AnalysisSourceReceiptV1, CoverageInterval, CoverageReport};
 use prost::Message as _;
 
 impl Capture<'_> {
+    pub(in crate::analysis) fn coverage_report(
+        bytes: &[u8],
+        receipt: &crate::AnalysisSourceReceiptV1,
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<CoverageReport> {
+        if bytes.is_empty() || bytes.len() > crate::MAX_EVIDENCE_GRPC_MESSAGE_BYTES {
+            return Err(invalid("the coverage report size is invalid"));
+        }
+        budget.charge(bytes.len().checked_mul(128).ok_or_else(overflow)?)?;
+        let report =
+            CoverageReport::decode(bytes).map_err(|source| crate::Error::EvidenceDecode {
+                source,
+                frame_bytes: bytes.len(),
+                location: snafu::location!(),
+            })?;
+        if report.source_id.as_slice() != receipt.identity.source_id
+            || report.source_epoch != receipt.identity.source_epoch
+            || report.cpu_id != receipt.cpu_id
+            || report.revision != receipt.coverage_revision
+            || report.revision == 0
+        {
+            return Err(invalid(
+                "the coverage report differs from its captured source receipt",
+            ));
+        }
+        Ok(report)
+    }
+
     pub(super) fn metadata(
         &mut self,
         extraction: &mut AnalysisExtractionV1,
@@ -17,6 +45,7 @@ impl Capture<'_> {
             ("correlation_packages", extraction.graph_enabled),
             ("policy_observations", extraction.graph_enabled),
             ("graph_manifest", extraction.graph_enabled),
+            ("graph_state", extraction.graph_enabled),
             ("notifications", extraction.notification_enabled),
         ] {
             if self.read.requests.contains_key(relation) && !available {
@@ -40,27 +69,7 @@ impl Capture<'_> {
             for source in &sources {
                 budget.check()?;
                 let report = if let Some(bytes) = &source.coverage_report {
-                    if bytes.is_empty() || bytes.len() > crate::MAX_EVIDENCE_GRPC_MESSAGE_BYTES {
-                        return Err(invalid("the coverage report size is invalid"));
-                    }
-                    budget.charge(bytes.len().checked_mul(128).ok_or_else(overflow)?)?;
-                    let report = CoverageReport::decode(bytes.as_slice()).map_err(|source| {
-                        crate::Error::EvidenceDecode {
-                            source,
-                            frame_bytes: bytes.len(),
-                            location: snafu::location!(),
-                        }
-                    })?;
-                    if report.source_id.as_slice() != source.receipt.identity.source_id
-                        || report.source_epoch != source.receipt.identity.source_epoch
-                        || report.cpu_id != source.receipt.cpu_id
-                        || report.revision != source.receipt.coverage_revision
-                        || report.revision == 0
-                    {
-                        return Err(invalid(
-                            "the coverage report differs from its captured source receipt",
-                        ));
-                    }
+                    let report = Self::coverage_report(bytes, &source.receipt, &mut budget)?;
                     Some(report)
                 } else {
                     if source.receipt.coverage_revision != 0 {
@@ -69,13 +78,16 @@ impl Capture<'_> {
                     None
                 };
                 self.coverage(
-                    source,
-                    "receipt",
-                    if report.is_some() {
-                        "reported"
-                    } else {
-                        "unknown"
-                    },
+                    "coverage",
+                    &source.receipt,
+                    (
+                        "receipt",
+                        if report.is_some() {
+                            "reported"
+                        } else {
+                            "unknown"
+                        },
+                    ),
                     None,
                     None,
                     &mut budget,
@@ -86,15 +98,22 @@ impl Capture<'_> {
                     ("pending", &source.pending),
                 ] {
                     for gap in gaps {
-                        self.coverage(source, kind, kind, Some(gap), None, &mut budget)?;
+                        self.coverage(
+                            "coverage",
+                            &source.receipt,
+                            (kind, kind),
+                            Some(gap),
+                            None,
+                            &mut budget,
+                        )?;
                     }
                 }
                 if let Some(report) = report {
                     for interval in &report.intervals {
                         self.coverage(
-                            source,
-                            "interval",
-                            &interval.state,
+                            "coverage",
+                            &source.receipt,
+                            ("interval", &interval.state),
                             None,
                             Some(interval),
                             &mut budget,
@@ -171,19 +190,19 @@ impl Capture<'_> {
     }
 
     table_row! {
-        fn coverage(
+        pub(in crate::analysis::extraction) fn coverage(
             &mut self,
-            source: &AnalysisSourceSnapshotV1,
-            row_kind: &str,
-            state: &str,
+            relation: &str,
+            receipt: &AnalysisSourceReceiptV1,
+            classification: (&str, &str),
             gap: Option<&AnalysisGapV1>,
             interval: Option<&CoverageInterval>,
             budget: &mut ReadBudget<'_>,
         );
         schema coverage_fields;
-        row(self, "coverage", budget);
+        row(self, relation, budget);
         setup {
-            let receipt = &source.receipt;
+            let (row_kind, state) = classification;
             let identity = &receipt.identity;
             let opening = interval.and_then(|value| value.opening_counters.as_ref());
             let closing = interval.and_then(|value| value.closing_counters.as_ref());

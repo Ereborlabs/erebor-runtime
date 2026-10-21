@@ -1,5 +1,7 @@
 use super::*;
 
+mod atomic;
+
 mod bounds;
 mod defaults;
 mod encoding;

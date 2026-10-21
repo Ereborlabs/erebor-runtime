@@ -22,7 +22,7 @@ impl Capture<'_> {
                     "tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,cpu_id,source_cursor",
                     "Immutable evidence record. Source cursors, kernel sequences, and store positions are distinct.",
                 ),
-                "coverage" => (
+                "coverage" | "graph_coverage" => (
                     "tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,cpu_id",
                     "Captured source receipt, coverage interval, or retained gap. Silence does not prove complete coverage.",
                 ),
@@ -37,6 +37,10 @@ impl Capture<'_> {
                 "compiled_policies" => (
                     "tenant_id,entity_key,lifetime_key,owner_revision",
                     "Recorded compiled policy proof and its exact retained context revision.",
+                ),
+                "graph_state" => (
+                    "tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,method_version",
+                    "Captured source receipt and required graph processor progress.",
                 ),
                 "discovery_state" => (
                     "tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,method_version",
@@ -127,6 +131,7 @@ impl Capture<'_> {
         };
         insert("events", Self::event_fields());
         insert("coverage", Self::coverage_fields());
+        insert("graph_coverage", Self::coverage_fields());
         insert("context_versions", Self::version_fields());
         insert("context", Self::context_fields());
         insert("catalog", Self::catalog_fields());
@@ -138,6 +143,7 @@ impl Capture<'_> {
         insert("compiled_policies", Self::compiled_fields());
         insert("behaviors", Self::behavior_fields());
         insert("discovery_state", Self::discovery_state_fields());
+        insert("graph_state", Self::graph_state_fields());
         insert("findings", Self::finding_fields());
         insert("relationships", Self::relationship_fields());
         insert("graph_subjects", Self::subject_fields());
