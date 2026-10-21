@@ -1462,4 +1462,5 @@ async fn combined_input_respects_limit() -> TestResult {
 }
 
 mod contract;
+mod descriptors;
 mod reusing;

@@ -1979,3 +1979,20 @@ archive is unchanged. This transfer changes no production code. Totals stay
 +10,346 from the recovery baseline and +16,340 from the original baseline.
 Complete migration, required net reduction, and the final shared Rust procedure
 remain **Not done**.
+
+
+## Native package composition and descriptor test retirement
+
+Status: **Done** for `package/tests/admission/cycles.rs` and
+`package/installed/read/tests/descriptors.rs`. Three current Query tests pass.
+They preserve exact cycle rejection and no partial writes, internal composition,
+the complete shared-artifact descriptor, actual Wasm execution, exact replay
+metadata, and retained Arrow buffer pressure and release. Native SQL executes
+the auxiliary. No production API or activation owner is added. Connected
+compilation, strict Clippy and formatting pass. Read the [qualification record](../../recovery/araphor-package-test-leaf-retirement-20261021.json).
+
+There are now 125 retired files and 83 unchanged reference files. The complete
+archive is unchanged. Production totals stay +10,346 from the recovery baseline
+and +16,340 from the original baseline. The mixed Wasm metadata/lifecycle file
+stays. Complete migration, required net reduction, and the final shared Rust
+procedure remain **Not done**.

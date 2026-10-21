@@ -1707,3 +1707,14 @@ retain all 56 original assertions across nine cases. Their local fixture uses
 current Data commits and native Query reads. Data owns traversal; the fixture
 adds no traversal implementation. The [retirement record](../../recovery/araphor-native-traversal-test-retirement-20261021.json)
 records exact source, commands, custody and the separate remaining Graph work.
+
+
+### Native package descriptor and composition proof
+
+The [cycle tests](../../crates/araphor-query/src/definition/tests/execution/contract/cycles.rs)
+check actual image admission and internal native SQL composition. The
+[descriptor test](../../crates/araphor-query/src/definition/tests/execution/descriptors.rs)
+executes a Wasm root and SQL auxiliary from one immutable image. It checks the
+complete descriptor, retained Arrow buffer bytes, pressure and exact replay.
+The [retirement record](../../recovery/araphor-package-test-leaf-retirement-20261021.json)
+records the two complete replaced leaves and the mixed metadata file that stays.
