@@ -96,7 +96,9 @@ replacement then retires one complete test leaf after all ten old test functions
 have passing native assertions. The native model replacement then retires five more files after all 50 mapped
 cases pass. This removes 306 production lines. The public receipt/output replacement then retires three more files and 90
 production lines. Two checkpoint test leaves then retire after actual Wasm/native retries,
-reopen and overflow checks pass. There are now 97 retired files; 111 remain
+reopen and overflow checks pass. The complete storage-window test file then
+retires after 39 connected cases, formatting and strict Clippy pass. There are
+now 98 retired files; 110 remain
 unchanged. The recovery archive retains all 208 originals.
 The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish

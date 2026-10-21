@@ -1065,6 +1065,24 @@ exceeds 16 MiB; it does not claim an executed fallback beyond 32 MiB. No
 additional Back file retires from this change. The complete quota audit and
 final Rust gate remain open.
 
+## Storage window assertions
+
+[The transferred cases](../../crates/araphor-analysis/src/graph/tests/windows.rs)
+call the existing Data registration, intake, coverage, commit and read owners.
+They retain all three original test bodies and 40 test/helper assertion sites.
+Existing Graph test derivation constructs the expected domain snapshots.
+Header reads skip corrupt unselected payloads; selected corruption and damaged
+headers fail. Wide and short replacements retain immutable historical versions
+and the unchanged processor head.
+
+All 39 connected cases, formatting and strict Clippy pass on the recorded
+source based on 070a88f7. The
+[retirement record](../../recovery/araphor-analysis-window-test-retirement-20261020.json)
+proves the exact original file against Git and both archive layers. Only the
+storage-window test file retires; all 110 remaining Back files are unchanged.
+This changes no production code. Producer, advancement, lifecycle, recovery and
+the final full Rust gate remain open.
+
 ## In-process Wasm ownership
 
 [WasmExecution::compiled](../../crates/araphor-package-runtime/src/wasm/cache.rs)

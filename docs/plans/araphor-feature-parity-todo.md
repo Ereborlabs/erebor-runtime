@@ -59,7 +59,9 @@ Fifteen more retained-query, authority, Wasm, and finite notification test
 leaves are removed after 89 focused checks pass. Two image/fixture leaves then
 retire after exact replacement tests pass. The complete error leaf then
 retires after typed error and joined execution checks pass. There are now
-97 retired files; 111 baseline files remain unchanged. Runtime now owns the
+98 retired files; 110 baseline files remain unchanged. The latest retirement
+transfers the complete storage-window assertions after all 39 connected cases
+pass. Runtime now owns the
 complete limits configuration and both original serialization tests.
 The native operation replacement also retires one complete test leaf after
 all ten old test functions have passing native assertions. This test-only

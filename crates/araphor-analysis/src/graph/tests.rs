@@ -6,6 +6,7 @@ mod contract;
 mod defaults;
 mod domain;
 mod fixture;
+mod windows;
 
 use araphor_data::RemoteSubjectBindingV1;
 

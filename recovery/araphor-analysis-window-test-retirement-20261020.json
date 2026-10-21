@@ -1,0 +1,362 @@
+{
+  "status": "Done for the exact storage window test leaf. Complete producer/migration/final Rust gate Not done.",
+  "recorded_at": "2026-10-21T01:07:14.940971+00:00",
+  "qualified_source_base": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+  "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+  "candidate_files": [
+    {
+      "path": "crates/araphor-analysis_back/src/graph/tests/storage_windows.rs",
+      "sha256": "54b4d2378f3ddb3014bdcc8504946f0de34909d0f4b8ddf0df492a55ca932e27",
+      "baseline_equal": true,
+      "archive_equal": true,
+      "production_lines": 0,
+      "classification": "The whole graph/tests tree inherits the cfg(test) Graph test module."
+    }
+  ],
+  "qualified_owner_sha256": {
+    "Cargo.lock": "3134ce9dc69225f9a76b6dc2fba7e964883d2088a50ed973073e56fbc700bc08",
+    "crates/araphor-analysis/Cargo.toml": "c04c97e241fc51342ad9c05befa0aa1c58aab7782388d1c15dcb53d9331b9155",
+    "crates/araphor-analysis/src/graph/tests.rs": "3ae187a0b2d8782c5bd5fdf726939a0af80f375346e214830cdd0e4d979a92ad",
+    "crates/araphor-analysis/src/graph/tests/windows.rs": "320a873836f78adc124fb4e63826760fe114ebdf1eb080ad5f8773fe7c72dc29"
+  },
+  "qualification": {
+    "migration-window-build138": {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-component-build",
+        "-p",
+        "mithril-control",
+        "-p",
+        "mithril-e2e",
+        "-p",
+        "erebor-runtime-session",
+        "--all-features",
+        "--lib",
+        "--no-run"
+      ],
+      "started_utc": "2026-10-21T00:54:29.439513+00:00",
+      "elapsed_seconds": 420.278,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log": "/tmp/araphor-oci-execution/migration-window-build138.log",
+      "evidence_version": 3,
+      "head_before": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+      "head_after": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+      "wrapper_sha256": "ce32bc7d80ec6f7d385869c2c690f11037f46a1dde3ae1e48674db2a7172ab97",
+      "record_sha256": "08fbbb3842aa6dd7367c31eac3c6aeb107e702a6bf4c867a8bba0e7f2e012e4e",
+      "log_sha256": "e41bd9565ef64346d9c444d57e4527d022e9a3f7515f1b0359da5173af5832f9"
+    },
+    "migration-window-fmt138": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "started_utc": "2026-10-21T00:55:58.755518+00:00",
+      "elapsed_seconds": 5.173,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log": "/tmp/araphor-oci-execution/migration-window-fmt138.log",
+      "evidence_version": 3,
+      "head_before": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+      "head_after": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+      "wrapper_sha256": "ce32bc7d80ec6f7d385869c2c690f11037f46a1dde3ae1e48674db2a7172ab97",
+      "record_sha256": "9fcc61f9b3c8f5b3682f3c5f3b41a3e4113828ae1225dbbf04cf4880d3b077d1",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "migration-window-clippy138": {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-component-build",
+        "-p",
+        "mithril-control",
+        "-p",
+        "mithril-e2e",
+        "-p",
+        "erebor-runtime-session",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "started_utc": "2026-10-21T01:03:15.294062+00:00",
+      "elapsed_seconds": 103.614,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log": "/tmp/araphor-oci-execution/migration-window-clippy138.log",
+      "evidence_version": 3,
+      "head_before": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+      "head_after": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+      "wrapper_sha256": "ce32bc7d80ec6f7d385869c2c690f11037f46a1dde3ae1e48674db2a7172ab97",
+      "record_sha256": "555fbea20b4dcae82f67d3a6758b41d24e550709ed7c149f5f900c650a93d81a",
+      "log_sha256": "a471f9ec195e2f04c5dd1dd6d082052d58e6aaf657f2014b018ed30bf358cb63"
+    },
+    "migration-window-analysis138": {
+      "command": [
+        "target/debug/deps/araphor_analysis-50121ab5f4e5110f",
+        "graph::tests"
+      ],
+      "started_utc": "2026-10-21T01:03:04.306919+00:00",
+      "elapsed_seconds": 4.952,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log": "/tmp/araphor-oci-execution/migration-window-analysis138.log",
+      "evidence_version": 3,
+      "head_before": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+      "head_after": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+      "wrapper_sha256": "ce32bc7d80ec6f7d385869c2c690f11037f46a1dde3ae1e48674db2a7172ab97",
+      "binary_sha256": "8a9af7d4582e6289d5c829d72582793f0c9cf80d75bce07e3e10e0721ecb9cd6",
+      "record_sha256": "4ec2971c253b9c9e14e0e6797c621d5d9daa042b3603dd421c873984f0740930",
+      "log_sha256": "5c9108c472e8b85770e2a75f4ecdf4dc38fe80dae7ccbe5417637207fd58a22d"
+    },
+    "migration-window-data138": {
+      "command": [
+        "target/debug/deps/araphor_data-5e06ca626062ff7a",
+        "analysis::graph_rows::tests::defaults::native_window_overlap",
+        "--exact"
+      ],
+      "started_utc": "2026-10-21T01:03:09.408149+00:00",
+      "elapsed_seconds": 1.556,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log": "/tmp/araphor-oci-execution/migration-window-data138.log",
+      "evidence_version": 3,
+      "head_before": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+      "head_after": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+      "wrapper_sha256": "ce32bc7d80ec6f7d385869c2c690f11037f46a1dde3ae1e48674db2a7172ab97",
+      "binary_sha256": "aff798749bdf4de77ee755e1d9ff582c897af5b5c19e842f7f2b1dac699f8517",
+      "record_sha256": "badfdae2c768d06a8ede0e5ee5f8d9991cfa7d4476e28f3519f0ab0f491d004a",
+      "log_sha256": "a753055705706542e6dc6e8bc17980de99c39972a461d745e0ded5d5ce2ccc5e"
+    }
+  },
+  "assertion_map": {
+    "path": "/tmp/araphor-graph-window-review-20261020-9rjut3rf/assertions.json",
+    "sha256": "34280c925ffb45ca772c925990c883d074f887ea68e85b9b90f1735bcc48d024",
+    "test_assertion_sites": 35,
+    "helper_assertion_sites": 5,
+    "normalized_complete_bodies_equal": true
+  },
+  "assertions": [
+    "Header-only projections and strict ordered after/window pagination, including empty continuation.",
+    "Exact first/second/overlapping snapshots and IDs; foreign tenant empty; zero/reversed ranges reject.",
+    "Wide then short same-first-cursor replacement; complete immutable historical versions; nonadvancing processor head.",
+    "Payload corruption leaves headers readable and non-overlapping payload skipped; selected corrupt payload and corrupt header reject."
+  ],
+  "retired_default_rule": "Only the obsolete256-record range ceiling rejection is removed. Qualified native_window_overlap preserves actual wide/sparse overlap1..1025 with zero/reversed guards retained.",
+  "fixture_note": "Second raw intake timestamp is2 instead of the old1. Original wire observed/ingested time, replay input and graph publication are unchanged; no storage-window assertion depends on that intake timestamp.",
+  "ownership": [
+    "Existing current Graph test derive only constructs expected canonical domain snapshots. No native producer qualification is inferred.",
+    "Supported Data registration/intake/coverage/commit/read APIs perform all actual storage work.",
+    "Existing workspace Prost0.13 is added as an Analysis dev-dependency solely to encode the existing CoverageReport test input. No new package/version or production API is added."
+  ],
+  "distinct_passing_selectors": [
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::baseline::graph_credential_baseline"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::baseline::graph_kubernetes_baseline"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::baseline::graph_native_baseline"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::binding::expiry_downgrades_all_proofs"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::binding::input_binding_accepts_batches"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::binding::input_binding_preserves_order"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::binding::input_requires_canonical_manifest"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::binding::result_requires_exact_image"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::candidate_evidence_is_exact"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::candidate_reason_is_exact"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::candidate_reason_matches_contract"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::candidate_rejects_authority_upgrade"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::candidate_rejects_missing_coverage"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::candidate_requires_host_validation"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::contract::descriptor_preserves_owners"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::contract::support_requires_exact_ports"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::declared_detector_retains_details"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::defaults::graph_accepts_large_window"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::defaults::graph_accepts_retained_facts"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::defaults::graph_omits_record_ceiling"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::defaults::graph_preserves_boottime_horizon"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::contradictions_require_same_operation"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::credential_versions_preserve_conflict"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::history_preserves_exact_generation"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::kubernetes_preserves_partial_stages"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::missing_lifetime_stays_unknown"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::mmap_cannot_borrow_completion"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::operation_results_stay_separate"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::parent_requires_exact_lifetime"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::physical_results_keep_stages"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::policy_requires_retained_ack"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::replay_is_byte_identical"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::restricted_context_stays_restricted"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::shared_principal_stays_contextual"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::domain::subject_lifetime_is_native"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::windows::graph_window_metadata"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::windows::graph_window_replacement"
+    },
+    {
+      "binary": "araphor_analysis",
+      "selector": "graph::tests::windows::graph_window_selection"
+    },
+    {
+      "binary": "araphor_data",
+      "selector": "analysis::graph_rows::tests::defaults::native_window_overlap"
+    }
+  ],
+  "recovery_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+  "recovery_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+  "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5",
+  "remaining_scope": [
+    "graph/derive/adapter,derive,coverage,publication,source advancement,live/recovery and lifecycle files remain.",
+    "Full shared Rust procedure after the final connected source edit remains Not done. No benchmark or push."
+  ],
+  "production_net": 0,
+  "remaining_reference": {
+    "before": 111,
+    "after": 110,
+    "byte_identical_to_baseline": 110,
+    "mismatches": []
+  },
+  "production_ledger": {
+    "head": "070a88f7ed3fad50c1c1c362d4b4cf1ee54202d8",
+    "selected_worktree_sha256": "d260ed09799d959fb6a1db0633efd5c07674b7d3a6dc39d03a9c4d363dd2ff40",
+    "remaining_deletions_for_6000_goal": 19549,
+    "comparisons": [
+      {
+        "base": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+        "production_code_added": 16560,
+        "production_code_deleted": 9005,
+        "production_code_net": 7555
+      },
+      {
+        "base": "7b7b407adf347d389984553a4d212bfce37b75b5",
+        "production_code_added": 43964,
+        "production_code_deleted": 30415,
+        "production_code_net": 13549
+      }
+    ]
+  }
+}

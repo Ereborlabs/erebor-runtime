@@ -146,6 +146,7 @@ dependencies = [
  "erebor-interceptor-abi",
  "erebor-runtime-error",
  "futures-util",
+ "prost",
  "serde",
  "serde_arrow",
  "serde_json",
