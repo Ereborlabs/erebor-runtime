@@ -3,7 +3,7 @@ use snafu::ResultExt as _;
 
 use super::{
     AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
-    AnalysisStoreMetaV1, AnalysisTableRequests, ProcessorScopeV1,
+    AnalysisStoreMetaV1, AnalysisTableRequests, ManagedRead, ProcessorScopeV1,
 };
 use crate::{AnalysisDatabaseSnafu, Result, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION};
 
@@ -96,27 +96,63 @@ impl AnalysisStore {
         tables: &AnalysisTableRequests,
         control: &AnalysisReadControl,
     ) -> Result<(AnalysisStoreMetaV1, u64)> {
+        self.read_dependency_revision(
+            selection,
+            tables,
+            None,
+            AnalysisExtractLimits::default(),
+            control,
+        )
+    }
+
+    pub fn managed_dependency_revision(
+        &self,
+        selection: &AnalysisSelectionV1,
+        tables: &AnalysisTableRequests,
+        managed: &ManagedRead,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<(AnalysisStoreMetaV1, u64)> {
+        if selection.tenant_id != managed.instance.spec.tenant {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("managed capture scope"));
+        }
+        self.read_dependency_revision(selection, tables, Some(managed), limits, control)
+    }
+
+    fn read_dependency_revision(
+        &self,
+        selection: &AnalysisSelectionV1,
+        tables: &AnalysisTableRequests,
+        managed: Option<&ManagedRead>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<(AnalysisStoreMetaV1, u64)> {
         control.check()?;
         if !selection.valid() || !selection.results.is_empty() {
             return self
                 .reject("the dependency selection is invalid or includes unsupported results");
         }
-        let relations: &[&str] = if tables.contains_key("discovery_state") {
-            &["processor_progress", "processor_gaps", "analysis_results"]
-        } else {
-            &[]
-        };
+        let mut relations = managed.map_or_else(Vec::new, |_| selection.source_revisions(0));
+        if tables.contains_key("discovery_state") {
+            relations.extend(
+                ["processor_progress", "processor_gaps", "analysis_results"]
+                    .map(|name| (name.into(), 0)),
+            );
+        }
         let coordinator = self.read_coordinator(control)?;
         let all_traces = selection.traces.is_all();
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
+            if let Some(managed) = managed {
+                Self::check_managed_metadata(snapshot, managed)?;
+            }
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
             let (selection, _) =
                 self.resolve_selection(
                     snapshot,
                     selection,
                     control,
-                AnalysisExtractLimits::default(),
+                limits,
                 )?;
             let selection = selection.as_ref();
             drop(coordinator);
@@ -126,7 +162,7 @@ impl AnalysisStore {
                     "SELECT COALESCE(MAX(last_changed_revision), 0)::UBIGINT
                      FROM relation_revisions WHERE relation_name = ? AND last_changed_revision <= ?",
                 ).context(AnalysisDatabaseSnafu { operation: "prepare relation dependencies" })?;
-                for relation in relations {
+                for (relation, _) in &relations {
                     control.check()?;
                     let changed = statement.query_row(params![relation, meta.commit_revision], |row| row.get::<_, u64>(0))
                         .context(AnalysisDatabaseSnafu { operation: "read relation dependencies" })?;

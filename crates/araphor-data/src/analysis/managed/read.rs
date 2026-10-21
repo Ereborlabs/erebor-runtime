@@ -285,6 +285,26 @@ impl AnalysisStore {
         })
     }
 
+    pub(in crate::analysis) fn check_managed_metadata(
+        reader: &Connection,
+        request: &ManagedRead,
+    ) -> Result<()> {
+        let expected = &request.instance;
+        Self::managed_instance_from(reader, expected.spec.tenant, &expected.spec.id)?
+            .filter(|instance| instance == expected)
+            .ok_or_else(|| Code::Conflict.error("managed capture generation"))?;
+        Self::check_managed_pending(reader, expected.spec.tenant, &expected.spec.id)?;
+        let completed =
+            Self::managed_completed_from(reader, expected.spec.tenant, &expected.spec.id)?;
+        if request
+            .completed
+            .is_some_and(|expected| expected != completed)
+        {
+            return Err(Code::Conflict.error("managed capture completion"));
+        }
+        Ok(())
+    }
+
     pub(super) fn managed_completed_from(
         reader: &Connection,
         tenant: [u8; 16],

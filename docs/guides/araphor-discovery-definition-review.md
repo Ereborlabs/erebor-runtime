@@ -991,6 +991,44 @@ The current source descends from 111c575e. All 113 remaining Back files match
 the baseline. The full Rust gate, larger inspection owner, input runner and
 producer integration remain **Not done**. No benchmark is run.
 
+## Metadata-first resume and checkpoint retries
+
+[SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) A managed instance opens its saved subscription.
+  -> [Progress::new](../../crates/araphor-query/src/stream/progress.rs) opens the existing source watch before the probe.
+  -> [Run::session](../../crates/araphor-query/src/stream/mod.rs) checks full authority and the selected managed head.
+  -> [Run::dependencies](../../crates/araphor-query/src/stream/mod.rs) starts the tracked metadata worker and retains its actual evaluation permit.
+  -> [AnalysisStore::managed_dependency_revision](../../crates/araphor-data/src/analysis/dependencies.rs) checks the exact head, pending work, completion and source notices in one read transaction.
+  -> [SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) checks the saved cursor and deadline, finishes empty calls and releases the idle permit.
+  -> [Progress::next](../../crates/araphor-query/src/stream/progress.rs) waits on the same source or deadline event.
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) uses the existing capture and native physical execution when work is due.
+
+The probe reads no prior IPC or source payload. It adds no bulk input pool
+reservation. This statement does not claim complete temporary heap accounting.
+No global relation change is ignored as an own-commit exception. A dependency
+on analysis_results stays conservatively dirty. Explicit rebuild bypasses both
+idle checks. Cancellation retains worker tokens and permits through actual exit.
+Data registration and commit keep their existing guards.
+
+[The Data cases](../../crates/araphor-data/src/analysis/managed/tests/metadata.rs)
+prove header fences and no prior decode. The
+[Query cases](../../crates/araphor-query/src/definition/tests/captured/managed.rs)
+prove idle pressure, cancellation, notices, deadlines and explicit rebuild.
+The [real Instance restart](../../crates/araphor-analysis/src/instance/tests/restart.rs)
+preserves a committed checkpoint under full input pressure. The
+[checkpoint cases](../../crates/araphor-analysis/src/instance/tests/checkpoint.rs)
+use actual Wasm and source-built native implementations for retry, clean reopen,
+older-output immutability, overflow and slot release. The
+[finite input cases](../../crates/araphor-query/src/definition/tests/execution/contract/inputs.rs)
+preserve the additional native input assertions.
+
+All 84 connected cases, connected compilation, strict Clippy and formatting
+pass on the recorded source based on 3be60374. The
+[retirement record](../../recovery/araphor-analysis-checkpoint-retry-retirement-20261020.json)
+identifies the exact commands, 30 checkpoint assertion groups and two removed
+test files. All 111 remaining reference files and the archive are unchanged.
+Retained dependency expiry, pressure retry, general scalar clock events,
+producer and lifecycle integration, and the final full Rust gate remain open.
+
 ## In-process Wasm ownership
 
 [WasmExecution::compiled](../../crates/araphor-package-runtime/src/wasm/cache.rs)

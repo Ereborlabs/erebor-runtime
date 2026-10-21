@@ -38,7 +38,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 113 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 111 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -55,7 +55,7 @@ Every replacement passes its required checks
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
 | Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public binary transport and CLI presentation now pass focused checks. Full per-window heads and latest selection remain open. | Focused checks pass |
-| Final retirement | The earlier 92 files and three output/receipt files are removed after replacement checks pass. The 113 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Final retirement | The earlier 95 files and two checkpoint test files are removed after replacement checks pass. The 111 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -734,20 +734,77 @@ remains unchanged. The larger inspect.rs and input-runner files stay until
 all their remaining rules pass replacement checks. Complete producers,
 public lifecycle, recovery integration, and the final Rust gate are **Not done**.
 
+### Metadata-first resume and checkpoint retries
+
+Implementation and focused checks are **Done** for this bounded replacement.
+Query probes an unchanged managed resume before native physical preparation.
+Data checks the exact instance, pending work, selected completion, and source
+revisions in one controlled transaction. The probe reads no source payload or
+prior IPC. The same Query Progress receiver and saved deadline remain in use.
+An idle probe finishes empty calls and releases its evaluation permit before
+waiting. An actual worker retains that permit until the worker exits.
+
+A source change or due deadline uses the existing native capture, immutable
+attempt, physical execution and Data sink. Capture, registration and commit
+keep their existing guards. An explicit rebuild bypasses both idle shortcuts.
+The public ManagedPublication test executes again at the unchanged cursor.
+No self-commit exception, polling loop, extra clock or second state owner is
+added. Global relation notices can still force conservative capture for an
+unrelated source. Exact suppression for that case remains **Not done**.
+
+Six finite native tests now cover durable indices, foreign-tenant exclusion,
+scoped revisions, captured time, catalog schema and bounds, buffer ownership,
+generated input, and retained trace revocation. The real Instance test commits
+checkpoint 1, joins, and resumes with every free input byte occupied. The
+instance stays idle with its evaluation slot available and its exact receipt
+and checkpoint unchanged. A later context event produces checkpoint 2 from
+the same constant model input. Changed input still invalidates prior state.
+
+Actual Wasm and source-built native tests retain the 3, 6, 9 checkpoint
+sequence, completed retry before and after store reopen, exact artifact
+identity, original complete output and context, and older-request retry after
+newer state. Native overflow returns the typed SDK Limit. The successful head,
+output and checkpoint remain unchanged. No selected output is published for
+the failed attempt. All four explicitly configured operation slots release.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `migration-input-restart-build134` | Connected test build passes. | 22.685 |
+| `migration-input-restart-fmt134` | Workspace formatting passes. | 4.592 |
+| `migration-input-restart-clippy134` | Strict connected Clippy passes. | 123.035 |
+| `migration-checkpoint-targets134` | 3 cases pass. | 24.169 |
+| `migration-restart-query-connected134` | 62 cases pass. | 30.974 |
+| `migration-restart-data-connected134` | 12 cases pass. | 7.305 |
+| `migration-restart-analysis-connected134` | 7 cases pass. | 11.670 |
+
+The first focused run finds three fixture assertions. The direct metadata
+capture now checks the exact real context reference instead of using the
+shared empty-fixture helper. The Query pressure tests require the full pool
+while idle and zero retained input after the final definition owner closes.
+The shared helper and production memory behavior do not change. Every failed
+case then passes. The earlier command records remain available.
+
+The [checkpoint retirement record](../../recovery/araphor-analysis-checkpoint-retry-retirement-20261020.json)
+maps all 30 old assertion groups. Exactly two complete checkpoint test files
+retire after these checks. This removes no production code. There are now
+**97 retired files and 111 unchanged baseline files**. The archive remains
+unchanged. The old input executor, mixed native restart and Wasm lifecycle
+files remain. Retained dependency expiry, witness renewal, offered-cut pressure
+retry, general scalar clock events, complete producers and lifecycle, and the
+final Rust gate remain **Not done**.
+
 ### Production code ledger
 
-The current count131 includes native input capture, projected membership,
-shared source requests, reactive admission, guarded Graph publication, model
-retirement, public receipt/output reads, native input windows, and the three
-receipt/output retirements.
+The current count134 includes the preceding native migration, metadata-first
+resume, explicit rebuild, and the two checkpoint test retirements.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 16,460 | 8,892 | +7,568 |
-| Original reduction baseline `7b7b407a` | 43,877 | 30,315 | +13,562 |
+| `6a25ba1b` | 16,569 | 8,892 | +7,677 |
+| Original reduction baseline `7b7b407a` | 43,986 | 30,315 | +13,671 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -780,12 +837,17 @@ counter also excludes two test-only attribute/import lines in model/schema.rs
 that the earlier counter incorrectly included. Public receipt/output reads,
 original receipt enumeration and native input windows add 621 production
 lines. The three retirements remove 90. This delivery adds 531 net production
-lines. Another 19,562 net production lines
+lines. Metadata-first resume and explicit rebuild then add 109 production
+lines. The checkpoint retirements remove test code only. Another 19,671 net production lines
 must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count131.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count134.json`. Its selected source
+fingerprint is
+`919f8aa8bfb6bb183e1c71497af61f886435f7cb5db762e2efe5c8ea89f4f113`.
+The earlier count131 records public inspection, input windows and output
+retirement at +13,562 production lines from the original baseline. Its
 fingerprint is
 `0bb41262738c88011c2f6c637e90316ea6f8a27c90bd7e11319dd9f1d7742561`.
 The earlier count122 records model retirement at +13,031 production lines
@@ -1072,7 +1134,7 @@ during source retirement. This record does not claim a remote push.
 Local commit `d9369555` retains the archive and its checksum. The archive
 contains the complete recovered source. The 29 earlier leaves, four additional
 finite files, and eight Wasm leaves are retired at that earlier source state.
-The latest custody record verifies all 113 remaining files against the baseline.
+The latest custody record verifies all 111 remaining files against the baseline.
 The complete 208-file source remains in the unchanged archive.
 
 ## Back package, model and notification inventory

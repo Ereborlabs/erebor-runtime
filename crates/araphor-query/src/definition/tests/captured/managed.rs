@@ -23,7 +23,7 @@ impl ManagedPublication for Sink {
             Invocation::default(),
             ManagedRead {
                 instance,
-                rebuild: false,
+                rebuild: self.state.rebuild.load(Ordering::SeqCst),
                 completed: None,
             },
         ))
@@ -39,6 +39,10 @@ impl ManagedPublication for Sink {
         assert!(snapshot
             .managed()
             .is_some_and(|captured| captured.time_utc_ns() > 0));
+        assert_eq!(
+            snapshot.managed().map(|managed| managed.rebuild()),
+            Some(self.state.rebuild.load(Ordering::SeqCst))
+        );
         let cursor = crate::follow::Cursor::decode(&frontier.cursor)?;
         assert_eq!(
             cursor.read_revision(),
@@ -439,6 +443,15 @@ async fn resume_keeps_cut_idle() -> TestResult {
     let original_time = update.evaluated_utc_ns;
     drop(update);
     first.cancel_and_join().await?;
+    drop(state.receipt.lock().unwrap().take());
+    let retained = fixture.engine.memory().input_reserved();
+    let capacity = fixture
+        .engine
+        .limits()
+        .input_capacity
+        .ok_or("input capacity")?;
+    let pressure = fixture.engine.memory().reserve_input(capacity - retained)?;
+    assert!(fixture.engine.memory().reserve_input(1).is_err());
     let inputs = state.input_evaluations.load(Ordering::SeqCst);
     let (idle, observed) = tokio::sync::oneshot::channel();
     let clock = ResumeClock::new(original_time + 1, Some(idle));
@@ -461,6 +474,9 @@ async fn resume_keeps_cut_idle() -> TestResult {
     assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
     assert_eq!(state.entries.load(Ordering::SeqCst), 1);
     assert_eq!(state.input_evaluations.load(Ordering::SeqCst), inputs);
+    assert_eq!(fixture.engine.memory().input_reserved(), capacity);
+    drop(fixture.engine.reserve_evaluation([1; 16])?);
+    drop(pressure);
     fixture.event(2)?;
     let update = tokio::time::timeout(Duration::from_secs(30), next)
         .await?
@@ -476,6 +492,185 @@ async fn resume_keeps_cut_idle() -> TestResult {
     );
     resumed.cancel_and_join().await?;
     drop(update);
+    drop(state.receipt.lock().unwrap().take());
+    assert_eq!(fixture.engine.memory().input_reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_restart_cancellation_joins() -> TestResult {
+    let fixture = fixture().await?;
+    let state = Arc::new(SinkState::default());
+    let (definition, target) = prepared(&fixture, &state).await?;
+    let control = AnalysisReadControl::default();
+    let mut first = stream(&fixture, definition.clone(), Arc::clone(&target), &control)?;
+    let update = first.next().await.ok_or("initial idle receipt")??;
+    let frontier = state
+        .frontier
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("idle frontier")?;
+    let now = update.evaluated_utc_ns + 1;
+    drop(update);
+    first.cancel_and_join().await?;
+    drop(state.receipt.lock().unwrap().take());
+    let retained = fixture.engine.memory().input_reserved();
+    let capacity = fixture
+        .engine
+        .limits()
+        .input_capacity
+        .ok_or("input capacity")?;
+    let pressure = fixture.engine.memory().reserve_input(capacity - retained)?;
+    let (idle, observed) = tokio::sync::oneshot::channel();
+    let control = AnalysisReadControl::default();
+    let mut resumed = Subscription::managed(
+        fixture
+            .engine
+            .session(AnalysisSelectionV1::tenant([1; 16]), &control, 0)?,
+        definition,
+        target,
+        b"managed-test",
+        Some(frontier),
+        ResumeClock::new(now, Some(idle)),
+    )?;
+    let mut next = Box::pin(resumed.next());
+    tokio::select! {
+        update = &mut next => return Err(format!("idle restart executed: {update:?}").into()),
+        observed = observed => observed?,
+    }
+    assert_eq!(fixture.engine.memory().input_reserved(), capacity);
+    drop(next);
+    tokio::time::timeout(Duration::from_secs(30), resumed.cancel_and_join()).await??;
+    assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
+    assert_eq!(state.entries.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture.engine.memory().input_reserved(),
+        capacity - retained
+    );
+    drop(fixture.engine.reserve_evaluation([1; 16])?);
+    drop(pressure);
+    assert_eq!(fixture.engine.memory().input_reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restart_keeps_source_notice() -> TestResult {
+    let fixture = fixture().await?;
+    let (release, held) = mpsc::channel();
+    release.send(())?;
+    let state = Arc::new(SinkState {
+        begin_gate: Some(WriterGate {
+            entered: Mutex::new(None),
+            release: Mutex::new(held),
+        }),
+        ..Default::default()
+    });
+    let (definition, target) = prepared(&fixture, &state).await?;
+    let control = AnalysisReadControl::default();
+    let mut first = stream(&fixture, definition.clone(), Arc::clone(&target), &control)?;
+    let update = first.next().await.ok_or("initial source receipt")??;
+    let frontier = state
+        .frontier
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("source frontier")?;
+    let now = update.evaluated_utc_ns + 1;
+    drop(update);
+    first.cancel_and_join().await?;
+    let (entered, observed) = tokio::sync::oneshot::channel();
+    *state
+        .begin_gate
+        .as_ref()
+        .ok_or("begin gate")?
+        .entered
+        .lock()
+        .unwrap() = Some(entered);
+    let control = AnalysisReadControl::default();
+    let mut resumed = Subscription::managed(
+        fixture
+            .engine
+            .session(AnalysisSelectionV1::tenant([1; 16]), &control, 0)?,
+        definition,
+        target,
+        b"managed-test",
+        Some(frontier),
+        ResumeClock::new(now, None),
+    )?;
+    let mut next = Box::pin(resumed.next());
+    tokio::select! {
+        update = &mut next => return Err(format!("restart bypassed begin: {update:?}").into()),
+        entered = observed => entered?,
+    }
+    fixture.event(2)?;
+    release.send(())?;
+    let update = tokio::time::timeout(Duration::from_secs(30), next)
+        .await?
+        .ok_or("source notice receipt")??;
+    assert_eq!(state.begins.load(Ordering::SeqCst), 2);
+    assert_eq!(state.admissions.load(Ordering::SeqCst), 2);
+    assert_eq!(state.entries.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        update.snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        2
+    );
+    resumed.cancel_and_join().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn rebuild_bypasses_idle_resume() -> TestResult {
+    let fixture = fixture().await?;
+    let state = Arc::new(SinkState::default());
+    let (definition, target) = prepared(&fixture, &state).await?;
+    let control = AnalysisReadControl::default();
+    let mut first = stream(&fixture, definition.clone(), Arc::clone(&target), &control)?;
+    let initial = first.next().await.ok_or("initial rebuild receipt")??;
+    let frontier = state
+        .frontier
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("rebuild frontier")?;
+    let now = initial.evaluated_utc_ns + 1;
+    let revision = initial.cursor.read_revision();
+    drop(initial);
+    first.cancel_and_join().await?;
+    let inputs = state.input_evaluations.load(Ordering::SeqCst);
+    state.rebuild.store(true, Ordering::SeqCst);
+    let control = AnalysisReadControl::default();
+    let mut rebuilt = Subscription::managed(
+        fixture
+            .engine
+            .session(AnalysisSelectionV1::tenant([1; 16]), &control, 0)?,
+        definition,
+        target,
+        b"managed-test",
+        Some(frontier),
+        ResumeClock::new(now, None),
+    )?;
+    let update = tokio::time::timeout(Duration::from_secs(30), rebuilt.next())
+        .await?
+        .ok_or("rebuilt update")??;
+    assert_eq!(update.cursor.read_revision(), revision);
+    assert_eq!(update.evaluated_utc_ns, now);
+    assert_eq!(
+        update.snapshot.managed().map(|managed| managed.rebuild()),
+        Some(true)
+    );
+    assert_eq!(state.admissions.load(Ordering::SeqCst), 2);
+    assert_eq!(state.entries.load(Ordering::SeqCst), 2);
+    assert!(state.input_evaluations.load(Ordering::SeqCst) > inputs);
+    assert_eq!(
+        update.snapshot.page.extraction.sources[0]
+            .receipt
+            .contiguous_cursor,
+        1
+    );
+    rebuilt.cancel_and_join().await?;
     Ok(())
 }
 

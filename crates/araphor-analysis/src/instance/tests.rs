@@ -16,8 +16,10 @@ use sdk::arrow_array::{Array as _, UInt64Array};
 
 use super::*;
 
+mod checkpoint;
 mod finite;
 mod history;
+mod restart;
 
 pub(super) type TestResult<T = ()> =
     std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;

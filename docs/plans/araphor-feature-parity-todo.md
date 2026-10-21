@@ -59,7 +59,7 @@ Fifteen more retained-query, authority, Wasm, and finite notification test
 leaves are removed after 89 focused checks pass. Two image/fixture leaves then
 retire after exact replacement tests pass. The complete error leaf then
 retires after typed error and joined execution checks pass. There are now
-95 retired files; 113 baseline files remain unchanged. Runtime now owns the
+97 retired files; 111 baseline files remain unchanged. Runtime now owns the
 complete limits configuration and both original serialization tests.
 The native operation replacement also retires one complete test leaf after
 all ten old test functions have passing native assertions. This test-only
@@ -82,6 +82,14 @@ Fresh Graph writes compare the exact prior window head. The connected checks
 cover 106 distinct passing cases. No further reference file is retired by
 these corrections. Complete producers, public lifecycle, native Data waits,
 and the final Rust gate remain open.
+The metadata-first resume passes focused checks with a real saved checkpoint
+and full configured input pressure. Source changes and saved deadlines use the
+same native Query Progress. Explicit rebuild still executes. Six more native
+input cases pass. Actual Wasm and native checkpoint retry/reopen and native
+overflow assertions pass. Two complete checkpoint test leaves retire. This
+removes no production code. Retained dependency expiry, pressure retry,
+general scalar clock events and the complete input executor remain open.
+Read the [bounded result](araphor-analysis-migration.md#metadata-first-resume-and-checkpoint-retries).
 The items below that describe removed paths refer to the stopped draft, not
 a qualified replacement. No deletion commit or push was made.
 

@@ -25,7 +25,7 @@ use snafu::ResultExt as _;
 
 use super::progress::Progress;
 use super::{Output, OutputStream, Run};
-use crate::sources::{JournalExec, SourceData};
+use crate::sources::{JournalExec, SourceData, SourceSnapshot};
 use crate::{Result, SqlSnafu};
 
 mod kernel;
@@ -184,20 +184,52 @@ impl SubscribeExec {
     }
 
     pub(crate) async fn open(run: Arc<Run>) -> Result<OutputStream> {
-        let permit = Arc::new(
-            run.session
-                .control()
-                .query_async(
-                    run.session
-                        .engine()
-                        .acquire_evaluation(run.session.selection().tenant_id),
-                )
-                .await?,
-        );
         let mut progress =
             Progress::new(run.session.engine().store(), Arc::clone(&run.clock), None);
-        let now = progress.begin()?;
-        let session = run.session(now, &permit).await?;
+        let (permit, now, session) = loop {
+            let permit = Arc::new(
+                run.session
+                    .control()
+                    .query_async(
+                        run.session
+                            .engine()
+                            .acquire_evaluation(run.session.selection().tenant_id),
+                    )
+                    .await?,
+            );
+            let now = progress.begin()?;
+            let session = run.session(now, &permit).await?;
+            if let Some(cursor) = run.resume.as_ref().filter(|_| {
+                session
+                    .managed
+                    .as_ref()
+                    .is_some_and(|managed| !managed.rebuild)
+                    && run.resume_expiry.is_none_or(|expiry| expiry > now)
+            }) {
+                let selection = SourceSnapshot::selection(&run.selection(now)?, run.sources())?;
+                let (meta, revision) = run.dependencies(&session, selection, Some(&permit)).await?;
+                cursor.check_store(&meta)?;
+                if revision <= cursor.read_revision() {
+                    let calls = session
+                        .calls
+                        .as_ref()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal("subscription call context is absent".into())
+                        })
+                        .context(SqlSnafu)?;
+                    calls.finish().await;
+                    drop(session);
+                    drop(permit);
+                    progress.captured(meta.commit_revision, run.resume_expiry);
+                    run.session
+                        .control()
+                        .query_async(progress.next(run.session.control(), None))
+                        .await?;
+                    continue;
+                }
+            }
+            break (permit, now, session);
+        };
         let mut state = session.state()?;
         let logical = crate::planner::subscription::Subscribe::runtime(
             run.plan.as_ref().clone(),

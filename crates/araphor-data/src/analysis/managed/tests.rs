@@ -19,6 +19,7 @@ use crate::{
 mod history;
 mod lifecycle;
 mod memory;
+mod metadata;
 mod output;
 mod status;
 mod terminal;

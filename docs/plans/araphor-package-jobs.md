@@ -95,7 +95,9 @@ more whole files after 373 distinct connected cases pass. The native operation
 replacement then retires one complete test leaf after all ten old test functions
 have passing native assertions. The native model replacement then retires five more files after all 50 mapped
 cases pass. This removes 306 production lines. The public receipt/output replacement then retires three more files and 90
-production lines. There are now 95 retired files; 113 remain unchanged. The recovery archive retains all 208 originals.
+production lines. Two checkpoint test leaves then retire after actual Wasm/native retries,
+reopen and overflow checks pass. There are now 97 retired files; 111 remain
+unchanged. The recovery archive retains all 208 originals.
 The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish
 long-running lifecycle or automatic restart.
@@ -115,6 +117,13 @@ native SQL window and the same Query Progress deadline. Full history selection,
 public lifecycle and complete restart integration remain **Not done**. Read the
 [bounded result](araphor-analysis-migration.md#public-receipt-reads-and-native-input-windows)
 for exact source and verification records.
+
+An unchanged managed resume now probes Data metadata before native physical
+preparation. It retains the same Query Progress receiver and saved deadline.
+A real saved checkpoint stays idle under full input pressure. Explicit rebuild
+executes. The [checkpoint and resume result](araphor-analysis-migration.md#metadata-first-resume-and-checkpoint-retries)
+records 84 passing connected checks. Conservative unrelated-source capture,
+retained dependency expiry, pressure retry and full lifecycle remain open.
 
 ### First deliverable: definition files and running instances
 

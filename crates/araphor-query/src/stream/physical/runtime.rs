@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use araphor_data::{AnalysisSelectionV1, AnalysisStoreMetaV1, StorePositionV1};
+use araphor_data::{AnalysisStoreMetaV1, StorePositionV1};
 use datafusion::common::DataFusionError;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::aggregates::AggregateExec;
@@ -9,7 +9,7 @@ use snafu::ResultExt as _;
 
 use super::{kernel::Kernel, Compiled, Mode, SubscribeExec};
 use crate::definition::CapturedExecution;
-use crate::execution::{Engine, PendingRead, PhysicalStream, Read, Session};
+use crate::execution::{PendingRead, PhysicalStream, Read, Session};
 use crate::follow::Operation;
 use crate::sources::{ArrowSnapshot, Changes, JournalExec};
 use crate::stream::progress::{Progress, Wake};
@@ -149,58 +149,13 @@ impl Runtime {
             .ok_or_else(Self::state_error)?
             .selection
             .clone();
-        let (meta, revision) = self.dependencies(selection).await?;
+        let (meta, revision) = self
+            .run
+            .dependencies(&self.run.session, selection, None)
+            .await?;
         self.check_store(&meta)?;
         self.progress.checked(meta.commit_revision);
         Ok(revision > self.revision)
-    }
-
-    async fn dependencies(
-        &self,
-        selection: AnalysisSelectionV1,
-    ) -> Result<(AnalysisStoreMetaV1, u64)> {
-        loop {
-            let stage = Arc::new(
-                self.run
-                    .session
-                    .control()
-                    .within(self.run.session.engine().limits().extract_timeout)?,
-            );
-            let worker = Arc::clone(&stage);
-            let store = Arc::clone(self.run.session.engine().store());
-            let selection = selection.clone();
-            let run = Arc::clone(&self.run);
-            let scope = self.run.session.token()?;
-            match Engine::blocking(stage, scope, move || {
-                store
-                    .dependency_revision_for(&selection, run.sources(), &worker)
-                    .map_err(crate::Error::from)
-            })
-            .await
-            {
-                Err(crate::Error::Data {
-                    source:
-                        araphor_data::Error::AnalysisBusy {
-                            resource: "reader", ..
-                        },
-                }) => {
-                    self.run
-                        .session
-                        .control()
-                        .query_async(async {
-                            self.run
-                                .session
-                                .engine()
-                                .store()
-                                .wait_capacity()
-                                .await
-                                .map_err(crate::Error::from)
-                        })
-                        .await?;
-                }
-                result => return result,
-            }
-        }
     }
 
     async fn evaluate(&mut self, clock_changed: bool) -> Result<Option<Event>> {
@@ -224,7 +179,10 @@ impl Runtime {
         };
         let selection = self.run.selection(now)?;
         if self.snapshot.is_none() && self.run.resume.is_some() && self.run.managed.is_none() {
-            let (meta, _) = self.dependencies(selection.clone()).await?;
+            let (meta, _) = self
+                .run
+                .dependencies(&self.run.session, selection.clone(), Some(&permit))
+                .await?;
             self.check_store(&meta)?;
         }
         let reuse = initial.is_some();
@@ -331,7 +289,8 @@ impl Runtime {
                     if let Some(cursor) =
                         self.run.resume.as_ref().filter(|_| self.snapshot.is_none())
                     {
-                        if managed.source_revision() <= cursor.read_revision()
+                        if !managed.rebuild()
+                            && managed.source_revision() <= cursor.read_revision()
                             && self.run.resume_expiry.is_none_or(|expiry| expiry > now)
                         {
                             let cursor = cursor.clone();

@@ -41,6 +41,7 @@ struct WriterGate {
 #[derive(Debug, Default)]
 struct SinkState {
     admitted: AtomicBool,
+    rebuild: AtomicBool,
     begins: AtomicUsize,
     admissions: AtomicUsize,
     begin_gate: Option<WriterGate>,

@@ -1,7 +1,10 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use araphor_data::{AnalysisReadControl, AnalysisTableRequests, StorePositionV1};
+use araphor_data::{
+    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStoreMetaV1,
+    AnalysisTableRequests, StorePositionV1,
+};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::execution::memory_pool::MemoryReservation;
 use futures_core::Stream;
@@ -46,6 +49,68 @@ impl Run {
             }
         }
         Ok(self.session.selection().clone())
+    }
+
+    pub(crate) async fn dependencies(
+        self: &Arc<Self>,
+        session: &Session,
+        selection: AnalysisSelectionV1,
+        permit: Option<&Arc<Permit>>,
+    ) -> crate::Result<(AnalysisStoreMetaV1, u64)> {
+        loop {
+            let stage = Arc::new(
+                session
+                    .control()
+                    .within(session.engine().limits().extract_timeout)?,
+            );
+            let worker = Arc::clone(&stage);
+            let store = Arc::clone(session.engine().store());
+            let selection = selection.clone();
+            let run = Arc::clone(self);
+            let managed = session.managed.clone();
+            let limits = AnalysisExtractLimits {
+                scan_bytes: session.engine().limits().scan_bytes,
+                input_bytes: session.engine().limits().input_bytes,
+                keys: session.engine().limits().extract_keys,
+                ..Default::default()
+            };
+            let scope = (session.token()?, permit.cloned());
+            match crate::execution::Engine::blocking(stage, scope, move || {
+                match &managed {
+                    Some(managed) => store.managed_dependency_revision(
+                        &selection,
+                        run.sources(),
+                        managed,
+                        limits,
+                        &worker,
+                    ),
+                    None => store.dependency_revision_for(&selection, run.sources(), &worker),
+                }
+                .map_err(crate::Error::from)
+            })
+            .await
+            {
+                Err(crate::Error::Data {
+                    source:
+                        araphor_data::Error::AnalysisBusy {
+                            resource: "reader", ..
+                        },
+                }) => {
+                    session
+                        .control()
+                        .query_async(async {
+                            session
+                                .engine()
+                                .store()
+                                .wait_capacity()
+                                .await
+                                .map_err(crate::Error::from)
+                        })
+                        .await?;
+                }
+                result => return result,
+            }
+        }
     }
 
     pub(crate) async fn session(&self, now: u64, permit: &Arc<Permit>) -> crate::Result<Session> {
