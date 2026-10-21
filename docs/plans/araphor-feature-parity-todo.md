@@ -738,3 +738,29 @@ No Back file retires. All 110 remaining files match the baseline. The separate
 legacy helper ceilings, complete migration and final Rust gate remain
 **Not done**. The complete production count is +13,536 from the original
 baseline. The required net reduction remains **Not done**.
+
+## Public image fixture execution
+
+`araphor image test PACKAGE --revision REVISION` tests all root-image fixtures.
+Add `--fixture NAME` to test one fixture. Control checks current Test authority
+and image trust. The existing Qualification owner executes the native Query
+plan. Replies use the existing binary codec and preserve each fixture name and
+pass result. Installation and testing start no Discovery. Testing changes no
+managed output, state or progress.
+
+The authority watch now spans reply encoding. A deterministic endpoint test
+first returns success after late trust revocation. The corrected route returns
+PermissionDenied. Both fixed five-minute request defaults are removed. Existing
+configured Query timeouts, grant expiry and cancellation remain active.
+
+All 53 distinct focused cases pass across the recorded runs. The cancellation
+fixture first fails because its explicit 2 MiB input pool cannot hold the
+current 2.04 MiB Wasm component. Its pool is now 4 MiB; all original assertions
+stay unchanged and pass. The reader-exhaustion fixture now has an explicit
+16-reader limit. Connected compilation, formatting and strict Clippy pass.
+Read the [source and test record](../../recovery/araphor-public-fixture-execution-20261020.json).
+
+This delivery adds 53 production lines and retires no Back file. All 110
+remaining files match the baseline. Dependency-artifact fixture selection,
+negative fixture time, complete migration and the final Rust gate remain
+**Not done**.

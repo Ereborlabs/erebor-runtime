@@ -6,7 +6,7 @@ use std::time::Duration;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fixture_cancellation_joins_guest() -> TestResult {
     const BYTES: usize = 16 * 1024;
-    const INPUT_BYTES: usize = 2 * 1024 * 1024;
+    const INPUT_BYTES: usize = 4 * 1024 * 1024;
     let mut model = sdk::Model::new(
         "evaluate",
         Vec::new(),

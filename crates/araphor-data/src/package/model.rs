@@ -6,7 +6,7 @@ use tokio::sync::watch;
 
 use crate::{AnalysisSelectionV1, Result};
 
-use super::{PackageArtifactIdentityV1, PackageBundleRef, PackageBundleV1};
+use super::{PackageArtifactIdentityV1, PackageBundleRef, PackageBundleV1, PackageRefV1};
 
 mod request;
 
@@ -215,6 +215,10 @@ pub enum PackageRequestV1 {
         package_id: String,
         revision: Option<String>,
     },
+    TestImage {
+        image: PackageRefV1,
+        fixture: Option<String>,
+    },
     InspectInstance {
         instance_id: String,
     },
@@ -236,6 +240,7 @@ impl PackageRequestV1 {
     pub fn action(&self) -> PackageActionV1 {
         match self {
             Self::AdmitDefinition { .. } | Self::InstallImage { .. } => PackageActionV1::Install,
+            Self::TestImage { .. } => PackageActionV1::Test,
             Self::InspectDefinition { .. }
             | Self::InspectImage { .. }
             | Self::InspectInstance { .. }
@@ -291,11 +296,19 @@ pub struct InstanceResultV1 {
     pub output: sdk::wire::Output,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureResult {
+    pub fixture: String,
+    pub passed: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackageResponseV1 {
     Definition(araphor_discovery_definition::ResolvedDefinition),
     Image(araphor_package::PackageImageV1),
+    Tests(Vec<FixtureResult>),
     Instance(InstanceStatusV1),
     History(Vec<crate::ManagedReceipt>),
     Output(sdk::wire::Dataset),
@@ -629,6 +642,47 @@ mod inspection_tests {
         assert_eq!(encode.retry_hint(), RetryHint::NonRetryable);
         assert!(std::error::Error::source(&encode)
             .is_some_and(|source| source.is::<rmp_serde::encode::Error>()));
+        Ok(())
+    }
+
+    #[test]
+    fn fixture_results_roundtrip() -> Result<()> {
+        for tests in [
+            Vec::new(),
+            vec![
+                FixtureResult {
+                    fixture: "equal".into(),
+                    passed: true,
+                },
+                FixtureResult {
+                    fixture: "different".into(),
+                    passed: false,
+                },
+            ],
+        ] {
+            let bytes = PackageResponseV1::Tests(tests.clone()).encode()?;
+            let PackageResponseV1::Tests(actual) = PackageResponseV1::from_bytes(&bytes)? else {
+                return Err(PackageErrorCodeV1::Invalid.error("fixture response"));
+            };
+            assert_eq!(actual, tests);
+            assert!(PackageResponseV1::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+            assert!(matches!(
+                PackageResponseV1::from_bytes(&[bytes.as_slice(), &[0]].concat()),
+                Err(crate::Error::Package {
+                    code: PackageErrorCodeV1::Invalid,
+                    field: "package response trailing bytes",
+                    ..
+                })
+            ));
+        }
+        assert!(serde_json::from_value::<FixtureResult>(
+            serde_json::json!({"fixture":"equal","passed":true,"output":[]})
+        )
+        .is_err());
+        assert!(
+            serde_json::from_value::<FixtureResult>(serde_json::json!({"fixture":"equal"}))
+                .is_err()
+        );
         Ok(())
     }
 }

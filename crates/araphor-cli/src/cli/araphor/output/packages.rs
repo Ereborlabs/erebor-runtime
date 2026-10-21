@@ -45,6 +45,16 @@ impl Output {
                 }
                 Ok(text.into_bytes())
             }
+            PackageResponseV1::Tests(tests) => {
+                if matches!(self.mode, OutputMode::Jsonl) {
+                    return Self::json("image_tests", tests);
+                }
+                let mut text = String::from("fixture\tpassed\n");
+                for test in tests {
+                    let _ = writeln!(text, "{}\t{}", Self::text(&test.fixture), test.passed);
+                }
+                Ok(text.into_bytes())
+            }
             PackageResponseV1::Instance(instance) => {
                 if matches!(self.mode, OutputMode::Jsonl) {
                     return Self::json("instance", instance);
@@ -461,6 +471,40 @@ mod tests {
                     &serde_json::to_value(&history)?
                 );
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fixture_output_keeps_results() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for tests in [
+            Vec::new(),
+            vec![
+                araphor_data::FixtureResult {
+                    fixture: "equal".into(),
+                    passed: true,
+                },
+                araphor_data::FixtureResult {
+                    fixture: "different".into(),
+                    passed: false,
+                },
+            ],
+        ] {
+            let json = Output::new(Some(OutputMode::Jsonl), false)
+                .package(PackageResponseV1::Tests(tests.clone()))?;
+            let document: serde_json::Value = serde_json::from_slice(&json)?;
+            assert_eq!(
+                document.get("frame").unwrap_or(&document),
+                &serde_json::to_value(&tests)?
+            );
+            let table = Output::new(Some(OutputMode::Table), false)
+                .package(PackageResponseV1::Tests(tests.clone()))?;
+            let expected = if tests.is_empty() {
+                "fixture\tpassed\n"
+            } else {
+                "fixture\tpassed\nequal\ttrue\ndifferent\tfalse\n"
+            };
+            assert_eq!(String::from_utf8(table)?, expected);
         }
         Ok(())
     }

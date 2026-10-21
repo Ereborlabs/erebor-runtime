@@ -18,11 +18,7 @@ mod query;
 #[cfg(test)]
 mod tests;
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub struct FixtureResult {
-    pub fixture: String,
-    pub passed: bool,
-}
+pub use araphor_data::FixtureResult;
 
 pub struct Qualification {
     query: Arc<Engine>,

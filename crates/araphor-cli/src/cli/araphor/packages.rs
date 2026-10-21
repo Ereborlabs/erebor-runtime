@@ -58,6 +58,14 @@ enum ImageCommand {
     Digest { path: PathBuf },
     /// Retain a local OCI layout or archive for the authenticated tenant.
     Install { path: PathBuf },
+    /// Run saved fixtures from one exact retained image.
+    Test {
+        package: String,
+        #[arg(long)]
+        revision: String,
+        #[arg(long)]
+        fixture: Option<String>,
+    },
     /// Read retained image descriptors and artifact identities.
     Inspect {
         package: String,
@@ -82,6 +90,17 @@ impl ImageArgs {
                 bundle: PackageBundleV1::read(path)
                     .map_err(araphor_data::Error::from)
                     .context(PackageSnafu)?,
+            },
+            ImageCommand::Test {
+                package,
+                revision,
+                fixture,
+            } => PackageRequestV1::TestImage {
+                image: araphor_data::PackageRefV1 {
+                    package_id: package.clone(),
+                    revision: revision.clone(),
+                },
+                fixture: fixture.clone(),
             },
             ImageCommand::Inspect { package, revision } => PackageRequestV1::InspectImage {
                 package_id: package.clone(),
@@ -502,5 +521,81 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(args).is_err());
         }
+    }
+
+    #[test]
+    fn image_test_cli() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for name in [None, Some("equal")] {
+            let mut args = vec!["araphor", "image", "test", "fixture", "--revision", "exact"];
+            if let Some(name) = name {
+                args.extend(["--fixture", name]);
+            }
+            let cli = Cli::try_parse_from(args)?;
+            assert!(cli.validate_route().is_ok());
+            let Command::Investigate(command) = cli.command else {
+                return Err("image command".into());
+            };
+            let Prepared::Package(request) = command.prepare()? else {
+                return Err("image request".into());
+            };
+            assert!(request.selection.is_none());
+            assert!(matches!(PackageRequestV1::from_bytes(&request.definition)?,
+                PackageRequestV1::TestImage { image, fixture } if image.package_id == "fixture" && image.revision == "exact" && fixture.as_deref() == name));
+        }
+        for args in [
+            vec!["araphor", "image", "test", "fixture"],
+            vec!["araphor", "image", "test", "fixture", "--revision"],
+            vec![
+                "araphor",
+                "image",
+                "test",
+                "fixture",
+                "--revision",
+                "exact",
+                "--fixture",
+            ],
+            vec![
+                "araphor",
+                "image",
+                "test",
+                "fixture",
+                "--revision",
+                "exact",
+                "--revision",
+                "other",
+            ],
+            vec![
+                "araphor",
+                "image",
+                "test",
+                "fixture",
+                "--revision",
+                "exact",
+                "--unknown",
+            ],
+            vec![
+                "araphor",
+                "image",
+                "test",
+                "fixture",
+                "--revision",
+                "exact",
+                "--scope",
+                "team",
+            ],
+            vec![
+                "araphor",
+                "image",
+                "test",
+                "fixture",
+                "--revision",
+                "exact",
+                "--node",
+                "node-a",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        Ok(())
     }
 }

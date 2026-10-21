@@ -212,3 +212,42 @@ fn instance_requests_are_readonly() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn image_test_request() -> TestResult {
+    for name in [None, Some("equal".to_owned())] {
+        let operation = PackageRequestV1::TestImage {
+            image: crate::PackageRefV1 {
+                package_id: "fixture".into(),
+                revision: "exact".into(),
+            },
+            fixture: name,
+        };
+        assert_eq!(operation.action(), crate::PackageActionV1::Test);
+        let bytes = operation.encode()?;
+        let actual = PackageRequestV1::from_bytes(&bytes)?;
+        assert_eq!(
+            serde_json::to_value(&actual)?,
+            serde_json::to_value(&operation)?
+        );
+        assert_eq!(actual.action(), crate::PackageActionV1::Test);
+        assert!(PackageRequestV1::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+        assert!(PackageRequestV1::from_bytes(&[bytes.as_slice(), &[0]].concat()).is_err());
+        assert!(PackageRequestV1::from_bytes(&envelope(
+            &serde_json::to_vec(&operation)?,
+            b"archive"
+        )?)
+        .is_err());
+    }
+    for metadata in [
+        serde_json::json!({"operation":"test_image","fixture":null}),
+        serde_json::json!({"operation":"test_image","image":{"package_id":"fixture"}}),
+        serde_json::json!({"operation":"test_image","image":{"package_id":"fixture","revision":"exact","extra":true}}),
+        serde_json::json!({"operation":"test_image","image":{"package_id":"fixture","revision":"exact"},"scope":"team"}),
+    ] {
+        assert!(
+            PackageRequestV1::from_bytes(&envelope(&serde_json::to_vec(&metadata)?, &[])?).is_err()
+        );
+    }
+    Ok(())
+}

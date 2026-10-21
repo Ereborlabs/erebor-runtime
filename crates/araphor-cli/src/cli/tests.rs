@@ -533,6 +533,7 @@ fn transport_options_are_separate() -> Result<(), Box<dyn std::error::Error>> {
         vec!["sql", "SELECT 1"],
         vec!["catalog"],
         vec!["image", "inspect", "denials"],
+        vec!["image", "test", "fixture", "--revision", "exact"],
         vec!["definition", "inspect", "denials"],
         vec!["instance", "inspect", "counts"],
         vec!["instance", "read", "counts", "saved"],

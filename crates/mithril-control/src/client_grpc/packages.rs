@@ -30,9 +30,8 @@ impl ClientGrpcOwner {
         let grant = access
             .package_grant(selection, action)
             .map_err(Self::auth_failure)?;
-        let control = Arc::new(
-            AnalysisReadControl::with_timeout(Duration::from_secs(300)).map_err(Self::failure)?,
-        );
+        let changes = (action == PackageActionV1::Test).then(|| self.auth.changes_for(&grant));
+        let control = Arc::new(AnalysisReadControl::default());
         let _guard = PackageRunGuard(control.clone());
         let response = match operation {
             definition @ (PackageRequestV1::AdmitDefinition { .. }
@@ -48,7 +47,8 @@ impl ClientGrpcOwner {
                     .await?
             }
             image @ (PackageRequestV1::InstallImage { .. }
-            | PackageRequestV1::InspectImage { .. }) => {
+            | PackageRequestV1::InspectImage { .. }
+            | PackageRequestV1::TestImage { .. }) => {
                 self.image_request(grant.clone(), image, control.clone())
                     .await?
             }
@@ -64,6 +64,14 @@ impl ClientGrpcOwner {
             .check(&grant, action)
             .map_err(Self::image_failure)?;
         access.check().map_err(Self::auth_failure)?;
+        if changes
+            .as_ref()
+            .is_some_and(|changes| changes.has_changed().unwrap_or(true))
+        {
+            return Err(Self::image_failure(
+                PackageErrorCodeV1::Denied.error("package authority changed"),
+            ));
+        }
         Ok(proto::PackageOperationReply { result })
     }
 
@@ -154,6 +162,16 @@ impl ClientGrpcOwner {
             return Err(Status::invalid_argument(
                 "An image requires tenant selection.",
             ));
+        }
+        if let PackageRequestV1::TestImage { image, fixture } = request {
+            return araphor_analysis::Qualification::new(
+                self.data()?.query.clone(),
+                self.auth.clone(),
+            )
+            .run(&grant, &image, fixture.as_deref(), &control)
+            .await
+            .map(PackageResponseV1::Tests)
+            .map_err(Self::failure);
         }
         let store = self.data()?.store.clone();
         let authority = self.auth.clone();

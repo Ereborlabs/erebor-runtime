@@ -5,8 +5,7 @@ impl AraphorClient {
         &self,
         operation: wire::PackageOperationRequest,
     ) -> AraphorResult<wire::PackageOperationReply> {
-        let mut request = self.request(operation)?;
-        request.set_timeout(Duration::from_secs(300));
+        let request = self.request(operation)?;
         AraphorClientServiceClient::new(self.channel.clone())
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX)

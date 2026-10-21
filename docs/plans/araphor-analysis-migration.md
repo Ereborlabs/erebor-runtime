@@ -874,8 +874,8 @@ recovery and the final full Rust gate remain **Not done**.
 
 ### Production code ledger
 
-The current count142 includes the preceding native migration and the extracted
-provenance count correction. The storage-window transfer and native Graph
+The current count145 includes the preceding native migration, extracted
+provenance correction and public image fixture execution. The storage-window transfer and native Graph
 adapter qualification change no production code.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
@@ -883,8 +883,8 @@ count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 16,560 | 9,018 | +7,542 |
-| Original reduction baseline `7b7b407a` | 43,951 | 30,415 | +13,536 |
+| `6a25ba1b` | 16,585 | 8,990 | +7,595 |
+| Original reduction baseline `7b7b407a` | 43,987 | 30,398 | +13,589 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -920,13 +920,16 @@ lines. The three retirements remove 90. This delivery adds 531 net production
 lines. Metadata-first resume and explicit rebuild then add 109 production
 lines. The checkpoint retirements remove test code only. The resource-default
 correction removes 122 production lines. The extracted provenance correction
-removes another 13. Another 19,536 net production lines
+removes another 13. Public fixture execution adds 53. Another 19,589 net
+production lines
 must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count142.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count145.json`. Its selected source
 fingerprint is
+`eb30b2103411f91a8e2528f63a9ab8ab3c0b1088bb97fc352f9d22971a4f7cdc`.
+The earlier count142 records extracted provenance at +13,536. Its fingerprint is
 `250c6bd51dc832117d8cb2881afb495f18911beee4a20bb86f581a60acbd6b9a`.
 The earlier count138 has a +13,549 production result. Its fingerprint is
 `d260ed09799d959fb6a1db0633efd5c07674b7d3a6dc39d03a9c4d363dd2ff40`.
@@ -1697,3 +1700,29 @@ No Back file retires. All 110 remaining files match the baseline. The separate
 legacy helper ceilings, complete migration and final Rust gate remain
 **Not done**. The complete production count is +13,536 from the original
 baseline. The required net reduction remains **Not done**.
+
+## Public image fixture execution
+
+`araphor image test PACKAGE --revision REVISION` tests all root-image fixtures.
+Add `--fixture NAME` to test one fixture. Control checks current Test authority
+and image trust. The existing Qualification owner executes the native Query
+plan. Replies use the existing binary codec and preserve each fixture name and
+pass result. Installation and testing start no Discovery. Testing changes no
+managed output, state or progress.
+
+The authority watch now spans reply encoding. A deterministic endpoint test
+first returns success after late trust revocation. The corrected route returns
+PermissionDenied. Both fixed five-minute request defaults are removed. Existing
+configured Query timeouts, grant expiry and cancellation remain active.
+
+All 53 distinct focused cases pass across the recorded runs. The cancellation
+fixture first fails because its explicit 2 MiB input pool cannot hold the
+current 2.04 MiB Wasm component. Its pool is now 4 MiB; all original assertions
+stay unchanged and pass. The reader-exhaustion fixture now has an explicit
+16-reader limit. Connected compilation, formatting and strict Clippy pass.
+Read the [source and test record](../../recovery/araphor-public-fixture-execution-20261020.json).
+
+This delivery adds 53 production lines and retires no Back file. All 110
+remaining files match the baseline. Dependency-artifact fixture selection,
+negative fixture time, complete migration and the final Rust gate remain
+**Not done**.

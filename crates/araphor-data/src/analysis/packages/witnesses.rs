@@ -272,7 +272,14 @@ mod tests {
     #[test]
     fn empty_provenance_reads() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            Default::default(),
+            crate::StorageLimitsV1 {
+                reader_admissions: Some(16),
+                ..Default::default()
+            },
+        )?;
         let mut held = Vec::new();
         while let Ok(permit) = store.reserve_reader() {
             held.push(permit);
