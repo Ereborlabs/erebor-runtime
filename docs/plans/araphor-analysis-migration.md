@@ -1811,3 +1811,19 @@ the recovery baseline and complete archive before deletion. There are now
 code. Read the [retirement record](../../recovery/araphor-native-reuse-retirement-20261020.json).
 The production total stays +14,333 from the original baseline. The complete
 migration, net reduction and final shared Rust procedure remain **Not done**.
+
+## Saved input identity includes discarded origins
+
+The new regression first shows a saved input keeping its original revision
+while an unused native CTE declares another source. The identity shortcut now
+requires exactly that saved output as the declared origin. Otherwise the
+existing native input hash includes the complete context and result references.
+Changed context or a changed second saved result must change that hash even
+when the selected rows stay equal. The direct input keeps its original revision.
+
+All 45 focused cases, connected compilation, formatting and strict Clippy pass.
+Read the [qualification record](../../recovery/araphor-retained-origin-qualification-20261020.json).
+The correction adds two production lines and no owner. No reference file retires;
+all 105 remaining files and the full archive are unchanged. The production total
+is +14,335 from the original baseline. The complete migration, required net
+reduction and final shared Rust procedure remain **Not done**.

@@ -807,3 +807,12 @@ files and 105 unchanged reference files. Production code does not decrease.
 Read the [bounded result](araphor-analysis-migration.md#native-image-closure-reuse-retirement).
 Freshness, installed snapshot, lifecycle and the complete migration remain
 **Not done**. The final Rust procedure remains **Not done**.
+
+## Saved input origin correction
+
+A saved input keeps its original revision only when it has exactly one declared
+origin. An unused CTE source still contributes to the derived input revision.
+The actual regression first fails, then passes with all 45 focused cases.
+Read the [bounded result](araphor-analysis-migration.md#saved-input-identity-includes-discarded-origins).
+No reference file retires. The 105 remaining files and full archive are
+unchanged. The complete migration and final Rust procedure remain **Not done**.

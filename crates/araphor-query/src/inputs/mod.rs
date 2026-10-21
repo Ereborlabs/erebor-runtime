@@ -65,15 +65,17 @@ impl Inputs {
                     slot,
                     window: Window::infer(plan)?,
                     plan: Arc::new(plan.clone()),
-                    origins,
                     retained: if matches!(
                         &model.inputs[slot].source,
                         sdk::InputSource::Table(sdk::TableRef::Named(_))
                     ) {
-                        Self::retained_slot(plan)
+                        Self::retained_slot(plan).filter(|slot| {
+                            origins.len() == 1 && origins.contains(&SourceOrigin::Package(*slot))
+                        })
                     } else {
                         None
                     },
+                    origins,
                 })
             })
             .collect::<Result<Vec<_>>>()?;

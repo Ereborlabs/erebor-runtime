@@ -1103,3 +1103,13 @@ There are now 103 retired files and 105 unchanged files. Production code does
 not decrease. Read the [bounded result](araphor-analysis-migration.md#native-image-closure-reuse-retirement).
 This does not qualify Instance lifecycle, freshness or snapshot removal.
 The complete migration and final Rust procedure remain **Not done**.
+
+## Saved input origin correction
+
+Native optimization can remove an unused CTE from execution. Its declared
+source still contributes to the package input revision. The original saved
+revision is reused only for one exact declared saved source. All 45 focused
+cases and connected checks pass. Read the
+[bounded result](araphor-analysis-migration.md#saved-input-identity-includes-discarded-origins).
+No reference file retires. Complete migration and final Rust qualification
+remain **Not done**.

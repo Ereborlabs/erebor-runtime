@@ -1544,3 +1544,20 @@ The old package activation generation becomes an immutable image revision;
 these tests do not prove a managed Instance generation change. Freshness,
 snapshot, lifecycle, complete migration and final Rust qualification remain
 **Not done**.
+
+## Discarded source declarations and saved revisions
+
+[Input admission](../../crates/araphor-query/src/inputs/mod.rs) preserves a saved
+revision only when its exact saved source is the sole declared origin. Native
+DataFusion can remove an unused CTE from execution. Query still keeps the
+admitted origin and uses its existing complete derived-input hash.
+
+The [actual native regression](../../crates/araphor-analysis/src/instance/tests/retained/origins.rs)
+first fails. After correction, a changed declared context and a changed second
+saved result both change the derived revision while selected rows remain 7.
+The direct right input keeps its original revision. Exact source refs, context
+refs, unchanged Data and full resource release are checked. All 45 focused cases
+and connected checks pass. Read the
+[qualification record](../../recovery/araphor-retained-origin-qualification-20261020.json).
+No reference file retires. The complete migration and final Rust procedure
+remain **Not done**.
