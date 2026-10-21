@@ -1912,3 +1912,21 @@ remain **Not done**. Control's 256-item configuration limits, policy package
 and retry limits of 16, and the 48-attempt history ceiling remain outside this
 change. Their remaining work, complete migration, required net reduction, and
 the final shared Rust procedure remain **Not done**.
+
+
+## Fixture comparator test retirement
+
+Status: **Done** for `package/fixtures/tests.rs`. Five current comparator tests
+and the actual public image fixture RPC pass. They preserve all three old test
+bodies, including split batches, dataset and reference order, changed reason
+details, nested floats, null values, and numeric tolerance. Invalid checkpoint
+versions fail native SDK validation. Connected compilation and strict Clippy pass.
+Read the [exact qualification and custody record](../../recovery/araphor-fixture-test-retirement-20261021.json).
+
+There are now 114 retired files and 94 unchanged reference files. The complete
+archive retains all 208 originals. This test-only deletion removes no production
+code. The production totals remain +10,354 from the recovery baseline and
++16,348 from the original baseline. Production `package/fixtures.rs` stays:
+negative fixture time and contained-artifact fixture selection remain open.
+Complete migration, the required net reduction, and the final shared Rust
+procedure remain **Not done**.
