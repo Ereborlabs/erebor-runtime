@@ -874,18 +874,17 @@ recovery and the final full Rust gate remain **Not done**.
 
 ### Production code ledger
 
-The current count138 includes the preceding native migration, metadata-first
-resume, explicit rebuild, the two checkpoint test retirements and the Graph
-resource-default correction. The storage-window test transfer changes no
-production code.
+The current count142 includes the preceding native migration and the extracted
+provenance count correction. The storage-window transfer and native Graph
+adapter qualification change no production code.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 16,560 | 9,005 | +7,555 |
-| Original reduction baseline `7b7b407a` | 43,964 | 30,415 | +13,549 |
+| `6a25ba1b` | 16,560 | 9,018 | +7,542 |
+| Original reduction baseline `7b7b407a` | 43,951 | 30,415 | +13,536 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -920,13 +919,16 @@ original receipt enumeration and native input windows add 621 production
 lines. The three retirements remove 90. This delivery adds 531 net production
 lines. Metadata-first resume and explicit rebuild then add 109 production
 lines. The checkpoint retirements remove test code only. The resource-default
-correction removes 122 production lines. Another 19,549 net production lines
+correction removes 122 production lines. The extracted provenance correction
+removes another 13. Another 19,536 net production lines
 must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count138.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count142.json`. Its selected source
 fingerprint is
+`250c6bd51dc832117d8cb2881afb495f18911beee4a20bb86f581a60acbd6b9a`.
+The earlier count138 has a +13,549 production result. Its fingerprint is
 `d260ed09799d959fb6a1db0633efd5c07674b7d3a6dc39d03a9c4d363dd2ff40`.
 The earlier count137 has the same +13,549 production result. Its fingerprint is
 `13c415988c50cf51223c082f490b3f5adfa34f553d88a41635edc84de8dcd65c`.
@@ -1679,3 +1681,19 @@ reference files. This delivery changes no production code. Read the
 [qualification record](../../recovery/araphor-graph-adapter-qualification-20261020.json)
 for exact source hashes, native artifacts and passing commands. The complete
 migration and final Rust gate remain **Not done**.
+
+## Extracted provenance count defaults
+
+The native Data extraction owner no longer rejects more than 64 retained
+results, 8192 witnesses or 256 contexts by default. Existing configured byte
+and selected-key limits still apply. Exact revisions, tenant checks, origin
+union and earliest witness expiry stay unchanged. The change removes 13
+production lines and adds no owner. All 24 ordinary extraction cases and six
+native Query input cases pass. The existing release history scan stays ignored.
+Connected compilation, formatting and strict Clippy pass. Read the
+[qualification record](../../recovery/araphor-extracted-provenance-20261020.json).
+
+No Back file retires. All 110 remaining files match the baseline. The separate
+legacy helper ceilings, complete migration and final Rust gate remain
+**Not done**. The complete production count is +13,536 from the original
+baseline. The required net reduction remains **Not done**.

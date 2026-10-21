@@ -722,3 +722,19 @@ reference files. This delivery changes no production code. Read the
 [qualification record](../../recovery/araphor-graph-adapter-qualification-20261020.json)
 for exact source hashes, native artifacts and passing commands. The complete
 migration and final Rust gate remain **Not done**.
+
+## Extracted provenance count defaults
+
+The native Data extraction owner no longer rejects more than 64 retained
+results, 8192 witnesses or 256 contexts by default. Existing configured byte
+and selected-key limits still apply. Exact revisions, tenant checks, origin
+union and earliest witness expiry stay unchanged. The change removes 13
+production lines and adds no owner. All 24 ordinary extraction cases and six
+native Query input cases pass. The existing release history scan stays ignored.
+Connected compilation, formatting and strict Clippy pass. Read the
+[qualification record](../../recovery/araphor-extracted-provenance-20261020.json).
+
+No Back file retires. All 110 remaining files match the baseline. The separate
+legacy helper ceilings, complete migration and final Rust gate remain
+**Not done**. The complete production count is +13,536 from the original
+baseline. The required net reduction remains **Not done**.

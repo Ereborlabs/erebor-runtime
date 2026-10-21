@@ -1,5 +1,9 @@
 use super::*;
-use crate::{AnalysisStore, GraphTraversalV1, ProcessorClassV1, StorageLimitsV1};
+use crate::{
+    AnalysisExtractLimits, AnalysisExtractionV1, AnalysisInputTables, AnalysisReadModeV1,
+    AnalysisSelectionV1, AnalysisStore, AnalysisTableRead, GraphTraversalV1, ProcessorClassV1,
+    StorageLimitsV1,
+};
 
 #[test]
 fn native_row_defaults() -> TestResult {
@@ -401,12 +405,31 @@ fn native_witness_defaults() -> TestResult {
         |row| row.get(0),
     )?;
     assert_eq!(count, 8_193);
+    let before = fixture.store.meta()?;
+    let captured = provenance_read(
+        &fixture.store,
+        std::slice::from_ref(&request.result_id),
+        AnalysisExtractLimits::default(),
+        true,
+    )?;
+    assert_eq!(captured.witnesses, request.witnesses);
+    assert_eq!(fixture.store.meta()?, before);
     let path = fixture.store.root.clone();
     drop(fixture.store);
     let reopened = AnalysisStore::open(path)?;
     assert_eq!(
         reopened.read_result(source.tenant_id, &request.result_id)?,
         Some(vec![1])
+    );
+    assert_eq!(
+        provenance_read(
+            &reopened,
+            std::slice::from_ref(&request.result_id),
+            AnalysisExtractLimits::default(),
+            true,
+        )?
+        .witnesses,
+        request.witnesses
     );
     Ok(())
 }
@@ -458,5 +481,200 @@ fn native_traversal_defaults() -> TestResult {
     let mut empty = request;
     empty.result_ids[0].clear();
     assert!(empty.validate().is_err());
+    Ok(())
+}
+
+fn provenance_read(
+    store: &AnalysisStore,
+    results: &[String],
+    limits: AnalysisExtractLimits,
+    inherit: bool,
+) -> crate::Result<AnalysisExtractionV1> {
+    let mut selection = AnalysisSelectionV1::new([1; 16], Vec::new());
+    selection.results = results.to_vec();
+    let requests = Default::default();
+    Ok(store
+        .read_tables(
+            &selection,
+            AnalysisTableRead {
+                requests: &requests,
+                event_ranges: None,
+                inputs: inherit.then_some(AnalysisInputTables {
+                    authorized: &selection,
+                    scope: "provenance",
+                    outputs: &[],
+                    limits: Default::default(),
+                }),
+                mode: AnalysisReadModeV1::Metadata,
+                now: 10,
+            },
+            limits,
+            &AnalysisReadControl::default(),
+        )?
+        .extraction)
+}
+
+#[test]
+fn extracted_provenance_defaults() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let mut request = fixture.request.clone();
+    request.scope.processor_id = "provenance-defaults".into();
+    request.body = vec![1];
+    fixture
+        .store
+        .register_processor(&request.scope, ProcessorClassV1::Optional, 1)?;
+    let contexts = (0..257_u64)
+        .map(|index| crate::AnalysisContextVersionV1 {
+            key: crate::AnalysisContextKeyV1 {
+                tenant_id: [1; 16],
+                owner_id: "provenance".into(),
+                entity_key: index.to_be_bytes().to_vec(),
+                lifetime_key: vec![1],
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: crate::ContextSensitivityV1::Tenant,
+            body: vec![1],
+        })
+        .collect::<Vec<_>>();
+    let contexts = fixture.store.commit_contexts(&contexts)?;
+    request.context_revision = contexts
+        .iter()
+        .map(|reference| reference.commit_revision)
+        .max()
+        .unwrap_or(0);
+    request.context_refs = contexts.clone();
+    request.result_id = "provenance:0".into();
+    let original = request.clone();
+    let mut ids = Vec::new();
+    for index in 0..65 {
+        request.result_id = format!("provenance:{index}");
+        if index != 0 {
+            request.expected_cursor = request.consumed_cursor;
+            request.context_refs = vec![contexts[0].clone()];
+            request.witnesses[0].expires_utc_ns = request.created_utc_ns + 1;
+        }
+        fixture.store.commit_result(&request)?;
+        ids.push(request.result_id.clone());
+    }
+    let before = fixture.store.meta()?;
+    let changes = fixture.store.subscribe_revision();
+    let direct = provenance_read(
+        &fixture.store,
+        &ids,
+        AnalysisExtractLimits::default(),
+        false,
+    )?;
+    assert!(direct.witnesses.is_empty());
+    assert_eq!(direct.references.len(), 65);
+    let captured = provenance_read(&fixture.store, &ids, AnalysisExtractLimits::default(), true)?;
+    assert_eq!(
+        captured
+            .references
+            .iter()
+            .filter_map(crate::AnalysisReferenceV1::result)
+            .count(),
+        65
+    );
+    let retained = captured
+        .references
+        .iter()
+        .filter_map(crate::AnalysisReferenceV1::context)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(retained, contexts);
+    for reference in &captured.references {
+        assert_eq!(
+            reference.origins(),
+            &[crate::AnalysisReferenceOriginV1::ExplicitResult]
+        );
+    }
+    assert_eq!(captured.witnesses, request.witnesses);
+    let bytes = direct
+        .input_bytes
+        .checked_add(original.request_meta()?.len() - 1)
+        .ok_or("configured input bytes")?;
+    let bounded = AnalysisExtractLimits {
+        input_bytes: bytes,
+        ..Default::default()
+    };
+    provenance_read(&fixture.store, &ids, bounded, false)?;
+    for (limits, expected) in [
+        (bounded, "selected input bytes"),
+        (
+            AnalysisExtractLimits {
+                keys: Some(64),
+                ..Default::default()
+            },
+            "selected input keys",
+        ),
+    ] {
+        assert!(
+            matches!(provenance_read(&fixture.store, &ids, limits, true), Err(crate::Error::AnalysisInputTooLarge { resource, .. }) if resource == expected)
+        );
+        assert_eq!(fixture.store.meta()?, before);
+        assert!(!changes.has_changed()?);
+    }
+    assert_eq!(fixture.store.meta()?, before);
+    assert!(!changes.has_changed()?);
+    let path = fixture.store.root.clone();
+    drop(fixture.store);
+    let reopened = AnalysisStore::open(path)?;
+    let captured = provenance_read(&reopened, &ids, AnalysisExtractLimits::default(), true)?;
+    assert_eq!(
+        captured
+            .references
+            .iter()
+            .filter_map(crate::AnalysisReferenceV1::result)
+            .count(),
+        65
+    );
+    assert_eq!(
+        captured
+            .references
+            .iter()
+            .filter_map(crate::AnalysisReferenceV1::context)
+            .cloned()
+            .collect::<Vec<_>>(),
+        contexts
+    );
+    assert_eq!(captured.witnesses, request.witnesses);
+    let mut foreign_witness = original.clone();
+    let crate::AnalysisStreamIdentityV1::Evidence(identity) =
+        &mut foreign_witness.witnesses[0].identity
+    else {
+        return Err("evidence witness".into());
+    };
+    identity.tenant_id = [2; 16];
+    let mut foreign_context = original.clone();
+    foreign_context.context_refs[0].key.tenant_id = [2; 16];
+    for (changed, expected) in [
+        (
+            foreign_witness,
+            "the captured evidence witness has a foreign tenant",
+        ),
+        (
+            foreign_context,
+            "the captured evidence context has a foreign tenant",
+        ),
+    ] {
+        reopened.writer_access()?.get()?.execute(
+            "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
+            params![changed.request_meta()?, original.result_id],
+        )?;
+        assert!(matches!(
+            provenance_read(&reopened, std::slice::from_ref(&original.result_id), AnalysisExtractLimits::default(), true),
+            Err(crate::Error::AnalysisState { reason, .. }) if reason == expected
+        ));
+        reopened.writer_access()?.get()?.execute(
+            "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
+            params![original.request_meta()?, original.result_id],
+        )?;
+    }
+    assert_eq!(
+        provenance_read(&reopened, &ids, AnalysisExtractLimits::default(), true)?.witnesses,
+        request.witnesses
+    );
     Ok(())
 }

@@ -220,9 +220,6 @@ impl AnalysisStore {
             .iter()
             .filter_map(AnalysisReferenceV1::result)
             .count();
-        if count > 64 {
-            return self.reject("the package evidence sources exceed their count limit");
-        }
         for index in 0..count {
             control.check()?;
             let entry = output
@@ -293,16 +290,6 @@ impl AnalysisStore {
                 for origin in &origins {
                     output.reference_context(&reference.key, reference.commit_revision, *origin)?;
                 }
-            }
-            if output.witnesses.len() > 8192
-                || output
-                    .references
-                    .iter()
-                    .filter_map(AnalysisReferenceV1::context)
-                    .count()
-                    > 256
-            {
-                return self.reject("the package evidence references exceed their count limit");
             }
         }
         Ok(())
