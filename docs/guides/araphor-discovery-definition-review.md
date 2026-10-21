@@ -1687,3 +1687,14 @@ policy and retained-attempt ceilings are separate remaining work. Read the
 [bounded result](../plans/araphor-analysis-migration.md#finite-native-notification-retirement)
 for qualification and custody. Complete migration, required net
 reduction, and the final shared Rust procedure remain **Not done**.
+
+
+### Complete native Graph adapter proof
+
+The [native adapter tests](../../crates/araphor-analysis/src/graph/tests/execution.rs)
+execute all three detectors for each of six selected and gapped inputs through
+actual native and Wasm calls. Each full return passes the existing Fixture
+checks and production Graph application before complete snapshots are compared.
+Replay retains the original oracle; explicit output pressure retains the exact
+resource error and buffer-release checks. The [retirement record](../../recovery/araphor-graph-adapter-test-retirement-20261021.json)
+names the three replaced test leaves. It does not qualify automatic advancement.

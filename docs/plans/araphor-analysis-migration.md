@@ -1930,3 +1930,21 @@ code. The production totals remain +10,354 from the recovery baseline and
 negative fixture time and contained-artifact fixture selection remain open.
 Complete migration, the required net reduction, and the final shared Rust
 procedure remain **Not done**.
+
+
+## Complete native Graph adapter test retirement
+
+Status: **Done** for `graph/derive/adapter/tests.rs`, `tests/native.rs`, and
+`tests/native/large.rs`. Fourteen distinct current tests pass. The actual native
+and Wasm calls compare complete three-detector Graph snapshots for all six
+selected and gapped inputs. Replay also matches the original trusted output.
+The explicit output-pool test retains the exact shared-output error, checkpoint
+alias lifetime, release and successful replay assertions. Connected compilation
+and strict Clippy pass. Read the [exact assertion and qualification record](../../recovery/araphor-graph-adapter-test-retirement-20261021.json).
+
+There are now 117 retired files and 91 unchanged reference files. The full
+archive is unchanged. This test-only change adds and removes no production
+code. Production totals stay +10,354 from the recovery baseline and +16,348
+from the original baseline. Automatic Graph advancement, expiry and recovery,
+complete migration, required net reduction, and the final shared Rust procedure
+remain **Not done**.

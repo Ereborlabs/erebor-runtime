@@ -27,6 +27,25 @@ async fn native_graph_adapter() -> TestResult {
 }
 
 async fn parity(target: Target) -> TestResult {
+    let comparisons = if matches!(target, Target::Native) {
+        let input = fixture::credential_input()?.normalized()?;
+        Some(
+            detectors()
+                .into_iter()
+                .map(|detector| {
+                    let evaluation = evaluation(&input, detector)?;
+                    let expected = detector.evaluate(&evaluation)?;
+                    Ok((
+                        detector,
+                        Fixture::new(detector, Target::Native, &evaluation, &expected, None)?,
+                        Fixture::new(detector, Target::Wasm, &evaluation, &expected, None)?,
+                    ))
+                })
+                .collect::<TestResult<Vec<_>>>()?,
+        )
+    } else {
+        None
+    };
     for detector in detectors() {
         let selected = selected(detector)?;
         let mut gapped = selected.clone();
@@ -55,6 +74,23 @@ async fn parity(target: Target) -> TestResult {
                 serde_json::to_value(actual_graph)?,
                 serde_json::to_value(expected)?
             );
+            if let Some(comparisons) = &comparisons {
+                let native = captured_graph(
+                    &input,
+                    comparisons
+                        .iter()
+                        .map(|(detector, native, _)| (*detector, native)),
+                )
+                .await?;
+                let wasm = captured_graph(
+                    &input,
+                    comparisons
+                        .iter()
+                        .map(|(detector, _, wasm)| (*detector, wasm)),
+                )
+                .await?;
+                assert_eq!(serde_json::to_value(native)?, serde_json::to_value(wasm)?);
+            }
             evaluation.checkpoint = result.output().checkpoint.clone();
             evaluation.inputs.reverse();
             drop(actual);
@@ -68,6 +104,11 @@ async fn parity(target: Target) -> TestResult {
                 &evaluation,
                 &detector.evaluate(&evaluation)?,
                 replay.calls.get(&call.id()).ok_or("replayed call")?,
+            )?;
+            fixture.compare(
+                &evaluation,
+                &trusted,
+                replay.calls.get(&call.id()).ok_or("original replay")?,
             )?;
             drop(replay);
             drop(call);
@@ -91,6 +132,28 @@ async fn parity(target: Target) -> TestResult {
         serde_json::to_value(super::derive(&input)?)?
     );
     large(target).await
+}
+
+async fn captured_graph<'a>(
+    input: &GraphReplayInputV1,
+    fixtures: impl Iterator<Item = (algorithm::Detector, &'a Fixture)>,
+) -> TestResult<GraphSnapshotV1> {
+    let mut graph = Graph::new(input)?;
+    for (detector, fixture) in fixtures {
+        let evaluation = evaluation(input, detector)?;
+        let trusted = detector.evaluate(&evaluation)?;
+        let (call, returned) = fixture.run(&evaluation).await?;
+        let result = returned
+            .calls
+            .get(&call.id())
+            .ok_or("complete graph call")?;
+        fixture.compare(&evaluation, &trusted, result)?;
+        graph = graph.apply(&call, result)?;
+        drop(returned);
+        drop(call);
+        fixture.released()?;
+    }
+    Ok(graph.finish()?)
 }
 
 async fn large(target: Target) -> TestResult {
@@ -193,6 +256,19 @@ async fn pressure(target: Target) -> TestResult {
         .downcast_ref::<araphor_query::Error>()
         .ok_or("typed Query pressure")?;
     assert_eq!(Failure::from(error), Failure::Busy, "{error:?}");
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    let mut output = false;
+    while let Some(error) = source {
+        output |= matches!(
+            error.downcast_ref::<araphor_query::Error>(),
+            Some(araphor_query::Error::Capacity {
+                resource: "shared output",
+                ..
+            })
+        );
+        source = error.source();
+    }
+    assert!(output, "{error:?}");
     drop(held);
     let (call, replay) = fixture.run(&detached).await?;
     fixture.compare(
