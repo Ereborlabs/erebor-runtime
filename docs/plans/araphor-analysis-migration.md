@@ -1948,3 +1948,17 @@ code. Production totals stay +10,354 from the recovery baseline and +16,348
 from the original baseline. Automatic Graph advancement, expiry and recovery,
 complete migration, required net reduction, and the final shared Rust procedure
 remain **Not done**.
+
+
+## Native target build retirement
+
+Status: **Done** for the old `build.rs`. The current Package Runtime build
+script has identical bytes and supplies the compiler target to NativeAdmission.
+Four current native admission tests pass. The preceding actual native Graph
+checks also pass on the same current Runtime. Read the [retirement record](../../recovery/araphor-native-target-build-retirement-20261021.json).
+
+There are now 118 retired files and 90 unchanged reference files. The full
+archive is unchanged. This deletion removes eight production code lines. Totals
+are +10,346 from the recovery baseline and +16,340 from the original baseline.
+Complete migration, required net reduction, and the final shared Rust procedure
+remain **Not done**.
