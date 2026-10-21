@@ -113,7 +113,7 @@ impl DeclaredFindingReasonV1 {
 
     fn validate(&self, package: &str) -> Result<()> {
         let local = self.code.strip_prefix(&format!("{package}."));
-        if local.is_none_or(str::is_empty) || self.code.len() > 256 {
+        if local.is_none_or(str::is_empty) {
             return GraphInvalidSnafu {
                 field: "finding reason namespace",
             }

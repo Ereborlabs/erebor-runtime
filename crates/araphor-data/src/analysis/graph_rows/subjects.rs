@@ -18,7 +18,10 @@ impl GraphRows {
         writer
             .append_row(params![
                 result_id,
-                ordinal as u32,
+                u32::try_from(ordinal).map_err(|_| GraphInvalidSnafu {
+                    field: "graph row ordinal"
+                }
+                .build())?,
                 subject.tenant_id.as_slice(),
                 Self::label(&subject.kind)?,
                 Self::json(&subject.authority)?,
@@ -116,12 +119,6 @@ impl GraphRows {
                 operation: "advance selected graph subjects",
             })? {
                 control.check()?;
-                if selected.len() >= 2048 {
-                    return GraphInvalidSnafu {
-                        field: "selected graph subject count",
-                    }
-                    .fail();
-                }
                 selected.push(Self::column_operation(
                     Self::decode_subject(row),
                     "decode selected graph subject columns",
@@ -143,7 +140,6 @@ impl GraphRows {
             "graph_subjects",
             COLUMNS,
             result_id,
-            2048,
             control,
             Self::decode_subject,
         )

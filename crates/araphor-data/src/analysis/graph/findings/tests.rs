@@ -8,7 +8,7 @@ fn native_header_read_budget() -> std::result::Result<(), Box<dyn std::error::Er
     let mut headers = FindingHeaders::default();
     for id in ["first", "second"] {
         let mut header = GraphHeader::decode(&encoded_header)?;
-        header.snapshot_bytes = crate::analysis::MAX_RESULT_BYTES / 2 + 1;
+        header.snapshot_bytes = MAX_READ_BYTES / 4 + 1;
         headers.insert(id.into(), header);
     }
     assert!(headers.get("first").is_some());

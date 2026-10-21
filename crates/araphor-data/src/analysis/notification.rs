@@ -16,7 +16,7 @@ impl AnalysisStore {
         lookup: NotificationLookup<'_>,
     ) -> Result<Vec<AnalysisContextVersionV1>> {
         let (finding, action, concern, route, limit) = match lookup {
-            NotificationLookup::Finding(id, action) if !id.is_empty() && id.len() <= 4096 => (
+            NotificationLookup::Finding(id, action) if !id.is_empty() => (
                 Some(id),
                 action,
                 None,

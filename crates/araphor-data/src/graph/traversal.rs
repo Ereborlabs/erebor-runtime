@@ -35,35 +35,29 @@ impl Default for GraphTraversalV1 {
             direction: GraphTraversalDirectionV1::Outgoing,
             edge_types: Vec::new(),
             max_hops: 1,
-            max_subjects: 2048,
-            max_relationships: 4096,
+            max_subjects: usize::MAX,
+            max_relationships: usize::MAX,
         }
     }
 }
 
 impl GraphTraversalV1 {
-    pub const MAX_BYTES: usize = 1024 * 1024;
-    pub const MAX_SEEDS: usize = 64;
-    pub const MAX_HOPS: u32 = 64;
-    pub const MAX_SUBJECTS: usize = 65_536;
-    pub const MAX_RELATIONSHIPS: usize = 131_072;
+    pub const MAX_BYTES: usize = usize::MAX;
+    pub const MAX_SEEDS: usize = usize::MAX;
+    pub const MAX_HOPS: u32 = u32::MAX;
+    pub const MAX_SUBJECTS: usize = usize::MAX;
+    pub const MAX_RELATIONSHIPS: usize = usize::MAX;
 
     pub fn validate(&self) -> Result<()> {
         if self.seeds.is_empty()
-            || self.seeds.len() > Self::MAX_SEEDS
             || self.seeds.len() > self.max_subjects
             || self.seeds.iter().collect::<BTreeSet<_>>().len() != self.seeds.len()
             || self.seeds.iter().any(|seed| seed.validate().is_err())
-            || self.result_ids.len() > 1024
-            || self
-                .result_ids
-                .iter()
-                .any(|id| id.is_empty() || id.len() > 256)
+            || self.result_ids.iter().any(|id| id.is_empty())
             || self.result_ids.iter().collect::<BTreeSet<_>>().len() != self.result_ids.len()
             || self.edge_types.iter().collect::<BTreeSet<_>>().len() != self.edge_types.len()
-            || self.max_hops > Self::MAX_HOPS
-            || !(1..=Self::MAX_SUBJECTS).contains(&self.max_subjects)
-            || !(1..=Self::MAX_RELATIONSHIPS).contains(&self.max_relationships)
+            || self.max_subjects == 0
+            || self.max_relationships == 0
         {
             return GraphInvalidSnafu {
                 field: "graph traversal",
@@ -102,7 +96,7 @@ impl TryFrom<&[u8]> for GraphTraversalV1 {
     type Error = crate::Error;
 
     fn try_from(bytes: &[u8]) -> Result<Self> {
-        if bytes.is_empty() || bytes.len() > Self::MAX_BYTES {
+        if bytes.is_empty() {
             return GraphInvalidSnafu {
                 field: "graph traversal bytes",
             }

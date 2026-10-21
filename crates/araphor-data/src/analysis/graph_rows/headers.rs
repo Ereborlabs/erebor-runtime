@@ -144,7 +144,10 @@ impl GraphRows {
                 .fail();
             }
             bytes = bytes
-                .checked_add(256 + id.len() + length as usize + stream as usize)
+                .checked_add(256)
+                .and_then(|bytes| bytes.checked_add(id.len()))
+                .and_then(|bytes| bytes.checked_add(length as usize))
+                .and_then(|bytes| bytes.checked_add(stream as usize))
                 .ok_or_else(|| {
                     AnalysisInputTooLargeSnafu {
                         resource: "graph header buffers",

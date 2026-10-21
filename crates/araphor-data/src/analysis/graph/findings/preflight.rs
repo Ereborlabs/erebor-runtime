@@ -28,7 +28,7 @@ impl FindingHeaders {
     }
 
     pub(super) fn insert(&mut self, id: String, header: GraphHeader) {
-        let charge = header.snapshot_bytes + 384;
+        let charge = header.snapshot_bytes.saturating_add(384);
         if self.bytes.saturating_add(charge) > MAX_READ_BYTES + 384 {
             self.headers.clear();
             self.bytes = 0;

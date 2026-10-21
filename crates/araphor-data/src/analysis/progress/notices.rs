@@ -81,7 +81,7 @@ impl AnalysisStore {
         coverage: u64,
         check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
-        if !scope.valid() || result_id.is_empty() || result_id.len() > 256 || revision == 0 {
+        if !scope.valid() || result_id.is_empty() || revision == 0 {
             return self.reject("the result notice identity is invalid");
         }
         let graph = scope.processor_id == crate::GRAPH_PROCESSOR;

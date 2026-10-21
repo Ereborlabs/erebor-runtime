@@ -635,9 +635,12 @@ contracts remain. Their presence does not qualify a complete producing path.
 ### 13. Configurable quotas, disabled by default
 
 - **Before:** Several limits were mandatory.
-- **Now:** Wasm/native options, shared memory capacities, and storage limits
-  already have disabled defaults. Query per-call limits, SDK limits,
-  extraction limits, and compiler limits still include mandatory bounds.
+- **Now:** Wasm/native options, shared memory capacities, storage, Query bulk,
+  SDK bulk and extraction limits have disabled defaults. Graph domain,
+  retained-result and traversal resource defaults are now removed. All 159
+  connected cases, formatting and strict Clippy pass. Evidence intake, coverage reports,
+  Discovery batching, notification policy, legacy package literals and SDK
+  descriptor boundaries still need their separate audit.
 - **Required:** Make the remaining quotas configurable and disabled by
   default. Keep identity, type, format, and arithmetic validation.
 - **Reuse:** Existing option handling and configured-limit checks. Change

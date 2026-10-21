@@ -36,25 +36,12 @@ impl GraphValidate for GraphSubjectKeyV1 {
                 node_id,
                 node_boot_id,
                 label_epoch,
-            } => {
-                !node_id.is_empty()
-                    && node_id.len() <= 256
-                    && *node_boot_id != [0; 16]
-                    && *label_epoch > 0
-            }
+            } => !node_id.is_empty() && *node_boot_id != [0; 16] && *label_epoch > 0,
             GraphSubjectAuthorityV1::Provider { authority_id }
-            | GraphSubjectAuthorityV1::External { authority_id } => {
-                !authority_id.is_empty() && authority_id.len() <= 256
-            }
-            GraphSubjectAuthorityV1::Kubernetes { cluster_id } => {
-                !cluster_id.is_empty() && cluster_id.len() <= 256
-            }
+            | GraphSubjectAuthorityV1::External { authority_id } => !authority_id.is_empty(),
+            GraphSubjectAuthorityV1::Kubernetes { cluster_id } => !cluster_id.is_empty(),
         };
-        if self.tenant_id == [0; 16]
-            || !valid_authority
-            || self.identity.is_empty()
-            || self.identity.len() > 512
-        {
+        if self.tenant_id == [0; 16] || !valid_authority || self.identity.is_empty() {
             return GraphInvalidSnafu {
                 field: "subject lifetime",
             }
@@ -162,17 +149,12 @@ impl GraphValidate for PolicyObservationProvenanceV1 {
             || (self.profile_generation_ref_id == 0
                 && self.state != PolicyProvenanceStateV1::Missing)
             || self.observations.is_empty()
-            || self.observations.len() > GRAPH_WINDOW_RECORDS as usize
             || self.observations.windows(2).any(|pair| pair[0] >= pair[1])
             || self
                 .observations
                 .iter()
                 .any(|id| id.stream != self.source || id.validate().is_err())
-            || self.limits.len() > 32
-            || self
-                .limits
-                .iter()
-                .any(|limit| limit.is_empty() || limit.len() > 128)
+            || self.limits.iter().any(|limit| limit.is_empty())
             || self.limits.windows(2).any(|pair| pair[0] >= pair[1])
             || [
                 self.policy_source_revision_id.as_ref(),
@@ -182,7 +164,7 @@ impl GraphValidate for PolicyObservationProvenanceV1 {
             ]
             .into_iter()
             .flatten()
-            .any(|value| value.is_empty() || value.len() > 256)
+            .any(|value| value.is_empty())
             || self
                 .activation_acknowledgement
                 .as_ref()
@@ -313,26 +295,20 @@ impl FindingV1 {
         if self.tenant_id == [0; 16]
             || self.subject_id.tenant_id != self.tenant_id
             || self.finding_id.is_empty()
-            || self.finding_id.len() > 4096
             || self.package_id.is_empty()
-            || self.package_id.len() > 128
             || self.package_version != 1
             || self.window_start_utc_ns > self.window_end_utc_ns
             || self.evidence.is_empty()
-            || self.evidence.len() > GRAPH_WINDOW_RECORDS as usize
             || self.evidence.windows(2).any(|pair| pair[0] >= pair[1])
             || self
                 .evidence
                 .iter()
                 .any(|id| !self.revision.evidence.contains(id))
-            || self.required_coverage_interval_ids.len() > 256
             || self
                 .required_coverage_interval_ids
                 .windows(2)
                 .any(|pair| pair[0] >= pair[1])
             || self.required_coverage_interval_ids.contains(&[0; 16])
-            || self.policy_provenance.len() > 256
-            || self.effects.len() > GRAPH_WINDOW_RECORDS as usize
             || self
                 .effects
                 .iter()
@@ -340,12 +316,8 @@ impl FindingV1 {
             || self
                 .required_action
                 .as_ref()
-                .is_some_and(|action| action.is_empty() || action.len() > 128)
-            || self.limits.len() > 64
-            || self
-                .limits
-                .iter()
-                .any(|limit| limit.is_empty() || limit.len() > 128)
+                .is_some_and(|action| action.is_empty())
+            || self.limits.iter().any(|limit| limit.is_empty())
             || self.limits.windows(2).any(|pair| pair[0] >= pair[1])
         {
             return GraphInvalidSnafu {
@@ -446,36 +418,30 @@ impl GraphSnapshotV1 {
             || !self.scope.identity.valid()
             || self.first_cursor == 0
             || self.last_cursor < self.first_cursor
-            || self.last_cursor - self.first_cursor >= GRAPH_WINDOW_RECORDS
             || self.graph.revision != self.input_manifest
             || self.missing_ranges != self.input_manifest.missing_ranges
-            || self.input_positions.len() > GRAPH_WINDOW_RECORDS as usize
             || self.input_positions.iter().any(|(record, position)| {
                 !self.input_manifest.evidence.contains(record) || position.commit_revision == 0
             })
             || self
                 .previous_result_id
                 .as_ref()
-                .is_some_and(|id| id.is_empty() || id.len() > 256)
-            || self.graph.subjects.len() > 2048
+                .is_some_and(|id| id.is_empty())
             || self
                 .graph
                 .subjects
                 .windows(2)
                 .any(|pair| pair[0] >= pair[1])
-            || self.graph.edges.len() > 4096
             || self
                 .graph
                 .edges
                 .windows(2)
                 .any(|pair| pair[0].key >= pair[1].key)
-            || self.findings.len() > 1024
             || self
                 .findings
                 .windows(2)
                 .any(|pair| pair[0].finding_id >= pair[1].finding_id)
             || self.packages.is_empty()
-            || self.packages.len() > 64
             || self
                 .packages
                 .iter()
@@ -487,7 +453,6 @@ impl GraphSnapshotV1 {
                 id.stream != self.scope.identity
                     || !(self.first_cursor..=self.last_cursor).contains(&id.durable_cursor)
             })
-            || self.missing_ranges.len() > 256
             || self
                 .missing_ranges
                 .iter()
@@ -531,13 +496,11 @@ impl GraphSnapshotV1 {
         }
         for package in &self.packages {
             if package.package_id.is_empty()
-                || package.package_id.len() > 128
                 || package.package_version != 1
                 || !package
                     .replay_contract_id
                     .starts_with(&format!("{}/v", package.package_id))
-                || package.replay_contract_id.len() > 512
-                || matches!(&package.state, GraphPackageStateV1::Declared(value) if value.is_empty() || value.len() > 128)
+                || matches!(&package.state, GraphPackageStateV1::Declared(value) if value.is_empty())
             {
                 return GraphInvalidSnafu {
                     field: "graph package checkpoint",
@@ -567,12 +530,6 @@ impl TryFrom<&[u8]> for GraphSnapshotV1 {
     type Error = crate::Error;
 
     fn try_from(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() > crate::analysis::MAX_RESULT_BYTES {
-            return GraphInvalidSnafu {
-                field: "graph result bytes",
-            }
-            .fail();
-        }
         let value: Self = serde_json::from_slice(bytes).context(GraphEncodingSnafu)?;
         value.validate()?;
         Ok(value)
@@ -596,7 +553,6 @@ impl GraphFactV1 {
                     .map(|id| *id.as_bytes())
                     != Some(self.record_id.stream.tenant_id)
                     || activation.node_id.is_empty()
-                    || activation.node_id.len() > 128
                     || activation.node_boot_id.len() != 16
                     || activation.node_boot_id == [0; 16]
                     || activation.label_epoch == 0
@@ -611,7 +567,7 @@ impl GraphFactV1 {
                         &activation.target_snapshot_digest,
                     ]
                     .into_iter()
-                    .any(|id| id.is_empty() || id.len() > 256)
+                    .any(|id| id.is_empty())
                     || [
                         &activation.node_bound_generation_digest,
                         &activation.readback_digest,
@@ -620,7 +576,7 @@ impl GraphFactV1 {
                     ]
                     .into_iter()
                     .flatten()
-                    .any(|id| id.is_empty() || id.len() > 256)
+                    .any(|id| id.is_empty())
                     || activation.profile_generation_ref_id == Some(0)
                 {
                     return GraphInvalidSnafu {
@@ -633,10 +589,7 @@ impl GraphFactV1 {
                 subject, action_id, ..
             } => {
                 subject.validate()?;
-                if subject.tenant_id != self.record_id.stream.tenant_id
-                    || action_id.is_empty()
-                    || action_id.len() > 256
-                {
+                if subject.tenant_id != self.record_id.stream.tenant_id || action_id.is_empty() {
                     return GraphInvalidSnafu {
                         field: "context action",
                     }
@@ -661,19 +614,13 @@ impl GraphFactV1 {
                 principal_id,
                 ..
             } => {
-                if *object_id == [0; 16]
-                    || reviewed_policy_revision.is_empty()
-                    || reviewed_policy_revision.len() > 256
-                {
+                if *object_id == [0; 16] || reviewed_policy_revision.is_empty() {
                     return GraphInvalidSnafu {
                         field: "credential classification",
                     }
                     .fail();
                 }
-                if principal_id
-                    .as_ref()
-                    .is_some_and(|id| id.is_empty() || id.len() > 256)
-                {
+                if principal_id.as_ref().is_some_and(|id| id.is_empty()) {
                     return GraphInvalidSnafu {
                         field: "credential principal",
                     }
@@ -686,7 +633,7 @@ impl GraphFactV1 {
                         &completion.file_description_id,
                     ]
                     .into_iter()
-                    .any(|id| id.is_empty() || id.len() > 256)
+                    .any(|id| id.is_empty())
                         || completion.task_cookie == 0
                         || completion.process_instance_id == [0; 16]
                         || completion.object_id != *object_id
@@ -697,7 +644,7 @@ impl GraphFactV1 {
                         || [&completion.credential_lease_id, &completion.principal_id]
                             .into_iter()
                             .flatten()
-                            .any(|id| id.is_empty() || id.len() > 256)
+                            .any(|id| id.is_empty())
                     {
                         return GraphInvalidSnafu {
                             field: "credential read completion",
@@ -711,11 +658,7 @@ impl GraphFactV1 {
                 state_id,
                 reviewed_policy_revision,
                 ..
-            } if *role_id == 0
-                || *state_id == 0
-                || reviewed_policy_revision.is_empty()
-                || reviewed_policy_revision.len() > 256 =>
-            {
+            } if *role_id == 0 || *state_id == 0 || reviewed_policy_revision.is_empty() => {
                 return GraphInvalidSnafu {
                     field: "reviewed role baseline",
                 }
@@ -765,7 +708,7 @@ impl GraphFactV1 {
             } => {
                 if [authority_id, principal_id, operation_id]
                     .into_iter()
-                    .any(|id| id.is_empty() || id.len() > 256)
+                    .any(|id| id.is_empty())
                     || [process_instance_id, credential_object_id, socket_object_id]
                         .into_iter()
                         .any(|id| *id == Some([0; 16]))
@@ -773,7 +716,7 @@ impl GraphFactV1 {
                     || [request_id, credential_lease_id]
                         .into_iter()
                         .flatten()
-                        .any(|id| id.is_empty() || id.len() > 256)
+                        .any(|id| id.is_empty())
                 {
                     return GraphInvalidSnafu {
                         field: "authority fact",
@@ -821,7 +764,7 @@ impl GraphFactV1 {
                         operation_id,
                     ]
                     .into_iter()
-                    .any(|id| id.is_empty() || id.len() > 256)
+                    .any(|id| id.is_empty())
                 {
                     return GraphInvalidSnafu {
                         field: "carried channel proof",
@@ -831,7 +774,6 @@ impl GraphFactV1 {
             }
             GraphFactValueV1::Kubernetes(stage)
                 if stage.cluster_id.is_empty()
-                    || stage.cluster_id.len() > 256
                     || [
                         &stage.audit_id,
                         &stage.object_uid,
@@ -845,7 +787,7 @@ impl GraphFactV1 {
                     ]
                     .into_iter()
                     .flatten()
-                    .any(|id| id.is_empty() || id.len() > 256) =>
+                    .any(|id| id.is_empty()) =>
             {
                 return GraphInvalidSnafu {
                     field: "Kubernetes fact",
@@ -862,8 +804,7 @@ impl TryFrom<&AnalysisContextVersionV1> for GraphFactV1 {
     type Error = crate::Error;
 
     fn try_from(context: &AnalysisContextVersionV1) -> Result<Self> {
-        if !context.key.valid() || context.key.owner_revision == 0 || context.body.len() > 32 * 1024
-        {
+        if !context.key.valid() || context.key.owner_revision == 0 {
             return GraphInvalidSnafu {
                 field: "graph context version",
             }
@@ -893,12 +834,7 @@ pub struct GraphReplayInputV1 {
 
 impl GraphReplayInputV1 {
     pub fn validate(&self) -> Result<()> {
-        if !self.source.valid()
-            || self.records.is_empty()
-            || self.records.len() > GRAPH_WINDOW_RECORDS as usize
-            || self.facts.len() > 256
-            || self.coverage.len() > 4096
-        {
+        if !self.source.valid() || self.records.is_empty() {
             return GraphInvalidSnafu {
                 field: "replay input",
             }

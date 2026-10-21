@@ -71,7 +71,7 @@ impl CanonicalGraph {
 }
 
 impl GraphRows {
-    pub(super) const MAX_CANONICAL_BYTES: usize = super::MAX_RESULT_BYTES;
+    pub(super) const MAX_CANONICAL_BYTES: usize = u32::MAX as usize;
     pub(super) fn encode_body(snapshot: &GraphSnapshotV1, body: &[u8]) -> Result<Vec<u8>> {
         snapshot.validate()?;
         let canonical = Self::json(snapshot)?;
@@ -173,7 +173,6 @@ impl GraphRows {
         table: &str,
         columns: &str,
         result_id: &str,
-        maximum: usize,
         control: Option<&AnalysisReadControl>,
         decode: impl Fn(&Row<'_>) -> Result<T>,
     ) -> Result<Vec<T>> {
@@ -200,11 +199,10 @@ impl GraphRows {
             else {
                 break;
             };
-            if values.len() >= maximum
-                || row.get::<_, u32>(0).context(AnalysisDatabaseSnafu {
-                    operation: "read graph ordinal",
-                })? as usize
-                    != values.len()
+            if row.get::<_, u32>(0).context(AnalysisDatabaseSnafu {
+                operation: "read graph ordinal",
+            })? as usize
+                != values.len()
             {
                 return GraphInvalidSnafu {
                     field: "graph row ordinal",

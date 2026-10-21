@@ -296,20 +296,9 @@ impl AnalysisSelectionV1 {
                 .as_slice()
                 .iter()
                 .all(|key| key.tenant_id == self.tenant_id && key.valid())
-            && self
-                .results
-                .iter()
-                .all(|id| !id.is_empty() && id.len() <= 256)
-            && self
-                .profiles
-                .as_slice()
-                .iter()
-                .all(|id| !id.is_empty() && id.len() <= 256)
-            && self
-                .graphs
-                .as_slice()
-                .iter()
-                .all(|id| !id.is_empty() && id.len() <= 256)
+            && self.results.iter().all(|id| !id.is_empty())
+            && self.profiles.as_slice().iter().all(|id| !id.is_empty())
+            && self.graphs.as_slice().iter().all(|id| !id.is_empty())
             && self.obligations.as_slice().iter().all(|key| {
                 key.tenant_id == self.tenant_id
                     && key.owner_id == crate::NOTIFICATION_STATE_OWNER
@@ -1249,7 +1238,7 @@ impl AnalysisStore {
                     let id = row.context(AnalysisDatabaseSnafu {
                         operation: "decode discovery profile key",
                     })?;
-                    if id.is_empty() || id.len() > 256 {
+                    if id.is_empty() {
                         return self.reject("the discovery profile key is invalid");
                     }
                     if limits.keys.is_some_and(|keys| resolved.key_count() >= keys) {
@@ -1302,7 +1291,7 @@ impl AnalysisStore {
                     let id = row.context(AnalysisDatabaseSnafu {
                         operation: "decode graph result key",
                     })?;
-                    if id.is_empty() || id.len() > 256 {
+                    if id.is_empty() {
                         return self.reject("the graph result key is invalid");
                     }
                     if limits.keys.is_some_and(|keys| resolved.key_count() >= keys) {

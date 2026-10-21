@@ -793,18 +793,67 @@ files remain. Retained dependency expiry, witness renewal, offered-cut pressure
 retry, general scalar clock events, complete producers and lifecycle, and the
 final Rust gate remain **Not done**.
 
+### Graph and retained-result resource defaults
+
+The replacement removes Graph record, fact, coverage, row, payload and variable
+identifier ceilings. Shared result writes and reads also remove their fixed
+body, metadata and reference-count ceilings. Recovery and copy paths accept the
+same range. Existing SDK, Query and Data options still enforce explicit limits.
+No additional resource owner is added. This change removes 122 production
+lines and retires no Back file. All 111 remaining reference files and the full
+archive remain unchanged.
+
+The detector keeps its 300-second BOOTTIME join horizon. The default graph
+traversal remains one outgoing hop. Subject and relationship failure limits
+default to MAX. Native SQL uses NULL for an early-stop LIMIT only when its
+value cannot fit BIGINT; actual configured count checks remain active. Stored
+header counts and ordinals keep their existing u32 format and checked
+conversions. Window reads use actual overlap without a 255-cursor assumption.
+
+The 32 MiB read threshold remains batch and cache geometry. A large item uses
+the existing single-item fallback. The threshold does not reject that item.
+Data serialization/storage and Query array/exchange limits keep separate
+owners. This change does not claim complete Rust heap accounting.
+
+Implementation and focused qualification are **Done** for this bounded
+correction. The first build finds a missing test import. The corrected source
+passes the following checks without source changes during each command.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `migration-resource-build137` | Connected test build passes. | 90.554 |
+| `migration-resource-fmt137` | Workspace formatting passes. | 4.970 |
+| `migration-resource-clippy137` | Strict connected Clippy passes. | 98.094 |
+| `migration-resource-data-connected137` | 94 cases pass. | 126.951 |
+| `migration-resource-analysis137` | 56 cases pass. | 65.547 |
+| `migration-resource-control137` | 3 cases pass. | 1.152 |
+| `migration-resource-query137` | 6 cases pass. | 2.843 |
+
+The [resource qualification record](../../recovery/araphor-graph-resource-defaults-20261020.json)
+retains the exact source, commands, root test corrections and custody proof.
+These 159 cases include large body/meta and actual witness persistence, exact
+retry, reopen, backup/restore, native traversal and format checks, explicit
+limits, cancellation, scopes and current authority. The domain tests use the
+existing Builtins detector implementations. They do not qualify the automatic
+native Graph producer. Evidence intake, encoded coverage reports,
+Discovery batching, notification policy, legacy package literals and remaining
+SDK descriptor boundaries still need their separate audit. Complete quota
+qualification, producer replacement, Back removal and the final Rust gate
+remain **Not done**.
+
 ### Production code ledger
 
-The current count134 includes the preceding native migration, metadata-first
-resume, explicit rebuild, and the two checkpoint test retirements.
+The current count137 includes the preceding native migration, metadata-first
+resume, explicit rebuild, the two checkpoint test retirements and the Graph
+resource-default correction.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
 count.
 
 | Baseline | Added production Rust | Removed production Rust | Net |
 | --- | ---: | ---: | ---: |
-| `6a25ba1b` | 16,569 | 8,892 | +7,677 |
-| Original reduction baseline `7b7b407a` | 43,986 | 30,315 | +13,671 |
+| `6a25ba1b` | 16,560 | 9,005 | +7,555 |
+| Original reduction baseline `7b7b407a` | 43,964 | 30,415 | +13,549 |
 
 The finite managed deliverable at `7315cabd` adds 3,407 net production lines relative to
 `95e9bb4d` (`13,825 - 10,418`). The required 6,000-line net reduction is
@@ -838,13 +887,17 @@ that the earlier counter incorrectly included. Public receipt/output reads,
 original receipt enumeration and native input windows add 621 production
 lines. The three retirements remove 90. This delivery adds 531 net production
 lines. Metadata-first resume and explicit rebuild then add 109 production
-lines. The checkpoint retirements remove test code only. Another 19,671 net production lines
+lines. The checkpoint retirements remove test code only. The resource-default
+correction removes 122 production lines. Another 19,549 net production lines
 must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count134.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count137.json`. Its selected source
 fingerprint is
+`13c415988c50cf51223c082f490b3f5adfa34f553d88a41635edc84de8dcd65c`.
+The earlier count134 records metadata-first resume and checkpoint retirement
+at +13,671 production lines from the original baseline. Its fingerprint is
 `919f8aa8bfb6bb183e1c71497af61f886435f7cb5db762e2efe5c8ea89f4f113`.
 The earlier count131 records public inspection, input windows and output
 retirement at +13,562 production lines from the original baseline. Its

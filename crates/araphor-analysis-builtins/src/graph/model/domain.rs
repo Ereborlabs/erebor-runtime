@@ -22,11 +22,8 @@ impl AnalysisContextKeyV1 {
     pub fn valid(&self) -> bool {
         self.tenant_id != [0; 16]
             && !self.owner_id.is_empty()
-            && self.owner_id.len() <= 128
             && !self.entity_key.is_empty()
-            && self.entity_key.len() <= 256
             && !self.lifetime_key.is_empty()
-            && self.lifetime_key.len() <= 256
     }
 }
 

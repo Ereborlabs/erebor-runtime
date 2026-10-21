@@ -76,8 +76,8 @@ impl NotificationObligationV1 {
                 && self.revision > 0
                 && self.finding.is_some() != self.unconfirmed_concern.is_some()
                 && self.finding.as_ref().is_none_or(|finding| {
-                    NotificationGrantV1::identifier(&finding.finding_id, 4096)
-                        && NotificationGrantV1::identifier(&finding.result_id, 256)
+                    NotificationGrantV1::identifier(&finding.finding_id, usize::MAX)
+                        && NotificationGrantV1::identifier(&finding.result_id, usize::MAX)
                 })
                 && NotificationGrantV1::identifier(&self.package_id, 64)
                 && self

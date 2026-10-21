@@ -11,7 +11,7 @@ mod selection;
 
 use preflight::{FindingHeaders, FindingKey, FindingSelection};
 
-const MAX_READ_BYTES: usize = 2 * super::super::MAX_RESULT_BYTES;
+const MAX_READ_BYTES: usize = 32 * 1024 * 1024;
 
 impl AnalysisStore {
     pub fn graph_findings(

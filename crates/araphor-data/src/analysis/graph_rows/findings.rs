@@ -21,7 +21,10 @@ impl GraphRows {
         writer
             .append_row(params![
                 result_id,
-                ordinal as u32,
+                u32::try_from(ordinal).map_err(|_| GraphInvalidSnafu {
+                    field: "graph row ordinal"
+                }
+                .build())?,
                 finding.tenant_id.as_slice(),
                 &finding.finding_id,
                 &finding.package_id,
@@ -104,7 +107,6 @@ impl GraphRows {
             "graph_findings",
             COLUMNS,
             result_id,
-            1024,
             control,
             |row| Self::finding(row, header),
         )

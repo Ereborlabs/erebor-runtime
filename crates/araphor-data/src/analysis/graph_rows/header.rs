@@ -14,7 +14,8 @@ pub(in crate::analysis) struct GraphHeader {
 }
 
 impl GraphHeader {
-    pub(in crate::analysis) const MAX_BYTES: usize = GraphRows::MAX_CANONICAL_BYTES + 128;
+    pub(in crate::analysis) const MAX_BYTES: usize =
+        GraphRows::MAX_CANONICAL_BYTES.saturating_add(128);
 
     pub(super) fn encode(snapshot: &GraphSnapshotV1, canonical: &[u8]) -> Result<Vec<u8>> {
         if canonical.len() > GraphRows::MAX_CANONICAL_BYTES || canonical.is_empty() {
@@ -26,14 +27,18 @@ impl GraphHeader {
         let metadata =
             serde_json::to_value(HeaderMetadata(snapshot)).context(crate::GraphEncodingSnafu)?;
         let metadata = GraphRows::json(&metadata)?;
+        let subjects = u32::try_from(snapshot.graph.subjects.len()).map_err(Self::error)?;
+        let edges = u32::try_from(snapshot.graph.edges.len()).map_err(Self::error)?;
+        let findings = u32::try_from(snapshot.findings.len()).map_err(Self::error)?;
+        let canonical_bytes = u32::try_from(canonical.len()).map_err(Self::error)?;
         let mut bytes = Vec::new();
         Encoder::new(&mut bytes)
             .array(6)
             .and_then(|e| e.u32(2))
-            .and_then(|e| e.u32(snapshot.graph.subjects.len() as u32))
-            .and_then(|e| e.u32(snapshot.graph.edges.len() as u32))
-            .and_then(|e| e.u32(snapshot.findings.len() as u32))
-            .and_then(|e| e.u32(canonical.len() as u32))
+            .and_then(|e| e.u32(subjects))
+            .and_then(|e| e.u32(edges))
+            .and_then(|e| e.u32(findings))
+            .and_then(|e| e.u32(canonical_bytes))
             .and_then(|e| e.bytes(&metadata))
             .map_err(Self::error)?;
         Ok(bytes)
@@ -60,12 +65,7 @@ impl GraphHeader {
         let finding_count = decoder.u32().map_err(Self::error)? as usize;
         let snapshot_bytes = decoder.u32().map_err(Self::error)? as usize;
         let metadata = decoder.bytes().map_err(Self::error)?;
-        if subject_count > 2048
-            || edge_count > 4096
-            || finding_count > 1024
-            || snapshot_bytes > GraphRows::MAX_CANONICAL_BYTES
-            || snapshot_bytes == 0
-            || metadata.len() > GraphRows::MAX_CANONICAL_BYTES
+        if snapshot_bytes == 0
             || metadata.len() > snapshot_bytes
             || decoder.position() != bytes.len()
         {
@@ -150,15 +150,25 @@ impl GraphHeader {
     }
 
     pub(in crate::analysis) fn check_bytes(&self, result_id: &str, stored: u64) -> Result<()> {
-        let count = self.subject_count + self.edge_count + self.finding_count;
+        let count = self
+            .subject_count
+            .checked_add(self.edge_count)
+            .and_then(|count| count.checked_add(self.finding_count))
+            .ok_or_else(|| Self::error("graph row count overflow"))?;
         let maximum = self
             .snapshot_bytes
-            .checked_add(count.checked_mul(256 + result_id.len()).ok_or_else(|| {
-                GraphInvalidSnafu {
-                    field: "graph storage byte bound",
-                }
-                .build()
-            })?)
+            .checked_add(
+                result_id
+                    .len()
+                    .checked_add(256)
+                    .and_then(|width| count.checked_mul(width))
+                    .ok_or_else(|| {
+                        GraphInvalidSnafu {
+                            field: "graph storage byte bound",
+                        }
+                        .build()
+                    })?,
+            )
             .ok_or_else(|| {
                 GraphInvalidSnafu {
                     field: "graph storage byte bound",

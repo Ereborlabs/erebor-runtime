@@ -58,10 +58,9 @@ impl AnalysisStore {
                 UNION ALL SELECT 1 FROM expired_ranges x
                 WHERE NOT EXISTS (SELECT 1 FROM replay_floors f WHERE f.tenant_id = x.tenant_id)"),
             ("invalid result body", "SELECT 1 FROM analysis_results WHERE octet_length(tenant_id) <> 16
-                OR result_id = '' OR length(result_id) > 256 OR processor_id = ''
-                OR octet_length(body) = 0 OR (octet_length(body) > 16777216
-                    AND (processor_id <> 'graph-findings' OR stream_key IS NULL))
-                OR octet_length(request_meta) = 0 OR octet_length(request_meta) > 16777216"),
+                OR result_id = '' OR processor_id = ''
+                OR octet_length(body) = 0
+                OR octet_length(request_meta) = 0"),
             ("invalid profile header", "SELECT 1 FROM analysis_results
                 WHERE (stream_key IS NULL AND (method_version IS NOT NULL OR interval_id IS NOT NULL
                     OR profile_revision IS NOT NULL OR facts_revision IS NOT NULL
@@ -69,7 +68,7 @@ impl AnalysisStore {
                 OR (stream_key IS NOT NULL AND (processor_id NOT IN ('discovery', 'graph-findings')
                     OR octet_length(stream_key) NOT BETWEEN 68 AND 195
                     OR method_version IS NULL OR method_version = 0
-                    OR interval_id IS NULL OR interval_id = '' OR length(interval_id) > 256
+                    OR interval_id IS NULL OR interval_id = ''
                     OR (processor_id = 'discovery' AND (profile_revision IS NULL OR profile_revision = 0))
                     OR (processor_id = 'graph-findings' AND (profile_revision IS NOT NULL
                         OR interval_id <> first_cursor::VARCHAR))
@@ -88,8 +87,7 @@ impl AnalysisStore {
                 WHERE a.result_id IS NULL OR c.owner_id IS NULL OR r.commit_revision = 0"),
             ("invalid processor result", "SELECT 1 FROM processor_progress p
                 LEFT JOIN analysis_results r ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id
-                WHERE length(p.result_id) > 256
-                    OR (p.result_id <> '' AND (r.result_id IS NULL OR r.processor_id <> p.processor_id))"),
+                WHERE p.result_id <> '' AND (r.result_id IS NULL OR r.processor_id <> p.processor_id)"),
             ("invalid processor progress", "SELECT 1 FROM processor_progress p
                 LEFT JOIN source_receipts s ON s.stream_key = p.stream_key AND s.tenant_id = p.tenant_id
                 WHERE p.class NOT IN ('required', 'optional') OR p.processor_id = '' OR p.method_version = 0

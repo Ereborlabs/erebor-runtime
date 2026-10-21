@@ -29,7 +29,7 @@ async fn graph_traversal_grpc_contract() -> TestResult {
     for (definition_json, follow, bookmark, expected) in [
         (b"{}".to_vec(), false, vec![], tonic::Code::InvalidArgument),
         (
-            vec![b' '; GraphTraversalV1::MAX_BYTES + 1],
+            vec![b' '; 1024 * 1024 + 1],
             false,
             vec![],
             tonic::Code::InvalidArgument,

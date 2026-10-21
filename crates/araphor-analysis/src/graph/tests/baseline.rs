@@ -1,6 +1,6 @@
 use super::super::*;
 use super::fixture::*;
-use super::{derive, TestResult};
+use super::{derive as current, TestResult};
 use araphor_data::KubernetesStageProofV1;
 use EffectPhysicalResultV1::{DeniedBeforeEffect, UnknownAfterPreEffect};
 
@@ -8,20 +8,20 @@ use EffectPhysicalResultV1::{DeniedBeforeEffect, UnknownAfterPreEffect};
 fn graph_native_baseline() -> TestResult {
     let mut denied = wire(1, DeniedBeforeEffect, 2, 2, [20; 16]);
     let original = input(vec![record(1, &denied)?]);
-    let protected = derive(&original)?;
+    let protected = historical_baseline(&original)?;
     let mut gapped = original;
     gapped.coverage[0].state = DiscoveryCoverageStateV1::Gapped;
     gapped.coverage[0].gap_reasons.push("GAP".into());
     gapped.coverage_keys[0].state = DiscoveryCoverageStateV1::Gapped;
     gapped.coverage_keys[0].gap_reasons.push("GAP".into());
-    let gapped = derive(&gapped)?;
+    let gapped = historical_baseline(&gapped)?;
     denied.task_cookie = 0;
     denied
         .decision_context
         .as_mut()
         .ok_or("context")?
         .process_instance_id = vec![0; 16];
-    let missing = derive(&input(vec![record(1, &denied)?]))?;
+    let missing = historical_baseline(&input(vec![record(1, &denied)?]))?;
     let actual = serde_json::json!({"protected": protected, "gapped": gapped, "missing": missing});
     assert_eq!(
         actual,
@@ -33,7 +33,7 @@ fn graph_native_baseline() -> TestResult {
 #[test]
 fn graph_credential_baseline() -> TestResult {
     let mut input = credential_input()?;
-    let direct = derive(&input)?;
+    let direct = historical_baseline(&input)?;
     let mut use_fact = GraphFactV1::try_from(&input.facts[5])?;
     if let GraphFactValueV1::AuthorityUse {
         process_instance_id,
@@ -49,9 +49,9 @@ fn graph_credential_baseline() -> TestResult {
         *socket_object_id = None;
     }
     input.facts[5].body = serde_json::to_vec(&use_fact)?;
-    let contextual = derive(&input)?;
+    let contextual = historical_baseline(&input)?;
     input.facts.remove(5);
-    let missing = derive(&input)?;
+    let missing = historical_baseline(&input)?;
     let actual =
         serde_json::json!({"direct": direct, "contextual": contextual, "missing": missing});
     assert_eq!(
@@ -105,7 +105,7 @@ fn graph_kubernetes_baseline() -> TestResult {
             1,
             GraphFactValueV1::Kubernetes(stage.clone()),
         )?];
-        outputs.push(derive(&input)?);
+        outputs.push(historical_baseline(&input)?);
     }
     let actual = serde_json::to_value(outputs)?;
     assert_eq!(
@@ -113,4 +113,16 @@ fn graph_kubernetes_baseline() -> TestResult {
         serde_json::from_slice::<serde_json::Value>(include_bytes!("baseline/kubernetes.json"))?
     );
     Ok(())
+}
+
+fn historical_baseline(input: &GraphReplayInputV1) -> Result<GraphSnapshotV1> {
+    let mut snapshot = current(input)?;
+    for package in &mut snapshot.packages {
+        assert_eq!(package.window_ns, 300_000_000_000);
+        assert_eq!(package.window_records, u64::MAX);
+        assert_eq!(package.window_bytes, usize::MAX);
+        package.window_records = 256;
+        package.window_bytes = 4 * 1024 * 1024;
+    }
+    Ok(snapshot)
 }

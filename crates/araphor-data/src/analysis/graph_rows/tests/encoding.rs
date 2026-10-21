@@ -42,16 +42,15 @@ fn native_json_encoding_bounds() -> TestResult {
     encoded.push(0);
     assert!(GraphHeader::decode(&encoded).is_err());
     let mut snapshot = fixture.snapshot;
-    snapshot.input_manifest.coverage[0].gap_reasons =
-        vec!["x".repeat(GraphRows::MAX_CANONICAL_BYTES)];
+    snapshot.input_manifest.coverage[0].gap_reasons = vec!["x".repeat(1024)];
     snapshot.graph.revision = snapshot.input_manifest.clone();
     for finding in &mut snapshot.findings {
         finding.revision = snapshot.input_manifest.clone();
     }
     assert!(matches!(
-        GraphRows::encode(&snapshot),
+        CanonicalGraph::bounded(snapshot, 512),
         Err(crate::Error::GraphInvalid {
-            field: "graph result bytes",
+            field: "graph output bytes",
             ..
         })
     ));
@@ -139,5 +138,39 @@ fn native_header_metadata_current_format() -> TestResult {
         GraphHeader::decode(&encoded_header)?.body(snapshot)?,
         serde_json::to_vec(snapshot)?
     );
+    Ok(())
+}
+
+#[test]
+fn native_header_integer_format() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let encoded = GraphRows::encode(&fixture.snapshot)?;
+    let mut decoder = minicbor::Decoder::new(&encoded);
+    assert_eq!(decoder.array()?, Some(6));
+    let mut fields = [0u32; 5];
+    for field in &mut fields {
+        *field = decoder.u32()?;
+    }
+    let metadata = decoder.bytes()?;
+    for index in 1..5 {
+        let mut bytes = Vec::new();
+        let mut encoder = minicbor::Encoder::new(&mut bytes);
+        encoder.array(6)?;
+        for (position, field) in fields.iter().enumerate() {
+            encoder.u64(if position == index {
+                u64::from(u32::MAX) + 1
+            } else {
+                u64::from(*field)
+            })?;
+        }
+        encoder.bytes(metadata)?;
+        assert!(matches!(
+            GraphHeader::decode(&bytes),
+            Err(crate::Error::GraphInvalid {
+                field: "graph header format",
+                ..
+            })
+        ));
+    }
     Ok(())
 }

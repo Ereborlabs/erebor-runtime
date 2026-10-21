@@ -41,12 +41,7 @@ impl AnalysisStore {
         entity: &[u8],
         lifetime: &[u8],
     ) -> Result<Option<AnalysisContextVersionV1>> {
-        if tenant == [0; 16]
-            || owner.is_empty()
-            || owner.len() > 128
-            || !(1..=MAX_CONTEXT_KEY_BYTES).contains(&entity.len())
-            || !(1..=MAX_CONTEXT_KEY_BYTES).contains(&lifetime.len())
-        {
+        if tenant == [0; 16] || owner.is_empty() || entity.is_empty() || lifetime.is_empty() {
             return self.reject("the context head scope is invalid");
         }
         self.read_snapshot(|reader| {

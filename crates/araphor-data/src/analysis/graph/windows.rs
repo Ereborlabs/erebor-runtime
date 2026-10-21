@@ -4,7 +4,7 @@ use snafu::ResultExt as _;
 use super::super::graph_rows::{GraphHeader, GraphRows};
 use crate::{
     AnalysisDatabaseSnafu, AnalysisStore, EvidenceIntakeIdentityV1, GraphSnapshotV1, Result,
-    GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, GRAPH_WINDOW_RECORDS,
+    GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
 };
 
 const GRAPH_HEADS: &str = "SELECT result_id, commit_revision, first_cursor,
@@ -71,7 +71,7 @@ impl AnalysisStore {
         last: u64,
         after: Option<&str>,
     ) -> Result<GraphPage> {
-        if !source.valid() || first == 0 || last < first || last - first >= GRAPH_WINDOW_RECORDS {
+        if !source.valid() || first == 0 || last < first {
             return self.reject("the graph window range is invalid");
         }
         self.read_snapshot(|reader| {
@@ -98,11 +98,10 @@ impl AnalysisStore {
         let query = format!(
             "SELECT result_id, commit_revision FROM ({GRAPH_HEADS}) heads
              WHERE (? IS NULL OR result_id > ?) AND (NOT ? OR current_rank = 1)
-                AND (? IS NULL OR first_cursor >= ?) AND (? IS NULL OR first_cursor <= ?)
+                AND (? IS NULL OR first_cursor <= ?)
              ORDER BY result_id LIMIT 1"
         );
         let key = source.map(EvidenceIntakeIdentityV1::key);
-        let lower = window.map(|(first, _)| first.saturating_sub(GRAPH_WINDOW_RECORDS - 1).max(1));
         let upper = window.map(|(_, last)| last);
         let row: Option<(String, u64)> = reader
             .query_row(
@@ -116,8 +115,6 @@ impl AnalysisStore {
                     after,
                     after,
                     current,
-                    lower,
-                    lower,
                     upper,
                     upper
                 ],

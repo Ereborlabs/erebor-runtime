@@ -49,17 +49,24 @@ impl GraphWalk<'_> {
                  UNION ALL SELECT to_subject_id, from_subject_id FROM edges"
             }
         };
+        // NULL removes the early stop when its value does not fit native BIGINT.
+        let edge_limit = self
+            .request
+            .max_relationships
+            .checked_add(1)
+            .and_then(|value| i64::try_from(value).ok())
+            .map_or(Value::Null, Value::BigInt);
         values.extend([
             Value::BigInt(self.request.max_hops as i64),
-            Value::BigInt(self.request.max_subjects as i64 + 1),
+            Value::UBigInt(self.request.max_subjects.saturating_add(1) as u64),
             Value::BigInt(self.request.max_hops as i64),
-            Value::BigInt(self.request.max_relationships as i64 + 1),
+            edge_limit,
             Value::BigInt(self.request.max_hops as i64),
             Value::BigInt(std::mem::size_of::<WalkRows>() as i64),
             Value::BigInt(std::mem::size_of::<(crate::GraphSubjectKeyV1, u32)>() as i64),
             Value::BigInt(std::mem::size_of::<(String, u32)>() as i64),
-            Value::BigInt(self.request.max_subjects as i64),
-            Value::BigInt(self.request.max_relationships as i64),
+            Value::UBigInt(self.request.max_subjects as u64),
+            Value::UBigInt(self.request.max_relationships as u64),
             Value::BigInt(self.input_bytes.min(i64::MAX as usize) as i64),
         ]);
         let subject_permission = GraphRows::subject_permission(self.binding_scope);

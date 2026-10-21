@@ -1029,6 +1029,42 @@ test files. All 111 remaining reference files and the archive are unchanged.
 Retained dependency expiry, pressure retry, general scalar clock events,
 producer and lifecycle integration, and the final full Rust gate remain open.
 
+## Graph and retained-result resource defaults
+
+[GraphReplayInputV1 and GraphSnapshotV1](../../crates/araphor-data/src/graph/model.rs)
+validate typed records, source identity, proof, ordering and references without
+default resource ceilings. The
+[Graph domain tests](../../crates/araphor-analysis/src/graph/tests/defaults.rs)
+keep the existing 300-second BOOTTIME join rule and require that exactly 256
+records add no false resource-failure reason. These tests use the existing
+Builtins implementations; they do not qualify a native Graph producer.
+
+[GraphRows](../../crates/araphor-data/src/analysis/graph_rows/mod.rs)
+retains the native storage owner. Its
+[header](../../crates/araphor-data/src/analysis/graph_rows/header.rs)
+checks u32 counts and canonical byte length before encoding. Row appends check
+u32 ordinals before writing. The
+[Data tests](../../crates/araphor-data/src/analysis/graph_rows/tests/defaults.rs)
+cover the former row, body, metadata, context and witness boundaries, exact
+retry, reopen, backup/restore and configured storage rollback.
+
+[GraphTraversalV1](../../crates/araphor-data/src/graph/traversal.rs)
+keeps the default one-hop query shape. Explicit subject and relationship
+failure limits remain active. The existing native recursive SQL uses checked
+BIGINT or NULL for its early-stop LIMIT. The
+[result owner](../../crates/araphor-data/src/analysis/progress.rs)
+and [recovery checks](../../crates/araphor-data/src/analysis/schema.rs) accept
+the same expanded result range. Fixed batch/cache geometry can select a
+single-item fallback; it is not a payload rejection ceiling.
+
+All 159 connected cases, formatting and strict Clippy pass on the unchanged
+recorded source based on d6c055d4. The
+[qualification record](../../recovery/araphor-graph-resource-defaults-20261020.json)
+identifies exact commands, source hashes and custody. The large metadata case
+exceeds 16 MiB; it does not claim an executed fallback beyond 32 MiB. No
+additional Back file retires from this change. The complete quota audit and
+final Rust gate remain open.
+
 ## In-process Wasm ownership
 
 [WasmExecution::compiled](../../crates/araphor-package-runtime/src/wasm/cache.rs)

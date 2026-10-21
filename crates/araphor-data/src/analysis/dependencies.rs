@@ -72,7 +72,7 @@ impl AnalysisStore {
                 let notice = row.context(AnalysisDatabaseSnafu {
                     operation: "decode discovery notice",
                 })?;
-                if notice.0.is_empty() || notice.0.len() > 256 || notice.1 == 0 {
+                if notice.0.is_empty() || notice.1 == 0 {
                     return self.reject("the discovery notice result is invalid");
                 }
                 notices.push(notice);

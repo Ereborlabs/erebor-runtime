@@ -249,11 +249,7 @@ impl AnalysisStore {
             || input.window_id.is_empty()
             || input.window_id.len() > 256
             || input.request.is_empty()
-            || input.request.len() > super::super::MAX_RESULT_BYTES
             || input.metadata.is_empty()
-            || input.metadata.len() > super::super::MAX_RESULT_BYTES
-            || input.datasets.len().saturating_add(input.checkpoint.len())
-                > super::super::MAX_RESULT_BYTES
             || input.dependencies.len() > 64
             || input.source_revisions.len() > 64
             || input
@@ -270,7 +266,6 @@ impl AnalysisStore {
                     || reference.result_id.len() > 256
                     || reference.commit_revision == 0
             })
-            || input.witnesses.len() > super::super::MAX_RESULT_REFS
             || input.context_refs.len() > 256
             || input.created_utc_ns == 0
             || input
@@ -292,9 +287,6 @@ impl AnalysisStore {
         {
             return self
                 .reject("the package result exceeds its bounds or contains invalid references");
-        }
-        if Self::package_contract(input)?.len() > super::super::MAX_RESULT_BYTES {
-            return self.reject("the package commit metadata exceeds its byte limit");
         }
         Ok(())
     }

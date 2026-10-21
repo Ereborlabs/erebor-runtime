@@ -1,0 +1,462 @@
+use super::*;
+use crate::{AnalysisStore, GraphTraversalV1, ProcessorClassV1, StorageLimitsV1};
+
+#[test]
+fn native_row_defaults() -> TestResult {
+    let mut fixture = CommitFixture::new()?;
+    let edge = fixture.snapshot.graph.edges[0].clone();
+    for index in 0..4_097_u64 {
+        let mut subject = edge.key.to.clone();
+        subject.identity = [b"resource-".as_slice(), &index.to_be_bytes()].concat();
+        fixture.snapshot.graph.subjects.push(subject.clone());
+        let mut next = edge.clone();
+        next.key.to = subject;
+        fixture.snapshot.graph.edges.push(next);
+    }
+    fixture.snapshot.graph.subjects.sort();
+    fixture.snapshot.graph.subjects.dedup();
+    fixture
+        .snapshot
+        .graph
+        .edges
+        .sort_by(|left, right| left.key.cmp(&right.key));
+    fixture.add_findings(1_025)?;
+    fixture.snapshot.findings[0].finding_id = "a".repeat(4_097);
+    fixture
+        .snapshot
+        .findings
+        .sort_by(|left, right| left.finding_id.cmp(&right.finding_id));
+    fixture.snapshot.validate()?;
+    fixture.request.result_id = "graph:".to_owned() + &"x".repeat(257);
+    fixture.request.body = serde_json::to_vec(&fixture.snapshot)?;
+    let receipt = fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
+    let tenant = fixture.request.scope.identity.tenant_id;
+    assert_eq!(
+        fixture
+            .store
+            .graph_result(tenant, &fixture.request.result_id)?,
+        Some(fixture.snapshot.clone())
+    );
+    assert_eq!(
+        fixture
+            .store
+            .read_result(tenant, &fixture.request.result_id)?,
+        Some(fixture.request.body.clone())
+    );
+    assert_eq!(
+        fixture
+            .store
+            .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?
+            .len(),
+        fixture.snapshot.findings.len()
+    );
+    let reader = fixture.store.writer_access()?;
+    let request = GraphTraversalV1 {
+        seeds: vec![edge.key.from.clone()],
+        result_ids: vec![fixture.request.result_id.clone()],
+        ..Default::default()
+    };
+    assert_eq!(request.max_hops, 1);
+    assert_eq!(request.max_subjects, usize::MAX);
+    assert_eq!(request.max_relationships, usize::MAX);
+    request.validate()?;
+    let control = AnalysisReadControl::default();
+    let walk = crate::analysis::graph::traversal::read::GraphWalk::new(
+        reader.get()?,
+        &control,
+        &request,
+        &request.result_ids,
+        usize::MAX,
+        false,
+    )
+    .run()?;
+    assert!(walk.subjects.len() > 2_048);
+    assert!(walk.edges.len() > 4_096);
+    let mut bounded = request.clone();
+    bounded.max_relationships = 4_096;
+    assert!(matches!(
+        crate::analysis::graph::traversal::read::GraphWalk::new(
+            reader.get()?,
+            &control,
+            &bounded,
+            &bounded.result_ids,
+            usize::MAX,
+            false
+        )
+        .run(),
+        Err(crate::Error::AnalysisInputTooLarge {
+            resource: "graph traversal relationships",
+            ..
+        })
+    ));
+    bounded = request.clone();
+    bounded.max_subjects = 2_048;
+    assert!(matches!(
+        crate::analysis::graph::traversal::read::GraphWalk::new(
+            reader.get()?,
+            &control,
+            &bounded,
+            &bounded.result_ids,
+            usize::MAX,
+            false
+        )
+        .run(),
+        Err(crate::Error::AnalysisInputTooLarge {
+            resource: "graph traversal subjects",
+            ..
+        })
+    ));
+    bounded = request.clone();
+    bounded.max_hops = 65;
+    bounded.seeds = fixture.snapshot.graph.subjects[..65].to_vec();
+    bounded.validate()?;
+    assert!(crate::analysis::graph::traversal::read::GraphWalk::new(
+        reader.get()?,
+        &control,
+        &bounded,
+        &bounded.result_ids,
+        usize::MAX,
+        false
+    )
+    .run()
+    .is_ok());
+    drop(reader);
+    let path = fixture.store.root.clone();
+    let snapshot = fixture.snapshot.clone();
+    let id = fixture.request.result_id.clone();
+    drop(fixture.store);
+    let reopened = AnalysisStore::open(path)?;
+    assert_eq!(reopened.graph_result(tenant, &id)?, Some(snapshot));
+    assert_eq!(reopened.meta()?.commit_revision, receipt.commit_revision);
+    Ok(())
+}
+
+#[test]
+fn native_metadata_defaults() -> TestResult {
+    let mut fixture = CommitFixture::new()?;
+    fixture.snapshot.packages[0].coverage_predicate = "x".repeat(16 * 1024 * 1024 + 1);
+    fixture.request.body = serde_json::to_vec(&fixture.snapshot)?;
+    fixture.snapshot.validate()?;
+    assert!(fixture.request.body.len() > 16 * 1024 * 1024);
+    let receipt = fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
+    assert_eq!(
+        fixture
+            .store
+            .commit_graph(&fixture.request, true, || Ok(()))?,
+        receipt
+    );
+    let tenant = fixture.request.scope.identity.tenant_id;
+    assert_eq!(
+        fixture
+            .store
+            .graph_result(tenant, &fixture.request.result_id)?,
+        Some(fixture.snapshot.clone())
+    );
+    let backup = fixture.store.root.join("backups").join("resources");
+    fixture.store.backup(&backup)?;
+    let restored_path = fixture._directory.path().join("restored");
+    let restored = AnalysisStore::restore(&backup, &restored_path)?;
+    assert_eq!(
+        restored.graph_result(tenant, &fixture.request.result_id)?,
+        Some(fixture.snapshot.clone())
+    );
+    let path = fixture.store.root.clone();
+    drop(fixture.store);
+    let reopened = AnalysisStore::open(path)?;
+    assert_eq!(
+        reopened.graph_result(tenant, &fixture.request.result_id)?,
+        Some(fixture.snapshot)
+    );
+    Ok(())
+}
+
+#[test]
+fn configured_graph_rollback() -> TestResult {
+    let mut fixture = CommitFixture::limits(StorageLimitsV1 {
+        logical_max_bytes: Some(256 * 1024),
+        ..Default::default()
+    })?;
+    fixture.snapshot.packages[0].coverage_predicate = "x".repeat(256 * 1024);
+    fixture.request.body = serde_json::to_vec(&fixture.snapshot)?;
+    let before = fixture.store.meta()?;
+    let changes = fixture.store.subscribe_revision();
+    assert!(matches!(
+        fixture
+            .store
+            .commit_graph(&fixture.request, true, || Ok(())),
+        Err(crate::Error::StorageCapacity { .. })
+    ));
+    assert_eq!(fixture.store.meta()?, before);
+    assert!(!changes.has_changed()?);
+    assert!(fixture
+        .store
+        .graph_snapshot(&fixture.snapshot.scope.identity)?
+        .is_none());
+    assert_eq!(
+        fixture
+            .store
+            .processor_health(&fixture.request.scope)?
+            .ok_or("progress")?
+            .consumed_cursor,
+        0
+    );
+    let reader = fixture.store.writer_access()?;
+    for table in [
+        "analysis_results",
+        "graph_subjects",
+        "graph_relationships",
+        "graph_findings",
+        "evidence_refs",
+        "context_refs",
+    ] {
+        let count: u64 =
+            reader
+                .get()?
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })?;
+        assert_eq!(count, 0, "{table}");
+    }
+    Ok(())
+}
+
+#[test]
+fn native_result_defaults() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let mut request = fixture.request.clone();
+    request.scope.processor_id = "resource-probe".into();
+    request.result_id = "result:".to_owned() + &"x".repeat(257);
+    fixture
+        .store
+        .register_processor(&request.scope, ProcessorClassV1::Optional, 1)?;
+    request.body = vec![1; 16 * 1024 * 1024 + 1];
+    let context = crate::AnalysisContextVersionV1 {
+        key: crate::AnalysisContextKeyV1 {
+            tenant_id: request.scope.identity.tenant_id,
+            owner_id: "o".repeat(65_537),
+            entity_key: vec![1; 257],
+            lifetime_key: vec![2; 257],
+            owner_revision: 1,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: crate::ContextSensitivityV1::Tenant,
+        body: vec![1],
+    };
+    let mut contexts = (0..257_u64)
+        .map(|index| {
+            let mut value = context.clone();
+            if index != 0 {
+                value.key.entity_key = index.to_be_bytes().to_vec();
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+    contexts.sort_by(|left, right| left.key.cmp(&right.key));
+    request.context_refs = fixture.store.commit_contexts(&contexts)?;
+    request.context_revision = request
+        .context_refs
+        .iter()
+        .map(|value| value.commit_revision)
+        .max()
+        .unwrap_or(0);
+    assert!(request.request_meta()?.len() > 16 * 1024 * 1024);
+    let receipt = fixture.store.commit_result(&request)?;
+    assert_eq!(fixture.store.commit_result(&request)?, receipt);
+    assert_eq!(
+        fixture
+            .store
+            .read_result(request.scope.identity.tenant_id, &request.result_id)?,
+        Some(request.body.clone())
+    );
+    let mut changed = request.clone();
+    changed.body.push(2);
+    assert!(matches!(
+        fixture.store.commit_result(&changed),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    let path = fixture.store.root.clone();
+    drop(fixture.store);
+    let reopened = AnalysisStore::open(path)?;
+    assert_eq!(
+        reopened.read_result(request.scope.identity.tenant_id, &request.result_id)?,
+        Some(request.body)
+    );
+    assert_eq!(
+        reopened
+            .context_heads(
+                request.scope.identity.tenant_id,
+                &context.key.owner_id,
+                usize::MAX
+            )?
+            .len(),
+        257
+    );
+    assert_eq!(
+        reopened
+            .context_heads(
+                request.scope.identity.tenant_id,
+                &context.key.owner_id,
+                4_097
+            )?
+            .len(),
+        257
+    );
+    assert!(reopened
+        .context_heads(request.scope.identity.tenant_id, &context.key.owner_id, 0)
+        .is_err());
+    assert_eq!(reopened.context_version(&context.key)?, Some(context));
+    Ok(())
+}
+
+#[test]
+fn native_window_overlap() -> TestResult {
+    let mut fixture = CommitFixture::new()?;
+    fixture.snapshot.last_cursor = 1_025;
+    fixture.request.consumed_cursor = 0;
+    fixture.request.body = serde_json::to_vec(&fixture.snapshot)?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, false, || Ok(()))?;
+    let (graphs, _) =
+        fixture
+            .store
+            .graph_window_page(&fixture.snapshot.scope.identity, 1_025, 1_025, None)?;
+    assert_eq!(graphs.len(), 1);
+    assert_eq!(graphs[0].1, fixture.snapshot);
+    let (graphs, _) =
+        fixture
+            .store
+            .graph_window_page(&fixture.snapshot.scope.identity, 1, 1_025, None)?;
+    assert_eq!(graphs.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn native_witness_defaults() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let source = fixture.request.scope.identity.clone();
+    let page = fixture.store.read_page(&source, 1)?;
+    let original = page.records.first().ok_or("source record")?;
+    let record = crate::DiscoveryRecordV1::try_from((
+        crate::DiscoveryRecordIdV1 {
+            stream: source.clone(),
+            cpu_id: 0,
+            durable_cursor: 1,
+        },
+        original.framed_record.as_slice(),
+    ))?;
+    let original = record.decode()?;
+    for first in (2..=8_193_u64).step_by(crate::MAX_EVIDENCE_BATCH_RECORDS) {
+        let last = first
+            .saturating_add(crate::MAX_EVIDENCE_BATCH_RECORDS as u64 - 1)
+            .min(8_193);
+        let mut framed = Vec::new();
+        let mut ends = Vec::new();
+        for cursor in first..=last {
+            let mut wire = original.clone();
+            wire.observed_boottime_ns = cursor * 1_000;
+            wire.decision_context
+                .as_mut()
+                .ok_or("decision context")?
+                .original_kernel_sequence = cursor;
+            framed.extend(Vec::<u8>::try_from(&wire)?);
+            ends.push(framed.len());
+        }
+        fixture.store.accept_validated_batch(
+            source.clone(),
+            crate::ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: first,
+                last_cursor: last,
+                intake_utc_ns: 1,
+                frame_ends: ends,
+                framed_records: framed.into(),
+            },
+        )?;
+    }
+    let mut request = fixture.request;
+    request.scope.processor_id = "many-witnesses".into();
+    fixture
+        .store
+        .register_processor(&request.scope, ProcessorClassV1::Optional, 1)?;
+    request.body = vec![1];
+    request.consumed_cursor = 8_193;
+    let original = request.witnesses[0].clone();
+    request.witnesses = (1..=8_193)
+        .map(|cursor| crate::AnalysisWitnessV1 {
+            cursor,
+            ..original.clone()
+        })
+        .collect();
+    let receipt = fixture.store.commit_result(&request)?;
+    assert_eq!(fixture.store.commit_result(&request)?, receipt);
+    let count: u64 = fixture.store.writer_access()?.get()?.query_row(
+        "SELECT count(*) FROM evidence_refs WHERE ref_id = ?",
+        params![&request.result_id],
+        |row| row.get(0),
+    )?;
+    assert_eq!(count, 8_193);
+    let path = fixture.store.root.clone();
+    drop(fixture.store);
+    let reopened = AnalysisStore::open(path)?;
+    assert_eq!(
+        reopened.read_result(source.tenant_id, &request.result_id)?,
+        Some(vec![1])
+    );
+    Ok(())
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn native_ordinal_format() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let reader = Connection::open_in_memory()?;
+    reader.execute_batch(GraphRows::SCHEMA)?;
+    let mut appender = reader.appender("graph_subjects")?;
+    assert!(matches!(
+        GraphRows::insert_subject(
+            &mut appender,
+            "format",
+            u32::MAX as usize + 1,
+            &fixture.snapshot.graph.subjects[0]
+        ),
+        Err(crate::Error::GraphInvalid {
+            field: "graph row ordinal",
+            ..
+        })
+    ));
+    appender.flush()?;
+    drop(appender);
+    assert_eq!(
+        reader.query_row("SELECT count(*) FROM graph_subjects", [], |row| row
+            .get::<_, u64>(0))?,
+        0
+    );
+    Ok(())
+}
+
+#[test]
+fn native_traversal_defaults() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let request = GraphTraversalV1 {
+        seeds: vec![fixture.snapshot.graph.subjects[0].clone()],
+        result_ids: vec!["x".repeat(1024 * 1024 + 1)],
+        max_hops: u32::MAX,
+        ..Default::default()
+    };
+    let json = serde_json::to_vec(&request)?;
+    assert!(json.len() > 1024 * 1024);
+    assert_eq!(GraphTraversalV1::try_from(json.as_slice())?, request);
+    let mut duplicate = request.clone();
+    duplicate.seeds.push(duplicate.seeds[0].clone());
+    assert!(duplicate.validate().is_err());
+    let mut empty = request;
+    empty.result_ids[0].clear();
+    assert!(empty.validate().is_err());
+    Ok(())
+}

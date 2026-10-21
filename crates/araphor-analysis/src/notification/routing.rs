@@ -67,8 +67,8 @@ impl NotificationRouter {
         NotificationErrorCodeV1::Invalid.require(
             now > 0
                 && tenant != [0; 16]
-                && NotificationGrantV1::identifier(&reference.finding_id, 4096)
-                && NotificationGrantV1::identifier(&reference.result_id, 256),
+                && NotificationGrantV1::identifier(&reference.finding_id, usize::MAX)
+                && NotificationGrantV1::identifier(&reference.result_id, usize::MAX),
             "finding reference",
         )?;
         let (result_id, finding) = self

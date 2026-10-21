@@ -3,7 +3,6 @@ use snafu::ResultExt as _;
 
 use super::model::require;
 use super::*;
-use crate::analysis::MAX_RESULT_BYTES;
 use crate::{
     AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1, AnalysisGapV1,
     ContextSensitivityV1, DiscoveryEncodingSnafu, ProcessorScopeV1, Result,
@@ -122,7 +121,6 @@ impl TryFrom<&[u8]> for DiscoveryProfileV1 {
     type Error = crate::Error;
 
     fn try_from(bytes: &[u8]) -> Result<Self> {
-        require(bytes.len() <= MAX_RESULT_BYTES, "profile bytes")?;
         let profile: Self = serde_json::from_slice(bytes).context(DiscoveryEncodingSnafu)?;
         profile.validate()?;
         Ok(profile)

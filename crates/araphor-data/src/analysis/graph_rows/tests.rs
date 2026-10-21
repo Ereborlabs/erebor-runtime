@@ -1,6 +1,7 @@
 use super::*;
 
 mod bounds;
+mod defaults;
 mod encoding;
 pub(in crate::analysis) mod fixture;
 mod guards;
@@ -275,8 +276,8 @@ fn native_selected_byte_bounds() -> TestResult {
         )?
     };
     for length in [
-        GraphRows::MAX_CANONICAL_BYTES - 1,
-        GraphRows::MAX_CANONICAL_BYTES + 4 * 1024 * 1024,
+        fixture.request.body.len() * 2,
+        fixture.request.body.len() * 3,
     ] {
         fixture.store.fault_write(
             "UPDATE graph_findings SET effects = repeat('x'::BLOB, ?) WHERE result_id = ?",
@@ -361,7 +362,7 @@ fn native_selected_byte_bounds() -> TestResult {
 }
 
 #[test]
-fn native_retry_byte_bounds() -> TestResult {
+fn native_retry_rejects_corruption() -> TestResult {
     let fixture = CommitFixture::new()?;
     let receipt = fixture
         .store
@@ -376,8 +377,8 @@ fn native_retry_byte_bounds() -> TestResult {
         )?
     };
     for (column, length, header) in [
-        ("request_meta", super::super::MAX_RESULT_BYTES + 1, false),
-        ("body", GraphHeader::MAX_BYTES + 1, true),
+        ("request_meta", 1024, false),
+        ("body", 1024, true),
         ("tenant_id", 1024, false),
     ] {
         fixture.store.fault_write(
@@ -395,14 +396,14 @@ fn native_retry_byte_bounds() -> TestResult {
             assert!(matches!(
                 error,
                 crate::Error::GraphInvalid {
-                    field: "graph header bytes",
+                    field: "graph header format",
                     ..
                 }
             ));
+        } else if column == "request_meta" {
+            assert!(matches!(error, crate::Error::AnalysisConflict { .. }));
         } else {
-            assert!(
-                matches!(error, crate::Error::AnalysisState { reason, .. } if reason == "the retained analysis result exceeds its byte bound")
-            );
+            assert!(matches!(error, crate::Error::AnalysisState { .. }));
         }
         fixture.store.fault_write(
             "UPDATE analysis_results SET tenant_id = ?, request_meta = ?, body = ? WHERE result_id = ?",

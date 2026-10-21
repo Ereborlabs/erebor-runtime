@@ -21,7 +21,10 @@ impl GraphRows {
         writer
             .append_row(params![
                 result_id,
-                ordinal as u32,
+                u32::try_from(ordinal).map_err(|_| GraphInvalidSnafu {
+                    field: "graph row ordinal"
+                }
+                .build())?,
                 Self::json(&edge.key.from)?,
                 Self::json(&edge.key.to)?,
                 Self::label(&edge.key.edge_type)?,
@@ -74,7 +77,7 @@ impl GraphRows {
         ordinals: &[u32],
         control: &AnalysisReadControl,
     ) -> Result<Vec<GraphEdgeV1>> {
-        if ordinals.len() > 4096 || ordinals.windows(2).any(|pair| pair[0] >= pair[1]) {
+        if ordinals.windows(2).any(|pair| pair[0] >= pair[1]) {
             return GraphInvalidSnafu {
                 field: "selected graph edge ordinals",
             }
@@ -150,7 +153,6 @@ impl GraphRows {
             "graph_relationships",
             COLUMNS,
             result_id,
-            4096,
             control,
             Self::decode_edge,
         )

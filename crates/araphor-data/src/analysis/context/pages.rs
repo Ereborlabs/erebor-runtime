@@ -12,7 +12,6 @@ impl AnalysisStore {
     ) -> Result<Vec<AnalysisContextVersionV1>> {
         if tenant == [0; 16]
             || owner.is_empty()
-            || owner.len() > 128
             || after
                 .is_some_and(|key| !key.valid() || key.tenant_id != tenant || key.owner_id != owner)
         {
@@ -75,13 +74,13 @@ impl AnalysisStore {
         owner: &str,
         limit: usize,
     ) -> Result<Vec<AnalysisContextVersionV1>> {
-        if tenant == [0; 16]
-            || owner.is_empty()
-            || owner.len() > 128
-            || !(1..=4096).contains(&limit)
-        {
+        if tenant == [0; 16] || owner.is_empty() || limit == 0 {
             return self.reject("the context head scope is invalid");
         }
+        // NULL removes the early stop when its value does not fit native BIGINT.
+        let limit_value = limit
+            .checked_add(1)
+            .and_then(|value| i64::try_from(value).ok());
         self.read_snapshot(|reader| {
             let mut statement = reader
                 .prepare(
@@ -93,18 +92,15 @@ impl AnalysisStore {
                     operation: "prepare context heads",
                 })?;
             let rows = statement
-                .query_map(
-                    params![tenant.as_slice(), owner, (limit + 1) as u32],
-                    |row| {
-                        Ok(AnalysisContextKeyV1 {
-                            tenant_id: tenant,
-                            owner_id: owner.to_owned(),
-                            entity_key: row.get(0)?,
-                            lifetime_key: row.get(1)?,
-                            owner_revision: row.get(2)?,
-                        })
-                    },
-                )
+                .query_map(params![tenant.as_slice(), owner, limit_value], |row| {
+                    Ok(AnalysisContextKeyV1 {
+                        tenant_id: tenant,
+                        owner_id: owner.to_owned(),
+                        entity_key: row.get(0)?,
+                        lifetime_key: row.get(1)?,
+                        owner_revision: row.get(2)?,
+                    })
+                })
                 .context(AnalysisDatabaseSnafu {
                     operation: "read context heads",
                 })?;

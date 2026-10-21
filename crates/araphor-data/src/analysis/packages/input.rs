@@ -31,7 +31,6 @@ impl AnalysisStore {
             || !active.key.valid()
             || !selection.valid()
             || active.key.tenant_id != selection.tenant_id
-            || witness_count > super::super::MAX_RESULT_REFS
         {
             return Ok(None);
         }
@@ -157,9 +156,9 @@ impl AnalysisStore {
             if after != expected {
                 return Ok(None);
             }
-            let row: Option<(u64, u64)> = reader
+            let row: Option<u64> = reader
                 .query_row(
-                    "SELECT octet_length(r.commit_meta)::UBIGINT, octet_length(x.body)::UBIGINT
+                    "SELECT octet_length(r.commit_meta)::UBIGINT
                  FROM package_results r JOIN analysis_results x USING (result_id)
                  JOIN package_heads h USING (result_id)
                  WHERE r.tenant_id = ? AND r.scope_id = ? AND r.package_id = ?
@@ -177,18 +176,16 @@ impl AnalysisStore {
                         receipt.result_id,
                         receipt.commit_revision
                     ],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| row.get(0),
                 )
                 .optional()
                 .context(AnalysisDatabaseSnafu {
                     operation: "bound completed package metadata",
                 })?;
-            let Some((contract_bytes, body_bytes)) = row else {
+            let Some(contract_bytes) = row else {
                 return Ok(None);
             };
-            if contract_bytes > Self::RESULT_READ_BYTES
-                || body_bytes > super::super::MAX_RESULT_BYTES as u64
-            {
+            if contract_bytes > Self::RESULT_READ_BYTES {
                 return self.reject("the completed package metadata exceeds its byte limit");
             }
             let (contract, body, window): (Vec<u8>, Vec<u8>, String) = reader

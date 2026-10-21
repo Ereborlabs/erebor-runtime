@@ -13,10 +13,8 @@ mod profile;
 
 pub use profile::PreparedProfile;
 
-pub const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
-const MAX_RESULT_META_BYTES: usize = 16 * 1024 * 1024;
-pub const MAX_RESULT_REFS: usize = 8_192;
-const MAX_CONTEXT_REFS: usize = 256;
+pub const MAX_RESULT_BYTES: usize = usize::MAX;
+pub const MAX_RESULT_REFS: usize = usize::MAX;
 const MAX_WITNESS_AGE_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -169,10 +167,7 @@ impl From<&crate::DiscoveryProfileV1> for ProfileHeader {
 
 impl ProcessorScopeV1 {
     pub(super) fn valid(&self) -> bool {
-        !self.processor_id.is_empty()
-            && self.processor_id.len() <= 128
-            && self.method_version > 0
-            && self.identity.valid()
+        !self.processor_id.is_empty() && self.method_version > 0 && self.identity.valid()
     }
 }
 
@@ -236,7 +231,7 @@ impl AnalysisStore {
                 .query_row(
                     "SELECT r.result_id,
                         CASE WHEN r.processor_id = 'graph-findings' AND r.stream_key IS NOT NULL THEN ''::BLOB
-                            WHEN octet_length(r.body) <= ? THEN r.body ELSE ''::BLOB END,
+                            ELSE r.body END,
                         r.commit_revision
                      FROM processor_progress p JOIN analysis_results r
                        ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id
@@ -244,7 +239,6 @@ impl AnalysisStore {
                      WHERE p.processor_id = ? AND p.method_version = ?
                        AND p.tenant_id = ? AND p.stream_key = ?",
                     params![
-                        MAX_RESULT_BYTES as u64,
                         scope.processor_id,
                         scope.method_version,
                         scope.identity.tenant_id.as_slice(),
@@ -269,10 +263,8 @@ impl AnalysisStore {
                         .ok_or_else(|| self.state_error("the processor graph result is absent"))?;
                 }
             }
-            if result.as_ref().is_some_and(|result| {
-                result.body.is_empty() || result.body.len() > MAX_RESULT_BYTES
-            }) {
-                return self.reject("the processor result exceeds its byte bound");
+            if result.as_ref().is_some_and(|result| result.body.is_empty()) {
+                return self.reject("the processor result body is empty");
             }
             Ok(result)
         })
@@ -288,16 +280,16 @@ impl AnalysisStore {
         tenant: [u8; 16],
         result_id: &str,
     ) -> Result<Option<Vec<u8>>> {
-        if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
+        if tenant == [0; 16] || result_id.is_empty() {
             return self.reject("the analysis result identity is invalid");
         }
         let stored: Option<(bool, Vec<u8>)> = connection
             .query_row(
                 "SELECT processor_id = 'graph-findings' AND stream_key IS NOT NULL,
                     CASE WHEN processor_id = 'graph-findings' AND stream_key IS NOT NULL THEN ''::BLOB
-                        WHEN octet_length(body) <= ? THEN body ELSE ''::BLOB END
+                        ELSE body END
                 FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
-                params![MAX_RESULT_BYTES as u64, tenant.as_slice(), result_id],
+                params![tenant.as_slice(), result_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
@@ -313,7 +305,7 @@ impl AnalysisStore {
             let graph = super::graph_rows::GraphRows::read(connection, result_id, &header)?;
             body = header.body(&graph)?;
         }
-        if body.is_empty() || body.len() > MAX_RESULT_BYTES {
+        if body.is_empty() {
             return self.reject("the retained analysis result size is invalid");
         }
         Ok(Some(body))
@@ -729,12 +721,8 @@ impl AnalysisStore {
         };
         if !input.scope.valid()
             || input.result_id.is_empty()
-            || input.result_id.len() > 256
             || input.body.is_empty()
-            || input.body.len() > MAX_RESULT_BYTES
             || input.created_utc_ns == 0
-            || input.witnesses.len() > MAX_RESULT_REFS
-            || input.context_refs.len() > MAX_CONTEXT_REFS
             || input.consumed_cursor < input.expected_cursor
             || input.witnesses.windows(2).any(|pair| {
                 (&pair[0].identity, pair[0].cursor) >= (&pair[1].identity, pair[1].cursor)
@@ -766,9 +754,6 @@ impl AnalysisStore {
         }
         let path = self.root.join("analysis.duckdb");
         let request = input.request_meta().context(JsonSnafu { path: &path })?;
-        if request.len() > MAX_RESULT_META_BYTES {
-            return self.reject("the analysis result metadata exceeds its byte bound");
-        }
         let graph_header = graph
             .map(|graph| {
                 if canonical {
@@ -788,15 +773,11 @@ impl AnalysisStore {
         let existing = transaction
             .query_row(
                 "SELECT CASE WHEN octet_length(tenant_id) = 16 THEN tenant_id ELSE NULL END,
-                CASE WHEN octet_length(request_meta) <= ? THEN request_meta ELSE NULL END,
+                request_meta,
                 CASE WHEN processor_id = 'graph-findings' AND stream_key IS NOT NULL THEN ''::BLOB
-                    WHEN octet_length(body) <= ? THEN body ELSE NULL END,
+                    ELSE body END,
                 commit_revision FROM analysis_results WHERE result_id = ?",
-                params![
-                    MAX_RESULT_META_BYTES as u64,
-                    MAX_RESULT_BYTES as u64,
-                    input.result_id
-                ],
+                params![input.result_id],
                 |row| {
                     Ok((
                         row.get::<_, Option<Vec<u8>>>(0)?,

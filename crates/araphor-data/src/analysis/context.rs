@@ -10,7 +10,6 @@ mod reads;
 mod tests;
 mod write;
 
-const MAX_CONTEXT_KEY_BYTES: usize = 256;
 type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, u64);
 
 pub use araphor_analysis_builtins::graph::AnalysisContextKeyV1;

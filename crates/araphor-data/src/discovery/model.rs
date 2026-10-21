@@ -82,7 +82,6 @@ impl DiscoveryValidate for DiscoveryCoverageV1 {
             self.stream.valid()
                 && self.first_cursor > 0
                 && self.last_cursor >= self.first_cursor
-                && self.expected_records <= MAX_DISCOVERY_RECORDS as u64
                 && self.expected_records <= self.last_cursor - self.first_cursor + 1
                 && (self.coverage_revision > 0
                     || (matches!(
@@ -93,11 +92,7 @@ impl DiscoveryValidate for DiscoveryCoverageV1 {
             "coverage identity",
         )?;
         require(
-            self.gap_reasons.len() <= 32
-                && self
-                    .gap_reasons
-                    .iter()
-                    .all(|reason| !reason.is_empty() && reason.len() <= 128)
+            self.gap_reasons.iter().all(|reason| !reason.is_empty())
                 && (self.state != DiscoveryCoverageStateV1::Healthy || self.gap_reasons.is_empty()),
             "coverage state",
         )

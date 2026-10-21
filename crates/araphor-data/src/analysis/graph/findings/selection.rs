@@ -26,9 +26,8 @@ impl AnalysisStore {
                 PARTITION BY finding_id
                 ORDER BY commit_revision DESC, finding.result_id DESC) = 1
          )
-         SELECT CASE WHEN octet_length(encode(result_id)) BETWEEN 1 AND 256
-                THEN result_id END,
-            CASE WHEN octet_length(encode(finding_id)) <= 4096 THEN finding_id END,
+         SELECT result_id,
+            finding_id,
             finding_bytes
          FROM current_findings
          WHERE (? IS NULL OR finding_id > ?) AND (? IS NULL OR finding_id = ?)
@@ -53,8 +52,7 @@ impl AnalysisStore {
                     + octet_length(encode(metadata.result_id))), 0) <= ? AS included
                 FROM main.analysis_results metadata JOIN requested USING (result_id)
              )
-             SELECT CASE WHEN octet_length(encode(metadata.result_id)) BETWEEN 1 AND 256
-                    THEN metadata.result_id END AS result_id,
+             SELECT metadata.result_id,
                 CASE WHEN headers.included AND octet_length(metadata.body) <= ?
                     THEN metadata.body END AS graph_header,
                 CASE WHEN headers.included AND octet_length(metadata.stream_key) <= ?
