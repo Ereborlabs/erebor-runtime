@@ -550,7 +550,7 @@ impl SourceSnapshot {
         }
         let mut package_coverage = BTreeMap::new();
         for (index, (schema, batches, coverage)) in packages {
-            let (slot, _, _) = self
+            let (slot, source, _) = self
                 .inputs
                 .as_ref()
                 .and_then(|inputs| inputs.bindings.get(index))
@@ -565,11 +565,39 @@ impl SourceSnapshot {
             source_bytes = source_bytes
                 .saturating_add(Captured::table_bytes(&schema, &batches))
                 .saturating_add(Captured::coverage_bytes(&coverage));
+            let input = if let araphor_data::AnalysisInputSource::Managed(reference) = source {
+                let input = sdk::Input {
+                    data: sdk::Dataset {
+                        name: reference.output().output.clone(),
+                        batches: batches.clone(),
+                    },
+                    revision: sdk::Revision {
+                        owner: format!(
+                            "{}.{}",
+                            reference.output().package,
+                            reference.output().export
+                        ),
+                        id: format!(
+                            "{}:{}",
+                            reference.result().result_id,
+                            reference.result().commit_revision
+                        ),
+                        window: None,
+                    },
+                    coverage: coverage.clone(),
+                };
+                source_bytes = source_bytes
+                    .saturating_add(std::mem::size_of::<sdk::Input>())
+                    .saturating_add(input.metadata_bytes());
+                Some(Arc::new(input))
+            } else {
+                None
+            };
             let indices = (0..schema.fields().len()).collect();
             if tables
                 .insert(
                     SourceOrigin::Package(*slot),
-                    (schema, indices, batches, None),
+                    (schema, indices, batches, input),
                 )
                 .is_some()
                 || package_coverage.insert(*slot, coverage).is_some()
@@ -585,7 +613,15 @@ impl SourceSnapshot {
             }
         }
         let mut witnesses = std::mem::take(&mut page.extraction.witnesses);
-        if self.inputs.is_some() {
+        let retained = self
+            .inputs
+            .as_ref()
+            .is_some_and(|inputs| inputs.retained.is_some());
+        if self
+            .inputs
+            .as_ref()
+            .is_some_and(|inputs| inputs.retained.is_none())
+        {
             for witness in &mut witnesses {
                 if witness.expires_utc_ns == 0 {
                     witness.expires_utc_ns =
@@ -597,7 +633,16 @@ impl SourceSnapshot {
             left.identity
                 .cmp(&right.identity)
                 .then(left.cursor.cmp(&right.cursor))
-                .then(left.expires_utc_ns.cmp(&right.expires_utc_ns))
+                .then_with(|| {
+                    let expiry = |value: u64| {
+                        if retained && value == 0 {
+                            u64::MAX
+                        } else {
+                            value
+                        }
+                    };
+                    expiry(left.expires_utc_ns).cmp(&expiry(right.expires_utc_ns))
+                })
         });
         witnesses
             .dedup_by(|left, right| left.identity == right.identity && left.cursor == right.cursor);

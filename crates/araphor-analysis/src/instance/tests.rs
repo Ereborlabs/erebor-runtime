@@ -20,6 +20,7 @@ mod checkpoint;
 mod finite;
 mod history;
 mod restart;
+mod retained;
 
 pub(super) type TestResult<T = ()> =
     std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;

@@ -170,7 +170,12 @@ impl Fixture {
         )]);
         let outputs = references
             .iter()
-            .map(|reference| (reference.clone(), Arc::new(self.schema.clone())))
+            .map(|reference| {
+                (
+                    crate::AnalysisInputSource::Package(reference.clone()),
+                    Arc::new(self.schema.clone()),
+                )
+            })
             .collect::<Vec<_>>();
         self.store.read_tables(
             selection,

@@ -5,7 +5,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use araphor_data::{AnalysisReadControl, AnalysisTableRequests, PackageErrorCodeV1};
 use araphor_discovery_definition::{Definition, ResolvedDefinition};
 use datafusion::arrow::array::RecordBatch;
-use datafusion::catalog::TableProvider as _;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::logical_expr::LogicalPlan;
@@ -37,6 +36,7 @@ struct DefinitionAdmission {
     sources: AnalysisTableRequests,
     tenant: [u8; 16],
     images: Arc<package::Bundles>,
+    retained: Option<Arc<crate::sources::InputCapture>>,
     _memory: MemoryReservation,
 }
 
@@ -304,11 +304,21 @@ impl Engine {
             .map(|(name, (table, _))| {
                 (
                     name.clone(),
-                    crate::sources::SourceProvider::local(name, table.schema()),
+                    if table
+                        .as_any()
+                        .downcast_ref::<crate::sources::SourceProvider>()
+                        .is_some_and(|source| source.retained_source().is_some())
+                    {
+                        Arc::clone(table)
+                    } else {
+                        crate::sources::SourceProvider::local(name, table.schema())
+                    },
                 )
             })
             .collect();
-        let mut packages = package::Packages::new(self, bundles, tenant, providers, memory)?;
+        let registered = Arc::clone(&tables);
+        let mut packages =
+            package::Packages::new(self, bundles, tenant, providers, Arc::clone(&memory))?;
         packages.state.config_mut().set_extension(tables);
         let packages = Arc::new(packages);
         let mut state = packages.state.clone();
@@ -320,6 +330,72 @@ impl Engine {
             .await?;
         // Seal after native parameter binding reconstructs child schemas.
         let plan = PackageCall::seal(plan).context(SqlSnafu)?;
+        let admitted = |table: &Arc<dyn datafusion::catalog::TableProvider>| {
+            table
+                .as_any()
+                .downcast_ref::<crate::sources::SourceProvider>()
+                .and_then(crate::sources::SourceProvider::retained_source)
+                .filter(|source| {
+                    origins.contains(&crate::sources::SourceOrigin::Package(source.slot))
+                })
+                .cloned()
+        };
+        let count = registered
+            .values()
+            .filter(|(table, _)| admitted(table).is_some())
+            .count();
+        let source_bytes = count
+            .checked_mul(std::mem::size_of::<Arc<crate::sources::RetainedSource>>())
+            .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
+        let input_bytes = count
+            .checked_mul(std::mem::size_of::<(
+                usize,
+                araphor_data::AnalysisInputSource,
+                datafusion::arrow::datatypes::SchemaRef,
+            )>())
+            .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
+        let bytes = source_bytes
+            .checked_add(input_bytes)
+            .and_then(|bytes| {
+                bytes.checked_add(if count == 0 {
+                    0
+                } else {
+                    std::mem::size_of::<crate::sources::InputCapture>()
+                })
+            })
+            .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
+        let transient = source_bytes
+            .checked_add(source_bytes)
+            .map(|transient| transient.max(bytes))
+            .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
+        let bindings_memory = memory.reserve_input(transient).context(SqlSnafu)?;
+        let mut bindings = Vec::with_capacity(count);
+        for (table, _) in registered.values() {
+            if let Some(source) = admitted(table) {
+                bindings.push(source);
+            }
+        }
+        let retained_sources: Arc<[Arc<crate::sources::RetainedSource>]> = bindings.into();
+        let mut bindings = Vec::with_capacity(count);
+        for source in retained_sources.iter() {
+            bindings.push((
+                source.slot,
+                araphor_data::AnalysisInputSource::Managed(Arc::clone(&source.reference)),
+                Arc::clone(&source.schema),
+            ));
+        }
+        bindings_memory.try_resize(bytes).context(SqlSnafu)?;
+        let inputs = (!bindings.is_empty()).then(|| {
+            Arc::new(crate::sources::InputCapture {
+                scope: String::new(),
+                bindings,
+                limits: araphor_analysis_sdk::Limits::default(),
+                ranges: Vec::new(),
+                include_results: true,
+                retained: Some(retained_sources),
+                _memory: Some(bindings_memory),
+            })
+        });
         let sources = origins
             .into_iter()
             .filter_map(|source| source.durable().map(|name| (name.to_owned(), None)))
@@ -342,6 +418,7 @@ impl Engine {
                 sources,
                 tenant,
                 images: Arc::clone(&packages.bundles),
+                retained: inputs,
                 _memory: retained,
             }),
         })
@@ -400,6 +477,7 @@ impl Session {
         definition.check_invocation(self.selection(), &invocation, managed.as_ref())?;
         let mut session = self.clone();
         session.managed = managed;
+        session.inputs = definition.admission.retained.clone();
         session.control = Arc::new(self.control().operation()?);
         let pending = PendingRead {
             control: Arc::clone(session.control()),
@@ -474,6 +552,11 @@ impl PreparedDefinition {
             .fail();
         }
         if let Some(managed) = managed {
+            if self.admission.retained.is_some() {
+                return Err(PackageErrorCodeV1::Unsupported
+                    .error("retained source publication")
+                    .into());
+            }
             if !invocation.inputs.is_empty() || !invocation.checkpoints.is_empty() {
                 return Err(PackageErrorCodeV1::Invalid
                     .error("managed invocation state")

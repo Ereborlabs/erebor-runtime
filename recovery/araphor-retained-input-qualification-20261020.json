@@ -1,0 +1,520 @@
+{
+  "recorded_at": "2026-10-21T03:04:37.321776+00:00",
+  "head_before_commit": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+  "result": "Focused qualification passes. No reference file retires. The complete migration and final Rust procedure are Not done.",
+  "behavior": [
+    "Session registers an exact saved managed call dataset as a native table alias. Installation and admission start no Discovery.",
+    "Data creates the opaque exact reference without loading Arrow IPC. The existing source transaction checks tenant, generation, call, result, current head, stored scope, source versions, trace reads, context heads and original evidence expiry.",
+    "Native planning and the existing physical source scan capture the saved dataset with other declared inputs. The producer does not run again.",
+    "Data prepays encoded lengths and SDK decode bounds, then runs complete stored result validation. Equal exact references and schemas decode once; Arrow buffers share their existing claims.",
+    "A full identity input keeps original revision and coverage. Narrowed, reordered, filtered or derived input uses the existing native fingerprint. Inherited revision order uses the complete stable revision tuple.",
+    "All reads leave stored outputs, state and progress unchanged. Logical input limits count both alias payloads. Final alias drop releases the actual memory claim."
+  ],
+  "sources": {
+    "crates/araphor-analysis/src/instance/tests.rs": "a9810fa13b0ac8ea57bb3796c0ea50e193d1db6f0a2c72eddfa82792ca145812",
+    "crates/araphor-analysis/src/instance/tests/retained.rs": "81a02651a92411c4ae4ee260305b6b0bb056eeadd63ed4f574247c0aaaf7d368",
+    "crates/araphor-analysis/src/instance/tests/retained/guards.rs": "33882ee600ad87e86a2f924c4a3fd0409535d36a4c48fd7d3695e76c1ca44c27",
+    "crates/araphor-analysis/src/instance/tests/retained/projections.rs": "766fad7ac41c58aa52e4f10e6ac53315607c0f1774cb2ff3d8e11985796920d2",
+    "crates/araphor-analysis/src/instance/tests/retained/revisions.rs": "7ed7230edc6118fdabb4c5eed2437df6b11a5a3c8d7f8f1ed418d1bc91b16842",
+    "crates/araphor-data/src/analysis/extraction.rs": "12ca7c8b9cf794e5e106395f9eab8b9e6c416f265e853b85cd6cbb4754c4bfdb",
+    "crates/araphor-data/src/analysis/extraction/package.rs": "5436bd86533ab6560ae39b9756359f0562d38796eb2748989a6608ce288ed90c",
+    "crates/araphor-data/src/analysis/extraction/tables/mod.rs": "e3e00e2c737062f2d41cfd6ea685bb96fcb759c5582ffd26d7586b901607007b",
+    "crates/araphor-data/src/analysis/managed/input.rs": "a165c186e9466135d3fc14c81eee83a10eef80c3332a545c32440c5e8c24715e",
+    "crates/araphor-data/src/analysis/managed/mod.rs": "ec2b349b0a4f563a6ce5ee7645cc9a64ca872d4f13686f2b766d9f1fd7573295",
+    "crates/araphor-data/src/analysis/managed/read.rs": "640e26825e3f7fe220a098bd8ae66ba12138d97f2ab4a516a54fda9aed08afd1",
+    "crates/araphor-data/src/analysis/managed/tests.rs": "ea24b36cd0cf609d4cf34520334168a9f0ce2d529c755ff6ff340de234f740b5",
+    "crates/araphor-data/src/analysis/managed/tests/input.rs": "191f513c090da0bfd1c83a18713c72e7fd55b1d13c8da53ca17d1cc8313e97ec",
+    "crates/araphor-data/src/analysis/mod.rs": "8650eb84113f95bc1e8762bf3d3658dc5b8167f44f0477639469f91b4128ac76",
+    "crates/araphor-data/src/analysis/packages/tests/output.rs": "568e763ecc17843f663555e1c6c5c7fbd8830aa4aea3546c5db30a0f8060c9ad",
+    "crates/araphor-data/src/lib.rs": "2336dd6de15095b94197267b2cbcddbe46acb4f7d24adf8aed9eae6512e1b50f",
+    "crates/araphor-query/src/definition.rs": "9a767274cf948f6b65415272a47ae151df34500e4b3e7f25a36286a1cc6d08e8",
+    "crates/araphor-query/src/definition/package.rs": "b2c9534258463ba93dc1d973964de2c960f74d19ecfda9867dbe78aeb59da995",
+    "crates/araphor-query/src/execution.rs": "fd1e59ae5efd9bcb6a63f159e6637949e899cccc0486b091c54f0597b7895063",
+    "crates/araphor-query/src/execution/tests.rs": "ea933a8f0a6a7c89d588435babc5f16a1e9c99c16441f6a9a17bca105cd311f7",
+    "crates/araphor-query/src/inputs/mod.rs": "bf688e4e915dae1e36cb91a98ea94dceb65fd4dd92839927aa407cd3d00f3e92",
+    "crates/araphor-query/src/inputs/physical.rs": "ae6c7b7e237d354d6398051d641a6916ee6bb50c7c4ecf65473ee9e53831eb9a",
+    "crates/araphor-query/src/inputs/receipt.rs": "bfff40ddf86f4d803b33c1e725a5c74501fcfd9ab5324d0a7e71d4ecf971b3f8",
+    "crates/araphor-query/src/sources/mod.rs": "f085ba4271c251d3674a058aadef2f07cd45eb3f23c0760ee483267d0bdfce8e",
+    "crates/araphor-query/src/sources/rows.rs": "4c8e1f8e2deaf35b2f4867347b171b5d572ec2dca8d95bbf72bd19855d9e0425",
+    "crates/araphor-query/src/sources/rows/package.rs": "84f36a3d268a740a7467bc2061c82902b9e1077d4adb8c4d519df40fe77ff42c"
+  },
+  "passing_test_runs": [
+    {
+      "command": [
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "instance::tests::retained::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 7.46,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-analysis154",
+      "record": "/tmp/araphor-oci-execution/migration-retained-analysis154.json",
+      "record_sha256": "b8710d8586c2cc136234507e9e1bd67a70bb205d17c65e30d5e5cc2af18b32e6",
+      "log": "/tmp/araphor-oci-execution/migration-retained-analysis154.log",
+      "log_sha256": "3326a2f0ef1d5991b821e36c60bb9cafead6416d250eb147e49c61720a80d600",
+      "binary_sha256": "7850021e1a20aa4a137f9b57785e3d179a7012ccb3ec6a2e9a4174ecb80074b8",
+      "passed": 10,
+      "ignored": 0
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_query-20b5305718963d88",
+        "definition::tests::captured::",
+        "definition::tests::execution::contract::",
+        "inputs::tests::",
+        "memory::tests::",
+        "sources::rows::package::",
+        "execution::tests::local",
+        "definition::tests::subscription::windows::",
+        "definition::tests::subscription::package_window_expires_without_intake",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 104.641,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-query153",
+      "record": "/tmp/araphor-oci-execution/migration-retained-query153.json",
+      "record_sha256": "7f7c48fda51a8a410f145d4e7fcd4ed1e8364c41c4ce8bee599c60cc42939aab",
+      "log": "/tmp/araphor-oci-execution/migration-retained-query153.log",
+      "log_sha256": "19e9ebcf03cb3fc44dfb6397949591598ead528d8f66b64be3b5bc17af3a6b0d",
+      "binary_sha256": "301fd13f581b92df6de63a510ae0d01fd846ab135dac00a6aa984e45a51a7e1f",
+      "passed": 124,
+      "ignored": 0
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_data-ef29af64b90b2937",
+        "analysis::managed::tests::",
+        "analysis::packages::tests::output::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 59.879,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-data153",
+      "record": "/tmp/araphor-oci-execution/migration-retained-data153.json",
+      "record_sha256": "622542f6a58bf220bb746dc157504be3f5673ffcd41d7e17dbf32d8468f91f8d",
+      "log": "/tmp/araphor-oci-execution/migration-retained-data153.log",
+      "log_sha256": "174df1ff41ca9803142d6f29245d926f4afbca4820f7d0b28d8931d5051182e5",
+      "binary_sha256": "6e0b40a13988fdc143b6895e61eb08932ba48f4184bd67dc0bfcdd138b3337a9",
+      "passed": 56,
+      "ignored": 0
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_data-ef29af64b90b2937",
+        "analysis::extraction::tests::",
+        "analysis::dependencies::tests::",
+        "analysis::packages::tests::input::",
+        "analysis::packages::tests::representation::packages_dependency",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 29.765,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-extraction154",
+      "record": "/tmp/araphor-oci-execution/migration-retained-extraction154.json",
+      "record_sha256": "6b45b2db049763abdb6b729222ba969a7d281bc0a753ff4e261dbbbb932aae99",
+      "log": "/tmp/araphor-oci-execution/migration-retained-extraction154.log",
+      "log_sha256": "3ed86a17af98b020ad5c39a6d5e7a718ba657ccb4761be2356d1a061e1feb6dc",
+      "binary_sha256": "6e0b40a13988fdc143b6895e61eb08932ba48f4184bd67dc0bfcdd138b3337a9",
+      "passed": 40,
+      "ignored": 1
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_query-20b5305718963d88",
+        "definition::tests::execution::physical_native_complete_relation",
+        "definition::tests::execution::physical_native_failures_release",
+        "definition::tests::guest::native_checkpoint_shares_output_budget",
+        "definition::tests::guest::native_output_quota_preserves_input",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 12.301,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-native154",
+      "record": "/tmp/araphor-oci-execution/migration-retained-native154.json",
+      "record_sha256": "41d29b3c3a085155bad6819e1832495aaffb8952c0b47bb03a92ea1cb4fdfe4f",
+      "log": "/tmp/araphor-oci-execution/migration-retained-native154.log",
+      "log_sha256": "34ddc0b309cebbe80cf3f3875f8486edc24b85cb812eda285a8c622cbd224ab4",
+      "binary_sha256": "301fd13f581b92df6de63a510ae0d01fd846ab135dac00a6aa984e45a51a7e1f",
+      "passed": 4,
+      "ignored": 0
+    }
+  ],
+  "distinct_passing_cases": 234,
+  "existing_ignored_cases": 1,
+  "passing_checks": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "--all-features",
+        "--lib",
+        "--bin",
+        "araphor",
+        "--no-run"
+      ],
+      "elapsed_seconds": 27.395,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-build154",
+      "record": "/tmp/araphor-oci-execution/migration-retained-build154.json",
+      "record_sha256": "daf92839b7b5dd94c5e4e9ba88c664481bd3cbf11098cd5b5a044209b91e7894",
+      "log": "/tmp/araphor-oci-execution/migration-retained-build154.log",
+      "log_sha256": "92ba5a921eef4cdaed483418d9292c4976c52e5bf9eeee22d552e41c9c0b79c6"
+    },
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "elapsed_seconds": 4.837,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-fmt154",
+      "record": "/tmp/araphor-oci-execution/migration-retained-fmt154.json",
+      "record_sha256": "bef797e82b6056151d7c20bd48fa947e8dbdcdbfb011e1950a55473e81ea4db0",
+      "log": "/tmp/araphor-oci-execution/migration-retained-fmt154.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "elapsed_seconds": 12.787,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-clippy154",
+      "record": "/tmp/araphor-oci-execution/migration-retained-clippy154.json",
+      "record_sha256": "156e87b8bdbe09afef398e5cbcdc466259546a36d06904acaa178fe35ec9a6e6",
+      "log": "/tmp/araphor-oci-execution/migration-retained-clippy154.log",
+      "log_sha256": "29e2bfdc66952bd312e6d0bd631c282d97c5af4a0734a7f357e0d844ea8a960c"
+    }
+  ],
+  "earlier_failures": [
+    {
+      "command": [
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "instance::tests::retained::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 7.165,
+      "exit_code": 101,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-analysis150",
+      "record": "/tmp/araphor-oci-execution/migration-retained-analysis150.json",
+      "record_sha256": "ff831d1f9262cc202e6adccb39cde527e97bdaf1f0f6da7e32aa7dd5e196f674",
+      "log": "/tmp/araphor-oci-execution/migration-retained-analysis150.log",
+      "log_sha256": "95cde2aed05f9e5b9cfbf04c9c07f5370dd0e1a237bc32372d13ddcb147f5961",
+      "binary_sha256": "e921982c6652c6c233e1130051e9377cf61b31e2697213f1ba05d25825c249ea"
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_query-20b5305718963d88",
+        "definition::tests::captured::",
+        "definition::tests::execution::contract::",
+        "inputs::tests::",
+        "memory::tests::",
+        "sources::rows::package::",
+        "execution::tests::local",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 142.738,
+      "exit_code": 137,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-query-regression150",
+      "record": "/tmp/araphor-oci-execution/migration-retained-query-regression150.json",
+      "record_sha256": "e684c077bcc92ad7b23f8362b9e5130f14db67243906eb33841554eb23ffbf74",
+      "log": "/tmp/araphor-oci-execution/migration-retained-query-regression150.log",
+      "log_sha256": "79f49a8a98c4536a1e5406230aec9c48976d8bff44d72124e20543c18bb2786d",
+      "binary_sha256": "1e1e5bad46297b92fedf2529c80023279701ca00ab8431f22c501e3dee9cf582"
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "instance::tests::retained::revisions::retained_revisions_ignore_slots",
+        "--exact",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 1.51,
+      "exit_code": 101,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-order-reproduce151",
+      "record": "/tmp/araphor-oci-execution/migration-retained-order-reproduce151.json",
+      "record_sha256": "bde65830d23f45b957a18f1fe7fc33f5d977fad354b3feef99165ae54de44063",
+      "log": "/tmp/araphor-oci-execution/migration-retained-order-reproduce151.log",
+      "log_sha256": "c119393dc0a435c4d37c173bfb5a4fbd40c3add9028eab14489b2790124a6ece",
+      "binary_sha256": "1e545f302be69f54defc7c3a615ace44209f282a4f9c6eca04e8a8897849463c"
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "instance::tests::retained::projections::retained_projection_derives_revision",
+        "--exact",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 1.057,
+      "exit_code": 101,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-projection-reproduce152",
+      "record": "/tmp/araphor-oci-execution/migration-retained-projection-reproduce152.json",
+      "record_sha256": "8a2bce0309c0be18f2800561ac8388933a732e8873a340407696f9b73b5d9406",
+      "log": "/tmp/araphor-oci-execution/migration-retained-projection-reproduce152.log",
+      "log_sha256": "33956de7977646b1b084b4998e6a7ba95583c1ff7a23224ba9b693a520872e39",
+      "binary_sha256": "25a53510eb59c0849cb82fddc8020ef09b310e066975b3efd84918c21af6ea0d"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "elapsed_seconds": 99.906,
+      "exit_code": 101,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-clippy153",
+      "record": "/tmp/araphor-oci-execution/migration-retained-clippy153.json",
+      "record_sha256": "a919b780f097b112aab54738d76e0f28c3436092cc2e603c752d824ae440cd7f",
+      "log": "/tmp/araphor-oci-execution/migration-retained-clippy153.log",
+      "log_sha256": "e6a1a9360532e883c113b8923cae6bf950c42020e5379955264d09ce1c82adf3"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "--all-features",
+        "--lib",
+        "--bin",
+        "araphor",
+        "--no-run"
+      ],
+      "elapsed_seconds": 30.963,
+      "exit_code": 101,
+      "source_unchanged": true,
+      "head_before": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "head_after": "c83c5e55722f696cf155834fe6fdb38b0e4bc542",
+      "label": "migration-retained-reproduce-build151",
+      "record": "/tmp/araphor-oci-execution/migration-retained-reproduce-build151.json",
+      "record_sha256": "15c9bca4b08d0dcd5f4a65bb54d398a71d739ef36e3a18293918177e292a744a",
+      "log": "/tmp/araphor-oci-execution/migration-retained-reproduce-build151.log",
+      "log_sha256": "50136db9d2ec9be5ce16932a0d53284a8269a5e8115f6181645206e7b44594c6"
+    }
+  ],
+  "failure_corrections": [
+    "The initial new alias tests use the wrong global cursor failure category and model byte measure. Exact cursor fields stay unchanged. Corrected bulk qualification proves one full SDK payload fits and two shared logical payloads exceed the explicit bound.",
+    "The broad Query process exits with signal9 after113 cases finish. Its only pending case is local_skips_store. The old loop exhausts default unbounded permits and cannot terminate. Kernel logs are unavailable. The fixture now explicitly configures16 admissions, collects exactly16 permits and retains every local/no-store assertion. The actual test and full124-case group pass.",
+    "The actual registration-order test first reports different derived revisions for identical references and rows. Canonical inherited revision ordering corrects it. Changed values and equal-value changed references remain distinct.",
+    "The actual narrowed-projection test first keeps the original wider dataset revision. The shortcut now requires full native schema and identity column order. Narrowed, reordered and full identity cases pass.",
+    "Clippy rejects expect in a new test. A direct Arrow buffer comparison preserves the shared-buffer assertion. Strict Clippy passes after correction.",
+    "The new Query fixture initially omits the retention argument of open_with_limits. It now passes default retention explicitly. Connected compilation passes."
+  ],
+  "production_equivalence_for_prior_runs": {
+    "migration-retained-query153": {
+      "later_changed_paths": [
+        "crates/araphor-analysis/src/instance/tests/retained.rs"
+      ],
+      "change": "The test replaces expect with a direct Arrow buffer comparison. Production source and the Query and Data harness inputs stay unchanged."
+    },
+    "migration-retained-data153": {
+      "later_changed_paths": [
+        "crates/araphor-analysis/src/instance/tests/retained.rs"
+      ],
+      "change": "The test replaces expect with a direct Arrow buffer comparison. Production source and the Query and Data harness inputs stay unchanged."
+    }
+  },
+  "count": {
+    "record": "/tmp/araphor-oci-execution-count154.json",
+    "sha256": "85b1f7e6cb0bb2b8d2f0e3ff28bd2f811f74ee7d816354679b814eaf73d6ffe0",
+    "fingerprint": "2613617eddb0bf8788bf162d66063f7aa5f085526897e489a6e3562ecd3811b7",
+    "deliverable_production_net": 744,
+    "original_baseline": "7b7b407adf347d389984553a4d212bfce37b75b5",
+    "original_production_net": 14333,
+    "required_further_net_deletions": 20333,
+    "methodology": [
+      "Compare baseline file content with current file content under crates/ and docs/.",
+      "Include tracked .rs and .md paths and all new Rust files in araphor-data, araphor-query, araphor-analysis, and araphor-analysis-sdk.",
+      "Exclude other untracked source trees.",
+      "Count a line only when line.strip() is nonempty. Report after minus before.",
+      "Read added files with an empty baseline and deleted files with empty current content.",
+      "Disable rename detection. A move between counted paths cancels in the total.",
+      "Count tests paths, tests and *_tests modules, *-e2e crates, and the test-only analysis/crash.rs module as test Rust.",
+      "In other Rust files, use syn Rust syntax spans for cfg(test) items, parameters, fields, expressions, locals and match arms. An attributed parameter never excludes its function body.",
+      "Exclude test-fixtures and test-support gated code as test Rust, including their external helper modules. Other feature-gated code remains production Rust.",
+      "Retain all nonblank code, comment, and documentation lines in the inventory.",
+      "These counts do not prove semantic simplification. Review compressed formatting and retained behavior separately.",
+      "This report selects Rust files only. Documentation, manifests and lockfiles are excluded.",
+      "Explicitly exclude model/schema.rs in both Analysis paths because the whole file has crate-level cfg(test). Count120 misclassified its two attribute/import lines as production. The real model retirement removes306 production lines, not308.",
+      "Include new Rust files under araphor-package, araphor-cli, mithril-control, mithril-e2e, araphor-discovery-effects, araphor-analysis_back and araphor-discovery-definition in addition to the original roots.",
+      "Use production_code for results: syntax token lines excluding blank lines, comments, documentation and test/test-support/test-fixtures code according to the established counter.",
+      "Added/deleted totals sum positive/negative per-file production-code size changes, not textual diff insertions/deletions. File moves cancel in the overall net.",
+      "The source hashes identify the measured snapshot; no repository files are written or staged."
+    ]
+  },
+  "custody": {
+    "record": "/tmp/araphor-back-custody152.json",
+    "sha256": "a9a055dfef6c4d698f31c5861eefcc55eee341dec06b4b6e769981070a8750ef",
+    "remaining_unchanged": 106,
+    "previously_retired": 102,
+    "retired_this_change": [],
+    "recovery_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+    "recovery_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420"
+  },
+  "frozen_patches": [
+    {
+      "path": "/tmp/araphor-retained-session-20261020-sq_637pm/retained-session.patch",
+      "sha256": "a2956f90d4926e03a90a376718409922ddd2a6ae0191b1543bb353d9959938ca"
+    },
+    {
+      "path": "/tmp/araphor-retained-guards-20261020-hch5p88t/retained-guards.patch",
+      "sha256": "ecd8a186359b1d8e53fd98738ffbd39394c611e439b387159406ea28af3620a6"
+    },
+    {
+      "path": "/tmp/araphor-retained-input-bound-20261020-gmewl7l8/retained-input-bound.patch",
+      "sha256": "49b80e16fd75caede3fc729cdff036d484c919c659251f16f991c00a9fd0b345"
+    },
+    {
+      "path": "/tmp/araphor-retained-revision-order-20261021-4jzqlc5u/native-key-fix.patch",
+      "sha256": "518191c4975bc8a3527713b078286b496b84d09b0259ce9f0673db1b46493279"
+    },
+    {
+      "path": "/tmp/araphor-retained-projection-20261021-tmhitgzk/identity-fix.patch",
+      "sha256": "ca63ad775993fca3bd0a93f25713e43cd4366e66ebff1fcbb9c6600b050aeb3f"
+    }
+  ],
+  "native": {
+    "build_record": "/tmp/araphor-graph-native139.json",
+    "build_record_sha256": "35ebdda71782cad4386fea4f3a7f8915ed6ea2ae0418c302b621da9cf2beea86",
+    "source_inputs_verified": 117,
+    "target": "x86_64-unknown-linux-gnu",
+    "artifacts": {
+      "credentials.so": {
+        "sha256": "8d3aa9aa1e4bd1962555114875beaefd266437aae448788f5a45ab72d83db19c",
+        "bytes": 4643840
+      },
+      "detector.so": {
+        "sha256": "c203e716904c8107780027c3d902bce2567e9b8f65d8478882e2b6dc49a070a8",
+        "bytes": 4037696
+      },
+      "discovery.so": {
+        "sha256": "dac390371e9cde58e85a178b781f2dc0c121479ee0b56e49dca637e9418a36df",
+        "bytes": 5618008
+      },
+      "kubernetes.so": {
+        "sha256": "7147266c8f21da3faff8397edf3c3b29e1357fc8d7282146ae71b8ada5b4f4b4",
+        "bytes": 4643808
+      },
+      "process.so": {
+        "sha256": "4ce917493c31bab3d8583cbc5b8c3aaa589a61f72f4bed339c8327df4442dafc",
+        "bytes": 4643696
+      },
+      "runtime.so": {
+        "sha256": "c1e6da3f5925602ba58681ad8cf0d5e515d834bb8a0ae92d299bef78020e2cc9",
+        "bytes": 5975920
+      }
+    }
+  },
+  "remaining": [
+    "Managed alias publication, native follow and durable alias admission/recovery are unsupported.",
+    "Expired original evidence remains Incomplete. Readable Unknown input, model-wide expiry downgrade, original absolute leases versus renewed raw leases and native witness deadlines remain unimplemented.",
+    "Complete source and lifetime assertions remain in the mixed reference leaves. No whole leaf is qualified by this finite slice.",
+    "Production Graph/Discovery/notification producers and public start/stop/recovery integration remain open.",
+    "Data controlled lock retry and repeated native interrupt polling remain open. This change adds no polling.",
+    "The complete shared Rust procedure after the final connected edit is Not done. No benchmark or push ran."
+  ]
+}

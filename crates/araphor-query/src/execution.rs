@@ -517,6 +517,7 @@ impl Engine {
             tables: Arc::default(),
             calls: None,
             managed: None,
+            inputs: None,
             workers: None,
             output_rows: self.limits.output_rows,
             output_bytes: self.limits.output_bytes,
@@ -650,7 +651,7 @@ pub enum Read {
     Page(Option<StorePositionV1>),
 }
 
-pub(crate) type LocalTables = BTreeMap<String, (Arc<MemTable>, usize)>;
+pub(crate) type LocalTables = BTreeMap<String, (Arc<dyn TableProvider>, usize)>;
 
 #[derive(Clone)]
 pub struct Session {
@@ -662,6 +663,7 @@ pub struct Session {
     pub(crate) tables: Arc<LocalTables>,
     pub(crate) calls: Option<Arc<crate::definition::CallContext>>,
     pub(crate) managed: Option<araphor_data::ManagedRead>,
+    pub(crate) inputs: Option<Arc<crate::sources::InputCapture>>,
     pub(crate) workers: Option<araphor_package_runtime::TaskTracker>,
     output_rows: usize,
     output_bytes: usize,
@@ -759,6 +761,7 @@ impl Session {
             tables: Arc::clone(&self.tables),
             calls: None,
             managed: None,
+            inputs: None,
             workers: self.workers.clone(),
             output_rows: self.output_rows,
             output_bytes: self.output_bytes,
@@ -863,6 +866,60 @@ impl Session {
                 .context(SqlSnafu)?;
         }
         Arc::make_mut(&mut self.tables).insert(name.to_owned(), (Arc::new(table), bytes));
+        Ok(())
+    }
+
+    pub async fn register_retained(
+        &mut self,
+        name: &str,
+        instance: &str,
+        reference: araphor_data::analysis::PackageResultRefV1,
+        dataset: &str,
+    ) -> Result<()> {
+        self.control.check()?;
+        if name.is_empty() || name.chars().any(char::is_control) {
+            return InvalidSnafu {
+                field: "retained table alias",
+            }
+            .fail();
+        }
+        let store = Arc::clone(self.engine.store());
+        let selection = self.selection.clone();
+        let instance = instance.to_owned();
+        let dataset = dataset.to_owned();
+        let read = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
+        let limits = AnalysisExtractLimits {
+            input_bytes: self.engine.limits.input_bytes,
+            ..Default::default()
+        };
+        let (reference, port) = Engine::blocking(Arc::clone(&read), self.token()?, move || {
+            Ok(store.managed_input(&selection, &instance, &reference, &dataset, limits, &read)?)
+        })
+        .await?;
+        let bytes = reference
+            .allocation_bytes()
+            .and_then(|bytes| {
+                port.allocated_bytes()
+                    .checked_sub(port.name.capacity())
+                    .and_then(|schema| bytes.checked_add(schema))
+            })
+            .and_then(|bytes| {
+                bytes.checked_add(std::mem::size_of::<araphor_analysis_sdk::Schema>())
+            })
+            .and_then(|bytes| {
+                bytes.checked_add(std::mem::size_of::<crate::sources::RetainedSource>())
+            })
+            .and_then(|bytes| {
+                bytes.checked_add(std::mem::size_of::<crate::sources::SourceProvider>())
+            })
+            .ok_or_else(|| {
+                araphor_data::PackageErrorCodeV1::Limit.error("retained table metadata")
+            })?;
+        let memory = self.memory.reserve_input(bytes).context(SqlSnafu)?;
+        let schema = Arc::new(port.schema);
+        let table = crate::sources::SourceProvider::retained(reference, schema, memory)?;
+        self.control.check()?;
+        Arc::make_mut(&mut self.tables).insert(name.into(), (table, 0));
         Ok(())
     }
 
@@ -1139,7 +1196,7 @@ impl Session {
         let snapshot = SourceSnapshot::new(
             Arc::clone(&self.engine.store),
             self.selection.clone(),
-            None,
+            self.inputs.clone(),
             AnalysisExtractLimits {
                 scan_bytes: self.engine.limits.scan_bytes,
                 input_bytes: self.engine.limits.input_bytes,
@@ -1183,6 +1240,28 @@ impl Session {
             run.as_deref(),
         )
         .context(SqlSnafu)?;
+        let retained = self.inputs.as_ref().is_some_and(|inputs| {
+            inputs.bindings.iter().any(|(_, source, _)| {
+                matches!(source, araphor_data::AnalysisInputSource::Managed(_))
+            })
+        });
+        if retained && (self.managed.is_some() || run.as_ref().is_some_and(|run| run.follow)) {
+            return Err(araphor_data::PackageErrorCodeV1::Unsupported
+                .error("retained source publication")
+                .into());
+        }
+        if bounds.packages.iter().any(|slot| {
+            !self.inputs.as_ref().is_some_and(|inputs| {
+                inputs
+                    .bindings
+                    .iter()
+                    .any(|(admitted, _, _)| admitted == slot)
+            })
+        }) {
+            return Err(araphor_data::PackageErrorCodeV1::Invalid
+                .error("retained source admission")
+                .into());
+        }
         let captured = self
             .capture(snapshot, requests, bounds, mode, Arc::clone(&permit))
             .await?;

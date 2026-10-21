@@ -17,6 +17,7 @@ use crate::{
 };
 
 mod history;
+mod input;
 mod lifecycle;
 mod memory;
 mod metadata;
@@ -1635,6 +1636,53 @@ fn managed_witness_lifetime_check() -> TestResult {
             )?
             .current
     );
+    let (pin, port) = store.managed_input(
+        &spec.grant.selection,
+        &spec.id,
+        &receipt.results[&10],
+        "rows",
+        AnalysisExtractLimits::default(),
+        &AnalysisReadControl::default(),
+    )?;
+    let inputs = [(
+        crate::AnalysisInputSource::Managed(Arc::new(pin)),
+        Arc::new(port.schema),
+    )];
+    let requests = AnalysisTableRequests::new();
+    for now in [19, 20, 21] {
+        let read = store.read_tables(
+            &AnalysisSelectionV1::new([1; 16], Vec::new()),
+            AnalysisTableRead {
+                requests: &requests,
+                event_ranges: None,
+                inputs: Some(crate::AnalysisInputTables {
+                    authorized: &spec.grant.selection,
+                    scope: "",
+                    outputs: &inputs,
+                    limits: sdk::Limits::default(),
+                }),
+                mode: AnalysisReadModeV1::Complete,
+                now,
+            },
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+        );
+        if now == 19 {
+            let page = read?;
+            assert_eq!(page.packages.len(), 1);
+            assert_eq!(page.extraction.witnesses.len(), 1);
+            assert_eq!(page.extraction.witnesses[0].expires_utc_ns, 20);
+        } else {
+            assert!(matches!(
+                read,
+                Err(crate::Error::Package {
+                    code: crate::PackageErrorCodeV1::Incomplete,
+                    field: "managed input freshness",
+                    ..
+                })
+            ));
+        }
+    }
     assert_eq!(
         store
             .source_status(&source)?

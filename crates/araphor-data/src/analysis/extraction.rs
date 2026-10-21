@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 use std::ops::Bound;
+use std::sync::Arc;
 
 use duckdb::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use duckdb::{params, Connection, OptionalExt as _};
@@ -496,11 +497,26 @@ impl AnalysisTableRead<'_> {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AnalysisInputSource {
+    Package(araphor_analysis_sdk::OutputRef),
+    Managed(Arc<super::ManagedInputRef>),
+}
+
+impl AnalysisInputSource {
+    pub fn output(&self) -> &araphor_analysis_sdk::OutputRef {
+        match self {
+            Self::Package(reference) => reference,
+            Self::Managed(reference) => reference.output(),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct AnalysisInputTables<'a> {
     pub authorized: &'a AnalysisSelectionV1,
     pub scope: &'a str,
-    pub outputs: &'a [(araphor_analysis_sdk::OutputRef, SchemaRef)],
+    pub outputs: &'a [(AnalysisInputSource, SchemaRef)],
     pub limits: araphor_analysis_sdk::Limits,
 }
 
@@ -922,7 +938,11 @@ impl AnalysisExtractionV1 {
         }
     }
 
-    fn grow<U>(values: &mut Vec<U>, used: usize, limit: usize) -> Result<usize> {
+    pub(in crate::analysis) fn grow<U>(
+        values: &mut Vec<U>,
+        used: usize,
+        limit: usize,
+    ) -> Result<usize> {
         if values.len() < values.capacity() {
             return Ok(0);
         }

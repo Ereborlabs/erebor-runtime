@@ -6,7 +6,7 @@ use araphor_data::AnalysisTableRequests;
 use datafusion::catalog::TableProvider;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::TableReference;
-use datafusion::datasource::provider_as_source;
+use datafusion::datasource::{provider_as_source, source_as_provider};
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
 use snafu::ResultExt as _;
 
@@ -41,6 +41,7 @@ struct PortPlan {
     window: Option<Window>,
     plan: Arc<LogicalPlan>,
     origins: BTreeSet<SourceOrigin>,
+    retained: Option<usize>,
 }
 
 impl Inputs {
@@ -65,6 +66,14 @@ impl Inputs {
                     window: Window::infer(plan)?,
                     plan: Arc::new(plan.clone()),
                     origins,
+                    retained: if matches!(
+                        &model.inputs[slot].source,
+                        sdk::InputSource::Table(sdk::TableRef::Named(_))
+                    ) {
+                        Self::retained_slot(plan)
+                    } else {
+                        None
+                    },
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -113,6 +122,35 @@ impl Inputs {
             })
             .collect();
         Self::from_plans(model, plans, origins).map(Some)
+    }
+
+    fn retained_slot(plan: &LogicalPlan) -> Option<usize> {
+        match plan {
+            LogicalPlan::TableScan(scan) if scan.filters.is_empty() && scan.fetch.is_none() => {
+                let provider = source_as_provider(&scan.source).ok()?;
+                let provider = provider.as_any().downcast_ref::<SourceProvider>()?;
+                let schema = provider.schema();
+                if scan.projected_schema.as_arrow() != schema.as_ref()
+                    || scan.projection.as_ref().is_some_and(|projection| {
+                        projection.iter().copied().ne(0..schema.fields().len())
+                    })
+                {
+                    return None;
+                }
+                provider.retained_source().map(|source| source.slot)
+            }
+            LogicalPlan::Projection(projection)
+                if projection.schema.as_arrow() == projection.input.schema().as_arrow()
+                    && projection
+                        .expr
+                        .iter()
+                        .all(|expr| matches!(expr, Expr::Column(_))) =>
+            {
+                Self::retained_slot(&projection.input)
+            }
+            LogicalPlan::SubqueryAlias(alias) => Self::retained_slot(&alias.input),
+            _ => None,
+        }
     }
 
     pub fn admit(engine: &Engine, model: &sdk::Model) -> Result<Self> {
@@ -167,6 +205,7 @@ impl Inputs {
                     window,
                     plan: Arc::new(plan),
                     origins,
+                    retained: None,
                 });
             }
         }

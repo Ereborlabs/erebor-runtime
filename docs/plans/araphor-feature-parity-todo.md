@@ -781,3 +781,18 @@ files. The full archive retains all 208 originals. Read the
 Keep the production adapter until its input and source-metadata replacement
 passes qualification. Complete migration and the final Rust gate remain
 **Not done**.
+
+## Finite saved-output input replacement
+
+Native definitions now read exact saved package datasets through registered
+table aliases and the existing source capture. They keep source identity,
+original evidence, trace checks and shared Arrow buffer charges. All 234
+focused cases pass. The registration-order and narrowed-projection regressions
+first fail, then pass after correction. Read the
+[bounded result](araphor-analysis-migration.md#exact-saved-outputs-in-native-inputs).
+
+No further reference file retires. There are still 102 retired files and 106
+unchanged files. Managed alias publication, durable recovery, expired-input
+Unknown coverage, model-wide expiry and witness deadlines remain open. The
+production total is +14,333 from the original baseline. The required net
+reduction and final Rust procedure remain **Not done**.

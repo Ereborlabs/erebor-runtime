@@ -21,6 +21,7 @@ use crate::{InvalidSnafu, Result, SqlSnafu};
 pub(super) struct PortScope {
     pub(super) slot: usize,
     pub(super) selection: AnalysisSelectionV1,
+    pub(super) packages: std::collections::BTreeSet<usize>,
 }
 
 impl Inputs {
@@ -139,8 +140,8 @@ impl Inputs {
         let snapshot = source.snapshot().context(SqlSnafu)?;
         let mut bound = Vec::new();
         for origin in &port.origins {
-            if let SourceOrigin::Port(id) = origin {
-                if let Some(input) = source.port_input(*id).context(SqlSnafu)? {
+            if matches!(origin, SourceOrigin::Port(_) | SourceOrigin::Package(_)) {
+                if let Some(input) = source.captured_input(origin).context(SqlSnafu)? {
                     bound.push(input);
                 }
             }
@@ -160,10 +161,27 @@ impl Inputs {
             } else {
                 SourceSnapshot::prune_selection(selection, &bounds)
             };
+        if let Some(slot) = port.retained {
+            let input = source
+                .captured_input(&SourceOrigin::Package(slot))
+                .context(SqlSnafu)?
+                .ok_or_else(|| {
+                    araphor_data::PackageErrorCodeV1::Incomplete.error("retained input metadata")
+                })?;
+            return Ok(sdk::Input {
+                data,
+                revision: input.revision.clone(),
+                coverage: input.coverage.clone(),
+            });
+        }
         self.input(
             data,
             &snapshot,
-            &PortScope { slot, selection },
+            &PortScope {
+                slot,
+                selection,
+                packages: source.package_indices(&port.origins),
+            },
             inherited
                 .iter()
                 .chain(bound.iter().map(|input| input.as_ref())),
@@ -203,6 +221,15 @@ impl Inputs {
                     || sources.contains_key("trace_measurements");
                 Ok(PortScope {
                     slot: port.slot,
+                    packages: self
+                        .packages
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (slot, _))| {
+                            port.origins.contains(&SourceOrigin::Package(*slot))
+                        })
+                        .map(|(index, _)| index)
+                        .collect(),
                     selection: if trace {
                         selection
                     } else {
@@ -263,10 +290,7 @@ impl Inputs {
                 .any(|name| has(name)),
                 AnalysisReferenceOriginV1::Notification => has("notifications"),
                 AnalysisReferenceOriginV1::ExplicitResult => package.is_none(),
-                AnalysisReferenceOriginV1::Package(index) => self
-                    .packages
-                    .get(*index)
-                    .is_some_and(|(slot, _)| port.origins.contains(&SourceOrigin::Package(*slot))),
+                AnalysisReferenceOriginV1::Package(index) => scope.packages.contains(index),
             };
         let mut contexts = Vec::new();
         let mut results = Vec::new();
@@ -345,7 +369,19 @@ impl Inputs {
             .any(context);
         let mut coverage = Self::source_coverage(&sources, missing)?;
         let mut inherited = inherited.collect::<Vec<_>>();
-        inherited.sort_by(|left, right| left.data.name.cmp(&right.data.name));
+        inherited.sort_by_key(|input| {
+            let input = *input;
+            (
+                &input.data.name,
+                &input.revision.owner,
+                &input.revision.id,
+                input
+                    .revision
+                    .window
+                    .as_ref()
+                    .map(|window| (&window.source, window.start_utc_ns, window.end_utc_ns)),
+            )
+        });
         if !inherited.is_empty() {
             let builtin = port.origins.iter().any(|origin| origin.durable().is_some());
             coverage = Self::coverage(
@@ -622,6 +658,7 @@ mod supplied {
         let held = memory.reserve_input(scratch + 1)?;
         let scope = scope(&[SourceOrigin::Local("fixture".into())])?;
         let selected = PortScope {
+            packages: Default::default(),
             slot: 0,
             selection: snapshot.selection.clone(),
         };

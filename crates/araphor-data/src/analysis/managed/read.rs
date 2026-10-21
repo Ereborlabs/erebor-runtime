@@ -451,13 +451,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         id: &str,
     ) -> Result<(Record, sdk::wire::Output, u64)> {
-        let (metadata, body, revision): (Vec<u8>, Vec<u8>, u64) = reader.query_row("SELECT request_meta, body, commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND processor_id = 'managed-package-v1'",
-            params![tenant.as_slice(), id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .context(AnalysisDatabaseSnafu { operation: "read complete managed result" })?;
-        let mut record: Record =
-            serde_json::from_slice(&metadata).context(crate::PackageEncodingSnafu)?;
-        let mut output: sdk::wire::Output =
-            serde_json::from_slice(&body).context(crate::PackageEncodingSnafu)?;
+        let (mut record, mut output, revision) = Self::managed_header_from(reader, tenant, id)?;
         let mut blobs = reader
             .prepare(
                 "SELECT role, slot, ipc FROM managed_arrow WHERE result_id = ? ORDER BY role, slot",
@@ -518,6 +512,21 @@ impl AnalysisStore {
         if seen.len() != expected {
             return Err(Code::Invalid.error("managed Arrow payload count"));
         }
+        Ok((record, output, revision))
+    }
+
+    pub(super) fn managed_header_from(
+        reader: &Connection,
+        tenant: [u8; 16],
+        id: &str,
+    ) -> Result<(Record, sdk::wire::Output, u64)> {
+        let (metadata, body, revision): (Vec<u8>, Vec<u8>, u64) = reader.query_row("SELECT request_meta, body, commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND processor_id = 'managed-package-v1'",
+            params![tenant.as_slice(), id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .context(AnalysisDatabaseSnafu { operation: "read complete managed result" })?;
+        let record: Record =
+            serde_json::from_slice(&metadata).context(crate::PackageEncodingSnafu)?;
+        let output: sdk::wire::Output =
+            serde_json::from_slice(&body).context(crate::PackageEncodingSnafu)?;
         if Self::managed_edges(reader, tenant, id)? != record.dependencies {
             return Err(Code::Invalid.error("managed result edges"));
         }
@@ -532,6 +541,18 @@ impl AnalysisStore {
         revision: u64,
         now: u64,
         control: &AnalysisReadControl,
+    ) -> Result<bool> {
+        self.managed_source_current(reader, spec, (id, revision), now, control, None)
+    }
+
+    pub(super) fn managed_source_current(
+        &self,
+        reader: &Connection,
+        spec: &ManagedSpec,
+        (id, revision): (&str, u64),
+        now: u64,
+        control: &AnalysisReadControl,
+        mut output: Option<&mut crate::AnalysisExtractionV1>,
     ) -> Result<bool> {
         let mut statement = reader.prepare("WITH RECURSIVE needed(result_id, revision) AS (
             SELECT ?::VARCHAR, ?::UBIGINT UNION
@@ -600,6 +621,19 @@ impl AnalysisStore {
                 return Ok(false);
             }
             Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, control)?;
+            if let Some(output) = output.as_deref_mut() {
+                for trace in &capture.traces {
+                    if !output.trace_reads.contains(trace) {
+                        let added = crate::AnalysisExtractionV1::grow(
+                            &mut output.trace_reads,
+                            output.input_bytes,
+                            output.limits.input_bytes,
+                        )?;
+                        output.charge(added)?;
+                        output.trace_reads.push(*trace);
+                    }
+                }
+            }
             if capture
                 .witnesses
                 .iter()
@@ -705,6 +739,47 @@ impl AnalysisStore {
         packet: &sdk::wire::Output,
         revision: u64,
     ) -> Result<(sdk::Output, sdk::Limits)> {
+        let descriptor = Self::validate_managed_header(reader, tenant, id, record, revision)?;
+        let model = descriptor
+            .exports
+            .iter()
+            .find(|model| model.name == record.declaration.export)
+            .ok_or_else(|| Code::Missing.error("retained managed model"))?;
+        match (&record.parameters, model.parameters.fields().is_empty()) {
+            (None, true) => {}
+            (Some(packet), false) => {
+                let data = packet
+                    .decode(&model.parameters, record.context.context.limits)
+                    .context(crate::AnalysisContractSnafu)?;
+                if packet.name != "parameters" || data.batches.len() != 1 || data.rows() != 1 {
+                    return Err(Code::Invalid.error("retained managed parameters"));
+                }
+                data.validate(
+                    &sdk::Port::new("parameters", model.parameters.clone()),
+                    record.context.context.limits,
+                )
+                .context(crate::AnalysisContractSnafu)?;
+            }
+            _ => return Err(Code::Invalid.error("retained managed parameters")),
+        }
+        packet
+            .decode_retained(
+                &descriptor,
+                &record.declaration.export,
+                record.context.context.limits,
+                &record.rows,
+            )
+            .map(|output| (output, model.limits))
+            .context(crate::AnalysisContractSnafu)
+    }
+
+    pub(super) fn validate_managed_header(
+        reader: &Connection,
+        tenant: [u8; 16],
+        id: &str,
+        record: &Record,
+        revision: u64,
+    ) -> Result<sdk::Package> {
         let attempt =
             Self::managed_attempt_from(reader, tenant, &record.instance, &record.attempt)?
                 .ok_or_else(|| Code::Missing.error("managed result attempt"))?;
@@ -746,23 +821,6 @@ impl AnalysisStore {
         {
             return Err(Code::Invalid.error("retained managed evaluation context"));
         }
-        match (&record.parameters, model.parameters.fields().is_empty()) {
-            (None, true) => {}
-            (Some(packet), false) => {
-                let data = packet
-                    .decode(&model.parameters, record.context.context.limits)
-                    .context(crate::AnalysisContractSnafu)?;
-                if packet.name != "parameters" || data.batches.len() != 1 || data.rows() != 1 {
-                    return Err(Code::Invalid.error("retained managed parameters"));
-                }
-                data.validate(
-                    &sdk::Port::new("parameters", model.parameters.clone()),
-                    record.context.context.limits,
-                )
-                .context(crate::AnalysisContractSnafu)?;
-            }
-            _ => return Err(Code::Invalid.error("retained managed parameters")),
-        }
         let mut dependencies = attempt.capture.dependencies.clone();
         dependencies.extend(
             record
@@ -776,15 +834,7 @@ impl AnalysisStore {
         if dependencies != record.dependencies {
             return Err(Code::Invalid.error("retained managed dependencies"));
         }
-        packet
-            .decode_retained(
-                &descriptor,
-                &record.declaration.export,
-                record.context.context.limits,
-                &record.rows,
-            )
-            .map(|output| (output, model.limits))
-            .context(crate::AnalysisContractSnafu)
+        Ok(descriptor)
     }
 }
 

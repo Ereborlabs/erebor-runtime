@@ -1744,3 +1744,41 @@ files. The full archive retains all 208 originals. Read the
 Keep the production adapter until its input and source-metadata replacement
 passes qualification. Complete migration and the final Rust gate remain
 **Not done**.
+
+## Exact saved outputs in native inputs
+
+A finite native definition can now read one exact saved package dataset.
+`Session::register_retained` registers its table alias. Data creates the exact
+result reference from stored metadata without loading Arrow IPC. The existing
+native SourceProvider and source capture read that dataset in the same Data
+transaction as the other inputs. Registration and reads change no output,
+state or progress. The producer does not execute again.
+
+Data checks the tenant, instance generation, call, result revision, producer
+head, stored scope, source revisions, trace access, context heads and original
+witness expiry. It bounds encoded and decoded input before bulk allocation.
+Equal aliases share Arrow buffers. Each logical SDK input still contributes to
+the configured model byte limit. The captured definition retains its metadata
+reservation after the prepared definition is dropped.
+
+Two native regressions first fail, then pass after correction. Registering the
+same aliases in a different order must keep the same derived revision. A
+changed result reference or changed rows must change that revision. A narrowed
+or reordered projection must derive a new revision. Only the complete identity
+projection can keep the original saved revision and coverage.
+
+All 234 distinct focused cases pass, including four source-built native cases.
+Connected compilation, workspace formatting and strict connected Clippy pass.
+The reader-exhaustion test now sets an explicit 16-reader limit and uses a
+bounded loop. Default reader admission remains disabled. Read the
+[qualification record](../../recovery/araphor-retained-input-qualification-20261020.json)
+for source hashes, failed regressions, passing commands and buffer-lifetime
+proof.
+
+No Back file retires. All 106 remaining reference files match the baseline.
+The complete archive is unchanged. Managed publication, native follow, durable
+alias recovery, readable expired inputs with Unknown coverage, model-wide
+expiry downgrade and witness deadlines remain **Not done**. The separate Data
+lock and native-interrupt polling paths remain open. This delivery adds 744
+production lines. The total from the original baseline is +14,333. The required
+net reduction and complete final Rust procedure remain **Not done**.

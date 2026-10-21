@@ -48,10 +48,10 @@ pub use analysis::RetentionResultV1;
 pub use analysis::{
     AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisContextKeyV1, AnalysisContextRefV1,
     AnalysisContextVersionV1, AnalysisExtractLimits, AnalysisExtractionV1, AnalysisGapV1,
-    AnalysisInputTables, AnalysisPositionPageV1, AnalysisProcessorResultV1, AnalysisReadControl,
-    AnalysisReadModeV1, AnalysisReadPageV1, AnalysisRecordV1, AnalysisRecoveryStatusV1,
-    AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisResultCommitV1,
-    AnalysisResultReceiptV1, AnalysisSelectionV1, AnalysisSourceReceiptV1,
+    AnalysisInputSource, AnalysisInputTables, AnalysisPositionPageV1, AnalysisProcessorResultV1,
+    AnalysisReadControl, AnalysisReadModeV1, AnalysisReadPageV1, AnalysisRecordV1,
+    AnalysisRecoveryStatusV1, AnalysisReferenceOriginV1, AnalysisReferenceV1,
+    AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisSelectionV1, AnalysisSourceReceiptV1,
     AnalysisSourceSnapshotV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
     AnalysisStreamIdentityV1, AnalysisTableRead, AnalysisTableRequests, AnalysisWitnessV1,
     ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1, ProcessorClassV1,
@@ -76,7 +76,7 @@ pub use analysis::AnalysisCommitStage;
 
 pub use analysis::{
     ManagedAttempt, ManagedCall, ManagedCapture, ManagedCommit, ManagedExit, ManagedFrontier,
-    ManagedInstance, ManagedLease, ManagedManifest, ManagedMember, ManagedPage, ManagedPrior,
-    ManagedRead, ManagedReceipt, ManagedRequest, ManagedResult, ManagedResume, ManagedReturn,
-    ManagedSelected, ManagedSpec, ManagedStatus, ManagedTerminal,
+    ManagedInputRef, ManagedInstance, ManagedLease, ManagedManifest, ManagedMember, ManagedPage,
+    ManagedPrior, ManagedRead, ManagedReceipt, ManagedRequest, ManagedResult, ManagedResume,
+    ManagedReturn, ManagedSelected, ManagedSpec, ManagedStatus, ManagedTerminal,
 };

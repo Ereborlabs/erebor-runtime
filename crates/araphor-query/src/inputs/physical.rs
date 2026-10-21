@@ -111,7 +111,7 @@ impl Inputs {
                 .map(|(slot, reference)| {
                     (
                         *slot,
-                        reference.clone(),
+                        araphor_data::AnalysisInputSource::Package(reference.clone()),
                         Arc::new(self.ports[*slot].schema.clone()),
                     )
                 })
@@ -119,12 +119,14 @@ impl Inputs {
             limits,
             ranges,
             include_results: self.packages.len() < self.plans.len(),
+            retained: None,
+            _memory: None,
         };
         let control = session.control();
         let source = SourceSnapshot::new(
             Arc::clone(engine.store()),
             session.selection().clone(),
-            Some(capture),
+            Some(Arc::new(capture)),
             AnalysisExtractLimits {
                 scan_bytes: engine.limits().scan_bytes,
                 input_bytes: engine.limits().input_bytes,

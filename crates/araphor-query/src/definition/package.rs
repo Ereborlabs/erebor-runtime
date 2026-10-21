@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::ControlFlow;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use araphor_analysis_sdk as sdk;
@@ -753,15 +753,7 @@ impl Packages {
     }
 
     fn port(schema: Arc<sdk::Schema>) -> Result<(usize, Arc<dyn TableProvider>)> {
-        static PORTS: AtomicUsize = AtomicUsize::new(0);
-        let id = PORTS
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .map_err(|_| {
-                InvalidSnafu {
-                    field: "package relation identity",
-                }
-                .build()
-            })?;
+        let id = SourceProvider::identity()?;
         Ok((id, SourceProvider::port(id, schema)))
     }
 

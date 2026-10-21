@@ -1075,3 +1075,18 @@ files. The full archive retains all 208 originals. Read the
 Keep the production adapter until its input and source-metadata replacement
 passes qualification. Complete migration and the final Rust gate remain
 **Not done**.
+
+## Finite saved outputs as native tables
+
+`Session::register_retained` binds one exact saved package dataset to a native
+table alias. The producer does not run again. Data checks current source
+proofs and the original evidence lease in the same source transaction. Native
+SQL can project or combine the saved rows. Equal aliases share Arrow buffers;
+configured model bytes still count both logical inputs.
+
+The 234 focused cases, connected build, formatting and strict Clippy pass.
+Read the [bounded result](araphor-analysis-migration.md#exact-saved-outputs-in-native-inputs).
+No reference file retires. Managed alias publication, follow, durable recovery
+and expired-input Unknown coverage remain **Not done**. This delivery adds
+744 production lines; it does not meet the required net reduction. The complete
+migration and final Rust procedure remain **Not done**.

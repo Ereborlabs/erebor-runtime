@@ -1,6 +1,7 @@
 mod capture;
 mod commit;
 mod history;
+mod input;
 mod lifecycle;
 mod model;
 mod read;
@@ -8,6 +9,7 @@ mod schema;
 mod selected;
 mod status;
 
+pub use input::ManagedInputRef;
 pub use lifecycle::ManagedLease;
 pub use model::*;
 

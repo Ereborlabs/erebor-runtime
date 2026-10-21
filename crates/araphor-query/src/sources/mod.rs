@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -62,10 +63,12 @@ impl SourceOrigin {
 
 pub(crate) struct InputCapture {
     pub(crate) scope: String,
-    pub(crate) bindings: Vec<(usize, sdk::OutputRef, SchemaRef)>,
+    pub(crate) bindings: Vec<(usize, araphor_data::AnalysisInputSource, SchemaRef)>,
     pub(crate) limits: sdk::Limits,
     pub(crate) ranges: Vec<(u64, u64)>,
     pub(crate) include_results: bool,
+    pub(crate) retained: Option<Arc<[Arc<RetainedSource>]>>,
+    pub(crate) _memory: Option<datafusion::execution::memory_pool::MemoryReservation>,
 }
 
 #[derive(Clone, Copy)]
@@ -81,6 +84,7 @@ pub(crate) struct ScanBounds {
     pub(crate) fields: BTreeMap<&'static str, Interval>,
     pub(crate) events: Option<Vec<(u64, u64)>>,
     pub(crate) windows: Vec<(crate::follow::Window, (u64, u64))>,
+    pub(crate) packages: BTreeSet<usize>,
 }
 
 #[derive(Default)]
@@ -131,6 +135,9 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
             ..Default::default()
         };
         if let Some(source) = SourceData::from_plan(node.as_ref()) {
+            if let SourceOrigin::Package(slot) = source.origin {
+                self.bounds.packages.insert(slot);
+            }
             if let Some(name) = source.origin.durable() {
                 self.requests
                     .get_mut(name)
@@ -189,7 +196,7 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
 pub(crate) struct SourceSnapshot {
     store: Arc<AnalysisStore>,
     selection: AnalysisSelectionV1,
-    inputs: Option<InputCapture>,
+    inputs: Option<Arc<InputCapture>>,
     managed: Option<araphor_data::ManagedRead>,
     limits: AnalysisExtractLimits,
     control: AnalysisReadControl,
@@ -270,7 +277,7 @@ impl SourceSnapshot {
     pub(crate) fn new(
         store: Arc<AnalysisStore>,
         selection: AnalysisSelectionV1,
-        inputs: Option<InputCapture>,
+        inputs: Option<Arc<InputCapture>>,
         limits: AnalysisExtractLimits,
         control: AnalysisReadControl,
         extract_timeout: Option<Duration>,
@@ -299,6 +306,7 @@ impl SourceSnapshot {
                 let provider: Arc<dyn TableProvider> = Arc::new(SourceProvider {
                     origin: SourceOrigin::Durable(name.clone()),
                     schema: Arc::clone(schema),
+                    retained: None,
                 });
                 (name.clone(), provider)
             })
@@ -429,6 +437,15 @@ impl SourceSnapshot {
 pub struct SourceProvider {
     pub(crate) origin: SourceOrigin,
     schema: SchemaRef,
+    retained: Option<Arc<RetainedSource>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct RetainedSource {
+    pub(crate) slot: usize,
+    pub(crate) reference: Arc<araphor_data::ManagedInputRef>,
+    pub(crate) schema: SchemaRef,
+    _memory: datafusion::execution::memory_pool::MemoryReservation,
 }
 
 impl SourceProvider {
@@ -436,6 +453,7 @@ impl SourceProvider {
         Arc::new(Self {
             origin: SourceOrigin::Local(name.to_owned()),
             schema,
+            retained: None,
         })
     }
 
@@ -443,6 +461,7 @@ impl SourceProvider {
         Arc::new(Self {
             origin: SourceOrigin::Port(port),
             schema,
+            retained: None,
         })
     }
 
@@ -450,7 +469,43 @@ impl SourceProvider {
         Arc::new(Self {
             origin: SourceOrigin::Package(slot),
             schema,
+            retained: None,
         })
+    }
+
+    pub(crate) fn identity() -> crate::Result<usize> {
+        static PORTS: AtomicUsize = AtomicUsize::new(0);
+        PORTS
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| {
+                crate::InvalidSnafu {
+                    field: "package relation identity",
+                }
+                .build()
+            })
+    }
+
+    pub(crate) fn retained(
+        reference: araphor_data::ManagedInputRef,
+        schema: SchemaRef,
+        memory: datafusion::execution::memory_pool::MemoryReservation,
+    ) -> crate::Result<Arc<dyn TableProvider>> {
+        let slot = Self::identity()?;
+        let retained = Arc::new(RetainedSource {
+            slot,
+            reference: Arc::new(reference),
+            schema: Arc::clone(&schema),
+            _memory: memory,
+        });
+        Ok(Arc::new(Self {
+            origin: SourceOrigin::Package(slot),
+            schema,
+            retained: Some(retained),
+        }))
+    }
+
+    pub(crate) fn retained_source(&self) -> Option<&Arc<RetainedSource>> {
+        self.retained.as_ref()
     }
 
     fn bounds(

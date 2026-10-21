@@ -98,7 +98,7 @@ impl SourceSnapshot {
         Ok((Arc::clone(schema), batches.clone()))
     }
 
-    pub(crate) fn port_input(&self, slot: usize) -> Result<Option<Arc<sdk::Input>>> {
+    pub(crate) fn captured_input(&self, origin: &SourceOrigin) -> Result<Option<Arc<sdk::Input>>> {
         let captured = self
             .captured
             .lock()
@@ -107,10 +107,28 @@ impl SourceSnapshot {
             .as_ref()
             .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))?
             .tables
-            .get(&SourceOrigin::Port(slot))
-            .ok_or_else(|| DataFusionError::Execution("the materialized port is absent".into()))?
+            .get(origin)
+            .ok_or_else(|| DataFusionError::Execution("the materialized input is absent".into()))?
             .3;
         Ok(input.as_ref().map(Arc::clone))
+    }
+
+    pub(crate) fn package_indices(
+        &self,
+        origins: &std::collections::BTreeSet<SourceOrigin>,
+    ) -> std::collections::BTreeSet<usize> {
+        self.inputs
+            .as_ref()
+            .map(|inputs| {
+                inputs
+                    .bindings
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (slot, _, _))| origins.contains(&SourceOrigin::Package(*slot)))
+                    .map(|(index, _)| index)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) fn retain_ports(&self) -> Result<()> {
@@ -283,7 +301,9 @@ mod tests {
             matches!(error, datafusion::common::DataFusionError::External(source)
             if matches!(source.downcast_ref::<crate::Error>(), Some(crate::Error::Capacity { resource: "shared input", .. })))
         );
-        assert!(source.port_input(0).is_err());
+        assert!(source
+            .captured_input(&super::SourceOrigin::Port(0))
+            .is_err());
         drop(memory.reserve_input(1024)?);
         drop(held);
         source.bind_port(
@@ -292,14 +312,18 @@ mod tests {
             input.data.batches.clone(),
             Some(&input),
         )?;
-        let stored = source.port_input(0)?.ok_or("stored SDK input")?;
+        let stored = source
+            .captured_input(&super::SourceOrigin::Port(0))?
+            .ok_or("stored SDK input")?;
         assert_eq!(stored.data.name, input.data.name);
         assert_eq!(stored.data.batches, input.data.batches);
         assert_eq!(stored.revision, input.revision);
         assert_eq!(stored.coverage, input.coverage);
         assert!(Arc::ptr_eq(
             &stored,
-            &source.port_input(0)?.ok_or("same SDK input")?
+            &source
+                .captured_input(&super::SourceOrigin::Port(0))?
+                .ok_or("same SDK input")?
         ));
         assert!(Arc::ptr_eq(
             stored.data.batches[0].column(0),
@@ -333,7 +357,9 @@ mod tests {
         assert!(source
             .bind_port(1, schema, input.data.batches.clone(), Some(&input))
             .is_err());
-        assert!(source.port_input(1).is_err());
+        assert!(source
+            .captured_input(&super::SourceOrigin::Port(1))
+            .is_err());
         drop(stored);
         drop(source);
         drop(memory.reserve_input(capacity)?);

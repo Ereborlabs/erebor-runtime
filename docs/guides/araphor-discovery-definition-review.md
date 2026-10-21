@@ -1470,3 +1470,46 @@ files. The full archive retains all 208 originals. Read the
 Keep the production adapter until its input and source-metadata replacement
 passes qualification. Complete migration and the final Rust gate remain
 **Not done**.
+
+## Exact saved datasets in native input plans
+
+[Session::register_retained](../../crates/araphor-query/src/execution.rs)
+The caller supplies a table alias, producer instance, exact result reference
+and dataset name.
+  -> [AnalysisStore::managed_input](../../crates/araphor-data/src/analysis/managed/input.rs) reads the stored header and schema without Arrow IPC and creates an opaque reference.
+  -> [SourceProvider::retained](../../crates/araphor-query/src/sources/mod.rs) owns that reference, the native schema and its metadata reservation.
+  -> [Native admission](../../crates/araphor-query/src/definition.rs) seals declared source bindings, including an unused native CTE.
+  -> [Source capture](../../crates/araphor-data/src/analysis/extraction/package.rs) checks the exact producer head and original source proof in the existing Data transaction.
+  -> [Retained decode](../../crates/araphor-data/src/analysis/managed/input.rs) bounds encoded and decoded bytes, then uses the existing complete SDK validator.
+  -> [Captured tables](../../crates/araphor-query/src/sources/rows.rs) retain original metadata and real shared Arrow buffer claims.
+  -> [Input receipts](../../crates/araphor-query/src/inputs/receipt.rs) preserve full identity projections and derive revisions for other SQL results.
+
+The physical operator remains the existing native source scan. The change adds
+no executor, parser, codec, scheduler or polling task. Data owns the opaque
+reference. Query owns native admission and buffer lifetime. Equal references
+and schemas decode once. Each alias pays for its retained metadata and each
+logical input pays the configured model byte cost. These charges do not claim
+a bound on the complete process heap.
+
+[Analysis alias tests](../../crates/araphor-analysis/src/instance/tests/retained.rs)
+produce real durable results and execute real native definitions. The tests
+check exact refs, stale heads, stored scope, late trace revocation, eliminated
+CTEs, shared buffers, configured pressure and complete resource release.
+[Revision tests](../../crates/araphor-analysis/src/instance/tests/retained/revisions.rs)
+check registration-order independence and changed source identity.
+[Projection tests](../../crates/araphor-analysis/src/instance/tests/retained/projections.rs)
+check narrowed, reordered and full identity projections.
+[Data tests](../../crates/araphor-data/src/analysis/managed/tests/input.rs)
+prove that metadata reads skip corrupt IPC while complete capture reaches the
+existing SDK validation failure. The original witness-expiry test keeps its
+commit and rollback assertions and adds before, at and after expiry reads.
+
+All 234 distinct focused cases pass, including four source-built native cases.
+Connected compilation, formatting and strict Clippy pass. Read the
+[qualification record](../../recovery/araphor-retained-input-qualification-20261020.json).
+The saved alias is finite and caller-owned. It is not a durable definition
+field. Managed publication and follow reject it before capture. Expired
+witnesses remain Incomplete; readable Unknown inputs and witness deadlines are
+not implemented. No Back file retires. All 106 remaining files and the full
+archive are unchanged. The complete migration and final Rust procedure remain
+**Not done**.

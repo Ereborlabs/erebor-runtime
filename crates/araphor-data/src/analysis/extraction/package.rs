@@ -3,8 +3,8 @@ use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::{
-    AnalysisExtractionV1, AnalysisInputTables, AnalysisReadControl, AnalysisReferenceOriginV1,
-    AnalysisReferenceV1, AnalysisStore,
+    AnalysisExtractionV1, AnalysisInputSource, AnalysisInputTables, AnalysisReadControl,
+    AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisStore,
 };
 use crate::analysis::{PackageCommitV1, PackageKeyV1};
 use crate::{
@@ -28,13 +28,18 @@ impl AnalysisStore {
             outputs,
             ..
         } = packages;
-        if !selection.valid() || scope.is_empty() || scope.len() > 256 {
+        let legacy = outputs
+            .iter()
+            .filter(|(source, _)| matches!(source, AnalysisInputSource::Package(_)))
+            .count();
+        if !selection.valid() || (legacy != 0 && (scope.is_empty() || scope.len() > 256)) {
             return Err(Code::Invalid.error("dependency selection"));
         }
-        if outputs.len() > 64 {
+        if legacy > 64 {
             return Err(Code::Limit.error("model dependencies"));
         }
-        for (reference, _) in outputs {
+        for (source, _) in outputs {
+            let reference = source.output();
             for name in [&reference.package, &reference.export, &reference.output] {
                 crate::validate_package_name(name)?;
             }
@@ -45,8 +50,42 @@ impl AnalysisStore {
                 return Err(Code::Invalid.error("dependency revision"));
             }
         }
-        for (index, (reference, _)) in outputs.iter().enumerate() {
+        for (index, (source, schema)) in outputs.iter().enumerate() {
             control.check()?;
+            if let AnalysisInputSource::Managed(reference) = source {
+                if metadata {
+                    self.check_managed_input(
+                        reader,
+                        reference,
+                        selection,
+                        capture.now(),
+                        output,
+                        control,
+                    )?;
+                } else if let Some(previous) = outputs[..index]
+                    .iter()
+                    .position(|(previous, expected)| previous == source && expected == schema)
+                {
+                    capture.package_alias(index, previous, &mut output.sink(control))?;
+                } else {
+                    let (data, coverage) = self.captured_managed_input(
+                        reader,
+                        reference,
+                        selection,
+                        capture.now(),
+                        output,
+                        control,
+                    )?;
+                    capture.package_batches(index, data, &coverage, &mut output.sink(control))?;
+                }
+                output.reference_result(
+                    &reference.result().result_id,
+                    reference.result().commit_revision,
+                    AnalysisReferenceOriginV1::Package(index),
+                )?;
+                continue;
+            }
+            let reference = source.output();
             let same = |other: &sdk::OutputRef| {
                 other.package == reference.package
                     && other.revision == reference.revision
@@ -54,7 +93,7 @@ impl AnalysisStore {
             };
             if outputs[..index]
                 .iter()
-                .any(|(reference, _)| same(reference))
+                .any(|(source, _)| matches!(source, AnalysisInputSource::Package(reference) if same(reference)))
             {
                 continue;
             }
@@ -149,7 +188,7 @@ impl AnalysisStore {
                 for (index, _) in outputs
                     .iter()
                     .enumerate()
-                    .filter(|(_, (reference, _))| same(reference))
+                    .filter(|(_, (source, _))| matches!(source, AnalysisInputSource::Package(reference) if same(reference)))
                 {
                     output.reference_result(
                         id,
@@ -178,11 +217,14 @@ impl AnalysisStore {
             for (index, _) in outputs
                 .iter()
                 .enumerate()
-                .filter(|(_, (reference, _))| same(reference))
+                .filter(|(_, (source, _))| matches!(source, AnalysisInputSource::Package(reference) if same(reference)))
             {
                 output.reference_result(id, revision, AnalysisReferenceOriginV1::Package(index))?;
             }
-            for (index, (reference, _)) in outputs.iter().enumerate() {
+            for (index, (source, _)) in outputs.iter().enumerate() {
+                let AnalysisInputSource::Package(reference) = source else {
+                    continue;
+                };
                 if !same(reference) {
                     continue;
                 }
