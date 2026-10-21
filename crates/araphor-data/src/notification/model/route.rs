@@ -54,8 +54,7 @@ impl TryFrom<&crate::AnalysisContextVersionV1> for ApprovedNotificationRouteV1 {
         NotificationErrorCodeV1::Invalid.require(
             context.key.owner_id == NOTIFICATION_ROUTE_OWNER
                 && context.key.lifetime_key == b"route"
-                && context.sensitivity == ContextSensitivityV1::HostRestricted
-                && context.body.len() <= 32 * 1024,
+                && context.sensitivity == ContextSensitivityV1::HostRestricted,
             "route context owner",
         )?;
         let route: Self =

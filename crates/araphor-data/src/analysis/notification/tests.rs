@@ -81,7 +81,14 @@ fn control_notification_scoped_heads() -> std::result::Result<(), Box<dyn std::e
 #[test]
 fn control_notification_scoped_concerns() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("analysis"))?;
+    let store = AnalysisStore::open_with_limits(
+        directory.path().join("analysis"),
+        Default::default(),
+        crate::StorageLimitsV1 {
+            notification_routes: Some(32),
+            ..Default::default()
+        },
+    )?;
     let tenant = [1; 16];
     let concern = [7; 16];
     let mut version = context(
@@ -121,7 +128,45 @@ fn control_notification_scoped_concerns() -> std::result::Result<(), Box<dyn std
         store
             .notification_states(tenant, NotificationLookup::Finding("same", None))?
             .len(),
-        crate::MAX_NOTIFICATION_ROUTES + 2
+        34
+    );
+    Ok(())
+}
+
+#[test]
+fn notification_lookup_is_unbounded() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("analysis");
+    let store = AnalysisStore::open(&path)?;
+    for entity in 1..=40 {
+        store.commit_context(&context(
+            [1; 16],
+            entity,
+            serde_json::json!({
+                "finding": {"finding_id": "same"}, "required_action": null
+            }),
+        ))?;
+    }
+    assert_eq!(
+        store
+            .notification_states([1; 16], NotificationLookup::Finding("same", None))?
+            .len(),
+        40
+    );
+    drop(store);
+    let store = AnalysisStore::open_with_limits(
+        path,
+        Default::default(),
+        crate::StorageLimitsV1 {
+            notification_routes: Some(usize::MAX),
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(
+        store
+            .notification_states([1; 16], NotificationLookup::Finding("same", None))?
+            .len(),
+        40
     );
     Ok(())
 }

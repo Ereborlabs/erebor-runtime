@@ -14,9 +14,6 @@ pub use subject::*;
 
 pub const NOTIFICATION_ROUTE_OWNER: &str = "notification-route-v1";
 pub const NOTIFICATION_STATE_OWNER: &str = "notification-state-v1";
-/// This value limits one read page or one routing or delivery call.
-pub const MAX_NOTIFICATION_STATES: usize = 256;
-pub const MAX_NOTIFICATION_ROUTES: usize = 32;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum NotificationErrorCodeV1 {
@@ -92,7 +89,7 @@ impl NotificationGrantV1 {
                 && self.principal_id != [0; 16]
                 && self.authorization_revision > 0
                 && self.expires_utc_ns > 0
-                && (1..=MAX_NOTIFICATION_ROUTES).contains(&self.routes.len())
+                && !self.routes.is_empty()
                 && self.routes.iter().all(|route| Self::identifier(route, 64))
                 && self.routes.windows(2).all(|pair| pair[0] < pair[1])
                 && !self.operations.is_empty()

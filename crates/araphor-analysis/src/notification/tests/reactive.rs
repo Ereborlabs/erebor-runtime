@@ -1,3 +1,7 @@
+mod concerns;
+mod findings;
+mod routing;
+
 use araphor_query::execution::{Engine, Limits};
 use araphor_query::follow::{Clock, Subscription, Update};
 use futures_util::TryStreamExt as _;
@@ -26,10 +30,19 @@ async fn capture(
     sql: &str,
     now: u64,
 ) -> std::result::Result<Update, Box<dyn std::error::Error>> {
+    capture_tenant(engine, [1; 16], sql, now).await
+}
+
+async fn capture_tenant(
+    engine: &Arc<Engine>,
+    tenant: [u8; 16],
+    sql: &str,
+    now: u64,
+) -> std::result::Result<Update, Box<dyn std::error::Error>> {
     let (plan, sources) = engine.prepare(sql, Vec::new()).await?;
     let mut subscription = Subscription::new(
         engine.session(
-            AnalysisSelectionV1::tenant([1; 16]),
+            AnalysisSelectionV1::tenant(tenant),
             &AnalysisReadControl::default(),
             now,
         )?,

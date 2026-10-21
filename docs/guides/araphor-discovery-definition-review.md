@@ -1634,3 +1634,56 @@ The [retirement record](../../recovery/araphor-native-graph-source-retirement-20
 records the passing gates and five retired leaves. Automatic Graph advancement,
 producer recovery, complete migration, required net reduction, and the final
 shared Rust procedure remain **Not done**.
+
+
+## Native Notification eligibility and delivery
+
+This route computes one complete eligible set and consumes it through the
+existing finite Router. Read the owners in this order:
+
+1. [Data Notification rows](../../crates/araphor-data/src/analysis/extraction/tables/notification.rs)
+   project primary and escalation IDs and revisions, current grant expiry,
+   retry time, and current-finding ACK state from the captured cut. The Boolean
+   ACK test compares its saved finding revision with the obligation's current
+   finding revision. Query receives the exact next change time.
+2. [Native eligibility SQL](../../crates/araphor-analysis/src/notification/reactive.sql)
+   selects the latest finding and route revisions. Same-revision action uses
+   null-safe equality. Priority ranks are info, warning, high, critical;
+   sensitivity ranks are public, tenant, host_restricted. Equal or lower values
+   remain quiet. Exact primary and escalation reference changes remain visible.
+   Each of the seven DISTINCT predicates has its own parentheses so the pinned
+   native parser does not consume a following AND or OR in the right operand.
+3. [NotificationRouter::consume](../../crates/araphor-analysis/src/notification/reactive.rs)
+   accepts an exhausted, untruncated Query update. It decodes eligible finding
+   refs and obligation IDs, then retains each finite routing or delivery result.
+   One failed item does not stop a later item. Query owns source subscriptions
+   and deadline wakes; this consumer adds no clock or polling loop.
+4. [Routing](../../crates/araphor-analysis/src/notification/routing.rs) checks the
+   current finding reference and actual route authority.
+   [Obligation updates](../../crates/araphor-analysis/src/notification/obligation.rs)
+   preserve action identity and monotonic priority and sensitivity.
+   [Concern refresh](../../crates/araphor-analysis/src/notification/concern.rs)
+   updates the saved primary and escalation references through an authorized
+   current primary. Missing or expired primary approval does not refresh early.
+   Escalation metadata can be retained before final send authorization.
+5. [Delivery](../../crates/araphor-analysis/src/notification/delivery.rs) returns
+   early for an ACK of the current finding revision. A stale ACK does not block
+   concern refresh. [Attempts](../../crates/araphor-analysis/src/notification/attempt.rs)
+   retain the captured finding, route, sequence, and deadline; they check actual
+   current authorization before the sink. Route refresh does not reset attempts
+   or the original ACK deadline. Accepted delivery does not create a human ACK.
+
+[StorageLimitsV1](../../crates/araphor-data/src/analysis/capacity.rs) owns
+notification_routes and notification_states. Both are optional and default to
+None. The [Router store](../../crates/araphor-analysis/src/notification/store.rs)
+uses these counts and the existing Data context_max_bytes persistence limit.
+Configured excesses still fail. Context decoding keeps identity and type checks;
+removing a default resource ceiling does not remove those guards.
+
+[Control Notification methods](../../crates/mithril-control/src/notification.rs)
+currently expose explicit finite routing and delivery. Automatic subscription
+installation, failed-offer retry and shutdown remain **Not done**. Control,
+policy and retained-attempt ceilings are separate remaining work. Read the
+[bounded result](../plans/araphor-analysis-migration.md#finite-native-notification-retirement)
+for qualification and custody. Complete migration, required net
+reduction, and the final shared Rust procedure remain **Not done**.

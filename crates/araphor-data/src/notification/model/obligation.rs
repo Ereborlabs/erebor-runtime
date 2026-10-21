@@ -127,8 +127,7 @@ impl TryFrom<&crate::AnalysisContextVersionV1> for NotificationObligationV1 {
     fn try_from(context: &crate::AnalysisContextVersionV1) -> Result<Self> {
         NotificationErrorCodeV1::Invalid.require(
             context.key.owner_id == NOTIFICATION_STATE_OWNER
-                && context.key.lifetime_key == b"obligation"
-                && context.body.len() <= 32 * 1024,
+                && context.key.lifetime_key == b"obligation",
             "notification context owner",
         )?;
         let state: Self =

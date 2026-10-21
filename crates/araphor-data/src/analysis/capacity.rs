@@ -20,6 +20,8 @@ pub struct StorageLimitsV1 {
     pub tenant_max_bytes: Option<u64>,
     pub witness_max_bytes: Option<u64>,
     pub context_max_bytes: Option<u64>,
+    pub notification_routes: Option<usize>,
+    pub notification_states: Option<usize>,
     pub storage_entries: Option<usize>,
     pub diagnostic_entries: Option<usize>,
     pub source_entries: Option<usize>,
@@ -281,6 +283,8 @@ impl StorageLimitsV1 {
             tenant_max_bytes: Some(2 * 1024 * 1024 * 1024),
             witness_max_bytes: Some(512 * 1024 * 1024),
             context_max_bytes: None,
+            notification_routes: None,
+            notification_states: None,
             storage_entries: Some(4096),
             diagnostic_entries: Some(1024),
             source_entries: Some(4096),
@@ -307,6 +311,8 @@ mod tests {
         assert_eq!(limits, StorageLimitsV1::default());
         assert!(limits.valid());
         assert_eq!(limits.reader_admissions, None);
+        assert_eq!(limits.notification_routes, None);
+        assert_eq!(limits.notification_states, None);
         assert_eq!(limits.native_memory_bytes, None);
         assert_eq!(limits.native_temp_bytes, None);
         assert_eq!(limits.maintenance_bytes()?, 0);
@@ -348,10 +354,12 @@ mod tests {
             )
             .is_err());
         let limits: StorageLimitsV1 = serde_json::from_str(
-            r#"{"reader_admissions":2,"native_memory_bytes":16777216,"native_temp_bytes":33554432,"tenant_max_bytes":8,"source_entries":1,"tenant_revisions":1}"#,
+            r#"{"reader_admissions":2,"native_memory_bytes":16777216,"native_temp_bytes":33554432,"tenant_max_bytes":8,"source_entries":1,"tenant_revisions":1,"notification_routes":32,"notification_states":256}"#,
         )?;
         assert!(limits.valid());
         assert_eq!(limits.reader_admissions, Some(2));
+        assert_eq!(limits.notification_routes, Some(32));
+        assert_eq!(limits.notification_states, Some(256));
         for reader_admissions in [
             None,
             Some(0),
@@ -1275,6 +1283,10 @@ impl StorageUsageV1 {
 }
 
 impl AnalysisStore {
+    pub fn storage_limits(&self) -> &StorageLimitsV1 {
+        &self.storage
+    }
+
     pub fn storage_usage(&self) -> Result<StorageUsageV1> {
         Self::storage_at(&self.root, 0, 0)
     }

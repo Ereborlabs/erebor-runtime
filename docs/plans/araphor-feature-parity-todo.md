@@ -829,3 +829,11 @@ This closes the prior test-only Graph input boundary for one finite refresh.
 Automatic Graph advancement and recovery, Discovery live and replay ownership,
 remaining quotas and polling, full migration, required net reduction, and the
 final shared Rust procedure remain **Not done**.
+
+
+## Finite Notification status
+
+Read the [bounded Notification result](araphor-analysis-migration.md#finite-native-notification-retirement)
+for the qualified five-leaf scope, exact qualification, custody, and counts.
+Automatic Control consumption and failed-offer recovery, remaining limits,
+complete migration, and the final shared Rust procedure remain **Not done**.

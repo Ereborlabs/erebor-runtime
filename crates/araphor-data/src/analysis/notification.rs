@@ -21,7 +21,10 @@ impl AnalysisStore {
                 action,
                 None,
                 None,
-                crate::MAX_NOTIFICATION_ROUTES + 2,
+                self.storage
+                    .notification_routes
+                    .and_then(|limit| limit.checked_add(2))
+                    .and_then(|limit| i64::try_from(limit).ok()),
             ),
             NotificationLookup::Concern(id, route)
                 if id != [0; 16] && crate::NotificationGrantV1::identifier(route, 64) =>
@@ -31,7 +34,7 @@ impl AnalysisStore {
                     None,
                     Some(serde_json::json!(id).to_string()),
                     Some(route),
-                    2,
+                    Some(2),
                 )
             }
             _ => return self.reject("the notification lookup is invalid"),
@@ -74,7 +77,7 @@ impl AnalysisStore {
                         concern.as_deref(),
                         concern.as_deref(),
                         route,
-                        limit as u32
+                        limit
                     ],
                     |row| Self::context_row(tenant, owner, row),
                 )

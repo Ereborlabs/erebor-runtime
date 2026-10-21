@@ -1872,3 +1872,43 @@ advancement, producer recovery, Discovery live and replay ownership, remaining
 resource and polling work, the complete migration, the required net reduction,
 and the final shared Rust procedure remain **Not done**. This finite route
 adds no public Graph recovery API for a lost acknowledgement.
+
+
+## Finite native Notification retirement
+
+Status: **Done** for these five finite leaves. This entry covers only the finite
+Notification rules and native work discovery. The five retired leaves are
+`notification/mod.rs`, `notification/routing.rs`, `notification/delivery.rs`,
+`notification/tests.rs`, and `notification/tests/isolation.rs`.
+
+Data exposes exact primary and escalation references and a Boolean for an ACK
+of the current finding revision. Native SQL compares action with null-safe
+equality and severity and sensitivity with their declared monotonic ranks.
+Concern route refresh uses an authorized current primary and retained escalation
+references. A current ACK suppresses concern refresh; a stale ACK does not.
+The finite consumer preserves per-item errors and calls the retained Router and
+send owners. Existing send owners preserve authority, attempt history, and original
+deadlines. Query owns source notices and exact retry and grant deadlines.
+
+Seven complete DISTINCT predicates now have parentheses. The pinned native
+parser otherwise consumes a following AND or OR as part of the right operand.
+The correction preserves the intended null-safe comparisons and all assertions.
+
+StorageLimitsV1 owns optional notification_routes and notification_states
+counts. Both default to None. Configured aggregate reads still reject excess rows.
+Persistence uses the existing context_max_bytes owner instead of a separate
+32 KiB Router ceiling. Identity, uniqueness, authorization, immutable attempts,
+and original ACK deadlines remain enforced.
+
+Qualification: 42 distinct passing tests cover Analysis 31, Data 7, Query 2, and Control 2. The final connected test build, strict Clippy, formatting, and corrected concern case pass. The record retains the exact source for each run.
+Retirement record: [commands, hashes, and exact test names](../../recovery/araphor-native-notification-retirement-20261021.json).
+Custody and archive verification: all 95 remaining files match the recovery baseline and complete archive. The archive is unchanged.
+Remaining files and production counts: 113 files are retired. This change removes 323 reference production lines and has a net reduction of 288 production Rust lines. The totals remain +10,354 from the recovery baseline and +16,348 from the original baseline; the required overall reduction is not met.
+The [reading route](../guides/araphor-discovery-definition-review.md#native-notification-eligibility-and-delivery)
+explains the current owners.
+
+Automatic Control subscription installation, failed-offer retry and shutdown
+remain **Not done**. Control's 256-item configuration limits, policy package
+and retry limits of 16, and the 48-attempt history ceiling remain outside this
+change. Their remaining work, complete migration, required net reduction, and
+the final shared Rust procedure remain **Not done**.

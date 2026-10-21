@@ -1127,3 +1127,12 @@ and [retirement record](../../recovery/araphor-native-graph-source-retirement-20
 Automatic Graph advancement and recovery, remaining long-running ownership,
 full migration, required net reduction, and the final shared Rust procedure
 remain **Not done**.
+
+
+## Native Notification finite work
+
+Read the [bounded Notification result](araphor-analysis-migration.md#finite-native-notification-retirement)
+for native eligibility, retained finite delivery, optional count limits, and
+qualified retirement evidence. Automatic Control subscription ownership,
+failed-offer retry and shutdown, complete migration, and the final shared Rust
+procedure remain **Not done**.

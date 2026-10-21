@@ -181,5 +181,6 @@ fn control_notification_hidden_pages_advance_without_disclosure() -> TestResult 
     assert_eq!(acknowledged.deadline_utc_ns, Some(200));
     assert!(acknowledged.human_acknowledgement.is_some());
     assert_eq!(router.health(&human, 103)?.obligations, 258);
+    assert_eq!(router.obligations(&human, 103)?.len(), 258);
     Ok(())
 }

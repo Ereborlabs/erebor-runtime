@@ -84,11 +84,11 @@ fn schema_contract() -> TestResult {
         ),
         (
             "notification_routes",
-            "186e953bf0a989da22a1f46521ca879fe69f90efbcc968ed0b355ee1af366b16",
+            "72b2e52b27141973341103d2bef715207354d5833a8ea6a9b1b04f63bf49f39f",
         ),
         (
             "notifications",
-            "f5091ed8642cfb7e9fb7ffe99d0d94b3da121044ca60f271e38fb554367824ad",
+            "a3850aa5c3dac2bb08f4a3a207f1edf95f31b3c97112c8bc2ec7ab96c149cbc6",
         ),
         (
             "policy_observations",

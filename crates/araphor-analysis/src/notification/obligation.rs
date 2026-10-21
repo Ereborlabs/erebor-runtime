@@ -220,7 +220,10 @@ impl NotificationRouter {
         states: &mut Vec<NotificationObligationV1>,
     ) -> Result<()> {
         NotificationErrorCodeV1::Limit.require(
-            states.len() < MAX_NOTIFICATION_ROUTES + 1,
+            self.store
+                .storage_limits()
+                .notification_routes
+                .is_none_or(|limit| states.len() <= limit),
             "related obligation count",
         )?;
         self.save(state)?;

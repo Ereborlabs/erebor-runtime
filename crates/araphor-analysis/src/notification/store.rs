@@ -29,8 +29,17 @@ impl NotificationRouter {
     }
 
     pub(super) fn routes(&self, tenant: [u8; 16]) -> Result<Vec<ApprovedNotificationRouteV1>> {
-        self.store
-            .context_heads(tenant, NOTIFICATION_ROUTE_OWNER, MAX_NOTIFICATION_ROUTES)?
+        let limit = self.store.storage_limits().notification_routes;
+        let contexts = self.store.context_heads(
+            tenant,
+            NOTIFICATION_ROUTE_OWNER,
+            limit.unwrap_or(usize::MAX).max(1),
+        )?;
+        NotificationErrorCodeV1::Limit.require(
+            limit.is_none_or(|limit| contexts.len() <= limit),
+            "route count",
+        )?;
+        contexts
             .iter()
             .map(|value| ApprovedNotificationRouteV1::try_from(value).map_err(Into::into))
             .collect()
@@ -100,7 +109,10 @@ impl NotificationRouter {
             NotificationLookup::Finding(&finding.finding_id, finding.required_action.as_deref()),
         )?;
         NotificationErrorCodeV1::Limit.require(
-            contexts.len() <= MAX_NOTIFICATION_ROUTES + 1,
+            self.store
+                .storage_limits()
+                .notification_routes
+                .is_none_or(|limit| contexts.len() <= limit.saturating_add(1)),
             "related obligation count",
         )?;
         contexts
@@ -144,7 +156,6 @@ impl NotificationRouter {
         sensitivity: ContextSensitivityV1,
     ) -> Result<()> {
         let body = serde_json::to_vec(value).context(NotificationEncodingSnafu)?;
-        NotificationErrorCodeV1::Limit.require(body.len() <= 32 * 1024, "state bytes")?;
         self.store.commit_context_checked(
             &AnalysisContextVersionV1 {
                 key: key.clone(),
