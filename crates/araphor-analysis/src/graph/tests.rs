@@ -5,6 +5,7 @@ mod binding;
 mod contract;
 mod defaults;
 mod domain;
+mod execution;
 mod fixture;
 mod windows;
 

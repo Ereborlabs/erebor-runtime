@@ -1392,3 +1392,23 @@ documents, blank lines, and moves are excluded. Read the
 [crate-removal result](../plans/araphor-package-jobs.md#native-derived-relations-and-crate-removal)
 for the count record and remaining work. Full workspace CI, benchmarks, and
 physical Kubernetes checks did not run.
+
+## Native Graph adapter qualification
+
+All 42 ordinary Graph cases and both explicit source-built native cases pass.
+The six adapter cases use native Query preparation and execution. Wasm and
+native calls run the actual detectors. SQL returns known complete values to
+check transport and Graph validation. It does not implement the SQL detector.
+The cases keep typed output, complete reasons and evidence, saved state,
+configured pressure, exact replay and resource release assertions. Connected
+test compilation, workspace formatting and strict connected Clippy pass.
+
+No Back file retires. The old `graph/derive/adapter/mod.rs` also constructs
+production Graph inputs and their source revision, window, time and coverage.
+The current factories exist only in tests. Native transport does not replace
+that responsibility. Keep the complete old file until a production owner and
+its tests cover those rules. There are still 98 retired files and 110 unchanged
+reference files. This delivery changes no production code. Read the
+[qualification record](../../recovery/araphor-graph-adapter-qualification-20261020.json)
+for exact source hashes, native artifacts and passing commands. The complete
+migration and final Rust gate remain **Not done**.

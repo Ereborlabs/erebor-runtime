@@ -1,0 +1,230 @@
+{
+  "status": "Done for finite native Graph transport qualification. Production input construction and Back retirement Not done.",
+  "recorded_at": "2026-10-21T01:27:15.224953+00:00",
+  "qualified_source_base": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+  "qualified_owner_sha256": {
+    "crates/araphor-analysis/src/graph/tests.rs": "fbb8ca12096385e0926132b6f486fa8bfa0937b1288381b925bd838b21b92764",
+    "crates/araphor-analysis/src/graph/tests/execution.rs": "97d33a74fc9ac47c54721177a4e300293253861c311553ecf275156ec90b598d",
+    "crates/araphor-analysis/src/graph/tests/execution/runtime.rs": "27a4e9aaacd89b82700c1ac64e555ef2f09d3e765fae1a6dfe2e5d62ad225a5b"
+  },
+  "qualification": {
+    "migration-adapter-build141": {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-component-build",
+        "-p",
+        "mithril-control",
+        "-p",
+        "mithril-e2e",
+        "-p",
+        "erebor-runtime-session",
+        "--all-features",
+        "--lib",
+        "--no-run"
+      ],
+      "started_utc": "2026-10-21T01:23:14.365522+00:00",
+      "elapsed_seconds": 23.222,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis/src/graph/tests.rs": "fbb8ca12096385e0926132b6f486fa8bfa0937b1288381b925bd838b21b92764",
+        "crates/araphor-analysis/src/graph/tests/execution.rs": "97d33a74fc9ac47c54721177a4e300293253861c311553ecf275156ec90b598d",
+        "crates/araphor-analysis/src/graph/tests/execution/runtime.rs": "27a4e9aaacd89b82700c1ac64e555ef2f09d3e765fae1a6dfe2e5d62ad225a5b"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-adapter-build141.log",
+      "evidence_version": 3,
+      "head_before": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+      "head_after": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+      "wrapper_sha256": "ce32bc7d80ec6f7d385869c2c690f11037f46a1dde3ae1e48674db2a7172ab97",
+      "record_sha256": "bd488145580f5fe30de44a93cea3a76b203186d867f4ba0762d0f91e6830f659",
+      "log_sha256": "382be354240609584bbf363c61af41215d570521924a4f9d6dc8c003f07901d4"
+    },
+    "migration-adapter-fmt141": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "started_utc": "2026-10-21T01:23:35.201416+00:00",
+      "elapsed_seconds": 4.88,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis/src/graph/tests.rs": "fbb8ca12096385e0926132b6f486fa8bfa0937b1288381b925bd838b21b92764",
+        "crates/araphor-analysis/src/graph/tests/execution.rs": "97d33a74fc9ac47c54721177a4e300293253861c311553ecf275156ec90b598d",
+        "crates/araphor-analysis/src/graph/tests/execution/runtime.rs": "27a4e9aaacd89b82700c1ac64e555ef2f09d3e765fae1a6dfe2e5d62ad225a5b"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-adapter-fmt141.log",
+      "evidence_version": 3,
+      "head_before": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+      "head_after": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+      "wrapper_sha256": "ce32bc7d80ec6f7d385869c2c690f11037f46a1dde3ae1e48674db2a7172ab97",
+      "record_sha256": "46e8379282a8a8749530c9858643b23c63b56810b2ffa5a7e670c50a2d51415e",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "migration-adapter-clippy141": {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-component-build",
+        "-p",
+        "mithril-control",
+        "-p",
+        "mithril-e2e",
+        "-p",
+        "erebor-runtime-session",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "started_utc": "2026-10-21T01:24:09.391334+00:00",
+      "elapsed_seconds": 12.243,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis/src/graph/tests.rs": "fbb8ca12096385e0926132b6f486fa8bfa0937b1288381b925bd838b21b92764",
+        "crates/araphor-analysis/src/graph/tests/execution.rs": "97d33a74fc9ac47c54721177a4e300293253861c311553ecf275156ec90b598d",
+        "crates/araphor-analysis/src/graph/tests/execution/runtime.rs": "27a4e9aaacd89b82700c1ac64e555ef2f09d3e765fae1a6dfe2e5d62ad225a5b"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-adapter-clippy141.log",
+      "evidence_version": 3,
+      "head_before": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+      "head_after": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+      "wrapper_sha256": "ce32bc7d80ec6f7d385869c2c690f11037f46a1dde3ae1e48674db2a7172ab97",
+      "record_sha256": "7924465e5e22670815cd567dc910a1ff5b18a694cc639d7298c8931a991f505d",
+      "log_sha256": "acfcfa7dad6640f681839c9d9bb5851520877508f4798bf62ad0ba2c34b7a220"
+    },
+    "migration-adapter-graph141": {
+      "command": [
+        "target/debug/deps/araphor_analysis-50121ab5f4e5110f",
+        "graph::tests"
+      ],
+      "started_utc": "2026-10-21T01:24:07.633689+00:00",
+      "elapsed_seconds": 95.184,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis/src/graph/tests.rs": "fbb8ca12096385e0926132b6f486fa8bfa0937b1288381b925bd838b21b92764",
+        "crates/araphor-analysis/src/graph/tests/execution.rs": "97d33a74fc9ac47c54721177a4e300293253861c311553ecf275156ec90b598d",
+        "crates/araphor-analysis/src/graph/tests/execution/runtime.rs": "27a4e9aaacd89b82700c1ac64e555ef2f09d3e765fae1a6dfe2e5d62ad225a5b"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-adapter-graph141.log",
+      "evidence_version": 3,
+      "head_before": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+      "head_after": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+      "wrapper_sha256": "ce32bc7d80ec6f7d385869c2c690f11037f46a1dde3ae1e48674db2a7172ab97",
+      "binary_sha256": "9dda2a98c55fe8b5332c4cc94f7f2857b19296617e47c703fb8a41e3a2107483",
+      "record_sha256": "aa45231cb8a1cc135132aa952742d8588347859fafe02e8d146ec3dfde7c1129",
+      "log_sha256": "1f802d185a7807d1d2682a25c9b119a12658c8edeaabcdfd7e7bfbc8d68d2370"
+    },
+    "migration-adapter-native141": {
+      "command": [
+        "target/debug/deps/araphor_analysis-50121ab5f4e5110f",
+        "graph::tests::execution::native_graph_adapter",
+        "graph::tests::execution::native_graph_pressure",
+        "--exact",
+        "--ignored"
+      ],
+      "started_utc": "2026-10-21T01:26:08.363000+00:00",
+      "elapsed_seconds": 26.901,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "sources": {
+        "crates/araphor-analysis/src/graph/tests.rs": "fbb8ca12096385e0926132b6f486fa8bfa0937b1288381b925bd838b21b92764",
+        "crates/araphor-analysis/src/graph/tests/execution.rs": "97d33a74fc9ac47c54721177a4e300293253861c311553ecf275156ec90b598d",
+        "crates/araphor-analysis/src/graph/tests/execution/runtime.rs": "27a4e9aaacd89b82700c1ac64e555ef2f09d3e765fae1a6dfe2e5d62ad225a5b"
+      },
+      "log": "/tmp/araphor-oci-execution/migration-adapter-native141.log",
+      "evidence_version": 3,
+      "head_before": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+      "head_after": "f1145b43b35580f8536163f6dfa795e55f03ce1e",
+      "wrapper_sha256": "ce32bc7d80ec6f7d385869c2c690f11037f46a1dde3ae1e48674db2a7172ab97",
+      "binary_sha256": "9dda2a98c55fe8b5332c4cc94f7f2857b19296617e47c703fb8a41e3a2107483",
+      "record_sha256": "338ef9d36b4e46a884e393c909cd7b56ae1e692314f62a6f8801c4c06b159985",
+      "log_sha256": "100b1886db4c02715026dcc52ba0994dec96a25103daef10ee4756d97fcc1de2"
+    }
+  },
+  "native_artifacts": {
+    "record": "/tmp/araphor-graph-native139.json",
+    "sha256": "35ebdda71782cad4386fea4f3a7f8915ed6ea2ae0418c302b621da9cf2beea86",
+    "target": "x86_64-unknown-linux-gnu",
+    "artifacts": {
+      "credentials.so": {
+        "sha256": "8d3aa9aa1e4bd1962555114875beaefd266437aae448788f5a45ab72d83db19c",
+        "bytes": 4643840
+      },
+      "detector.so": {
+        "sha256": "c203e716904c8107780027c3d902bce2567e9b8f65d8478882e2b6dc49a070a8",
+        "bytes": 4037696
+      },
+      "discovery.so": {
+        "sha256": "dac390371e9cde58e85a178b781f2dc0c121479ee0b56e49dca637e9418a36df",
+        "bytes": 5618008
+      },
+      "kubernetes.so": {
+        "sha256": "7147266c8f21da3faff8397edf3c3b29e1357fc8d7282146ae71b8ada5b4f4b4",
+        "bytes": 4643808
+      },
+      "process.so": {
+        "sha256": "4ce917493c31bab3d8583cbc5b8c3aaa589a61f72f4bed339c8327df4442dafc",
+        "bytes": 4643696
+      },
+      "runtime.so": {
+        "sha256": "c1e6da3f5925602ba58681ad8cf0d5e515d834bb8a0ae92d299bef78020e2cc9",
+        "bytes": 5975920
+      }
+    }
+  },
+  "coverage": [
+    "All42 ordinary Graph cases pass. Both ignored native adapter and pressure cases also run explicitly and pass.",
+    "Three actual detectors run in Wasm and source-built native libraries for healthy and gapped inputs. SQL returns known complete values to qualify native transport only.",
+    "Native calls preserve typed datasets, parameters, exact time and seed, evidence, reasons, detail rows, checkpoint, and complete Graph snapshots.",
+    "The pressure cases retain checkpoint buffers, release detached outputs, reject while the real pool is held, replay exactly after release, reject184rows and release all permits and memory."
+  ],
+  "fixture_budget": "SQL SDK max_bytes is the configured16MiB output pool. Wasm/native retain1MiB. SQL Arrow reason slices share parent capacity and are charged per reason. The checkpoint limit and all pressure assertions stay unchanged.",
+  "production_net": 0,
+  "retired_files": [],
+  "retained_candidate": {
+    "path": "crates/araphor-analysis_back/src/graph/derive/adapter/mod.rs",
+    "sha256": "faccbec2eb26b9a7d9fa330eb2ce1866dc0b46807266fb5e87b2d891787b5034",
+    "production_lines": 171,
+    "reason": "Its production evaluation_for constructs canonical Graph ports and source-derived revision, source window, time, ID and coverage. Current factories are cfg(test). Generic Query transport does not replace that owner."
+  },
+  "independent_review": {
+    "path": "/tmp/araphor-graph-adapter-gate-20261020-2vr5aqiv/AMENDMENT.md",
+    "sha256": "dcb3670dfe022597eb0f5b13d98c15cd154d5aeaf4018973aff384658fae6ee6",
+    "supersedes": "The earlier independent review and draft retirement map cleared the whole leaf too broadly. No retirement occurs."
+  },
+  "remaining_reference": {
+    "retired": 98,
+    "remaining": 110,
+    "byte_identical_to_baseline": 110,
+    "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab"
+  },
+  "recovery_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+  "recovery_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+  "remaining_scope": [
+    "Production Graph input construction, capture and reactive orchestration.",
+    "Public lifecycle, retained dependency recovery, complete producers and final shared Rust procedure remain open.",
+    "No benchmark or push."
+  ]
+}
