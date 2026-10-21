@@ -7,6 +7,7 @@ mod defaults;
 mod domain;
 mod execution;
 mod fixture;
+mod traversal;
 mod windows;
 
 use araphor_data::RemoteSubjectBindingV1;

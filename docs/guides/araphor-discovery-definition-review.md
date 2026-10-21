@@ -1698,3 +1698,12 @@ checks and production Graph application before complete snapshots are compared.
 Replay retains the original oracle; explicit output pressure retains the exact
 resource error and buffer-release checks. The [retirement record](../../recovery/araphor-graph-adapter-test-retirement-20261021.json)
 names the three replaced test leaves. It does not qualify automatic advancement.
+
+
+### Native traversal proof
+
+The [traversal tests](../../crates/araphor-analysis/src/graph/tests/traversal.rs)
+retain all 56 original assertions across nine cases. Their local fixture uses
+current Data commits and native Query reads. Data owns traversal; the fixture
+adds no traversal implementation. The [retirement record](../../recovery/araphor-native-traversal-test-retirement-20261021.json)
+records exact source, commands, custody and the separate remaining Graph work.

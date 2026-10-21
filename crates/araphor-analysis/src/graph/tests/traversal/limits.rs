@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn native_traversal_fanout_caps() -> TestResult {
+async fn traversal_fanout_caps() -> TestResult {
     let fixture = TraversalFixture::new(false)?;
     let mut snapshot = GraphSnapshotV1::try_from(fixture.requests[0].body.as_slice())?;
     let template = snapshot
@@ -32,7 +32,7 @@ async fn native_traversal_fanout_caps() -> TestResult {
         .err()
         .ok_or("traversal subject cap")?;
     assert!(matches!(
-        TraversalFixture::data_error(&error),
+        TraversalFixture::data_error(error.as_ref()),
         Some(araphor_data::Error::AnalysisInputTooLarge { .. })
     ));
     request.max_subjects = 63;
@@ -55,7 +55,7 @@ async fn native_traversal_fanout_caps() -> TestResult {
 }
 
 #[tokio::test]
-async fn native_traversal_input_caps() -> TestResult {
+async fn traversal_input_caps() -> TestResult {
     let fixture = TraversalFixture::new(false)?;
     for (subjects, edges) in [(7, 9), (9, 9), (10, 8)] {
         let mut request = TraversalFixture::request(8);
@@ -67,7 +67,7 @@ async fn native_traversal_input_caps() -> TestResult {
             .err()
             .ok_or("traversal graph cap")?;
         assert!(matches!(
-            TraversalFixture::data_error(&error),
+            TraversalFixture::data_error(error.as_ref()),
             Some(araphor_data::Error::AnalysisInputTooLarge { .. })
         ));
     }
@@ -100,7 +100,7 @@ async fn native_traversal_input_caps() -> TestResult {
             .err()
             .ok_or("traversal input cap")?;
         assert!(matches!(
-            TraversalFixture::data_error(&error),
+            TraversalFixture::data_error(error.as_ref()),
             Some(araphor_data::Error::AnalysisInputTooLarge { .. })
         ));
     }
@@ -108,7 +108,7 @@ async fn native_traversal_input_caps() -> TestResult {
 }
 
 #[tokio::test]
-async fn native_traversal_cancel_and_deadline() -> TestResult {
+async fn traversal_cancel_and_deadline() -> TestResult {
     let fixture = TraversalFixture::new(false)?;
     let cancelled = Arc::new(AnalysisReadControl::default());
     cancelled.cancel()?;
@@ -124,7 +124,7 @@ async fn native_traversal_cancel_and_deadline() -> TestResult {
         .err()
         .ok_or("cancelled traversal")?;
     assert!(matches!(
-        TraversalFixture::data_error(&error),
+        TraversalFixture::data_error(error.as_ref()),
         Some(araphor_data::Error::AnalysisReadCancelled { .. })
     ));
     let expired = Arc::new(AnalysisReadControl::with_timeout(
@@ -142,7 +142,7 @@ async fn native_traversal_cancel_and_deadline() -> TestResult {
         .err()
         .ok_or("expired traversal")?;
     assert!(matches!(
-        TraversalFixture::data_error(&error),
+        TraversalFixture::data_error(error.as_ref()),
         Some(araphor_data::Error::AnalysisReadDeadline { .. })
     ));
     assert_eq!(
@@ -155,6 +155,6 @@ async fn native_traversal_cancel_and_deadline() -> TestResult {
             .sum::<usize>(),
         8
     );
-    fixture.native.store.checkpoint()?;
+    fixture.store.checkpoint()?;
     Ok(())
 }

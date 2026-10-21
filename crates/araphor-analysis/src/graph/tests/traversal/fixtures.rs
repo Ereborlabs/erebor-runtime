@@ -1,15 +1,68 @@
 use super::*;
 
+use araphor_data::{
+    AnalysisWitnessV1, CoverageCounters, CoverageInterval, CoverageReport, EvidenceStoreOutcomeV1,
+    PackageArtifactV1, PackageBundleV1, PackageImplementationV1, ValidatedCoverageV1,
+    ValidatedEvidenceBatchV1,
+};
+use prost::Message as _;
+
 pub(super) struct TraversalFixture {
-    pub(super) native: native_storage::CommitFixture,
+    pub(super) store: Arc<AnalysisStore>,
+    pub(super) directory: tempfile::TempDir,
     pub(super) requests: Vec<AnalysisResultCommitV1>,
 }
 
 impl TraversalFixture {
     pub(super) fn new(large: bool) -> TestResult<Self> {
-        let native = native_storage::CommitFixture::new()?;
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
+        store.enable_graph_owner()?;
+        store.register_graph(&source())?;
+        for (descriptor, bytes) in [
+            (
+                araphor_analysis_builtins::discovery::Discovery::package(),
+                araphor_analysis_builtins::components::DISCOVERY,
+            ),
+            (
+                algorithm::Detector::Process.descriptor(),
+                araphor_analysis_builtins::components::PROCESS,
+            ),
+            (
+                algorithm::Detector::Credentials.descriptor(),
+                araphor_analysis_builtins::components::CREDENTIALS,
+            ),
+            (
+                algorithm::Detector::Kubernetes.descriptor(),
+                araphor_analysis_builtins::components::KUBERNETES,
+            ),
+        ] {
+            let exports = descriptor
+                .exports
+                .iter()
+                .map(|model| model.name.clone())
+                .collect();
+            let artifact = PackageArtifactV1 {
+                descriptor,
+                implementations: vec![PackageImplementationV1::Wasm {
+                    exports,
+                    artifact: bytes.to_vec(),
+                }],
+                fixtures: Vec::new(),
+            };
+            store.install_package_image(
+                source().tenant_id,
+                &PackageBundleV1 {
+                    schema_version: 1,
+                    root: artifact.reference(),
+                    artifacts: vec![artifact],
+                },
+                || Ok(()),
+            )?;
+        }
         let mut fixture = Self {
-            native,
+            directory,
+            store,
             requests: Vec::new(),
         };
         for window in 0..if large { 17 } else { 3 } {
@@ -40,28 +93,72 @@ impl TraversalFixture {
         request.consumed_cursor = request.expected_cursor;
         request.created_utc_ns += 10;
         request.body = serde_json::to_vec(&snapshot)?;
-        self.native.store.commit_graph(&request, false)?;
+        self.store.commit_graph(&request, false, || Ok(()))?;
         Ok(())
     }
 
     fn commit_window(&mut self, window: u64, large: bool) -> TestResult {
         let cursor = window + 1;
         let first = window * 1024;
-        let mut snapshot = if window == 0 {
-            self.native.snapshot.clone()
-        } else {
-            let execution = self.native.owner.execution.clone();
-            let mut event = wire(cursor, DeniedBeforeEffect, 2, 2, [20; 16]);
+        let mut event = wire(
+            cursor,
+            EffectPhysicalResultV1::DeniedBeforeEffect,
+            2,
+            2,
+            [20; 16],
+        );
+        if window != 0 {
             event.task_cookie = if window == 16 { first } else { first + 1 };
-            let observation = record(cursor, &event)?;
-            accept(&self.native.store, std::slice::from_ref(&observation))?;
-            coverage(&self.native.store, cursor, cursor, "HEALTHY")?;
-            let mut replay = input(vec![observation]);
-            replay.coverage[0].coverage_revision = cursor;
-            replay.coverage_keys[0].report_revision = cursor;
-            replay.coverage_keys[0].interval_revision = cursor;
-            GraphAndFindingOwner::derive(&replay, &execution)?
-        };
+        }
+        let observation = record(cursor, &event)?;
+        assert_eq!(
+            self.store.accept_validated_batch(
+                source(),
+                ValidatedEvidenceBatchV1 {
+                    cpu_id: 0,
+                    first_cursor: cursor,
+                    last_cursor: cursor,
+                    intake_utc_ns: 1,
+                    frame_ends: vec![observation.wire_record.len()],
+                    framed_records: observation.wire_record.clone().into(),
+                },
+            )?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        self.store.accept_validated_coverage(ValidatedCoverageV1 {
+            identity: source(),
+            cpu_id: 0,
+            revision: cursor,
+            encoded_report: CoverageReport {
+                source_id: source().source_id.to_vec(),
+                cpu_id: 0,
+                source_epoch: source().source_epoch,
+                revision: cursor,
+                intervals: vec![CoverageInterval {
+                    interval_id: vec![4; 16],
+                    source_epoch: source().source_epoch,
+                    revision: cursor,
+                    state: "HEALTHY".into(),
+                    first_sequence: 1,
+                    last_sequence: Some(cursor),
+                    opening_counters: Some(Default::default()),
+                    closing_counters: Some(CoverageCounters {
+                        attempted: cursor,
+                        requested: cursor,
+                        emitted: cursor,
+                        next_sequence: cursor + 1,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+            }
+            .encode_to_vec(),
+        })?;
+        let mut replay = input(vec![observation]);
+        replay.coverage[0].coverage_revision = cursor;
+        replay.coverage_keys[0].report_revision = cursor;
+        replay.coverage_keys[0].interval_revision = cursor;
+        let mut snapshot = super::super::derive(&replay)?;
         snapshot.witness_deadline_utc_ns = 10 + cursor + GRAPH_WITNESS_TTL_NS;
         snapshot.graph.subjects = Self::subjects(window, large);
         snapshot.graph.edges = Self::edges(&snapshot, window, large);
@@ -81,7 +178,7 @@ impl TraversalFixture {
             }],
             context_refs: vec![],
         };
-        self.native.store.commit_graph(&request, true)?;
+        self.store.commit_graph(&request, true, || Ok(()))?;
         self.requests.push(request);
         Ok(())
     }

@@ -1962,3 +1962,20 @@ archive is unchanged. This deletion removes eight production code lines. Totals
 are +10,346 from the recovery baseline and +16,340 from the original baseline.
 Complete migration, required net reduction, and the final shared Rust procedure
 remain **Not done**.
+
+
+## Native traversal test retirement
+
+Status: **Done** for the five `graph/tests/traversal` reference leaves. Nine
+current native Query tests pass. All 56 original literal assertions stay.
+The cases preserve 16,385 unique subjects, 32,769 edges, exact directions and
+lifetimes, configured limits, cancellation, historical bytes, and complete
+receipts across reopen and backup/restore. Four real built-in image revisions
+also survive restore. No production owner, execution layer or limit is added.
+Connected compilation and strict Clippy pass. Read the [qualification record](../../recovery/araphor-native-traversal-test-retirement-20261021.json).
+
+There are now 123 retired files and 85 unchanged reference files. The complete
+archive is unchanged. This transfer changes no production code. Totals stay
++10,346 from the recovery baseline and +16,340 from the original baseline.
+Complete migration, required net reduction, and the final shared Rust procedure
+remain **Not done**.

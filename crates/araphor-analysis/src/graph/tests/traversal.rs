@@ -6,6 +6,15 @@ use araphor_query::execution::Read;
 use araphor_query::sources::ArrowSnapshot;
 use futures_util::TryStreamExt;
 
+use std::sync::Arc;
+
+use araphor_data::{
+    AnalysisReadControl, AnalysisResultCommitV1, AnalysisSelectionV1, AnalysisStore,
+    GraphTraversalDirectionV1, GraphTraversalV1, Selection,
+};
+use araphor_query::execution::{Engine, Limits};
+
+use super::fixture::{input, record, source, wire};
 use super::*;
 
 mod bindings;
@@ -13,8 +22,6 @@ mod fixtures;
 mod limits;
 mod recovery;
 use fixtures::TraversalFixture;
-
-type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const SUBJECT_SQL: &str = "SELECT DISTINCT subject_id, traversal_depth FROM graph_subjects";
 
@@ -31,7 +38,7 @@ impl TraversalFixture {
         &self,
         request: GraphTraversalV1,
         sql: &str,
-    ) -> Result<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
+    ) -> TestResult<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
         self.selected(
             request,
             AnalysisSelectionV1::new(source().tenant_id, vec![source()]),
@@ -49,9 +56,9 @@ impl TraversalFixture {
         limits: Limits,
         control: Arc<AnalysisReadControl>,
         sql: &str,
-    ) -> Result<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
+    ) -> TestResult<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
         Self::read(
-            Arc::clone(&self.native.store),
+            Arc::clone(&self.store),
             request,
             selection,
             limits,
@@ -68,7 +75,7 @@ impl TraversalFixture {
         limits: Limits,
         control: Arc<AnalysisReadControl>,
         sql: &str,
-    ) -> Result<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
+    ) -> TestResult<(Arc<ArrowSnapshot>, Vec<RecordBatch>)> {
         let graphs = if selection.graphs().is_empty() {
             Selection::All
         } else {
@@ -144,7 +151,7 @@ impl TraversalFixture {
 }
 
 #[tokio::test]
-async fn native_traversal_large_graph() -> TestResult {
+async fn traversal_large_graph() -> TestResult {
     let fixture = TraversalFixture::new(true)?;
     let mut subjects = BTreeSet::new();
     let mut edges = 0;
@@ -206,7 +213,7 @@ async fn native_traversal_large_graph() -> TestResult {
 }
 
 #[tokio::test]
-async fn native_traversal_directions_and_hops() -> TestResult {
+async fn traversal_directions_and_hops() -> TestResult {
     let fixture = TraversalFixture::new(false)?;
     for (direction, expected) in [
         (
@@ -271,7 +278,7 @@ async fn native_traversal_directions_and_hops() -> TestResult {
 }
 
 #[tokio::test]
-async fn native_traversal_exact_lifetimes() -> TestResult {
+async fn traversal_exact_lifetimes() -> TestResult {
     let fixture = TraversalFixture::new(false)?;
     for change in ["node", "boot", "label", "kind"] {
         let mut seed = TraversalFixture::subject(0);

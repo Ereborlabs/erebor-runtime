@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn native_traversal_binding_membership() -> TestResult {
+async fn traversal_binding_membership() -> TestResult {
     let fixture = TraversalFixture::new(false)?;
     let seed = TraversalFixture::subject(1);
     let first = GraphSnapshotV1::try_from(fixture.requests[0].body.as_slice())?;

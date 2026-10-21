@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn native_traversal_replacement_history() -> TestResult {
+async fn traversal_replacement_history() -> TestResult {
     let fixture = TraversalFixture::new(false)?;
     let original = &fixture.requests[0];
     let mut snapshot = GraphSnapshotV1::try_from(original.body.as_slice())?;
@@ -37,7 +37,6 @@ async fn native_traversal_replacement_history() -> TestResult {
     );
     assert_eq!(
         fixture
-            .native
             .store
             .read_result(source().tenant_id, &original.result_id)?,
         Some(original.body.clone())
@@ -58,14 +57,14 @@ async fn native_traversal_replacement_history() -> TestResult {
         .err()
         .ok_or("absent graph result")?;
     assert!(matches!(
-        TraversalFixture::data_error(&error),
+        TraversalFixture::data_error(error.as_ref()),
         Some(araphor_data::Error::AnalysisReadDenied { .. })
     ));
     Ok(())
 }
 
 #[tokio::test]
-async fn native_traversal_reopen_and_restore() -> TestResult {
+async fn traversal_reopen_and_restore() -> TestResult {
     let fixture = TraversalFixture::new(false)?;
     let before = fixture
         .query(TraversalFixture::request(8), SUBJECT_SQL)
@@ -73,31 +72,19 @@ async fn native_traversal_reopen_and_restore() -> TestResult {
     let expected = TraversalFixture::depths(&before.1)?;
     let receipt = before.0.page.extraction.graph_traversal().cloned();
     drop(before);
-    let TraversalFixture { native, requests } = fixture;
-    let native_storage::CommitFixture {
+    let TraversalFixture {
         directory,
-        owner,
         store,
-        snapshot,
-        request,
-    } = native;
-    drop(owner);
+        requests,
+    } = fixture;
     drop(store);
     let root = directory.path().join("analysis");
     let store = Arc::new(AnalysisStore::open(&root)?);
-    let owner = GraphAndFindingOwner::new(
-        store.clone(),
-        Arc::new(Inputs::default()),
-        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
-    )?;
+    store.enable_graph_owner()?;
+    store.register_graph(&source())?;
     let fixture = TraversalFixture {
-        native: native_storage::CommitFixture {
-            directory,
-            owner,
-            store,
-            snapshot,
-            request,
-        },
+        directory,
+        store,
         requests,
     };
     let reopened = fixture
@@ -110,19 +97,16 @@ async fn native_traversal_reopen_and_restore() -> TestResult {
     );
     drop(reopened);
     let backup = root.join("backups/traversal");
-    fixture.native.store.backup(&backup)?;
+    fixture.store.backup(&backup)?;
     let restored = Arc::new(AnalysisStore::restore(
         &backup,
-        &fixture.native.directory.path().join("restored"),
+        &fixture.directory.path().join("restored"),
     )?);
-    let saved = fixture.native.store.package_revisions(source().tenant_id)?;
+    let saved = fixture.store.package_revisions(source().tenant_id)?;
     assert_eq!(saved.len(), 4);
     assert_eq!(restored.package_revisions(source().tenant_id)?, saved);
-    let _owner = GraphAndFindingOwner::new(
-        restored.clone(),
-        Arc::new(Inputs::default()),
-        crate::InstalledAnalysis::testing(Some(restored.clone()), source().tenant_id)?,
-    )?;
+    restored.enable_graph_owner()?;
+    restored.register_graph(&source())?;
     let result = TraversalFixture::read(
         restored,
         TraversalFixture::request(8),

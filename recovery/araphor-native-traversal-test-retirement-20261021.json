@@ -1,0 +1,186 @@
+{
+  "status": "Done for the five named traversal test leaves. Other Graph producer and storage test leaves remain unchanged.",
+  "recorded_at": "2026-10-21T12:49:58.634409+00:00",
+  "qualified_source_base": "96bf954484cf3bbd87afc445357cd1cd6f67a91d",
+  "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+  "retired_files": {
+    "crates/araphor-analysis_back/src/graph/tests/traversal.rs": "f9825f0c1b5470f06961bb967ca24a75999bafc0d6cc99cc746bd6c93f05dc1b",
+    "crates/araphor-analysis_back/src/graph/tests/traversal/bindings.rs": "7b161c4205e16056f3f075cf5963e1530f6729b51b57e032bc7f1690cd60857e",
+    "crates/araphor-analysis_back/src/graph/tests/traversal/fixtures.rs": "6f83a28706e07691ce474fcd30916fb84ba41e10597ebf54e215d4ca9e2315b5",
+    "crates/araphor-analysis_back/src/graph/tests/traversal/limits.rs": "e0ff399c55c1723384e63840c66bf4365ecf63dbcb2c20d708e315d17bde3388",
+    "crates/araphor-analysis_back/src/graph/tests/traversal/recovery.rs": "a40101930d8173bd8e50326b64f61ce683ad7a587e8e987a42cd46a453a4019a"
+  },
+  "qualified_owner_sha256": {
+    "crates/araphor-analysis/src/graph/tests.rs": "2189af771a9ef2abf7cd7e12eb48593dc326e1d906720f953783c3efdffbb5d8",
+    "crates/araphor-analysis/src/graph/tests/traversal.rs": "886461f6e5b77ac0b94ffcf55d871c419ee2ecd0152c89e0a07592a97148bc3e",
+    "crates/araphor-analysis/src/graph/tests/traversal/bindings.rs": "45240e9e6a3e3fb5ed7e88ee7db8f5baee9ad722d6cbf6197cd8022988a4276f",
+    "crates/araphor-analysis/src/graph/tests/traversal/fixtures.rs": "40609fd6ecc3e29cc5374dbd9351fd87cec66e55f25b69e5fbca339f08947480",
+    "crates/araphor-analysis/src/graph/tests/traversal/limits.rs": "87ede8a7f9ead944252c038addea0d878f659e53b3c3ee86d3370afb3667901b",
+    "crates/araphor-analysis/src/graph/tests/traversal/recovery.rs": "c3b512ba5ee0798fdcddf264a9383a41d119f2bb4a1df01f09c947239982470b",
+    "crates/araphor-analysis/src/graph/tests/fixture.rs": "0eb3ece3f72fec1c573bb1bb52f217e1075510e67b2ac9b7011c06ee3e594240",
+    "crates/araphor-query/src/execution.rs": "87d0fc0ab0105b208f7ef87082b1447bf87adfae9e6e7589809af3c75e2dc005",
+    "crates/araphor-query/src/sources/rows.rs": "3e9e06fbe1a4fe37a018457a3abcee87e48d443ceb1a36ac0e21902105068956",
+    "crates/araphor-data/src/analysis/graph/traversal.rs": "f274bf706534abcc1bca93bb21b8287711bfc5f70a19d3279bb9cce805d27f9f",
+    "crates/araphor-data/src/analysis/graph/traversal/sql.rs": "a376f2de8bd0e095af14bd5602514cb262895117eee288542c6a92c40c36784a",
+    "crates/araphor-data/src/analysis/graph/traversal/read.rs": "997c05bd88a7ccc3326df69d54608798cd0099901a6080d0ed1c17b4c8fc75a4",
+    "crates/araphor-data/src/analysis/extraction/graph/traversal.rs": "93e15f093725b01c58cd504bd06792a023bbd1603bc533f080a84d9966aa7500",
+    "crates/araphor-data/src/analysis/extraction/graph/traversal/versions.rs": "989ae85e1ae1d3b50ad56d8b6b434ce5df0d7db16553b2083721cd57af7403df"
+  },
+  "qualification": {
+    "migration-traversal-clippy193": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-analysis-builtins",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "-p",
+        "araphor-package",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "elapsed_seconds": 15.574,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_after": "96bf954484cf3bbd87afc445357cd1cd6f67a91d",
+      "log_sha256": "ce1e26ff21295b4230a6d4cd77aad6eb5750490e0bc6c7adeebd26c64f550ad8",
+      "record_sha256": "c5025b98e645a0c2e4012e93b7e594ba8c1c9b2a5949ae7945fb5c6d6a1d22f4",
+      "passing_tests": []
+    },
+    "migration-traversal-build193": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-analysis-builtins",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "-p",
+        "araphor-package",
+        "--all-features",
+        "--lib",
+        "--bin",
+        "araphor",
+        "--no-run"
+      ],
+      "elapsed_seconds": 31.046,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_after": "96bf954484cf3bbd87afc445357cd1cd6f67a91d",
+      "log_sha256": "d8f4f04f34c0731f881e8c93fd3d5a47248cc42049360743478b58ed94689021",
+      "record_sha256": "51008603a107c062a32ad7886cc826b1a5fb175fc51aac80d73a9dce0e231a83",
+      "passing_tests": []
+    },
+    "migration-traversal-tests193": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "graph::tests::traversal::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 28.412,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_after": "96bf954484cf3bbd87afc445357cd1cd6f67a91d",
+      "log_sha256": "d162f2d3d23ef70f543322282c36c70db8c08b726c73e06fc84420871b9ec863",
+      "record_sha256": "05b0586b8a2f3f4eb513d0e0626085cc21f183678ec4780ebc1fdde9f73cdb27",
+      "passing_tests": [
+        "graph::tests::traversal::limits::traversal_cancel_and_deadline",
+        "graph::tests::traversal::bindings::traversal_binding_membership",
+        "graph::tests::traversal::limits::traversal_fanout_caps",
+        "graph::tests::traversal::limits::traversal_input_caps",
+        "graph::tests::traversal::recovery::traversal_replacement_history",
+        "graph::tests::traversal::traversal_directions_and_hops",
+        "graph::tests::traversal::traversal_exact_lifetimes",
+        "graph::tests::traversal::recovery::traversal_reopen_and_restore",
+        "graph::tests::traversal::traversal_large_graph"
+      ]
+    },
+    "migration-transfer-fmt194": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 4.488,
+      "source_unchanged": true,
+      "head_after": "96bf954484cf3bbd87afc445357cd1cd6f67a91d",
+      "record_sha256": "aa5d7ef8e2d59f89fb3a47f26547dc38c51a3d541e3385ae00d3950a33465efc",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "test_contracts": {
+    "graph::tests::traversal::traversal_large_graph": "17 retained versions; 16385 unique subjects; 32769 edges; exact depth map, complete receipt (8 unique/10 versioned/9 edges), multiple seeds and exact native edge count.",
+    "graph::tests::traversal::traversal_directions_and_hops": "Exact outgoing/incoming/both maps; one-hop boundary; zero-hop seed only and zero relationships; edge-type exclusion.",
+    "graph::tests::traversal::traversal_exact_lifetimes": "No borrowed node/boot/label/kind identity; exact empty receipt; binding exclusion.",
+    "graph::tests::traversal::bindings::traversal_binding_membership": "Real finding-independent edge membership; two unscoped versions; exact one scoped version for both ordinary and filtered edge types.",
+    "graph::tests::traversal::limits::traversal_fanout_caps": "Configured 16-subject failure; exact 63-subject/62-edge success and boundary receipt.",
+    "graph::tests::traversal::limits::traversal_input_caps": "All three subject/versioned/edge overflow cases reject; exact 10-version/9-edge boundary succeeds; configured scan1 and input1024 reject at Data.",
+    "graph::tests::traversal::limits::traversal_cancel_and_deadline": "Typed cancel and deadline errors; subsequent exact 8-row healthy traversal; actual checkpoint succeeds.",
+    "graph::tests::traversal::recovery::traversal_replacement_history": "Replacement removes current edges; exact historical IDs retain eight subjects and original complete bytes; absent ID returns ReadDenied.",
+    "graph::tests::traversal::recovery::traversal_reopen_and_restore": "Exact native rows and receipt across reopen and backup/restore; four real built-in image revisions restore without change."
+  },
+  "assertion_custody": {
+    "original_literal_assertions": 56,
+    "preserved_literal_assertions": 56,
+    "comparison": "Equal after whitespace, fixture-field flattening and borrowing of boxed test errors. Exact expected rows, identities, range counts, quota errors, receipts and historical bytes stay unchanged.",
+    "map_sha256": "268a34856ef46f98297d0f1b55cd48826271e709e71d9a48fa227a59650b1631",
+    "extra_check": "Each actual evidence intake returns Accepted."
+  },
+  "replacement": "Tests use current validated Graph inputs, supported Data intake/coverage/guarded commit APIs, Engine::prepare and Session::stream(Read::Snapshot). Data executes traversal. No test traversal, activation owner or production API is added.",
+  "custody_rule": "The remaining excluded Back parent graph/tests.rs, including its old module declarations, stays byte-identical. Only the five qualified whole leaves retire.",
+  "archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+  "archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+  "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5",
+  "production_code_net": 0,
+  "production_totals": {
+    "from_recovery_baseline": 10346,
+    "from_original_baseline": 16340,
+    "required_net_reduction_met": false
+  },
+  "remaining_gaps": [
+    "Paging, adaptive Graph windows, automatic refresh, finite retained-image inspection through corrupt Graph rows and atomic image-context rollback remain separate work.",
+    "Complete migration, required net reduction and the final shared Rust procedure remain Not done."
+  ],
+  "custody": {
+    "original_files": 208,
+    "retired_files": 123,
+    "remaining_files": 85,
+    "all_remaining_baseline_and_archive_equal": true,
+    "remaining_manifest_sha256": "0b73348d79f3a19f5de3ec9996ecc3afece69fce1dd57a79201d057361bff2b0"
+  }
+}
