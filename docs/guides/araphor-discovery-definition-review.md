@@ -1513,3 +1513,34 @@ witnesses remain Incomplete; readable Unknown inputs and witness deadlines are
 not implemented. No Back file retires. All 106 remaining files and the full
 archive are unchanged. The complete migration and final Rust procedure remain
 **Not done**.
+
+## Native image closure reuse
+
+[Query reuse tests](../../crates/araphor-query/src/definition/tests/execution/reusing.rs)
+prepare and execute real native definitions. They select one, two, one and
+zero images through explicit SQL. An unused installed image stays inert.
+Cloned definitions share their admission, image and charge owners. Independent
+definitions, engines and tenants retain separate owners. Exact new dependency
+revisions change the returned value; the old definition still returns its
+original value. The final owner releases its actual pools and permits.
+
+[Instance reuse test](../../crates/araphor-analysis/src/instance/tests/reusing.rs)
+executes saved state twice. It then denies a new attempt and a completed
+receipt after grant revocation. Image trust loss denies another new attempt.
+Neither denial writes output, state or progress. Restored authority executes
+the same retained definition and continues the original checkpoint.
+
+These tests use the existing admission, execution, authority and Data owners.
+They add no production code. The initial draft calls an absent output getter.
+The corrected test reserves and drops the whole configured output pool.
+This proves release without a new production API.
+
+The four new cases and 27 mapped owner cases pass. Connected compilation,
+formatting and strict Clippy pass after the reference deletion. Only the old
+reuse test leaf retires. There are now 103 retired files and 105 unchanged
+reference files. The complete archive retains the deleted file. Read the
+[retirement record](../../recovery/araphor-native-reuse-retirement-20261020.json).
+The old package activation generation becomes an immutable image revision;
+these tests do not prove a managed Instance generation change. Freshness,
+snapshot, lifecycle, complete migration and final Rust qualification remain
+**Not done**.

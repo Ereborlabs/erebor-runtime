@@ -98,8 +98,9 @@ cases pass. This removes 306 production lines. The public receipt/output replace
 production lines. Two checkpoint test leaves then retire after actual Wasm/native retries,
 reopen and overflow checks pass. The complete storage-window test file then
 retires after 39 connected cases, formatting and strict Clippy pass. There are
-now 102 retired files; 106 remain unchanged. The latest four-file retirement
-qualifies all 12 complete baseline snapshots through 36 native calls. The recovery archive retains all 208 originals.
+now 103 retired files; 105 remain unchanged. The earlier four-file retirement
+qualifies all 12 complete baseline snapshots through 36 native calls. The later
+reuse test retirement preserves current authority and explicit image closure rules. The recovery archive retains all 208 originals.
 The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish
 long-running lifecycle or automatic restart.
@@ -1090,3 +1091,15 @@ No reference file retires. Managed alias publication, follow, durable recovery
 and expired-input Unknown coverage remain **Not done**. This delivery adds
 744 production lines; it does not meet the required net reduction. The complete
 migration and final Rust procedure remain **Not done**.
+
+## Native image closure reuse
+
+Current native definitions retain exact immutable image closures. Repeated
+execution checks current authority. New explicit declarations can use a new
+revision while the old definition keeps its prior dependency result. All four
+new cases and 27 mapped owner cases pass, with connected compilation,
+formatting and strict Clippy. One complete reference reuse test leaf retires.
+There are now 103 retired files and 105 unchanged files. Production code does
+not decrease. Read the [bounded result](araphor-analysis-migration.md#native-image-closure-reuse-retirement).
+This does not qualify Instance lifecycle, freshness or snapshot removal.
+The complete migration and final Rust procedure remain **Not done**.

@@ -1,0 +1,434 @@
+{
+  "recorded_at": "2026-10-21T03:28:10.472631+00:00",
+  "head_before_commit": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+  "result": "One complete reuse test leaf retires after31 focused replacement/owner cases pass. Production delta0. Complete migration and final Rust procedure are Not done.",
+  "replacement_tests": [
+    "definition::tests::execution::reusing::prepared_closures_stay_pinned",
+    "definition::tests::execution::reusing::prepared_owners_keep_scope",
+    "definition::tests::execution::reusing::prepared_dependency_stays_pinned",
+    "instance::tests::reusing::retained_runs_check_authority"
+  ],
+  "old_assertion_map": {
+    "back_path": "crates/araphor-analysis_back/src/package/installed/read/tests/retained/reusing.rs",
+    "back_sha256": "afa0c95dae46a54c4e7965ae483943f334d5b3b31779336f1d72f8df3e04209f",
+    "rows": [
+      {
+        "old_test": "reuse_checks_current_grants",
+        "assertions": [
+          "Consumed reconstruction releases the prior wrapper; immutable native admission clones instead share one owner.",
+          "The bundle identity and exact pin list remain stable across retained use.",
+          "Current grant checks and current image trust remain necessary after retention.",
+          "A successful retained run returns the implementation result.",
+          "Grant denial releases the retained execution owner and all configured capacity."
+        ],
+        "native": [
+          "definition::tests::execution::reusing::prepared_closures_stay_pinned",
+          "instance::tests::reusing::retained_runs_check_authority",
+          "definition::tests::capacity::image_capacity_follows_plan",
+          "definition::tests::capacity::metadata_clones_share_capacity",
+          "instance::tests::denied_ack_keeps_receipt"
+        ],
+        "architecture_change": "Exact callback counts 4 admissions/8 checks describe old snapshot reconstruction. Native repeated execution checks current authority at its actual entry/publication/disclosure boundaries."
+      },
+      {
+        "old_test": "reuse_tracks_active_roots",
+        "assertions": [
+          "A selected closure can retain one image, add another image, remove the first declaration, or contain no image.",
+          "An unrelated installed image does not enter a selected native definition.",
+          "An older immutable definition remains executable with its original image.",
+          "Each final image/plan/charge owner releases its resources."
+        ],
+        "native": [
+          "definition::tests::execution::reusing::prepared_closures_stay_pinned",
+          "definition::tests::capacity::image_capacity_follows_plan",
+          "definition::tests::capacity::image_capacity_is_shared"
+        ],
+        "architecture_change": "Native SQL declarations select the exact image closure. Installation remains inert. No global active-root registry, automatic activation membership, or old export-pin totals are preserved."
+      },
+      {
+        "old_test": "reuse_excludes_other_scope",
+        "assertions": [
+          "Independent execution owners prepare independent image/reservation owners.",
+          "Dropping the original admission restores only its original pool while another owner retains its own admission.",
+          "Tenant-specific image loading and execution cannot cross tenant boundaries.",
+          "A newly declared selection is a separate immutable definition and current authority remains required."
+        ],
+        "native": [
+          "definition::tests::execution::reusing::prepared_owners_keep_scope",
+          "instance::tests::reusing::retained_runs_check_authority",
+          "definition::tests::execution::physical_definition_denies_other_tenant",
+          "analysis::packages::tests::image::package_image_versions_and_tenants"
+        ],
+        "architecture_change": "The old installed scope string is replaced by the admitted definition and its explicit grant selection. This test does not invent a ban on deliberate pure-SQL PreparedDefinition transfer to another Engine."
+      },
+      {
+        "old_test": "reuse_reloads_reinstalled_revision",
+        "assertions": [
+          "Changing dependency code must not reuse stale implementation bytes.",
+          "The exact replacement root/artifact closure is selected.",
+          "The original retained definition keeps its exact original digest, artifacts, and implementation result.",
+          "The final retained image owner releases its charge."
+        ],
+        "native": [
+          "definition::tests::execution::reusing::prepared_dependency_stays_pinned",
+          "definition::tests::native_package_locked_dependency",
+          "analysis::packages::tests::image::package_image_retains_closure",
+          "analysis::packages::tests::image::package_image_install_is_atomic"
+        ],
+        "architecture_change": "Data rejects changed bytes under an existing tenant/package/revision. A new explicit revision/digest replaces old mutable same-version reinstall and activation-generation selection."
+      }
+    ],
+    "whole_leaf_gate": "Conditional only: all four new tests and mapped unchanged-owner tests must pass; record the approved native declaration and immutable-image counterparts. No Back deletion is part of this patch.",
+    "other_leaves": "freshness.rs and installed/snapshot.rs remain open as recorded in the separate 26-row static audit.",
+    "separate_instance_fences": {
+      "meaning": "The old last-test generation is an installed activation pin generation. The explicit r2 test proves only the approved immutable-image counterpart. It does not claim to change a managed Instance generation.",
+      "existing_native_tests": [
+        "analysis::managed::tests::lifecycle::lifecycle_cas_is_inert",
+        "analysis::managed::tests::lifecycle::transition_fences_registration",
+        "analysis::managed::tests::lifecycle::transition_fences_publication",
+        "analysis::managed::tests::lifecycle::lifecycle_history_survives_reopen"
+      ],
+      "boundary": "These tests preserve immutable managed generation while lifecycle CAS fences work. No Instance lifecycle/remove/renewal leaf is a retirement candidate in this patch."
+    }
+  },
+  "assertion_map_sha256": "c21d4daf2169902cf7599155cf09588f58e6393fae6cfc81dede27e34e60a2cf",
+  "architecture_replacements": [
+    "Explicit SQL declarations select the image closure. Installation is inert. There is no implicit active-root registry. Native closures contain1,2,1,then0 images and retain the old immutable definition.",
+    "An immutable OCI key rejects changed bytes without partial dependency insertion. An explicit new revision selects exact new artifacts and digest. Real dependency outputs remain9,19,9 across old/new/old calls.",
+    "The old generation assertion is an installed package activation pin. It does not prove a changed managed Instance generation. No lifecycle, removal or renewal leaf retires.",
+    "Old snapshot callback totals belong to the removed wrapper. Current native operations check current grants and image trust before new work and completed-result disclosure. The exact restored checkpoint continues11,22,then33.",
+    "Clone/image/reservation/native-plan lifetime, independent definitions and engine/tenant ownership are checked on actual production owners. Full configured pool reservations prove release."
+  ],
+  "passing_test_runs": [
+    {
+      "command": [
+        "target/debug/deps/araphor_query-20b5305718963d88",
+        "definition::tests::execution::reusing::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 1.191,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "head_after": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "label": "migration-closure-query156",
+      "record": "/tmp/araphor-oci-execution/migration-closure-query156.json",
+      "record_sha256": "0b600fdcd2433a16c4321438c8f5983350a30e5583fa02dd595b7ceff0a16afe",
+      "log": "/tmp/araphor-oci-execution/migration-closure-query156.log",
+      "log_sha256": "4843a52bd418f63056f49d0c91a07742ccc1facf28fb20bd0786bcf87c38ceb3",
+      "binary_sha256": "47af2eddbbb1ed195f3c69b1f3ed4289b56c5d4b2b821dd330e6ed8e285ac440",
+      "passed": 3
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "instance::tests::reusing::retained_runs_check_authority",
+        "--exact",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 1.141,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "head_after": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "label": "migration-closure-analysis156",
+      "record": "/tmp/araphor-oci-execution/migration-closure-analysis156.json",
+      "record_sha256": "9825e5077c9083473dfd5a2c9670987bde9a1f5abae782ae8fe4d8eafd8c1420",
+      "log": "/tmp/araphor-oci-execution/migration-closure-analysis156.log",
+      "log_sha256": "3a455c862516d843010b6a48e2bb526991be2966bdfe5af5144cd2f522214b8b",
+      "binary_sha256": "e9d4d17c3084170e68580b6121bc009fae5e6cec1d5181f83aba88d72163d4aa",
+      "passed": 1
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_query-20b5305718963d88",
+        "definition::tests::capacity::",
+        "definition::tests::execution::physical_definition_denies_other_tenant",
+        "definition::tests::native_package_locked_dependency",
+        "definition::tests::parity::prepared_guest_keeps_identity",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 12.063,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "head_after": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "label": "migration-closure-query-owners156",
+      "record": "/tmp/araphor-oci-execution/migration-closure-query-owners156.json",
+      "record_sha256": "66c13cfc1c0197247dd3c69ff5a428b16718f51eef14b66191030ed533214dea",
+      "log": "/tmp/araphor-oci-execution/migration-closure-query-owners156.log",
+      "log_sha256": "f7df66bdce3be0f5fc779598921d732b8968ec966cbd193acf65440ec6d78c3c",
+      "binary_sha256": "47af2eddbbb1ed195f3c69b1f3ed4289b56c5d4b2b821dd330e6ed8e285ac440",
+      "passed": 12
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "instance::tests::image_authority_precedes_preparation",
+        "instance::tests::denied_ack_keeps_receipt",
+        "instance::tests::history::historical_inspect_binds_scope",
+        "--exact",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 3.005,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "head_after": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "label": "migration-closure-analysis-owners156",
+      "record": "/tmp/araphor-oci-execution/migration-closure-analysis-owners156.json",
+      "record_sha256": "7c7f29d28823bd6b1811f2407ca722893fa41e69b3dc9cb540b4ec0c8b1d6fe1",
+      "log": "/tmp/araphor-oci-execution/migration-closure-analysis-owners156.log",
+      "log_sha256": "91815d1272a6d2adc3f119f84b62ad98f1cce1992e1118e544014c4b8f8c77d2",
+      "binary_sha256": "e9d4d17c3084170e68580b6121bc009fae5e6cec1d5181f83aba88d72163d4aa",
+      "passed": 3
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_data-ef29af64b90b2937",
+        "analysis::packages::tests::image::",
+        "analysis::managed::tests::lifecycle::lifecycle_cas_is_inert",
+        "analysis::managed::tests::lifecycle::lifecycle_history_survives_reopen",
+        "analysis::managed::tests::lifecycle::transition_fences_publication",
+        "analysis::managed::tests::lifecycle::transition_fences_registration",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 26.563,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "head_after": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "label": "migration-closure-data-owners156",
+      "record": "/tmp/araphor-oci-execution/migration-closure-data-owners156.json",
+      "record_sha256": "0927cd50a75aa1c8358f35515494feecc3ddbfe58112c110b5e044929e95dedb",
+      "log": "/tmp/araphor-oci-execution/migration-closure-data-owners156.log",
+      "log_sha256": "93e457c6fadc9006f2cafaeee8616bd66726a89b7f43615e76e1c6358758e305",
+      "binary_sha256": "6e0b40a13988fdc143b6895e61eb08932ba48f4184bd67dc0bfcdd138b3337a9",
+      "passed": 10
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_package_runtime-ce6e51d30b7cef9c",
+        "wasm::tests::runtime::prepared::prepared_handle_keeps_binding",
+        "wasm::tests::runtime::prepared::retained_trap_keeps_code",
+        "--exact",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 5.864,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "head_after": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "label": "migration-closure-runtime157",
+      "record": "/tmp/araphor-oci-execution/migration-closure-runtime157.json",
+      "record_sha256": "d24a793b1724b69b5bced32cd9a936673b93d44bd4bd00d962ca5964da257268",
+      "log": "/tmp/araphor-oci-execution/migration-closure-runtime157.log",
+      "log_sha256": "7bc2776929feca425d29f0fb372cf19ebb637014cf4035f0d912bfe7acbbf21e",
+      "binary_sha256": "d6528277cc44c626b4ab3d121f836812bcd850c50952362820c39bc4f5b2d741",
+      "passed": 2
+    }
+  ],
+  "distinct_passing_cases": 31,
+  "passing_checks_after_retirement": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "--all-features",
+        "--lib",
+        "--bin",
+        "araphor",
+        "--no-run"
+      ],
+      "elapsed_seconds": 25.828,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "head_after": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "label": "migration-closure-final-build158",
+      "record": "/tmp/araphor-oci-execution/migration-closure-final-build158.json",
+      "record_sha256": "1d70da5ccaf16aaf78f7b46940fc850102b51a9c7c39c05604e74b2123a3c63b",
+      "log": "/tmp/araphor-oci-execution/migration-closure-final-build158.log",
+      "log_sha256": "e999b6d408f59e7af95327985bd3026c295b04b59e408acc129f381284ae2441"
+    },
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "elapsed_seconds": 4.687,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "head_after": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "label": "migration-closure-final-fmt158",
+      "record": "/tmp/araphor-oci-execution/migration-closure-final-fmt158.json",
+      "record_sha256": "f3ba918f733d44ad86d98399221fd24d6e7db4b78aba48c4429dc21345374188",
+      "log": "/tmp/araphor-oci-execution/migration-closure-final-fmt158.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "elapsed_seconds": 0.631,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_before": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "head_after": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+      "label": "migration-closure-final-clippy158",
+      "record": "/tmp/araphor-oci-execution/migration-closure-final-clippy158.json",
+      "record_sha256": "58d11581c054be54c568de1c78050d57c40a61510031f4795ebdb8ab3c54dde9",
+      "log": "/tmp/araphor-oci-execution/migration-closure-final-clippy158.log",
+      "log_sha256": "45d8f7d972875790a6cec7ca48e9acc17c5af68372da1940633becec3b4cd60a"
+    }
+  ],
+  "source_qualification": {
+    "sources_after_retirement": {
+      "crates/araphor-analysis/src/instance/tests.rs": "e72e0b6ef257d8a6058be2251013cc9da7ffb83f6bf2aeb4449068f85f8d86d0",
+      "crates/araphor-analysis/src/instance/tests/reusing.rs": "c2cfdc6a61fc88a3a09db1e8fc21b1723882a6f9bd513e827dd3875bbf1748f0",
+      "crates/araphor-analysis_back/src/package/installed/read/tests/retained/reusing.rs": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "crates/araphor-query/src/definition/tests/execution.rs": "4ae51e423c48c7ea1466c9dcf8b22e878299bd6d4770893c75898bd01b5905c7",
+      "crates/araphor-query/src/definition/tests/execution/reusing.rs": "1784a6cf0d88c76c3dd25fd333653e044d24eec0c7ea40854ded5b6a5d4d0771"
+    },
+    "active_source_unchanged_since_tests": true,
+    "only_path_removed_after_tests": "crates/araphor-analysis_back/src/package/installed/read/tests/retained/reusing.rs",
+    "removed_path_is_not_a_workspace_member": true
+  },
+  "earlier_failure": {
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "araphor-data",
+      "-p",
+      "araphor-query",
+      "-p",
+      "araphor-analysis",
+      "-p",
+      "mithril-control",
+      "-p",
+      "araphor-cli",
+      "-p",
+      "erebor-runtime-client",
+      "--all-features",
+      "--lib",
+      "--bin",
+      "araphor",
+      "--no-run"
+    ],
+    "elapsed_seconds": 68.813,
+    "exit_code": 101,
+    "source_unchanged": true,
+    "head_before": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+    "head_after": "722d9d5f25d8b68e0f2234ec5074489e784a9861",
+    "label": "migration-closure-build155",
+    "record": "/tmp/araphor-oci-execution/migration-closure-build155.json",
+    "record_sha256": "014f98c8aff5c9009a19ddb1910d24845171db954c83d5bd9181d7bdedabf877",
+    "log": "/tmp/araphor-oci-execution/migration-closure-build155.log",
+    "log_sha256": "c4451e74fe0a34292a3465b730a5bb079a2190e013ed9c03ab13b1722e9cb5e3"
+  },
+  "correction": "The draft calls an absent Memory::output_reserved. Tests now reserve and drop the complete configured output pool through the existing API. No production getter is added. The immutable author patch and independent review remain unchanged; the separate review amendment records this compile mistake.",
+  "patch": {
+    "path": "/tmp/araphor-retained-closure-tests-20261020-78n2um38/retained-closure-tests.patch",
+    "sha256": "60a07f139c8046722a1db9b2862c3297e46c27a0322fbd4537ed86308ff33a8f"
+  },
+  "independent_review": {
+    "path": "/tmp/araphor-reusing-independent-final-20261021-_umugibz/REVIEW.md",
+    "sha256": "9caaa7efdb4233f4c2ab4ee4f2409c9e67caf2683ddbc40383e9fc260e2ad204",
+    "compile_amendment_sha256": "d26f1617752933c9f402c9f5c36e6d4991f5a4b6b851c2bddb3e255bdbec3451",
+    "scope": "Independent source review only. Root compilation and actual tests supply qualification."
+  },
+  "custody": {
+    "record": "/tmp/araphor-back-custody157.json",
+    "sha256": "b25bd9d1f121ed295023ffc163c9f31a65861d0778452b3c4098a8a56b353897",
+    "retired_files": [
+      {
+        "path": "crates/araphor-analysis_back/src/package/installed/read/tests/retained/reusing.rs",
+        "sha256": "afa0c95dae46a54c4e7965ae483943f334d5b3b31779336f1d72f8df3e04209f",
+        "baseline_equal": true,
+        "archive_equal": true,
+        "production_lines": 0
+      }
+    ],
+    "remaining_unchanged": 105,
+    "total_retired": 103,
+    "recovery_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+    "recovery_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+    "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5"
+  },
+  "count": {
+    "record": "/tmp/araphor-oci-execution-count158.json",
+    "sha256": "4576614da050b4d094a2b7fdf24598e5f4ef77e56931320f2fb09ed0095560ed",
+    "fingerprint": "25116e6749459436ad02892da182823555f0542f8d060c0b3e5dc084c9767dca",
+    "deliverable_production_net": 0,
+    "original_production_net": 14333,
+    "remaining_deletions_for_6000_goal": 20333,
+    "methodology": [
+      "Compare baseline file content with current file content under crates/ and docs/.",
+      "Include tracked .rs and .md paths and all new Rust files in araphor-data, araphor-query, araphor-analysis, and araphor-analysis-sdk.",
+      "Exclude other untracked source trees.",
+      "Count a line only when line.strip() is nonempty. Report after minus before.",
+      "Read added files with an empty baseline and deleted files with empty current content.",
+      "Disable rename detection. A move between counted paths cancels in the total.",
+      "Count tests paths, tests and *_tests modules, *-e2e crates, and the test-only analysis/crash.rs module as test Rust.",
+      "In other Rust files, use syn Rust syntax spans for cfg(test) items, parameters, fields, expressions, locals and match arms. An attributed parameter never excludes its function body.",
+      "Exclude test-fixtures and test-support gated code as test Rust, including their external helper modules. Other feature-gated code remains production Rust.",
+      "Retain all nonblank code, comment, and documentation lines in the inventory.",
+      "These counts do not prove semantic simplification. Review compressed formatting and retained behavior separately.",
+      "This report selects Rust files only. Documentation, manifests and lockfiles are excluded.",
+      "Explicitly exclude model/schema.rs in both Analysis paths because the whole file has crate-level cfg(test). Count120 misclassified its two attribute/import lines as production. The real model retirement removes306 production lines, not308.",
+      "Include new Rust files under araphor-package, araphor-cli, mithril-control, mithril-e2e, araphor-discovery-effects, araphor-analysis_back and araphor-discovery-definition in addition to the original roots.",
+      "Use production_code for results: syntax token lines excluding blank lines, comments, documentation and test/test-support/test-fixtures code according to the established counter.",
+      "Added/deleted totals sum positive/negative per-file production-code size changes, not textual diff insertions/deletions. File moves cancel in the overall net.",
+      "The source hashes identify the measured snapshot; no repository files are written or staged."
+    ]
+  },
+  "remaining": [
+    "freshness.rs and the complete installed/snapshot.rs retain unqualified rules.",
+    "Instance lifecycle/removal/renewal and any generation-changing replacement remain separate gates.",
+    "The proposed Graph producer is unlanded and unqualified.",
+    "Complete migration, required net reduction and final shared Rust procedure remain Not done.",
+    "No benchmark or push ran."
+  ]
+}

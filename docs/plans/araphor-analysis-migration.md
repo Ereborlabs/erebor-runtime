@@ -38,7 +38,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 106 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 105 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -55,7 +55,7 @@ Every replacement passes its required checks
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
 | Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public binary transport and CLI presentation now pass focused checks. Full per-window heads and latest selection remain open. | Focused checks pass |
-| Final retirement | The earlier 98 files and four native baseline test/assets files are removed after replacement checks pass. The 106 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Final retirement | The earlier 102 files and one complete native reuse test leaf are removed after replacement checks pass. The 105 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -1782,3 +1782,32 @@ expiry downgrade and witness deadlines remain **Not done**. The separate Data
 lock and native-interrupt polling paths remain open. This delivery adds 744
 production lines. The total from the original baseline is +14,333. The required
 net reduction and complete final Rust procedure remain **Not done**.
+
+## Native image closure reuse retirement
+
+Four new tests execute the exact native image closure and retained Instance
+under current authority. They preserve clone and image ownership, complete
+buffer release, engine and tenant isolation, and real dependency results.
+The native definitions select one, two, one, then zero images. An installed
+unused image starts no work and enters no closure. The older definition keeps
+its immutable image while a new revision returns a changed dependency value.
+
+Explicit SQL declarations replace the old active-root registry. An immutable
+OCI revision rejects changed bytes at the same key and writes no partial
+new dependency. A declared new revision returns the new value. This replaces
+the old mutable same-version activation generation rule. These tests do not
+prove a changed managed Instance generation. Lifecycle, removal and renewal
+remain separate gates.
+
+All four new tests and 27 mapped owner tests pass. Connected compilation,
+formatting and strict Clippy pass after the reference deletion. The initial
+test draft used an absent output-pool getter. The corrected tests reserve and
+drop the complete configured output pool to prove release through the actual
+owner API. No production getter or wrapper is added.
+
+Only `package/installed/read/tests/retained/reusing.rs` retires. Its bytes match
+the recovery baseline and complete archive before deletion. There are now
+103 retired files and 105 unchanged reference files. This removes no production
+code. Read the [retirement record](../../recovery/araphor-native-reuse-retirement-20261020.json).
+The production total stays +14,333 from the original baseline. The complete
+migration, net reduction and final shared Rust procedure remain **Not done**.

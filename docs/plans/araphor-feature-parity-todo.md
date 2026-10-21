@@ -59,7 +59,7 @@ Fifteen more retained-query, authority, Wasm, and finite notification test
 leaves are removed after 89 focused checks pass. Two image/fixture leaves then
 retire after exact replacement tests pass. The complete error leaf then
 retires after typed error and joined execution checks pass. There are now
-102 retired files; 106 baseline files remain unchanged. The storage-window
+103 retired files; 105 baseline files remain unchanged. The storage-window
 retirement transfers the complete assertions after all 39 connected cases pass.
 The later baseline retirement qualifies all 12 snapshots through 36 native calls
 before the four old test/assets files are removed. Runtime now owns the
@@ -796,3 +796,14 @@ unchanged files. Managed alias publication, durable recovery, expired-input
 Unknown coverage, model-wide expiry and witness deadlines remain open. The
 production total is +14,333 from the original baseline. The required net
 reduction and final Rust procedure remain **Not done**.
+
+## Native image closure reuse
+
+Four new native closure and current-authority cases and 27 mapped owner cases
+pass. One complete old reuse test leaf retires. Explicit SQL declarations and
+immutable OCI revisions replace its old active-root and mutable-version rules.
+No managed Instance generation change is claimed. There are now 103 retired
+files and 105 unchanged reference files. Production code does not decrease.
+Read the [bounded result](araphor-analysis-migration.md#native-image-closure-reuse-retirement).
+Freshness, installed snapshot, lifecycle and the complete migration remain
+**Not done**. The final Rust procedure remains **Not done**.
