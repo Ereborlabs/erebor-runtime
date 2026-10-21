@@ -98,8 +98,8 @@ cases pass. This removes 306 production lines. The public receipt/output replace
 production lines. Two checkpoint test leaves then retire after actual Wasm/native retries,
 reopen and overflow checks pass. The complete storage-window test file then
 retires after 39 connected cases, formatting and strict Clippy pass. There are
-now 98 retired files; 110 remain
-unchanged. The recovery archive retains all 208 originals.
+now 102 retired files; 106 remain unchanged. The latest four-file retirement
+qualifies all 12 complete baseline snapshots through 36 native calls. The recovery archive retains all 208 originals.
 The full Rust gate59 stops at a stale OCI fixture. The corrected fixture passes
 all 15 Package cases. The complete final Rust gate remains **Not done**. These finite results do not establish
 long-running lifecycle or automatic restart.
@@ -1058,4 +1058,20 @@ Read the [source and test record](../../recovery/araphor-public-fixture-executio
 This delivery adds 53 production lines and retires no Back file. All 110
 remaining files match the baseline. Dependency-artifact fixture selection,
 negative fixture time, complete migration and the final Rust gate remain
+**Not done**.
+
+## Native Graph baseline retirement
+
+All 12 saved snapshots now pass through 36 actual native package calls and
+production Graph validation. All three ordinary baseline cases also pass.
+The complete golden files stay unchanged. The shared test normalizer changes
+only the removed resource limits and checks the unchanged 300-second horizon.
+Connected compilation, formatting and strict Clippy pass.
+
+Only the old baseline test and three duplicate JSON files retire. This removes
+no production code. There are now 102 retired files and 106 unchanged reference
+files. The full archive retains all 208 originals. Read the
+[retirement record](../../recovery/araphor-native-graph-baseline-retirement-20261020.json).
+Keep the production adapter until its input and source-metadata replacement
+passes qualification. Complete migration and the final Rust gate remain
 **Not done**.

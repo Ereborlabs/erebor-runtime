@@ -59,9 +59,10 @@ Fifteen more retained-query, authority, Wasm, and finite notification test
 leaves are removed after 89 focused checks pass. Two image/fixture leaves then
 retire after exact replacement tests pass. The complete error leaf then
 retires after typed error and joined execution checks pass. There are now
-98 retired files; 110 baseline files remain unchanged. The latest retirement
-transfers the complete storage-window assertions after all 39 connected cases
-pass. Runtime now owns the
+102 retired files; 106 baseline files remain unchanged. The storage-window
+retirement transfers the complete assertions after all 39 connected cases pass.
+The later baseline retirement qualifies all 12 snapshots through 36 native calls
+before the four old test/assets files are removed. Runtime now owns the
 complete limits configuration and both original serialization tests.
 The native operation replacement also retires one complete test leaf after
 all ten old test functions have passing native assertions. This test-only
@@ -763,4 +764,20 @@ Read the [source and test record](../../recovery/araphor-public-fixture-executio
 This delivery adds 53 production lines and retires no Back file. All 110
 remaining files match the baseline. Dependency-artifact fixture selection,
 negative fixture time, complete migration and the final Rust gate remain
+**Not done**.
+
+## Native Graph baseline retirement
+
+All 12 saved snapshots now pass through 36 actual native package calls and
+production Graph validation. All three ordinary baseline cases also pass.
+The complete golden files stay unchanged. The shared test normalizer changes
+only the removed resource limits and checks the unchanged 300-second horizon.
+Connected compilation, formatting and strict Clippy pass.
+
+Only the old baseline test and three duplicate JSON files retire. This removes
+no production code. There are now 102 retired files and 106 unchanged reference
+files. The full archive retains all 208 originals. Read the
+[retirement record](../../recovery/araphor-native-graph-baseline-retirement-20261020.json).
+Keep the production adapter until its input and source-metadata replacement
+passes qualification. Complete migration and the final Rust gate remain
 **Not done**.

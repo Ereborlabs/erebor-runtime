@@ -38,7 +38,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 110 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 106 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -55,7 +55,7 @@ Every replacement passes its required checks
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
 | Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public binary transport and CLI presentation now pass focused checks. Full per-window heads and latest selection remain open. | Focused checks pass |
-| Final retirement | The earlier 97 files and one storage-window test file are removed after replacement checks pass. The 110 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Final retirement | The earlier 98 files and four native baseline test/assets files are removed after replacement checks pass. The 106 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -874,8 +874,8 @@ recovery and the final full Rust gate remain **Not done**.
 
 ### Production code ledger
 
-The current count145 includes the preceding native migration, extracted
-provenance correction and public image fixture execution. The storage-window transfer and native Graph
+The current count147 includes the preceding native migration, extracted
+provenance correction, public image fixtures and native baseline retirement. The storage-window transfer and native Graph
 adapter qualification change no production code.
 It excludes tests, comments, and blank lines. Moves cancel in the net result;
 the retained Back source is included. No covered source changed during the
@@ -926,8 +926,10 @@ must be removed relative to the
 current count to meet the target. No
 speed result is inferred from these counts.
 
-The record is `/tmp/araphor-oci-execution-count145.json`. Its selected source
+The record is `/tmp/araphor-oci-execution-count147.json`. Its selected source
 fingerprint is
+`fbfc6d67d3f5ac370ba26047efdb0b04029db2d4e73e7e4e6b78f67a078c4d03`.
+The earlier count145 has the same +13,589 production result. Its fingerprint is
 `eb30b2103411f91a8e2528f63a9ab8ab3c0b1088bb97fc352f9d22971a4f7cdc`.
 The earlier count142 records extracted provenance at +13,536. Its fingerprint is
 `250c6bd51dc832117d8cb2881afb495f18911beee4a20bb86f581a60acbd6b9a`.
@@ -1226,7 +1228,7 @@ during source retirement. This record does not claim a remote push.
 Local commit `d9369555` retains the archive and its checksum. The archive
 contains the complete recovered source. The 29 earlier leaves, four additional
 finite files, and eight Wasm leaves are retired at that earlier source state.
-The latest custody record verifies all 110 remaining files against the baseline.
+The latest custody record verifies all 106 remaining files against the baseline.
 The complete 208-file source remains in the unchanged archive.
 
 ## Back package, model and notification inventory
@@ -1725,4 +1727,20 @@ Read the [source and test record](../../recovery/araphor-public-fixture-executio
 This delivery adds 53 production lines and retires no Back file. All 110
 remaining files match the baseline. Dependency-artifact fixture selection,
 negative fixture time, complete migration and the final Rust gate remain
+**Not done**.
+
+## Native Graph baseline retirement
+
+All 12 saved snapshots now pass through 36 actual native package calls and
+production Graph validation. All three ordinary baseline cases also pass.
+The complete golden files stay unchanged. The shared test normalizer changes
+only the removed resource limits and checks the unchanged 300-second horizon.
+Connected compilation, formatting and strict Clippy pass.
+
+Only the old baseline test and three duplicate JSON files retire. This removes
+no production code. There are now 102 retired files and 106 unchanged reference
+files. The full archive retains all 208 originals. Read the
+[retirement record](../../recovery/araphor-native-graph-baseline-retirement-20261020.json).
+Keep the production adapter until its input and source-metadata replacement
+passes qualification. Complete migration and the final Rust gate remain
 **Not done**.

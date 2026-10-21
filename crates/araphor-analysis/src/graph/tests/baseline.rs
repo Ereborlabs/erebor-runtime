@@ -116,7 +116,10 @@ fn graph_kubernetes_baseline() -> TestResult {
 }
 
 fn historical_baseline(input: &GraphReplayInputV1) -> Result<GraphSnapshotV1> {
-    let mut snapshot = current(input)?;
+    Ok(historical_snapshot(current(input)?))
+}
+
+pub(super) fn historical_snapshot(mut snapshot: GraphSnapshotV1) -> GraphSnapshotV1 {
     for package in &mut snapshot.packages {
         assert_eq!(package.window_ns, 300_000_000_000);
         assert_eq!(package.window_records, u64::MAX);
@@ -124,5 +127,5 @@ fn historical_baseline(input: &GraphReplayInputV1) -> Result<GraphSnapshotV1> {
         package.window_records = 256;
         package.window_bytes = 4 * 1024 * 1024;
     }
-    Ok(snapshot)
+    snapshot
 }

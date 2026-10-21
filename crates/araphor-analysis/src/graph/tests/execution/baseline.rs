@@ -1,37 +1,42 @@
+use super::super::{baseline::historical_snapshot, fixture::*};
 use super::*;
+use araphor_data::KubernetesStageProofV1;
+use EffectPhysicalResultV1::{DeniedBeforeEffect, UnknownAfterPreEffect};
 
-#[test]
-fn graph_native_baseline() -> TestResult {
-    let execution = execution()?;
+#[tokio::test]
+#[ignore = "requires source-built native artifacts in ARAPHOR_NATIVE_DIR"]
+async fn native_process_baseline() -> TestResult {
     let mut denied = wire(1, DeniedBeforeEffect, 2, 2, [20; 16]);
     let original = input(vec![record(1, &denied)?]);
-    let protected = GraphAndFindingOwner::derive(&original, &execution)?;
+    let fixtures = fixtures(&original)?;
+    let protected = snapshot(&original, &fixtures).await?;
     let mut gapped = original;
     gapped.coverage[0].state = DiscoveryCoverageStateV1::Gapped;
     gapped.coverage[0].gap_reasons.push("GAP".into());
     gapped.coverage_keys[0].state = DiscoveryCoverageStateV1::Gapped;
     gapped.coverage_keys[0].gap_reasons.push("GAP".into());
-    let gapped = GraphAndFindingOwner::derive(&gapped, &execution)?;
+    let gapped = snapshot(&gapped, &fixtures).await?;
     denied.task_cookie = 0;
     denied
         .decision_context
         .as_mut()
         .ok_or("context")?
         .process_instance_id = vec![0; 16];
-    let missing = GraphAndFindingOwner::derive(&input(vec![record(1, &denied)?]), &execution)?;
+    let missing = snapshot(&input(vec![record(1, &denied)?]), &fixtures).await?;
     let actual = serde_json::json!({"protected": protected, "gapped": gapped, "missing": missing});
     assert_eq!(
         actual,
-        serde_json::from_slice::<serde_json::Value>(include_bytes!("baseline/native.json"))?
+        serde_json::from_slice::<serde_json::Value>(include_bytes!("../baseline/native.json"))?
     );
     Ok(())
 }
 
-#[test]
-fn graph_credential_baseline() -> TestResult {
-    let execution = execution()?;
+#[tokio::test]
+#[ignore = "requires source-built native artifacts in ARAPHOR_NATIVE_DIR"]
+async fn native_credential_baseline() -> TestResult {
     let mut input = credential_input()?;
-    let direct = GraphAndFindingOwner::derive(&input, &execution)?;
+    let fixtures = fixtures(&input)?;
+    let direct = snapshot(&input, &fixtures).await?;
     let mut use_fact = GraphFactV1::try_from(&input.facts[5])?;
     if let GraphFactValueV1::AuthorityUse {
         process_instance_id,
@@ -47,25 +52,26 @@ fn graph_credential_baseline() -> TestResult {
         *socket_object_id = None;
     }
     input.facts[5].body = serde_json::to_vec(&use_fact)?;
-    let contextual = GraphAndFindingOwner::derive(&input, &execution)?;
+    let contextual = snapshot(&input, &fixtures).await?;
     input.facts.remove(5);
-    let missing = GraphAndFindingOwner::derive(&input, &execution)?;
+    let missing = snapshot(&input, &fixtures).await?;
     let actual =
         serde_json::json!({"direct": direct, "contextual": contextual, "missing": missing});
     assert_eq!(
         actual,
-        serde_json::from_slice::<serde_json::Value>(include_bytes!("baseline/credential.json"))?
+        serde_json::from_slice::<serde_json::Value>(include_bytes!("../baseline/credential.json"))?
     );
     Ok(())
 }
 
-#[test]
-fn graph_kubernetes_baseline() -> TestResult {
-    let execution = execution()?;
+#[tokio::test]
+#[ignore = "requires source-built native artifacts in ARAPHOR_NATIVE_DIR"]
+async fn native_kubernetes_baseline() -> TestResult {
     let mut input = input(vec![record(
         1,
         &wire(1, UnknownAfterPreEffect, 3, 13, [20; 16]),
     )?]);
+    let fixtures = fixtures(&input)?;
     let mut stage = KubernetesStageProofV1 {
         cluster_id: "cluster".into(),
         carried_request_id: None,
@@ -104,12 +110,47 @@ fn graph_kubernetes_baseline() -> TestResult {
             1,
             GraphFactValueV1::Kubernetes(stage.clone()),
         )?];
-        outputs.push(GraphAndFindingOwner::derive(&input, &execution)?);
+        outputs.push(snapshot(&input, &fixtures).await?);
     }
     let actual = serde_json::to_value(outputs)?;
     assert_eq!(
         actual,
-        serde_json::from_slice::<serde_json::Value>(include_bytes!("baseline/kubernetes.json"))?
+        serde_json::from_slice::<serde_json::Value>(include_bytes!("../baseline/kubernetes.json"))?
     );
     Ok(())
+}
+
+fn fixtures(input: &GraphReplayInputV1) -> TestResult<Vec<(algorithm::Detector, Fixture)>> {
+    let input = input.normalized()?;
+    detectors()
+        .into_iter()
+        .map(|detector| {
+            let evaluation = evaluation(&input, detector)?;
+            let expected = detector.evaluate(&evaluation)?;
+            Ok((
+                detector,
+                Fixture::new(detector, Target::Native, &evaluation, &expected, None)?,
+            ))
+        })
+        .collect()
+}
+
+async fn snapshot(
+    input: &GraphReplayInputV1,
+    fixtures: &[(algorithm::Detector, Fixture)],
+) -> TestResult<GraphSnapshotV1> {
+    let input = input.normalized()?;
+    let mut graph = Graph::new(&input)?;
+    for (detector, fixture) in fixtures {
+        let evaluation = evaluation(&input, *detector)?;
+        let expected = detector.evaluate(&evaluation)?;
+        let (call, returned) = fixture.run(&evaluation).await?;
+        let result = returned.calls.get(&call.id()).ok_or("baseline call")?;
+        fixture.compare(&evaluation, &expected, result)?;
+        graph = graph.apply(&call, result)?;
+        drop(returned);
+        drop(call);
+        fixture.released()?;
+    }
+    Ok(historical_snapshot(graph.finish()?))
 }

@@ -1454,3 +1454,19 @@ This delivery adds 53 production lines and retires no Back file. All 110
 remaining files match the baseline. Dependency-artifact fixture selection,
 negative fixture time, complete migration and the final Rust gate remain
 **Not done**.
+
+## Native Graph baseline retirement
+
+All 12 saved snapshots now pass through 36 actual native package calls and
+production Graph validation. All three ordinary baseline cases also pass.
+The complete golden files stay unchanged. The shared test normalizer changes
+only the removed resource limits and checks the unchanged 300-second horizon.
+Connected compilation, formatting and strict Clippy pass.
+
+Only the old baseline test and three duplicate JSON files retire. This removes
+no production code. There are now 102 retired files and 106 unchanged reference
+files. The full archive retains all 208 originals. Read the
+[retirement record](../../recovery/araphor-native-graph-baseline-retirement-20261020.json).
+Keep the production adapter until its input and source-metadata replacement
+passes qualification. Complete migration and the final Rust gate remain
+**Not done**.

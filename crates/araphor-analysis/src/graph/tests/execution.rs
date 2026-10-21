@@ -6,6 +6,7 @@ use araphor_query::execution::{Engine, Limits};
 use araphor_query::Failure;
 use std::{sync::Arc, time::Duration};
 
+mod baseline;
 mod runtime;
 use runtime::{Fixture, Target};
 
