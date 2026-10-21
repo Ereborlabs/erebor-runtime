@@ -231,3 +231,34 @@ native proof covers Linux x86_64 GNU with glibc 2.39. Its exact E2E retry passes
 the original failure has no established cause. Other native platforms and a
 causal runtime speed improvement remain unqualified. No kernel program, ABI,
 backend trait, or durable owner is added by this change.
+
+
+## Current immutable context validation
+
+This section covers the current Data commit owner. Earlier entries retain
+their historical source state. The native Analysis replacement remains in
+[the migration record](../plans/araphor-analysis-migration.md).
+
+[AnalysisStore::commit_progress](../../crates/araphor-data/src/analysis/progress.rs) A caller submits a result or retries an immutable result ID
+  -> [AnalysisStore::commit_progress](../../crates/araphor-data/src/analysis/progress.rs) Data compares the raw context revision with the captured input references
+  -> [AnalysisStore::commit_progress](../../crates/araphor-data/src/analysis/progress.rs) Data rejects a malformed fresh header with AnalysisState
+  -> [AnalysisStore::commit_progress](../../crates/araphor-data/src/analysis/progress.rs) Data rejects a malformed immutable retry with AnalysisConflict
+  -> [AnalysisStore::commit_progress](../../crates/araphor-data/src/analysis/progress.rs) the transaction rolls back all proposed context rows
+
+[AnalysisStore::commit_progress](../../crates/araphor-data/src/analysis/progress.rs) A valid exact retry reaches immutable comparison
+  -> [AnalysisStore::commit_progress](../../crates/araphor-data/src/analysis/progress.rs) Data checks current final authority
+  -> [AnalysisStore::commit_progress](../../crates/araphor-data/src/analysis/progress.rs) Data returns the original receipt without a new write
+
+The raw header check stays before merged request serialization. Generated
+context references can produce the same stored metadata from different raw
+headers. An invalid header must not receive a successful receipt. Mutable
+profile replacement keeps its existing validation.
+
+The [atomic Graph context test](../../crates/araphor-data/src/analysis/graph_rows/tests/atomic.rs)
+checks fresh and retained malformed headers, complete metadata rollback, and
+the valid original retry. The [generic progress test](../../crates/araphor-data/src/analysis/progress.rs)
+keeps all 16 changed-request conflict assertions. The [history test](../../crates/araphor-data/src/analysis/graph/findings/tests.rs)
+creates a changed finding and checks the new head and original history.
+Read the [exact correction and qualification record](../../recovery/araphor-immutable-retry-validation-20261021.json).
+All 24 related Data cases and both native Graph storage cases pass. The final
+shared Rust procedure remains **Not done** at this source record.

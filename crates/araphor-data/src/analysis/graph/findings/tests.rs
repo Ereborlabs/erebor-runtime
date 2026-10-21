@@ -462,7 +462,7 @@ fn graph_revision_keeps_guards() -> std::result::Result<(), Box<dyn std::error::
 #[test]
 fn graph_reads_keep_history() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let fixture = CommitFixture::new()?;
-    fixture
+    let original = fixture
         .store
         .commit_graph(&fixture.request, true, || Ok(()))?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
@@ -473,8 +473,16 @@ fn graph_reads_keep_history() -> std::result::Result<(), Box<dyn std::error::Err
     next.created_utc_ns += 1;
     let mut snapshot = fixture.snapshot.clone();
     snapshot.previous_result_id = Some(fixture.request.result_id.clone());
+    let updated = snapshot.findings.first_mut().ok_or("fixture finding")?;
+    updated.required_action = Some("inspect-updated-effect".into());
+    let updated = updated.clone();
     next.body = serde_json::to_vec(&snapshot)?;
-    fixture.store.commit_graph(&next, false, || Ok(()))?;
+    let receipt = fixture.store.commit_graph(&next, false, || Ok(()))?;
+    assert!(receipt.commit_revision > original.commit_revision);
+    assert_eq!(
+        fixture.store.graph_result(tenant, &next.result_id)?,
+        Some(snapshot)
+    );
     assert_eq!(
         fixture
             .store
@@ -497,7 +505,7 @@ fn graph_reads_keep_history() -> std::result::Result<(), Box<dyn std::error::Err
         fixture
             .store
             .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?,
-        vec![(next.result_id.clone(), finding.clone())]
+        vec![(next.result_id.clone(), updated)]
     );
     assert_eq!(
         fixture

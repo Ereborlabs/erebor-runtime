@@ -923,6 +923,9 @@ impl AnalysisStore {
                 .max()
                 .unwrap_or(0)
         {
+            if existing.is_some() && previous.is_none() {
+                return AnalysisConflictSnafu.fail();
+            }
             return self.reject("the result context revision differs from its captured references");
         }
         let header = if let Some(graph) = graph {
@@ -1591,7 +1594,12 @@ mod tests {
         assert!(store.commit_result(&invalid).is_err());
         invalid = input.clone();
         invalid.context_refs[0].commit_revision = 0;
-        assert!(store.commit_result(&invalid).is_err());
+        let before = store.meta()?;
+        assert!(matches!(
+            store.commit_result(&invalid),
+            Err(crate::Error::AnalysisState { .. })
+        ));
+        assert_eq!(store.meta()?, before);
         let receipt = store.commit_result(&input)?;
         assert_eq!(receipt.commit_revision, 4);
         assert_eq!(receipt.consumed_cursor, 1);
@@ -1633,6 +1641,7 @@ mod tests {
                     input.created_utc_ns,
                     input.witnesses,
                     input.context_refs,
+                    [],
                 ])
             );
         }

@@ -118,6 +118,21 @@ fn graph_contexts_commit_atomically() -> TestResult {
     let captured = proof(&fixture)?;
     let before = fixture.store.meta()?;
     let sources = vec![("context_versions".into(), before.commit_revision)];
+    let mut malformed = fixture.request.clone();
+    malformed.context_revision += 1;
+    assert!(matches!(
+        fixture.store.commit_graph_snapshot(
+            malformed.clone(),
+            CanonicalGraph::new(fixture.snapshot.clone())?,
+            &rows,
+            std::slice::from_ref(&captured),
+            &sources,
+            true,
+            || Ok(()),
+        ),
+        Err(crate::Error::AnalysisState { .. })
+    ));
+    assert_eq!(fixture.store.meta()?, before);
     let denied = fixture.store.commit_graph_snapshot(
         fixture.request.clone(),
         CanonicalGraph::new(fixture.snapshot.clone())?,
@@ -182,6 +197,19 @@ fn graph_contexts_commit_atomically() -> TestResult {
         }));
     }
     let after = fixture.store.meta()?;
+    assert!(matches!(
+        fixture.store.commit_graph_snapshot(
+            malformed,
+            CanonicalGraph::new(fixture.snapshot.clone())?,
+            &rows,
+            std::slice::from_ref(&captured),
+            &sources,
+            true,
+            || Ok(()),
+        ),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    assert_eq!(fixture.store.meta()?, after);
     assert_eq!(
         fixture.store.commit_graph_snapshot(
             fixture.request.clone(),
