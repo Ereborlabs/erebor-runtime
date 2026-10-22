@@ -620,7 +620,8 @@ impl PackageExec {
             owner.memory.retain_input(batch, &input)?;
         }
         input.try_resize(input_metadata(&evaluation))?;
-        let (output, output_memory) = if self.call.sql.is_some() {
+        // Keep admission until retained output replaces the exchange reservation.
+        let (_admission, output, output_memory) = if self.call.sql.is_some() {
             let output_memory = Arc::new(owner.memory.reserve_output(0)?);
             let checked = self
                 .call
@@ -631,13 +632,13 @@ impl PackageExec {
                 .sql(&evaluation, &owner, &context, &source, &output_memory)
                 .await?;
             checked.validate_output(&output).map_err(external)?;
-            (output, output_memory)
+            (None, output, output_memory)
         } else {
-            let (effective, output, memory) = self
+            let (admission, effective, output, memory) = self
                 .guest(evaluation, &owner, Arc::clone(&input), &context)
                 .await?;
             evaluation = effective;
-            (output, memory)
+            (admission, output, memory)
         };
         owner.control.check().map_err(external)?;
         for batch in output

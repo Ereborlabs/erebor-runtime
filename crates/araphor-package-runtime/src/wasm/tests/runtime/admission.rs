@@ -1,5 +1,19 @@
 use super::*;
 
+struct Lease {
+    slots: Arc<tokio::sync::Semaphore>,
+    observed: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        self.observed.store(
+            self.slots.available_permits(),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+}
+
 #[tokio::test]
 async fn owned_admission_binds_runtime() -> TestResult {
     let quota = crate::Limits {
@@ -108,6 +122,17 @@ async fn owned_admission_binds_runtime() -> TestResult {
             .map(|capacity| capacity.available_permits()),
         Some(0)
     );
+    let observed = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+    let lease = Lease {
+        slots: Arc::clone(
+            first
+                .wasm()?
+                .evaluations
+                .as_ref()
+                .ok_or("evaluation slots")?,
+        ),
+        observed: Arc::clone(&observed),
+    };
     let (_, output) = first
         .evaluate_reserved(
             Arc::clone(&image),
@@ -119,10 +144,11 @@ async fn owned_admission_binds_runtime() -> TestResult {
             None,
             Some(prepared.clone()),
             admitted,
-            (),
+            lease,
         )
         .await?;
     assert_eq!(value(&output)?, 9);
+    assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!(
         first
             .wasm()?

@@ -248,6 +248,8 @@ impl Runtime {
         let (send, receive) = tokio::sync::oneshot::channel();
         let mut worker = tokio::task::spawn_blocking(move || {
             let _worker_token = worker_token;
+            // Keep the slot until the worker releases its exchange memory.
+            let _admission = admission.as_ref().map(wasm::EvaluationPermit::retain);
             let _lease = lease;
             let result: Result<_> = (move || {
                 let mut evaluation = evaluation;

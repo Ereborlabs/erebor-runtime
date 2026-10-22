@@ -32,7 +32,19 @@ pub struct WasmExecution {
     entered: Mutex<Option<execution::GuestEntry>>,
 }
 
-pub struct EvaluationPermit(OwnedSemaphorePermit);
+pub struct EvaluationPermit(Arc<OwnedSemaphorePermit>);
+
+pub struct EvaluationLease {
+    _permit: Arc<OwnedSemaphorePermit>,
+}
+
+impl EvaluationPermit {
+    pub fn retain(&self) -> EvaluationLease {
+        EvaluationLease {
+            _permit: Arc::clone(&self.0),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct PreparedComponent {
@@ -66,7 +78,7 @@ impl WasmExecution {
         };
         Arc::clone(capacity)
             .try_acquire_owned()
-            .map(|permit| Some(EvaluationPermit(permit)))
+            .map(|permit| Some(EvaluationPermit(Arc::new(permit))))
             .map_err(|_| {
                 crate::AnalysisBusySnafu {
                     resource: "component evaluations",
@@ -95,7 +107,7 @@ impl WasmExecution {
                     .map_err(|_| Code::Incomplete.error("component evaluation capacity"))
             })
             .await?;
-        Ok(Some(EvaluationPermit(permit)))
+        Ok(Some(EvaluationPermit(Arc::new(permit))))
     }
 
     pub async fn wait_capacity(&self, resource: &str, requested: usize) -> Result<()> {

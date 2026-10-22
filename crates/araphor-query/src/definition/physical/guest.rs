@@ -26,7 +26,12 @@ impl PackageExec {
         owner: &CallContext,
         input: Arc<MemoryReservation>,
         context: &TaskContext,
-    ) -> Result<(sdk::Evaluation, sdk::Output, Arc<MemoryReservation>)> {
+    ) -> Result<(
+        Option<araphor_package_runtime::wasm::EvaluationLease>,
+        sdk::Evaluation,
+        sdk::Output,
+        Arc<MemoryReservation>,
+    )> {
         let permit = context
             .session_config()
             .get_extension::<Permit>()
@@ -65,6 +70,7 @@ impl PackageExec {
         } else {
             None
         };
+        let retained = admission.as_ref().map(|permit| permit.retain());
         let scratch = if owner.memory.input_capacity().is_some() {
             let retained = evaluation.allocated_bytes();
             let bytes = evaluation
@@ -169,6 +175,6 @@ impl PackageExec {
             )
             .await
             .map_err(external)?;
-        Ok((evaluation, result, output))
+        Ok((retained, evaluation, result, output))
     }
 }
