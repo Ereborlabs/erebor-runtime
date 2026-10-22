@@ -27,7 +27,7 @@ fn retained_header_skips_ipc() -> TestResult {
         })?;
     let before = store.meta()?;
     let (pin, port) = store.managed_input(
-        &fixture.instance.spec.grant.selection,
+        &fixture.instance.grant.selection,
         &fixture.instance.spec.id,
         reference,
         "rows",
@@ -44,12 +44,12 @@ fn retained_header_skips_ipc() -> TestResult {
     let requests = AnalysisTableRequests::new();
     for mode in [AnalysisReadModeV1::Metadata, AnalysisReadModeV1::Complete] {
         let read = store.read_tables(
-            &fixture.instance.spec.grant.selection,
+            &fixture.instance.grant.selection,
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
                 inputs: Some(crate::AnalysisInputTables {
-                    authorized: &fixture.instance.spec.grant.selection,
+                    authorized: &fixture.instance.grant.selection,
                     scope: "",
                     outputs: &inputs,
                     limits: sdk::Limits::default(),

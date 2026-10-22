@@ -73,7 +73,7 @@ impl AnalysisStore {
                 Self::managed_header_from(reader, selection.tenant_id, &reference.result_id)?;
             let producer = Self::managed_instance_from(reader, selection.tenant_id, instance)?
                 .ok_or_else(|| Code::Missing.error("managed input instance"))?;
-            producer.spec.grant.permitted_by(selection)?;
+            producer.grant.permitted_by(selection)?;
             let descriptor = Self::validate_managed_header(
                 reader, selection.tenant_id, &reference.result_id, &record, revision,
             )?;
@@ -204,7 +204,7 @@ impl AnalysisStore {
         }
         let producer = Self::managed_instance_from(reader, reference.tenant, &reference.instance)?
             .ok_or_else(|| Code::Missing.error("managed input instance"))?;
-        producer.spec.grant.permitted_by(selection)?;
+        producer.grant.permitted_by(selection)?;
         let call = producer
             .spec
             .manifest

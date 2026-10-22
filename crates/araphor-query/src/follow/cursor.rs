@@ -69,6 +69,9 @@ impl Cursor {
     pub fn read_revision(&self) -> u64 {
         self.revision
     }
+    pub(super) fn set_revision(&mut self, revision: u64) {
+        self.revision = self.revision.max(revision);
+    }
     pub(crate) fn evaluated(&self) -> u64 {
         self.evaluated
     }

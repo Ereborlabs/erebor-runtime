@@ -16,7 +16,7 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use futures_util::TryStreamExt as _;
 
-use super::{Capture, Head, Projection};
+use super::{Capture, GraphRun, Head, Projection};
 use crate::Graph;
 
 type CapturedRecords = (
@@ -34,13 +34,27 @@ impl Projection {
             .session_config()
             .get_extension::<SourceSnapshot>()
             .ok_or_else(|| Self::invalid("graph captured source"))?;
-        let value = self
+        let run = GraphRun::from_context(context, self)?;
+        let value = run
             .captured
             .get_or_init(|| async {
-                self.read(plans, context, Arc::clone(&source))
+                let value = self
+                    .read(plans, context, Arc::clone(&source))
                     .await
                     .map(Arc::new)
-                    .map_err(Arc::new)
+                    .map_err(Arc::new);
+                #[cfg(test)]
+                {
+                    let observed = self
+                        .observed
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .clone();
+                    if let (Ok(value), Some(observed)) = (&value, observed) {
+                        let _observed = observed.send(Arc::clone(value));
+                    }
+                }
+                value
             })
             .await
             .clone()

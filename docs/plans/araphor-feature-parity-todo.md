@@ -837,3 +837,22 @@ Read the [bounded Notification result](araphor-analysis-migration.md#finite-nati
 for the qualified five-leaf scope, exact qualification, custody, and counts.
 Automatic Control consumption and failed-offer recovery, remaining limits,
 complete migration, and the final shared Rust procedure remain **Not done**.
+
+## Stopped authority renewal result
+
+Explicit stopped-instance renewal is implemented at Data and Instance. Current
+authority is separate from each attempt's captured grant. Native Graph plans
+now receive fresh shared capture state for each execution. Finite Discovery
+processing uses the existing Query subscription and joins before return.
+
+The [review route](../guides/araphor-discovery-definition-review.md#stopped-authority-renewal-and-fresh-graph-execution)
+and [checkpoint record](../../recovery/araphor-renewal-retirement-20261022.json)
+state the exact behavior and focused proof. The complete old renewal/restart
+test retires after its state, authority, receipt, and recovery rules pass.
+Restart preserves state; an explicit rebuild reproduces the former fresh-state
+case. There are 129 retired files and 79 unchanged reference files.
+
+Result for this bounded change: **Done**. Update and rollback, saved-input
+replay, automatic Graph publication, Discovery interval completion, complete
+retirement, the required net reduction, and the final shared Rust procedure
+remain **Not done**. Implementation continues within the current request.

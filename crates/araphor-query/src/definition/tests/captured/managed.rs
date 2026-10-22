@@ -265,7 +265,7 @@ async fn scope_check_precedes_capture() -> TestResult {
     let state = Arc::new(SinkState::default());
     let (definition, target) = prepared(&fixture, &state).await?;
     let mut target = (*target).clone();
-    target.managed.as_mut().unwrap().spec.grant.selection =
+    target.managed.as_mut().unwrap().grant.selection =
         AnalysisSelectionV1::new([1; 16], Vec::new());
     let control = AnalysisReadControl::default();
     let mut stream = stream(&fixture, definition, Arc::new(target), &control)?;
@@ -325,7 +325,6 @@ async fn window_keeps_full_grant() -> TestResult {
             .managed()
             .ok_or("window state")?
             .instance()
-            .spec
             .grant
             .selection,
         full

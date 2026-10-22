@@ -282,7 +282,7 @@ async fn host_idle_denial_suspends() -> TestResult {
     let (stop, stopped) = watch::channel(false);
     let worker = tokio::spawn(host.serve(stopped, u64::MAX));
     let progress = fixture.host_progress("denied-idle", 0).await?;
-    authority.deny(&instance.admitted.spec.grant.principal);
+    authority.deny(&instance.admitted.grant.principal);
     let suspended = fixture.host_stopped("denied-idle").await?;
     assert_eq!(suspended.progress, progress);
     assert_eq!(suspended.generation, instance.admitted.generation);
@@ -632,8 +632,12 @@ async fn host_expiry_keeps_healthy() -> TestResult {
         .await?;
     let mut expired = healthy.admitted.spec.clone();
     expired.id = "expired-member".into();
-    expired.grant.expires_utc_ns = Some(1);
-    let expired = fixture.query.store().admit_managed(&expired, || Ok(()))?;
+    let mut grant = healthy.admitted.grant.clone();
+    grant.expires_utc_ns = Some(1);
+    let expired = fixture
+        .query
+        .store()
+        .admit_managed(&expired, &grant, || Ok(()))?;
     fixture.query.store().set_managed_running(
         [1; 16],
         &expired.spec.id,
@@ -825,7 +829,7 @@ async fn host_source_denial_suspends() -> TestResult {
     )?;
     fixture
         .authority
-        .check(&denied.admitted.spec.grant, PackageActionV1::Run)?;
+        .check(&denied.admitted.grant, PackageActionV1::Run)?;
     fixture
         .query
         .store()
@@ -837,7 +841,7 @@ async fn host_source_denial_suspends() -> TestResult {
     let suspended = fixture.host_stopped("source-denied").await?;
     fixture
         .authority
-        .check(&denied.admitted.spec.grant, PackageActionV1::Run)?;
+        .check(&denied.admitted.grant, PackageActionV1::Run)?;
     assert_eq!(suspended.progress, progress);
     assert_eq!(suspended.generation, denied.admitted.generation);
     fixture.context(2)?;
@@ -938,7 +942,6 @@ async fn host_crossing_expiry_joins_admission() -> TestResult {
     let deadline = AnalysisReadControl::with_timeout(
         expiring
             .admitted
-            .spec
             .grant
             .remaining()?
             .ok_or("finite grant deadline")?,
@@ -970,7 +973,7 @@ async fn host_crossing_expiry_joins_admission() -> TestResult {
     }
     deadline.expired().await;
     assert!(matches!(
-        expiring.admitted.spec.grant.remaining(),
+        expiring.admitted.grant.remaining(),
         Err(araphor_data::Error::Package {
             code: Code::Denied,
             field: "package grant",

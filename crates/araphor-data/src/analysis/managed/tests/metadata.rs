@@ -7,12 +7,11 @@ fn metadata_skips_prior_ipc() -> TestResult {
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let mut fixture = Fixture::admit(&store)?;
     let mut spec = fixture.instance.spec.clone();
+    let mut grant = fixture.instance.grant.clone();
     spec.id = "metadata".into();
-    spec.grant.selection.contexts = crate::Selection::All;
-    spec.grant
-        .selection
-        .select_profiles(crate::Selection::All)?;
-    fixture.instance = store.admit_managed(&spec, || Ok(()))?;
+    grant.selection.contexts = crate::Selection::All;
+    grant.selection.select_profiles(crate::Selection::All)?;
+    fixture.instance = store.admit_managed(&spec, &grant, || Ok(()))?;
     let context = crate::AnalysisContextVersionV1 {
         key: crate::AnalysisContextKeyV1 {
             tenant_id: [1; 16],
@@ -29,7 +28,7 @@ fn metadata_skips_prior_ipc() -> TestResult {
     let changed = store.commit_context(&context)?;
     let requests = AnalysisTableRequests::new();
     let page = store.read_managed_tables(
-        &fixture.instance.spec.grant.selection,
+        &fixture.instance.grant.selection,
         &ManagedRead {
             instance: fixture.instance.clone(),
             rebuild: false,
@@ -74,7 +73,7 @@ fn metadata_skips_prior_ipc() -> TestResult {
         rebuild: false,
         completed: Some(receipt.commit_revision),
     };
-    let mut selection = selected.instance.spec.grant.selection.clone();
+    let mut selection = selected.instance.grant.selection.clone();
     selection.select_profiles(crate::Selection::Exact(Vec::new()))?;
     let tables = AnalysisTableRequests::from([("context_versions".into(), None)]);
     let before = store.meta()?;
@@ -124,7 +123,7 @@ fn metadata_skips_prior_ipc() -> TestResult {
         })
     ));
     let dependent = store.managed_dependency_revision(
-        &selected.instance.spec.grant.selection,
+        &selected.instance.grant.selection,
         &tables,
         &selected,
         AnalysisExtractLimits::default(),
@@ -182,7 +181,7 @@ fn metadata_fences_managed_head() -> TestResult {
     };
     let read = |selected: &ManagedRead| {
         store.managed_dependency_revision(
-            &selected.instance.spec.grant.selection,
+            &selected.instance.grant.selection,
             &tables,
             selected,
             AnalysisExtractLimits::default(),
@@ -234,7 +233,7 @@ fn metadata_fences_managed_head() -> TestResult {
     assert_eq!(store.meta()?, before);
     selected.completed = Some(terminal.revision);
     assert_eq!(read(&selected)?.1, 0);
-    let mut foreign = selected.instance.spec.grant.selection.clone();
+    let mut foreign = selected.instance.grant.selection.clone();
     foreign.tenant_id = [2; 16];
     assert!(matches!(
         store.managed_dependency_revision(

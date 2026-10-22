@@ -321,11 +321,11 @@ impl InstanceHost {
             };
             let ManagedSpec {
                 id,
-                grant,
                 definition,
                 manifest,
                 ..
             } = current.spec;
+            let grant = current.grant;
             drop(manifest);
             let mut changes = self.authority.changes_for(&grant);
             let admission = Arc::new(control.operation()?.within(grant.remaining()?)?);
@@ -462,9 +462,9 @@ impl InstanceHost {
             let operation = Arc::new(
                 control
                     .operation()?
-                    .within(owner.admitted.spec.grant.remaining()?)?,
+                    .within(owner.admitted.grant.remaining()?)?,
             );
-            let mut changes = self.authority.changes_for(&owner.admitted.spec.grant);
+            let mut changes = self.authority.changes_for(&owner.admitted.grant);
             let opened = Arc::clone(&owner);
             let lifecycle = expected.lifecycle;
             let stage = Arc::clone(&operation);
@@ -501,7 +501,7 @@ impl InstanceHost {
                         }
                     };
                     if control.check().is_ok() {
-                        owner.admitted.spec.grant.remaining()?;
+                        owner.admitted.grant.remaining()?;
                     }
                     if !ready? {
                         return Err(error);

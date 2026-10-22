@@ -167,6 +167,7 @@ pub(crate) struct Event {
     pub output: Output,
     pub calls: std::collections::BTreeMap<u64, Arc<crate::definition::CallResult>>,
     pub completed: bool,
+    pub revision: u64,
     pub evaluated: u64,
     pub clock_changed: bool,
     pub exhausted: bool,

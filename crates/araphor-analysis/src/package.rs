@@ -104,7 +104,7 @@ impl Package {
         Ok(selection)
     }
 
-    async fn prepared(&self) -> Result<&(PreparedDefinition, PackageCall)> {
+    pub(crate) async fn prepared(&self) -> Result<&(PreparedDefinition, PackageCall)> {
         self.prepared
             .get_or_try_init(|| async {
                 self.check()?;

@@ -10,6 +10,7 @@ impl AnalysisStore {
     pub(in crate::analysis) const MANAGED_SCHEMA: &'static str = "
         CREATE TABLE managed_instances (
             tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL, spec BLOB NOT NULL,
+            authority BLOB NOT NULL,
             generation UBIGINT NOT NULL, progress UBIGINT NOT NULL,
             running BOOLEAN NOT NULL, lifecycle UBIGINT NOT NULL, failure BLOB,
             PRIMARY KEY (tenant_id, instance_id)
@@ -37,6 +38,7 @@ impl AnalysisStore {
 
     pub(in crate::analysis) const MANAGED_CHARGES: &'static str = "
         SELECT tenant_id, 256 + octet_length(encode(instance_id)) + octet_length(spec)
+            + octet_length(authority)
             + COALESCE(octet_length(failure), 0) AS bytes
             FROM managed_instances
         UNION ALL SELECT tenant_id, 256 + octet_length(encode(instance_id))
@@ -84,7 +86,7 @@ impl AnalysisStore {
             let instance = Self::managed_instance_from(reader, tenant, &id)?.ok_or_else(|| {
                 crate::PackageErrorCodeV1::Missing.error("managed recovery instance")
             })?;
-            instance.spec.validate()?;
+            instance.validate()?;
             if instance.generation == 0
                 || instance.generation > head
                 || instance.progress > head
@@ -214,11 +216,14 @@ impl AnalysisStore {
                 return Self::reject_path(root, "the managed frontier receipt differs");
             }
             let capture = &attempt.capture;
+            capture.grant.validate()?;
             if capture.store != meta.store_uuid
                 || capture.schema != meta.schema_version
                 || capture.recovery == 0
                 || capture.recovery > meta.recovery_epoch
                 || capture.generation != owner.generation
+                || capture.grant.selection != owner.grant.selection
+                || (capture.lifecycle == owner.lifecycle && capture.grant != owner.grant)
                 || capture.lifecycle < owner.generation
                 || capture.lifecycle > owner.lifecycle
                 || capture.lifecycle > capture.revision

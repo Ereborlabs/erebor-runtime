@@ -226,6 +226,7 @@ impl AnalysisStore {
             || meta.recovery_epoch != capture.recovery
             || meta.commit_revision < capture.revision
             || instance.generation != capture.generation
+            || instance.grant != capture.grant
             || instance.lifecycle != capture.lifecycle
             || instance.running != capture.running
             || instance.progress != capture.progress

@@ -519,6 +519,7 @@ impl Engine {
             managed: None,
             inputs: None,
             workers: None,
+            context_init: None,
             output_rows: self.limits.output_rows,
             output_bytes: self.limits.output_bytes,
         })
@@ -668,6 +669,8 @@ impl TableBinding {
 
 pub(crate) type LocalTables = BTreeMap<String, TableBinding>;
 
+type ContextInit = dyn Fn(&mut SessionConfig) + Send + Sync;
+
 #[derive(Clone)]
 pub struct Session {
     engine: Arc<Engine>,
@@ -680,6 +683,7 @@ pub struct Session {
     pub(crate) managed: Option<araphor_data::ManagedRead>,
     pub(crate) inputs: Option<Arc<crate::sources::InputCapture>>,
     pub(crate) workers: Option<araphor_package_runtime::TaskTracker>,
+    context_init: Option<Arc<ContextInit>>,
     output_rows: usize,
     output_bytes: usize,
 }
@@ -736,6 +740,13 @@ impl CapturedPhysical {
 }
 
 impl Session {
+    pub fn set_context_init(
+        &mut self,
+        initializer: impl Fn(&mut SessionConfig) + Send + Sync + 'static,
+    ) {
+        self.context_init = Some(Arc::new(initializer));
+    }
+
     pub(crate) async fn metadata(
         &self,
         sources: &AnalysisTableRequests,
@@ -778,6 +789,7 @@ impl Session {
             managed: None,
             inputs: None,
             workers: self.workers.clone(),
+            context_init: self.context_init.clone(),
             output_rows: self.output_rows,
             output_bytes: self.output_bytes,
         }
@@ -1247,6 +1259,9 @@ impl Session {
                 .clone()
                 .unwrap_or_else(|| self.call_context(crate::definition::Invocation::default())),
         );
+        if let Some(initializer) = &self.context_init {
+            initializer(&mut config);
+        }
         let context = TaskContext::new(
             context.task_id(),
             context.session_id(),

@@ -33,7 +33,7 @@ impl Instance {
         witness_expiry: u64,
         expected_lifecycle: u64,
     ) -> Result<Subscription> {
-        let grant = &self.admitted.spec.grant;
+        let grant = &self.admitted.grant;
         let changes = self.authority.changes_for(grant);
         let resume = Self::authorize(self.authority.as_ref(), grant, &self.prepared, || {
             control.check()?;
@@ -43,7 +43,9 @@ impl Instance {
                 &control,
             )?;
             let current = &resume.instance;
-            if current.spec != self.admitted.spec || current.generation != self.admitted.generation
+            if current.spec != self.admitted.spec
+                || current.grant != self.admitted.grant
+                || current.generation != self.admitted.generation
             {
                 return Err(Code::Conflict.error("managed instance generation"));
             }
@@ -235,7 +237,7 @@ impl Stream for Subscription {
                                 .blocking(move |control| {
                                     Instance::authorize(
                                         owner.authority.as_ref(),
-                                        &owner.admitted.spec.grant,
+                                        &owner.admitted.grant,
                                         &owner.prepared,
                                         || {
                                             control.check()?;
@@ -269,7 +271,7 @@ impl ManagedPublication for sink::Publication {
     ) -> araphor_query::Result<(Invocation, ManagedRead)> {
         Instance::authorize(
             self.owner.authority.as_ref(),
-            &self.owner.admitted.spec.grant,
+            &self.owner.admitted.grant,
             &self.owner.prepared,
             || {
                 control.check()?;
@@ -332,7 +334,7 @@ impl ManagedPublication for sink::Publication {
         };
         let attempt = Instance::authorize(
             self.owner.authority.as_ref(),
-            &self.owner.admitted.spec.grant,
+            &self.owner.admitted.grant,
             &self.owner.prepared,
             || {
                 self.owner

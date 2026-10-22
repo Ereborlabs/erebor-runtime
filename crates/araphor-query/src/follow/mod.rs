@@ -345,6 +345,7 @@ impl State {
             output,
             calls,
             completed,
+            revision,
             evaluated,
             clock_changed,
             exhausted,
@@ -366,7 +367,7 @@ impl State {
                 .check_store(&snapshot.page.extraction.meta)
                 .map_err(|error| (error, Some(Arc::clone(&snapshot))))?;
         }
-        let cursor = if completed {
+        let mut cursor = if completed {
             Cursor::new(
                 &snapshot.page.extraction.meta,
                 self.run.operation,
@@ -386,6 +387,9 @@ impl State {
                 )
             })?
         };
+        if completed && self.run.operation == Operation::Replace {
+            cursor.set_revision(revision);
+        }
         self.started = true;
         self.cursor = Some(cursor.clone());
         Ok(Some(Update {

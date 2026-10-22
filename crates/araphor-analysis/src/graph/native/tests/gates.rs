@@ -141,13 +141,9 @@ async fn payload(
     let expected_graph = Graph::new(&expected)?;
     let publication = fixture.prepare(filter).await?;
     let projection = Arc::clone(&publication.projection);
+    let observed = projection.observe_capture();
     let (id, _) = publication.refresh(result_id.into()).await?;
-    let captured = projection
-        .captured
-        .get()
-        .ok_or("graph input capture")?
-        .as_ref()
-        .map_err(|error| format!("{error:?}"))?;
+    let captured = observed.try_recv()?;
     assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
     assert_eq!(captured.inputs.len(), 3);
     for (index, input) in captured.inputs.iter().enumerate() {

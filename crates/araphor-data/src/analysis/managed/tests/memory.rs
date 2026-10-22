@@ -11,15 +11,19 @@ fn metadata_counts_spare_capacity() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("data"))?;
     let fixture = Fixture::admit(&store)?;
-    let mut spec = fixture.instance.spec;
-    spec.grant.authorization_id = Some("authority".into());
-    spec.grant.selection.nodes = vec!["node".into()];
-    spec.grant.selection.results = vec!["result".into()];
-    spec.definition
+    let mut instance = fixture.instance;
+    instance.grant.authorization_id = Some("authority".into());
+    instance.grant.selection.nodes = vec!["node".into()];
+    instance.grant.selection.results = vec!["result".into()];
+    instance
+        .spec
+        .definition
         .definition
         .labels
         .insert("label".into(), "value".into());
-    spec.manifest
+    instance
+        .spec
+        .manifest
         .calls
         .values_mut()
         .next()
@@ -29,18 +33,19 @@ fn metadata_counts_spare_capacity() -> TestResult {
         closure_digest: Some("closure".into()),
         platform: Some("platform".into()),
     });
-    let encoded = serde_json::to_vec(&spec)?;
-    let before = spec.allocation_bytes().ok_or("metadata size")?;
-    let mut growth = grow(&mut spec.id) + grow(&mut spec.grant.principal);
+    let encoded = serde_json::to_vec(&instance)?;
+    let before = instance.allocation_bytes().ok_or("metadata size")?;
+    let mut growth = grow(&mut instance.spec.id) + grow(&mut instance.grant.principal);
     growth += grow(
-        spec.grant
+        instance
+            .grant
             .authorization_id
             .as_mut()
             .ok_or("authorization absent")?,
     );
     for values in [
-        &mut spec.grant.selection.nodes,
-        &mut spec.grant.selection.results,
+        &mut instance.grant.selection.nodes,
+        &mut instance.grant.selection.results,
     ] {
         let before = values.capacity();
         values.reserve(32);
@@ -49,36 +54,45 @@ fn metadata_counts_spare_capacity() -> TestResult {
             growth += grow(value);
         }
     }
-    let (mut key, mut value) = spec
+    let (mut key, mut value) = instance
+        .spec
         .definition
         .definition
         .labels
         .pop_first()
         .ok_or("label absent")?;
     growth += grow(&mut key) + grow(&mut value);
-    spec.definition.definition.labels.insert(key, value);
-    growth += grow(&mut spec.definition.definition.name);
-    growth += grow(&mut spec.definition.definition.description);
-    growth += grow(&mut spec.definition.sql);
-    let source = match &mut spec.definition.definition.program {
+    instance
+        .spec
+        .definition
+        .definition
+        .labels
+        .insert(key, value);
+    growth += grow(&mut instance.spec.definition.definition.name);
+    growth += grow(&mut instance.spec.definition.definition.description);
+    growth += grow(&mut instance.spec.definition.sql);
+    let source = match &mut instance.spec.definition.definition.program {
         Program::Sql { source } | Program::Prql { source } => source,
     };
     let Source::Inline { inline } = source else {
         return Err("captured source absent".into());
     };
     growth += grow(inline);
-    let pins = spec.definition.images.capacity();
-    spec.definition.images.reserve(32);
-    growth += (spec.definition.images.capacity() - pins) * std::mem::size_of::<ImagePin>();
-    let pin = spec
+    let pins = instance.spec.definition.images.capacity();
+    instance.spec.definition.images.reserve(32);
+    growth += (instance.spec.definition.images.capacity() - pins) * std::mem::size_of::<ImagePin>();
+    let pin = instance
+        .spec
         .definition
         .images
         .first_mut()
         .ok_or("image pin absent")?;
     growth +=
         grow(&mut pin.image.package_id) + grow(&mut pin.image.revision) + grow(&mut pin.digest);
-    growth += grow(&mut spec.manifest.planner) + grow(&mut spec.manifest.definition);
-    let call = spec
+    growth +=
+        grow(&mut instance.spec.manifest.planner) + grow(&mut instance.spec.manifest.definition);
+    let call = instance
+        .spec
         .manifest
         .calls
         .values_mut()
@@ -99,9 +113,9 @@ fn metadata_counts_spare_capacity() -> TestResult {
     for value in &mut call.arguments {
         growth += grow(value);
     }
-    assert_eq!(serde_json::to_vec(&spec)?, encoded);
+    assert_eq!(serde_json::to_vec(&instance)?, encoded);
     assert_eq!(
-        spec.allocation_bytes().ok_or("grown metadata size")?,
+        instance.allocation_bytes().ok_or("grown metadata size")?,
         before + growth
     );
     Ok(())

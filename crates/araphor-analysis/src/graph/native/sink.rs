@@ -21,7 +21,7 @@ use datafusion::physical_plan::{
 };
 use futures_util::TryStreamExt as _;
 
-use super::{GraphPublication, Projection};
+use super::{GraphPublication, GraphRun, Projection};
 use crate::Graph;
 
 type Receipt = (String, AnalysisResultReceiptV1);
@@ -110,9 +110,8 @@ impl DataSink for Publication {
             }
         }
         let receipt = ExecutionReceipt::from_context(context)?;
-        let captured = self
-            .owner
-            .projection
+        let run = GraphRun::from_context(context, &self.owner.projection)?;
+        let captured = run
             .captured
             .get()
             .ok_or_else(|| Projection::invalid("graph detector input was not executed"))?
@@ -149,8 +148,7 @@ impl DataSink for Publication {
             .source_revisions(receipt.snapshot().page.extraction.meta.commit_revision);
         receipt
             .blocking(context, captured, move |control| {
-                let captured = owner
-                    .projection
+                let captured = run
                     .captured
                     .get()
                     .ok_or_else(|| Code::Incomplete.error("graph input capture"))?

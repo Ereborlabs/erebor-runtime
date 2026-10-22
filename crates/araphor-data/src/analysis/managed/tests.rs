@@ -22,6 +22,7 @@ mod lifecycle;
 mod memory;
 mod metadata;
 mod output;
+mod renewal;
 mod status;
 mod terminal;
 
@@ -101,12 +102,19 @@ impl Fixture {
         )?;
         store.admit_definition([1; 16], &definition, || Ok(()))?;
         let selection = AnalysisSelectionV1::new([1; 16], Vec::new());
-        let spec = ManagedSpec { tenant: [1; 16], id: "counter".into(), grant: PackageGrantV1 { principal: "fixture".into(), revision: 1, selection: selection.clone(), expires_utc_ns: None, authorization_id: Some("definition-grant".into()) }, manifest: ManagedManifest {
+        let grant = PackageGrantV1 {
+            principal: "fixture".into(),
+            revision: 1,
+            selection: selection.clone(),
+            expires_utc_ns: None,
+            authorization_id: Some("definition-grant".into()),
+        };
+        let spec = ManagedSpec { tenant: [1; 16], id: "counter".into(), manifest: ManagedManifest {
             format: 1, planner: "datafusion-53/sql-call-1".into(), definition: definition.digest()?, calls: [(10, 2), (11, 3)].into_iter().map(|(id, increment)| (id, ManagedCall {
                 image: pin.clone(), package: image.root.clone(), export: "count".into(), target: "sql".into(), artifact: None, arguments: vec![format!("source => (SELECT 1::BIGINT UNSIGNED AS value), increment => {increment}")], dependencies: BTreeSet::new(),
             })).collect(),
         }, definition };
-        let instance = store.admit_managed(&spec, || Ok(()))?;
+        let instance = store.admit_managed(&spec, &grant, || Ok(()))?;
         Ok(Self { instance, model })
     }
 
@@ -120,7 +128,7 @@ impl Fixture {
             .ok_or("instance absent")?;
         let requests = AnalysisTableRequests::new();
         let page = store.read_managed_tables(
-            &instance.spec.grant.selection,
+            &instance.grant.selection,
             &ManagedRead {
                 instance: instance.clone(),
                 rebuild,
@@ -319,7 +327,7 @@ fn managed_calls_commit_atomically() -> TestResult {
     let fixture = Fixture::admit(&store)?;
     let mut checked = false;
     assert_eq!(
-        store.admit_managed(&fixture.instance.spec, || {
+        store.admit_managed(&fixture.instance.spec, &fixture.instance.grant, || {
             checked = true;
             Ok(())
         })?,
@@ -335,7 +343,7 @@ fn managed_calls_commit_atomically() -> TestResult {
         .arguments
         .push("changed => 1".into());
     assert!(matches!(
-        store.admit_managed(&changed, || Ok(())),
+        store.admit_managed(&changed, &fixture.instance.grant, || Ok(())),
         Err(crate::Error::AnalysisConflict { .. })
     ));
     let captured = fixture.capture(&store, false)?;
@@ -871,16 +879,16 @@ fn managed_sql_checks_authority() -> TestResult {
         Vec::new(),
     )?;
     store.admit_definition([1; 16], &definition, || Ok(()))?;
+    let grant = PackageGrantV1 {
+        principal: "fixture".into(),
+        revision: 1,
+        selection: AnalysisSelectionV1::new([1; 16], Vec::new()),
+        expires_utc_ns: None,
+        authorization_id: Some("definition-grant".into()),
+    };
     let spec = ManagedSpec {
         tenant: [1; 16],
         id: "pure".into(),
-        grant: PackageGrantV1 {
-            principal: "fixture".into(),
-            revision: 1,
-            selection: AnalysisSelectionV1::new([1; 16], Vec::new()),
-            expires_utc_ns: None,
-            authorization_id: Some("definition-grant".into()),
-        },
         manifest: ManagedManifest {
             format: 1,
             planner: "datafusion-53/sql-call-1".into(),
@@ -892,20 +900,20 @@ fn managed_sql_checks_authority() -> TestResult {
     let before = store.meta()?;
     let mut checked = 0;
     assert!(store
-        .admit_managed(&spec, || {
+        .admit_managed(&spec, &grant, || {
             checked += 1;
             crate::AnalysisReadDeniedSnafu.fail()
         })
         .is_err());
     assert_eq!(store.meta()?, before);
-    let instance = store.admit_managed(&spec, || {
+    let instance = store.admit_managed(&spec, &grant, || {
         checked += 1;
         Ok(())
     })?;
     let requests = AnalysisTableRequests::new();
     let captured = store
         .read_managed_tables(
-            &spec.grant.selection,
+            &grant.selection,
             &ManagedRead {
                 instance,
                 rebuild: false,
@@ -1153,16 +1161,16 @@ fn managed_native_selected_roundtrip() -> TestResult {
         Vec::new(),
     )?;
     store.admit_definition([1; 16], &definition, || Ok(()))?;
+    let grant = PackageGrantV1 {
+        principal: "fixture".into(),
+        revision: 1,
+        selection: AnalysisSelectionV1::new([1; 16], Vec::new()),
+        expires_utc_ns: None,
+        authorization_id: Some("definition-grant".into()),
+    };
     let spec = ManagedSpec {
         tenant: [1; 16],
         id: "native-selected".into(),
-        grant: PackageGrantV1 {
-            principal: "fixture".into(),
-            revision: 1,
-            selection: AnalysisSelectionV1::new([1; 16], Vec::new()),
-            expires_utc_ns: None,
-            authorization_id: Some("definition-grant".into()),
-        },
         manifest: ManagedManifest {
             format: 1,
             planner: "datafusion-53/sql-call-1".into(),
@@ -1171,7 +1179,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
         },
         definition,
     };
-    store.admit_managed(&spec, || Ok(()))?;
+    store.admit_managed(&spec, &grant, || Ok(()))?;
     let dictionary = DictionaryArray::<Int8Type>::try_new(
         Int8Array::from(vec![0, 1, 0]),
         Arc::new(StringArray::from(vec!["one", "two"])),
@@ -1208,7 +1216,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
         let requests = AnalysisTableRequests::new();
         let capture = store
             .read_managed_tables(
-                &spec.grant.selection,
+                &grant.selection,
                 &ManagedRead {
                     instance,
                     rebuild: false,
@@ -1416,15 +1424,16 @@ fn managed_registration_keeps_cut() -> TestResult {
     };
     store.commit_context(&context)?;
     let mut spec = fixture.instance.spec.clone();
+    let mut grant = fixture.instance.grant.clone();
     spec.id = "contextual".into();
-    spec.grant.selection.contexts = crate::Selection::Exact(vec![context.key.clone()]);
+    grant.selection.contexts = crate::Selection::Exact(vec![context.key.clone()]);
 
-    fixture.instance = store.admit_managed(&spec, || Ok(()))?;
+    fixture.instance = store.admit_managed(&spec, &grant, || Ok(()))?;
     let instance = fixture.instance.clone();
     let requests = AnalysisTableRequests::new();
     let captured = store
         .read_managed_tables(
-            &spec.grant.selection,
+            &grant.selection,
             &ManagedRead {
                 instance,
                 rebuild: false,
@@ -1455,7 +1464,7 @@ fn managed_registration_keeps_cut() -> TestResult {
         .ok_or("contextual instance absent")?;
     let captured = store
         .read_managed_tables(
-            &spec.grant.selection,
+            &grant.selection,
             &ManagedRead {
                 instance,
                 rebuild: false,
@@ -1508,14 +1517,15 @@ fn managed_witness_lifetime_check() -> TestResult {
         },
     )?;
     let mut spec = fixture.instance.spec.clone();
+    let mut grant = fixture.instance.grant.clone();
     spec.id = "witnessed".into();
-    spec.grant.selection.sources = crate::Selection::Exact(vec![source.clone()]);
-    fixture.instance = store.admit_managed(&spec, || Ok(()))?;
+    grant.selection.sources = crate::Selection::Exact(vec![source.clone()]);
+    fixture.instance = store.admit_managed(&spec, &grant, || Ok(()))?;
     let cursor = AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
     let requests = AnalysisTableRequests::from([("events".into(), Some(BTreeSet::from([cursor])))]);
     let capture = store
         .read_managed_tables(
-            &spec.grant.selection,
+            &grant.selection,
             &ManagedRead {
                 instance: fixture.instance.clone(),
                 rebuild: false,
@@ -1637,7 +1647,7 @@ fn managed_witness_lifetime_check() -> TestResult {
             .current
     );
     let (pin, port) = store.managed_input(
-        &spec.grant.selection,
+        &grant.selection,
         &spec.id,
         &receipt.results[&10],
         "rows",
@@ -1656,7 +1666,7 @@ fn managed_witness_lifetime_check() -> TestResult {
                 requests: &requests,
                 event_ranges: None,
                 inputs: Some(crate::AnalysisInputTables {
-                    authorized: &spec.grant.selection,
+                    authorized: &grant.selection,
                     scope: "",
                     outputs: &inputs,
                     limits: sdk::Limits::default(),

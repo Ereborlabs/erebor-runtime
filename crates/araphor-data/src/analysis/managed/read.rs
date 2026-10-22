@@ -10,10 +10,16 @@ impl AnalysisStore {
     pub fn admit_managed(
         &self,
         spec: &ManagedSpec,
+        grant: &crate::PackageGrantV1,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<ManagedInstance> {
         spec.validate()?;
+        grant.validate()?;
+        if grant.selection.tenant_id != spec.tenant {
+            return Err(Code::Invalid.error("managed instance grant"));
+        }
         let bytes = serde_json::to_vec(spec).context(crate::PackageEncodingSnafu)?;
+        let grant_bytes = serde_json::to_vec(grant).context(crate::PackageEncodingSnafu)?;
         let mut writer = self.writer()?;
         let transaction = writer
             .get_mut()?
@@ -23,7 +29,7 @@ impl AnalysisStore {
             })?;
         Self::check_managed_images(&transaction, spec)?;
         if let Some(saved) = Self::managed_instance_from(&transaction, spec.tenant, &spec.id)? {
-            if saved.spec != *spec {
+            if saved.spec != *spec || saved.grant != *grant {
                 return crate::AnalysisConflictSnafu.fail();
             }
             check()?;
@@ -32,8 +38,8 @@ impl AnalysisStore {
         let revision = self.package_next(&transaction)?;
         transaction
             .execute(
-                "INSERT INTO managed_instances (tenant_id, instance_id, spec, generation, progress, running, lifecycle) VALUES (?, ?, ?, ?, 0, false, ?)",
-                params![spec.tenant.as_slice(), spec.id, bytes, revision, revision],
+                "INSERT INTO managed_instances (tenant_id, instance_id, spec, authority, generation, progress, running, lifecycle) VALUES (?, ?, ?, ?, ?, 0, false, ?)",
+                params![spec.tenant.as_slice(), spec.id, bytes, grant_bytes, revision, revision],
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "insert managed instance",
@@ -59,6 +65,7 @@ impl AnalysisStore {
         self.revision.send_replace(revision);
         Ok(ManagedInstance {
             spec: spec.clone(),
+            grant: grant.clone(),
             generation: revision,
             progress: 0,
             running: false,
@@ -83,8 +90,8 @@ impl AnalysisStore {
         tenant: [u8; 16],
         id: &str,
     ) -> Result<Option<ManagedInstance>> {
-        let row = reader.query_row("SELECT spec, generation, progress, running, lifecycle FROM managed_instances WHERE tenant_id = ? AND instance_id = ?", params![tenant.as_slice(), id], |row|
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, u64>(1)?, row.get::<_, u64>(2)?, row.get::<_, bool>(3)?, row.get::<_, u64>(4)?)))
+        let row = reader.query_row("SELECT spec, authority, generation, progress, running, lifecycle FROM managed_instances WHERE tenant_id = ? AND instance_id = ?", params![tenant.as_slice(), id], |row|
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, u64>(2)?, row.get::<_, u64>(3)?, row.get::<_, bool>(4)?, row.get::<_, u64>(5)?)))
             .optional().context(AnalysisDatabaseSnafu { operation: "read managed instance" })?;
         row.map(|row| Self::managed_row(tenant, id, row))
             .transpose()
@@ -133,15 +140,24 @@ impl AnalysisStore {
     pub(super) fn managed_row(
         tenant: [u8; 16],
         id: &str,
-        (bytes, generation, progress, running, lifecycle): (Vec<u8>, u64, u64, bool, u64),
+        (bytes, grant, generation, progress, running, lifecycle): (
+            Vec<u8>,
+            Vec<u8>,
+            u64,
+            u64,
+            bool,
+            u64,
+        ),
     ) -> Result<ManagedInstance> {
         let spec: ManagedSpec =
             serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu)?;
+        let grant = serde_json::from_slice(&grant).context(crate::PackageEncodingSnafu)?;
         if spec.tenant != tenant || spec.id != id {
             return Err(Code::Invalid.error("managed instance key"));
         }
         Ok(ManagedInstance {
             spec,
+            grant,
             generation,
             progress,
             running,
@@ -349,6 +365,7 @@ impl AnalysisStore {
                 return Err(Code::Invalid.error("managed attempt generation"));
             }
             instance.progress = attempt.capture.progress;
+            instance.grant = attempt.capture.grant.clone();
             instance.running = attempt.capture.running;
             instance.lifecycle = attempt.capture.lifecycle;
             Ok(Some(ManagedAttempt(

@@ -38,6 +38,7 @@ pub trait GraphFacts: Send + Sync {
     ) -> araphor_data::Result<(Vec<AnalysisContextVersionV1>, Vec<AnalysisContextRefV1>)>;
 }
 
+#[derive(Clone)]
 pub struct GraphPublication {
     session: Session,
     authority: Arc<dyn PackageAuthorization>,
@@ -55,6 +56,12 @@ struct Projection {
     limits: Limits,
     #[cfg(test)]
     projections: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    observed: Mutex<Option<std::sync::mpsc::Sender<Arc<Capture>>>>,
+}
+
+struct GraphRun {
+    projection: Weak<Projection>,
     captured: OnceCell<std::result::Result<Arc<Capture>, Arc<DataFusionError>>>,
 }
 
@@ -159,7 +166,15 @@ impl GraphPublication {
             limits: query.limits().clone(),
             #[cfg(test)]
             projections: std::sync::atomic::AtomicUsize::new(0),
-            captured: OnceCell::new(),
+            #[cfg(test)]
+            observed: Mutex::new(None),
+        });
+        let selected = Arc::downgrade(&projection);
+        session.set_context_init(move |config| {
+            config.set_extension(Arc::new(GraphRun {
+                projection: selected.clone(),
+                captured: OnceCell::new(),
+            }));
         });
         for index in 0..projection.ports.len() {
             let source = Arc::new(node::Port {
@@ -344,5 +359,21 @@ impl Projection {
             field,
             location: snafu::location!(),
         })
+    }
+}
+
+impl GraphRun {
+    fn from_context(
+        context: &datafusion::execution::TaskContext,
+        projection: &Arc<Projection>,
+    ) -> std::result::Result<Arc<Self>, DataFusionError> {
+        let run = context
+            .session_config()
+            .get_extension::<Self>()
+            .ok_or_else(|| Projection::invalid("graph execution context"))?;
+        if !Weak::ptr_eq(&run.projection, &Arc::downgrade(projection)) {
+            return Err(Projection::invalid("graph execution projection"));
+        }
+        Ok(run)
     }
 }

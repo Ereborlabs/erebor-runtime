@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use araphor_analysis_sdk as sdk;
@@ -95,6 +96,22 @@ impl ExecutionReceipt {
 
     pub fn calls(&self) -> &BTreeMap<u64, Arc<CallResult>> {
         &self.calls
+    }
+
+    pub fn acknowledge(&self, context: &TaskContext, revision: u64) -> Result<()> {
+        let current = Self::from_context(context)?;
+        if !Arc::ptr_eq(&self.snapshot, &current.snapshot) {
+            return Err(external(
+                araphor_data::PackageErrorCodeV1::Invalid.error("publication receipt"),
+            ));
+        }
+        context
+            .session_config()
+            .get_extension::<CallContext>()
+            .ok_or_else(|| internal("package execution context is absent"))?
+            .publication
+            .fetch_max(revision, Ordering::AcqRel);
+        Ok(())
     }
 
     pub async fn blocking<T: Send + 'static>(
@@ -203,6 +220,7 @@ pub(crate) struct CallContext {
     now: u64,
     workers: TaskTracker,
     calls: Mutex<BTreeMap<u64, CallState>>,
+    publication: AtomicU64,
     scope: Option<TaskTracker>,
 }
 
@@ -237,6 +255,7 @@ impl CallContext {
             now,
             workers: TaskTracker::new(),
             calls: Mutex::default(),
+            publication: AtomicU64::new(0),
             scope,
         })
     }
@@ -254,6 +273,10 @@ impl CallContext {
             return Err(internal("package parent execution is closed"));
         }
         Ok((self.workers.token(), scope))
+    }
+
+    pub(crate) fn published_revision(&self) -> u64 {
+        self.publication.load(Ordering::Acquire)
     }
 
     pub fn results(&self) -> Result<BTreeMap<u64, Arc<CallResult>>> {

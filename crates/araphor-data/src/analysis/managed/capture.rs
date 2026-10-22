@@ -19,7 +19,7 @@ impl AnalysisStore {
     ) -> Result<ManagedCapture> {
         let before = output.input_bytes;
         let expected = &request.instance;
-        let bytes: u64 = reader.query_row("SELECT octet_length(spec) FROM managed_instances WHERE tenant_id = ? AND instance_id = ?",
+        let bytes: u64 = reader.query_row("SELECT octet_length(spec) + octet_length(authority) FROM managed_instances WHERE tenant_id = ? AND instance_id = ?",
             params![expected.spec.tenant.as_slice(), expected.spec.id], |row| row.get(0))
             .context(AnalysisDatabaseSnafu { operation: "bound managed instance capture" })?;
         output.charge(
@@ -82,6 +82,7 @@ impl AnalysisStore {
             contract: Capture {
                 tenant: instance.spec.tenant,
                 instance: instance.spec.id.clone(),
+                grant: instance.grant.clone(),
                 generation: instance.generation,
                 progress: instance.progress,
                 completed,

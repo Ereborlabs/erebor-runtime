@@ -563,7 +563,7 @@ impl PreparedDefinition {
             }
             let spec = &managed.instance.spec;
             if spec.tenant != selection.tenant_id
-                || spec.grant.selection != *selection
+                || managed.instance.grant.selection != *selection
                 || spec.definition != *self.resolved()
             {
                 return Err(PackageErrorCodeV1::Denied

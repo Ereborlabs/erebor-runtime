@@ -5,7 +5,7 @@ use snafu::ResultExt as _;
 
 use super::super::AnalysisStore;
 use super::ManagedInstance;
-use crate::{AnalysisDatabaseSnafu, PackageErrorCodeV1 as Code, Result};
+use crate::{AnalysisDatabaseSnafu, PackageErrorCodeV1 as Code, PackageGrantV1, Result};
 
 pub struct ManagedLease(Arc<AnalysisStore>);
 
@@ -16,6 +16,57 @@ impl Drop for ManagedLease {
 }
 
 impl AnalysisStore {
+    /// Stop and join the original execution before this call.
+    pub fn renew_managed(
+        &self,
+        expected: &ManagedInstance,
+        grant: &PackageGrantV1,
+        check: impl FnOnce() -> Result<()>,
+    ) -> Result<ManagedInstance> {
+        expected.validate()?;
+        grant.validate()?;
+        if grant.selection != expected.grant.selection {
+            return Err(Code::Conflict.error("managed renewal selection"));
+        }
+        let mut writer = self.writer()?;
+        let transaction = writer
+            .get_mut()?
+            .transaction()
+            .context(AnalysisDatabaseSnafu {
+                operation: "begin managed renewal",
+            })?;
+        let mut instance =
+            Self::managed_instance_from(&transaction, expected.spec.tenant, &expected.spec.id)?
+                .ok_or_else(|| Code::Missing.error("managed renewal instance"))?;
+        if instance != *expected || instance.running {
+            return crate::AnalysisConflictSnafu.fail();
+        }
+        Self::check_managed_pending(&transaction, expected.spec.tenant, &expected.spec.id)?;
+        if instance.grant == *grant {
+            check()?;
+            return Ok(instance);
+        }
+        Self::check_managed_images(&transaction, &instance.spec)?;
+        let revision = self.package_next(&transaction)?;
+        let changed = transaction.execute(
+            "UPDATE managed_instances SET authority = ?, lifecycle = ? WHERE tenant_id = ? AND instance_id = ? AND lifecycle = ?",
+            params![serde_json::to_vec(grant).context(crate::PackageEncodingSnafu)?, revision,
+                expected.spec.tenant.as_slice(), expected.spec.id, expected.lifecycle],
+        ).context(AnalysisDatabaseSnafu { operation: "renew managed authority" })?;
+        if changed != 1 {
+            return crate::AnalysisConflictSnafu.fail();
+        }
+        self.check_logical(&transaction, expected.spec.tenant, false)?;
+        Self::record_revision(&transaction, revision, &["managed_instances"])?;
+        check()?;
+        self.commit_metadata(transaction, "commit managed renewal")?;
+        self.revision.send_replace(revision);
+        self.activations.send_replace(revision);
+        instance.grant = grant.clone();
+        instance.lifecycle = revision;
+        Ok(instance)
+    }
+
     pub fn lease_managed(self: &Arc<Self>) -> Result<ManagedLease> {
         if self
             .managed_owner

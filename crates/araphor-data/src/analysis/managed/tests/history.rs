@@ -8,7 +8,7 @@ fn history_keeps_original_receipts() -> TestResult {
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
     let fixture = Fixture::admit(&store)?;
-    let selection = &fixture.instance.spec.grant.selection;
+    let selection = &fixture.instance.grant.selection;
     let control = AnalysisReadControl::default();
     assert!(store
         .managed_history(selection, "counter", &control)?
@@ -134,7 +134,7 @@ fn history_checks_stored_binding() -> TestResult {
         assert!(
             matches!(
                 store.managed_history(
-                    &fixture.instance.spec.grant.selection,
+                    &fixture.instance.grant.selection,
                     "counter",
                     &AnalysisReadControl::default()
                 ),
@@ -152,7 +152,7 @@ fn history_checks_stored_binding() -> TestResult {
     }
     assert_eq!(
         store.managed_history(
-            &fixture.instance.spec.grant.selection,
+            &fixture.instance.grant.selection,
             "counter",
             &AnalysisReadControl::default()
         )?,

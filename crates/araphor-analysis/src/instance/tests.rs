@@ -19,6 +19,7 @@ use super::*;
 mod checkpoint;
 mod finite;
 mod history;
+mod renewal;
 mod restart;
 mod retained;
 mod reusing;
@@ -31,6 +32,7 @@ pub(super) struct Authority {
     images: Mutex<BTreeSet<String>>,
     changes: tokio::sync::watch::Sender<u64>,
     deny_next: AtomicBool,
+    revoked: Mutex<BTreeSet<u64>>,
 }
 
 impl Authority {
@@ -41,15 +43,29 @@ impl Authority {
             .unwrap_or_else(|error| error.into_inner()) = allowed;
         self.changes.send_modify(|revision| *revision += 1);
     }
+
+    fn revoke(&self, revision: u64) {
+        self.revoked
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(revision);
+        self.changes.send_modify(|revision| *revision += 1);
+    }
 }
 
 impl PackageAuthorization for Authority {
     fn check(&self, grant: &PackageGrantV1, _: PackageActionV1) -> araphor_data::Result<()> {
         grant.remaining()?;
-        if !*self
-            .allowed
+        let revoked = self
+            .revoked
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+            .contains(&grant.revision);
+        if revoked
+            || !*self
+                .allowed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
         {
             return Err(Code::Denied.error("instance fixture authority"));
         }
@@ -97,6 +113,14 @@ impl PackageAuthorization for Authority {
         }
         for (grant, bundle) in grants {
             grant.remaining()?;
+            if self
+                .revoked
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .contains(&grant.revision)
+            {
+                return Err(Code::Denied.error("instance fixture authority set"));
+            }
             if bundle.is_some_and(|bundle| !images.contains(bundle.digest())) {
                 return Err(Code::Denied.error("instance fixture trust set"));
             }
@@ -138,6 +162,7 @@ impl Fixture {
                 images: Mutex::default(),
                 changes: tokio::sync::watch::channel(0).0,
                 deny_next: AtomicBool::new(false),
+                revoked: Mutex::default(),
             }),
             grant: PackageGrantV1 {
                 principal: "instance-fixture".into(),
@@ -1640,7 +1665,6 @@ async fn instance_metadata_keeps_capacity() -> TestResult {
         instance._metadata.size()
             >= instance
                 .admitted
-                .spec
                 .allocation_bytes()
                 .ok_or("metadata size")?
     );

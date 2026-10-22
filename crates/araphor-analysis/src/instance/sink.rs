@@ -212,7 +212,7 @@ impl DataSink for Publication {
                     .publishing = true;
                 Instance::authorize(
                     owner.authority.as_ref(),
-                    &owner.admitted.spec.grant,
+                    &owner.admitted.grant,
                     &owner.prepared,
                     || {
                         control.check()?;

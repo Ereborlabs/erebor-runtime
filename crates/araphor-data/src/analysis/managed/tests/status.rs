@@ -3,7 +3,7 @@ use crate::{PackageErrorCodeV1 as Code, PackageReadinessV1 as Readiness};
 
 fn status(store: &AnalysisStore, fixture: &Fixture) -> TestResult<ManagedStatus> {
     Ok(store.managed_status(
-        &fixture.instance.spec.grant.selection,
+        &fixture.instance.grant.selection,
         "counter",
         &AnalysisReadControl::default(),
     )?)
@@ -254,7 +254,7 @@ fn attempted_failure_uses_history() -> TestResult {
     assert_eq!(store.meta()?, before);
     assert!(matches!(
         store.managed_status(
-            &fixture.instance.spec.grant.selection,
+            &fixture.instance.grant.selection,
             "counter",
             &AnalysisReadControl::default()
         ),
@@ -291,7 +291,7 @@ fn attempted_failure_uses_history() -> TestResult {
         .is_err());
     assert!(matches!(
         store.managed_status(
-            &fixture.instance.spec.grant.selection,
+            &fixture.instance.grant.selection,
             "counter",
             &AnalysisReadControl::default()
         ),
@@ -346,11 +346,7 @@ fn status_read_is_scoped_metadata() -> TestResult {
     let cancelled = AnalysisReadControl::default();
     cancelled.cancel()?;
     assert!(store
-        .managed_status(
-            &fixture.instance.spec.grant.selection,
-            "counter",
-            &cancelled
-        )
+        .managed_status(&fixture.instance.grant.selection, "counter", &cancelled)
         .is_err());
     let before = store.meta()?;
     let mut writer = store.writer()?;

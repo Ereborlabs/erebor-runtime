@@ -196,7 +196,7 @@ fn transition_fences_registration() -> TestResult {
     let requests = AnalysisTableRequests::new();
     assert!(store
         .read_managed_tables(
-            &fixture.instance.spec.grant.selection,
+            &fixture.instance.grant.selection,
             &ManagedRead {
                 instance: fixture.instance.clone(),
                 rebuild: false,

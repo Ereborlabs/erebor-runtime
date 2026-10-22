@@ -16,6 +16,7 @@ use datafusion::logical_expr::{dml::InsertOp, LogicalPlan, LogicalPlanBuilder};
 use crate::Result;
 
 mod host;
+mod lifecycle;
 mod manifest;
 mod read;
 mod sink;
@@ -87,29 +88,27 @@ impl Instance {
             let spec = ManagedSpec {
                 tenant: grant.selection.tenant_id,
                 id,
-                grant,
                 definition,
                 manifest,
             };
-            let bytes = spec
-                .allocation_bytes()
-                .and_then(|bytes| bytes.checked_sub(std::mem::size_of::<ManagedSpec>()))
-                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
-                .and_then(|bytes| {
-                    calls
-                        .len()
-                        .checked_mul(std::mem::size_of::<(u64, LogicalPlan)>())
-                        .and_then(|slots| bytes.checked_add(slots))
-                })
-                .ok_or_else(|| Code::Limit.error("managed instance memory"))?;
+            let candidate = ManagedInstance {
+                spec,
+                grant,
+                generation: 0,
+                progress: 0,
+                running: false,
+                lifecycle: 0,
+            };
+            let bytes = Self::metadata_bytes(&candidate, &calls)?;
             let metadata = memory
                 .reserve_input(bytes)
                 .map_err(|source| araphor_query::Error::Sql { source })?;
-            let mut admitted = Self::authorize(check.as_ref(), &spec.grant, &prepared, || {
-                store.admit_managed(&spec, || stage.check())
+            let mut admitted = Self::authorize(check.as_ref(), &candidate.grant, &prepared, || {
+                store.admit_managed(&candidate.spec, &candidate.grant, || stage.check())
             })
             .map_err(araphor_query::Error::from)?;
-            admitted.spec = spec;
+            admitted.spec = candidate.spec;
+            admitted.grant = candidate.grant;
             Ok((admitted, prepared, calls, metadata))
         })
         .await?;
@@ -132,7 +131,7 @@ impl Instance {
         request: ManagedRequest,
         control: &AnalysisReadControl,
     ) -> Result<ManagedReceipt> {
-        let grant = &self.admitted.spec.grant;
+        let grant = &self.admitted.grant;
         let mut changes = self.authority.changes_for(grant);
         self.check()?;
         let operation = control.operation()?.within(grant.remaining()?)?;
@@ -184,7 +183,10 @@ impl Instance {
                 .store()
                 .managed_instance(spec.tenant, &spec.id, &stage)?
                 .filter(|current| {
-                    current.spec == *spec && current.generation == owner.admitted.generation
+                    current.spec == *spec
+                        && current.grant == owner.admitted.grant
+                        && current.generation == owner.admitted.generation
+                        && current.lifecycle == owner.admitted.lifecycle
                 })
                 .ok_or_else(|| Code::Conflict.error("managed instance generation"))?;
             let previous =
@@ -229,9 +231,11 @@ impl Instance {
         )
         .and_then(LogicalPlanBuilder::build)
         .map_err(|source| araphor_query::Error::Sql { source })?;
-        let session =
-            self.query
-                .session(spec.grant.selection.clone(), control, request.time_utc_ns)?;
+        let session = self.query.session(
+            self.admitted.grant.selection.clone(),
+            control,
+            request.time_utc_ns,
+        )?;
         let captured = session
             .capture_managed(
                 &definition,
@@ -256,7 +260,7 @@ impl Instance {
                     .ok_or_else(|| Code::Incomplete.error("managed captured state"))?;
                 Self::authorize(
                     owner.authority.as_ref(),
-                    &owner.admitted.spec.grant,
+                    &owner.admitted.grant,
                     &owner.prepared,
                     || {
                         owner.query.store().register_managed_attempt(
@@ -320,7 +324,7 @@ impl Instance {
     }
 
     fn check(&self) -> araphor_data::Result<()> {
-        let grant = &self.admitted.spec.grant;
+        let grant = &self.admitted.grant;
         grant.remaining()?;
         self.authority.check(grant, PackageActionV1::Run)?;
         for (bundle, digest) in self.prepared.images() {
@@ -328,6 +332,23 @@ impl Instance {
                 .admit(grant, &PackageBundleRef::retained(bundle, digest))?;
         }
         Ok(())
+    }
+
+    fn metadata_bytes(
+        instance: &ManagedInstance,
+        calls: &BTreeMap<u64, LogicalPlan>,
+    ) -> araphor_data::Result<usize> {
+        instance
+            .allocation_bytes()
+            .and_then(|bytes| bytes.checked_sub(std::mem::size_of::<ManagedInstance>()))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .and_then(|bytes| {
+                calls
+                    .len()
+                    .checked_mul(std::mem::size_of::<(u64, LogicalPlan)>())
+                    .and_then(|slots| bytes.checked_add(slots))
+            })
+            .ok_or_else(|| Code::Limit.error("managed instance memory"))
     }
 
     fn authorize<T>(

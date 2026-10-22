@@ -374,7 +374,13 @@ impl Runtime {
             return Ok(None);
         };
         self.check_store(&output.snapshot.page.extraction.meta)?;
-        self.revision = output.snapshot.page.extraction.meta.commit_revision;
+        self.revision = output
+            .snapshot
+            .page
+            .extraction
+            .meta
+            .commit_revision
+            .max(calls.published_revision());
         self.position = Some(output.position);
         self.progress
             .captured(self.revision, output.snapshot.next_change);
@@ -386,6 +392,7 @@ impl Runtime {
             output,
             calls: calls.results().context(SqlSnafu)?,
             completed: true,
+            revision: self.revision,
             evaluated: now,
             clock_changed,
             exhausted: self.exhausted,
@@ -437,6 +444,7 @@ impl Runtime {
                 _control: Arc::clone(self.run.session.control()),
             },
             completed: false,
+            revision: self.revision,
             evaluated: self.evaluated,
             clock_changed,
             exhausted: self.exhausted,

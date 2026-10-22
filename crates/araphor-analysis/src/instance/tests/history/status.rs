@@ -14,8 +14,9 @@ async fn status_inspect_keeps_failure() -> TestResult {
     let stopped = store.suspend_managed(&running, || Ok(()))?;
     let mut expired = instance.admitted().spec.clone();
     expired.id = "expired-writer".into();
-    expired.grant.expires_utc_ns = Some(1);
-    let admitted = store.admit_managed(&expired, || Ok(()))?;
+    let mut grant = instance.admitted().grant.clone();
+    grant.expires_utc_ns = Some(1);
+    let admitted = store.admit_managed(&expired, &grant, || Ok(()))?;
     let running =
         store.set_managed_running([1; 16], &expired.id, admitted.lifecycle, true, || Ok(()))?;
     store.suspend_managed(&running, || Ok(()))?;
@@ -51,7 +52,7 @@ async fn status_inspect_keeps_failure() -> TestResult {
             assert_eq!(status.instance, stopped);
             assert!(status.status_progress > 0);
         } else {
-            assert_eq!(status.instance.spec.grant.expires_utc_ns, Some(1));
+            assert_eq!(status.instance.grant.expires_utc_ns, Some(1));
             assert_eq!(status.status_progress, 0);
         }
     }

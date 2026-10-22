@@ -58,7 +58,6 @@ impl ManagedManifest {
 pub struct ManagedSpec {
     pub tenant: [u8; 16],
     pub id: String,
-    pub grant: PackageGrantV1,
     pub definition: ResolvedDefinition,
     pub manifest: ManagedManifest,
 }
@@ -67,19 +66,6 @@ impl ManagedSpec {
     pub fn allocation_bytes(&self) -> Option<usize> {
         let bytes = std::mem::size_of::<Self>()
             .checked_add(self.id.capacity())?
-            .checked_add(self.grant.principal.capacity())?
-            .checked_add(
-                self.grant
-                    .authorization_id
-                    .as_ref()
-                    .map_or(0, String::capacity),
-            )?
-            .checked_add(
-                self.grant
-                    .selection
-                    .allocation_bytes()
-                    .checked_sub(std::mem::size_of::<crate::AnalysisSelectionV1>())?,
-            )?
             .checked_add(
                 self.definition
                     .allocation_bytes()?
@@ -121,15 +107,12 @@ impl ManagedSpec {
         if self.tenant == [0; 16]
             || self.id.is_empty()
             || self.id.chars().any(char::is_control)
-            || self.grant.selection.tenant_id != self.tenant
-            || !self.grant.selection.valid()
             || self.manifest.definition != self.definition.digest()?
         {
             return Err(Code::Invalid.error("managed instance"));
         }
         self.definition.validate()?;
         self.manifest.order()?;
-        self.grant.validate()?;
         for call in self.manifest.calls.values() {
             if call.export.is_empty() || !self.definition.images.contains(&call.image) {
                 return Err(Code::Invalid.error("managed call pin"));
@@ -143,10 +126,42 @@ impl ManagedSpec {
 #[serde(deny_unknown_fields)]
 pub struct ManagedInstance {
     pub spec: ManagedSpec,
+    pub grant: PackageGrantV1,
     pub generation: u64,
     pub progress: u64,
     pub running: bool,
     pub lifecycle: u64,
+}
+
+impl ManagedInstance {
+    pub fn allocation_bytes(&self) -> Option<usize> {
+        self.spec
+            .allocation_bytes()?
+            .checked_sub(std::mem::size_of::<ManagedSpec>())?
+            .checked_add(std::mem::size_of::<Self>())?
+            .checked_add(self.grant.principal.capacity())?
+            .checked_add(
+                self.grant
+                    .authorization_id
+                    .as_ref()
+                    .map_or(0, String::capacity),
+            )?
+            .checked_add(
+                self.grant
+                    .selection
+                    .allocation_bytes()
+                    .checked_sub(std::mem::size_of::<crate::AnalysisSelectionV1>())?,
+            )
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        self.spec.validate()?;
+        self.grant.validate()?;
+        if self.grant.selection.tenant_id != self.spec.tenant {
+            return Err(Code::Invalid.error("managed instance grant"));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -263,6 +278,7 @@ impl ManagedPrior {
 pub(super) struct Capture {
     pub tenant: [u8; 16],
     pub instance: String,
+    pub grant: PackageGrantV1,
     pub generation: u64,
     pub progress: u64,
     pub completed: u64,

@@ -124,7 +124,7 @@ fn completion_fences_capture() -> TestResult {
     };
     let error = store
         .read_managed_tables(
-            &resumed.instance.spec.grant.selection,
+            &resumed.instance.grant.selection,
             &selected,
             AnalysisTableRead {
                 requests: &requests,

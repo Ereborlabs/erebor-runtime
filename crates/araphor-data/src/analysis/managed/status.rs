@@ -48,14 +48,14 @@ impl AnalysisStore {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |reader| {
             let (values, bytes, head) = reader.query_row(
-                "SELECT i.spec, i.generation, i.progress, i.running, i.lifecycle, i.failure, m.commit_revision FROM managed_instances i CROSS JOIN store_meta m WHERE i.tenant_id = ? AND i.instance_id = ?",
+                "SELECT i.spec, i.authority, i.generation, i.progress, i.running, i.lifecycle, i.failure, m.commit_revision FROM managed_instances i CROSS JOIN store_meta m WHERE i.tenant_id = ? AND i.instance_id = ?",
                 params![selection.tenant_id.as_slice(), id], |row| Ok((
-                    (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?),
-                    row.get::<_, Option<Vec<u8>>>(5)?, row.get::<_, u64>(6)?)),
+                    (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?),
+                    row.get::<_, Option<Vec<u8>>>(6)?, row.get::<_, u64>(7)?)),
             ).optional().context(AnalysisDatabaseSnafu { operation: "read managed status" })?
                 .ok_or_else(|| Code::Missing.error("managed status instance"))?;
             let instance = Self::managed_row(selection.tenant_id, id, values)?;
-            instance.spec.grant.permitted_by(selection)?;
+            instance.grant.permitted_by(selection)?;
             Self::check_managed_pending(reader, selection.tenant_id, id)?;
             let failure = Failure::decode(bytes, &instance, head)?
                 .filter(|failure| failure.progress == instance.progress);

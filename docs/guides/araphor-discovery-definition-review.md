@@ -1803,3 +1803,41 @@ and physical-environment cases remain outside this qualification. The archive
 and all 80 remaining reference files have unchanged bytes. Complete migration,
 producer lifecycle, historical replay, grant renewal and the required net
 reduction remain **Not done**.
+
+### Stopped authority renewal and fresh Graph execution
+
+Read [Instance::renew](../../crates/araphor-analysis/src/instance/lifecycle.rs),
+then [AnalysisStore::renew_managed](../../crates/araphor-data/src/analysis/managed/lifecycle.rs).
+The caller stops and joins the original execution before renewal. Data compares
+the complete expected instance, rejects running or unresolved work, and checks
+the new authority before commit. The program, generation, progress, saved state,
+and readiness do not change. A changed grant increments the lifecycle fence.
+An exact retry still checks authority and writes nothing.
+
+[ManagedInstance](../../crates/araphor-data/src/analysis/managed/model.rs) owns
+current authority. Each saved capture keeps its original grant. A later renewal
+cannot change the principal, revision, or context attributed to an earlier
+result. Restart continues saved state. Only an explicit rebuild starts fresh
+state. The [Data renewal cases](../../crates/araphor-data/src/analysis/managed/tests/renewal.rs)
+and [Instance renewal cases](../../crates/araphor-analysis/src/instance/tests/renewal.rs)
+check these rules, rollback, stale owners, current revocation, and reopen.
+
+[Session::set_context_init](../../crates/araphor-query/src/execution.rs) installs
+fresh execution state in the native DataFusion task context. Graph ports and
+the native sink share one GraphRun for that execution. They do not retain a
+consumed capture in the admitted plan. DataFusion's default plan reset clones
+the sink object, so it cannot supply this shared state. The
+[native Graph cases](../../crates/araphor-analysis/src/graph/native/tests.rs)
+check repeated changed cuts, exact retries, current denial, and retained memory.
+
+[DiscoveryOwner::process](../../crates/araphor-analysis/src/discovery/mod.rs)
+uses the same finite Query subscription as live execution and joins it before
+return. Its source-scoped profile read checks current authority before and
+after the read. The finite progress case checks unchanged metadata on a no-op,
+cumulative counts after intake, source denial, and released resources.
+
+The [checkpoint record](../../recovery/araphor-renewal-retirement-20261022.json)
+names the focused checks and the replaced reference test. The result for this
+bounded change is **Done**. Complete lifecycle replacement, saved input replay,
+automatic Graph publication, Discovery window completion, the required net
+reduction, and the final shared Rust procedure remain **Not done**.

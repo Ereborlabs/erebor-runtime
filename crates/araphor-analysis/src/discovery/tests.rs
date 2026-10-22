@@ -224,6 +224,47 @@ async fn registry(streams: &mut Updates, tenant: [u8; 16]) -> TestResult<Update>
 }
 
 #[tokio::test]
+async fn native_finite_progress() -> TestResult {
+    let fixture = Fixture::new(Limits::default())?;
+    fixture.append(1)?;
+    let owner = fixture.owner(AnalysisSelectionV1::new(
+        fixture.source.tenant_id,
+        vec![fixture.source.clone()],
+    ))?;
+    assert!(owner.profile(&fixture.source)?.is_none());
+    assert_eq!(owner.process(&fixture.source).await?, 1);
+    let first = owner.profile(&fixture.source)?.ok_or("first profile")?;
+    assert_eq!(first.snapshot.accepted_records, 1);
+    assert_eq!(
+        fixture
+            .store
+            .processor_health(&fixture.scope())?
+            .ok_or("finite processor")?
+            .consumed_cursor,
+        1
+    );
+    let before = fixture.store.meta()?;
+    assert_eq!(owner.process(&fixture.source).await?, 0);
+    assert_eq!(fixture.store.meta()?, before);
+    fixture.append(2)?;
+    assert_eq!(owner.process(&fixture.source).await?, 1);
+    let next = owner.profile(&fixture.source)?.ok_or("next profile")?;
+    assert_eq!(next.profile_id, first.profile_id);
+    assert_eq!(next.revision, first.revision + 1);
+    assert_eq!(next.snapshot.accepted_records, 2);
+    assert!(next.updated_utc_ns >= first.updated_utc_ns);
+    let mut other = fixture.source.clone();
+    other.node_id.push_str("-other");
+    let before = fixture.store.meta()?;
+    assert!(owner.profile(&other).is_err());
+    assert!(owner.process(&other).await.is_err());
+    assert_eq!(fixture.store.meta()?, before);
+    drop(owner);
+    fixture.released()?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_source_stream_lifecycle() -> TestResult {
     let fixture = Fixture::new(Limits {
         input_capacity: Some(128 * 1024 * 1024),
@@ -232,6 +273,18 @@ async fn native_source_stream_lifecycle() -> TestResult {
     })?;
     let owner = fixture.owner(AnalysisSelectionV1::tenant(fixture.source.tenant_id))?;
     let tenant = fixture.source.tenant_id;
+    assert!(owner.profile(&fixture.source)?.is_none());
+    let mut other_source = fixture.source.clone();
+    other_source.tenant_id = [99; 16];
+    assert!(matches!(
+        owner.profile(&other_source),
+        Err(crate::Error::Data {
+            source: araphor_data::Error::Package {
+                code: Code::Denied,
+                ..
+            }
+        })
+    ));
     let mut streams = owner.sources().await?;
     assert!(streams
         .iter()
@@ -293,6 +346,7 @@ async fn native_source_stream_lifecycle() -> TestResult {
         1
     );
     let profile = fixture.profile()?.ok_or("profile absent")?;
+    assert_eq!(owner.profile(&fixture.source)?, Some(profile.clone()));
     assert_eq!(profile.snapshot.accepted_records, 1);
     assert_eq!(profile.snapshot.unresolved_records, 1);
     assert!(!profile.snapshot.coverage.is_empty());

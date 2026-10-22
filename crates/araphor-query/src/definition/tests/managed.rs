@@ -21,13 +21,6 @@ impl Fixture {
             &ManagedSpec {
                 tenant: [1; 16],
                 id: "constant".into(),
-                grant: PackageGrantV1 {
-                    principal: "fixture".into(),
-                    revision: 1,
-                    selection,
-                    expires_utc_ns: None,
-                    authorization_id: Some("constant-grant".into()),
-                },
                 definition: definition.resolved().clone(),
                 manifest: ManagedManifest {
                     format: 1,
@@ -35,6 +28,13 @@ impl Fixture {
                     definition: definition.resolved().digest()?,
                     calls: BTreeMap::new(),
                 },
+            },
+            &PackageGrantV1 {
+                principal: "fixture".into(),
+                revision: 1,
+                selection,
+                expires_utc_ns: None,
+                authorization_id: Some("constant-grant".into()),
             },
             || Ok(()),
         )?)
@@ -193,7 +193,7 @@ async fn managed_capture_keeps_binding() -> TestResult {
     for changed_scope in [false, true] {
         let mut changed = instance.clone();
         if changed_scope {
-            changed.spec.grant.selection = AnalysisSelectionV1::tenant([1; 16]);
+            changed.grant.selection = AnalysisSelectionV1::tenant([1; 16]);
         } else {
             changed.spec.definition.sql.push(' ');
         }

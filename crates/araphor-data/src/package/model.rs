@@ -463,13 +463,6 @@ mod inspection_tests {
                 spec: crate::ManagedSpec {
                     tenant: [1; 16],
                     id: "counts".into(),
-                    grant: PackageGrantV1 {
-                        principal: "saved-run-principal".into(),
-                        revision: 7,
-                        selection: crate::AnalysisSelectionV1::tenant([1; 16]),
-                        expires_utc_ns: Some(99),
-                        authorization_id: Some("saved-run-session".into()),
-                    },
                     definition,
                     manifest: crate::ManagedManifest {
                         format: 1,
@@ -477,6 +470,13 @@ mod inspection_tests {
                         definition: revision.clone(),
                         calls: Default::default(),
                     },
+                },
+                grant: PackageGrantV1 {
+                    principal: "saved-run-principal".into(),
+                    revision: 7,
+                    selection: crate::AnalysisSelectionV1::tenant([1; 16]),
+                    expires_utc_ns: Some(99),
+                    authorization_id: Some("saved-run-session".into()),
                 },
                 generation: 10,
                 progress: 12,

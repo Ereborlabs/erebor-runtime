@@ -15,6 +15,17 @@ use super::*;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+impl Projection {
+    fn observe_capture(&self) -> std::sync::mpsc::Receiver<Arc<Capture>> {
+        let (send, receive) = std::sync::mpsc::channel();
+        *self
+            .observed
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(send);
+        receive
+    }
+}
+
 struct Authority {
     changes: watch::Sender<u64>,
     allowed: AtomicBool,
@@ -422,13 +433,9 @@ async fn captured_source(target: Target) -> TestResult {
     let fixture = Fixture::target(target)?;
     let publication = fixture.prepare("").await?;
     let projection = Arc::clone(&publication.projection);
+    let observed = projection.observe_capture();
     let first = publication.refresh("graph:native-first".into()).await?;
-    let captured = projection
-        .captured
-        .get()
-        .ok_or("graph capture")?
-        .as_ref()
-        .map_err(|error| error.to_string())?;
+    let captured = observed.try_recv()?;
     assert!(captured
         .graph
         .lock()
@@ -458,6 +465,7 @@ async fn captured_source(target: Target) -> TestResult {
         .ok_or("qualified Graph source range")?;
     assert_eq!(range.source, serde_json::to_vec(&fixture.source)?);
     assert_eq!((range.start_utc_ns, range.end_utc_ns), fixture.times);
+    drop(captured);
     drop(projection);
     assert_eq!(first.0, "graph:native-first");
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
@@ -488,13 +496,9 @@ async fn captured_source(target: Target) -> TestResult {
     let before = fixture.query.store().meta()?;
     let next = fixture.prepare("").await?;
     let projection = Arc::clone(&next.projection);
+    let observed = projection.observe_capture();
     let second = next.refresh("graph:native-unchanged".into()).await?;
-    let captured = projection
-        .captured
-        .get()
-        .ok_or("second Graph capture")?
-        .as_ref()
-        .map_err(|error| error.to_string())?;
+    let captured = observed.try_recv()?;
     assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
     let current = captured
         .inputs
@@ -508,6 +512,7 @@ async fn captured_source(target: Target) -> TestResult {
         })
         .collect::<Vec<_>>();
     assert_eq!(current, metadata);
+    drop(captured);
     drop(projection);
     assert_eq!(second, first);
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 2);
@@ -525,6 +530,104 @@ async fn captured_source(target: Target) -> TestResult {
         .iter()
         .any(|pin| pin.key.owner_id == "native-package-v1"));
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn prepared_calls_capture_fresh() -> TestResult {
+    let fixture = Fixture::target(Target::Wasm)?;
+    let prepared = fixture.prepare("").await?;
+    let projection = Arc::clone(&prepared.projection);
+    let observed = projection.observe_capture();
+    let first = prepared
+        .clone()
+        .refresh("graph:prepared-first".into())
+        .await?;
+    let original = observed.try_recv()?;
+    assert!(original.source.upgrade().is_none());
+    assert!(original
+        .graph
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_none());
+    let before = fixture.query.store().meta()?;
+    let repeated = prepared
+        .clone()
+        .refresh("graph:prepared-repeat".into())
+        .await?;
+    let next = observed.try_recv()?;
+    assert!(!Arc::ptr_eq(&original, &next));
+    assert!(next.source.upgrade().is_none());
+    assert_eq!(repeated, first);
+    assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(projection.projections.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(original.inputs.len(), next.inputs.len());
+    for (original, next) in original.inputs.iter().zip(&next.inputs) {
+        assert_eq!(original.revision, next.revision);
+        assert_eq!(original.coverage, next.coverage);
+    }
+    fixture.coverage(2, Some("HEALTHY"))?;
+    let changed = prepared
+        .clone()
+        .refresh("graph:prepared-changed".into())
+        .await?;
+    let updated = observed.try_recv()?;
+    assert!(!Arc::ptr_eq(&original, &updated));
+    assert!(!Arc::ptr_eq(&next, &updated));
+    assert_eq!(updated.coverage_revision, 2);
+    assert!(updated.source.upgrade().is_none());
+    assert_eq!(projection.projections.load(Ordering::SeqCst), 3);
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 3);
+    assert!(fixture
+        .query
+        .store()
+        .graph_result(fixture.source.tenant_id, &changed.0)?
+        .is_some());
+    fixture.authority.set(false);
+    let before = fixture.query.store().meta()?;
+    let error = prepared
+        .clone()
+        .refresh("graph:prepared-denied".into())
+        .await
+        .err()
+        .ok_or("revoked prepared Graph published")?;
+    assert_eq!(
+        erebor_runtime_error::ErrorExt::status_code(&error),
+        erebor_runtime_error::StatusCode::PermissionDenied
+    );
+    assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(projection.projections.load(Ordering::SeqCst), 3);
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 3);
+    assert!(fixture
+        .query
+        .store()
+        .graph_result(fixture.source.tenant_id, "graph:prepared-denied")?
+        .is_none());
+    drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_run_requires_projection() -> TestResult {
+    let fixture = Fixture::target(Target::Sql)?;
+    let first = fixture.prepare("").await?;
+    let second = fixture.prepare("").await?;
+    let context = datafusion::execution::TaskContext::default();
+    assert!(GraphRun::from_context(&context, &first.projection).is_err());
+    let config = context
+        .session_config()
+        .clone()
+        .with_extension(Arc::new(GraphRun {
+            projection: Arc::downgrade(&first.projection),
+            captured: OnceCell::new(),
+        }));
+    let context = context.with_session_config(config);
+    assert!(GraphRun::from_context(&context, &first.projection).is_ok());
+    let error = GraphRun::from_context(&context, &second.projection)
+        .err()
+        .ok_or("foreign Graph projection was admitted")?;
+    assert!(error.to_string().contains("graph execution projection"));
     Ok(())
 }
 
@@ -797,18 +900,15 @@ async fn keeps_frozen_coverage() -> TestResult {
     fixture.coverage(1, Some("GAPPED"))?;
     let owner = fixture.prepare("").await?;
     let projection = Arc::clone(&owner.projection);
+    let observed = projection.observe_capture();
     let (first, _) = owner.refresh("graph:coverage-one".into()).await?;
-    let capture = projection
-        .captured
-        .get()
-        .ok_or("coverage capture")?
-        .as_ref()
-        .map_err(|error| error.to_string())?;
+    let capture = observed.try_recv()?;
     assert!(capture
         .inputs
         .iter()
         .all(|input| input.coverage.state == sdk::CoverageState::Gapped
             && input.coverage.limits == ["SOURCE_COVERAGE_INSUFFICIENT"]));
+    drop(capture);
     drop(projection);
     let original = fixture
         .query

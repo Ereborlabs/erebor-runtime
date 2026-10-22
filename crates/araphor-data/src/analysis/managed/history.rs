@@ -19,7 +19,7 @@ impl AnalysisStore {
         control.run(&mut reader, |reader| {
             let instance = Self::managed_instance_from(reader, selection.tenant_id, id)?
                 .ok_or_else(|| Code::Missing.error("managed history instance"))?;
-            instance.spec.grant.permitted_by(selection)?;
+            instance.grant.permitted_by(selection)?;
             let head = Self::read_meta_from(reader, &self.root.join("analysis.duckdb"))?.commit_revision;
             let mut statement = reader.prepare(
                 "SELECT attempt_id, contract, completed FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? ORDER BY completed, attempt_id"

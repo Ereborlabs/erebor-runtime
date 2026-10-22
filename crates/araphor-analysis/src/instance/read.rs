@@ -167,7 +167,7 @@ impl Instance {
             let stored = store
                 .managed_instance(grant.selection.tenant_id, &instance, &read)?
                 .ok_or_else(|| Code::Missing.error("managed instance"))?;
-            stored.spec.grant.permitted_by(&grant.selection)?;
+            stored.grant.permitted_by(&grant.selection)?;
             Ok(output(&store, &stored, &id, now, &read)?)
         })
         .await?)

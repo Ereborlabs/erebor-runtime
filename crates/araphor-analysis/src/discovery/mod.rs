@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use araphor_data::{
-    EvidenceIntakeIdentityV1, PackageErrorCodeV1 as Code, ProcessorScopeV1, DISCOVERY_PROCESSOR,
-    DISCOVERY_SCHEMA_VERSION,
+    DiscoveryProfileV1, EvidenceIntakeIdentityV1, PackageErrorCodeV1 as Code,
+    ProcessorScopeV1, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
 };
 use araphor_query::follow::Update;
 use futures_util::stream::SelectAll;
@@ -123,6 +123,89 @@ impl DiscoveryOwner {
             .ok_or_else(|| Code::Denied.error("discovery package tenant").into())
     }
 
+    pub fn profile(
+        &self,
+        source: &EvidenceIntakeIdentityV1,
+    ) -> Result<Option<DiscoveryProfileV1>> {
+        let package = self.package(source.tenant_id)?;
+        package.selection(Some(source))?;
+        package.check()?;
+        let scope = ProcessorScopeV1 {
+            processor_id: DISCOVERY_PROCESSOR.into(),
+            method_version: u64::from(DISCOVERY_SCHEMA_VERSION),
+            identity: source.clone(),
+        };
+        let profile = package
+            .query
+            .store()
+            .processor_result(&scope)?
+            .map(|result| DiscoveryProfileV1::try_from(result.body.as_slice()))
+            .transpose()?;
+        if profile.as_ref().is_some_and(|profile| profile.scope != scope) {
+            return Err(Code::Invalid.error("discovery profile source").into());
+        }
+        package.check()?;
+        Ok(profile)
+    }
+
+    pub async fn process(&self, source: &EvidenceIntakeIdentityV1) -> Result<usize> {
+        let Some(mut stream) = self.profile_stream(source, false).await? else {
+            return Ok(0);
+        };
+        let result = async {
+            let update = stream
+                .next()
+                .await
+                .ok_or_else(|| Code::Incomplete.error("finite discovery subscription"))??;
+            Self::publish(Arc::clone(self.package(source.tenant_id)?), update).await
+        }
+        .await;
+        let joined = stream.cancel_and_join().await;
+        let count = result?;
+        joined?;
+        Ok(count)
+    }
+
+    async fn profile_stream(
+        &self,
+        source: &EvidenceIntakeIdentityV1,
+        follow: bool,
+    ) -> Result<Option<araphor_query::follow::Subscription>> {
+        let package = self.package(source.tenant_id)?;
+        let stream = package.subscribe(Some(source), follow).await?;
+        let registration = Arc::clone(package);
+        let scope = ProcessorScopeV1 {
+            processor_id: DISCOVERY_PROCESSOR.into(),
+            method_version: u64::from(DISCOVERY_SCHEMA_VERSION),
+            identity: source.clone(),
+        };
+        match tokio::task::spawn_blocking(move || {
+            registration.commit(|| {
+                registration
+                    .query
+                    .store()
+                    .ensure_optional_processor_guarded(&scope, || {
+                        registration.grant.remaining().map(|_| ())
+                    })
+            })
+        })
+        .await
+        .context(crate::error::TaskSnafu)?
+        {
+            Ok(_) => Ok(Some(stream)),
+            Err(crate::Error::Data {
+                source: araphor_data::Error::AnalysisConflict { .. },
+            }) => {
+                stream.cancel_and_join().await?;
+                Ok(None)
+            }
+            Err(error) => {
+                stream.cancel_and_join().await?;
+                Err(error)
+            }
+        }
+    }
+
     async fn derive(&self, streams: &mut Updates, tenant: [u8; 16], update: &Update) -> Result<()> {
         if update.limited || !update.exhausted {
             return Err(Code::Incomplete
@@ -154,40 +237,15 @@ impl DiscoveryOwner {
             .iter()
             .map(|entry| entry.key.clone())
             .collect::<HashSet<_>>();
-        let package = self.package(tenant)?;
         for source in sources {
             let pipeline = Pipeline::Profile(source.clone());
             if !active.contains(&pipeline) {
-                let stream = package.subscribe(Some(&source), true).await?;
-                let registration = Arc::clone(package);
-                let scope = ProcessorScopeV1 {
-                    processor_id: DISCOVERY_PROCESSOR.into(),
-                    method_version: u64::from(DISCOVERY_SCHEMA_VERSION),
-                    identity: source.clone(),
-                };
-                match tokio::task::spawn_blocking(move || {
-                    registration.commit(|| {
-                        registration
-                            .query
-                            .store()
-                            .ensure_optional_processor_guarded(&scope, || {
-                                registration.grant.remaining().map(|_| ())
-                            })
-                    })
-                })
-                .await
-                .context(crate::error::TaskSnafu)?
-                {
-                    Ok(_) => {}
-                    Err(crate::Error::Data {
-                        source: araphor_data::Error::AnalysisConflict { .. },
-                    }) => continue,
-                    Err(error) => return Err(error),
+                if let Some(stream) = self.profile_stream(&source, true).await? {
+                    streams.push(PipelineStream {
+                        key: pipeline,
+                        stream,
+                    });
                 }
-                streams.push(PipelineStream {
-                    key: pipeline,
-                    stream,
-                });
             }
         }
         Ok(())
