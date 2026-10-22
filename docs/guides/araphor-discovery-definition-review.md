@@ -1718,3 +1718,88 @@ executes a Wasm root and SQL auxiliary from one immutable image. It checks the
 complete descriptor, retained Arrow buffer bytes, pressure and exact replay.
 The [retirement record](../../recovery/araphor-package-test-leaf-retirement-20261021.json)
 records the two complete replaced leaves and the mixed metadata file that stays.
+
+
+### Native Graph storage contract proof
+
+The [storage tests](../../crates/araphor-analysis/src/graph/native/tests/storage.rs)
+use actual Wasm calls and the native Graph sink. Complete image contexts remain
+readable when Graph rows are corrupt. Invalid context commits preserve all
+metadata and leave no result. Exact retry retains the original receipt and body.
+The [retirement record](../../recovery/araphor-native-graph-storage-test-retirement-20261021.json)
+records the replaced leaf and the distinct remaining production work.
+
+
+### Wasm stop and revocation proof
+
+Read the [joined stop and revocation tests](../../crates/araphor-analysis/src/instance/subscription/tests.rs),
+the [entered-guest Host stop test](../../crates/araphor-analysis/src/instance/host/tests.rs),
+and the [warmed Runtime cancellation test](../../crates/araphor-package-runtime/src/wasm/tests/runtime.rs).
+The native evaluation permit remains held until the actual worker exits.
+Cancellation remains distinct from denial. The [Data terminal test](../../crates/araphor-data/src/analysis/managed/tests/terminal.rs)
+compares complete saved checkpoints and selected output through failure and
+reopen. The [retirement record](../../recovery/araphor-wasm-interruption-test-retirement-20261021.json)
+names the nine passing cases and the shared reference files that stay.
+
+### Managed Wasm slot and exchange lifetime
+
+[PackageExec::guest](../../crates/araphor-query/src/definition/physical/guest.rs)
+receives a managed package call
+  -> [Prepared::acquire_evaluation](../../crates/araphor-package-runtime/src/lib.rs) waits for the configured Wasm slot through the call control
+  -> [EvaluationPermit::retain](../../crates/araphor-package-runtime/src/wasm.rs) creates a lifetime lease without another execution permit
+  -> [Runtime::evaluate_reserved](../../crates/araphor-package-runtime/src/lib.rs) consumes the unique permit and keeps a separate lease until the worker releases its exchange memory
+  -> [PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) keeps the Query lease until Arrow output is retained and the exchange reservation is resized
+
+[Runtime cancellation](../../crates/araphor-package-runtime/src/lib.rs) receives a stop or deadline event
+  -> the Runtime joins its blocking worker before it returns
+  -> the worker releases exchange memory before its slot lease
+  -> Query releases local output before its slot lease on failure or drop
+
+EvaluationPermit has no Clone implementation. EvaluationLease has private
+fields and cannot authorize execution. The Runtime and Query leases prevent a
+waiting call from taking the slot while the previous exchange still uses its
+full output reservation. Unconfigured quotas still create no slot semaphore.
+The native and unmanaged admission paths retain their existing behavior.
+
+The [admission regression](../../crates/araphor-package-runtime/src/wasm/tests/runtime/admission.rs)
+observes the sole slot inside the worker lease destructor. The expected count
+is zero during destruction and one after joined completion. The new assertion
+fails before the fix. The [managed capacity cases](../../crates/araphor-analysis/src/instance/subscription/tests/capacity.rs)
+retain their 8 MiB output pool, two-step progress check, healthy SQL work,
+cancelled waiter and complete release assertions. These cases and the final
+shared Rust procedure pass. Read the [failure and source record](../../recovery/araphor-wasm-exchange-lifetime-20261021.json).
+
+### Built-in image installation proof
+
+The [traversal fixture](../../crates/araphor-analysis/src/graph/tests/traversal/fixtures.rs)
+constructs the four original images from the public built-in descriptors and
+component bytes. Existing PackageArtifactV1 and PackageBundleV1 types retain
+the complete descriptor, exports, executable bytes and saved-state declaration.
+The fixture checks the retained image, digest, original retry receipt and
+unchanged Data metadata. Installation creates no activation or running instance.
+The [recovery case](../../crates/araphor-analysis/src/graph/tests/traversal/recovery.rs)
+also checks all four revisions after reopen and backup restore.
+
+The [Wasm Graph case](../../crates/araphor-analysis/src/graph/tests/execution.rs)
+executes Process, Credentials and Kubernetes components through native Query
+plans. The [Discovery corpus cases](../../crates/araphor-analysis/src/discovery/output/tests/baseline.rs)
+execute the original atoms, merge, groups and compare exports. The
+[Data image cases](../../crates/araphor-data/src/analysis/packages/tests/image.rs)
+check complete closure, rollback, authority, exact revisions and tenant isolation.
+The [public install case](../../crates/mithril-control/src/client_grpc/tests/packages.rs)
+checks authenticated image installation without execution.
+
+These nine cases pass before `package/required.rs` is removed. The generic OCI
+owners replace the old fixed scope and implicit activation facade. No production
+catalogue or package registry is added. The reference `required/testing.rs`
+stays with its remaining callers. The final shared Rust procedure passes on
+the same source after reference removal. Read the [declaration record](../../recovery/araphor-builtin-image-retirement-20261021.json).
+
+The [final verification record](../../recovery/araphor-analysis-retirement-final-20261021.json)
+identifies base `cd843f23`, exact working source hashes, commands and results.
+All 95 workspace test targets pass after the last covered edit. The run has
+2,779 passing cases and 564 ignored cases. Ignored native artifact, release-only
+and physical-environment cases remain outside this qualification. The archive
+and all 80 remaining reference files have unchanged bytes. Complete migration,
+producer lifecycle, historical replay, grant renewal and the required net
+reduction remain **Not done**.

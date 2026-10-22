@@ -1,0 +1,216 @@
+{
+  "status": "Done for the named finite Graph storage test leaf and final shared Rust procedure. Complete migration remains Not done.",
+  "recorded_at": "2026-10-21T13:07:10.626664+00:00",
+  "qualified_source_base": "ced981a242aa6771d0b70a012ce3873ffdb338a5",
+  "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+  "retired_file": {
+    "path": "crates/araphor-analysis_back/src/graph/tests/storage_contract.rs",
+    "sha256": "faa4b68db29a633815065991e5ed842ee23ded986ebe4b09af443df5158c2660",
+    "baseline_equal": true,
+    "archive_equal": true,
+    "production_code": 0
+  },
+  "qualified_owner_sha256": {
+    "crates/araphor-analysis/src/graph/native/tests.rs": "255ffda62010d48de447a7027fca2070de6bf50d2f5a9fdf96f3aedbc9d31529",
+    "crates/araphor-analysis/src/graph/native/tests/storage.rs": "2bdc7ad066bf4f4fe46cbb3394f9bbc7c6a0edee82602cb80ccc55eeac884d10",
+    "crates/araphor-analysis/src/graph/native.rs": "438578e7ac1b6bb5020cfd7c4b7b42145aa52352bef245b0a27f5c44d6f2bdec",
+    "crates/araphor-analysis/src/graph/native/capture.rs": "4f6cb9c029526633225d90135ed778e0279efbd17c0974677d122425936dd415",
+    "crates/araphor-analysis/src/graph/native/sink.rs": "39a5ccaa49f776db4399efcf7bda7e50f9208c3ec402cd770375dc2a3d71e638",
+    "crates/araphor-package/src/bundle.rs": "ec0b7f80ce61fa8c0be455f20c8db1d88080e019ff69147e63cb0d4efa653b2d",
+    "crates/araphor-data/src/analysis/graph.rs": "a73f56e991265987e48eb21b4947fdf63f6ac6ebc8950da43d1d0627fd8e12dd"
+  },
+  "qualification": {
+    "migration-storage-leaf-clippy195": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-analysis-builtins",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "-p",
+        "araphor-package",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "elapsed_seconds": 15.738,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_after": "ced981a242aa6771d0b70a012ce3873ffdb338a5",
+      "log_sha256": "f76371d882d38e14eb641525dab1356e67c7a82b09b0a0d1e2f676e9e9a3eec0",
+      "record_sha256": "56ae728b89b5c5a6817a1036ac968b2e62f1fcd8c08aab0660094e033bc3873a",
+      "passing_tests": []
+    },
+    "migration-storage-leaf-build195": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-analysis-builtins",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "-p",
+        "erebor-runtime-client",
+        "-p",
+        "araphor-package",
+        "--all-features",
+        "--lib",
+        "--bin",
+        "araphor",
+        "--no-run"
+      ],
+      "elapsed_seconds": 31.714,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_after": "ced981a242aa6771d0b70a012ce3873ffdb338a5",
+      "log_sha256": "469d30e5f96b9def80c3dec1a5b382aa9971dd535229eb6a641103d8c294bc22",
+      "record_sha256": "7d0c8cab68792da092f2b112565af92d745c421e78055f2995877586235bebb6",
+      "passing_tests": []
+    },
+    "migration-storage-leaf-tests195": {
+      "command": [
+        "env",
+        "RUST_TEST_THREADS=2",
+        "target/debug/deps/araphor_analysis-dceadf49d5b8be6d",
+        "graph::native::tests::storage::",
+        "--nocapture"
+      ],
+      "elapsed_seconds": 30.862,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_after": "ced981a242aa6771d0b70a012ce3873ffdb338a5",
+      "log_sha256": "9b8aa4d50f66c75c5b0a8b9f8ae4ba335b3971be1ceaf172568823cc7ec4ebea",
+      "record_sha256": "cdd6e5716167d150e10701b97b266341c8fbc49df777085e36fb594442b6842f",
+      "passing_tests": [
+        "graph::native::tests::storage::graph_refs_use_header",
+        "graph::native::tests::storage::graph_package_commit_refs"
+      ]
+    },
+    "migration-storage-leaf-fmt196": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "elapsed_seconds": 4.364,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "head_after": "ced981a242aa6771d0b70a012ce3873ffdb338a5",
+      "record_sha256": "cd1fa32f90bdc9c7d468fa5367250671c2e1943f985016e50bf69f4cf4252382",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "assertion_custody": {
+    "old_macros": 15,
+    "current_macros": 30,
+    "assertion_map_sha256": "e011ad8fbab6c70b47b45e3994081fce7515c27c1076e397a2f10c3c5a79149b",
+    "coverage": "Every old rule remains. The native explicit three-image contexts and exact Graph-fact context union replace the old singleton activation context. Complete equality remains required."
+  },
+  "replacement": {
+    "graph_refs_use_header": "Actual Wasm PackageCalls execute through native GraphPublication. Corrupt Graph subject rows prevent snapshot decoding but leave exact source and all three complete image/export/output/digest contexts readable. Zero/foreign tenant, empty ID and absent result checks preserve exact disclosure behavior. Metadata stays unchanged.",
+    "graph_package_commit_refs": "Wrong sorted native package key and malformed exact saved context each reject an advancing guarded Data commit, preserve complete metadata and leave the result absent. Restoring the context permits one real commit, exact no-change receipt retry, complete snapshot equality, full provenance union, exact native pins and current processor body/revision equality."
+  },
+  "archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+  "archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+  "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5",
+  "production_code_net": 0,
+  "production_totals": {
+    "from_recovery_baseline": 10346,
+    "from_original_baseline": 16340,
+    "required_net_reduction_met": false
+  },
+  "remaining_gaps": [
+    "Automatic Graph advancement, paging, adaptive splitting, complete migration and required net reduction remain Not done.",
+    "The private package supervisor stays. Native physical memory failure cannot be retried by repeating entered work; known failure before an attempt lacks durable status; retained-image admission mutation still needs an owner decision and exact proof."
+  ],
+  "custody": {
+    "original_files": 208,
+    "retired_files": 126,
+    "remaining_files": 82,
+    "all_remaining_baseline_and_archive_equal": true,
+    "remaining_manifest_sha256": "49e369e8ebad56fb783bbda531f9b3b6efc7364b5fed6d41d7316e445d0bdf8a"
+  },
+  "production_count": {
+    "record_sha256": "fe6cc4c2dd68d5ba53efe2eb1453f135a3d832981615e48a933c1428b3d398b5",
+    "counter_wrapper_sha256": "9d54dae1bb801cb8bf9f6c91040511db76befe93590329a1e6da9cbb5581e68f",
+    "counter_binary_sha256": "ce08a285665db81fd003ae2dfd22f176b9d0647028cd0a7b26aa0e45dc2f8a9f",
+    "selected_worktree_sha256": "7e15997c5e8c8edceeb69ac843ff786233e61e96c0c2ddffe106f69ba3119af6",
+    "comparisons": [
+      {
+        "base": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+        "production_code_added": 20131,
+        "production_code_deleted": 9785,
+        "production_code_net": 10346
+      },
+      {
+        "base": "7b7b407adf347d389984553a4d212bfce37b75b5",
+        "production_code_added": 46672,
+        "production_code_deleted": 30332,
+        "production_code_net": 16340
+      }
+    ]
+  },
+  "earlier_status": "Done for the named finite Graph storage test leaf. Complete migration and final shared Rust procedure remain Not done.",
+  "verification_limit": "The final shared Rust procedure passes all enabled workspace targets. Ignored native artifact, release-only and physical-environment cases are not qualified. Complete migration and the required production reduction remain Not done.",
+  "final_qualification": {
+    "command": [
+      "bash",
+      ".github/scripts/verify-rust-ci.sh"
+    ],
+    "cwd": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime",
+    "started_at": "2026-10-22T01:45:14.594927+00:00",
+    "head_before": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+    "environment": {
+      "CARGO_BUILD_JOBS": "2",
+      "CARGO_NET_OFFLINE": "true",
+      "RUST_TEST_THREADS": "4",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_PROFILE_DEV_DEBUG": "1",
+      "CARGO_PROFILE_TEST_DEBUG": "1"
+    },
+    "wrapper_sha256": "1ebbf8c8dcc8b219d6fad99eb4cdc632e4c042be98e25da5c1cfa21ed5eaccd0",
+    "finished_at": "2026-10-22T02:12:35.186570+00:00",
+    "head_after": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+    "elapsed_seconds": 1640.673,
+    "exit_code": 0,
+    "source_unchanged": true,
+    "log_sha256": "33aabd136039fc2af9d3d685639ab0b64a1eadc1f43d7371d7080404de67ba7e",
+    "record_sha256": "ca5946b8203d2f2be98ed29d938c83f85aba87a590405929c2289be4b59ce916",
+    "source_manifest_sha256": "bbed2773e007d7d4ec5b7761d8d0e38f92262e120970be08768ae19a86a6e77b",
+    "script_sha256": "bcab1478aa03262b211d0d189dcca6f37da2107d7110e75cfdb56e6d771580de",
+    "totals": {
+      "passed": 2779,
+      "failed": 0,
+      "ignored": 564
+    }
+  }
+}

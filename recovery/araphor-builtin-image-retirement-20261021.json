@@ -1,0 +1,372 @@
+{
+  "schema_version": 1,
+  "status": "Done for the whole required.rs reference leaf and final shared Rust procedure. Complete migration remains Not done.",
+  "scope": "Retire only package/required.rs. Keep required/testing.rs and every other Back file unchanged.",
+  "reference_baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+  "draft_head": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+  "retired_files": [
+    {
+      "path": "crates/araphor-analysis_back/src/package/required.rs",
+      "sha256": "2467bf9491e1cc79fd2d11d4bc8c3330b6309ee0ef00728307c7a6de2fa4b9fe",
+      "physical_lines": 95,
+      "nonblank_lines": 88,
+      "test_only_module_declaration_lines": 2,
+      "production_nonblank_lines": 86,
+      "count_method": "The file has no comments. Exclude seven blank lines and the two test/test-fixtures module declaration lines."
+    }
+  ],
+  "old_to_current": [
+    {
+      "old_symbol": "AnalysisPackageOwner::required_bundles",
+      "required_duty": "Construct four single-artifact Wasm images with the exact builtin descriptors and all declared exports.",
+      "current_symbols": [
+        "araphor_analysis_builtins::discovery::Discovery::package",
+        "araphor_analysis_builtins::graph::Detector::{Process,Credentials,Kubernetes}::descriptor",
+        "araphor_analysis_builtins::components::{DISCOVERY,PROCESS,CREDENTIALS,KUBERNETES}",
+        "araphor_package::{PackageArtifactV1,PackageBundleV1}"
+      ],
+      "replacement": "The existing TraversalFixture::new assembles these exact four descriptor/component pairs through public OCI types. Current Query tests execute all four component families. No production registry or catalog is added."
+    },
+    {
+      "old_symbol": "AnalysisPackageOwner::ensure_required",
+      "old_duty": "Install absent builtin activations and return an InstalledAnalysis facade.",
+      "current_symbols": [
+        "araphor_data::AnalysisStore::install_package_image",
+        "mithril_control::client_grpc::packages",
+        "araphor_analysis::Instance::{admit,run}",
+        "araphor_analysis::InstanceHost"
+      ],
+      "approved_replacement": "Image installation stays inert. Explicit managed instance admission and start own execution. Do not recreate implicit activation, a fixed analysis scope, an operation semaphore, a lifecycle mutex or an InstalledAnalysis facade."
+    },
+    {
+      "old_symbol": "AnalysisPackageOwner::DOMAIN_SCOPE",
+      "old_duty": "Supply a fixed activation namespace.",
+      "approved_replacement": "Images are retained by tenant and exact image revision. Managed instances have explicit identities. The old scope does not become a new image or query namespace."
+    }
+  ],
+  "builtin_pairs": [
+    {
+      "descriptor": "Discovery::package()",
+      "component": "components::DISCOVERY",
+      "exports": "All declared descriptor exports."
+    },
+    {
+      "descriptor": "Detector::Process.descriptor()",
+      "component": "components::PROCESS",
+      "exports": "All declared descriptor exports."
+    },
+    {
+      "descriptor": "Detector::Credentials.descriptor()",
+      "component": "components::CREDENTIALS",
+      "exports": "All declared descriptor exports."
+    },
+    {
+      "descriptor": "Detector::Kubernetes.descriptor()",
+      "component": "components::KUBERNETES",
+      "exports": "All declared descriptor exports."
+    }
+  ],
+  "patch": {
+    "path": "/tmp/araphor-retirement-final-20261021/builtin-image-proof.patch",
+    "sha256": "7b456083a05a15bc8fb5676be417ebc47e9a13fec18815aec69013d3707cf1fa",
+    "target": "crates/araphor-analysis/src/graph/tests/traversal/fixtures.rs",
+    "base_sha256": "40609fd6ecc3e29cc5374dbd9351fd87cec66e55f25b69e5fbca339f08947480",
+    "proposed_sha256": "dd5533fa830ec9177c8e0e933678b7e7bfa9a143cd6fda275a9f3c503f904c5a",
+    "applied": true,
+    "production_added": 0,
+    "test_physical_added": 34,
+    "test_physical_deleted": 9,
+    "checks": [
+      "Full artifact vector equality includes complete descriptors, executable bytes, exports, fixtures and saved-state declarations. Use assert! equality to avoid binary dumps.",
+      "Require exact root, schema version and image digest.",
+      "Require the original installation receipt and unchanged complete metadata and revision on reinstall.",
+      "Require no package activation and no running managed instance after each installation."
+    ],
+    "actual_sha256": "dd5533fa830ec9177c8e0e933678b7e7bfa9a143cd6fda275a9f3c503f904c5a"
+  },
+  "qualification": {
+    "named_case_count": 9,
+    "tests": [
+      {
+        "package": "araphor-analysis",
+        "name": "graph::tests::traversal::recovery::traversal_reopen_and_restore",
+        "source": "crates/araphor-analysis/src/graph/tests/traversal/recovery.rs",
+        "proof": "The existing fixture installs the four exact builtin images. The proposed assertions check their complete retained contents, inert installation and idempotent retry. The existing case checks all four saved revisions after reopen and backup restore.",
+        "status": "Pass. The exact named case ran on the replacement source."
+      },
+      {
+        "package": "araphor-analysis",
+        "name": "graph::tests::execution::wasm_graph_adapter",
+        "source": "crates/araphor-analysis/src/graph/tests/execution.rs",
+        "proof": "The original Process, Credentials and Kubernetes Wasm components execute through native Query package calls. Complete outputs match each detector oracle.",
+        "status": "Pass. The exact named case ran on the replacement source."
+      },
+      {
+        "package": "araphor-analysis",
+        "name": "discovery::output::tests::baseline::recorded_matches_corpus",
+        "source": "crates/araphor-analysis/src/discovery/output/tests/baseline.rs",
+        "proof": "The original Discovery atoms export executes through Query. Recorded output matches the saved corpus, including absent context.",
+        "status": "Pass. The exact named case ran on the replacement source."
+      },
+      {
+        "package": "araphor-analysis",
+        "name": "discovery::output::tests::baseline::merge_matches_corpus",
+        "source": "crates/araphor-analysis/src/discovery/output/tests/baseline.rs",
+        "proof": "The original Discovery merge and groups exports execute through Query and match the saved corpus.",
+        "status": "Pass. The exact named case ran on the replacement source."
+      },
+      {
+        "package": "araphor-analysis",
+        "name": "discovery::output::tests::baseline::comparison_matches_corpus",
+        "source": "crates/araphor-analysis/src/discovery/output/tests/baseline.rs",
+        "proof": "The original Discovery compare and groups exports execute through Query and match saved counts, outcomes and identities.",
+        "status": "Pass. The exact named case ran on the replacement source."
+      },
+      {
+        "package": "araphor-data",
+        "name": "analysis::packages::tests::image::package_image_retains_closure",
+        "source": "crates/araphor-data/src/analysis/packages/tests/image.rs",
+        "proof": "Image installation retains exact closure and digest, creates no activation or result, returns the original receipt on retry, survives reopen and backup restore, and retains referenced revisions during collection.",
+        "status": "Pass. The exact named case ran on the replacement source."
+      },
+      {
+        "package": "araphor-data",
+        "name": "analysis::packages::tests::image::package_image_install_is_atomic",
+        "source": "crates/araphor-data/src/analysis/packages/tests/image.rs",
+        "proof": "A denied final callback rolls back installation. A denied retry remains denied. Changed bytes at the same revision conflict. Cancelled reads retain their typed error.",
+        "status": "Pass. The exact named case ran on the replacement source."
+      },
+      {
+        "package": "araphor-data",
+        "name": "analysis::packages::tests::image::package_image_versions_and_tenants",
+        "source": "crates/araphor-data/src/analysis/packages/tests/image.rs",
+        "proof": "Older exact image revisions remain available after a newer revision. Tenant retention is separate. Reinstall does not move latest image selection.",
+        "status": "Pass. The exact named case ran on the replacement source."
+      },
+      {
+        "package": "mithril-control",
+        "name": "client_grpc::tests::packages::image_rpc_install_is_not_execution",
+        "source": "crates/mithril-control/src/client_grpc/tests/packages.rs",
+        "proof": "The public operation checks manager authority, authentication, trust and whole-tenant selection. Installation and inspection create no activation. Retry does not advance the store revision.",
+        "status": "Pass. The exact named case ran on the replacement source."
+      }
+    ],
+    "draft_checks": {
+      "rustfmt_via_stdin": "Pass. No source file changed.",
+      "git_apply_check": "Pass. The patch was not applied.",
+      "old_file_matches_git_baseline": true,
+      "old_file_matches_archive": true
+    },
+    "build_clippy_and_final_ci": "Pass. The final shared Rust procedure covers the post-retirement source with no covered edits during the command.",
+    "focused_runs": {
+      "focused206-araphor_analysis": {
+        "command": [
+          "target/debug/deps/araphor_analysis-d255de3cbcd16f15",
+          "--exact",
+          "--nocapture",
+          "--test-threads=4",
+          "graph::tests::traversal::recovery::traversal_reopen_and_restore",
+          "graph::tests::execution::wasm_graph_adapter",
+          "discovery::output::tests::baseline::recorded_matches_corpus",
+          "discovery::output::tests::baseline::merge_matches_corpus",
+          "discovery::output::tests::baseline::comparison_matches_corpus",
+          "instance::subscription::tests::capacity::slot_wait_keeps_capture_and_progresses",
+          "instance::subscription::tests::capacity::slot_wait_cancellation_joins"
+        ],
+        "started_at": "2026-10-22T01:42:39.878001+00:00",
+        "head_before": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+        "environment": {
+          "RUST_TEST_THREADS": "4",
+          "RUST_BACKTRACE": "1"
+        },
+        "wrapper_sha256": "96827e477cd26c82842ed8b713fc69a1a6e6bbb20e0201024af5f2b12747ffb5",
+        "binary_sha256": "8c1e650a5e42687795672c36dd24c9f6900926d03d701707b565315564e33ee5",
+        "head_after": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+        "elapsed_seconds": 96.025,
+        "exit_code": 0,
+        "source_unchanged": true,
+        "log_sha256": "18e268dac2aae2ee85c32aceb54769feaed2a05b5bdbd6ffd3b8b4e9ee92395f",
+        "passing_tests": [
+          "discovery::output::tests::baseline::recorded_matches_corpus",
+          "discovery::output::tests::baseline::merge_matches_corpus",
+          "discovery::output::tests::baseline::comparison_matches_corpus",
+          "instance::subscription::tests::capacity::slot_wait_cancellation_joins",
+          "instance::subscription::tests::capacity::slot_wait_keeps_capture_and_progresses",
+          "graph::tests::traversal::recovery::traversal_reopen_and_restore",
+          "graph::tests::execution::wasm_graph_adapter"
+        ],
+        "record_sha256": "af20357d4830df9e4ba277435b12640512b986dc71d4a9d326e7f7fdbd2c7a5b",
+        "source_manifest_before_sha256": "14d2de908b0c22a7fd69ece9786af4a66891e7a4c4949ba76fe4cdf950b634ff",
+        "source_manifest_after_sha256": "14d2de908b0c22a7fd69ece9786af4a66891e7a4c4949ba76fe4cdf950b634ff"
+      },
+      "focused206-araphor_data": {
+        "command": [
+          "target/debug/deps/araphor_data-6c4e5d902cf7ca6f",
+          "--exact",
+          "--nocapture",
+          "--test-threads=4",
+          "analysis::packages::tests::image::package_image_retains_closure",
+          "analysis::packages::tests::image::package_image_install_is_atomic",
+          "analysis::packages::tests::image::package_image_versions_and_tenants"
+        ],
+        "started_at": "2026-10-22T01:42:39.877961+00:00",
+        "head_before": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+        "environment": {
+          "RUST_TEST_THREADS": "4",
+          "RUST_BACKTRACE": "1"
+        },
+        "wrapper_sha256": "96827e477cd26c82842ed8b713fc69a1a6e6bbb20e0201024af5f2b12747ffb5",
+        "binary_sha256": "80f05d73bd81daec5f16dbb70e0ef86d4f72ba78651b971210e4758c93b20312",
+        "head_after": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+        "elapsed_seconds": 6.764,
+        "exit_code": 0,
+        "source_unchanged": true,
+        "log_sha256": "ca5d1c314cd46c52deafe9e78233f0ca5754ab4de91896f2cbae4817e03e1ade",
+        "passing_tests": [
+          "analysis::packages::tests::image::package_image_install_is_atomic",
+          "analysis::packages::tests::image::package_image_versions_and_tenants",
+          "analysis::packages::tests::image::package_image_retains_closure"
+        ],
+        "record_sha256": "aed3ccfef3a914a5e535023b369a394bae3464270f733e6979e75e945bffb0bf",
+        "source_manifest_before_sha256": "14d2de908b0c22a7fd69ece9786af4a66891e7a4c4949ba76fe4cdf950b634ff",
+        "source_manifest_after_sha256": "14d2de908b0c22a7fd69ece9786af4a66891e7a4c4949ba76fe4cdf950b634ff"
+      },
+      "focused206-control-library": {
+        "command": [
+          "target/debug/deps/mithril_control-4df2a80fa1bb9b2b",
+          "client_grpc::tests::packages::image_rpc_install_is_not_execution",
+          "--exact",
+          "--nocapture"
+        ],
+        "started_at": "2026-10-22T01:43:47.002968+00:00",
+        "head_before": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+        "environment": {
+          "RUST_TEST_THREADS": "4",
+          "RUST_BACKTRACE": "1"
+        },
+        "wrapper_sha256": "96827e477cd26c82842ed8b713fc69a1a6e6bbb20e0201024af5f2b12747ffb5",
+        "binary_sha256": "f53164b337337ae8e65a150716245262b0300ce1f903597876a9257cf10328f1",
+        "head_after": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+        "elapsed_seconds": 2.716,
+        "exit_code": 0,
+        "source_unchanged": true,
+        "log_sha256": "22b7dedae808ad77cbd9ef63c64ca100ef284696f967663da7b1a675adc49b97",
+        "passing_tests": [
+          "client_grpc::tests::packages::image_rpc_install_is_not_execution"
+        ],
+        "record_sha256": "447001c51a7871774ed051beb51f69d3b21413f4e3ba0e34aa92d5ef53ac2483",
+        "source_manifest_before_sha256": "14d2de908b0c22a7fd69ece9786af4a66891e7a4c4949ba76fe4cdf950b634ff",
+        "source_manifest_after_sha256": "14d2de908b0c22a7fd69ece9786af4a66891e7a4c4949ba76fe4cdf950b634ff"
+      }
+    },
+    "selector_correction": "The first Control binary selected zero tests. That result was rejected. The correct library binary ran and passed the exact public installation case."
+  },
+  "preserved_reference_support": {
+    "path": "crates/araphor-analysis_back/src/package/required/testing.rs",
+    "physical_lines": 141,
+    "production_lines": 0,
+    "duties": [
+      "Supply test-only tenant authority and change notifications.",
+      "Construct configured fixture Query and old Package owners.",
+      "Retain temporary directories and install old fixture activations."
+    ],
+    "handling": "Keep the whole file unchanged with its remaining reference callers. Do not add a production test facade or preserve obsolete helper signatures as a product API."
+  },
+  "custody_at_draft": {
+    "archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+    "archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+    "nested_archive": "araphor-recovery-20261019-24zu3vty/backup-crate.tar",
+    "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5",
+    "original_files": 208,
+    "remaining_files": 81,
+    "retired_files": 127,
+    "all_remaining_files_match_archive": true,
+    "candidate_original_matches_archive_and_git": true,
+    "proposed_after_retirement": {
+      "remaining_files": 80,
+      "retired_files": 128,
+      "status": "Not executed."
+    }
+  },
+  "limits_of_proof": [
+    "active_managed enumerates running instances. It does not enumerate stopped rows. The installer source has no managed admission call.",
+    "This work does not qualify remaining lifecycle, historical replay, freshness or Graph/Discovery producer gaps.",
+    "No speed improvement, complete migration or overall reduction result is claimed.",
+    "Draft hashes identify read-only source inputs. They do not prove a completed build or final gate."
+  ],
+  "reference_hashes": {
+    "crates/araphor-analysis_back/src/package/required.rs": "2467bf9491e1cc79fd2d11d4bc8c3330b6309ee0ef00728307c7a6de2fa4b9fe",
+    "crates/araphor-analysis_back/src/package/required/testing.rs": "81d489bc76fbad37b31c1e4e950222ca430ac8557930ce28d7a181a863731e5d"
+  },
+  "replacement_source_hashes": {
+    "crates/araphor-analysis/src/graph/tests/traversal/fixtures.rs": "dd5533fa830ec9177c8e0e933678b7e7bfa9a143cd6fda275a9f3c503f904c5a",
+    "crates/araphor-analysis/src/graph/tests/traversal/recovery.rs": "c3b512ba5ee0798fdcddf264a9383a41d119f2bb4a1df01f09c947239982470b",
+    "crates/araphor-analysis/src/graph/tests/execution.rs": "13d4d8af473cc3e87172ddf6157c928a9b05149c7c6618adb124cc403e27eb40",
+    "crates/araphor-analysis/src/graph/tests/execution/runtime.rs": "27a4e9aaacd89b82700c1ac64e555ef2f09d3e765fae1a6dfe2e5d62ad225a5b",
+    "crates/araphor-analysis/src/discovery/output/tests.rs": "cde3696849f71c627fac58aa63db7aeb5c28af72280bc6af7ca89d83406b9e5f",
+    "crates/araphor-analysis/src/discovery/output/tests/baseline.rs": "dbb8882a3753aef60797edba60438233f68705f4dbaf933cf18c47a90b99f68e",
+    "crates/araphor-analysis-builtins/src/components.rs": "e4d56a4e8f566d8062523fca98a1062bc29e388d052f76bcd305a61437bb185e",
+    "crates/araphor-analysis-builtins/src/discovery/mod.rs": "f286f1a037da52957144b3068fa171a37dd7fb8f614e3bda760a7f39918ab9a8",
+    "crates/araphor-analysis-builtins/src/graph/mod.rs": "91266aea58dd794aae999bedf78cd2997fb23897a982e9f90e69bfd7e1145466",
+    "crates/araphor-analysis-builtins/src/graph/contract.rs": "b03a2e8d6c0c9f5ce436bd711ee106037745d3d872735fcba116defd0ae55e80",
+    "crates/araphor-package/src/bundle.rs": "ec0b7f80ce61fa8c0be455f20c8db1d88080e019ff69147e63cb0d4efa653b2d",
+    "crates/araphor-data/src/analysis/packages/image.rs": "245d8f06a9f615a239ce796d8fbe533ac37a0ae538139656b7a7534b91d707fe",
+    "crates/araphor-data/src/analysis/packages/tests/image.rs": "eac6041d2ec9f650750587712587b158d54eb8e9785245e87df68309dc3a8d50",
+    "crates/araphor-data/src/analysis/managed/read.rs": "640e26825e3f7fe220a098bd8ae66ba12138d97f2ab4a516a54fda9aed08afd1",
+    "crates/mithril-control/src/client_grpc/packages.rs": "425feacb746eb3e115d82b46c156be2a71dc390b8e6f053646d915b026120936",
+    "crates/mithril-control/src/client_grpc/tests/packages.rs": "bed7f887367b14bdb3db1564207e6b8851486f3b59dd5ff3bdb50dcfb957ab74"
+  },
+  "custody_after_retirement": {
+    "generated_at": "2026-10-22T01:45:01.347386+00:00",
+    "head": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+    "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+    "scope_base": "146dce5205a6684685e28be36d4e131a399cb1e2",
+    "archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+    "archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+    "nested_member": "araphor-recovery-20261019-24zu3vty/backup-crate.tar",
+    "nested_archive_sha256": "7e475f3e9a24175083bc920de043abcdd41e14d31744a9a9e07ea12513597fa5",
+    "original_files": 208,
+    "remaining_files": 80,
+    "retired_files": 128,
+    "scope_retired_files": 15,
+    "all_archive_baseline_equal": true,
+    "all_remaining_archive_baseline_equal": true,
+    "back_changes_are_whole_deletions_only": true
+  },
+  "production_code_net": -86,
+  "scope_limits": "This retirement does not qualify historical replay pins, grant renewal, producer supervision or complete migration.",
+  "earlier_status": "Done for the whole reference leaf after the nine focused replacements pass. The final shared Rust procedure is running.",
+  "verification_limit": "The final shared Rust procedure passes all enabled workspace targets. Ignored native artifact, release-only and physical-environment cases are not qualified. Complete migration and the required production reduction remain Not done.",
+  "final_qualification": {
+    "command": [
+      "bash",
+      ".github/scripts/verify-rust-ci.sh"
+    ],
+    "cwd": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime",
+    "started_at": "2026-10-22T01:45:14.594927+00:00",
+    "head_before": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+    "environment": {
+      "CARGO_BUILD_JOBS": "2",
+      "CARGO_NET_OFFLINE": "true",
+      "RUST_TEST_THREADS": "4",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_PROFILE_DEV_DEBUG": "1",
+      "CARGO_PROFILE_TEST_DEBUG": "1"
+    },
+    "wrapper_sha256": "1ebbf8c8dcc8b219d6fad99eb4cdc632e4c042be98e25da5c1cfa21ed5eaccd0",
+    "finished_at": "2026-10-22T02:12:35.186570+00:00",
+    "head_after": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+    "elapsed_seconds": 1640.673,
+    "exit_code": 0,
+    "source_unchanged": true,
+    "log_sha256": "33aabd136039fc2af9d3d685639ab0b64a1eadc1f43d7371d7080404de67ba7e",
+    "record_sha256": "ca5946b8203d2f2be98ed29d938c83f85aba87a590405929c2289be4b59ce916",
+    "source_manifest_sha256": "bbed2773e007d7d4ec5b7761d8d0e38f92262e120970be08768ae19a86a6e77b",
+    "script_sha256": "bcab1478aa03262b211d0d189dcca6f37da2107d7110e75cfdb56e6d771580de",
+    "totals": {
+      "passed": 2779,
+      "failed": 0,
+      "ignored": 564
+    }
+  }
+}

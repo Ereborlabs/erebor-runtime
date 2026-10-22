@@ -38,7 +38,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 105 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 80 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -55,7 +55,7 @@ Every replacement passes its required checks
 | Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
 | Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
 | Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public binary transport and CLI presentation now pass focused checks. Full per-window heads and latest selection remain open. | Focused checks pass |
-| Final retirement | The earlier 102 files and one complete native reuse test leaf are removed after replacement checks pass. The 105 remaining files retain unqualified or mixed rules. The complete final Rust gate is pending. Complete reference removal remains open. | Partial |
+| Final retirement | Individual replacement checks qualify 128 removed files. The 80 remaining files retain unqualified or mixed rules. The final shared Rust procedure passes on the current source. Complete reference removal remains open. | Partial |
 
 The earlier quota audit found default caps outside the moved owners. Current
 SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
@@ -1996,3 +1996,99 @@ archive is unchanged. Production totals stay +10,346 from the recovery baseline
 and +16,340 from the original baseline. The mixed Wasm metadata/lifecycle file
 stays. Complete migration, required net reduction, and the final shared Rust
 procedure remain **Not done**.
+
+
+## Native Graph storage contract test retirement
+
+Status: **Done** for `graph/tests/storage_contract.rs`. Both current owner tests
+pass after actual Wasm package execution through native GraphPublication. All
+15 old assertion rules remain; 30 current assertions check complete native image
+contexts, corrupt-row independence, exact rollback, retry, provenance and body
+bytes. No production owner or API is added. Connected compilation and strict
+Clippy pass. Read the [qualification record](../../recovery/araphor-native-graph-storage-test-retirement-20261021.json).
+
+There are now 126 retired files and 82 unchanged reference files. The complete
+archive is unchanged. Production totals stay +10,346 from the recovery baseline
+and +16,340 from the original baseline. Complete migration, required net
+reduction, and the final shared Rust procedure remain **Not done**.
+
+The private package supervisor stays. Three exact replacement checks remain:
+
+- Preserve safe capacity waits without repeating a guest or sink that has entered.
+  Synchronous native DataFusion allocation failure has no qualified resume path.
+- Save a known admission failure before an attempt exists, with the current
+  generation, lifecycle and progress fences. Preserve unknown pending attempts.
+- Test retained-image admission when stored bytes change during authorization.
+  Keep the Data digest guard; do not add an unqualified cache or bypass.
+
+
+## Wasm interruption test retirement
+
+Status: **Done** for `package/tests/wasm/interruption.rs`. Nine current owner
+tests pass. Actual Wasm calls preserve typed cancellation and denial, joined
+worker capacity, no publication, and unchanged saved checkpoints. The exact
+entered-guest barriers replace the old activation polling. No production code
+is added. Read the [assertion and qualification record](../../recovery/araphor-wasm-interruption-test-retirement-20261021.json).
+
+There are now 127 retired files and 81 unchanged reference files. The full
+archive is unchanged. The shared interruption helper and native expiry tests
+stay. Production totals stay +10,346 from the recovery baseline and +16,340
+from the original baseline. Complete migration, required net reduction, and
+the final shared Rust procedure remain **Not done**.
+
+## Required package declaration retirement
+
+Status: **Done** for `package/required.rs`. Nine exact current cases pass before
+the whole reference file is removed. The existing OCI types and Data writer
+retain the four original built-in descriptors, all exports and complete Wasm
+bytes. Retry returns the original receipt without metadata or revision changes.
+Installation starts no Discovery. Reopen and backup restore retain all four
+image revisions. Actual native Query plans execute each built-in component.
+Read the [declaration and qualification record](../../recovery/araphor-builtin-image-retirement-20261021.json)
+and the [reading route](../guides/araphor-discovery-definition-review.md#built-in-image-installation-proof).
+
+There are now 128 retired files and 80 unchanged reference files. The complete
+archive retains all 208 originals. This leaf removes 86 production code lines.
+The test fixture adds no production owner or registry. `required/testing.rs`
+stays with its remaining reference callers. Historical image replay, grant
+renewal and complete producer lifecycle remain **Not done**.
+
+## Managed Wasm exchange lifetime
+
+The complete run `ci205` passes formatting, workspace checking and strict
+Clippy. Analysis then passes 288 cases, fails one and ignores 15. The failed
+capacity-wait case reports a shared-output reservation error. The exact case
+passes alone, but that result does not identify the cause.
+
+The new Runtime assertion observes the sole slot inside worker lease
+destruction. The assertion fails before the fix: the slot is already available.
+EvaluationLease now retains slot lifetime through worker exchange cleanup and
+Query output accounting. EvaluationPermit remains unique and cannot be cloned.
+Both original Analysis capacity cases pass with the unchanged 8 MiB pool and
+all assertions. All 16 exact focused cases pass. Read the
+[failure, correction and source record](../../recovery/araphor-wasm-exchange-lifetime-20261021.json).
+
+The lifetime correction adds 17 production code lines. The earlier immutable
+retry correction adds three. The verified production deltas from `ced981a2`
+therefore change the earlier totals by 20 added lines and 86 removed lines.
+Totals are +10,280 from the recovery baseline and +16,274 from the original
+baseline. This calculation uses the earlier syntax count and exact later
+production changes. It is not a new complete syntax-counter run. Blank lines,
+comments and test code do not contribute. The required net reduction remains
+**Not done**.
+
+The final shared Rust procedure `ci206` passes after the last covered edit.
+Formatting, workspace checking, strict Clippy and all 95 workspace test targets
+pass in 1,640.673 seconds. The tests pass 2,779 cases and ignore 564. Ignored
+native artifact, release-only and physical-environment cases are not qualified.
+No covered source changes during the command. The base is `cd843f23`; the
+[final source, command and custody record](../../recovery/araphor-analysis-retirement-final-20261021.json)
+identifies the exact working source. The final archive check and all 80 remaining
+reference file checks also pass.
+
+Status: **Done** for the named removals and final shared Rust procedure.
+Complete migration and the required net reduction remain **Not done**. The next
+identified lifecycle gap is renewal of a suspended instance under a new grant.
+The replacement must retain original attempt attribution, successful output,
+checkpoint history and generation fences. Keep the old lifecycle files until
+their complete replacements pass.

@@ -352,6 +352,7 @@ async fn native_source_stream_lifecycle() -> TestResult {
         .is_err());
     assert_eq!(fixture.store.meta()?, before);
     drop(streams);
+    drop(owner);
     fixture.released()?;
     Ok(())
 }
@@ -400,6 +401,7 @@ async fn native_run_stops() -> TestResult {
     tokio::time::timeout(Duration::from_secs(90), worker)
         .await
         .map_err(|error| format!("stop: {error}"))???;
+    drop(owner);
     fixture.released()?;
     Ok(())
 }

@@ -1650,40 +1650,64 @@ async fn instance_metadata_keeps_capacity() -> TestResult {
     assert_eq!(fixture.query.memory().input_reserved(), retained);
     drop(copy);
     assert_eq!(fixture.query.memory().input_reserved(), 0);
-    let capacity = retained.checked_sub(1).ok_or("metadata capacity")?;
-    let query = Engine::new(
-        Arc::clone(fixture.query.store()),
-        araphor_query::execution::Limits {
-            input_capacity: Some(capacity),
-            ..Default::default()
-        },
-    )?;
-    let before = query.store().meta()?;
-    let error = Instance::admit(
-        Arc::clone(&query),
-        fixture.authority.clone(),
-        fixture.grant.clone(),
-        "metadata-short".into(),
-        definition,
-        &AnalysisReadControl::default(),
-    )
-    .await
-    .err()
-    .ok_or("one-byte-short metadata admitted")?;
-    let crate::Error::Query { source } = error else {
-        return Err(format!("metadata quota lost Query owner: {error:?}").into());
-    };
-    assert_eq!(
-        araphor_query::Failure::from(&source),
-        araphor_query::Failure::Busy,
-        "{source:?}"
-    );
-    assert_eq!(query.store().meta()?, before);
-    assert!(query
-        .store()
-        .managed_instance([1; 16], "metadata-short", &AnalysisReadControl::default())?
-        .is_none());
-    assert_eq!(query.memory().input_reserved(), 0);
-    drop(query.memory().reserve_input(capacity)?);
+    for (capacity, pressure, expected) in [
+        (
+            retained.checked_sub(1).ok_or("metadata capacity")?,
+            0,
+            araphor_query::Failure::InputTooLarge,
+        ),
+        (retained, 1, araphor_query::Failure::Busy),
+    ] {
+        let query = Engine::new(
+            Arc::clone(fixture.query.store()),
+            araphor_query::execution::Limits {
+                input_capacity: Some(capacity),
+                ..Default::default()
+            },
+        )?;
+        let held = query.memory().reserve_input(pressure)?;
+        let before = query.store().meta()?;
+        let error = Instance::admit(
+            Arc::clone(&query),
+            fixture.authority.clone(),
+            fixture.grant.clone(),
+            "metadata-short".into(),
+            definition.clone(),
+            &AnalysisReadControl::default(),
+        )
+        .await
+        .err()
+        .ok_or("one-byte-short metadata admitted")?;
+        let crate::Error::Query { source } = error else {
+            return Err(format!("metadata quota lost Query owner: {error:?}").into());
+        };
+        assert_eq!(
+            araphor_query::Failure::from(&source),
+            expected,
+            "{source:?}"
+        );
+        assert_eq!(query.store().meta()?, before);
+        assert!(query
+            .store()
+            .managed_instance([1; 16], "metadata-short", &AnalysisReadControl::default())?
+            .is_none());
+        assert_eq!(query.memory().input_reserved(), pressure);
+        drop(held);
+        if pressure != 0 {
+            let admitted = Instance::admit(
+                Arc::clone(&query),
+                fixture.authority.clone(),
+                fixture.grant.clone(),
+                "metadata-short".into(),
+                definition.clone(),
+                &AnalysisReadControl::default(),
+            )
+            .await?;
+            assert_eq!(query.memory().input_reserved(), retained);
+            drop(admitted);
+        }
+        assert_eq!(query.memory().input_reserved(), 0);
+        drop(query.memory().reserve_input(capacity)?);
+    }
     Ok(())
 }

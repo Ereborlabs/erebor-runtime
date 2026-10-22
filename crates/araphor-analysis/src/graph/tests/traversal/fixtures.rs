@@ -50,15 +50,40 @@ impl TraversalFixture {
                 }],
                 fixtures: Vec::new(),
             };
-            store.install_package_image(
-                source().tenant_id,
-                &PackageBundleV1 {
-                    schema_version: 1,
-                    root: artifact.reference(),
-                    artifacts: vec![artifact],
-                },
-                || Ok(()),
-            )?;
+            let bundle = PackageBundleV1 {
+                schema_version: 1,
+                root: artifact.reference(),
+                artifacts: vec![artifact],
+            };
+            let installed = store.install_package_image(source().tenant_id, &bundle, || Ok(()))?;
+            let retained = store
+                .package_image(
+                    source().tenant_id,
+                    &bundle.root.package_id,
+                    Some(&bundle.root.revision),
+                    &AnalysisReadControl::default(),
+                )?
+                .ok_or("builtin image is absent")?;
+            assert_eq!(retained.schema_version, bundle.schema_version);
+            assert_eq!(retained.root, bundle.root);
+            assert!(
+                retained.artifacts == bundle.artifacts,
+                "builtin artifacts differ"
+            );
+            assert_eq!(retained.digest()?, bundle.digest()?);
+            let before = store.meta()?;
+            let revision = *store.subscribe_revision().borrow();
+            assert_eq!(
+                store.install_package_image(source().tenant_id, &bundle, || Ok(()))?,
+                installed
+            );
+            assert_eq!(store.meta()?, before);
+            assert_eq!(*store.subscribe_revision().borrow(), revision);
+            assert!(store.package_activation_page(None)?.is_empty());
+            assert!(store
+                .active_managed(&AnalysisReadControl::default())?
+                .1
+                .is_empty());
         }
         let mut fixture = Self {
             directory,
