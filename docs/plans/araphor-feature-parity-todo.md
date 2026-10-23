@@ -9,9 +9,9 @@ Discovery definition file; and 16, running Discovery instances. Complete them
 before items 1-13. YAML definitions contain metadata and inline or referenced
 SQL or PRQL. Package calls are expressions inside that program. The
 [active package and job plan](araphor-package-jobs.md#first-deliverable-definition-files-and-running-instances)
-records that priority. Items 1-13 remain recorded TODOs. Existing uncommitted
-code from the stopped attempts is an unverified draft. The local backup is
-`/tmp/araphor-stopped-drafts-image1`. The draft is not a completed item.
+records that priority. The current status table below applies to all 16 items.
+The later implementation and retirement records replace the initial audit
+status. Do not use the stopped drafts as completion evidence.
 
 ## Intended end state
 
@@ -44,7 +44,45 @@ The call fails, loses permission, or is cancelled
   -> a relevant event or an explicit request can start another call
 ```
 
-## What already works
+## Current status on 2026-10-23
+
+Source checked: `9243df7030e735fc3ae4ec48f94235406d7dfc8b`. The check covers
+current production owners, their tests, and the recorded focused results.
+No Rust source changed and no tests ran for this status update. `Done` means
+that the stated behavior has a current implementation and mapped focused
+checks. It does not claim a new full-workspace CI result. `Not done` identifies
+a specific remaining part of an otherwise implemented item.
+
+| TODO | Result | Current behavior or remaining work |
+| --- | --- | --- |
+| 14. OCI package image | Done | Separate OCI owner, typed contracts, exact dependencies and saved-state contract. Installation starts no Discovery. Package size and SDK quotas are removed; the wider quota audit remains in item 13. |
+| 15. Discovery definition file | Done | YAML metadata with SQL, PRQL, or a package call. Referenced files are captured at admission. All forms use native Query planning and execution. Admission starts no Discovery. |
+| 16. Running Discovery instances | Done | Public lifecycle commands, independent instances, shared Query subscriptions, atomic state/progress, stop, current authority and restart recovery are implemented. |
+| 1. Package operations and saved state | Done | Image and Instance owners provide install, inspect, qualification, execution, update, rollback, removal and retained replay. SQL, Wasm and native calls preserve state and exact retry rules. |
+| 2. Installed package calls in SQL | Done | Native logical and physical package-call extensions execute SQL, Wasm and native exports with captured Arrow inputs, parameters and prior state. |
+| 3. Graph history and SDK input metadata | Not done | Historical selection works, but traversal request `result_ids` do not select versions by themselves. SDK coverage still omits selected-graph completeness and traversal boundaries. |
+| 4. Discovery window completion and evidence | Done | Query window events seal profiles. Data retains the captured evidence. A later interval remains separate. |
+| 5. Exact versions for each profile | Done | Retained profiles bind exact input, context, definition and package versions. A code change closes the old interval. |
+| 6. Finite execution, refresh, reads and replay | Done | Current Analysis and Instance operations provide finite work, repair, authorized reads and replay from retained inputs. Missing frozen inputs or code return an explicit unavailable result. |
+| 7. Context, groups and baseline comparison | Not done | Native context, grouping and baseline operations are implemented. The Control recorded-preview consumer remains detached from the current Analysis owner. |
+| 8. Discovery after an expired data range | Not done | Prefix resume and gap metadata exist. An interior expired range still causes an input-frontier error. Query and Data must select the next retained range and record the exact skipped range with the progress guard. |
+| 9. Graph and detector execution from Query events | Done | Native source subscriptions use the shared Host for detector execution, graph publication, expiry and recovery. Control starts this path independently of Discovery. |
+| 10. Notification execution from Query events | Done | Native subscriptions and the shared Host drive delivery, retries, ACK deadlines, restart and current permission checks. |
+| 11. Runtime configuration through Control | Done | Control passes configured Query and package runtime limits at construction and rejects reuse with different limits. Runtime quotas default to disabled. |
+| 12. Data and Wasm cancellation without periodic checks | Not done | Wasm and Data lock waits use events and exact deadlines. The Data deadline monitor still repeats native interrupts every millisecond after expiry. |
+| 13. Configurable quotas, disabled by default | Not done | SDK package quotas are removed and Query/runtime quotas default to disabled. Mandatory evidence-admission defaults and the remaining resource-boundary audit are still open. |
+
+Result: **11 Done; 5 Not done**. The remaining items are **3, 7, 8, 12 and
+13**. Finish item 12 next to remove the confirmed periodic Data interruption.
+The separate 6,000-line production Rust reduction target still requires a
+current count and further simplification. Reference removal is complete.
+
+The status and `Now` text in each numbered item below describe this source.
+Earlier qualification paragraphs retain their original source and result.
+Historical `Reuse` links identify reference code; they do not authorize
+restoration of removed execution owners.
+
+## Historical implementation records
 
 The backup deletion is withdrawn after the user identifies missing compatible
 functionality. All 208 backup files and 34 deleted Control and E2E reference
@@ -138,19 +176,27 @@ retained data that supports a result.
 Complete items 14, 15, and 16 in that order, before items 1-13. These are
 separate deliverables. Reuse the compatible old code needed for each one.
 The user authorized the OCI image as a separate crate, then the definition
-file. Image content, installation, inspection, and definition admission are
-**Done**. Running instances remain **Not done**. Native finite package-call
-execution is implemented. Its current qualification and remaining managed
-requirements are in the [migration record](araphor-analysis-migration.md).
+file. Image content, installation, inspection, definition admission, native
+package-call execution and running instances are **Done** for their stated
+contracts. The [migration record](araphor-analysis-migration.md) retains the
+focused results and the separate work that remains.
 
 ### 14. OCI package image
+
+**Status: Done.** The image and call contracts are implemented. The wider
+operational quota audit remains in item 13.
 
 - **Before:** A package contained reusable exports. Installation also activated
   supported exports.
 - **Now:** `araphor-package` owns the existing OCI codec and static package
   contracts. The `image install` request retains an image without activation.
   Data owns the durable image root and its exact dependency closure. The old
-  activation-oriented `package` commands are removed.
+  activation-oriented `package` commands are removed. Query executes the exact
+  declared SQL, Wasm or native implementation. Instance owns bindings, grants,
+  progress and saved state. The
+  [final focused result](araphor-analysis-migration.md#complete-reference-retirement)
+  includes image round trips, uncapped closures, native artifact checks and
+  managed execution.
 - **Required:** Keep the package as reusable, versioned code. Installing it
   must not start a Discovery. A definition and a running instance select how
   that code is used.
@@ -170,18 +216,18 @@ Recorded specifications:
 - [x] Execute the declared SQL, Wasm, or native implementation. Native Rust
   calls run inside Araphor's process. Do not add fallback to another target
   or a separate package execution process.
-- [ ] Keep input bindings, query windows, current grants, progress, and
+- [x] Keep input bindings, query windows, current grants, progress, and
   instance state at the call or running-instance boundary. Two instances can
   use the same image with different bindings and separate saved state.
-- [ ] Pass the selected Arrow inputs, prior state, parameters, and captured
+- [x] Pass the selected Arrow inputs, prior state, parameters, and captured
   evaluation context to the package. Validate returned datasets, proposed
   state, reasons, and evidence before Data commits them.
-- [ ] Preserve the exact artifact revision used by each call. Installation,
+- [x] Preserve the exact artifact revision used by each call. Installation,
   inspection, or a later image revision must not silently replace the code
   of an already admitted instance.
-- [ ] Add no mandatory package-size cap. Resource quotas must be configurable
-  and disabled by default. Preserve type, identity, format, and arithmetic
-  checks.
+- [x] Add no mandatory package-size cap. SDK package quotas are removed.
+  Separate engine quotas must be configurable and disabled by default, as
+  recorded in item 13. Preserve type, identity, format and arithmetic checks.
 
 Image content, installation, and inspection: **Done**. The affected checks
 pass. Read the
@@ -189,7 +235,7 @@ pass. Read the
 for the source route. The image delivery added no execution engine,
 subscription, or timer. The current native execution and its qualification
 are in the [migration record](araphor-analysis-migration.md). Managed state
-and instance requirements above remain open.
+and the instance requirements above are implemented through item 16.
 
 The image delivery adds 615 production Rust lines from `41815177`. The count
 excludes tests, comments, documents, and blank lines. Moved code adds zero to
@@ -199,11 +245,16 @@ redesign: **Not done**. The count record is `/tmp/araphor-image-count1.json`.
 
 ### 15. Discovery definition file (Compose file)
 
+**Status: Done.**
+
 - **Before:** Control configuration enabled a fixed Discovery implementation.
   Packages also carried input declarations.
 - **Now:** `araphor-discovery-definition` owns the YAML file, source capture,
   PRQL compilation, and admitted snapshot. Control admits and inspects that
-  snapshot. The fixed live Discovery remains separate.
+  snapshot. SQL, PRQL and package calls reach the native Query pipeline.
+  [File capture](../../crates/araphor-discovery-definition/src/file.rs) reads a
+  referenced file once at admission. Later file changes do not change the
+  admitted definition. Starting work is a separate Instance operation.
 - **Required:** A reusable YAML definition contains metadata and selects SQL,
   PRQL, or one package call. Calls use native SQL planning. Starting a
   definition creates a separate running instance.
@@ -342,30 +393,25 @@ reduction. The record is `/tmp/araphor-sql-call-count1.json`.
 
 ### 16. Running Discovery instances
 
+**Status: Done.** The stated lifecycle, subscription and recovery contracts
+have current implementations and mapped focused checks.
+
 - **Before:** Control ran fixed Discovery work. The retained package owner
   supervised scoped activations and saved their results and state.
-- **Now:** Fresh Discovery uses reactive Query streams. The finite Instance
-  owner admits an exact definition and call manifest, captures guarded prior
-  state, registers immutable attempts, and commits multi-call results and
-  progress atomically. Completed retries recover the original receipt. No
-  general service API starts, stops, or restores independent running instances.
-  The native Instance subscription now passes focused lifecycle, saved-cursor,
-  state, cancellation, and progress checks. Known terminal outcomes, original
-  claim lifetime, and failed-offer wait cuts also pass focused checks. The host
-  remains open. Read the
-  [subscription result](araphor-analysis-migration.md#native-managed-subscription-qualification).
-  The [terminal result](araphor-analysis-migration.md#known-terminal-outcomes-and-failed-offers)
-  records the later 83 passing cases and the remaining pressure-retry limit.
-  Shared image ownership also passes focused checks. Query retains the
-  admitted image and its reservation once; Instance borrows that image set.
-  A typed Query authority notice stays distinct from a real source denial.
-  Read the [image result](araphor-analysis-migration.md#shared-admitted-images-and-error-origins).
-  Native input capture and projected membership also pass focused checks.
-  SQL body inputs retain parent revision and coverage. The host reads small
-  membership keys, joins old workers before replacement, and receives Stop
-  notices during metadata pressure. Managed Run borrows admitted sources.
-  Read the [capture result](araphor-analysis-migration.md#native-input-capture-and-projected-membership).
-  General initial-admission pressure retry and public lifecycle remain open.
+- **Now:** [Instance Host](../../crates/araphor-analysis/src/instance/host.rs)
+  owns independent running instances and a native `FuturesUnordered`
+  collection. Control and CLI expose admission, Start, Stop, Run, Renew,
+  Update, Rollback, removal, inspection, history and retained reads.
+  Execution consumes actual Query subscription captures and window events.
+  Data commits complete outputs, guarded state, evidence and progress
+  atomically. Stop and authority loss cancel and join workers. Restart uses
+  retained definitions, exact image pins, saved state and native frontiers.
+  [Host tests](../../crates/araphor-analysis/src/instance/host/tests.rs) check
+  execution without an observer, independent members, authority and restore.
+  [Control lifecycle tests](../../crates/mithril-control/src/client_grpc/tests/packages/lifecycle.rs)
+  check the public operations. Read the
+  [lifecycle result](araphor-analysis-migration.md#package-lifecycle-and-retained-output-test-retirement)
+  and [final continuation result](araphor-analysis-migration.md#complete-reference-retirement).
 - **Required:** Create managed instances from admitted definitions. Each
   instance has its own lifetime, selected inputs, progress, and saved state.
 - **Reuse:** Query subscriptions and their native stream collection, current
@@ -375,41 +421,40 @@ reduction. The record is `/tmp/araphor-sql-call-count1.json`.
 
 Recorded specifications:
 
-The [finite result](araphor-analysis-migration.md#finite-managed-source-focused-qualification)
-covers finite admission, capture, state, publication, authority, cancellation,
-and receipt recovery. The requirements below also include running-service
-lifetime and restart behavior. Keep them unchecked until that complete
-behavior passes qualification. The current final Rust gate is pending.
+The recorded lifecycle and continuation checks cover the requirements below.
+These checks use the current production owners. Complete migration, item 12's
+Data interrupt loop and the overall reduction target remain separate work.
+No new full-workspace CI result is claimed.
 
-- [ ] Start, inspect, and stop each instance independently. Keep its identity
+- [x] Start, inspect, and stop each instance independently. Keep its identity
   separate from the image and reusable definition. Support multiple instances
   that use the same image.
-- [ ] Run until explicitly stopped, subject to current permission,
+- [x] Run until explicitly stopped, subject to current permission,
   cancellation, and execution failure. Add no default lifetime cutoff.
   A client disconnect must not stop the managed instance.
-- [ ] Drive all execution from actual Query subscription batches and declared
+- [x] Drive all execution from actual Query subscription batches and declared
   window events. Use the same native SQL pipeline for every program form.
   Add no polling in the owner or client and no private Discovery clock.
-- [ ] Insert and remove subscription streams on demand through a native
+- [x] Insert and remove subscription streams on demand through a native
   stream collection such as SelectAll/FuturesUnordered. Query owns window
   events and exact deadlines; a timer must not poll for changes.
-- [ ] Give each instance separate progress and saved state. Execute a logical
+- [x] Give each instance separate progress and saved state. Execute a logical
   call against its complete selected inputs; Arrow batch boundaries must not
   change the call's meaning.
-- [ ] Bind inputs and declared SQL reads to the captured Data view and
+- [x] Bind inputs and declared SQL reads to the captured Data view and
   evaluation time. New input remains pending while that call uses its
   captured view.
-- [ ] Use the existing Data commit checks to keep outputs, proposed state,
+- [x] Use the existing Data commit checks to keep outputs, proposed state,
   evidence references, and consumed progress consistent. Failed or cancelled
   work must not advance committed state or progress.
-- [ ] Check current permission before execution and commit. Stopping an
+- [x] Check current permission before execution and commit. Stopping an
   instance or revoking its grant must cancel work and reject stale completion.
   Release its streams, buffers, and runtime handles.
-- [ ] Restore active instances after restart from their admitted definition,
+- [x] Restore active instances after restart from their admitted definition,
   exact package revisions, committed state, and progress. Recheck current
   permission. Missing retained input must produce an explicit incomplete or
   unavailable result.
-- [ ] Stopping one instance must leave other instances and referenced package
+- [x] Stopping one instance must leave other instances and referenced package
   history intact.
 
 The analogy is: image = OCI package; Compose file = Discovery definition;
@@ -424,7 +469,11 @@ capability is not defined; the current ABI does not supply that capability.
 Any such API must preserve the same captured view and requires a separate
 concrete design.
 
-## Historical qualification that still requires migration
+## Historical qualification at the initial audit
+
+The following two paragraphs describe the initial audit. Current status is
+in the table above. Reference retirement is complete; the five specific open
+items remain identified there.
 
 The restored reference retains the old activation, model, source-sweep,
 recorded-preview, and graph-production tests. Their assertions must be checked
@@ -447,15 +496,20 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 1. Package operations and saved state
 
+**Status: Done.**
+
 - **Before:** Install, inspect, test, run, update, roll back, and remove SQL,
   Wasm, and native packages. Pass parameters, dependencies, and saved state.
   Return named outputs, reasons, and evidence.
-- **Now:** Image and definition install/inspection use current owners. Finite
-  native Query execution accepts Arrow input, parameters, and prior state.
-  Finite Instance execution now preserves guarded state, atomic multi-call
-  publication, immutable attempts, and original receipt recovery. The old
-  activation, update, rollback, removal, and restart APIs are removed. Their
-  managed lifecycle replacements remain unimplemented.
+- **Now:** Image, qualification and Instance owners provide the operations.
+  [Host request dispatch](../../crates/araphor-analysis/src/instance/host/request.rs)
+  handles admission, Start, Run, Stop, Renew, Update, Rollback, removal and
+  recreation. Native Query supplies Arrow inputs, parameters and prior state.
+  Data preserves atomic publication and exact retry receipts.
+  [Version tests](../../crates/araphor-analysis/src/instance/tests/version.rs)
+  and [checkpoint tests](../../crates/araphor-analysis/src/instance/tests/checkpoint.rs)
+  cover failed updates, rollback, state and reopen. Read the
+  [recorded qualification](araphor-analysis-migration.md#package-lifecycle-and-retained-output-test-retirement).
 - **Required:** Support the same operations through active Analysis. Preserve
   exact retries, failed-update rollback, permissions, restart, and atomic saved
   state. Separate package installation from Discovery start as described in
@@ -469,12 +523,17 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 2. Installed package calls in SQL
 
+**Status: Done.**
+
 - **Before:** The package owner selected and called the installed SQL, Wasm,
   or native implementation.
-- **Now:** Native Query admits exact installed export calls and has a physical
-  extension for SQL, Wasm, and native execution. Focused finite qualification
-  passes, including managed state and atomic publication. The current final
-  Rust gate is pending. Automatic restart remains open.
+- **Now:** Native Query admits exact installed export calls.
+  [Package physical execution](../../crates/araphor-query/src/definition/physical.rs)
+  runs SQL, Wasm and native implementations with captured inputs, parameters
+  and prior state. Data commits complete validated returns and progress.
+  [Execution tests](../../crates/araphor-query/src/definition/tests/execution.rs)
+  cover the targets, separate call state, exact pins and boundary failures.
+  Managed restart uses the same Host and retained call manifest as item 16.
 - **Required:** Let a SQL query call an installed export and use its declared
   outputs. Use the same native planning and execution route. Preserve
   parameters, saved state, permissions, and the exact artifact revision.
@@ -485,11 +544,20 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 3. Graph history and SDK input metadata
 
+**Status: Not done.** Historical selection and graph input execution are
+implemented. Two request and metadata gaps remain.
+
 - **Before:** A traversal could select an exact old graph version. SDK inputs
   included graph completeness, missing-data reasons, and traversal boundaries.
-- **Now:** Native Query already supplies graph datasets. However, the request's
-  result_ids are not applied to version selection. SDK completeness metadata
-  does not include all selected-graph and traversal facts.
+- **Now:** Native Query supplies graph datasets and exact historical selection
+  through `AnalysisSelectionV1.graphs`. Data's
+  [traversal entry](../../crates/araphor-data/src/analysis/extraction/graph/traversal.rs)
+  does not pass the request's `result_ids` to version selection. The
+  [history test](../../crates/araphor-analysis/src/graph/tests/traversal/recovery.rs)
+  sets both selections itself. The
+  [SDK receipt](../../crates/araphor-query/src/inputs/receipt.rs) combines source
+  and inherited package coverage but does not add selected-graph completeness
+  or traversal boundaries. Preserve the already transferred graph input tests.
 - **Required:** Return the requested permitted version. Report whether that
   graph input is complete, incomplete, or limited by the traversal. Keep all
   input datasets under the same captured source revision.
@@ -502,10 +570,18 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 4. Discovery window completion and evidence
 
+**Status: Done.**
+
 - **Before:** Discovery closed an interval, saved its final profile, and
   retained the selected input evidence. Its host loop decided when to close.
-- **Now:** Query supports rolling row expiry. The new Discovery publication
-  always writes an open profile and an empty evidence-reference list.
+- **Now:** [Managed publication](../../crates/araphor-analysis/src/discovery/publication/managed.rs)
+  reads Query's completed-window events and seals the profile. Data's
+  [profile transaction](../../crates/araphor-data/src/analysis/progress/profile.rs)
+  retains captured witnesses, including closure without new input.
+  `managed_window_frontier` in the
+  [managed tests](../../crates/araphor-analysis/src/discovery/tests/managed.rs)
+  checks the interval, seal, consumed cursor and cancellation. It passes in
+  the [final focused result](araphor-analysis-migration.md#complete-reference-retirement).
 - **Required:** Query must report the declared window's completion. Analysis
   must then save the final profile and its evidence. Later data must enter the
   next interval. No host clock loop is permitted.
@@ -516,11 +592,19 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 5. Exact input and package versions for each profile
 
+**Status: Done.**
+
 - **Before:** A profile recorded its input range, context facts, and installed
   package versions. A package change could start a new interval.
-- **Now:** The new path keeps context references and a SQL package reference.
-  It does not keep the complete recorded input description used by old replay
-  or perform the same package-change interval decision.
+- **Now:** Managed publication retains the exact selected OCI bundle,
+  captured source contexts and managed result. Data resolves the
+  [retained profile association](../../crates/araphor-data/src/analysis/progress/profile/replay.rs)
+  to its exact definition and call. A code change seals the current interval
+  before the next interval starts. The
+  [managed tests](../../crates/araphor-analysis/src/discovery/tests/managed.rs)
+  check immutable versions, exact evidence and code changes. The
+  [replay tests](../../crates/araphor-analysis/src/discovery/tests/replay.rs)
+  check original time, seed, producer and captured inputs.
 - **Required:** Record the exact data, facts, and code used for each profile.
   A package change must not merge results from incompatible implementations
   into the same interval.
@@ -532,11 +616,21 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 6. Finite execution, refresh, profile reads, and replay
 
+**Status: Done.**
+
 - **Before:** Callers could process available input, refresh a profile, read
   the profile, and reproduce it from its recorded data and code.
-- **Now:** Data retains profiles and native Query supplies finite execution.
-  The old host replay and refresh adapters are removed. Equivalent current
-  profile execution and replay operations remain unimplemented.
+- **Now:** `DiscoveryOwner::profile` supplies authorized profile reads.
+  Finite work uses the shared Instance operation. Historical repair uses
+  captured SQL and managed publication. The
+  [replay owner](../../crates/araphor-analysis/src/discovery/replay.rs) executes
+  the exact retained inputs and code through the native Instance path.
+  Missing frozen inputs or packages return an explicit unavailable result.
+  Four [replay tests](../../crates/araphor-analysis/src/discovery/tests/replay.rs)
+  and `sealed_repair_keeps_head` in the
+  [managed tests](../../crates/araphor-analysis/src/discovery/tests/managed.rs)
+  cover replay, repair, original heads, cancellation and reopen. The latter
+  passes in the [final focused result](araphor-analysis-migration.md#complete-reference-retirement).
 - **Required:** Supply these operations through new Analysis. All execution
   and replay input must come from Query subscriptions. Missing historical
   input or code must produce an explicit unavailable result.
@@ -548,11 +642,19 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 7. Context selection, display groups, and baseline comparison
 
+**Status: Not done.** The finite operations are implemented. The Control
+recorded-preview consumer remains disconnected.
+
 - **Before:** Callers could import and select permitted context, group behavior
   records for display, and compare current behavior with a reviewed baseline.
-- **Now:** Builtin computations and Data context contracts remain. The old
-  Analysis adapters and Control recorded preview bridge are removed. Complete
-  equivalent operations are not exposed through current Analysis.
+- **Now:** Active Analysis supplies authorized context import and native
+  [context selection](../../crates/araphor-analysis/src/context/selection.rs).
+  Native SQL and the [output adapter](../../crates/araphor-analysis/src/discovery/output.rs)
+  supply grouping and reviewed-baseline comparison. Their finite assertions
+  are retained. Control's `discovery/mod.rs` compiles only policy code; its
+  [recorded-preview file](../../crates/mithril-control/src/discovery/preview.rs)
+  still refers to the retired crate and has no active module. Connect that
+  consumer to the current native path. Do not create another computation owner.
 - **Required:** Preserve their results and permission checks in new Analysis.
   Connect Control preview and the existing callers to that path.
 - **Reuse:** [Context policy](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/context.rs),
@@ -564,11 +666,19 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 8. Discovery after an expired data range
 
+**Status: Not done.** Prefix resume and supplied gap metadata work. Automatic
+continuation across an interior expired range is missing.
+
 - **Before:** Optional Discovery could record an expired range and continue
   with later retained records.
-- **Now:** The new path handles a saved position below the retained floor.
-  It can fail when an interior range expires while an earlier range stays
-  pinned and keeps the floor at zero.
+- **Now:** Data retains the guarded optional-resume transaction. Current
+  Analysis and Query production code do not call it. In the
+  [recorded live tests](../../crates/araphor-analysis/src/package/tests/sql/recorded/live.rs),
+  `live_rejects_missing_input` removes cursor 2 from cursors 1-3 and expects
+  an input-frontier error. `live_keeps_resume_gaps` supplies the resume floor
+  and gap itself. Derive the next retained range from Query capture and record
+  each exact gap under Data's expected-position guard. Preserve cumulative
+  counts, completeness and stale-resume rejection.
 - **Required:** Process each retained range and record each exact missing
   range. Preserve cumulative counts and completeness. Reject a stale resume.
 - **Reuse:** Data's [optional processor resume transaction](../../crates/araphor-data/src/analysis/progress.rs)
@@ -578,12 +688,17 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 9. Graph and detector execution from Query events
 
+**Status: Done.**
+
 - **Before:** Graph processing selected source windows, called installed
   detectors, checked proof, and committed graph and finding results.
-- **Now:** Data retains graph contracts, validation, commits, history, and
-  traversal. Builtins retain the three detector computations. The old graph
-  producer and Control timer are removed. Current Query subscriptions do not
-  yet drive authorized graph assembly and publication.
+- **Now:** [Graph source subscriptions](../../crates/araphor-analysis/src/graph/feed.rs)
+  use `FuturesUnordered` and the shared Host for Evaluate and Expire instances.
+  [Control](../../crates/mithril-control/src/service/packages/graph.rs) prepares
+  pinned detector calls in native SQL and starts Graph independently of
+  Discovery. Managed checks cover notices, versions, expiry, restart,
+  replacement, grants and failure isolation. The final source-recovery check
+  passes in the [retirement result](araphor-analysis-migration.md#complete-reference-retirement).
 - **Required:** Query subscriptions must supply the selected event, context,
   coverage, package, and window changes. Preserve detector results, graph
   replacement, recovery, expiry, and operation with Discovery disabled.
@@ -596,13 +711,18 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 10. Notification execution from Query events
 
+**Status: Done.**
+
 - **Before:** The router created obligations, delivered notifications, retried
   failed delivery, escalated overdue work, and recorded acknowledgements.
-- **Now:** Active Analysis retains authorization, obligation state, delivery,
-  escalation, and acknowledgement operations and their domain tests. Control
-  delegates finite operations to it. The old periodic router is removed.
-  Query exposes notification rows and acknowledgement deadlines, but not every
-  retry deadline. Automatic subscriptions remain unimplemented.
+- **Now:** [Native Notification subscriptions](../../crates/araphor-analysis/src/instance/host/notification.rs)
+  use the shared Host and DataFusion publication sink. Data supplies retry,
+  ACK and grant-expiry events. Pending attempts retain the original subject
+  and route across reopen. The
+  [focused result](araphor-analysis-migration.md#shared-notification-execution-and-capacity-release)
+  records nine Analysis and six Control passes for deadlines, cancellation,
+  restart, permission, startup and disabled configuration. Notification uses
+  the same Host source-recovery wait as package and Graph members.
 - **Required:** Data, route, permission, retry, and acknowledgement events must
   trigger the existing operations. Preserve restart and disclosure checks.
 - **Reuse:** The [notification family](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/notification/mod.rs),
@@ -612,11 +732,16 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 11. Runtime configuration through Control
 
+**Status: Done.**
+
 - **Before:** Control passed configured Wasm and native options to the package
   runtime.
-- **Now:** Query owns Package Runtime construction through its Limits value.
-  Runtime Wasm and native quotas default to disabled. Control configuration
-  must still be checked for complete propagation through this route.
+- **Now:** [Control configuration](../../crates/mithril-control/src/config.rs)
+  passes Query limits, including package runtime options, to the first Engine
+  construction. The [package owner](../../crates/mithril-control/src/service/packages.rs)
+  rejects reuse with different limits. Query passes `limits.package` to
+  Runtime. Focused tests cover disabled defaults, explicit Wasm fuel and
+  unsupported native hard limits without disabling other targets.
 - **Required:** Pass the configured Analysis options at first construction.
   Check them when the runtime is reused. Omitted quotas must stay disabled.
 - **Reuse:** [AnalysisLimits](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/limits.rs)
@@ -626,11 +751,18 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 12. Data and Wasm cancellation without periodic checks
 
+**Status: Not done.** Wasm interruption and Data lock waits use events. The
+native deadline monitor still repeats interrupts.
+
 - **Before:** Data used repeated lock and interruption checks. Wasm used a
   periodic epoch tick to interrupt execution.
-- **Now:** Package Runtime waits for cancellation, an exact deadline, or
-  completion. The recurring Wasm epoch tick and compiler process are removed.
-  Data lock and interruption waits still require their own audit.
+- **Now:** [Wasm execution](../../crates/araphor-package-runtime/src/wasm/execution.rs)
+  waits for cancellation, an exact deadline or completion. Data lock waits
+  register unlock and cancellation notifications and use an exact deadline.
+  The [read monitor](../../crates/araphor-data/src/analysis/read.rs) reuses its
+  worker, but after expiry it sends another native interrupt every millisecond.
+  Remove that repetition while preserving native cancellation, deadline
+  enforcement and reader cleanup. The existing lock and read checks remain.
 - **Required:** Wait for lock release, cancellation, completion, or an actual
   deadline. Preserve interruption and reject cancelled output. Do not poll.
 - **Reuse:** Compatible Wasm admission, cache, execution, and cleanup code.
@@ -641,15 +773,20 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 13. Configurable quotas, disabled by default
 
+**Status: Not done.** Package quota removal is complete. Wider operational
+quota defaults and resource boundaries still need changes or qualification.
+
 - **Before:** Several limits were mandatory.
-- **Now:** Wasm/native options, shared memory capacities, storage, Query bulk,
-  extraction limits have disabled defaults. The current user instruction
-  removes SDK package quotas, including explicit values. All 143 focused
-  checks, strict Clippy, formatting, and library test compilation pass. Graph domain,
-  retained-result and traversal resource defaults are now removed. All 159
-  connected cases, formatting and strict Clippy pass. Evidence intake, coverage reports,
-  Discovery batching, notification policy, legacy package literals and SDK
-  descriptor boundaries still need their separate audit.
+- **Now:** SDK package quotas are removed. Query, runtime, storage, extraction
+  and shared-capacity options have disabled defaults. Graph and retained-result
+  resource defaults are removed. The
+  [package quota result](araphor-analysis-migration.md#package-quota-removal)
+  retains the 143 passing focused checks. Control's
+  [evidence admission](../../crates/mithril-control/src/config.rs) still defaults
+  to eight total slots and two slots per node; validation requires positive
+  values and supplies no disabled setting. Complete that change and the
+  remaining resource-boundary audit. Preserve identity, format, type and
+  arithmetic validation; do not remove domain rules as quota cleanup.
 - **Required:** Keep the package contract free of row, batch, byte, and
   checkpoint quotas. Only the time window can be set outside SQL. Keep
   separate engine quotas configurable and disabled by default. Keep identity,
