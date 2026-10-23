@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::PackageErrorCodeV1 as Code;
-use super::{InstalledRefV1, PackageBundleRef, PackageRefV1};
+use super::{InstalledRefV1, PackageArtifactV1, PackageBundleRef, PackageBundleV1, PackageRefV1};
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +19,20 @@ pub(crate) struct NativePackageContext {
     package: PackageRefV1,
     export: String,
     output: String,
+}
+
+impl NativePackageContext {
+    pub(crate) fn validate(self, artifacts: Vec<PackageArtifactV1>) -> Result<()> {
+        let bundle = PackageBundleV1 {
+            schema_version: 1,
+            root: self.root,
+            artifacts,
+        };
+        if bundle.checked_layout(&self.digest)?.is_none() {
+            return Err(Code::Invalid.error("native package bundle digest"));
+        }
+        PackageBundleRef::check_output(&bundle, &self.package, &self.export, &self.output)
+    }
 }
 
 impl PackageBundleRef<'_> {
@@ -32,7 +46,8 @@ impl PackageBundleRef<'_> {
         if tenant == [0; 16] {
             return Err(Code::Invalid.error("native package context tenant"));
         }
-        self.check_output(package, export, output)?;
+        self.bundle().validate()?;
+        Self::check_output(self.bundle(), package, export, output)?;
         let body = serde_json::to_vec(&NativePackageContext {
             root: self.bundle().root.clone(),
             digest: self.digest().into(),
@@ -77,18 +92,13 @@ impl PackageBundleRef<'_> {
         Ok(Some(reference))
     }
 
-    pub(crate) fn validate_context(&self, context: &AnalysisContextVersionV1) -> Result<()> {
-        let reference = Self::provenance(context)?
-            .ok_or_else(|| Code::Invalid.error("native package context owner"))?;
-        if reference.root != self.bundle().root || reference.digest != self.digest() {
-            return Err(Code::Invalid.error("native package bundle digest"));
-        }
-        self.check_output(&reference.package, &reference.export, &reference.output)
-    }
-
-    fn check_output(&self, package: &PackageRefV1, export: &str, output: &str) -> Result<()> {
-        self.bundle().validate()?;
-        let artifact = self.bundle().artifact(package)?;
+    fn check_output(
+        bundle: &PackageBundleV1,
+        package: &PackageRefV1,
+        export: &str,
+        output: &str,
+    ) -> Result<()> {
+        let artifact = bundle.artifact(package)?;
         let model = artifact
             .descriptor
             .exports

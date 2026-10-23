@@ -2425,3 +2425,25 @@ artifact corruption and atomic publication. The Graph unchanged-source retry
 passes its original observer. The same test later fails at repaired cursor 258.
 Read the [consolidation record](../../recovery/araphor-context-retry-consolidation-20261023.json).
 Complete Graph recovery and the final nine-file removal remain **Not done**.
+
+
+## Fresh native Layout validation
+
+[PackageBundleV1::checked_layout](../../crates/araphor-package/src/admission.rs)
+builds one fresh native OCI Layout from the actual closure and artifact bytes.
+A matching digest runs the complete structure, dependency and order checks.
+[NativePackageContext::validate](../../crates/araphor-data/src/package/provenance.rs)
+then checks the exact selected output. The
+[context reader](../../crates/araphor-data/src/analysis/context/provenance.rs)
+parses the context once and keeps its actual artifact reads. This replaces two
+fresh Layout constructions and duplicate context parsing on that path. Public
+bundle and context validation retain their complete checks. A saved digest
+does not replace artifact validation.
+
+Compilation and formatting pass on source state 369. All four Package checks
+and 17 Data checks pass, including corruption, dependency artifact pins,
+exact retries and atomic publication. The complete Graph recovery check passes
+in 180.11 seconds with its original observers. Read the
+[consolidation record](../../recovery/araphor-native-layout-validation-20261023.json)
+for source, command, binary and log hashes. The final nine reference files
+remain. Final reference removal is **Not done**.

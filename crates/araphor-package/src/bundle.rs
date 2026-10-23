@@ -268,6 +268,20 @@ mod encoding_tests {
                     ]
                     .into(),
                 )]);
+        let mut duplicate = sql.clone();
+        duplicate.artifacts.push(duplicate.artifacts[0].clone());
+        let digest = duplicate.digest()?;
+        let expected = sql.digest()?;
+        assert_ne!(digest, expected);
+        assert!(matches!(
+            duplicate.checked_layout(&digest),
+            Err(crate::Error::Package {
+                code: Code::Invalid,
+                field: "duplicate package revision",
+                ..
+            })
+        ));
+        assert!(duplicate.checked_layout(&expected)?.is_none());
         for mut package in [sql, provided, component] {
             assert_eq!(
                 package.artifacts[0].descriptor_bytes()?,
@@ -295,6 +309,13 @@ mod encoding_tests {
                 format!("sha256:{:x}", Sha256::digest(&content.manifest))
             );
             package.check_encoding()?;
+            assert_eq!(
+                package
+                    .checked_layout(&package.digest()?)?
+                    .ok_or("checked layout absent")?
+                    .digest(),
+                package.digest()?
+            );
             let restored = PackageBundleV1::from_bytes(&bytes)?;
             assert_eq!(restored.root, package.root);
             assert_eq!(restored.artifacts, package.artifacts);
@@ -328,6 +349,10 @@ mod encoding_tests {
         ));
         assert!(matches!(
             package.check_encoding(),
+            Err(crate::Error::AnalysisContract { .. })
+        ));
+        assert!(matches!(
+            package.checked_layout("mismatched"),
             Err(crate::Error::AnalysisContract { .. })
         ));
         Ok(())

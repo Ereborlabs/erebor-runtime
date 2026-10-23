@@ -1,0 +1,216 @@
+{
+  "result": "Done for fresh native Layout validation consolidation and its focused Package, Data and complete Graph recovery checks. Final reference removal is Not done.",
+  "source_base": "c7c4e6d0d58e45a82925737285303027a4539fb4",
+  "source_manifest": {
+    "file": "source369-final.json",
+    "sha256": "294448db4d41e0c66c4dbeac314dae6eeb90537dd1d0297ef9eda339a5fbd5b0",
+    "files": 56
+  },
+  "source": [
+    {
+      "path": "crates/araphor-package/src/admission.rs",
+      "role": "production",
+      "sha256": "515a1149965307e07e41e2edb7e8222bee37620fd1a78d58c3b973c4d3523f03"
+    },
+    {
+      "path": "crates/araphor-data/src/package/provenance.rs",
+      "role": "production",
+      "sha256": "687e80ee313ec67c03757525d31ddfd2560e5f3afb95abe425ff65f0f7058445"
+    },
+    {
+      "path": "crates/araphor-data/src/analysis/context/provenance.rs",
+      "role": "production",
+      "sha256": "feb82ba3b7e1a118e7437fe13e84e63b172522e3b411b5b141b081c63737e6cb"
+    },
+    {
+      "path": "crates/araphor-package/src/bundle.rs",
+      "role": "existing test extension",
+      "sha256": "c30dab798f68f39ec537c12da3a3928ded2d4fe3e68ce1d3b6ad11a95211b73f"
+    },
+    {
+      "path": "crates/araphor-data/src/analysis/packages/tests/context/native.rs",
+      "role": "existing test extension",
+      "sha256": "81fd6a637982063edcbc522d6a8a7eb2abba832a4ab9ee0fa778c849cfc3685a"
+    }
+  ],
+  "reason": "One stored native context path builds a fresh OCI Layout in PackageBundleRef::new, then builds the same fresh Layout again through validate_context and check_output. Both constructions read the same exact closure and actual artifact bytes.",
+  "behavior": "Parse the existing NativePackageContext once. Build one fresh Layout, compare its digest, run the same structural, dependency and ordering checks, then check the exact selected output. Public bundle validation and public context construction retain their complete checks.",
+  "owners": [
+    {
+      "path": "crates/araphor-package/src/admission.rs",
+      "method": "PackageBundleV1::checked_layout",
+      "role": "Build the fresh native OCI Layout from the actual bundle; a matching digest then runs the existing complete structure checks."
+    },
+    {
+      "path": "crates/araphor-data/src/package/provenance.rs",
+      "method": "NativePackageContext::validate",
+      "role": "Consume the parsed context and actual closure; use that checked Layout and the existing exact output selection. The private duplicate validate_context path is removed."
+    },
+    {
+      "path": "crates/araphor-data/src/analysis/context/provenance.rs",
+      "method": "AnalysisStore::validate_context_packages",
+      "role": "Keep descriptor closure and actual artifact reads, then pass the one parsed context to its validation owner."
+    }
+  ],
+  "preserved": [
+    "The stored-context path keeps its descriptor closure, artifact decode, dependency order, tenant, exact output and root identity checks.",
+    "Fresh Layout failure still precedes stored pin mismatch. A matching pin runs all structural, dependency and order checks before output selection.",
+    "Public bundle validation keeps structural checks before encoding checks. Public context creation keeps zero-tenant rejection, full bundle validation and exact output selection in that order.",
+    "Actual artifact bytes are checked on every applicable read. A retained digest does not replace validation. The change adds no cache, skip flag, constructor mode, schema or version."
+  ],
+  "production_nonblank_delta": 19,
+  "count_scope": "This is the bounded three-file production patch count from the reviewed packet. It is not a whole-migration reduction.",
+  "reviewed_packet": {
+    "path": "bundle-fusion368-patch/packet.json",
+    "sha256": "638f99ecc038c24c59221bdc0a27d9829882d1dcc3cfad3c0a25310a61ee72df"
+  },
+  "qualification": [
+    {
+      "name": "compile369",
+      "record": "compile369.json",
+      "record_sha256": "3925a4f1b97a723b5bcf174143ee34c819ee532a5c2fd7c8decd95093d1ec7bd",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-package",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 357.6789185569942,
+      "log": "compile369.log",
+      "log_sha256": "85a9a35b455c027944d00b7204650803dc18f149ee17ebfa89c274eb49e46130",
+      "source_unchanged": true
+    },
+    {
+      "name": "format369",
+      "record": "format369.json",
+      "record_sha256": "f4d29de2e431cfa8ec84aea9cbabb41ecd930e18a68f759238949418bdfd2c29",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 4.994697948000976,
+      "log": "format369.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_unchanged": true
+    },
+    {
+      "name": "package-layout369",
+      "record": "package-layout369.json",
+      "record_sha256": "8184c30e0a71f5ae6935daff90b3e34bbd6015d8203ff9ae2aea753f293d807a",
+      "command": [
+        "target/debug/deps/araphor_package-3fe5c6e88735225f",
+        "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+        "bundle::encoding_tests::bundle_writer_descriptor_errors",
+        "tests::image_roundtrip_keeps_contract",
+        "tests::image_closure_has_no_count_cap",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.24889714299933985,
+      "log": "package-layout369.log",
+      "log_sha256": "b5fde75c6f135a597512c4fc18672502a5afb1b1e84e2104ee674bab770ace21",
+      "source_unchanged": true,
+      "binary_sha256": "e235649093872753a1e93b25baf7467c41e957452db5a65f7f5a9fce49f2fb76",
+      "passing_selectors": [
+        "bundle::encoding_tests::bundle_writer_descriptor_errors",
+        "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+        "tests::image_closure_has_no_count_cap",
+        "tests::image_roundtrip_keeps_contract"
+      ]
+    },
+    {
+      "name": "data-context369",
+      "record": "data-context369.json",
+      "record_sha256": "3e447ac974fa4fdff17935670c8871d1e011e053d52a5e4f31632b58ef1590aa",
+      "command": [
+        "target/debug/deps/araphor_data-ef29af64b90b2937",
+        "analysis::managed::tests::frontier::",
+        "analysis::managed::tests::readiness::failed_frontier_keeps_progress",
+        "analysis::managed::tests::readiness::cancelled_frontier_is_unconsumed",
+        "analysis::managed::tests::managed_witness_lifetime_check",
+        "analysis::graph_rows::tests::atomic::graph_contexts_commit_atomically",
+        "analysis::packages::tests::evidence::packages_preserve_native_references",
+        "analysis::packages::tests::packages_failed_commit_atomicity",
+        "analysis::packages::tests::context::native::package_context_retains_closure",
+        "analysis::packages::tests::context::validation::domain_ref_corruption_rejected",
+        "analysis::packages::tests::context::native::package_context_checks_artifact",
+        "analysis::packages::tests::context::native::package_context_pins_dependency_artifact",
+        "analysis::context::tests::context_batch_retries",
+        "analysis::context::tests::context_batch_conflicts",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 41.27691537499777,
+      "log": "data-context369.log",
+      "log_sha256": "f596db197c59c477777d2d19ce910b17aa75141fbbb443ab5d40e7c5740ecd3d",
+      "source_unchanged": true,
+      "binary_sha256": "b46767f8112937fe91c41c15cb58c3ce72e27dfc71589a4032d9c0525b9cf963",
+      "passing_selectors": [
+        "analysis::context::tests::context_batch_conflicts",
+        "analysis::context::tests::context_batch_retries",
+        "analysis::graph_rows::tests::atomic::graph_contexts_commit_atomically",
+        "analysis::managed::tests::frontier::finite_result_rejects_resume",
+        "analysis::managed::tests::frontier::frontier_commits_with_receipt",
+        "analysis::managed::tests::frontier::frontier_expiry_keeps_history",
+        "analysis::managed::tests::frontier::frontier_rejects_corrupt_completion",
+        "analysis::managed::tests::frontier::pending_frontier_blocks_restart",
+        "analysis::managed::tests::managed_witness_lifetime_check",
+        "analysis::managed::tests::readiness::cancelled_frontier_is_unconsumed",
+        "analysis::managed::tests::readiness::failed_frontier_keeps_progress",
+        "analysis::packages::tests::context::native::package_context_checks_artifact",
+        "analysis::packages::tests::context::native::package_context_pins_dependency_artifact",
+        "analysis::packages::tests::context::native::package_context_retains_closure",
+        "analysis::packages::tests::context::validation::domain_ref_corruption_rejected",
+        "analysis::packages::tests::evidence::packages_preserve_native_references",
+        "analysis::packages::tests::packages_failed_commit_atomicity"
+      ]
+    }
+  ],
+  "graph_recovery": {
+    "command": [
+      "target/debug/deps/araphor_analysis-f2e10dea0901b393",
+      "graph::native::tests::feed::failed_feed_recovers_source",
+      "--exact",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "head": "c7c4e6d0d58e45a82925737285303027a4539fb4",
+    "binary_sha256": "13fba9c50fd1f772642859df6522fbceaac2f7976e515cd857c9361ce6604c43",
+    "exit_code": 0,
+    "elapsed_seconds": 180.11252434400376,
+    "log_sha256": "71fbe874d4eb3859faa33b5ff0a346e8a6d21773bbc0cc8edd327bb616d44034",
+    "source_unchanged": true,
+    "record": "graph-recovery369.json",
+    "record_sha256": "cfbf386a0b0aa168a60be8520999eaec5e9acab962533e007ecb061182d8f2ee"
+  },
+  "remaining": {
+    "retired": 199,
+    "reference_files": 9,
+    "removed_by_this_correction": 0
+  },
+  "limits": "No benchmark or full-workspace result is claimed. The final relevant Query, Discovery and strict Clippy checks remain pending. Nine original reference files remain."
+}

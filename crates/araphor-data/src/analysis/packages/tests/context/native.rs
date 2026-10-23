@@ -205,6 +205,21 @@ fn package_context_pins_dependency_artifact() -> TestResult {
         revision: "v1".into(),
     };
     let context = retained.context([1; 16], &dependency, "model", "rows")?;
+    let mut invalid = bundle.clone();
+    invalid.schema_version = 0;
+    assert!(matches!(
+        PackageBundleRef::retained(&invalid, retained.digest()).context(
+            [1; 16],
+            &dependency,
+            "model",
+            "rows"
+        ),
+        Err(crate::Error::Package {
+            code: crate::PackageErrorCodeV1::Invalid,
+            field: "bundle version or package count",
+            ..
+        })
+    ));
     let root_context = retained.context([1; 16], &bundle.root, "model", "rows")?;
     assert_ne!(context.key, root_context.key);
     let body: serde_json::Value = serde_json::from_slice(&context.body)?;

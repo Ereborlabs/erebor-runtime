@@ -7,7 +7,7 @@ use snafu::ResultExt as _;
 
 use super::*;
 use crate::package::NativePackageContext;
-use crate::{InstalledRefV1, JsonSnafu, PackageBundleRef, PackageBundleV1, PackageRefV1};
+use crate::{InstalledRefV1, JsonSnafu, PackageBundleRef, PackageRefV1};
 
 impl AnalysisStore {
     pub(in crate::analysis) fn validate_context_packages(
@@ -38,12 +38,7 @@ impl AnalysisStore {
                     .decode_artifact()
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let bundle = PackageBundleV1 {
-                schema_version: 1,
-                root: reference.root,
-                artifacts,
-            };
-            return PackageBundleRef::new(&bundle)?.validate_context(context);
+            return reference.validate(artifacts);
         }
         let Some(references) = InstalledRefV1::context_refs(context)? else {
             return Ok(());

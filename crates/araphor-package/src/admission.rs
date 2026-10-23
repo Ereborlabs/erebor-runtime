@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use araphor_analysis_sdk::oci::Layout;
 use snafu::ResultExt as _;
 
 use crate::{AnalysisContractSnafu, Result};
@@ -14,6 +15,22 @@ pub struct ModelRef {
 
 impl PackageBundleV1 {
     pub fn validate(&self) -> Result<()> {
+        self.validate_structure()?;
+        self.check_encoding()
+    }
+
+    /// Return the native layout after the digest and bundle checks pass.
+    /// Return `None` when the digest does not match.
+    pub fn checked_layout(&self, expected: &str) -> Result<Option<Layout<'_>>> {
+        let layout = super::oci::PackageOci::layout(self)?;
+        if layout.digest() != expected {
+            return Ok(None);
+        }
+        self.validate_structure()?;
+        Ok(Some(layout))
+    }
+
+    fn validate_structure(&self) -> Result<()> {
         if self.schema_version != 1 || self.artifacts.is_empty() {
             return Err(Code::Invalid.error("bundle version or package count"));
         }
@@ -76,7 +93,6 @@ impl PackageBundleV1 {
             return Err(Code::Invalid.error("unreferenced package artifact"));
         }
         self.order()?;
-        self.check_encoding()?;
         Ok(())
     }
 
