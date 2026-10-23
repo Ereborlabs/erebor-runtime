@@ -92,6 +92,21 @@ async fn retained_floor_is_gapped() -> TestResult {
             .consumed_cursor,
         2
     );
+    let before = fixture.query.store().meta()?;
+    let repeated = fixture
+        .prepare("")
+        .await?
+        .refresh("graph:retained-floor-repeat".into())
+        .await?;
+    assert_eq!(repeated.0, "graph:retained-floor");
+    assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .graph_result(source.tenant_id, &repeated.0)?,
+        Some(graph)
+    );
     drop(fixture.query.reserve_evaluation(source.tenant_id)?);
     drop(fixture.query.memory().reserve_input(INPUT)?);
     Ok(())

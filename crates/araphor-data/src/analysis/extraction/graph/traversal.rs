@@ -102,6 +102,8 @@ impl AnalysisStore {
                 version.revision,
                 version.sensitivity,
                 Some(&walk.subjects),
+                &[],
+                header.notice,
                 &mut output.sink(control),
             )?;
         }

@@ -13,8 +13,7 @@ use araphor_data::{
     GraphSubjectKeyV1, GraphSubjectKindV1, GraphValidate, GraphVersionV1, LocalSubjectBindingV1,
     OperationResultAuthorityV1, PolicyObservationProvenanceV1, PolicyProvenanceStateV1,
     ProcessorScopeV1, ProofIntegrityV1, ProofQualityV1, Result, TemporalCoverageV1,
-    GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, GRAPH_WINDOW_BYTES, GRAPH_WINDOW_NS,
-    GRAPH_WINDOW_RECORDS, GRAPH_WITNESS_TTL_NS,
+    GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, GRAPH_WINDOW_NS, GRAPH_WITNESS_TTL_NS,
 };
 use araphor_query::definition::{CallResult, PackageCall};
 use erebor_interceptor_abi::{
@@ -25,11 +24,14 @@ use snafu::ResultExt as _;
 mod edges;
 mod expiry;
 mod facts;
+mod feed;
+pub use feed::{GraphOwner, GraphProgram};
 mod finding;
 mod finish;
 mod identity;
 mod native;
-pub use native::{GraphFacts, GraphPublication};
+pub(crate) use native::GraphConversion;
+pub use native::{GraphFacts, GraphPublication, GraphSubscription};
 mod output;
 mod policy;
 mod projection;

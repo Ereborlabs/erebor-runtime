@@ -750,8 +750,19 @@ mod tests {
         empty.bindings[0].identity.request_id = empty.request_id;
         empty.bindings[0].identity.execution_id = [6; 16];
         store.accept_trace(&empty)?;
+        let mut selected = crate::AnalysisSelectionV1::new(identity.tenant_id, Vec::new());
+        selected.traces = crate::Selection::Exact(vec![identity.clone()]);
+        let before = store
+            .dependency_revision(&selected, &AnalysisReadControl::default())?
+            .1;
         let owner = EvidenceRetentionOwner::new(&store);
         let result = owner.step(201)?;
+        assert!(
+            store
+                .dependency_revision(&selected, &AnalysisReadControl::default())?
+                .1
+                > before
+        );
         assert_eq!(result.removed_records, 3);
         assert!(!result.more);
         assert!(store.retention_healthy());

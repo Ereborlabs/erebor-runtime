@@ -78,26 +78,10 @@ fn fixture() -> sdk::Result<sdk::Fixture> {
         .collect();
     let datasets = vec![
         Record::encode(&records)?,
-        Rows::encode(
-            &Discovery::port::<Context>("contexts"),
-            &contexts,
-            Discovery::limits(),
-        )?,
-        Rows::encode::<Disposition>(
-            &Discovery::port::<Disposition>("exclusions"),
-            &[],
-            Discovery::limits(),
-        )?,
-        Rows::encode::<Lifecycle>(
-            &Discovery::port::<Lifecycle>("lifecycle"),
-            &[],
-            Discovery::limits(),
-        )?,
-        Rows::encode(
-            &Discovery::port::<bool>("observed"),
-            &[false],
-            Discovery::limits(),
-        )?,
+        Rows::encode(&Discovery::port::<Context>("contexts"), &contexts)?,
+        Rows::encode::<Disposition>(&Discovery::port::<Disposition>("exclusions"), &[])?,
+        Rows::encode::<Lifecycle>(&Discovery::port::<Lifecycle>("lifecycle"), &[])?,
+        Rows::encode(&Discovery::port::<bool>("observed"), &[false])?,
         Rows::encode(
             &Discovery::port::<Coverage>("coverage"),
             &[Coverage {
@@ -111,7 +95,6 @@ fn fixture() -> sdk::Result<sdk::Fixture> {
                 state: CoverageState::Healthy,
                 gap_reasons: Vec::new(),
             }],
-            Discovery::limits(),
         )?,
     ];
     Ok(sdk::Fixture {
@@ -143,7 +126,6 @@ fn fixture() -> sdk::Result<sdk::Fixture> {
                 id: "fixture".into(),
                 time_utc_ns: 9_007_199_254_740_999,
                 seed: None,
-                limits: Discovery::limits(),
             },
             checkpoint: None,
         },
@@ -159,7 +141,7 @@ fn output<T: serde::de::DeserializeOwned + JsonSchema>(
         .iter()
         .find(|data| data.name == name)
         .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "fixture output"))?;
-    Rows::decode(&Discovery::port::<T>(name), data, Discovery::limits())
+    Rows::decode(&Discovery::port::<T>(name), data)
 }
 
 #[test]
@@ -224,27 +206,7 @@ fn sdk_conflicting_record() -> TestResult {
 }
 
 #[test]
-fn sdk_bounded_derivation() -> TestResult {
-    let mut fixture = fixture()?;
-    for bounds in [
-        sdk::Limits {
-            max_rows: 1,
-            ..Discovery::limits()
-        },
-        sdk::Limits {
-            max_bytes: 64,
-            ..Discovery::limits()
-        },
-    ] {
-        fixture.evaluation.context.limits = bounds;
-        assert!(matches!(
-            Discovery::evaluate(&fixture.evaluation),
-            Err(sdk::Error::Contract {
-                code: sdk::ErrorCode::Limit,
-                ..
-            })
-        ));
-    }
+fn record_optional_fields() -> TestResult {
     let port = Record::port();
     for name in ["original_sequence", "generation"] {
         let field = port.schema.field_with_name(name)?;

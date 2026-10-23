@@ -321,8 +321,8 @@ impl AnalysisStore {
         control.check()?;
         let _permit = self.reserve_reader()?;
         let coordinator = self.raw_coordinator(control)?;
-        let _snapshot = control.lock(|| self.maintenance.try_read())?;
-        let raw = control.lock(|| self.raw.try_lock())?;
+        let _snapshot = self.maintenance.read_until(control)?;
+        let raw = self.raw.until(control)?;
         let key = identity.key();
         let source = raw
             .sources
@@ -576,7 +576,9 @@ impl AnalysisStore {
         }
 
         if let RawIdentity::Evidence(source) = &identity {
-            if self.graph_enabled() && self.graph_registration_required(writer.get()?, source)? {
+            if self.graph_interested(source)?
+                && self.graph_registration_required(writer.get()?, source)?
+            {
                 self.project_raw(
                     writer
                         .connection
@@ -589,7 +591,7 @@ impl AnalysisStore {
                     .sources
                     .get(&source.key())
                     .map_or(0, |source| source.receipt.floor());
-                self.register_graph_locked(writer.get_mut()?, source, floor)?;
+                self.register_graph_locked(writer.get_mut()?, source, floor, || Ok(()))?;
                 raw.refresh_budget(writer.get()?, self.retention)?;
                 self.raw_dirty.store(false, Ordering::Release);
             }

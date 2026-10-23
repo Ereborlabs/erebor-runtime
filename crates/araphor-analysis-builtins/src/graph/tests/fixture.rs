@@ -38,16 +38,9 @@ pub(super) fn fixture(
     let package = detector.descriptor();
     let model = &package.exports[0];
     let datasets = vec![
-        Rows::encode(&model.inputs[0].port, records, model.limits)?,
-        Rows::encode(&model.inputs[1].port, facts, model.limits)?,
-        Rows::encode(
-            &model.inputs[2].port,
-            &[Manifest {
-                window_ns: 100,
-                window_records: 256,
-            }],
-            model.limits,
-        )?,
+        Rows::encode(&model.inputs[0].port, records)?,
+        Rows::encode(&model.inputs[1].port, facts)?,
+        Rows::encode(&model.inputs[2].port, &[Manifest { window_ns: 100 }])?,
     ];
     Ok(sdk::Fixture {
         implementation: "shared-rust".into(),
@@ -74,7 +67,6 @@ pub(super) fn fixture(
                 id: "evaluation".into(),
                 time_utc_ns: 1,
                 seed: None,
-                limits: model.limits,
             },
             checkpoint: None,
         },
@@ -87,11 +79,7 @@ pub(super) fn findings(
 ) -> sdk::Result<(Vec<Finding>, sdk::Output)> {
     let package = detector.descriptor();
     let report = package.test(fixture, |evaluation| detector.evaluate(evaluation))?;
-    let rows = Rows::decode(
-        &package.exports[0].outputs[2],
-        &report.output.datasets[2],
-        fixture.evaluation.context.limits,
-    )?;
+    let rows = Rows::decode(&package.exports[0].outputs[2], &report.output.datasets[2])?;
     Ok((rows, report.output))
 }
 

@@ -154,8 +154,8 @@ fn native_declaration_compiles() -> TestResult {
         br#"
 static uint32_t evaluate(const araphor_analysis_request_v1 *request,
                          araphor_analysis_response_v1 *response) {
-    response->error.code = request->context.limits.max_rows
-        ? ARAPHOR_ANALYSIS_OK : ARAPHOR_ANALYSIS_LIMIT;
+    response->error.code = request->context.has_seed > 1
+        ? ARAPHOR_ANALYSIS_INVALID : ARAPHOR_ANALYSIS_OK;
     return response->error.code;
 }
 static void release(araphor_analysis_response_v1 *response) {
@@ -167,10 +167,11 @@ int main(void) {
         evaluate, release
     };
     araphor_analysis_request_v1 request = {0};
+    request.context.has_seed = 2;
     araphor_analysis_response_v1 response = {0};
     uint32_t code = api.evaluate(&request, &response);
     api.release(&response);
-    return code == ARAPHOR_ANALYSIS_LIMIT ? 0 : 1;
+    return code == ARAPHOR_ANALYSIS_INVALID ? 0 : 1;
 }
 "#,
     )?;

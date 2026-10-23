@@ -9,7 +9,7 @@ use araphor_data::{
     PackageAuthorization, PackageBundleRef, PackageErrorCodeV1 as Code, PackageGrantV1,
     StorePositionV1,
 };
-use araphor_discovery_definition::{Definition, Program, Source};
+use araphor_discovery_definition::{Definition, Program, ResolvedDefinition, Source};
 use araphor_query::definition::{PackageCall, PreparedDefinition};
 use araphor_query::execution::{Limits, Session};
 use araphor_query::memory::Memory;
@@ -24,8 +24,14 @@ use tokio::sync::OnceCell;
 use crate::{Graph, Result};
 
 mod capture;
+mod commit;
+pub(crate) use commit::GraphConversion;
+mod managed;
 mod node;
+mod program;
 mod sink;
+mod subscription;
+pub use subscription::GraphSubscription;
 
 #[cfg(test)]
 mod tests;
@@ -72,6 +78,7 @@ struct Capture {
     heads: Vec<Head>,
     proofs: Vec<AnalysisContextRefV1>,
     consumed: u64,
+    accepted: u64,
     coverage_revision: u64,
     now: u64,
     inputs: Vec<sdk::Input>,
@@ -83,18 +90,55 @@ struct Head {
     revision: u64,
     first: u64,
     deadline: u64,
+    coverage: u64,
+    packages: std::collections::BTreeSet<araphor_data::AnalysisContextKeyV1>,
+    reusable: bool,
+}
+
+enum DefinitionRef<'a> {
+    Fresh(&'a Definition),
+    Retained(&'a ResolvedDefinition),
 }
 
 impl GraphPublication {
     pub async fn prepare(
-        mut session: Session,
+        session: Session,
         authority: Arc<dyn PackageAuthorization>,
         grant: PackageGrantV1,
         events: LogicalPlan,
         definition: Definition,
         facts: Arc<dyn GraphFacts>,
     ) -> Result<Self> {
-        if session.selection() != &grant.selection
+        Self::prepare_on(
+            session,
+            authority,
+            grant,
+            events,
+            DefinitionRef::Fresh(&definition),
+            facts,
+        )
+        .await
+    }
+
+    async fn prepare_on(
+        mut session: Session,
+        authority: Arc<dyn PackageAuthorization>,
+        grant: PackageGrantV1,
+        events: LogicalPlan,
+        definition: DefinitionRef<'_>,
+        facts: Arc<dyn GraphFacts>,
+    ) -> Result<Self> {
+        let mut selection = session.selection().clone();
+        selection.sources = grant.selection.sources.clone();
+        if selection != grant.selection
+            || (!grant.selection.sources.is_all()
+                && (session.selection().sources.is_all()
+                    || session
+                        .selection()
+                        .sources
+                        .as_slice()
+                        .iter()
+                        .any(|source| !grant.selection.sources.as_slice().contains(source))))
             || !grant.selection.binding_ids.is_empty()
             || grant.selection.graph_traversal().is_some()
             || !grant.selection.contexts.is_all()
@@ -152,7 +196,13 @@ impl GraphPublication {
         for sql in [
             "SELECT * FROM context_versions",
             "SELECT * FROM graph_state",
-            "SELECT * FROM graph_manifest QUALIFY ROW_NUMBER() OVER (PARTITION BY tenant_id, source_key, first_cursor ORDER BY commit_revision DESC) = 1",
+            "SELECT tenant_id, source_key, graph_result_id, commit_revision, graph_revision,
+                graph_sensitivity, first_cursor, last_cursor, previous_result_id,
+                context_notice_revision, witness_deadline_utc_ns, subject_count,
+                relationship_count, max_hops, hop_boundary, context_refs,
+                notice_coverage_revision FROM graph_manifest
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY tenant_id, source_key, first_cursor
+                ORDER BY commit_revision DESC) = 1",
         ] {
             children.push(query.prepare(sql, Vec::new()).await?.0);
         }
@@ -169,19 +219,13 @@ impl GraphPublication {
             #[cfg(test)]
             observed: Mutex::new(None),
         });
-        let selected = Arc::downgrade(&projection);
-        session.set_context_init(move |config| {
-            config.set_extension(Arc::new(GraphRun {
-                projection: selected.clone(),
-                captured: OnceCell::new(),
-            }));
-        });
         for index in 0..projection.ports.len() {
             let source = Arc::new(node::Port {
                 owner: Arc::clone(&projection),
                 index,
             });
             let port = araphor_query::sources::SourcePort::new(
+                projection.ports[index].name.clone(),
                 Arc::new(projection.ports[index].schema.clone()),
                 children.clone(),
                 source,
@@ -196,7 +240,10 @@ impl GraphPublication {
                 )),
             )?;
         }
-        let prepared = session.prepare_definition(&definition).await?;
+        let prepared = match definition {
+            DefinitionRef::Fresh(definition) => session.prepare_definition(definition).await?,
+            DefinitionRef::Retained(definition) => session.prepare_resolved(definition).await?,
+        };
         let mut calls = BTreeMap::new();
         let mut foreign = false;
         PackageCall::any(&prepared.plan, &mut |call| {
@@ -249,6 +296,53 @@ impl GraphPublication {
                 Ok(prepared)
             })
             .await?;
+        let packages = calls
+            .values()
+            .map(|call| {
+                let (bundle, digest) = prepared
+                    .images()
+                    .find(|(bundle, digest)| {
+                        bundle.root == call.image().image && *digest == call.image().digest.as_str()
+                    })
+                    .ok_or_else(|| Code::Denied.error("graph image attribution"))?;
+                Ok(PackageBundleRef::retained(bundle, digest)
+                    .context(
+                        grant.selection.tenant_id,
+                        call.package(),
+                        call.export(),
+                        call.output(),
+                    )?
+                    .key)
+            })
+            .collect::<araphor_data::Result<std::collections::BTreeSet<_>>>()?;
+        let selected = Arc::downgrade(&projection);
+        session.set_context_init(move |config| {
+            let run = Arc::new(GraphRun {
+                projection: selected.clone(),
+                captured: OnceCell::new(),
+            });
+            config.set_extension(Arc::clone(&run));
+            let packages = packages.clone();
+            config.set_extension(Arc::new(araphor_query::definition::CallReuse::new(
+                move |call| {
+                    call.descriptor()
+                        .exports
+                        .iter()
+                        .find(|model| model.name == call.export())
+                        .is_some_and(Graph::supports)
+                        && run
+                            .captured
+                            .get()
+                            .and_then(|captured| captured.as_ref().ok())
+                            .is_some_and(|captured| {
+                                captured
+                                    .heads
+                                    .iter()
+                                    .any(|head| head.reusable && head.packages == packages)
+                            })
+                },
+            )));
+        });
         Ok(Self {
             session,
             authority,
@@ -267,22 +361,12 @@ impl GraphPublication {
         let state = Arc::clone(&receipt);
         let owner = Arc::new(self);
         let execution = async {
-            let schema = Arc::clone(owner.prepared.plan.schema().inner());
-            let sink = Arc::new(sink::Publication {
-                owner: Arc::clone(&owner),
-                schema,
-                result_id,
-                receipt: state,
-            });
-            let mut definition = owner.prepared.clone();
-            definition.plan = LogicalPlanBuilder::insert_into(
-                definition.plan,
-                "__graph_publication",
-                provider_as_source(sink),
-                InsertOp::Append,
-            )
-            .and_then(LogicalPlanBuilder::build)
-            .map_err(|source| araphor_query::Error::Sql { source })?;
+            let definition = owner.publication(
+                owner.prepared.clone(),
+                sink::Kind::Publish(false),
+                Some(result_id),
+                state,
+            )?;
             owner
                 .session
                 .execute_definition(&definition, Default::default())
@@ -313,28 +397,69 @@ impl GraphPublication {
             .ok_or_else(|| Code::Incomplete.error("graph publication receipt"))?;
         Ok(result)
     }
+
+    fn publication(
+        self: &Arc<Self>,
+        mut definition: PreparedDefinition,
+        kind: sink::Kind,
+        result_id: Option<String>,
+        receipt: Arc<Mutex<Option<sink::Receipt>>>,
+    ) -> Result<PreparedDefinition> {
+        let sink = Arc::new(sink::Publication {
+            owner: Arc::clone(self),
+            schema: Arc::clone(definition.plan.schema().inner()),
+            result_id,
+            kind,
+            receipt,
+        });
+        definition.plan = LogicalPlanBuilder::insert_into(
+            definition.plan,
+            "__graph_publication",
+            provider_as_source(sink),
+            InsertOp::Append,
+        )
+        .and_then(LogicalPlanBuilder::build)
+        .map_err(|source| araphor_query::Error::Sql { source })?;
+        Ok(definition)
+    }
+
     async fn check_current(self: &Arc<Self>) -> Result<()> {
         let checked = Arc::clone(self);
         let stage = Arc::clone(self.session.control());
         araphor_query::execution::Engine::blocking(Arc::clone(&stage), (), move || {
-            let images = checked
-                .prepared
-                .images()
-                .map(|(bundle, digest)| PackageBundleRef::retained(bundle, digest))
-                .collect::<Vec<_>>();
-            let grants = std::iter::once((&checked.grant, None))
-                .chain(images.iter().map(|image| (&checked.grant, Some(image))))
-                .collect::<Vec<_>>();
-            checked
-                .authority
-                .commit_many(&grants, PackageActionV1::Run, &mut || {
-                    checked.grant.remaining()?;
-                    stage.check()
-                })?;
-            Ok(())
+            checked.check(&stage).map_err(Into::into)
         })
         .await?;
         Ok(())
+    }
+
+    fn check(&self, control: &araphor_data::AnalysisReadControl) -> araphor_data::Result<()> {
+        self.authorize(control, &mut || Ok(()))
+    }
+
+    fn authorize(
+        &self,
+        control: &araphor_data::AnalysisReadControl,
+        operation: &mut dyn FnMut() -> araphor_data::Result<()>,
+    ) -> araphor_data::Result<()> {
+        let images = self
+            .prepared
+            .images()
+            .map(|(bundle, digest)| PackageBundleRef::retained(bundle, digest))
+            .collect::<Vec<_>>();
+        let grants = std::iter::once((&self.grant, PackageActionV1::Run, None))
+            .chain(
+                images
+                    .iter()
+                    .map(|image| (&self.grant, PackageActionV1::Run, Some(image))),
+            )
+            .collect::<Vec<_>>();
+        self.authority.commit_many(&grants, &mut || {
+            self.grant.remaining()?;
+            self.session.control().check()?;
+            control.check()?;
+            operation()
+        })
     }
 }
 

@@ -69,7 +69,7 @@ async fn native_action_changes() -> TestResult {
     for matched in [true, false] {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-        store.enable_graph_owner()?;
+        let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
         let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
         let engine = Engine::new(store.clone(), Limits::default())?;
         if matched {
@@ -146,7 +146,7 @@ async fn native_priority_changes() -> TestResult {
     for matched in [true, false] {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-        store.enable_graph_owner()?;
+        let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
         let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
         let engine = Engine::new(store.clone(), Limits::default())?;
         if matched {
@@ -222,7 +222,7 @@ async fn native_sensitivity_changes() -> TestResult {
     for matched in [true, false] {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-        store.enable_graph_owner()?;
+        let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
         let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
         let engine = Engine::new(store.clone(), Limits::default())?;
         if matched {

@@ -4,6 +4,8 @@ use araphor_data::*;
 
 use super::*;
 
+mod limits;
+
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 #[test]
@@ -23,6 +25,7 @@ fn control_notification_revocation_survives_restart_and_requires_new_revision() 
         let owner = ConfiguredNotificationAuthority::new(
             crate::ControlStore::open(dir.path())?,
             std::slice::from_ref(&grant),
+            None,
         )?;
         owner.check(&grant, 100)?;
         owner.revoke(grant.tenant_id, grant.principal_id, 1)?;
@@ -31,6 +34,7 @@ fn control_notification_revocation_survives_restart_and_requires_new_revision() 
     let owner = ConfiguredNotificationAuthority::new(
         crate::ControlStore::open(dir.path())?,
         std::slice::from_ref(&grant),
+        None,
     )?;
     assert!(owner.check(&grant, 101).is_err());
     assert!(owner.replace(grant.clone()).is_err());
@@ -63,6 +67,7 @@ fn control_notification_stage_isolation() -> TestResult {
                 .into_iter()
                 .flat_map(|tenant| [policy(tenant, "primary"), policy(tenant, "escalation")])
                 .collect(),
+            ..Default::default()
         },
         10,
     )?
@@ -117,7 +122,7 @@ fn control_notification_stage_isolation() -> TestResult {
     Ok(())
 }
 
-fn grant(tenant: [u8; 16]) -> NotificationGrantV1 {
+pub(crate) fn grant(tenant: [u8; 16]) -> NotificationGrantV1 {
     NotificationGrantV1 {
         tenant_id: tenant,
         principal_id: [9; 16],
@@ -134,7 +139,7 @@ fn grant(tenant: [u8; 16]) -> NotificationGrantV1 {
     }
 }
 
-fn policy(tenant: [u8; 16], route: &str) -> NotificationPolicyV1 {
+pub(crate) fn policy(tenant: [u8; 16], route: &str) -> NotificationPolicyV1 {
     NotificationPolicyV1 {
         tenant_id: tenant,
         route_id: route.into(),

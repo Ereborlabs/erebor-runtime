@@ -90,7 +90,6 @@ pub struct Model {
     pub outputs: Vec<Port>,
     pub checkpoint: Option<CheckpointSpec>,
     pub reasons: Vec<Reason>,
-    pub limits: Limits,
     pub tolerance: NumericTolerance,
 }
 
@@ -111,7 +110,6 @@ impl Model {
             outputs,
             checkpoint: None,
             reasons: Vec::new(),
-            limits: Limits::default(),
             tolerance: NumericTolerance::default(),
         }
     }
@@ -167,25 +165,4 @@ pub struct Reason {
 pub struct NumericTolerance {
     pub absolute: f64,
     pub relative: f64,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[repr(C)]
-pub struct Limits {
-    pub max_batches: u32,
-    pub max_rows: u64,
-    pub max_bytes: u64,
-    pub max_checkpoint_bytes: u64,
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            max_batches: u32::MAX,
-            max_rows: u64::MAX,
-            max_bytes: u64::MAX,
-            max_checkpoint_bytes: u64::MAX,
-        }
-    }
 }

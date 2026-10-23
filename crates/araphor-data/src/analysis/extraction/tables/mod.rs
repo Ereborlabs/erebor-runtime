@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use sdk::arrow_array::{ArrayRef, RecordBatch};
+use snafu::ResultExt as _;
 
 use super::{AnalysisTableRead, ReadBudget};
 use crate::{
@@ -39,6 +40,7 @@ pub(super) struct Capture<'a> {
     latest: BTreeMap<([u8; 16], String), (u64, usize)>,
     trace_recipes: BTreeMap<[u8; 16], TraceRecipeV1>,
     mutable_discovery: bool,
+    graph_expiry: bool,
     received_min: Option<u64>,
     next_change: Option<u64>,
     packages: BTreeMap<usize, (Arc<sdk::Schema>, Vec<RecordBatch>, sdk::Coverage)>,
@@ -56,6 +58,7 @@ impl<'a> Capture<'a> {
             latest: BTreeMap::new(),
             trace_recipes: BTreeMap::new(),
             mutable_discovery: false,
+            graph_expiry: false,
             received_min: None,
             next_change: None,
             packages: BTreeMap::new(),
@@ -69,6 +72,37 @@ impl<'a> Capture<'a> {
 
     pub(super) fn graph_headers(&self) -> bool {
         self.read.requests.contains_key("graph_manifest")
+    }
+
+    pub(super) fn graph_expiry(&mut self, captured: &crate::ManagedCapture) -> Result<()> {
+        let instance = captured.instance();
+        let crate::ManagedDestination::Graph {
+            source,
+            calls,
+            operation: crate::ManagedGraphOperation::Expire,
+            ..
+        } = &instance.spec.destination
+        else {
+            return Ok(());
+        };
+        if !calls.is_empty()
+            || !instance.spec.manifest.calls.is_empty()
+            || self.read.inputs.is_some()
+            || self.scope.tenant_id != source.tenant_id
+            || self.scope.sources.as_slice() != std::slice::from_ref(source)
+            || !self.read.projects_field("graph_manifest", "snapshot")
+            || !self.read.projects_field("graph_manifest", "context_refs")
+            || !self.read.requests.contains_key("graph_state")
+            || self
+                .read
+                .requests
+                .keys()
+                .any(|name| !matches!(name.as_str(), "graph_manifest" | "graph_state"))
+        {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("historical Graph expiry capture"));
+        }
+        self.graph_expiry = true;
+        Ok(())
     }
 
     fn table(
@@ -169,14 +203,15 @@ impl<'a> Capture<'a> {
                 batches.clone()
             }
             None => {
-                let mut limits = inputs.limits;
-                limits.max_bytes = limits.max_bytes.min(budget.remaining_bytes() as u64);
-                let data = dataset.decode(schema, limits).map_err(|source| {
-                    crate::Error::AnalysisContract {
-                        source,
-                        location: snafu::location!(),
-                    }
-                })?;
+                let before = budget.output.input_bytes;
+                budget.charge(
+                    sdk::wire::Dataset::decoding_bytes(&dataset.arrow_ipc)
+                        .context(crate::AnalysisContractSnafu)?,
+                )?;
+                let data = dataset
+                    .decode(schema)
+                    .context(crate::AnalysisContractSnafu)?;
+                budget.output.input_bytes = before;
                 for batch in &data.batches {
                     budget.charge(batch.get_array_memory_size())?;
                 }

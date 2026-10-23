@@ -20,10 +20,8 @@ fn wire_contract_boundaries() -> TestResult {
     assert!(serde_json::from_value::<wire::Output>(metadata).is_err());
     let mut evaluation = fixture.evaluation.clone();
     evaluation.export = "missing".into();
-    evaluation.context.limits.max_bytes = 0;
     let mut header = input.clone();
     header.export_name = evaluation.export.clone();
-    header.context.limits = evaluation.context.limits;
     let headers = [
         (
             package.check_evaluation(&evaluation).map(|_| ()),
@@ -50,13 +48,13 @@ fn wire_contract_boundaries() -> TestResult {
         ),
         (
             header.decode(&package).map(|_| ()),
-            ErrorCode::Invalid,
-            "limits",
+            ErrorCode::Incompatible,
+            "export",
         ),
         (
             encoded.decode(&package, &evaluation).map(|_| ()),
-            ErrorCode::Invalid,
-            "limits",
+            ErrorCode::Incompatible,
+            "export",
         ),
     ];
     let mut invalid = package.clone();

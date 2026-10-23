@@ -49,7 +49,6 @@ fn evaluation(package: &sdk::Package, mode: &str, amount: u64) -> sdk::Result<sd
             id: "runtime-test".into(),
             time_utc_ns: 123,
             seed: Some(7),
-            limits: package.exports[0].limits,
         },
     })
 }
@@ -120,7 +119,7 @@ fn component_recovers_after_failure() -> TestResult {
     let runtime = WasmExecution::new(WasmLimits {
         fuel: Some(100_000_000),
         memory_bytes: Some(256 * 1024 * 1024),
-        data_bytes: Some(32 * 1024 * 1024),
+
         timeout: Some(Duration::from_secs(5)),
         allocation_bytes: Some(32 * 1024 * 1024),
         host_calls: Some(4096),
@@ -221,52 +220,6 @@ fn component_validates_error_output() -> TestResult {
             "{mode}: {error:?}"
         );
     }
-    Ok(())
-}
-
-#[test]
-fn component_enforces_transfer_limits() -> TestResult {
-    let runtime = WasmExecution::new(WasmLimits {
-        data_bytes: Some(32 * 1024 * 1024),
-        ..WasmLimits::default()
-    })?;
-    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-    let requested = sdk::Limits {
-        max_batches: u32::MAX,
-        max_rows: u64::MAX,
-        max_bytes: u64::MAX,
-        max_checkpoint_bytes: u64::MAX,
-    };
-    assert_eq!(
-        WasmExecution::limits(requested, &runtime.limits),
-        sdk::Limits {
-            max_bytes: 32 * 1024 * 1024,
-            max_checkpoint_bytes: 32 * 1024 * 1024,
-            ..requested
-        }
-    );
-    let package = package();
-    let input = evaluation(&package, "echo", 42)?;
-    let result = runtime.evaluate(&package, &input, COMPONENT, &control)?;
-    assert_eq!(value(&result)?, 42);
-    assert_eq!(input.context.limits, package.exports[0].limits);
-
-    let input = evaluation(&package, &"x".repeat(32 * 1024 * 1024), 0)?;
-    let result = runtime.evaluate(&package, &input, COMPONENT, &control);
-    assert!(
-        matches!(
-            result,
-            Err(Error::AnalysisContract {
-                source: sdk::Error::Contract {
-                    code: sdk::ErrorCode::Limit,
-                    ref field,
-                    ..
-                },
-                ..
-            }) if field == "batch bytes"
-        ),
-        "{result:?}"
-    );
     Ok(())
 }
 

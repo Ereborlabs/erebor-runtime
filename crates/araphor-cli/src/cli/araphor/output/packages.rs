@@ -45,6 +45,18 @@ impl Output {
                 }
                 Ok(text.into_bytes())
             }
+            PackageResponseV1::Uninstalled(image) => {
+                if matches!(self.mode, OutputMode::Jsonl) {
+                    return Self::json("image_uninstalled", image);
+                }
+                Ok(format!(
+                    "image\t{}\nrevision\t{}\ndigest\t{}\ninstalled\tfalse\n",
+                    Self::text(&image.image.package_id),
+                    Self::text(&image.image.revision),
+                    Self::text(&image.digest),
+                )
+                .into_bytes())
+            }
             PackageResponseV1::Tests(tests) => {
                 if matches!(self.mode, OutputMode::Jsonl) {
                     return Self::json("image_tests", tests);
@@ -107,7 +119,6 @@ impl Output {
                     "package": &result.package,
                     "export": &result.export,
                     "context": &result.context,
-                    "limits": result.limits,
                     "commit_revision": result.commit_revision,
                     "current": result.current,
                     "output": {
@@ -139,10 +150,9 @@ impl Output {
     }
 
     fn dataset_rows(name: &str, ipc: &[u8]) -> Result<serde_json::Value> {
-        let data =
-            araphor_analysis_sdk::wire::Dataset::decode_ipc(name, ipc, None, Default::default())
-                .context(araphor_data::AnalysisContractSnafu)
-                .context(PackageSnafu)?;
+        let data = araphor_analysis_sdk::wire::Dataset::decode_ipc(name, ipc, None)
+            .context(araphor_data::AnalysisContractSnafu)
+            .context(PackageSnafu)?;
         let mut writer = arrow_json::ArrayWriter::new(Vec::new());
         for batch in &data.batches {
             writer
@@ -209,6 +219,7 @@ mod tests {
             generation: 10,
             lifecycle: 14,
             running: false,
+            removed: false,
             progress: 12,
             readiness: araphor_data::PackageReadinessV1::Failed {
                 code: araphor_data::PackageErrorCodeV1::Invalid,
@@ -331,7 +342,6 @@ mod tests {
                 id: "first".into(),
                 time_utc_ns: 10,
                 seed: Some(7),
-                limits: Default::default(),
             },
         };
         let output = sdk::Output {
@@ -370,7 +380,7 @@ mod tests {
         };
         let package = sdk::Package::new("fixture", "r1", vec![model.clone()]);
         let packet = sdk::wire::Output::encode(&package, &evaluation, &output)?;
-        let mut context = araphor_data::ResultContext::new("first", 10, &model, &evaluation.inputs);
+        let mut context = araphor_data::ResultContext::new("first", 10, &evaluation.inputs);
         context.context = evaluation.context.clone();
         let image = araphor_data::PackageRefV1 {
             package_id: "fixture".into(),
@@ -386,7 +396,6 @@ mod tests {
             package: image,
             export: "read".into(),
             context,
-            limits: model.limits,
             commit_revision: 17,
             current: false,
             output: packet,
@@ -506,6 +515,30 @@ mod tests {
             };
             assert_eq!(String::from_utf8(table)?, expected);
         }
+        Ok(())
+    }
+    #[test]
+    fn uninstall_output_is_exact() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let image = araphor_discovery_definition::ImagePin {
+            image: araphor_data::PackageRefV1 {
+                package_id: "example".into(),
+                revision: "1".into(),
+            },
+            digest: format!("sha256:{}", "1".repeat(64)),
+        };
+        let response = PackageResponseV1::Uninstalled(image.clone());
+        let bytes = Output::new(Some(OutputMode::Jsonl), false).package(response.clone())?;
+        let document: serde_json::Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(document["kind"], "image_uninstalled");
+        assert_eq!(document["frame"], serde_json::to_value(&image)?);
+        let bytes = Output::new(Some(OutputMode::Table), false).package(response)?;
+        assert_eq!(
+            String::from_utf8(bytes)?,
+            format!(
+                "image\texample\nrevision\t1\ndigest\t{}\ninstalled\tfalse\n",
+                image.digest
+            )
+        );
         Ok(())
     }
 }

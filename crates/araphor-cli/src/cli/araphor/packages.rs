@@ -58,11 +58,23 @@ enum ImageCommand {
     Digest { path: PathBuf },
     /// Retain a local OCI layout or archive for the authenticated tenant.
     Install { path: PathBuf },
+    /// Remove installed access to one exact image. Retain admitted programs and history.
+    Uninstall {
+        package: String,
+        #[arg(long)]
+        revision: String,
+        #[arg(long)]
+        digest: String,
+    },
     /// Run saved fixtures from one exact retained image.
     Test {
         package: String,
         #[arg(long)]
         revision: String,
+        #[arg(long, requires = "artifact_revision")]
+        artifact: Option<String>,
+        #[arg(long, requires = "artifact")]
+        artifact_revision: Option<String>,
         #[arg(long)]
         fixture: Option<String>,
     },
@@ -91,15 +103,41 @@ impl ImageArgs {
                     .map_err(araphor_data::Error::from)
                     .context(PackageSnafu)?,
             },
+            ImageCommand::Uninstall {
+                package,
+                revision,
+                digest,
+            } => {
+                let image = araphor_discovery_definition::ImagePin {
+                    image: araphor_data::PackageRefV1 {
+                        package_id: package.clone(),
+                        revision: revision.clone(),
+                    },
+                    digest: digest.clone(),
+                };
+                image
+                    .validate()
+                    .map_err(araphor_data::Error::from)
+                    .context(PackageSnafu)?;
+                PackageRequestV1::UninstallImage { image }
+            }
             ImageCommand::Test {
                 package,
                 revision,
+                artifact,
+                artifact_revision,
                 fixture,
             } => PackageRequestV1::TestImage {
                 image: araphor_data::PackageRefV1 {
                     package_id: package.clone(),
                     revision: revision.clone(),
                 },
+                artifact: artifact.as_ref().zip(artifact_revision.as_ref()).map(
+                    |(package, revision)| araphor_data::PackageRefV1 {
+                        package_id: package.clone(),
+                        revision: revision.clone(),
+                    },
+                ),
                 fixture: fixture.clone(),
             },
             ImageCommand::Inspect { package, revision } => PackageRequestV1::InspectImage {
@@ -120,18 +158,79 @@ pub(crate) struct InstanceArgs {
     operation: InstanceCommand,
 }
 
+#[derive(Debug, Args)]
+struct InstanceLifecycle {
+    instance: String,
+    #[arg(long)]
+    lifecycle: u64,
+}
+
 #[derive(Debug, Subcommand)]
 enum InstanceCommand {
+    /// Admit one stopped instance from an exact saved definition.
+    Admit {
+        instance: String,
+        #[arg(long)]
+        definition: String,
+        #[arg(long)]
+        revision: String,
+    },
+    /// Start the saved instance and retain its execution grant.
+    Start(InstanceLifecycle),
+    /// Stop and join the saved instance. Retain its history.
+    Stop(InstanceLifecycle),
+    /// Run one finite step with the saved execution grant.
+    Run {
+        #[command(flatten)]
+        target: InstanceLifecycle,
+        evaluation: String,
+        #[arg(long)]
+        rebuild: bool,
+    },
+    /// Replace the grant of an exact stopped and joined instance.
+    Renew(InstanceLifecycle),
+    /// Evaluate an exact definition and replace the instance on success.
+    Update {
+        #[command(flatten)]
+        target: InstanceLifecycle,
+        #[arg(long)]
+        definition: String,
+        #[arg(long)]
+        revision: String,
+        #[arg(long)]
+        rebuild: bool,
+    },
+    /// Evaluate an exact retained generation and replace the instance on success.
+    Rollback {
+        #[command(flatten)]
+        target: InstanceLifecycle,
+        #[arg(long)]
+        generation: u64,
+        #[arg(long)]
+        rebuild: bool,
+    },
+    /// Stop and remove the exact instance lifecycle. Retain its history.
+    Remove(InstanceLifecycle),
+    /// Admit a fresh stopped instance after an explicit removal.
+    Recreate {
+        #[command(flatten)]
+        target: InstanceLifecycle,
+        #[arg(long)]
+        definition: String,
+        #[arg(long)]
+        revision: String,
+    },
     /// Read current lifecycle, progress, and readiness without running the instance.
     Inspect { instance: String },
     /// List original successful receipts without running the instance.
     History { instance: String },
     /// Read every output, evidence link, reason, and checkpoint of an exact retained call.
     Read { instance: String, result: String },
-    /// Run one local SELECT over the named datasets of an exact retained result.
+    /// Run one local SELECT over an exact result or the current selected output.
+    #[command(allow_missing_positional = true)]
     Query {
         instance: String,
-        result: String,
+        result: Option<String>,
         sql: String,
     },
 }
@@ -139,6 +238,73 @@ enum InstanceCommand {
 impl InstanceArgs {
     pub(super) fn prepare(&self) -> Result<Prepared> {
         let operation = match &self.operation {
+            InstanceCommand::Admit {
+                instance,
+                definition,
+                revision,
+            } => PackageRequestV1::AdmitInstance {
+                instance_id: instance.clone(),
+                definition_name: definition.clone(),
+                definition_revision: revision.clone(),
+            },
+            InstanceCommand::Start(target) => PackageRequestV1::StartInstance {
+                instance_id: target.instance.clone(),
+                expected_lifecycle: target.lifecycle,
+            },
+            InstanceCommand::Stop(target) => PackageRequestV1::StopInstance {
+                instance_id: target.instance.clone(),
+                expected_lifecycle: target.lifecycle,
+            },
+            InstanceCommand::Run {
+                target,
+                evaluation,
+                rebuild,
+            } => PackageRequestV1::RunInstance {
+                instance_id: target.instance.clone(),
+                expected_lifecycle: target.lifecycle,
+                evaluation_id: evaluation.clone(),
+                rebuild: *rebuild,
+            },
+            InstanceCommand::Renew(target) => PackageRequestV1::RenewInstance {
+                instance_id: target.instance.clone(),
+                expected_lifecycle: target.lifecycle,
+            },
+            InstanceCommand::Update {
+                target,
+                definition,
+                revision,
+                rebuild,
+            } => PackageRequestV1::UpdateInstance {
+                instance_id: target.instance.clone(),
+                expected_lifecycle: target.lifecycle,
+                definition_name: definition.clone(),
+                definition_revision: revision.clone(),
+                rebuild: *rebuild,
+            },
+            InstanceCommand::Rollback {
+                target,
+                generation,
+                rebuild,
+            } => PackageRequestV1::RollbackInstance {
+                instance_id: target.instance.clone(),
+                expected_lifecycle: target.lifecycle,
+                generation: *generation,
+                rebuild: *rebuild,
+            },
+            InstanceCommand::Remove(target) => PackageRequestV1::RemoveInstance {
+                instance_id: target.instance.clone(),
+                expected_lifecycle: target.lifecycle,
+            },
+            InstanceCommand::Recreate {
+                target,
+                definition,
+                revision,
+            } => PackageRequestV1::RecreateInstance {
+                instance_id: target.instance.clone(),
+                expected_lifecycle: target.lifecycle,
+                definition_name: definition.clone(),
+                definition_revision: revision.clone(),
+            },
             InstanceCommand::Inspect { instance } => PackageRequestV1::InspectInstance {
                 instance_id: instance.clone(),
             },
@@ -421,7 +587,7 @@ mod tests {
         for args in [
             vec!["araphor", "instance"],
             vec!["araphor", "instance", "inspect"],
-            vec!["araphor", "instance", "query", "counts", "result"],
+            vec!["araphor", "instance", "query", "counts"],
             vec!["araphor", "instance", "start", "counts"],
             vec!["araphor", "instance", "read", "counts"],
             vec!["araphor", "instance", "history"],
@@ -454,10 +620,18 @@ mod tests {
                 "instance",
                 "query",
                 "counts",
+                "SELECT value FROM selected",
+            ],
+            vec![
+                "araphor",
+                "instance",
+                "query",
+                "counts",
                 "saved",
                 "SELECT value FROM rows",
             ],
         ] {
+            let latest = args.len() == 5 && args[2] == "query";
             let cli = Cli::try_parse_from(args)?;
             let Command::Investigate(command) = cli.command else {
                 return Err("instance command absent".into());
@@ -487,11 +661,173 @@ mod tests {
                     sql,
                 } => {
                     assert_eq!(instance_id, "counts");
-                    assert_eq!(result_id, "saved");
-                    assert_eq!(sql, "SELECT value FROM rows");
+                    assert_eq!(result_id.as_deref(), (!latest).then_some("saved"));
+                    assert_eq!(
+                        sql,
+                        if latest {
+                            "SELECT value FROM selected"
+                        } else {
+                            "SELECT value FROM rows"
+                        }
+                    );
                 }
                 _ => return Err("instance operation changed".into()),
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn instance_admission_is_explicit() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let revision = format!("sha256:{}", "1".repeat(64));
+        let args = [
+            "araphor",
+            "instance",
+            "admit",
+            "counts",
+            "--definition",
+            "count-events",
+            "--revision",
+            revision.as_str(),
+        ];
+        let cli = Cli::try_parse_from(args)?;
+        let Command::Investigate(command) = cli.command else {
+            return Err("instance command".into());
+        };
+        let Prepared::Package(request) = command.prepare()? else {
+            return Err("instance request".into());
+        };
+        assert!(request.selection.is_none());
+        assert!(matches!(
+            PackageRequestV1::from_bytes(&request.definition)?,
+            PackageRequestV1::AdmitInstance {
+                instance_id,
+                definition_name,
+                definition_revision,
+            } if instance_id == "counts"
+                && definition_name == "count-events"
+                && definition_revision == revision
+        ));
+        for args in [
+            vec!["araphor", "instance", "admit"],
+            vec!["araphor", "instance", "admit", "counts"],
+            vec![
+                "araphor",
+                "instance",
+                "admit",
+                "counts",
+                "--definition",
+                "count-events",
+            ],
+            vec![
+                "araphor",
+                "instance",
+                "admit",
+                "counts",
+                "--revision",
+                &revision,
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        for option in ["--follow", "--run", "--force", "--scope", "--lifecycle"] {
+            let mut invalid = args.to_vec();
+            invalid.push(option);
+            assert!(Cli::try_parse_from(invalid).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_cli_is_explicit() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for (operation, tail, expected) in [
+            (
+                "start",
+                vec![],
+                serde_json::json!({"operation":"start_instance","instance_id":"counts","expected_lifecycle":17}),
+            ),
+            (
+                "stop",
+                vec![],
+                serde_json::json!({"operation":"stop_instance","instance_id":"counts","expected_lifecycle":17}),
+            ),
+            (
+                "run",
+                vec!["once", "--rebuild"],
+                serde_json::json!({"operation":"run_instance","instance_id":"counts","expected_lifecycle":17,"evaluation_id":"once","rebuild":true}),
+            ),
+            (
+                "renew",
+                vec![],
+                serde_json::json!({"operation":"renew_instance","instance_id":"counts","expected_lifecycle":17}),
+            ),
+            (
+                "update",
+                vec![
+                    "--definition",
+                    "count-events",
+                    "--revision",
+                    "exact",
+                    "--rebuild",
+                ],
+                serde_json::json!({"operation":"update_instance","instance_id":"counts","expected_lifecycle":17,"definition_name":"count-events","definition_revision":"exact","rebuild":true}),
+            ),
+            (
+                "rollback",
+                vec!["--generation", "11", "--rebuild"],
+                serde_json::json!({"operation":"rollback_instance","instance_id":"counts","expected_lifecycle":17,"generation":11,"rebuild":true}),
+            ),
+        ] {
+            let mut args = vec![
+                "araphor",
+                "instance",
+                operation,
+                "counts",
+                "--lifecycle",
+                "17",
+            ];
+            args.extend(tail.clone());
+            let cli = Cli::try_parse_from(&args)?;
+            let Command::Investigate(command) = cli.command else {
+                return Err("instance command".into());
+            };
+            let Prepared::Package(request) = command.prepare()? else {
+                return Err("instance request".into());
+            };
+            assert!(request.selection.is_none());
+            let decoded = PackageRequestV1::from_bytes(&request.definition)?;
+            assert_eq!(serde_json::to_value(decoded)?, expected);
+            for option in ["--force", "--owner", "--grant", "--follow", "--scope"] {
+                let mut invalid = args.clone();
+                invalid.push(option);
+                assert!(Cli::try_parse_from(invalid).is_err());
+            }
+            let mut missing = vec!["araphor", "instance", operation, "counts"];
+            missing.extend(tail);
+            assert!(Cli::try_parse_from(missing).is_err());
+        }
+        for args in [
+            vec!["araphor", "instance", "run", "counts", "--lifecycle", "17"],
+            vec![
+                "araphor",
+                "instance",
+                "update",
+                "counts",
+                "--lifecycle",
+                "17",
+                "--definition",
+                "count-events",
+            ],
+            vec![
+                "araphor",
+                "instance",
+                "rollback",
+                "counts",
+                "--lifecycle",
+                "17",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
         }
         Ok(())
     }
@@ -540,7 +876,7 @@ mod tests {
             };
             assert!(request.selection.is_none());
             assert!(matches!(PackageRequestV1::from_bytes(&request.definition)?,
-                PackageRequestV1::TestImage { image, fixture } if image.package_id == "fixture" && image.revision == "exact" && fixture.as_deref() == name));
+                PackageRequestV1::TestImage { image, artifact, fixture } if image.package_id == "fixture" && image.revision == "exact" && artifact.is_none() && fixture.as_deref() == name));
         }
         for args in [
             vec!["araphor", "image", "test", "fixture"],
@@ -595,6 +931,180 @@ mod tests {
             ],
         ] {
             assert!(Cli::try_parse_from(args).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn image_test_selects_artifact() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let cli = Cli::try_parse_from([
+            "araphor",
+            "image",
+            "test",
+            "container",
+            "--revision",
+            "image-exact",
+            "--artifact",
+            "child",
+            "--artifact-revision",
+            "child-exact",
+            "--fixture",
+            "equal",
+        ])?;
+        let Command::Investigate(command) = cli.command else {
+            return Err("image command".into());
+        };
+        let Prepared::Package(request) = command.prepare()? else {
+            return Err("image request".into());
+        };
+        assert!(request.selection.is_none());
+        assert!(matches!(PackageRequestV1::from_bytes(&request.definition)?,
+            PackageRequestV1::TestImage { image, artifact: Some(artifact), fixture }
+                if image.package_id == "container" && image.revision == "image-exact"
+                    && artifact.package_id == "child" && artifact.revision == "child-exact"
+                    && fixture.as_deref() == Some("equal")));
+        for tail in [
+            vec!["--artifact", "child"],
+            vec!["--artifact-revision", "child-exact"],
+            vec!["--artifact", "child", "--artifact-revision"],
+            vec![
+                "--artifact",
+                "child",
+                "--artifact-revision",
+                "child-exact",
+                "--artifact",
+                "other",
+            ],
+        ] {
+            let mut args = vec![
+                "araphor",
+                "image",
+                "test",
+                "container",
+                "--revision",
+                "image-exact",
+            ];
+            args.extend(tail);
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        Ok(())
+    }
+    #[test]
+    fn removal_cli_is_explicit() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let digest = format!("sha256:{}", "1".repeat(64));
+        let revision = format!("sha256:{}", "2".repeat(64));
+        for args in [
+            vec!["araphor", "image", "uninstall", "example"],
+            vec![
+                "araphor",
+                "image",
+                "uninstall",
+                "example",
+                "--revision",
+                "1",
+            ],
+            vec![
+                "araphor",
+                "image",
+                "uninstall",
+                "example",
+                "--revision",
+                "1",
+                "--digest",
+                "invalid",
+            ],
+            vec!["araphor", "instance", "remove", "counts"],
+            vec![
+                "araphor",
+                "instance",
+                "remove",
+                "counts",
+                "--lifecycle",
+                "-1",
+            ],
+            vec![
+                "araphor",
+                "instance",
+                "recreate",
+                "counts",
+                "--lifecycle",
+                "19",
+                "--definition",
+                "counts",
+            ],
+            vec![
+                "araphor",
+                "instance",
+                "remove",
+                "counts",
+                "--lifecycle",
+                "17",
+                "--force",
+            ],
+        ] {
+            match Cli::try_parse_from(args) {
+                Err(_) => {}
+                Ok(cli) => {
+                    let Command::Investigate(command) = cli.command else {
+                        return Err("removal command absent".into());
+                    };
+                    assert!(command.prepare().is_err());
+                }
+            }
+        }
+        for (args, expected) in [
+            (
+                vec![
+                    "araphor",
+                    "image",
+                    "uninstall",
+                    "example",
+                    "--revision",
+                    "1",
+                    "--digest",
+                    &digest,
+                ],
+                serde_json::json!({"operation":"uninstall_image", "image":{"image":{"package_id":"example", "revision":"1"}, "digest":digest}}),
+            ),
+            (
+                vec![
+                    "araphor",
+                    "instance",
+                    "remove",
+                    "counts",
+                    "--lifecycle",
+                    "17",
+                ],
+                serde_json::json!({"operation":"remove_instance", "instance_id":"counts", "expected_lifecycle":17}),
+            ),
+            (
+                vec![
+                    "araphor",
+                    "instance",
+                    "recreate",
+                    "counts",
+                    "--lifecycle",
+                    "19",
+                    "--definition",
+                    "counts",
+                    "--revision",
+                    &revision,
+                ],
+                serde_json::json!({"operation":"recreate_instance", "instance_id":"counts", "expected_lifecycle":19, "definition_name":"counts", "definition_revision":revision}),
+            ),
+        ] {
+            let cli = Cli::try_parse_from(args)?;
+            let Command::Investigate(command) = cli.command else {
+                return Err("removal command absent".into());
+            };
+            let Prepared::Package(request) = command.prepare()? else {
+                return Err("removal request absent".into());
+            };
+            assert!(request.selection.is_none());
+            assert_eq!(
+                serde_json::to_value(PackageRequestV1::from_bytes(&request.definition)?)?,
+                expected
+            );
         }
         Ok(())
     }

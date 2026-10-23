@@ -7,9 +7,6 @@ fn default_quotas_execute_component() -> TestResult {
     let store = wasmtime::Store::new(&runtime.engine, ());
     assert!(store.get_fuel().is_err());
     let package = package();
-    let limits = package.exports[0].limits;
-    assert_eq!(WasmExecution::limits(limits, &runtime.limits), limits);
-    assert_eq!(limits.max_bytes, u64::MAX);
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let output = runtime.evaluate(
         &package,
@@ -117,7 +114,7 @@ fn fixture_modes_keep_quotas() -> TestResult {
     let configured = WasmLimits {
         fuel: Some(1),
         memory_bytes: Some(1),
-        data_bytes: Some(1024),
+
         timeout: Some(Duration::from_millis(10)),
         allocation_bytes: Some(1024),
         host_calls: Some(1),

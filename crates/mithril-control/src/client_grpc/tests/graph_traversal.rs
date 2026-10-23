@@ -116,7 +116,11 @@ async fn graph_traversal_cross_tenant_seed_denied() -> TestResult {
 #[tokio::test]
 async fn graph_traversal_grpc_receipt() -> TestResult {
     let fixture = Fixture::new()?;
-    fixture.service.data()?.store.enable_graph_owner()?;
+    let _graph = fixture
+        .service
+        .data()?
+        .store
+        .lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
     let request = fixture.request(
         proto::QueryRequest {
             sql: "SELECT COUNT(*) FROM graph_subjects".into(),

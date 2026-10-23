@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use araphor_analysis_sdk as sdk;
 use araphor_data::{
     AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
     AnalysisTableRequests, StorePositionV1,
@@ -66,7 +65,6 @@ impl SourceOrigin {
 pub(crate) struct InputCapture {
     pub(crate) scope: String,
     pub(crate) bindings: Vec<(usize, araphor_data::AnalysisInputSource, SchemaRef)>,
-    pub(crate) limits: sdk::Limits,
     pub(crate) ranges: Vec<(u64, u64)>,
     pub(crate) include_results: bool,
     pub(crate) retained: Option<Arc<[Arc<RetainedSource>]>>,
@@ -81,11 +79,18 @@ pub(crate) enum ReadMode {
     Changes(StorePositionV1),
 }
 
+pub(crate) type WindowBound = (
+    crate::follow::WindowSource,
+    crate::follow::Window,
+    (u64, u64),
+    Option<i64>,
+);
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ScanBounds {
     pub(crate) fields: BTreeMap<&'static str, Interval>,
     pub(crate) events: Option<Vec<(u64, u64)>>,
-    pub(crate) windows: Vec<(crate::follow::Window, (u64, u64))>,
+    pub(crate) windows: Vec<WindowBound>,
     pub(crate) packages: BTreeSet<usize>,
 }
 
@@ -93,6 +98,8 @@ pub(crate) struct ScanBounds {
 struct ScanFrame {
     inputs: Vec<(bool, Option<crate::follow::Window>)>,
     next: usize,
+    call: Option<u64>,
+    source: Option<crate::follow::WindowSource>,
     scoped: bool,
     required: bool,
     window: Option<crate::follow::Window>,
@@ -115,23 +122,43 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
         let input = self.frames.last_mut().and_then(|parent| {
-            let input = parent.inputs.get(parent.next).copied();
+            let slot = parent.next;
+            let input = parent.inputs.get(slot).cloned().map(|input| {
+                (
+                    input,
+                    parent
+                        .call
+                        .map(|call| crate::follow::WindowSource::Input { call, slot }),
+                )
+            });
             parent.next += 1;
             input
         });
-        let (required, window) = input.unwrap_or((
-            false,
-            self.frames.is_empty().then_some(self.window).flatten(),
+        let scoped = input.is_some();
+        let ((required, window), source) = input.unwrap_or((
+            (
+                false,
+                self.frames
+                    .is_empty()
+                    .then(|| self.window.clone())
+                    .flatten(),
+            ),
+            self.frames
+                .is_empty()
+                .then_some(crate::follow::WindowSource::Query),
         ));
-        let inputs = node
+        let package = node
             .as_any()
-            .downcast_ref::<crate::definition::physical::PackageExec>()
+            .downcast_ref::<crate::definition::physical::PackageExec>();
+        let inputs = package
             .map(|package| package.event_inputs(self.moving))
             .transpose()?
             .unwrap_or_default();
         let mut frame = ScanFrame {
             inputs,
-            scoped: required || (self.moving && input.is_some()),
+            call: package.map(|package| package.call_id()),
+            source,
+            scoped: required || (self.moving && scoped),
             required,
             window,
             ..Default::default()
@@ -178,7 +205,12 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
             if let (Some(range), Some(ranges)) = (frame.range, &mut self.bounds.events) {
                 ranges.push(range);
                 if let Some(window) = frame.window {
-                    self.bounds.windows.push((window, range));
+                    self.bounds.windows.push((
+                        frame.source.unwrap_or(crate::follow::WindowSource::Query),
+                        window,
+                        range,
+                        None,
+                    ));
                 }
             }
         } else if let Some(parent) = self.frames.last_mut() {
@@ -233,8 +265,8 @@ impl SourceSnapshot {
             frames: Vec::new(),
             scanned: false,
             complete: false,
-            window: run.and_then(|run| run.window),
-            moving: run.is_some_and(|run| run.follow),
+            window: run.and_then(|run| run.window.clone()),
+            moving: run.is_some_and(|run| run.follow || run.managed.is_some()),
         };
         for plan in plans {
             plan.visit(&mut scan)?;
@@ -359,35 +391,55 @@ impl SourceSnapshot {
         }
         let mut snapshot = self.read(requests, &bounds, mode, &control)?;
         let mut deadline = snapshot.receipt.next_change;
-        for (window, range) in bounds.windows {
+        let mut windows = Vec::new();
+        for (scope, window, range, clock) in bounds.windows {
+            let now = clock
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| DataFusionError::Execution("window statement time".into()))?
+                .unwrap_or(self.now);
             let Some(selected) = window
-                .selection(&snapshot.receipt.selection, self.now)
+                .selection(&snapshot.receipt.selection, now)
                 .time_range()
             else {
                 continue;
             };
             let range = (range.0.max(selected.0), range.1.min(selected.1));
             if range.0 <= range.1 {
-                let expiry = window.expiry(snapshot.received_min(range, &control)?);
+                let received = snapshot.received_min(range, &control)?;
+                let expiry = if let Some((start, end)) = window.fixed_range(now)? {
+                    windows.push(crate::follow::WindowRange {
+                        source: scope,
+                        start_utc_ns: start,
+                        end_utc_ns: end,
+                        active: received.is_some(),
+                    });
+                    received.and_then(|_| u64::try_from(end).ok())
+                } else {
+                    window.expiry(received)
+                };
                 deadline = deadline.into_iter().chain(expiry).min();
             }
         }
-        Arc::get_mut(&mut snapshot.receipt)
-            .ok_or_else(|| {
-                DataFusionError::Internal("the source receipt is already shared".into())
-            })?
-            .next_change = deadline;
+        windows.sort_by_key(|window| (window.source, window.start_utc_ns, window.end_utc_ns));
+        windows.dedup_by(|next, previous| {
+            if (next.source, next.start_utc_ns, next.end_utc_ns)
+                == (previous.source, previous.start_utc_ns, previous.end_utc_ns)
+            {
+                previous.active |= next.active;
+                true
+            } else {
+                false
+            }
+        });
+        let receipt = Arc::get_mut(&mut snapshot.receipt).ok_or_else(|| {
+            DataFusionError::Internal("the source receipt is already shared".into())
+        })?;
+        receipt.set_windows(windows)?;
+        receipt.next_change = deadline;
         let receipt = Arc::clone(&snapshot.receipt);
         *captured = Some(snapshot);
         Ok(receipt)
-    }
-
-    pub(crate) fn capture_metadata(
-        &self,
-        sources: &AnalysisTableRequests,
-    ) -> Result<Arc<ArrowSnapshot>> {
-        let requests = sources.keys().map(|name| (name.clone(), None)).collect();
-        self.capture(&requests, ScanBounds::default(), ReadMode::Metadata)
     }
 
     fn data_error(error: araphor_data::Error) -> DataFusionError {

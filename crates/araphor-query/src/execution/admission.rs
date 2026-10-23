@@ -54,6 +54,32 @@ impl Engine {
 }
 
 impl super::Session {
+    pub async fn run_managed(
+        mut self,
+        definition: PreparedDefinition,
+        publication: Arc<dyn ManagedPublication>,
+        binding: &[u8],
+    ) -> Result<crate::follow::Update> {
+        let parent = Arc::clone(self.control());
+        let operation = Arc::new(parent.operation()?);
+        self.control = Arc::clone(&operation);
+        let now = self.now;
+        let result = {
+            let execution = Subscription::managed_once(self, definition, publication, binding, now);
+            tokio::pin!(execution);
+            tokio::select! {
+                result = &mut execution => result,
+                stopped = parent.query_async(std::future::pending::<Result<crate::follow::Update>>()) => {
+                    let _cancelled = operation.cancel();
+                    let _joined = execution.await;
+                    stopped
+                }
+            }
+        };
+        parent.check()?;
+        result
+    }
+
     pub fn subscribe_managed(
         self,
         definition: PreparedDefinition,

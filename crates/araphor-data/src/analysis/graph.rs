@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
@@ -9,8 +7,19 @@ use crate::{AnalysisConflictSnafu, GraphSnapshotV1, GRAPH_PROCESSOR, GRAPH_SCHEM
 use super::graph_rows::GraphRows;
 
 mod findings;
+mod interest;
+pub use interest::GraphLease;
 pub(super) mod traversal;
 mod windows;
+
+pub struct GraphCommit {
+    pub request: AnalysisResultCommitV1,
+    pub graph: super::graph_rows::CanonicalGraph,
+    pub contexts: Vec<AnalysisContextVersionV1>,
+    pub proofs: Vec<AnalysisContextRefV1>,
+    pub sources: Vec<(String, u64)>,
+    pub advance: bool,
+}
 
 impl AnalysisStore {
     fn check_graph_read(
@@ -107,23 +116,39 @@ impl AnalysisStore {
         Ok((revision, failed))
     }
 
-    pub fn graph_enabled(&self) -> bool {
-        self.graph_owner.load(Ordering::Acquire)
-    }
-
-    pub fn enable_graph_owner(&self) -> Result<()> {
-        let _writer = self.writer_access()?;
-        self.graph_owner
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| self.state_error("the graph owner is already active"))?;
-        Ok(())
-    }
-
     pub fn register_graph(&self, identity: &EvidenceIntakeIdentityV1) -> Result<()> {
         let mut writer = self.writer_access()?;
+        if !self.graph_registration_required(writer.get()?, identity)? {
+            return Ok(());
+        }
         let floor = Self::read_receipt_from(writer.get()?, &self.root, identity, &identity.key())?
             .map_or(0, |receipt| receipt.retained_floor);
-        self.register_graph_locked(writer.get_mut()?, identity, floor)
+        self.register_graph_locked(writer.get_mut()?, identity, floor, || Ok(()))
+    }
+
+    pub fn register_graph_guarded(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+        captured: u64,
+        check: impl FnOnce() -> Result<()>,
+    ) -> Result<bool> {
+        let mut writer = self.writer_access()?;
+        match self.graph_registration_from(writer.get()?, identity)? {
+            Some((class, false, _)) if class == "required" => {
+                check()?;
+                return Ok(true);
+            }
+            Some((class, true, revision)) if class == "required" && revision > captured => {
+                check()?;
+                return Ok(false);
+            }
+            Some(_) => return AnalysisConflictSnafu.fail(),
+            None => {}
+        }
+        let floor = Self::read_receipt_from(writer.get()?, &self.root, identity, &identity.key())?
+            .map_or(0, |receipt| receipt.retained_floor);
+        self.register_graph_locked(writer.get_mut()?, identity, floor, check)?;
+        Ok(true)
     }
 
     pub(super) fn register_graph_locked(
@@ -131,10 +156,8 @@ impl AnalysisStore {
         writer: &mut Connection,
         identity: &EvidenceIntakeIdentityV1,
         floor: u64,
+        check: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        if !self.graph_registration_required(writer, identity)? {
-            return Ok(());
-        }
         let key = identity.key();
         let start = floor
             .checked_add(1)
@@ -152,6 +175,7 @@ impl AnalysisStore {
         ).context(AnalysisDatabaseSnafu { operation: "register required graph processor" })?;
         self.check_logical(&transaction, identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
+        check()?;
         self.commit_metadata(transaction, "commit required graph registration")?;
         self.revision.send_replace(revision);
         Ok(())
@@ -162,22 +186,38 @@ impl AnalysisStore {
         writer: &Connection,
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<bool> {
+        match self.graph_registration_from(writer, identity)? {
+            Some((class, false, _)) if class == "required" => Ok(false),
+            Some(_) => AnalysisConflictSnafu.fail(),
+            None => Ok(true),
+        }
+    }
+
+    fn graph_registration_from(
+        &self,
+        writer: &Connection,
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<Option<(String, bool, u64)>> {
         if !identity.valid() {
             return self.reject("the graph source identity is invalid");
         }
-        let key = identity.key();
-        let existing: Option<(String, bool)> = writer.query_row(
-            "SELECT class, retired FROM processor_progress WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
-            params![GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, identity.tenant_id.as_slice(), key.as_slice()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional().context(AnalysisDatabaseSnafu { operation: "read required graph registration" })?;
-        if let Some(existing) = existing {
-            if existing != ("required".to_owned(), false) {
-                return AnalysisConflictSnafu.fail();
-            }
-            return Ok(false);
-        }
-        Ok(true)
+        writer
+            .query_row(
+                "SELECT class, retired, retirement_revision FROM processor_progress
+             WHERE processor_id = ? AND method_version = ?
+                AND tenant_id = ? AND stream_key = ?",
+                params![
+                    GRAPH_PROCESSOR,
+                    GRAPH_SCHEMA_VERSION,
+                    identity.tenant_id.as_slice(),
+                    identity.key().as_slice()
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read required graph registration",
+            })
     }
 
     pub fn graph_coverage_versions(

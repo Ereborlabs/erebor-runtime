@@ -4,10 +4,24 @@ use araphor_discovery_definition::{Definition, Program, Source};
 use super::*;
 
 impl Fixture {
-    async fn retained_instance(
+    pub(super) async fn retained_instance(
         &self,
         id: &str,
         sql: &str,
+    ) -> TestResult<Arc<araphor_analysis::Instance>> {
+        self.retained_program(
+            id,
+            Program::Sql {
+                source: Source::Inline { inline: sql.into() },
+            },
+        )
+        .await
+    }
+
+    async fn retained_program(
+        &self,
+        id: &str,
+        program: Program,
     ) -> TestResult<Arc<araphor_analysis::Instance>> {
         let access = self
             .service
@@ -23,9 +37,7 @@ impl Fixture {
                         name: "retained-count".into(),
                         description: "Read a retained package result.".into(),
                         labels: BTreeMap::new(),
-                        program: Program::Sql {
-                            source: Source::Inline { inline: sql.into() },
-                        },
+                        program,
                     },
                 },
                 true,
@@ -44,6 +56,215 @@ impl Fixture {
         )
         .await?)
     }
+}
+
+#[tokio::test]
+async fn selected_rpc_reads_sql_prql() -> TestResult {
+    for (program, rows) in [
+        (
+            Program::Sql {
+                source: Source::Inline {
+                    inline: "SELECT CAST(7 AS BIGINT UNSIGNED) AS value".into(),
+                },
+            },
+            1,
+        ),
+        (
+            Program::Sql {
+                source: Source::Inline {
+                    inline: "SELECT CAST(7 AS BIGINT UNSIGNED) AS value WHERE false".into(),
+                },
+            },
+            0,
+        ),
+        (
+            Program::Prql {
+                source: Source::Inline {
+                    inline: "from s\"SELECT CAST(7 AS BIGINT UNSIGNED) AS value\"".into(),
+                },
+            },
+            1,
+        ),
+    ] {
+        let fixture = Fixture::new()?;
+        fixture
+            .service
+            .auth
+            .replace_package_managers(vec![crate::InvestigateGrant {
+                subject: "alice".into(),
+                tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+            }])?;
+        let instance = fixture.retained_program("selected", program).await?;
+        fixture.retained_instance("foreign", "SELECT 1").await?;
+        assert!(instance.admitted().spec.manifest.calls.is_empty());
+        let receipt = instance
+            .run(
+                ManagedRequest {
+                    id: "selected-result".into(),
+                    time_utc_ns: ClientGrpcOwner::now()?,
+                    seed: None,
+                    rebuild: false,
+                    witness_expiry: u64::MAX,
+                    frontier: None,
+                },
+                &AnalysisReadControl::default(),
+            )
+            .await?;
+        assert!(receipt.results.is_empty());
+        fixture.service.auth.replace_package_managers(Vec::new())?;
+        let store = &fixture.service.data()?.store;
+        let before = store.meta()?;
+        let PackageResponseV1::Output(packet) = fixture
+            .package(
+                PackageRequestV1::ReadInstanceResult {
+                    instance_id: "selected".into(),
+                    result_id: receipt.selected.result_id.clone(),
+                },
+                false,
+            )
+            .await?
+        else {
+            return Err("selected raw variant".into());
+        };
+        let data = packet.decode_any()?;
+        assert_eq!(data.name, "selected");
+        assert_eq!(data.rows(), rows);
+        assert_eq!(
+            data.batches[0].schema_ref().as_ref(),
+            &instance.admitted().spec.manifest.selected_schema
+        );
+        for result_id in [Some(receipt.selected.result_id.clone()), None] {
+            let PackageResponseV1::Output(packet) = fixture
+                .package(
+                    PackageRequestV1::QueryInstanceResult {
+                        instance_id: "selected".into(),
+                        result_id,
+                        sql: "SELECT value, __row_index FROM selected".into(),
+                    },
+                    false,
+                )
+                .await?
+            else {
+                return Err("selected query variant".into());
+            };
+            let queried = packet.decode_any()?;
+            assert_eq!(queried.name, "query");
+            assert_eq!(queried.rows(), rows);
+            assert_eq!(queried.batches[0].num_columns(), 2);
+            if rows != 0 {
+                assert_eq!(
+                    queried.batches[0]
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<arrow_array::UInt64Array>()
+                        .ok_or("selected value")?
+                        .value(0),
+                    7
+                );
+                assert_eq!(
+                    queried.batches[0]
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<arrow_array::UInt64Array>()
+                        .ok_or("selected index")?
+                        .value(0),
+                    0
+                );
+            }
+        }
+        let error = fixture
+            .package(
+                PackageRequestV1::ReadInstanceResult {
+                    instance_id: "foreign".into(),
+                    result_id: receipt.selected.result_id.clone(),
+                },
+                false,
+            )
+            .await
+            .err()
+            .ok_or("foreign selected result returned")?;
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
+        assert_eq!(store.meta()?, before);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_joins_control_shutdown() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture
+        .service
+        .auth
+        .replace_package_managers(vec![crate::InvestigateGrant {
+            subject: "alice".into(),
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+        }])?;
+    let image = bundle();
+    fixture
+        .service
+        .auth
+        .replace_package_trust(vec![crate::PackageTrustPinV1 {
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+            bundle_digest: image.digest()?,
+        }])?;
+    fixture
+        .package(PackageRequestV1::InstallImage { bundle: image }, true)
+        .await?;
+    let instance = fixture
+        .retained_instance("host-counts", r#"SELECT * FROM "api.fixture"."1".count()"#)
+        .await?;
+    let data = fixture.service.data()?;
+    let store = Arc::clone(&data.store);
+    let read = AnalysisReadControl::default();
+    let selection = AnalysisSelectionV1::tenant([1; 16]);
+    let admitted = store
+        .managed_instance([1; 16], "host-counts", &read)?
+        .ok_or("managed instance")?;
+    assert!(!admitted.running);
+    assert!(store
+        .managed_history(&selection, "host-counts", &read)?
+        .is_empty());
+    let mut changes = store.subscribe_revision();
+    let runtime = fixture.service.control.analysis_packages(None)?;
+    let host = Arc::clone(&runtime.instances);
+    assert!(Arc::ptr_eq(&runtime.query, &data.query));
+    assert!(Arc::ptr_eq(
+        &host,
+        &fixture.service.control.analysis_packages(None)?.instances,
+    ));
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(Arc::clone(&host).serve(stopped, u64::MAX));
+    let running = host.start(instance, admitted.lifecycle, &read).await?;
+    let running = running.admitted();
+    let receipt = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let history = store.managed_history(&selection, "host-counts", &read)?;
+            if let Some(receipt) = history.into_iter().next() {
+                return Ok::<_, Box<dyn std::error::Error>>(receipt);
+            }
+            changes.changed().await?;
+        }
+    })
+    .await??;
+    assert!(receipt.commit_revision > running.progress);
+    assert!(store.lease_managed().is_err());
+    stop.send_replace(true);
+    tokio::time::timeout(std::time::Duration::from_secs(30), task).await???;
+    let lease = store.lease_managed()?;
+    assert_eq!(
+        store
+            .managed_history(&selection, "host-counts", &read)?
+            .len(),
+        1
+    );
+    let current = store
+        .managed_instance([1; 16], "host-counts", &read)?
+        .ok_or("managed instance after shutdown")?;
+    assert!(current.running);
+    assert_eq!(current.lifecycle, running.lifecycle);
+    assert_eq!(current.progress, receipt.commit_revision);
+    drop(lease);
+    Ok(())
 }
 
 #[tokio::test]
@@ -152,7 +373,7 @@ async fn instance_rpc_inspects_history() -> TestResult {
         .package(
             PackageRequestV1::QueryInstanceResult {
                 instance_id: "counts".into(),
-                result_id: reference.result_id.clone(),
+                result_id: Some(reference.result_id.clone()),
                 sql: "SELECT count, __row_index FROM rows".into(),
             },
             false,
@@ -161,7 +382,7 @@ async fn instance_rpc_inspects_history() -> TestResult {
     let PackageResponseV1::Output(output) = response else {
         return Err("retained selected rows variant".into());
     };
-    let data = output.decode_any(Default::default())?;
+    let data = output.decode_any()?;
     assert_eq!(data.name, "query");
     assert_eq!(data.rows(), 1);
     assert_eq!(data.batches[0].num_columns(), 2);
@@ -180,7 +401,7 @@ async fn instance_rpc_inspects_history() -> TestResult {
         .package(
             PackageRequestV1::QueryInstanceResult {
                 instance_id: other.admitted().spec.id.clone(),
-                result_id: reference.result_id.clone(),
+                result_id: Some(reference.result_id.clone()),
                 sql: "SELECT * FROM rows".into(),
             },
             false,
@@ -198,7 +419,7 @@ async fn instance_rpc_inspects_history() -> TestResult {
             .package(
                 PackageRequestV1::QueryInstanceResult {
                     instance_id: "counts".into(),
-                    result_id: reference.result_id.clone(),
+                    result_id: Some(reference.result_id.clone()),
                     sql: sql.into(),
                 },
                 false
@@ -336,7 +557,6 @@ async fn raw_rpc_keeps_auxiliaries() -> TestResult {
         requests[0].time_utc_ns as i64
     );
     assert_eq!(result.context.context.seed, Some(7));
-    assert_eq!(result.limits, model.limits);
     assert_eq!(result.context.inputs.len(), 1);
     assert_eq!(result.context.input_coverage.len(), 1);
     assert_eq!(result.output.datasets.len(), 2);

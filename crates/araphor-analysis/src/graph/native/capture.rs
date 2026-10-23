@@ -128,7 +128,7 @@ impl Projection {
         {
             return Err(Self::invalid("one exact graph source"));
         }
-        let (consumed, floor) = Self::progress(&inputs[3], identity)?;
+        let (consumed, floor, accepted) = Self::progress(&inputs[3], identity)?;
         let mut heads = Vec::new();
         let mut manifests = Vec::new();
         for batch in &inputs[4] {
@@ -150,6 +150,18 @@ impl Projection {
                         first: Self::column::<UInt64Array>(batch, "first_cursor")?.value(row),
                         deadline: Self::column::<UInt64Array>(batch, "witness_deadline_utc_ns")?
                             .value(row),
+                        coverage: Self::column::<UInt64Array>(batch, "notice_coverage_revision")?
+                            .value(row),
+                        packages: Self::json::<Vec<araphor_data::AnalysisContextRefV1>>(
+                            batch,
+                            "context_refs",
+                            row,
+                        )?
+                        .into_iter()
+                        .filter(|reference| reference.key.owner_id == "native-package-v1")
+                        .map(|reference| reference.key)
+                        .collect(),
+                        reusable: false,
                     });
                     manifests.push(revision);
                 }
@@ -293,6 +305,25 @@ impl Projection {
         self.projections
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut graph = Graph::try_from(normalized).map_err(Self::external)?;
+        let first = graph
+            .input
+            .records
+            .iter()
+            .map(|record| record.id.durable_cursor)
+            .min();
+        let last = graph
+            .input
+            .records
+            .iter()
+            .map(|record| record.id.durable_cursor)
+            .max();
+        for (head, manifest) in heads.iter_mut().zip(&manifests) {
+            head.reusable = first == Some(head.first)
+                && last.is_some_and(|last| last <= consumed)
+                && head.deadline > source.time_utc_ns()
+                && head.coverage == latest
+                && manifest == &graph.revision;
+        }
         frames.try_grow(Self::graph_metadata(&graph)?)?;
         graph._memory = Some(frames);
         let mut retained = positions
@@ -321,6 +352,16 @@ impl Projection {
         {
             retained = retained
                 .checked_add(bytes)
+                .ok_or_else(|| Self::invalid("graph retained metadata overflow"))?;
+        }
+        for key in heads.iter().flat_map(|head| &head.packages) {
+            retained = retained
+                .checked_add(
+                    size_of::<araphor_data::AnalysisContextKeyV1>()
+                        + key.owner_id.capacity()
+                        + key.entity_key.capacity()
+                        + key.lifetime_key.capacity(),
+                )
                 .ok_or_else(|| Self::invalid("graph retained metadata overflow"))?;
         }
         memory.try_grow(retained)?;
@@ -375,18 +416,17 @@ impl Projection {
             },
         };
         let values = graph.projection();
-        let limits = sdk::Limits {
-            max_rows: u64::MAX,
-            max_bytes: self.limits.input_bytes as u64,
-            ..Default::default()
-        };
         let mut inputs = Vec::with_capacity(3);
         for (port, values) in self.ports.iter().zip(values) {
-            let (bytes, allocation) = Rows::capacity(values, limits).map_err(Self::external)?;
+            let (bytes, allocation) = Rows::capacity(values).map_err(Self::external)?;
+            if bytes > self.limits.input_bytes {
+                return Err(Self::external(
+                    araphor_data::PackageErrorCodeV1::Limit.error("graph input bytes"),
+                ));
+            }
             let before = memory.size();
             memory.try_grow(allocation)?;
-            let data =
-                Rows::encode_capacity(port, values, limits, bytes).map_err(Self::external)?;
+            let data = Rows::encode_capacity(port, values, bytes).map_err(Self::external)?;
             for batch in &data.batches {
                 self.memory.retain_input(batch, &memory)?;
             }
@@ -417,6 +457,7 @@ impl Projection {
             heads,
             proofs,
             consumed,
+            accepted,
             coverage_revision: latest,
             now: source.time_utc_ns(),
             inputs,
@@ -637,10 +678,10 @@ impl Projection {
         ))
     }
 
-    fn progress(
+    pub(super) fn progress(
         batches: &[sdk::RecordBatch],
         identity: &EvidenceIntakeIdentityV1,
-    ) -> Result<(u64, u64)> {
+    ) -> Result<(u64, u64, u64)> {
         let mut progress = None;
         for batch in batches {
             for row in 0..batch.num_rows() {
@@ -666,6 +707,7 @@ impl Projection {
                 progress = Some((
                     consumed.value(row),
                     Self::column::<UInt64Array>(batch, "retained_floor")?.value(row),
+                    Self::column::<UInt64Array>(batch, "contiguous_cursor")?.value(row),
                 ));
             }
         }
@@ -779,7 +821,7 @@ impl Projection {
         })
     }
 
-    fn json<T: serde::de::DeserializeOwned>(
+    pub(super) fn json<T: serde::de::DeserializeOwned>(
         batch: &sdk::RecordBatch,
         name: &str,
         row: usize,

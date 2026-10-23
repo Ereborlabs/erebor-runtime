@@ -52,7 +52,6 @@ fn retained_header_skips_ipc() -> TestResult {
                     authorized: &fixture.instance.grant.selection,
                     scope: "",
                     outputs: &inputs,
-                    limits: sdk::Limits::default(),
                 }),
                 mode,
                 now: 10,

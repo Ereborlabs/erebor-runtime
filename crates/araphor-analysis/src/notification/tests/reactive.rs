@@ -65,7 +65,7 @@ async fn capture_tenant(
 async fn native_notification_follow() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-    store.enable_graph_owner()?;
+    let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     let engine = Engine::new(store.clone(), Limits::default())?;
     let mut approval = grant(NotificationPrincipalV1::Human);
@@ -118,11 +118,34 @@ async fn native_notification_follow() -> TestResult {
         .ok_or("missing expiry update")?;
     assert!(expired.clock_changed);
     assert_eq!(expired.evaluated_utc_ns, 2_000_000_000);
-    assert_eq!(expired.snapshot.next_change, None);
+    let retained_deadline = 1 + araphor_data::GRAPH_WITNESS_TTL_NS;
+    assert_eq!(expired.snapshot.next_change, Some(retained_deadline));
+    assert!(expired
+        .snapshot
+        .witnesses
+        .iter()
+        .any(|witness| witness.expires_utc_ns == retained_deadline));
     assert_eq!(
         expired.snapshot.page.extraction.meta.commit_revision,
         initial.snapshot.page.extraction.meta.commit_revision
     );
+    clock.now.store(retained_deadline, Ordering::SeqCst);
+    clock.changes.send_replace(retained_deadline);
+    let retained = tokio::time::timeout(Duration::from_secs(10), subscription.try_next())
+        .await??
+        .ok_or("missing retained witness deadline update")?;
+    assert!(retained.clock_changed);
+    assert_eq!(retained.evaluated_utc_ns, retained_deadline);
+    assert_eq!(retained.snapshot.next_change, None);
+    assert_eq!(
+        retained.snapshot.page.extraction.meta.commit_revision,
+        initial.snapshot.page.extraction.meta.commit_revision
+    );
+    assert!(retained
+        .snapshot
+        .witnesses
+        .iter()
+        .any(|witness| witness.expires_utc_ns == retained_deadline));
     subscription.cancel()?;
     Ok(())
 }
@@ -131,7 +154,7 @@ async fn native_notification_follow() -> TestResult {
 async fn native_notification_eligibility() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-    store.enable_graph_owner()?;
+    let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     let engine = Engine::new(store.clone(), Limits::default())?;
     let sink = Sink::default();
@@ -215,7 +238,7 @@ async fn native_notification_eligibility() -> TestResult {
 async fn native_notification_retry_deadline() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-    store.enable_graph_owner()?;
+    let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     let engine = Engine::new(store.clone(), Limits::default())?;
     let sink = Sink {
@@ -276,23 +299,70 @@ async fn native_notification_retry_deadline() -> TestResult {
 }
 
 #[tokio::test]
-async fn native_notification_requires_owner() -> TestResult {
+async fn native_notification_retained_findings() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-    let _router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
-    let engine = Engine::new(store, Limits::default())?;
-    let error = capture(&engine, NotificationRouter::SQL, 100)
-        .await
-        .err()
-        .ok_or("a missing graph owner must fail")?;
-    let error = error
-        .downcast_ref::<araphor_query::Error>()
-        .ok_or("query error type")?;
-    assert!(matches!(error,
-        araphor_query::Error::Sql { source: datafusion::common::DataFusionError::External(source) }
-        if matches!(source.downcast_ref::<araphor_data::Error>(),
-            Some(araphor_data::Error::AnalysisUnavailable { relation: "findings", .. }))
-    ));
+    let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
+    let engine = Engine::new(store.clone(), Limits::default())?;
+    let empty = capture(&engine, NotificationRouter::SQL, 100).await?;
+    assert_eq!(
+        empty
+            .batches
+            .iter()
+            .flatten()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        0
+    );
+    assert!(!store.graph_enabled());
+    configure(&router)?;
+    commit_finding(&store, finding(1, FindingSeverityV1::High), 1)?;
+    let before = store.processor_health(&ProcessorScopeV1 {
+        processor_id: GRAPH_PROCESSOR.into(),
+        method_version: 1,
+        identity: source(),
+    })?;
+    let update = capture(&engine, NotificationRouter::SQL, 100).await?;
+    assert_eq!(router.consume(&update, &Sink::default())?.routed.len(), 1);
+    assert!(update
+        .snapshot
+        .results()
+        .any(|reference| reference.result_id == "graph-test-1"));
+    assert!(update
+        .snapshot
+        .witnesses
+        .iter()
+        .any(|witness| witness.expires_utc_ns == 1 + araphor_data::GRAPH_WITNESS_TTL_NS));
+    let coverage = capture(
+        &engine,
+        "SELECT state FROM coverage WHERE kind = 'receipt'",
+        100,
+    )
+    .await?;
+    let batch = coverage
+        .batches
+        .as_ref()
+        .ok_or("coverage batches")?
+        .first()
+        .ok_or("coverage row")?;
+    let states = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<araphor_analysis_sdk::arrow_array::StringArray>()
+        .ok_or("coverage state")?;
+    assert_eq!(states.value(0), "unknown");
+    let after = store
+        .processor_health(&ProcessorScopeV1 {
+            processor_id: GRAPH_PROCESSOR.into(),
+            method_version: 1,
+            identity: source(),
+        })?
+        .ok_or("retained processor")?;
+    let before = before.ok_or("original processor")?;
+    assert_eq!(after.consumed_cursor, before.consumed_cursor);
+    assert_eq!(after.accepted_cursor, before.accepted_cursor);
+    assert_eq!(after.incomplete, before.incomplete);
+    assert!(!store.graph_enabled());
     Ok(())
 }
 

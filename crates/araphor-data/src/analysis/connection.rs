@@ -1,7 +1,9 @@
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
-use std::sync::{atomic::Ordering, MutexGuard, RwLockReadGuard, TryLockError};
+use std::sync::{atomic::Ordering, TryLockError};
+
+use super::read::locks::{MutexGuard, ReadGuard};
 
 use duckdb::{AccessMode, Config, Connection};
 use snafu::ResultExt as _;
@@ -83,7 +85,7 @@ pub(super) struct AnalysisConnection<'a> {
     pub(super) monitor: Option<&'a super::read::ReadMonitor>,
     root: &'a Path,
     dirty: Option<&'a std::sync::atomic::AtomicBool>,
-    _snapshot: Option<RwLockReadGuard<'a, ()>>,
+    _snapshot: Option<ReadGuard<'a, ()>>,
     _permit: Option<ReadPermit>,
 }
 
@@ -326,7 +328,7 @@ impl AnalysisStore {
         project: bool,
     ) -> Result<AnalysisConnection<'_>> {
         let mut connection = match control {
-            Some(control) => control.lock(|| self.writer.try_lock())?,
+            Some(control) => self.writer.until(control)?,
             None => self
                 .writer
                 .lock()
@@ -336,7 +338,7 @@ impl AnalysisStore {
             return self.reject("the data writer requires catalog recovery before retry");
         }
         let mut raw = match control {
-            Some(control) => control.lock(|| self.raw.try_lock())?,
+            Some(control) => self.raw.until(control)?,
             None => self
                 .raw
                 .lock()
@@ -428,7 +430,7 @@ impl AnalysisStore {
             drop(self.writer_wait(control, true)?);
         }
         let snapshot = match control {
-            Some(control) => control.lock(|| self.maintenance.try_read())?,
+            Some(control) => self.maintenance.read_until(control)?,
             None => self
                 .maintenance
                 .read()
@@ -455,7 +457,7 @@ impl AnalysisStore {
         }
         // ponytail: a queued read keeps its selected reader. Use a shared queue if measurements show imbalance.
         let connection = match control {
-            Some(control) => control.lock(|| self.readers[first].try_lock())?,
+            Some(control) => self.readers[first].until(control)?,
             None => self.readers[first]
                 .lock()
                 .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,

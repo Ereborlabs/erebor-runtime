@@ -41,6 +41,30 @@ mod tests {
     #[test]
     fn disabled_limits_allow_execution() -> Result<()> {
         NativeLimits::default().validate()?;
+        for native in [
+            NativeLimits {
+                memory_bytes: Some(0),
+                cpu_seconds: None,
+            },
+            NativeLimits {
+                memory_bytes: None,
+                cpu_seconds: Some(0),
+            },
+        ] {
+            assert!(matches!(
+                crate::Runtime::new(crate::Limits {
+                    native,
+                    ..Default::default()
+                }),
+                Err(crate::Error::Data {
+                    source: araphor_data::Error::Package {
+                        code: Code::Invalid,
+                        field: "native resource configuration",
+                        ..
+                    }
+                })
+            ));
+        }
         assert!(matches!(
             NativeLimits {
                 memory_bytes: Some(0),

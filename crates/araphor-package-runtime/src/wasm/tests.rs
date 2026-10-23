@@ -193,15 +193,19 @@ fn wait_checks_resource() -> TestResult {
     use std::future::Future;
     use std::task::{Context, Poll};
 
-    let runtime = WasmExecution::new(WasmLimits {
-        evaluations: Some(4),
+    let owner = crate::Runtime::new(crate::Limits {
+        wasm: WasmLimits {
+            evaluations: Some(4),
+            ..Default::default()
+        },
         ..Default::default()
     })?;
+    let runtime = owner.wasm()?;
     let mut context = Context::from_waker(futures_util::task::noop_waker_ref());
     let permits = (0..4)
         .map(|_| runtime.try_acquire_evaluation())
         .collect::<crate::Result<Vec<_>>>()?;
-    let wait = runtime.wait_capacity("component evaluations", 1);
+    let wait = owner.wait_capacity("component evaluations", 1);
     tokio::pin!(wait);
     assert!(wait.as_mut().poll(&mut context).is_pending());
     runtime.capacity.send_replace(());
@@ -216,7 +220,7 @@ fn wait_checks_resource() -> TestResult {
         .compiler
         .lock()
         .map_err(|_| "compiler fixture lock")?;
-    let wait = runtime.wait_capacity("component compiler", 1);
+    let wait = owner.wait_capacity("component compiler", 1);
     tokio::pin!(wait);
     assert!(wait.as_mut().poll(&mut context).is_pending());
     runtime.capacity.send_replace(());

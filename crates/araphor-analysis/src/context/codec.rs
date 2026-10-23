@@ -21,8 +21,7 @@ impl Context {
             host_packet: Self::json(view)?,
         };
         let port = builtin::Discovery::port::<builtin::ContextSelection>("context");
-        let data =
-            Rows::encode(&port, &[row], sdk::Limits::default()).context(AnalysisContractSnafu)?;
+        let data = Rows::encode(&port, &[row]).context(AnalysisContractSnafu)?;
         let (revision, coverage) = Self::metadata(view)?;
         Ok(sdk::Input {
             data,
@@ -34,8 +33,7 @@ impl Context {
     pub fn decode_context(input: &sdk::Input) -> Result<DiscoveryContextViewV1> {
         let port = builtin::Discovery::port::<builtin::ContextSelection>("context");
         let mut rows: Vec<builtin::ContextSelection> =
-            Rows::decode(&port, &input.data, sdk::Limits::default())
-                .context(AnalysisContractSnafu)?;
+            Rows::decode(&port, &input.data).context(AnalysisContractSnafu)?;
         Self::require(rows.len() == 1, "analysis context packet")?;
         let row = rows.remove(0);
         Self::require(row.selector_version == 1, "analysis context selector")?;

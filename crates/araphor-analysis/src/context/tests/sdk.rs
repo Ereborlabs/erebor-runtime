@@ -59,7 +59,6 @@ async fn context_sdk_version() -> TestResult<()> {
             cutoff_utc_ns: view.cutoff_utc_ns,
             host_packet: serde_json::to_string(&view)?,
         }],
-        builtin::Discovery::limits(),
     )?;
     assert!(Context::decode_context(&input).is_err());
     Ok(())

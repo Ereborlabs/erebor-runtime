@@ -62,7 +62,9 @@ impl Prepared {
 
 impl Runtime {
     pub fn new(limits: Limits) -> Result<Arc<Self>> {
-        limits.native.validate()?;
+        if limits.native.memory_bytes == Some(0) || limits.native.cpu_seconds == Some(0) {
+            limits.native.validate()?;
+        }
         Ok(Arc::new(Self {
             limits,
             wasm: Mutex::new(None),
@@ -152,8 +154,16 @@ impl Runtime {
                     component,
                 }))
             }
+            PackageImplementationV1::Native { .. } => {
+                self.limits.native.validate()?;
+                Ok(None)
+            }
             _ => Ok(None),
         }
+    }
+
+    pub async fn wait_capacity(&self, resource: &str, requested: usize) -> Result<()> {
+        self.wasm()?.wait_capacity(resource, requested).await
     }
 
     fn wasm(&self) -> Result<Arc<wasm::WasmExecution>> {
@@ -178,14 +188,12 @@ impl Runtime {
         control: AnalysisReadControl,
         workers: &TaskTracker,
     ) -> Result<(sdk::Evaluation, sdk::Output)> {
-        let limits = evaluation.context.limits;
         self.evaluate_reserved(
             bundle,
             package,
             evaluation,
             control,
             workers,
-            limits,
             None,
             None,
             None,
@@ -202,7 +210,6 @@ impl Runtime {
         evaluation: sdk::Evaluation,
         control: AnalysisReadControl,
         workers: &TaskTracker,
-        output_limits: sdk::Limits,
         copy_bytes: Option<usize>,
         prepared: Option<Prepared>,
         admission: Option<wasm::EvaluationPermit>,
@@ -228,7 +235,10 @@ impl Runtime {
         let artifact = bundle.artifact(&package)?;
         let wasm = match artifact.implementation(&evaluation.export)? {
             PackageImplementationV1::Wasm { .. } => Some(self.wasm()?),
-            PackageImplementationV1::Native { .. } => None,
+            PackageImplementationV1::Native { .. } => {
+                self.limits.native.validate()?;
+                None
+            }
             _ => {
                 return Err(PackageErrorCodeV1::Unsupported
                     .error("runtime target")
@@ -252,12 +262,9 @@ impl Runtime {
             let _admission = admission.as_ref().map(wasm::EvaluationPermit::retain);
             let _lease = lease;
             let result: Result<_> = (move || {
-                let mut evaluation = evaluation;
                 let artifact = bundle.artifact(&package)?;
                 let implementation = artifact.implementation(&evaluation.export)?;
                 if let Some(runtime) = wasm {
-                    evaluation.context.limits =
-                        wasm::WasmExecution::limits(evaluation.context.limits, &runtime.limits);
                     let PackageImplementationV1::Wasm {
                         artifact: bytes, ..
                     } = implementation
@@ -273,7 +280,6 @@ impl Runtime {
                         &evaluation,
                         &prepared,
                         &stage,
-                        output_limits,
                         copy_bytes,
                         admission,
                     )?;
@@ -294,16 +300,7 @@ impl Runtime {
                         .check_evaluation(&evaluation)
                         .context(AnalysisContractSnafu)?;
                     let library = native::NativeLibrary::load(bytes, qualification, &stage)?;
-                    let requested = evaluation.context.limits;
-                    let limits = sdk::Limits {
-                        max_batches: output_limits.max_batches.min(requested.max_batches),
-                        max_rows: output_limits.max_rows.min(requested.max_rows),
-                        max_bytes: output_limits.max_bytes.min(requested.max_bytes),
-                        max_checkpoint_bytes: output_limits
-                            .max_checkpoint_bytes
-                            .min(requested.max_checkpoint_bytes),
-                    };
-                    let output = library.call(&checked, limits, &stage)?;
+                    let output = library.call(&checked, copy_bytes, &stage)?;
                     checked
                         .validate_output(&output)
                         .context(AnalysisContractSnafu)?;

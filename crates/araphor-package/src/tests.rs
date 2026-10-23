@@ -78,12 +78,6 @@ fn image_roundtrip_keeps_contract() -> TestResult {
         code: "test.model.MATCH".into(),
         details: details.schema,
     }];
-    model.limits = sdk::Limits {
-        max_batches: 17,
-        max_rows: 8192,
-        max_bytes: 128 * 1024,
-        max_checkpoint_bytes: 32 * 1024,
-    };
     model.tolerance = sdk::NumericTolerance {
         absolute: 0.001,
         relative: 0.0001,
@@ -97,7 +91,7 @@ fn image_roundtrip_keeps_contract() -> TestResult {
             exports: vec!["count".into()],
             target: "x86_64-unknown-linux-gnu".into(),
             cpu_features: vec!["sse2".into()],
-            contract_version: 1,
+            contract_version: araphor_analysis_sdk::CONTRACT_VERSION,
             system_libraries: vec![LibraryRequirement {
                 name: "libc.so.6".into(),
                 symbols: vec!["memcpy".into()],

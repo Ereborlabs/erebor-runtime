@@ -49,19 +49,169 @@ fn fixtures() -> TestResult<PackageBundleV1> {
         inputs: Vec::new(),
         parameters: None,
         checkpoint: None,
-        expected: sdk::wire::Output::encode_model(&expected, model, model.limits)?,
+        expected: sdk::wire::Output::encode_model(&expected, model)?,
     };
     let mut mismatch = expected;
     mismatch.datasets[1].batches = vec![batch(vec![1.1, 2.0])?];
     let mut different = equal.clone();
     different.name = "different".into();
-    different.expected = sdk::wire::Output::encode_model(&mismatch, model, model.limits)?;
+    different.expected = sdk::wire::Output::encode_model(&mismatch, model)?;
     image.artifacts[0].implementations[0] = PackageImplementationV1::Sql {
         export: "count".into(),
         program: sql,
     };
     image.artifacts[0].fixtures = vec![equal, different];
     Ok(image)
+}
+
+fn container(mut image: PackageBundleV1) -> TestResult<PackageBundleV1> {
+    for package in ["api.fixture-bridge", "api.fixture-container"] {
+        let dependency = image.root.clone();
+        let source = image.artifact(&dependency)?.descriptor.exports[0].outputs[0].clone();
+        let mut artifact = bundle().artifacts.remove(0);
+        artifact.descriptor.id = package.into();
+        artifact.descriptor.exports[0].inputs.push(sdk::InputPort {
+            port: Port::new("source", source.schema),
+            source: sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
+                package: dependency.package_id,
+                revision: dependency.revision,
+                export: "count".into(),
+                output: "rows".into(),
+            })),
+        });
+        image.root = artifact.reference();
+        image.artifacts.push(artifact);
+    }
+    image.validate()?;
+    Ok(image)
+}
+
+#[tokio::test]
+async fn image_rpc_selects_artifact() -> TestResult {
+    let fixture = Fixture::new()?;
+    let child = fixtures()?;
+    let artifact = child.root.clone();
+    let image = container(child)?;
+    let mut foreign = fixtures()?;
+    foreign.root.package_id = "api.foreign".into();
+    foreign.artifacts[0].descriptor.id = foreign.root.package_id.clone();
+    fixture
+        .service
+        .auth
+        .replace_package_managers(vec![crate::InvestigateGrant {
+            subject: "alice".into(),
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+        }])?;
+    fixture.service.auth.replace_package_trust(
+        [&image, &foreign]
+            .into_iter()
+            .map(|image| {
+                Ok(crate::PackageTrustPinV1 {
+                    tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+                    bundle_digest: image.digest()?,
+                })
+            })
+            .collect::<araphor_data::Result<Vec<_>>>()?,
+    )?;
+    for image in [&image, &foreign] {
+        fixture
+            .package(
+                PackageRequestV1::InstallImage {
+                    bundle: image.clone(),
+                },
+                true,
+            )
+            .await?;
+    }
+    let data = fixture.service.data()?.store.clone();
+    let before = data.meta()?;
+    let notices = data.subscribe_revision();
+    let activations = data.package_activation_page(None)?;
+    let active = data.active_managed(&AnalysisReadControl::default())?;
+    assert!(data
+        .package_image(
+            [1; 16],
+            &artifact.package_id,
+            Some(&artifact.revision),
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+    let operation = |target, name| PackageRequestV1::TestImage {
+        image: image.root.clone(),
+        artifact: target,
+        fixture: name,
+    };
+    assert!(
+        matches!(fixture.package(operation(None, None), true).await?, PackageResponseV1::Tests(tests) if tests.is_empty())
+    );
+    let PackageResponseV1::Tests(tests) = fixture
+        .package(operation(Some(artifact.clone()), None), true)
+        .await?
+    else {
+        return Err("contained fixture results".into());
+    };
+    assert_eq!(
+        tests,
+        vec![
+            araphor_data::FixtureResult {
+                fixture: "equal".into(),
+                passed: true
+            },
+            araphor_data::FixtureResult {
+                fixture: "different".into(),
+                passed: false
+            },
+        ]
+    );
+    assert!(
+        matches!(fixture.package(operation(Some(artifact.clone()), Some("equal".into())), true).await?, PackageResponseV1::Tests(named) if named == vec![tests[0].clone()])
+    );
+    for (target, name) in [
+        (artifact.clone(), Some("missing".into())),
+        (
+            PackageRefV1 {
+                revision: "missing".into(),
+                ..artifact.clone()
+            },
+            None,
+        ),
+        (foreign.root.clone(), None),
+    ] {
+        assert_eq!(
+            fixture
+                .package(operation(Some(target), name), true)
+                .await
+                .err()
+                .map(|error| error.code()),
+            Some(tonic::Code::NotFound)
+        );
+    }
+    fixture.service.auth.replace_package_trust(Vec::new())?;
+    assert_eq!(
+        fixture
+            .package(operation(Some(artifact.clone()), None), true)
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::PermissionDenied)
+    );
+    fixture.service.auth.replace_package_managers(Vec::new())?;
+    assert_eq!(
+        fixture
+            .package(operation(Some(artifact), None), true)
+            .await
+            .err()
+            .map(|error| error.code()),
+        Some(tonic::Code::PermissionDenied)
+    );
+    assert_eq!(data.meta()?, before);
+    assert!(!notices.has_changed()?);
+    assert_eq!(data.package_activation_page(None)?, activations);
+    assert_eq!(
+        data.active_managed(&AnalysisReadControl::default())?,
+        active
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -73,6 +223,7 @@ async fn image_rpc_tests_fixtures() -> TestResult {
     empty.artifacts[0].descriptor.revision = "empty".into();
     empty.artifacts[0].fixtures.clear();
     let operation = PackageRequestV1::TestImage {
+        artifact: None,
         image: image.root.clone(),
         fixture: None,
     };
@@ -124,7 +275,7 @@ async fn image_rpc_tests_fixtures() -> TestResult {
     let before = data.meta()?;
     let notices = data.subscribe_revision();
     assert!(
-        matches!(fixture.package(PackageRequestV1::TestImage { image:empty.root, fixture:None }, true).await?, PackageResponseV1::Tests(tests) if tests.is_empty())
+        matches!(fixture.package(PackageRequestV1::TestImage { artifact: None, image:empty.root, fixture:None }, true).await?, PackageResponseV1::Tests(tests) if tests.is_empty())
     );
     let PackageResponseV1::Tests(tests) = fixture.package(operation.clone(), true).await? else {
         return Err("fixture results".into());
@@ -145,6 +296,7 @@ async fn image_rpc_tests_fixtures() -> TestResult {
     let PackageResponseV1::Tests(named) = fixture
         .package(
             PackageRequestV1::TestImage {
+                artifact: None,
                 image: image.root.clone(),
                 fixture: Some("different".into()),
             },
@@ -169,6 +321,7 @@ async fn image_rpc_tests_fixtures() -> TestResult {
             fixture
                 .package(
                     PackageRequestV1::TestImage {
+                        artifact: None,
                         image: reference,
                         fixture: name
                     },
@@ -256,7 +409,9 @@ fn image_reply_checks_trust() -> TestResult {
         .build()?;
     runtime.block_on(async {
         let fixture = Fixture::new()?;
-        let image = bundle();
+        let child = fixtures()?;
+        let artifact = child.root.clone();
+        let image = container(child)?;
         let digest = image.digest()?;
         fixture
             .service
@@ -276,7 +431,7 @@ fn image_reply_checks_trust() -> TestResult {
         let data = fixture.service.data()?.store.clone();
         let before = data.meta()?;
         let notices = data.subscribe_revision();
-        let request = PackageRequestV1::TestImage {
+        let request = PackageRequestV1::TestImage { artifact: Some(artifact),
             image: image.root,
             fixture: None,
         };
@@ -314,7 +469,7 @@ fn image_reply_checks_trust() -> TestResult {
         assert_eq!(data.meta()?, before);
         assert!(!notices.has_changed()?);
         fixture.service.auth.replace_package_trust(vec![trust])?;
-        assert!(matches!(fixture.package(request, true).await?, PackageResponseV1::Tests(tests) if tests.is_empty()));
+        assert!(matches!(fixture.package(request, true).await?, PackageResponseV1::Tests(tests) if tests.len() == 2));
         assert_eq!(data.meta()?, before);
         Ok(())
     })

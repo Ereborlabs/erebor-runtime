@@ -30,19 +30,22 @@ fn native_rows_integrity() -> TestResult {
     writer.execute_batch(
         "CREATE TABLE analysis_results (result_id VARCHAR PRIMARY KEY,
         tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
-        method_version UBIGINT, first_cursor UBIGINT)",
+        method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
+        coverage_revision UBIGINT)",
     )?;
     writer.execute_batch(GraphRows::SCHEMA)?;
     GraphRows::validate_tables(&writer)?;
     writer.execute(
-        "INSERT INTO analysis_results VALUES ('version', ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO analysis_results VALUES ('version', ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             graph.scope.identity.tenant_id.as_slice(),
             crate::GRAPH_PROCESSOR,
             &encoded_header,
             graph.scope.identity.key().as_slice(),
             graph.scope.method_version,
-            graph.first_cursor
+            graph.first_cursor,
+            graph.context_notice_revision,
+            fixture.request.coverage_revision
         ],
     )?;
     GraphRows::insert(graph, &writer, "version")?;
@@ -67,7 +70,8 @@ fn native_rows_integrity() -> TestResult {
         let other = "versión";
         transaction.execute(
             "INSERT INTO analysis_results SELECT ?, tenant_id, processor_id, body,
-            stream_key, method_version, first_cursor FROM analysis_results WHERE result_id = ?",
+            stream_key, method_version, first_cursor, facts_revision, coverage_revision
+            FROM analysis_results WHERE result_id = ?",
             params![other, "version"],
         )?;
         GraphRows::insert(graph, &transaction, other)?;

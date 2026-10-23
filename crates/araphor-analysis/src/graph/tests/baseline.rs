@@ -119,13 +119,9 @@ fn historical_baseline(input: &GraphReplayInputV1) -> Result<GraphSnapshotV1> {
     Ok(historical_snapshot(current(input)?))
 }
 
-pub(super) fn historical_snapshot(mut snapshot: GraphSnapshotV1) -> GraphSnapshotV1 {
-    for package in &mut snapshot.packages {
+pub(super) fn historical_snapshot(snapshot: GraphSnapshotV1) -> GraphSnapshotV1 {
+    for package in &snapshot.packages {
         assert_eq!(package.window_ns, 300_000_000_000);
-        assert_eq!(package.window_records, u64::MAX);
-        assert_eq!(package.window_bytes, usize::MAX);
-        package.window_records = 256;
-        package.window_bytes = 4 * 1024 * 1024;
     }
     snapshot
 }

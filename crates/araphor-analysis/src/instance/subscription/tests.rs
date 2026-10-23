@@ -15,7 +15,16 @@ impl Fixture {
         id: &str,
         mode: &str,
     ) -> TestResult<Arc<Instance>> {
-        let mut image = bundle("wasm")?;
+        self.terminal_target(id, mode, "wasm").await
+    }
+
+    pub(in crate::instance) async fn terminal_target(
+        &self,
+        id: &str,
+        mode: &str,
+        target: &str,
+    ) -> TestResult<Arc<Instance>> {
+        let mut image = bundle(target)?;
         let model = &mut image.artifacts[0].descriptor.exports[0];
         model.name = "evaluate".into();
         model.inputs.clear();
@@ -24,14 +33,21 @@ impl Fixture {
             sdk::Field::new("mode", sdk::DataType::Utf8, false),
             sdk::Field::new("amount", sdk::DataType::UInt64, false),
         ]);
-        let PackageImplementationV1::Wasm { exports, .. } =
-            &mut image.artifacts[0].implementations[0]
-        else {
-            return Err("Wasm terminal fixture absent".into());
-        };
-        *exports = vec!["evaluate".into()];
+        match &mut image.artifacts[0].implementations[0] {
+            PackageImplementationV1::Wasm { exports, .. } => *exports = vec!["evaluate".into()],
+            PackageImplementationV1::Native {
+                export,
+                qualification: Some(qualification),
+                ..
+            } => {
+                *export = "evaluate".into();
+                qualification.exports = vec!["evaluate".into()];
+            }
+            _ => return Err("terminal fixture target".into()),
+        }
         self.install(&image)?;
         self.context(1)?;
+        let mode = mode.replace("'", "''");
         let sql = format!(
             r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => '{mode}', amount => 0) WHERE EXISTS (SELECT 1 FROM context_versions)"#
         );
@@ -55,7 +71,7 @@ impl Fixture {
 }
 
 #[test]
-fn failure_keeps_package_codes() {
+fn failure_keeps_package_codes() -> TestResult {
     use datafusion::error::DataFusionError;
 
     for code in [
@@ -69,16 +85,19 @@ fn failure_keeps_package_codes() {
     ] {
         let error = crate::Error::from(code.error("direct terminal fixture"));
         assert_eq!(Subscription::failure(&error), ManagedExit::Failed(code));
+        assert_eq!(Subscription::admission(&error), Some(code));
         let error = crate::Error::from(araphor_query::Error::from(
             code.error("query terminal fixture"),
         ));
         assert_eq!(Subscription::failure(&error), ManagedExit::Failed(code));
+        assert_eq!(Subscription::admission(&error), Some(code));
         let error = crate::Error::from(araphor_query::Error::Sql {
             source: DataFusionError::External(Box::new(araphor_query::Error::from(
                 code.error("wrapped query fixture"),
             ))),
         });
         assert_eq!(Subscription::failure(&error), ManagedExit::Failed(code));
+        assert_eq!(Subscription::admission(&error), Some(code));
         let source = DataFusionError::Context(
             "native worker".into(),
             Box::new(DataFusionError::External(Box::new(
@@ -87,6 +106,7 @@ fn failure_keeps_package_codes() {
         );
         let error = crate::Error::from(araphor_query::Error::Sql { source });
         assert_eq!(Subscription::failure(&error), ManagedExit::Failed(code));
+        assert_eq!(Subscription::admission(&error), Some(code));
     }
     let denied = || araphor_data::Error::AnalysisReadDenied {
         location: snafu::location!(),
@@ -139,6 +159,10 @@ fn failure_keeps_package_codes() {
                 }
             );
             assert_eq!(
+                Subscription::admission(&error),
+                (!notice).then_some(Code::Denied)
+            );
+            assert_eq!(
                 error.status_code(),
                 erebor_runtime_error::StatusCode::PermissionDenied
             );
@@ -148,6 +172,44 @@ fn failure_keeps_package_codes() {
             );
         }
     }
+    for error in [
+        crate::Error::from(araphor_data::Error::AnalysisBusy {
+            resource: "reader",
+            location: snafu::location!(),
+        }),
+        crate::Error::from(araphor_query::Error::Busy {
+            resource: "evaluation",
+            location: snafu::location!(),
+        }),
+        crate::Error::from(araphor_data::Error::AnalysisReadCancelled {
+            location: snafu::location!(),
+        }),
+    ] {
+        assert_eq!(Subscription::admission(&error), None);
+    }
+    let memory = araphor_query::memory::Memory::new(Some(64), None);
+    let other = memory.scope();
+    let held = other.reserve_input(64)?;
+    let own = memory.scope();
+    let source = own
+        .reserve_input(1)
+        .err()
+        .ok_or("shared input pressure absent")?;
+    assert!(matches!(&source, DataFusionError::External(error)
+        if matches!(error.downcast_ref::<araphor_query::Error>(),
+            Some(araphor_query::Error::Capacity { resource: "shared input", .. }))));
+    let error = crate::Error::from(araphor_query::Error::Sql { source });
+    assert!(matches!(&error, crate::Error::Query { source }
+        if araphor_query::Failure::from(source) == araphor_query::Failure::Busy));
+    assert_eq!(Subscription::admission(&error), None);
+    drop(held);
+    drop(own.reserve_input(64)?);
+    let source = own
+        .reserve_input(65)
+        .err()
+        .ok_or("fixed input bound absent")?;
+    let error = crate::Error::from(araphor_query::Error::Sql { source });
+    assert_eq!(Subscription::admission(&error), Some(Code::Limit));
     for resource in ["input capacity", "output capacity"] {
         let error = crate::Error::from(araphor_query::Error::Sql {
             source: DataFusionError::ResourcesExhausted(resource.into()),
@@ -167,6 +229,7 @@ fn failure_keeps_package_codes() {
         Subscription::failure(&error),
         ManagedExit::Failed(Code::Denied)
     );
+    Ok(())
 }
 
 #[tokio::test]
@@ -227,18 +290,13 @@ async fn joined_trap_becomes_durable() -> TestResult {
         .ok_or("trapped instance")?;
     assert_eq!(current.progress, 0);
     assert!(current.running);
-    assert!(matches!(
-        fixture.query.store().managed_resume(
-            [1; 16],
-            "known-trap",
-            &AnalysisReadControl::default(),
-        ),
-        Err(araphor_data::Error::Package {
-            code: Code::Incomplete,
-            field: "managed capacity retry unavailable",
-            ..
-        })
-    ));
+    let resumed = fixture.query.store().managed_resume(
+        [1; 16],
+        "known-trap",
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(resumed.completed, terminal.revision);
+    assert_eq!(resumed.frontier, saved.request().frontier);
     let error = instance
         .run(saved.request().clone(), &AnalysisReadControl::default())
         .await
@@ -842,5 +900,130 @@ async fn postcommit_notice_keeps_receipt() -> TestResult {
         .cancel_and_join(&AnalysisReadControl::default())
         .await?
         .is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn capture_failure_keeps_intent() -> TestResult {
+    let fixture = Fixture::new(araphor_query::execution::Limits {
+        input_bytes: 1,
+        ..Default::default()
+    })?;
+    fixture.context(1)?;
+    let instance = fixture
+        .admit("capture-failure", "SELECT body FROM context_versions")
+        .await?;
+    let lifecycle = fixture.start(&instance)?;
+    let expected = fixture
+        .query
+        .store()
+        .managed_instance([1; 16], "capture-failure", &AnalysisReadControl::default())?
+        .ok_or("capture instance absent")?;
+    let mut stream = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    let error = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("capture stream ended")?
+        .err()
+        .ok_or("oversized capture published")?;
+    assert_eq!(
+        Subscription::failure(&error),
+        ManagedExit::Failed(Code::Limit)
+    );
+    assert!(stream
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .attempt
+        .is_none());
+    assert!(stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?
+        .is_none());
+    let status = fixture.query.store().managed_status(
+        &fixture.grant.selection,
+        "capture-failure",
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(status.instance, expected);
+    assert!(status.instance.running);
+    assert_eq!(status.status_progress, 0);
+    assert!(matches!(
+        status.readiness,
+        araphor_data::PackageReadinessV1::Failed {
+            code: Code::Limit,
+            ..
+        }
+    ));
+    let resume = fixture.query.store().managed_resume(
+        [1; 16],
+        "capture-failure",
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(resume.completed, 0);
+    assert!(resume.frontier.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn opening_failure_keeps_intent() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    let instance = fixture.admit("subscription-opening", "SELECT operation FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '1 second' OR operation = 7").await?;
+    let lifecycle = fixture.start(&instance)?;
+    let expected = fixture
+        .query
+        .store()
+        .managed_instance(
+            [1; 16],
+            "subscription-opening",
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("opening instance absent")?;
+    let error = instance
+        .subscribe(
+            Arc::new(AnalysisReadControl::default()),
+            u64::MAX,
+            lifecycle,
+        )
+        .err()
+        .ok_or("invalid follow window admitted")?;
+    assert!(matches!(
+        &error,
+        crate::Error::Query {
+            source: araphor_query::Error::Invalid {
+                field: "follow clock filter",
+                ..
+            }
+        }
+    ));
+    assert_eq!(
+        Subscription::failure(&error),
+        ManagedExit::Failed(Code::Invalid)
+    );
+    let status = fixture.query.store().managed_status(
+        &fixture.grant.selection,
+        "subscription-opening",
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(status.instance, expected);
+    assert!(status.instance.running);
+    assert_eq!(status.status_progress, 0);
+    assert!(matches!(
+        status.readiness,
+        araphor_data::PackageReadinessV1::Failed {
+            code: Code::Invalid,
+            ..
+        }
+    ));
+    let resume = fixture.query.store().managed_resume(
+        [1; 16],
+        "subscription-opening",
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(resume.completed, 0);
+    assert!(resume.frontier.is_none());
     Ok(())
 }

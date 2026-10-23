@@ -1,7 +1,7 @@
 use crate::{Error, ErrorCode, Package, Result};
 
 use super::codec::Codec;
-use super::{Checkpoint, Output, ReasonValue};
+use super::{Checkpoint, Dataset, Output, ReasonValue};
 
 impl Output {
     pub fn encode(
@@ -17,35 +17,20 @@ impl Output {
         output: &crate::Output,
     ) -> Result<Self> {
         checked.validate_output(output)?;
-        Self::encode_parts(
-            output,
-            checked.model(),
-            checked.evaluation().context.limits,
-            true,
-        )
+        Self::encode_parts(output, checked.model())
     }
 
-    /// Encode output values with per-dataset row and batch limits.
+    /// Encode output values with their declared schemas.
     /// The caller must validate the model and output contract.
-    pub fn encode_model(
-        output: &crate::Output,
-        model: &crate::Model,
-        limits: crate::Limits,
-    ) -> Result<Self> {
-        Self::encode_parts(output, model, limits, false)
+    pub fn encode_model(output: &crate::Output, model: &crate::Model) -> Result<Self> {
+        Self::encode_parts(output, model)
     }
 
-    fn encode_parts(
-        output: &crate::Output,
-        model: &crate::Model,
-        limits: crate::Limits,
-        aggregate: bool,
-    ) -> Result<Self> {
-        let mut codec = Codec::new(limits, aggregate);
+    fn encode_parts(output: &crate::Output, model: &crate::Model) -> Result<Self> {
         let datasets = output
             .datasets
             .iter()
-            .map(|data| codec.encode(data, Codec::schema(&model.outputs, &data.name)?))
+            .map(|data| Dataset::encode(data, Codec::schema(&model.outputs, &data.name)?))
             .collect::<Result<_>>()?;
         let reasons = output
             .reasons
@@ -56,7 +41,7 @@ impl Output {
                     .iter()
                     .find(|spec| spec.code == reason.code)
                     .ok_or_else(|| Error::contract(ErrorCode::Invalid, "reason code"))?;
-                let details = codec.encode(
+                let details = Dataset::encode(
                     &crate::Dataset {
                         name: reason.code.clone(),
                         batches: vec![reason.details.clone()],
@@ -77,7 +62,7 @@ impl Output {
             checkpoint: output
                 .checkpoint
                 .as_ref()
-                .map(|checkpoint| Checkpoint::encode(checkpoint, model, limits, aggregate))
+                .map(|checkpoint| Checkpoint::encode(checkpoint, model))
                 .transpose()?,
         })
     }
@@ -87,9 +72,8 @@ impl Output {
         package: &Package,
         evaluation: &crate::Evaluation,
     ) -> Result<crate::Output> {
-        let limits = evaluation.context.limits;
-        let model = package.wire_validator(&evaluation.export, limits)?;
-        let output = self.decode_parts(model, limits, true, false)?;
+        let model = package.wire_validator(&evaluation.export)?;
+        let output = self.decode_parts(model, None, ErrorCode::Incompatible)?;
         model.input(evaluation)?;
         model.output(evaluation, &output)?;
         Ok(output)
@@ -99,13 +83,13 @@ impl Output {
         &self,
         package: &Package,
         evaluation: &crate::Evaluation,
-        limits: crate::Limits,
+        copy_bytes: usize,
     ) -> Result<crate::Output> {
-        limits.validate()?;
         let checked = package.check_evaluation(evaluation)?;
-        let output = self.decode_parts(checked.model(), limits, true, true)?;
+        let output =
+            self.decode_parts(checked.model(), Some(copy_bytes), ErrorCode::Incompatible)?;
         checked.validate_output(&output)?;
-        if output.allocated_bytes() as u64 > limits.max_bytes {
+        if output.allocated_bytes() > copy_bytes {
             return Err(Error::contract(ErrorCode::Limit, "output allocation bytes"));
         }
         Ok(output)
@@ -115,29 +99,27 @@ impl Output {
         &self,
         package: &Package,
         export: &str,
-        limits: crate::Limits,
         inputs: &std::collections::BTreeMap<String, u64>,
     ) -> Result<crate::Output> {
-        let model = package.wire_validator(export, limits)?;
-        let output = self.decode_parts(model, limits, true, false)?;
-        package.validate_retained_output(export, limits, inputs, &output)?;
+        let model = package.wire_validator(export)?;
+        let output = self.decode_parts(model, None, ErrorCode::Incompatible)?;
+        package.validate_retained_output(export, inputs, &output)?;
         Ok(output)
     }
 
-    /// Decode output values with per-dataset row and batch limits.
+    /// Decode output values with their declared schemas.
     /// The caller must validate the model and output contract.
     pub fn decode_model(&self, model: &crate::Model) -> Result<crate::Output> {
-        self.decode_parts(model, model.limits, false, false)
+        self.decode_parts(model, None, ErrorCode::Invalid)
     }
 
     fn decode_parts(
         &self,
         model: &crate::Model,
-        limits: crate::Limits,
-        aggregate: bool,
-        combined: bool,
+        copy_bytes: Option<usize>,
+        version_error: ErrorCode,
     ) -> Result<crate::Output> {
-        let mut codec = Codec::new(limits, aggregate);
+        let mut codec = Codec::new(copy_bytes);
         let datasets = self
             .datasets
             .iter()
@@ -155,7 +137,16 @@ impl Output {
                 Ok(crate::ReasonValue {
                     output: reason.output.clone(),
                     code: reason.code.clone(),
-                    details: codec.single(&reason.code, &reason.details, &spec.details)?,
+                    details: codec.single(
+                        &reason.code,
+                        &reason.details,
+                        &spec.details,
+                        if version_error == ErrorCode::Invalid {
+                            "reason details"
+                        } else {
+                            "single row batch"
+                        },
+                    )?,
                 })
             })
             .collect::<Result<_>>()?;
@@ -166,15 +157,7 @@ impl Output {
             checkpoint: self
                 .checkpoint
                 .as_ref()
-                .map(|checkpoint| {
-                    let mut limits = limits;
-                    if combined {
-                        limits.max_checkpoint_bytes = limits
-                            .max_checkpoint_bytes
-                            .min(codec.remaining(false).max_bytes);
-                    }
-                    checkpoint.decode(model, limits, aggregate)
-                })
+                .map(|checkpoint| checkpoint.decode(model, &mut codec, version_error))
                 .transpose()?,
         })
     }

@@ -22,6 +22,7 @@ impl ManagedPublication for Sink {
         Ok((
             Invocation::default(),
             ManagedRead {
+                expected: None,
                 instance,
                 rebuild: self.state.rebuild.load(Ordering::SeqCst),
                 completed: None,
@@ -61,6 +62,9 @@ impl ManagedPublication for Sink {
             gate.release.lock().unwrap().recv().unwrap();
         }
         control.check()?;
+        if let Some(error) = self.state.admission_error.lock().unwrap().take() {
+            return Err(error);
+        }
         self.state.admissions.fetch_add(1, Ordering::SeqCst);
         self.state.admitted.store(true, Ordering::SeqCst);
         Ok(())
@@ -834,5 +838,139 @@ async fn failed_offer_keeps_cut_idle() -> TestResult {
     resumed.cancel_and_join().await?;
     drop(update);
     drop(fixture.engine.reserve_evaluation([1; 16])?);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stale_admission_keeps_capture_cut() -> TestResult {
+    for related in [true, false] {
+        let fixture = fixture().await?;
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (release, held) = mpsc::channel();
+        let state = Arc::new(SinkState {
+            admission_gate: Some(WriterGate {
+                entered: Mutex::new(Some(entered)),
+                release: Mutex::new(held),
+            }),
+            admission_error: Mutex::new(Some(crate::Error::Data {
+                source: araphor_data::Error::AnalysisConflict {
+                    location: snafu::location!(),
+                },
+            })),
+            ..Default::default()
+        });
+        let (definition, target) = prepared(&fixture, &state).await?;
+        let control = AnalysisReadControl::default();
+        let mut first = stream(&fixture, definition.clone(), Arc::clone(&target), &control)?;
+        let mut next = Box::pin(first.next());
+        tokio::select! {
+            result = &mut next => return Err(format!("stale admission ended before capture: {result:?}").into()),
+            observed = observed => observed?,
+        }
+        let captured = state
+            .frontier
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("stale capture cut")?;
+        let captured = crate::follow::Cursor::decode(&captured.cursor)?.read_revision();
+        assert_eq!(state.entries.load(Ordering::SeqCst), 0);
+        assert_eq!(state.input_evaluations.load(Ordering::SeqCst), 0);
+        if related {
+            fixture.event(2)?;
+            fixture.context(1)?;
+        } else {
+            let mut foreign = fixture
+                .engine
+                .store()
+                .source_page([1; 16], None)?
+                .pop()
+                .ok_or("captured source identity")?;
+            let frame = fixture
+                .engine
+                .store()
+                .read_page(&foreign, 1)?
+                .records
+                .remove(0)
+                .framed_record;
+            foreign.tenant_id = [2; 16];
+            fixture.engine.store().accept_validated_batch(
+                foreign,
+                araphor_data::ValidatedEvidenceBatchV1 {
+                    cpu_id: 0,
+                    first_cursor: 1,
+                    last_cursor: 1,
+                    intake_utc_ns: NOW,
+                    frame_ends: vec![frame.len()],
+                    framed_records: frame.into(),
+                },
+            )?;
+            let (_, revision) = fixture.engine.store().dependency_revision_for(
+                &AnalysisSelectionV1::tenant([1; 16]),
+                &[("events".to_owned(), None)].into_iter().collect(),
+                &control,
+            )?;
+            assert!(revision <= captured);
+        }
+        assert!(fixture.engine.store().meta()?.commit_revision > captured);
+        release.send(())?;
+        let error = tokio::time::timeout(Duration::from_secs(30), next)
+            .await?
+            .ok_or("stale admission result")?
+            .err()
+            .ok_or("stale admission published")?;
+        let mut source: &(dyn std::error::Error + 'static) = &error;
+        loop {
+            if matches!(
+                source.downcast_ref::<crate::Error>(),
+                Some(crate::Error::Data {
+                    source: araphor_data::Error::AnalysisConflict { .. }
+                })
+            ) {
+                break;
+            }
+            source = source.source().ok_or("stale source conflict lost")?;
+        }
+        assert_eq!(
+            erebor_runtime_error::ErrorExt::status_code(&error),
+            erebor_runtime_error::StatusCode::AlreadyExists,
+        );
+        first.cancel_and_join().await?;
+        assert_eq!(state.admissions.load(Ordering::SeqCst), 0);
+        assert_eq!(state.entries.load(Ordering::SeqCst), 0);
+        assert_eq!(state.commits.load(Ordering::SeqCst), 0);
+        drop(fixture.engine.reserve_evaluation([1; 16])?);
+        let recovery =
+            crate::follow::SourceRecovery::take(&error).ok_or("stale admission recovery absent")?;
+        assert!(crate::follow::SourceRecovery::take(&error).is_none());
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            recovery.changed(&AnalysisReadControl::default()),
+        )
+        .await??;
+        let mut resumed = stream(
+            &fixture,
+            definition,
+            target,
+            &AnalysisReadControl::default(),
+        )?;
+        release.send(())?;
+        let update = tokio::time::timeout(Duration::from_secs(30), resumed.next())
+            .await?
+            .ok_or("recovered admission update")??;
+        assert_eq!(
+            update.snapshot.page.extraction.sources[0]
+                .receipt
+                .contiguous_cursor,
+            if related { 2 } else { 1 }
+        );
+        assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
+        assert_eq!(state.entries.load(Ordering::SeqCst), 1);
+        assert_eq!(state.commits.load(Ordering::SeqCst), 1);
+        resumed.cancel_and_join().await?;
+        drop(update);
+        drop(state.receipt.lock().unwrap().take());
+        released(&fixture)?;
+    }
     Ok(())
 }

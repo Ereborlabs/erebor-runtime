@@ -3,7 +3,6 @@ use super::*;
 fn mixed_image() -> TestResult<PackageBundleV1> {
     let mut image = component("wasm", "count-input")?;
     let artifact = &mut image.artifacts[0];
-    artifact.descriptor.exports[0].limits.max_bytes = 64 * 1024;
     artifact.descriptor.exports[0].inputs[0].source =
         sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
             package: artifact.descriptor.id.clone(),
@@ -69,6 +68,26 @@ async fn selected_descriptor_keeps_auxiliary() -> TestResult {
         .map(|call| call.export())
         .collect::<Vec<_>>();
     assert_eq!(guests, ["count-input"]);
+    fixture.engine.store().fault_write(
+        "UPDATE package_revisions SET artifact = 'invalid'::BLOB",
+        &[],
+    )?;
+    let error = fixture.prepare(&Fixture::sql(
+        r#"SELECT * FROM "runtime-fixture"."1"."count-input"(mode => 'sum-input', amount => 0)"#,
+    )).await.err().ok_or("cold corrupted image accepted")?;
+    assert!(
+        matches!(
+            &error,
+            crate::Error::Data {
+                source: araphor_data::Error::AnalysisContract {
+                    source: sdk::Error::Io { path, .. },
+                    ..
+                }
+            }
+            if path.as_path() == std::path::Path::new("<OCI archive>")
+        ),
+        "{error:?}"
+    );
     let first = fixture
         .execute(&prepared, invocation("selected-descriptor"))
         .await?;
@@ -89,8 +108,7 @@ async fn selected_descriptor_keeps_auxiliary() -> TestResult {
     let parameters = direct.evaluation().parameters.clone();
     let schema = &call.descriptor().exports[0].outputs[0].schema;
     let expected =
-        sdk::wire::Dataset::encode(&direct.output().datasets[0], schema, sdk::Limits::default())?
-            .decode(schema, sdk::Limits::default())?;
+        sdk::wire::Dataset::encode(&direct.output().datasets[0], schema)?.decode(schema)?;
     let batches = direct.output().datasets[0].batches.clone();
     let retained = batches[0].column(0).get_buffer_memory_size();
     assert!(retained > 0 && retained < OUTPUT);

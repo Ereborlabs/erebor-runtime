@@ -35,9 +35,6 @@ impl AnalysisStore {
         if !selection.valid() || (legacy != 0 && (scope.is_empty() || scope.len() > 256)) {
             return Err(Code::Invalid.error("dependency selection"));
         }
-        if legacy > 64 {
-            return Err(Code::Limit.error("model dependencies"));
-        }
         for (source, _) in outputs {
             let reference = source.output();
             for name in [&reference.package, &reference.export, &reference.output] {
@@ -255,6 +252,7 @@ impl AnalysisStore {
         reader: &Connection,
         tenant: [u8; 16],
         output: &mut AnalysisExtractionV1,
+        graph_witnesses: bool,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         let count = output
@@ -319,11 +317,16 @@ impl AnalysisStore {
                     operation: "read captured evidence manifest",
                 })?;
             let (witnesses, contexts) = Self::decode_evidence(&processor, &manifest)?;
+            let inherit_raw = graph_witnesses
+                || processor != crate::GRAPH_PROCESSOR
+                || origins.as_slice() != [AnalysisReferenceOriginV1::Graph];
             for witness in witnesses {
                 if witness.identity.tenant() != tenant {
                     return self.reject("the captured evidence witness has a foreign tenant");
                 }
-                output.inherit_witness(witness)?;
+                if inherit_raw {
+                    output.inherit_witness(witness)?;
+                }
             }
             for reference in contexts {
                 if reference.key.tenant_id != tenant {

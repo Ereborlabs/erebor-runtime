@@ -19,17 +19,24 @@ use crate::{InvalidSnafu, Result, SqlSnafu};
 mod call;
 mod package;
 pub(crate) mod physical;
+mod replay;
 #[cfg(test)]
 mod tests;
 
 pub use call::PackageCall;
 pub(crate) use physical::CallContext;
-pub use physical::{CallResult, ExecutionReceipt, Invocation};
+pub use physical::{CallResult, CallReuse, ExecutionReceipt, Invocation};
 
 #[derive(Clone)]
 pub struct PreparedDefinition {
     pub plan: LogicalPlan,
     admission: Arc<DefinitionAdmission>,
+}
+
+enum ImageRead<'a> {
+    Installed,
+    Root(araphor_package::PackageRefV1),
+    Retained(&'a ResolvedDefinition),
 }
 
 struct DefinitionAdmission {
@@ -244,6 +251,7 @@ impl Engine {
             control,
             Arc::default(),
             Arc::clone(self.memory()),
+            ImageRead::Installed,
         )
         .await
     }
@@ -255,6 +263,7 @@ impl Engine {
         control: Arc<AnalysisReadControl>,
         tables: Arc<crate::execution::LocalTables>,
         memory: Arc<crate::memory::Memory>,
+        images: ImageRead<'_>,
     ) -> Result<PreparedDefinition> {
         control.check()?;
         if tenant == [0; 16] {
@@ -266,12 +275,18 @@ impl Engine {
         definition
             .validate_captured()
             .map_err(araphor_data::Error::from)?;
-        let sql = definition
-            .program
-            .sql()
-            .map_err(araphor_data::Error::from)?;
-        let mut resolved = ResolvedDefinition::new(definition.clone(), sql, Vec::new())
-            .map_err(araphor_data::Error::from)?;
+        let mut resolved = match &images {
+            ImageRead::Retained(retained) => (*retained).clone(),
+            _ => ResolvedDefinition::new(
+                definition.clone(),
+                definition
+                    .program
+                    .sql()
+                    .map_err(araphor_data::Error::from)?,
+                Vec::new(),
+            )
+            .map_err(araphor_data::Error::from)?,
+        };
         let retained = memory
             .reserve_input(DefinitionAdmission::allocation_bytes(
                 &resolved,
@@ -280,7 +295,56 @@ impl Engine {
             .context(SqlSnafu)?;
         let statement = self.limits().parser.parse(&resolved.sql)?;
         let references = package::Packages::references(&statement)?;
-        let bundles = if references.is_empty() {
+        let bundles = if let ImageRead::Retained(retained) = images {
+            let store = Arc::clone(self.store());
+            let read = Arc::clone(&control);
+            let pins = retained.images.clone();
+            Self::blocking(Arc::clone(&control), (), move || {
+                let bundles = pins
+                    .iter()
+                    .map(|pin| {
+                        store
+                            .retained_package_image(tenant, pin, &read)?
+                            .ok_or_else(|| {
+                                PackageErrorCodeV1::Missing
+                                    .error("retained definition image")
+                                    .into()
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                for reference in references {
+                    if !bundles.iter().any(|bundle| {
+                        bundle
+                            .artifacts
+                            .iter()
+                            .any(|artifact| artifact.reference() == reference)
+                    }) {
+                        return Err(PackageErrorCodeV1::Missing
+                            .error("retained definition artifact")
+                            .into());
+                    }
+                }
+                Ok(bundles)
+            })
+            .await?
+        } else if let ImageRead::Root(image) = images {
+            let store = Arc::clone(self.store());
+            let read = Arc::clone(&control);
+            Self::blocking(Arc::clone(&control), (), move || {
+                let bundle = store
+                    .package_image(tenant, &image.package_id, Some(&image.revision), &read)?
+                    .ok_or_else(|| {
+                        PackageErrorCodeV1::Missing.error("definition image revision")
+                    })?;
+                for reference in references {
+                    bundle
+                        .artifact(&reference)
+                        .map_err(araphor_data::Error::from)?;
+                }
+                Ok(vec![bundle])
+            })
+            .await?
+        } else if references.is_empty() {
             Vec::new()
         } else {
             let store = Arc::clone(self.store());
@@ -388,7 +452,6 @@ impl Engine {
             Arc::new(crate::sources::InputCapture {
                 scope: String::new(),
                 bindings,
-                limits: araphor_analysis_sdk::Limits::default(),
                 ranges: Vec::new(),
                 include_results: true,
                 retained: Some(retained_sources),
@@ -403,7 +466,8 @@ impl Engine {
         retained
             .try_resize(DefinitionAdmission::allocation_bytes(&resolved, &sources)?)
             .context(SqlSnafu)?;
-        let validation = state.optimize(&plan).context(SqlSnafu)?;
+        let validation =
+            crate::parser::Parser::stack(|| state.optimize(&plan)).context(SqlSnafu)?;
         state
             .query_planner()
             .create_physical_plan(&validation, &state)
@@ -433,8 +497,79 @@ impl Session {
                 Arc::clone(self.control()),
                 Arc::clone(&self.tables),
                 Arc::clone(self.memory()),
+                ImageRead::Installed,
             )
             .await
+    }
+
+    pub async fn prepare_image(
+        &self,
+        definition: &Definition,
+        image: araphor_package::PackageRefV1,
+    ) -> Result<PreparedDefinition> {
+        self.engine()
+            .prepare_definition_tables(
+                self.selection().tenant_id,
+                definition,
+                Arc::clone(self.control()),
+                Arc::clone(&self.tables),
+                Arc::clone(self.memory()),
+                ImageRead::Root(image),
+            )
+            .await
+    }
+
+    pub async fn prepare_resolved(
+        &self,
+        definition: &ResolvedDefinition,
+    ) -> Result<PreparedDefinition> {
+        definition.validate().map_err(araphor_data::Error::from)?;
+        let store = Arc::clone(self.engine().store());
+        let tenant = self.selection().tenant_id;
+        let name = definition.definition.name.clone();
+        let digest = definition.digest().map_err(araphor_data::Error::from)?;
+        let control = Arc::clone(self.control());
+        let stage = Arc::clone(&control);
+        let bytes = definition
+            .allocation_bytes()
+            .ok_or_else(|| PackageErrorCodeV1::Limit.error("retained definition metadata"))?;
+        let reserved = self.memory().reserve_input(bytes).context(SqlSnafu)?;
+        let (saved, reserved) = Engine::blocking(control, (), move || {
+            Ok((
+                store.definition(tenant, &name, Some(&digest), &stage)?,
+                reserved,
+            ))
+        })
+        .await?;
+        if saved.as_ref().is_some_and(|saved| saved != definition) {
+            return Err(PackageErrorCodeV1::Conflict
+                .error("retained definition pin")
+                .into());
+        }
+        let images = if saved.is_some() {
+            ImageRead::Retained(definition)
+        } else {
+            ImageRead::Installed
+        };
+        drop(saved);
+        drop(reserved);
+        let prepared = self
+            .engine()
+            .prepare_definition_tables(
+                tenant,
+                &definition.definition,
+                Arc::clone(self.control()),
+                Arc::clone(&self.tables),
+                Arc::clone(self.memory()),
+                images,
+            )
+            .await?;
+        if prepared.resolved() != definition {
+            return Err(PackageErrorCodeV1::Conflict
+                .error("resolved definition pin")
+                .into());
+        }
+        Ok(prepared)
     }
 
     pub async fn execute_definition(
@@ -556,14 +691,20 @@ impl PreparedDefinition {
                     .error("retained source publication")
                     .into());
             }
-            if !invocation.inputs.is_empty() || !invocation.checkpoints.is_empty() {
+            if !invocation.inputs.is_empty()
+                || !invocation.checkpoints.is_empty()
+                || invocation.time_utc_ns.is_some()
+            {
                 return Err(PackageErrorCodeV1::Invalid
                     .error("managed invocation state")
                     .into());
             }
             let spec = &managed.instance.spec;
             if spec.tenant != selection.tenant_id
-                || managed.instance.grant.selection != *selection
+                || spec
+                    .destination
+                    .selection(&managed.instance.grant.selection)?
+                    != *selection
                 || spec.definition != *self.resolved()
             {
                 return Err(PackageErrorCodeV1::Denied

@@ -343,6 +343,7 @@ impl<C: Consumer> Delivery<C> {
                                 operation: inner.operation,
                                 exhausted: false,
                                 clock_changed: false,
+                                completed_windows: Vec::new(),
                                 positions: Vec::new(),
                                 evaluated_utc_ns: 0,
                                 limited: false,

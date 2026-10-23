@@ -40,7 +40,9 @@ async fn run() -> mithril_control::Result<()> {
         kubernetes_nodes,
         kubernetes_admission,
         data_error,
+        instances,
         discovery,
+        graph,
         discovery_error,
     } = config.into_parts()?;
     info!(
@@ -58,11 +60,53 @@ async fn run() -> mithril_control::Result<()> {
         Some(config) => Some(ClientListener::load(config, control.clone()).await?),
         None => None,
     };
-    let (discovery_cancel, discovery_stop) = tokio::sync::watch::channel(false);
-    let discovery_task = discovery.map(|owner| {
+    let (analysis_cancel, analysis_stop) = tokio::sync::watch::channel(false);
+    let analysis_task = instances.map(|owner| {
+        let cancel = analysis_cancel.clone();
         tokio::spawn(async move {
-            if let Err(error) = owner.run(discovery_stop).await {
-                warn!("discovery stopped with an error", error = %error);
+            let host = owner.serve(analysis_stop.clone(), u64::MAX);
+            let sources = async move {
+                let discovery_stop = analysis_stop.clone();
+                let graph_stop = analysis_stop.clone();
+                let discovery = async move {
+                    if let Some(owner) = discovery {
+                        if let Err(error) = owner.run(discovery_stop).await {
+                            warn!("discovery source subscriptions stopped with an error", error = %error);
+                        }
+                    }
+                };
+                let graph = async move {
+                    if let Some(owner) = graph {
+                        if let Err(error) = owner.run(graph_stop).await {
+                            warn!("graph source subscriptions stopped with an error", error = %error);
+                        }
+                    }
+                };
+                tokio::join!(discovery, graph);
+                let mut stop = analysis_stop;
+                while !*stop.borrow_and_update() {
+                    if stop.changed().await.is_err() {
+                        break;
+                    }
+                }
+                Ok(())
+            };
+            tokio::pin!(host, sources);
+            let result = tokio::select! {
+                biased;
+                result = &mut host => {
+                    let _ = cancel.send(true);
+                    let joined = sources.await;
+                    result.and(joined)
+                }
+                result = &mut sources => {
+                    let _ = cancel.send(true);
+                    let joined = host.await;
+                    result.and(joined)
+                }
+            };
+            if let Err(error) = result {
+                warn!("analysis subscriptions stopped with an error", error = %error);
             }
         })
     });
@@ -155,10 +199,10 @@ async fn run() -> mithril_control::Result<()> {
             result = &mut admission_server => result,
         }
     };
-    let _ = discovery_cancel.send(true);
-    if let Some(task) = discovery_task {
+    let _ = analysis_cancel.send(true);
+    if let Some(task) = analysis_task {
         if let Err(error) = task.await {
-            warn!("discovery task failed", error = %error);
+            warn!("analysis subscription task failed", error = %error);
         }
     }
     result

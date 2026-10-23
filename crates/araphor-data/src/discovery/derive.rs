@@ -14,9 +14,6 @@ impl BehaviorSnapshotV1 {
             self.tenant_id != [0; 16]
                 && !self.source_revision.is_empty()
                 && self.source_revision.len() <= 128
-                && self.atoms.len() <= MAX_DISCOVERY_ATOMS
-                && self.coverage.len() <= 4096
-                && self.accepted_records <= MAX_DISCOVERY_RECORDS as u64
                 && self.unresolved_records == self.unresolved.len() as u64
                 && self.excluded_records == self.excluded.len() as u64,
             "snapshot bounds",
@@ -38,7 +35,6 @@ impl BehaviorSnapshotV1 {
                     && atom.first_cursor > 0
                     && atom.last_cursor >= atom.first_cursor
                     && atom.count <= atom.last_cursor - atom.first_cursor + 1
-                    && atom.evidence_sample.len() <= MAX_DISCOVERY_SAMPLES
                     && !atom.evidence_sample.is_empty()
                     && atom.evidence_sample.len() as u64 <= atom.count
                     && atom.key.proof_kind == self.proof_kind
@@ -118,9 +114,7 @@ impl BehaviorSnapshotV1 {
             match &entry.state {
                 DiscoveryLifecycleStateV1::Recorded { records } => {
                     require(
-                        !records.is_empty()
-                            && records.len() <= 64
-                            && records.windows(2).all(|pair| pair[0] < pair[1]),
+                        !records.is_empty() && records.windows(2).all(|pair| pair[0] < pair[1]),
                         "snapshot lifecycle records",
                     )?;
                     for id in records {

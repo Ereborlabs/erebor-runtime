@@ -68,7 +68,7 @@ async fn retained_revisions_ignore_slots() -> TestResult {
         tenant_evaluations: Some(1),
         ..Default::default()
     })?;
-    fixture.install(&consumer("1", 1024 * 1024)?)?;
+    fixture.install(&consumer("1")?)?;
     let (source, first) = producer(&fixture).await?;
     let second = fixture.admit("retained-second", r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(9 AS BIGINT UNSIGNED) AS value))"#).await?;
     let receipt = second

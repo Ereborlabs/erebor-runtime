@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, ErrorCode, Limits, RecordBatch, Result};
+use crate::{Error, ErrorCode, RecordBatch, Result};
 
 #[derive(Clone, Debug)]
 pub struct Dataset {
@@ -53,7 +53,6 @@ pub struct EvaluationContext {
     pub id: String,
     pub time_utc_ns: i64,
     pub seed: Option<u64>,
-    pub limits: Limits,
 }
 
 #[derive(Clone, Debug)]

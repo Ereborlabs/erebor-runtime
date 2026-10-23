@@ -213,7 +213,7 @@ async fn durable_record_projection() -> TestResult {
             .map(|batch| sdk::Dataset::normalize_batch(batch, Arc::new(port.schema.clone())))
             .collect::<sdk::Result<_>>()?,
     };
-    actual.validate(&port, builtin::Discovery::limits())?;
+    actual.validate(&port)?;
     let expected = records
         .values()
         .map(Fixture::record)

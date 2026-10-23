@@ -6,6 +6,49 @@ use super::*;
 mod traversal;
 
 impl AnalysisStore {
+    pub(super) fn graph_contexts(
+        &self,
+        snapshot: &Connection,
+        tenant: [u8; 16],
+        result_id: &str,
+        output: &mut AnalysisExtractionV1,
+        control: &AnalysisReadControl,
+    ) -> Result<Vec<crate::AnalysisContextRefV1>> {
+        control.check()?;
+        let length: u64 = snapshot
+            .query_row(
+                "SELECT octet_length(request_meta) FROM analysis_results
+             WHERE tenant_id = ? AND result_id = ? AND processor_id = ?",
+                params![tenant.as_slice(), result_id, crate::GRAPH_PROCESSOR],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "bound captured graph attribution",
+            })?;
+        let length = usize::try_from(length)
+            .map_err(|_| self.state_error("the graph attribution length is invalid"))?;
+        output.scan(length)?;
+        output.charge(length.saturating_mul(2))?;
+        let metadata: Vec<u8> = snapshot
+            .query_row(
+                "SELECT request_meta FROM analysis_results
+             WHERE tenant_id = ? AND result_id = ? AND processor_id = ?",
+                params![tenant.as_slice(), result_id, crate::GRAPH_PROCESSOR],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read captured graph attribution",
+            })?;
+        let (_, contexts) = Self::decode_evidence(crate::GRAPH_PROCESSOR, &metadata)?;
+        if contexts
+            .iter()
+            .any(|reference| reference.key.tenant_id != tenant)
+        {
+            return self.reject("the graph attribution has a foreign tenant");
+        }
+        Ok(contexts)
+    }
+
     pub(super) fn extract_graph_state(
         &self,
         snapshot: &Connection,
@@ -141,6 +184,7 @@ impl AnalysisStore {
         result_id: &str,
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
+        complete: bool,
     ) -> Result<GraphHeader> {
         control.check()?;
         let length: u64 = snapshot
@@ -168,8 +212,12 @@ impl AnalysisStore {
         let remaining = header.snapshot_bytes.saturating_sub(length);
         output.scan(remaining)?;
         output.charge(remaining.saturating_mul(2))?;
-        header.snapshot.findings =
-            GraphRows::read_findings(snapshot, result_id, &header, Some(control))?;
+        if complete {
+            header.snapshot = GraphRows::read_control(snapshot, result_id, &header, Some(control))?;
+        } else {
+            header.snapshot.findings =
+                GraphRows::read_findings(snapshot, result_id, &header, Some(control))?;
+        }
         if header.snapshot.findings.len() != header.finding_count {
             return self.reject("the selected graph finding count differs");
         }

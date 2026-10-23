@@ -57,7 +57,6 @@ pub struct Fact {
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub window_ns: u64,
-    pub window_records: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]

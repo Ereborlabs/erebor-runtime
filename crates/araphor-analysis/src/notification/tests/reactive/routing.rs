@@ -5,7 +5,7 @@ async fn native_escalation_route_changes() -> TestResult {
     for acknowledged in [false, true] {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-        store.enable_graph_owner()?;
+        let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
         let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
         let engine = Engine::new(store.clone(), Limits::default())?;
         let human = grant(NotificationPrincipalV1::Human);
@@ -142,7 +142,7 @@ async fn native_tenant_capacity_isolation() -> TestResult {
             ..Default::default()
         },
     )?);
-    store.enable_graph_owner()?;
+    let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     let engine = Engine::new(store.clone(), Limits::default())?;
     let sink = Sink::default();

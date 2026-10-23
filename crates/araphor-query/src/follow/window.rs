@@ -1,22 +1,31 @@
 use std::ops::Bound;
+use std::sync::Arc;
 
 use araphor_data::AnalysisSelectionV1;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::{ExprSchema, ScalarValue};
 use datafusion::datasource::source_as_provider;
-use datafusion::functions::datetime::now::NowFunc;
-use datafusion::logical_expr::{Expr, ExprSchemable, LogicalPlan, Operator};
+use datafusion::functions::datetime::{date_bin::DateBinFunc, now::NowFunc};
+use datafusion::logical_expr::{BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator};
+use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use snafu::ResultExt as _;
 
 use crate::definition::PackageCall;
 use crate::sources::SourceProvider;
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Window {
-    inclusive: Option<u64>,
-    exclusive: Option<u64>,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Window {
+    Moving {
+        inclusive: Option<u64>,
+        exclusive: Option<u64>,
+    },
+    Fixed {
+        bin: Arc<Expr>,
+        lower: bool,
+        upper: bool,
+    },
 }
 
 #[derive(Default)]
@@ -45,13 +54,12 @@ impl<'n> TreeNodeVisitor<'n> for Windows {
                 return Ok(TreeNodeRecursion::Jump);
             }
         }
-        plan.apply_expressions(|expression| {
-            expression.apply(|expression| {
-                self.clocks += usize::from(Window::clock(expression));
-                Ok(TreeNodeRecursion::Continue)
-            })
-        })?;
-        let mut window = self.stack.last().copied().flatten();
+        if let LogicalPlan::Join(join) = plan {
+            if let Some(predicate) = &join.filter {
+                self.clocks += Window::event_clocks(predicate, plan.schema())?;
+            }
+        }
+        let mut window = self.stack.last().cloned().flatten();
         if !Window::preserves(plan) && !Window::events(plan) {
             window = None;
         }
@@ -61,8 +69,13 @@ impl<'n> TreeNodeVisitor<'n> for Windows {
                 if matches!(expression, Expr::BinaryExpr(binary) if binary.op == Operator::And) {
                     return Ok(TreeNodeRecursion::Continue);
                 }
+                self.clocks += Window::event_clocks(expression, filter.input.schema())?;
                 if let Some(found) = Window::predicate(expression, filter.input.schema()) {
-                    window = Some(window.map_or(found, |current| current.intersect(found)));
+                    window = match window.take() {
+                        Some(current) => current.intersect(found),
+                        None => Some(found),
+                    };
+                    self.invalid |= window.is_none();
                     self.filters += 1;
                 }
                 Ok(TreeNodeRecursion::Jump)
@@ -83,7 +96,7 @@ impl<'n> TreeNodeVisitor<'n> for Windows {
             }
         }
         if Window::events(plan) {
-            self.scans.push(window);
+            self.scans.push(window.clone());
         }
         self.stack.push(window);
         Ok(TreeNodeRecursion::Continue)
@@ -96,6 +109,26 @@ impl<'n> TreeNodeVisitor<'n> for Windows {
 }
 
 impl Window {
+    fn event_clocks(
+        expression: &Expr,
+        schema: &datafusion::common::DFSchema,
+    ) -> datafusion::common::Result<usize> {
+        let (mut clocks, mut event) = (0, false);
+        expression.apply(|expression| {
+            clocks += usize::from(Self::clock(expression));
+            if let Expr::Column(column) = expression {
+                event |= column.name == "received_at"
+                    && schema.field_from_column(column).is_ok_and(|field| {
+                        field.data_type() == &DataType::Timestamp(TimeUnit::Microsecond, None)
+                            && field.metadata().get("araphor.units").map(String::as_str)
+                                == Some("microseconds since Unix epoch")
+                    });
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(if event { clocks } else { 0 })
+    }
+
     pub(crate) fn clocks(plan: &LogicalPlan) -> Result<usize> {
         let mut count = 0;
         plan.apply_with_subqueries(|plan| {
@@ -132,11 +165,11 @@ impl Window {
         if windows.clocks == 0 {
             return Ok(None);
         }
-        let window = windows.scans.first().copied().flatten();
+        let window = windows.scans.first().cloned().flatten();
         if windows.invalid
-            || window.is_none()
+            || window.as_ref().is_none_or(|window| !window.complete())
             || windows.filters != windows.clocks
-            || windows.scans.iter().any(|scan| *scan != window)
+            || windows.scans.iter().any(|scan| scan != &window)
         {
             return InvalidSnafu {
                 field: "follow clock filter",
@@ -146,11 +179,82 @@ impl Window {
         Ok(window)
     }
 
-    fn intersect(self, other: Self) -> Self {
-        Self {
-            inclusive: self.inclusive.into_iter().chain(other.inclusive).min(),
-            exclusive: self.exclusive.into_iter().chain(other.exclusive).min(),
+    fn complete(&self) -> bool {
+        !matches!(self, Self::Fixed { lower, upper, .. } if !lower || !upper)
+    }
+
+    fn intersect(self, other: Self) -> Option<Self> {
+        match (self, other) {
+            (
+                Self::Moving {
+                    inclusive,
+                    exclusive,
+                },
+                Self::Moving {
+                    inclusive: next,
+                    exclusive: after,
+                },
+            ) => Some(Self::Moving {
+                inclusive: inclusive.into_iter().chain(next).min(),
+                exclusive: exclusive.into_iter().chain(after).min(),
+            }),
+            (
+                Self::Fixed { bin, lower, upper },
+                Self::Fixed {
+                    bin: next,
+                    lower: first,
+                    upper: last,
+                },
+            ) if bin == next => Some(Self::Fixed {
+                bin,
+                lower: lower || first,
+                upper: upper || last,
+            }),
+            _ => None,
         }
+    }
+
+    pub(crate) fn fixed_range(&self, now: u64) -> datafusion::common::Result<Option<(i64, i64)>> {
+        let Self::Fixed { bin, .. } = self else {
+            return Ok(None);
+        };
+        let Expr::ScalarFunction(function) = bin.as_ref() else {
+            return Err(datafusion::common::DataFusionError::Internal(
+                "window function is absent".into(),
+            ));
+        };
+        let now = i64::try_from(now).map_err(|_| {
+            datafusion::common::DataFusionError::Execution("window statement time".into())
+        })?;
+        let context = SimplifyContext::default()
+            .with_query_execution_start_time(Some(chrono::DateTime::from_timestamp_nanos(now)));
+        let simplifier = ExprSimplifier::new(context);
+        let scalar = |expression| {
+            let Expr::Literal(value, _) = simplifier.simplify(expression)? else {
+                return Err(datafusion::common::DataFusionError::Internal(
+                    "window boundary is not constant".into(),
+                ));
+            };
+            let value = value.cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None))?;
+            match value {
+                ScalarValue::TimestampNanosecond(Some(value), _) => Ok(value),
+                _ => Err(datafusion::common::DataFusionError::Internal(
+                    "window boundary type".into(),
+                )),
+            }
+        };
+        let first = scalar(bin.as_ref().clone())?;
+        let end = scalar(Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(bin.as_ref().clone()),
+            Operator::Plus,
+            Box::new(function.args[0].clone()),
+        )))?;
+        if first >= end {
+            return Err(datafusion::common::DataFusionError::Execution(
+                "window interval".into(),
+            ));
+        }
+        Ok(Some((first, end)))
     }
 
     fn events(plan: &LogicalPlan) -> bool {
@@ -185,12 +289,19 @@ impl Window {
         let Expr::BinaryExpr(binary) = expression else {
             return None;
         };
-        let (column, bound, inclusive) = match binary.op {
-            Operator::GtEq => (&*binary.left, &*binary.right, true),
-            Operator::Gt => (&*binary.left, &*binary.right, false),
-            Operator::LtEq => (&*binary.right, &*binary.left, true),
-            Operator::Lt => (&*binary.right, &*binary.left, false),
+        let (column, bound, lower, inclusive) = match binary.op {
+            Operator::GtEq => (&*binary.left, &*binary.right, true, true),
+            Operator::Gt => (&*binary.left, &*binary.right, true, false),
+            Operator::LtEq => (&*binary.left, &*binary.right, false, true),
+            Operator::Lt => (&*binary.left, &*binary.right, false, false),
             _ => return None,
+        };
+        let (column, bound, lower) = if matches!(column, Expr::Column(_)) {
+            (column, bound, lower)
+        } else if matches!(bound, Expr::Column(_)) {
+            (bound, column, !lower)
+        } else {
+            return None;
         };
         let Expr::Column(column) = column else {
             return None;
@@ -213,6 +324,41 @@ impl Window {
             }
             _ => bound,
         };
+        let bin = if lower && inclusive {
+            Some(bound)
+        } else if !lower && !inclusive {
+            match bound {
+                Expr::BinaryExpr(end) if end.op == Operator::Plus => {
+                    let Expr::ScalarFunction(function) = end.left.as_ref() else {
+                        return None;
+                    };
+                    (function.args.first() == Some(end.right.as_ref())).then_some(end.left.as_ref())
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(Expr::ScalarFunction(function)) = bin {
+            if function.func.inner().as_any().is::<DateBinFunc>()
+                && (2..=3).contains(&function.args.len())
+                && matches!(function.args[0], Expr::Literal(_, _))
+                && Self::clock(&function.args[1])
+                && function
+                    .args
+                    .get(2)
+                    .is_none_or(|origin| matches!(origin, Expr::Literal(_, _) | Expr::Cast(_)))
+            {
+                return Some(Self::Fixed {
+                    bin: Arc::new(bin?.clone()),
+                    lower,
+                    upper: !lower,
+                });
+            }
+        }
+        if !lower {
+            return None;
+        }
         let Expr::BinaryExpr(bound) = bound else {
             return None;
         };
@@ -233,7 +379,7 @@ impl Window {
             _ => return None,
         };
         let width = u64::try_from(width).ok().filter(|width| *width != 0)?;
-        Some(Self {
+        Some(Self::Moving {
             inclusive: inclusive.then_some(width),
             exclusive: (!inclusive).then_some(width),
         })
@@ -249,12 +395,18 @@ impl Window {
         original: &AnalysisSelectionV1,
         now: u64,
     ) -> AnalysisSelectionV1 {
+        let Self::Moving {
+            inclusive,
+            exclusive,
+        } = self
+        else {
+            return original.clone();
+        };
         let threshold = |width: &u64| (i128::from(now) - i128::from(*width)) / 1000;
-        let micros = self
-            .inclusive
+        let micros = inclusive
             .iter()
             .map(threshold)
-            .chain(self.exclusive.iter().map(|width| threshold(width) + 1))
+            .chain(exclusive.iter().map(|width| threshold(width) + 1))
             .max()
             .unwrap_or(0);
         let lower = u64::try_from(micros.max(0) * 1000).unwrap_or(u64::MAX);
@@ -268,12 +420,19 @@ impl Window {
     }
 
     pub(crate) fn expiry(&self, received: Option<u64>) -> Option<u64> {
+        let Self::Moving {
+            inclusive,
+            exclusive,
+        } = self
+        else {
+            return None;
+        };
         received.and_then(|received| {
             let received = received / 1000 * 1000;
-            self.inclusive
+            inclusive
                 .and_then(|width| received.checked_add(width)?.checked_add(1000))
                 .into_iter()
-                .chain(self.exclusive.and_then(|width| {
+                .chain(exclusive.and_then(|width| {
                     if received == 0 {
                         Some(width.saturating_sub(999))
                     } else {

@@ -52,6 +52,37 @@ pub(crate) struct SqlCall {
 }
 
 impl PackageCall {
+    pub(super) fn metadata(
+        memory: &crate::memory::Memory,
+        model: &sdk::Model,
+        input_scope: &Inputs,
+        children: usize,
+    ) -> crate::Result<Arc<MemoryReservation>> {
+        use snafu::ResultExt as _;
+        let plans = model
+            .outputs
+            .len()
+            .checked_add(1)
+            .and_then(|count| count.checked_mul(children))
+            .and_then(|count| count.checked_mul(std::mem::size_of::<LogicalPlan>()))
+            .ok_or_else(|| araphor_data::PackageErrorCodeV1::Limit.error("package call memory"))?;
+        let bytes = input_scope
+            .allocated_bytes()
+            .checked_add(plans)
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    model
+                        .outputs
+                        .len()
+                        .checked_mul(std::mem::size_of::<PackageCall>())?,
+                )
+            })
+            .ok_or_else(|| araphor_data::PackageErrorCodeV1::Limit.error("package call memory"))?;
+        Ok(Arc::new(
+            memory.reserve_input(bytes).context(crate::SqlSnafu)?,
+        ))
+    }
+
     pub(super) fn seal(plan: LogicalPlan) -> Result<LogicalPlan> {
         plan.transform_up_with_subqueries(|plan| {
             if let LogicalPlan::Extension(extension) = &plan {

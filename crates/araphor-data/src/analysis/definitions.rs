@@ -28,7 +28,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "begin definition admission",
             })?;
-        Self::definition_images(&transaction, tenant, definition)?;
+        Self::definition_images(&transaction, tenant, definition, true)?;
         let existing: Option<(Vec<u8>, u64)> = transaction
             .query_row(
                 "SELECT definition, commit_revision FROM discovery_definitions
@@ -104,7 +104,7 @@ impl AnalysisStore {
                     if definition.definition.name != name || definition.digest()? != revision {
                         return Err(Code::Invalid.error("retained definition identity"));
                     }
-                    Self::definition_images(reader, tenant, &definition)?;
+                    Self::definition_images(reader, tenant, &definition, false)?;
                     Ok(definition)
                 })
                 .transpose()
@@ -115,17 +115,19 @@ impl AnalysisStore {
         reader: &Connection,
         tenant: [u8; 16],
         definition: &ResolvedDefinition,
+        installed: bool,
     ) -> Result<()> {
         for pin in &definition.images {
             let found: bool = reader
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM package_images
-                 WHERE tenant_id = ? AND package_id = ? AND revision = ? AND digest = ?)",
+                 WHERE tenant_id = ? AND package_id = ? AND revision = ? AND digest = ? AND (NOT ? OR installed))",
                     params![
                         tenant.as_slice(),
                         pin.image.package_id,
                         pin.image.revision,
-                        pin.digest
+                        pin.digest,
+                        installed,
                     ],
                     |row| row.get(0),
                 )
@@ -185,7 +187,7 @@ impl AnalysisStore {
             {
                 return Self::reject_path(root, "the saved definition is invalid");
             }
-            Self::definition_images(reader, tenant, &definition)?;
+            Self::definition_images(reader, tenant, &definition, false)?;
         }
         Ok(())
     }

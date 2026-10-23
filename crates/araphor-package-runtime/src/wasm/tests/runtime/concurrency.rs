@@ -34,7 +34,6 @@ fn input(package: &sdk::Package, id: &str) -> sdk::Evaluation {
             id: id.into(),
             time_utc_ns: 123,
             seed: Some(7),
-            limits: model.limits,
         },
     }
 }

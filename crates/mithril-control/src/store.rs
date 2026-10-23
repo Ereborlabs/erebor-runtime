@@ -4930,25 +4930,6 @@ mod tests {
             Join::Unresolved(Missing::AmbiguousWorkloadFact)
         );
         assert!(native_context_rows(&store, &record)?.is_empty());
-        {
-            let mut inner = store.evidence_lock()?;
-            inner
-                .state
-                .target_snapshots
-                .get_mut("conflicting-context")
-                .ok_or("conflicting snapshot absent")?
-                .targets[0]
-                .workload_targets[0]
-                .pod_labels
-                .insert(
-                    "oversized".into(),
-                    "x".repeat(araphor_data::DISCOVERY_PIN_BYTES),
-                );
-        }
-        assert_eq!(
-            store.discovery_context(&record)?,
-            Join::Unresolved(Missing::ContextLimit)
-        );
         Ok(())
     }
     pub(super) fn signed_artifact(

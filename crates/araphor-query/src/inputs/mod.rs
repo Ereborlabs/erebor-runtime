@@ -31,7 +31,6 @@ pub struct Inputs {
     sources: AnalysisTableRequests,
     packages: Vec<(usize, sdk::OutputRef)>,
     clock: bool,
-    limits: sdk::Limits,
     mode: sdk::InputMode,
 }
 
@@ -89,7 +88,6 @@ impl Inputs {
             sources: AnalysisTableRequests::new(),
             packages: Vec::new(),
             clock: false,
-            limits: model.limits,
             mode: model.input_mode,
         })
     }
@@ -254,7 +252,6 @@ impl Inputs {
             sources,
             packages,
             clock,
-            limits: model.limits,
             mode: model.input_mode,
         })
     }

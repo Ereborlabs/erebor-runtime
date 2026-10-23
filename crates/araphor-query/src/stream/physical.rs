@@ -187,7 +187,11 @@ impl SubscribeExec {
         let mut progress =
             Progress::new(run.session.engine().store(), Arc::clone(&run.clock), None);
         let (permit, now, session) = loop {
-            let permit = Arc::new(
+            let permit = Arc::new(if run.managed.is_some() && !run.follow {
+                run.session
+                    .engine()
+                    .reserve_evaluation(run.session.selection().tenant_id)?
+            } else {
                 run.session
                     .control()
                     .query_async(
@@ -195,10 +199,12 @@ impl SubscribeExec {
                             .engine()
                             .acquire_evaluation(run.session.selection().tenant_id),
                     )
-                    .await?,
-            );
+                    .await?
+            });
             let now = progress.begin()?;
-            let session = run.session(now, &permit).await?;
+            let session = run
+                .session(now, &permit, Vec::new(), Vec::new(), run.resume.as_ref())
+                .await?;
             if let Some(cursor) = run.resume.as_ref().filter(|_| {
                 session
                     .managed

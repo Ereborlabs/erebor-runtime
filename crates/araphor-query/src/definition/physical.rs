@@ -9,20 +9,22 @@ use araphor_data::AnalysisReadControl;
 use araphor_discovery_definition::ImagePin;
 use araphor_package::ModelRef;
 use araphor_package_runtime::{Prepared, Runtime, TaskTracker, TaskTrackerToken};
-use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::{SessionState, TaskContext};
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::optimizer::OptimizerRule;
+use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    execute_stream, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream, execute_stream,
 };
 use futures_util::future::{BoxFuture, FutureExt, Shared, WeakShared};
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{StreamExt, TryStreamExt, stream};
 
 use super::PackageCall;
 use crate::memory::Memory;
@@ -37,9 +39,9 @@ mod tests;
 pub struct Invocation {
     pub id: String,
     pub seed: Option<u64>,
+    pub time_utc_ns: Option<i64>,
     pub inputs: BTreeMap<u64, Vec<sdk::Input>>,
     pub checkpoints: BTreeMap<u64, sdk::Checkpoint>,
-    pub limits: sdk::Limits,
 }
 
 impl Default for Invocation {
@@ -47,9 +49,9 @@ impl Default for Invocation {
         Self {
             id: "package-call".into(),
             seed: None,
+            time_utc_ns: None,
             inputs: BTreeMap::new(),
             checkpoints: BTreeMap::new(),
-            limits: sdk::Limits::default(),
         }
     }
 }
@@ -58,14 +60,28 @@ pub struct CallResult {
     evaluation: sdk::Evaluation,
     output: sdk::Output,
     origin: Origin,
+    retained: Option<araphor_data::analysis::PackageResultRefV1>,
     _input: Arc<MemoryReservation>,
     _output: Arc<MemoryReservation>,
+}
+
+pub struct CallReuse {
+    allows: Arc<dyn Fn(&PackageCall) -> bool + Send + Sync>,
+}
+
+impl CallReuse {
+    pub fn new(allows: impl Fn(&PackageCall) -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            allows: Arc::new(allows),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct ExecutionReceipt {
     snapshot: Arc<crate::sources::ArrowSnapshot>,
     calls: BTreeMap<u64, Arc<CallResult>>,
+    completed_windows: Vec<crate::follow::WindowRange>,
 }
 
 impl ExecutionReceipt {
@@ -84,14 +100,20 @@ impl ExecutionReceipt {
             .ok_or_else(|| internal("package execution control is absent"))?
             .check()
             .map_err(external)?;
+        let snapshot = source.snapshot()?;
         Ok(Self {
-            snapshot: source.snapshot()?,
+            completed_windows: calls.completed_windows(&snapshot)?,
+            snapshot,
             calls: calls.results()?,
         })
     }
 
     pub fn snapshot(&self) -> &crate::sources::ArrowSnapshot {
         &self.snapshot
+    }
+
+    pub fn completed_windows(&self) -> &[crate::follow::WindowRange] {
+        &self.completed_windows
     }
 
     pub fn calls(&self) -> &BTreeMap<u64, Arc<CallResult>> {
@@ -191,6 +213,10 @@ impl CallResult {
     pub fn belongs_to(&self, call: &PackageCall) -> bool {
         self.origin.matches(call)
     }
+
+    pub fn retained(&self) -> Option<&araphor_data::analysis::PackageResultRefV1> {
+        self.retained.as_ref()
+    }
 }
 
 impl fmt::Debug for CallResult {
@@ -221,6 +247,9 @@ pub(crate) struct CallContext {
     workers: TaskTracker,
     calls: Mutex<BTreeMap<u64, CallState>>,
     publication: AtomicU64,
+    pub(crate) completion: Vec<crate::follow::WindowRange>,
+    windows: Vec<crate::follow::WindowRange>,
+    _windows: Option<MemoryReservation>,
     scope: Option<TaskTracker>,
 }
 
@@ -256,8 +285,109 @@ impl CallContext {
             workers: TaskTracker::new(),
             calls: Mutex::default(),
             publication: AtomicU64::new(0),
+            completion: Vec::new(),
+            windows: Vec::new(),
+            _windows: None,
             scope,
         })
+    }
+
+    pub(crate) fn set_windows(
+        &mut self,
+        windows: Vec<crate::follow::WindowRange>,
+    ) -> crate::Result<()> {
+        if !windows.is_empty() {
+            let bytes = windows
+                .capacity()
+                .checked_mul(std::mem::size_of::<crate::follow::WindowRange>())
+                .ok_or_else(|| {
+                    araphor_data::PackageErrorCodeV1::Limit.error("window scope memory")
+                })?;
+            self._windows = Some(
+                self.memory
+                    .reserve_input(bytes)
+                    .map_err(|source| crate::Error::Sql { source })?,
+            );
+            self.windows = windows;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn window_clock(&self, source: crate::follow::WindowSource) -> Result<Option<i64>> {
+        let Some(window) = self.windows.iter().find(|window| window.source == source) else {
+            return Ok(None);
+        };
+        if i128::from(window.start_utc_ns) <= i128::from(self.now)
+            && i128::from(self.now) < i128::from(window.end_utc_ns)
+        {
+            return Ok(None);
+        }
+        window
+            .end_utc_ns
+            .checked_sub(1)
+            .map(Some)
+            .ok_or_else(|| internal("window statement time"))
+    }
+
+    pub(crate) fn has_windows(&self) -> bool {
+        !self.windows.is_empty()
+    }
+
+    pub(crate) fn bind_window_clocks(
+        &self,
+        plan: LogicalPlan,
+        state: &SessionState,
+    ) -> Result<LogicalPlan> {
+        let simplify = SimplifyExpressions::new();
+        plan.transform_up_with_subqueries(|plan| {
+            let LogicalPlan::Extension(extension) = &plan else {
+                return Ok(Transformed::no(plan));
+            };
+            let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() else {
+                return Ok(Transformed::no(plan));
+            };
+            let mut call = call.clone();
+            for (slot, child) in call.children.iter_mut().enumerate() {
+                let mut scoped = state.clone();
+                let clock = if call.input_scope.window(slot).is_some() {
+                    self.window_clock(crate::follow::WindowSource::Input {
+                        call: call.id,
+                        slot,
+                    })?
+                } else {
+                    None
+                };
+                if let Some(clock) = clock {
+                    scoped.execution_props_mut().query_execution_start_time =
+                        Some(chrono::DateTime::from_timestamp_nanos(clock));
+                }
+                *child = child
+                    .clone()
+                    .transform_down_up_with_subqueries(
+                        |plan| {
+                            let nested = matches!(&plan, LogicalPlan::Extension(extension)
+                                if extension.node.as_any().is::<PackageCall>());
+                            Ok(Transformed::new(
+                                plan,
+                                false,
+                                if nested {
+                                    TreeNodeRecursion::Jump
+                                } else {
+                                    TreeNodeRecursion::Continue
+                                },
+                            ))
+                        },
+                        |plan| simplify.rewrite(plan, &scoped),
+                    )?
+                    .data;
+            }
+            Ok(Transformed::yes(LogicalPlan::Extension(
+                datafusion::logical_expr::Extension {
+                    node: Arc::new(call),
+                },
+            )))
+        })
+        .map(|plan| plan.data)
     }
 
     pub(crate) fn token(&self) -> Result<(TaskTrackerToken, Option<TaskTrackerToken>)> {
@@ -273,6 +403,41 @@ impl CallContext {
             return Err(internal("package parent execution is closed"));
         }
         Ok((self.workers.token(), scope))
+    }
+
+    pub(crate) fn completed_windows(
+        &self,
+        snapshot: &crate::sources::ArrowSnapshot,
+    ) -> Result<Vec<crate::follow::WindowRange>> {
+        let Some(first) = self.completion.first() else {
+            return Ok(Vec::new());
+        };
+        if self.completion.iter().any(|requested| {
+            requested.end_utc_ns != first.end_utc_ns
+                || !snapshot
+                    .windows
+                    .iter()
+                    .any(|captured| requested.same_interval(captured))
+        }) {
+            return Err(external(
+                araphor_data::PackageErrorCodeV1::Invalid.error("window completion capture"),
+            ));
+        }
+        let mut completed = self.completion.clone();
+        for captured in snapshot
+            .windows
+            .iter()
+            .filter(|captured| captured.active && captured.end_utc_ns == first.end_utc_ns)
+        {
+            if !completed
+                .iter()
+                .any(|requested| requested.same_interval(captured))
+            {
+                completed.push(*captured);
+            }
+        }
+        completed.sort_by_key(|window| window.source);
+        Ok(completed)
     }
 
     pub(crate) fn published_revision(&self) -> u64 {
@@ -398,6 +563,10 @@ impl fmt::Debug for PackageExec {
 }
 
 impl PackageExec {
+    pub(crate) fn call_id(&self) -> u64 {
+        self.call.id
+    }
+
     pub(crate) fn event_inputs(
         &self,
         moving: bool,
@@ -503,31 +672,13 @@ impl PackageExec {
             .iter()
             .find(|model| model.name == self.call.export)
             .ok_or_else(|| internal("package export is absent"))?;
-        let requested = owner.invocation.limits;
-        let limits = sdk::Limits {
-            max_batches: requested.max_batches.min(model.limits.max_batches),
-            max_rows: requested.max_rows.min(model.limits.max_rows),
-            max_bytes: requested.max_bytes.min(model.limits.max_bytes),
-            max_checkpoint_bytes: requested
-                .max_checkpoint_bytes
-                .min(model.limits.max_checkpoint_bytes),
-        };
         let input = Arc::new(owner.memory.reserve_input(0)?);
-        let mut budget = Budget::new(limits);
         let mut inputs = Vec::with_capacity(model.inputs.len());
         for (slot, port) in model.inputs.iter().enumerate() {
             let data = sdk::Dataset {
                 name: port.port.name.clone(),
                 batches: self
-                    .collect(
-                        slot,
-                        &port.port.schema,
-                        &owner,
-                        &context,
-                        &input,
-                        true,
-                        &mut budget,
-                    )
+                    .collect(slot, &port.port.schema, &owner, &context, &input, true)
                     .await?,
             };
             let mut inherited = Vec::new();
@@ -548,7 +699,7 @@ impl PackageExec {
                     .input_for(
                         data,
                         &source,
-                        slot,
+                        (self.call.id, slot),
                         &self.children[slot],
                         &inherited,
                         &owner.memory,
@@ -573,7 +724,6 @@ impl PackageExec {
                     &context,
                     &input,
                     true,
-                    &mut budget,
                 )
                 .await?;
             Some(Self::parameters(batches)?)
@@ -618,10 +768,12 @@ impl PackageExec {
             parameters,
             context: sdk::EvaluationContext {
                 id: owner.invocation.id.clone(),
-                time_utc_ns: i64::try_from(owner.now)
-                    .map_err(|_| internal("package evaluation time is out of range"))?,
+                time_utc_ns: match owner.invocation.time_utc_ns {
+                    Some(now) => now,
+                    None => i64::try_from(owner.now)
+                        .map_err(|_| internal("package evaluation time is out of range"))?,
+                },
                 seed: owner.invocation.seed,
-                limits,
             },
             checkpoint,
         };
@@ -643,8 +795,42 @@ impl PackageExec {
             owner.memory.retain_input(batch, &input)?;
         }
         input.try_resize(input_metadata(&evaluation))?;
+        let retained = snapshot
+            .managed()
+            .filter(|_| self.call.sql.is_none())
+            .and_then(|managed| managed.prior(self.call.id))
+            .filter(|prior| {
+                prior
+                    .retained
+                    .as_ref()
+                    .is_some_and(|saved| saved.matches(&evaluation))
+            })
+            .filter(|_| {
+                context
+                    .session_config()
+                    .get_extension::<CallReuse>()
+                    .is_some_and(|reuse| (reuse.allows)(&self.call))
+            });
+        let reference = retained.map(|prior| araphor_data::analysis::PackageResultRefV1 {
+            result_id: prior.result.clone(),
+            commit_revision: prior.revision,
+        });
         // Keep admission until retained output replaces the exchange reservation.
-        let (_admission, output, output_memory) = if self.call.sql.is_some() {
+        let (_admission, output, output_memory) = if let Some(prior) = retained {
+            let checked = self
+                .call
+                .descriptor()
+                .check_evaluation(&evaluation)
+                .map_err(external)?;
+            let output = prior
+                .retained
+                .as_ref()
+                .ok_or_else(|| internal("retained call is absent"))?
+                .output
+                .clone();
+            checked.validate_output(&output).map_err(external)?;
+            (None, output, Arc::new(owner.memory.reserve_output(0)?))
+        } else if self.call.sql.is_some() {
             let output_memory = Arc::new(owner.memory.reserve_output(0)?);
             let checked = self
                 .call
@@ -679,10 +865,14 @@ impl PackageExec {
             owner.memory.retain_output(batch, &output_memory)?;
         }
         output_memory.try_resize(output_metadata(&output))?;
+        if let Some(reference) = &reference {
+            output_memory.try_grow(reference.result_id.capacity())?;
+        }
         Ok(CallResult {
             evaluation,
             output,
             origin: Origin::new(&self.call),
+            retained: reference,
             _input: input,
             _output: output_memory,
         })
@@ -710,7 +900,6 @@ impl PackageExec {
         context: &Arc<TaskContext>,
         memory: &MemoryReservation,
         input: bool,
-        budget: &mut Budget,
     ) -> Result<Vec<sdk::RecordBatch>> {
         let plan = self
             .children
@@ -751,7 +940,6 @@ impl PackageExec {
             memory.try_resize(metadata.checked_add(conversion).ok_or_else(exceeded)?)?;
             let batch =
                 sdk::Dataset::normalize_batch(batch, Arc::clone(&schema)).map_err(external)?;
-            budget.add(&batch).map_err(|_| exceeded())?;
             if input {
                 owner.memory.retain_input(&batch, memory)?;
             } else {
@@ -762,7 +950,6 @@ impl PackageExec {
         }
         if batches.is_empty() {
             let batch = sdk::RecordBatch::new_empty(schema);
-            budget.add(&batch).map_err(|_| exceeded())?;
             batches.push(batch);
         }
         Ok(batches)
@@ -782,50 +969,6 @@ impl CallContext {
             }
             _ => Ok(None),
         }
-    }
-}
-
-struct Budget {
-    limits: sdk::Limits,
-    rows: u64,
-    bytes: u64,
-    batches: u32,
-    references: bool,
-}
-
-impl Budget {
-    fn new(limits: sdk::Limits) -> Self {
-        Self {
-            limits,
-            rows: 0,
-            bytes: 0,
-            batches: 0,
-            references: false,
-        }
-    }
-    fn references(limits: sdk::Limits) -> Self {
-        Self {
-            references: true,
-            ..Self::new(limits)
-        }
-    }
-    fn add(&mut self, batch: &sdk::RecordBatch) -> Result<()> {
-        self.rows = self
-            .rows
-            .checked_add(batch.num_rows() as u64)
-            .ok_or_else(limit)?;
-        self.bytes = self
-            .bytes
-            .checked_add(batch.get_array_memory_size() as u64)
-            .ok_or_else(limit)?;
-        self.batches = self.batches.checked_add(1).ok_or_else(limit)?;
-        if self.bytes > self.limits.max_bytes
-            || (!self.references
-                && (self.rows > self.limits.max_rows || self.batches > self.limits.max_batches))
-        {
-            return Err(limit());
-        }
-        Ok(())
     }
 }
 
@@ -875,7 +1018,7 @@ fn internal(message: &str) -> DataFusionError {
     DataFusionError::Internal(message.into())
 }
 fn limit() -> DataFusionError {
-    DataFusionError::ResourcesExhausted("package relation exceeds evaluation limits".into())
+    DataFusionError::ResourcesExhausted("package allocation size overflow".into())
 }
 
 impl DisplayAs for PackageExec {

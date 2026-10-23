@@ -190,6 +190,7 @@ fn run_case(cancel_waiter: bool) -> TestResult {
             let mut limits = araphor_query::execution::Limits {
                 input_capacity: Some(INPUT),
                 output_capacity: Some(OUTPUT),
+                output_bytes: 1024 * 1024,
                 ..Default::default()
             };
             limits.package.wasm.evaluations = Some(1);

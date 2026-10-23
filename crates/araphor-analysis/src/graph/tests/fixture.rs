@@ -1,11 +1,11 @@
 use super::*;
+use EffectPhysicalResultV1::{DeniedBeforeEffect, UnknownAfterPreEffect};
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, DiscoveryCoverageV1, EvidenceDecisionContext,
     EvidenceIntakeIdentityV1, EvidenceTemporalCoverage, GraphCoverageKeyV1,
     GraphPolicyActivationV1, GraphReadCompletionV1, GraphReadPathV1, RemoteSubjectBindingV1,
     SourceAuthorityV1,
 };
-use EffectPhysicalResultV1::{DeniedBeforeEffect, UnknownAfterPreEffect};
 
 pub(super) fn source() -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {
@@ -18,7 +18,7 @@ pub(super) fn source() -> EvidenceIntakeIdentityV1 {
     }
 }
 
-pub(super) fn wire(
+pub(in crate::graph) fn wire(
     cursor: u64,
     physical_result: EffectPhysicalResultV1,
     family: u32,
@@ -66,7 +66,7 @@ pub(super) fn wire(
     }
 }
 
-pub(super) fn record(cursor: u64, wire: &EvidenceRecord) -> Result<DiscoveryRecordV1> {
+pub(in crate::graph) fn record(cursor: u64, wire: &EvidenceRecord) -> Result<DiscoveryRecordV1> {
     DiscoveryRecordV1::try_from((
         DiscoveryRecordIdV1 {
             stream: source(),
@@ -110,7 +110,7 @@ pub(super) fn input(records: Vec<DiscoveryRecordV1>) -> GraphReplayInputV1 {
     }
 }
 
-pub(super) fn fact(
+pub(in crate::graph) fn fact(
     record: &DiscoveryRecordV1,
     index: u64,
     value: GraphFactValueV1,
@@ -140,7 +140,10 @@ pub(super) fn fact(
     })
 }
 
-pub(super) fn policy(record: &DiscoveryRecordV1, index: u64) -> Result<AnalysisContextVersionV1> {
+pub(in crate::graph) fn policy(
+    record: &DiscoveryRecordV1,
+    index: u64,
+) -> Result<AnalysisContextVersionV1> {
     let activation = AnalysisContextKeyV1 {
         tenant_id: source().tenant_id,
         owner_id: "activation-fixture".into(),
@@ -166,7 +169,7 @@ pub(super) fn policy(record: &DiscoveryRecordV1, index: u64) -> Result<AnalysisC
     )
 }
 
-pub(super) fn activation(record: &DiscoveryRecordV1) -> Result<AnalysisContextVersionV1> {
+pub(in crate::graph) fn activation(record: &DiscoveryRecordV1) -> Result<AnalysisContextVersionV1> {
     let key = AnalysisContextKeyV1 {
         tenant_id: source().tenant_id,
         owner_id: "activation-fixture".into(),
@@ -223,7 +226,7 @@ pub(super) fn credential_input() -> Result<GraphReplayInputV1> {
     credential_input_from(1)
 }
 
-pub(super) fn credential_input_from(first: u64) -> Result<GraphReplayInputV1> {
+pub(in crate::graph) fn credential_input_from(first: u64) -> Result<GraphReplayInputV1> {
     let records = vec![
         record(first, &wire(first, UnknownAfterPreEffect, 2, 4, [20; 16]))?,
         record(

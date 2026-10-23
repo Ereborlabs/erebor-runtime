@@ -40,7 +40,6 @@ async fn local_query_keeps_indices() -> TestResult {
             std::slice::from_ref(&data),
             "WITH selected AS (SELECT * FROM \"Rows\")
          SELECT value, __row_index FROM selected WHERE value > 20 ORDER BY value DESC",
-            sdk::Limits::default(),
         )
         .await?;
     let values: Vec<_> = output
@@ -71,7 +70,6 @@ async fn local_query_keeps_indices() -> TestResult {
                 .query_local(
                     std::slice::from_ref(&data),
                     &format!("SELECT * FROM {table}"),
-                    sdk::Limits::default()
                 )
                 .await?
                 .data
@@ -81,11 +79,7 @@ async fn local_query_keeps_indices() -> TestResult {
     }
     let schema = data.batches[0].schema();
     let empty = session
-        .query_local(
-            &[data],
-            "SELECT value FROM \"Rows\" WHERE false",
-            sdk::Limits::default(),
-        )
+        .query_local(&[data], "SELECT value FROM \"Rows\" WHERE false")
         .await?;
     assert_eq!(empty.data.rows(), 0);
     assert_eq!(empty.data.batches.len(), 1);
@@ -96,11 +90,7 @@ async fn local_query_keeps_indices() -> TestResult {
         schema.metadata()
     );
     let interval = session
-        .query_local(
-            &[],
-            "SELECT INTERVAL '1 day' AS duration",
-            sdk::Limits::default(),
-        )
+        .query_local(&[], "SELECT INTERVAL '1 day' AS duration")
         .await?;
     assert!(matches!(
         interval.data.batches[0].schema_ref().field(0).data_type(),
@@ -141,7 +131,7 @@ async fn local_query_closes_catalog() -> TestResult {
             format!("WITH unused AS (SELECT * FROM {table}) SELECT 1"),
         ] {
             let error = session
-                .query_local(std::slice::from_ref(&data), &sql, sdk::Limits::default())
+                .query_local(std::slice::from_ref(&data), &sql)
                 .await
                 .err()
                 .ok_or_else(|| format!("accepted: {sql}"))?;
@@ -165,7 +155,7 @@ async fn local_query_closes_catalog() -> TestResult {
     ] {
         assert!(
             session
-                .query_local(std::slice::from_ref(&data), sql, sdk::Limits::default())
+                .query_local(std::slice::from_ref(&data), sql)
                 .await
                 .is_err(),
             "accepted: {sql}"
@@ -173,7 +163,7 @@ async fn local_query_closes_catalog() -> TestResult {
     }
     assert_eq!(
         session
-            .query_local(&[], "SELECT 1 AS value", sdk::Limits::default())
+            .query_local(&[], "SELECT 1 AS value")
             .await?
             .data
             .rows(),
@@ -196,56 +186,18 @@ async fn local_query_releases_capacity() -> TestResult {
             .engine
             .session(AnalysisSelectionV1::tenant([1; 16]), &control(), 1)?;
     let data = dataset()?;
-    for limits in [
-        sdk::Limits {
-            max_rows: 1,
-            ..Default::default()
-        },
-        sdk::Limits {
-            max_bytes: 1,
-            ..Default::default()
-        },
-        sdk::Limits {
-            max_batches: 1,
-            ..Default::default()
-        },
-    ] {
-        assert!(session
-            .query_local(
-                std::slice::from_ref(&data),
-                "SELECT * FROM \"Rows\"",
-                limits
-            )
-            .await
-            .is_err());
-    }
     session.set_output(1, usize::MAX)?;
     assert!(session
-        .query_local(
-            std::slice::from_ref(&data),
-            "SELECT * FROM \"Rows\"",
-            sdk::Limits::default()
-        )
+        .query_local(std::slice::from_ref(&data), "SELECT * FROM \"Rows\"",)
         .await
         .is_err());
-    for (sql, limits) in [
-        (
-            "VALUES (1), (2)",
-            sdk::Limits {
-                max_rows: 1,
-                ..Default::default()
-            },
-        ),
-        (
-            "SELECT repeat('x', 4096)",
-            sdk::Limits {
-                max_bytes: 32,
-                ..Default::default()
-            },
-        ),
+    for (sql, rows, bytes) in [
+        ("VALUES (1), (2)", 1, usize::MAX),
+        ("SELECT repeat('x', 4096)", usize::MAX, 32),
     ] {
+        session.set_output(rows, bytes)?;
         let error = session
-            .query_local(&[], sql, limits)
+            .query_local(&[], sql)
             .await
             .err()
             .ok_or("output limit ignored")?;
@@ -266,11 +218,7 @@ async fn local_query_releases_capacity() -> TestResult {
         .session(AnalysisSelectionV1::tenant([1; 16]), &cancelled, 1)?;
     cancelled.cancel()?;
     assert!(stopped
-        .query_local(
-            std::slice::from_ref(&data),
-            "SELECT 1",
-            sdk::Limits::default()
-        )
+        .query_local(std::slice::from_ref(&data), "SELECT 1",)
         .await
         .is_err());
     drop(session);
@@ -284,7 +232,7 @@ async fn local_query_releases_capacity() -> TestResult {
         .session(AnalysisSelectionV1::tenant([1; 16]), &control(), 1)?;
     let data = dataset()?;
     let output = session
-        .query_local(&[data], "SELECT * FROM \"Rows\"", sdk::Limits::default())
+        .query_local(&[data], "SELECT * FROM \"Rows\"")
         .await?;
     let alias = output.data.batches[0].column(0).slice(0, 1);
     assert!(fixture.engine.memory().reserve_output(capacity).is_err());
@@ -305,7 +253,7 @@ async fn local_query_releases_capacity() -> TestResult {
 }
 
 #[tokio::test]
-async fn local_query_limits_batches() -> TestResult {
+async fn local_sql_controls_rows() -> TestResult {
     let mut fixture = Fixture::new(Limits::default());
     Arc::get_mut(&mut fixture.engine)
         .ok_or("shared engine")?
@@ -317,25 +265,11 @@ async fn local_query_limits_batches() -> TestResult {
     let session = fixture
         .engine
         .session(AnalysisSelectionV1::tenant([1; 16]), &control(), 1)?;
-    let error = session
-        .query_local(
-            &[],
-            "VALUES (1), (2), (3)",
-            sdk::Limits {
-                max_batches: 1,
-                ..Default::default()
-            },
-        )
-        .await
-        .err()
-        .ok_or("output batch limit ignored")?;
-    assert!(
-        matches!(error, Error::Sql { source: datafusion::common::DataFusionError::ResourcesExhausted(ref message), .. } if message == "local output batches"),
-        "{error:?}"
-    );
-    let output = session
-        .query_local(&[], "VALUES (1), (2), (3)", sdk::Limits::default())
+    let selected = session
+        .query_local(&[], "SELECT * FROM (VALUES (1), (2), (3)) LIMIT 1")
         .await?;
+    assert_eq!(selected.data.rows(), 1);
+    let output = session.query_local(&[], "VALUES (1), (2), (3)").await?;
     assert_eq!(output.data.rows(), 3);
     assert!(output.data.batches.len() > 1);
     Ok(())

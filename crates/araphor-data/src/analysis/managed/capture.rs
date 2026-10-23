@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use araphor_analysis_sdk as sdk;
-use duckdb::{params, Connection};
+use duckdb::{Connection, OptionalExt as _, params};
 use snafu::ResultExt as _;
 
 use super::super::{AnalysisExtractionV1, AnalysisSelectionV1, AnalysisStore, PackageResultRefV1};
@@ -18,54 +18,137 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
     ) -> Result<ManagedCapture> {
         let before = output.input_bytes;
-        let expected = &request.instance;
-        let bytes: u64 = reader.query_row("SELECT octet_length(spec) + octet_length(authority) FROM managed_instances WHERE tenant_id = ? AND instance_id = ?",
-            params![expected.spec.tenant.as_slice(), expected.spec.id], |row| row.get(0))
+        let expected = request.expected();
+        let bytes: u64 = reader.query_row("SELECT octet_length(v.spec) + octet_length(i.authority) FROM managed_instances i JOIN managed_versions v USING (tenant_id, instance_id) WHERE i.tenant_id = ? AND i.instance_id = ? AND v.generation = ?",
+            params![expected.spec.tenant.as_slice(), expected.spec.id, request.instance.generation], |row| row.get(0))
             .context(AnalysisDatabaseSnafu { operation: "bound managed instance capture" })?;
         output.charge(
             usize::try_from(bytes)
                 .unwrap_or(usize::MAX)
                 .saturating_mul(2),
         )?;
-        let instance =
-            Self::managed_instance_from(reader, expected.spec.tenant, &expected.spec.id)?
-                .filter(|instance| instance == expected)
-                .ok_or_else(|| Code::Conflict.error("managed capture generation"))?;
-        let completed =
-            Self::managed_completed_from(reader, expected.spec.tenant, &expected.spec.id)?;
-        if request
-            .completed
-            .is_some_and(|expected| expected != completed)
+        let (current, completed) = Self::managed_capture_owner(reader, request)?;
+        let instance = request.instance.clone();
+        let reuse = request.completed.is_some()
+            && request.expected.is_none()
+            && !request.rebuild
+            && matches!(
+                instance.spec.destination,
+                ManagedDestination::Graph {
+                    operation: ManagedGraphOperation::Evaluate,
+                    ..
+                }
+            )
+            && Self::validate_managed_failure(reader, &current)?
+                .is_none_or(|failure| failure.progress != current.progress);
+        if instance.spec
+            != Self::managed_version_from(
+                reader,
+                expected.spec.tenant,
+                &expected.spec.id,
+                instance.generation,
+            )?
+            || instance.grant != current.grant
+            || instance.progress != current.progress
+            || instance.running != current.running
+            || instance.lifecycle != current.lifecycle
         {
-            return Err(Code::Conflict.error("managed capture completion"));
+            return Err(Code::Conflict.error("managed target version"));
         }
         let mut prior = BTreeMap::new();
         let mut states = BTreeMap::new();
         for call in instance.spec.manifest.calls.keys() {
             control.check()?;
-            let (revision, id): (u64, Option<String>) = reader.query_row(
+            let compatible = instance.spec.same_call(&current.spec, *call);
+            let saved: Option<(u64, Option<String>)> = reader.query_row(
                 "SELECT state_revision, result_id FROM managed_calls WHERE tenant_id = ? AND instance_id = ? AND call_id = ?",
                 params![instance.spec.tenant.as_slice(), instance.spec.id, call], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()
                 .context(AnalysisDatabaseSnafu { operation: "capture managed prior reference" })?;
+            if !compatible && saved.as_ref().is_some_and(|(_, id)| id.is_some()) && !request.rebuild
+            {
+                return Err(Code::Conflict.error("managed update requires rebuild"));
+            }
+            let (revision, id) = saved.filter(|_| compatible).unwrap_or((0, None));
             let reference = if let Some(id) = id {
-                let (metadata, payload): (u64, u64) = reader.query_row("SELECT octet_length(request_meta) + octet_length(body),
+                if !request.rebuild {
+                    let (metadata, payload): (u64, u64) = reader.query_row("SELECT octet_length(request_meta) + octet_length(body),
                     (SELECT COALESCE(SUM(octet_length(ipc)), 0) FROM managed_arrow WHERE result_id = ? AND role IN ('parameters', 'checkpoint'))
                     FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND commit_revision = ?",
                     params![id, instance.spec.tenant.as_slice(), id, revision], |row| Ok((row.get(0)?, row.get(1)?)))
                     .context(AnalysisDatabaseSnafu { operation: "bound managed prior capture" })?;
-                let payload = usize::try_from(payload).unwrap_or(usize::MAX);
-                output.charge(
-                    usize::try_from(metadata)
-                        .unwrap_or(usize::MAX)
-                        .saturating_mul(2),
-                )?;
-                output.charge(payload)?;
-                let state = Self::managed_prior_from(
-                    reader, &instance, *call, &id, revision, output, control,
-                )?;
-                // The decoded state owns its buffers; the IPC payload has been released.
-                output.input_bytes -= payload;
-                prior.insert(*call, state);
+                    let payload = usize::try_from(payload).unwrap_or(usize::MAX);
+                    output.charge(
+                        usize::try_from(metadata)
+                            .unwrap_or(usize::MAX)
+                            .saturating_mul(2),
+                    )?;
+                    output.charge(payload)?;
+                    let mut state = Self::managed_prior_from(
+                        reader, &instance, *call, &id, revision, output, control,
+                    )?;
+                    // The decoded state owns its buffers; the IPC payload has been released.
+                    output.input_bytes -= payload;
+                    if reuse
+                        && matches!(&instance.spec.destination,
+                            ManagedDestination::Graph { calls, .. } if calls.contains(call))
+                        && matches!(
+                            instance.spec.manifest.calls[call].target.as_str(),
+                            "wasm" | "native"
+                        )
+                    {
+                        let payload: u64 = reader.query_row(
+                            "SELECT COALESCE(SUM(octet_length(ipc)), 0) FROM managed_arrow WHERE result_id = ?",
+                            params![id], |row| row.get(0),
+                        ).context(AnalysisDatabaseSnafu { operation: "bound retained Graph call" })?;
+                        let before = output.input_bytes;
+                        output.charge(usize::try_from(payload).unwrap_or(usize::MAX))?;
+                        let saved = Self::saved_evaluation_from(reader, &instance, &id, control)?;
+                        output.charge(saved.decoding_bytes(control)?)?;
+                        let mut evaluation = saved.decode(control)?;
+                        evaluation.checkpoint = None;
+                        let (record, packet, saved) =
+                            Self::managed_record_from(reader, instance.spec.tenant, &id)?;
+                        if saved != revision {
+                            return Err(Code::Invalid.error("retained Graph call revision"));
+                        }
+                        let decoding = packet
+                            .datasets
+                            .iter()
+                            .chain(packet.checkpoint.iter().flat_map(|state| &state.datasets))
+                            .map(|data| sdk::wire::Dataset::decoding_bytes(&data.arrow_ipc))
+                            .chain(
+                                packet.reasons.iter().map(|reason| {
+                                    sdk::wire::Dataset::decoding_bytes(&reason.details)
+                                }),
+                            )
+                            .try_fold(0usize, |bytes, next| {
+                                bytes
+                                    .checked_add(next.context(crate::AnalysisContractSnafu)?)
+                                    .ok_or_else(|| Code::Limit.error("retained Graph call memory"))
+                            })?;
+                        output.charge(decoding)?;
+                        let returned = Self::validate_managed_record(
+                            reader,
+                            instance.spec.tenant,
+                            &id,
+                            &record,
+                            &packet,
+                            revision,
+                        )?;
+                        output.input_bytes = before;
+                        output.charge(evaluation.allocated_bytes())?;
+                        output.charge(returned.allocated_bytes())?;
+                        output.charge(
+                            std::mem::size_of::<RetainedCall>() + 2 * std::mem::size_of::<usize>(),
+                        )?;
+                        state.retained = Some(std::sync::Arc::new(RetainedCall {
+                            evaluation,
+                            output: returned,
+                        }));
+                    }
+                    prior.insert(*call, state);
+                }
                 Some(PackageResultRefV1 {
                     result_id: id,
                     commit_revision: revision,
@@ -84,6 +167,7 @@ impl AnalysisStore {
                 instance: instance.spec.id.clone(),
                 grant: instance.grant.clone(),
                 generation: instance.generation,
+                expected_generation: current.generation,
                 progress: instance.progress,
                 completed,
                 running: instance.running,
@@ -123,58 +207,9 @@ impl AnalysisStore {
             .calls
             .get(&call)
             .ok_or_else(|| Code::Invalid.error("managed prior call"))?;
-        let (metadata, body): (Vec<u8>, Vec<u8>) = reader.query_row(
-            "SELECT request_meta, body FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND commit_revision = ? AND processor_id = 'managed-package-v1'",
-            params![tenant.as_slice(), id, revision], |row| Ok((row.get(0)?, row.get(1)?)))
-            .context(AnalysisDatabaseSnafu { operation: "read captured managed prior" })?;
-        let mut record: Record =
-            serde_json::from_slice(&metadata).context(crate::PackageEncodingSnafu)?;
-        let mut packet: araphor_analysis_sdk::wire::Output =
-            serde_json::from_slice(&body).context(crate::PackageEncodingSnafu)?;
-        let mut statement = reader.prepare("SELECT role, slot, ipc FROM managed_arrow WHERE result_id = ? AND role IN ('parameters', 'checkpoint') ORDER BY role, slot")
-            .context(AnalysisDatabaseSnafu { operation: "prepare captured prior payload" })?;
-        let rows = statement
-            .query_map(params![id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, usize>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                ))
-            })
-            .context(AnalysisDatabaseSnafu {
-                operation: "read captured prior payload",
-            })?;
-        let mut count = 0;
-        for row in rows {
-            let (role, slot, ipc) = row.context(AnalysisDatabaseSnafu {
-                operation: "decode captured prior payload",
-            })?;
-            let target = if role == "parameters" && slot == 0 {
-                record.parameters.as_mut().map(|data| &mut data.arrow_ipc)
-            } else if role == "checkpoint" {
-                packet
-                    .checkpoint
-                    .as_mut()
-                    .and_then(|checkpoint| checkpoint.datasets.get_mut(slot))
-                    .map(|data| &mut data.arrow_ipc)
-            } else {
-                None
-            }
-            .ok_or_else(|| Code::Invalid.error("managed prior role"))?;
-            if !target.is_empty() || ipc.is_empty() {
-                return Err(Code::Invalid.error("managed prior payload"));
-            }
-            *target = ipc;
-            count += 1;
-        }
-        if count
-            != usize::from(record.parameters.is_some())
-                + packet
-                    .checkpoint
-                    .as_ref()
-                    .map_or(0, |state| state.datasets.len())
-        {
-            return Err(Code::Invalid.error("managed prior payload count"));
+        let (record, packet, saved) = Self::managed_state_from(reader, tenant, id)?;
+        if saved != revision {
+            return Err(Code::Invalid.error("managed prior revision"));
         }
         let descriptor = Self::managed_contract(reader, tenant, declaration)?;
         output.charge(descriptor.allocated_bytes())?;
@@ -198,14 +233,11 @@ impl AnalysisStore {
                 control.check()?;
                 let before = output.input_bytes;
                 output.charge(
-                    sdk::wire::Dataset::decoding_bytes(
-                        &data.arrow_ipc,
-                        record.context.context.limits,
-                    )
-                    .context(crate::AnalysisContractSnafu)?,
+                    sdk::wire::Dataset::decoding_bytes(&data.arrow_ipc)
+                        .context(crate::AnalysisContractSnafu)?,
                 )?;
                 let decoded = data
-                    .decode(&model.parameters, record.context.context.limits)
+                    .decode(&model.parameters)
                     .context(crate::AnalysisContractSnafu)?;
                 output.input_bytes = before;
                 output.charge(decoded.allocated_bytes())?;
@@ -220,12 +252,8 @@ impl AnalysisStore {
             .as_ref()
             .map(|state| -> Result<sdk::Checkpoint> {
                 control.check()?;
-                let limits = sdk::Limits {
-                    max_bytes: model.limits.max_checkpoint_bytes,
-                    ..model.limits
-                };
                 let bytes = state.datasets.iter().try_fold(0usize, |bytes, data| {
-                    let next = sdk::wire::Dataset::decoding_bytes(&data.arrow_ipc, limits)
+                    let next = sdk::wire::Dataset::decoding_bytes(&data.arrow_ipc)
                         .context(crate::AnalysisContractSnafu)?;
                     bytes
                         .checked_add(next)
@@ -255,6 +283,7 @@ impl AnalysisStore {
             context: record.context,
             parameters,
             checkpoint,
+            retained: None,
         })
     }
 }

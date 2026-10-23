@@ -7,6 +7,7 @@ use tokio::sync::watch;
 use crate::follow::Clock;
 use crate::Result;
 
+#[derive(Clone)]
 pub struct Progress {
     clock: Arc<dyn Clock>,
     changes: watch::Receiver<u64>,

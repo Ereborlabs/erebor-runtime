@@ -25,8 +25,6 @@ fn graph_accepts_large_window() -> TestResult {
     assert!(!snapshot.findings.is_empty());
     for package in &snapshot.packages {
         assert_eq!(package.window_ns, 300_000_000_000);
-        assert_eq!(package.window_records, u64::MAX);
-        assert_eq!(package.window_bytes, usize::MAX);
     }
     let decoded = GraphSnapshotV1::try_from(serde_json::to_vec(&snapshot)?.as_slice())?;
     assert_eq!(decoded, snapshot);
@@ -127,20 +125,6 @@ fn graph_accepts_retained_facts() -> TestResult {
     assert_eq!(evaluation.inputs[0].data.rows(), 1);
     assert_eq!(evaluation.inputs[1].data.rows(), 257);
     assert_eq!(evaluation.inputs[2].data.rows(), 1);
-    let model = algorithm::Detector::Credentials
-        .descriptor()
-        .exports
-        .remove(0);
-    let values = graph.projection();
-    assert!(Rows::encode(
-        &model.inputs[1].port,
-        &values[1],
-        sdk::Limits {
-            max_bytes: 1,
-            ..model.limits
-        }
-    )
-    .is_err());
     let mut invalid = input;
     invalid.facts[0].key.entity_key.clear();
     assert!(invalid.validate().is_err());

@@ -441,30 +441,138 @@ async fn body_window_deadline() -> TestResult {
 async fn scalar_clock_guard() -> TestResult {
     let scalar =
         "SELECT CAST(CASE WHEN now() IS NOT NULL THEN 1 ELSE 0 END AS BIGINT UNSIGNED) AS value";
-    for (sql, body) in [
-        (scalar, false),
-        ("SELECT source_cursor AS value FROM events WHERE received_at >= now() - INTERVAL '2 seconds' OR operation = 7", false),
-        (scalar, true),
-        ("SELECT value FROM source WHERE now() >= now() - INTERVAL '2 seconds' OR value = 7", true),
+    for (sql, body, valid) in [
+        (scalar, false, true),
+        (
+            "SELECT source_cursor AS value FROM events WHERE received_at >= now() - INTERVAL '2 seconds' OR operation = 7",
+            false,
+            false,
+        ),
+        (scalar, true, true),
+        (
+            "SELECT value FROM source WHERE now() >= now() - INTERVAL '2 seconds' OR value = 7",
+            true,
+            true,
+        ),
     ] {
         let mut image = window_image(vec![sdk::InputPort {
             port: sdk::Port::new("source", Fixture::schema("value")),
-            source: sdk::InputSource::Query(if body {
-                "SELECT source_cursor AS value FROM events"
-            } else { sql }.into()),
+            source: sdk::InputSource::Query(
+                if body {
+                    "SELECT source_cursor AS value FROM events"
+                } else {
+                    sql
+                }
+                .into(),
+            ),
         }]);
+        image.artifacts[0].descriptor.exports[0]
+            .outputs
+            .push(sdk::Port::new("clock", Fixture::schema("value")));
+        let PackageImplementationV1::Sql { program, .. } =
+            &mut image.artifacts[0].implementations[0]
+        else {
+            return Err("SQL required".into());
+        };
         if body {
-            let PackageImplementationV1::Sql { program, .. } = &mut image.artifacts[0].implementations[0] else {
-                return Err("SQL required".into());
-            };
             program.outputs.insert("source".into(), sql.into());
         }
+        program.outputs.insert(
+            "clock".into(),
+            "SELECT CAST(CAST(CURRENT_TIMESTAMP AS BIGINT) AS BIGINT UNSIGNED) AS value".into(),
+        );
         let fixture = Fixture::installed(&image)?;
+        fixture.timed_event(1, NOW - SECOND)?;
         let before = fixture.engine.store().meta()?;
-        let prepared = fixture.prepare(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#)).await?;
-        assert!(matches!(fixture.follow(&prepared, Clock::new()),
-            Err(crate::Error::Invalid { field: "follow clock filter", .. })), "{sql}");
+        let prepared = fixture
+            .prepare(&Fixture::sql(
+                r#"SELECT * FROM "fixture"."r1".count('source')"#,
+            ))
+            .await?;
+        let clock = Clock::new();
+        if !valid {
+            assert!(
+                matches!(
+                    fixture.follow(&prepared, clock),
+                    Err(crate::Error::Invalid {
+                        field: "follow clock filter",
+                        ..
+                    })
+                ),
+                "{sql}"
+            );
+            assert_eq!(fixture.engine.store().meta()?, before);
+            continue;
+        }
+        assert!(crate::follow::Window::from_plan(&prepared.plan)?.is_none());
+        assert_eq!(prepared.sources().contains_key("events"), body);
+        let calls = Fixture::calls(&prepared.plan)?;
+        assert_eq!(calls.len(), 1);
+        let id = calls[0].id();
+        let mut stream = fixture.follow(&prepared, clock.clone())?;
+        let first = next(&mut stream).await?;
+        assert_eq!(
+            values(first.batches.as_deref().ok_or("scalar output")?)?,
+            [1]
+        );
+        assert_eq!(first.calls.len(), 1);
+        let call = &first.calls[&id];
+        assert_eq!(call.evaluation().context.time_utc_ns, NOW as i64);
+        assert_eq!(values(&call.evaluation().inputs[0].data.batches)?, [1]);
+        let stamp = call
+            .output()
+            .datasets
+            .iter()
+            .find(|output| output.name == "clock")
+            .ok_or("native clock output")?;
+        assert_eq!(values(&stamp.batches)?, [NOW]);
+        assert_eq!(first.evaluated_utc_ns, NOW);
+        assert_eq!(first.snapshot.next_change, None);
+        assert!(first.completed_windows.is_empty());
         assert_eq!(fixture.engine.store().meta()?, before);
+        assert!(futures_util::poll!(stream.next()).is_pending());
+        clock.set(NOW + SECOND);
+        let idle = next(&mut stream).await?;
+        assert!(idle.clock_changed);
+        assert!(idle.batches.is_none());
+        assert!(idle.calls.is_empty());
+        assert_eq!(idle.cursor, first.cursor);
+        assert_eq!(idle.evaluated_utc_ns, NOW);
+        assert_eq!(idle.snapshot.next_change, None);
+        assert!(idle.completed_windows.is_empty());
+        assert_eq!(values(&stamp.batches)?, [NOW]);
+        assert_eq!(fixture.engine.store().meta()?, before);
+        assert!(futures_util::poll!(stream.next()).is_pending());
+        if body {
+            fixture.timed_event(2, NOW + SECOND / 2)?;
+            let after = fixture.engine.store().meta()?;
+            let changed = next(&mut stream).await?;
+            if sql == scalar {
+                assert!(changed.batches.is_none());
+            } else {
+                assert_eq!(
+                    values(changed.batches.as_deref().ok_or("source output")?)?,
+                    [1, 2]
+                );
+            }
+            assert_eq!(changed.calls.len(), 1);
+            let call = &changed.calls[&id];
+            assert_eq!(call.evaluation().context.time_utc_ns, (NOW + SECOND) as i64);
+            assert_eq!(values(&call.evaluation().inputs[0].data.batches)?, [1, 2]);
+            let stamp = call
+                .output()
+                .datasets
+                .iter()
+                .find(|output| output.name == "clock")
+                .ok_or("changed clock output")?;
+            assert_eq!(values(&stamp.batches)?, [NOW + SECOND]);
+            assert_eq!(changed.evaluated_utc_ns, NOW + SECOND);
+            assert_eq!(changed.snapshot.next_change, None);
+            assert!(changed.completed_windows.is_empty());
+            assert_eq!(fixture.engine.store().meta()?, after);
+            assert!(futures_util::poll!(stream.next()).is_pending());
+        }
+        stream.cancel_and_join().await?;
     }
     Ok(())
 }

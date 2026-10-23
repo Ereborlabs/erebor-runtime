@@ -291,17 +291,11 @@ impl Fixture {
             window_id: "window".into(),
             result_id: id.into(),
             request: b"request".to_vec(),
-            metadata: serde_json::to_vec(&ResultContext::new(
-                id,
-                time,
-                &self.model,
-                &input.inputs,
-            ))?,
+            metadata: serde_json::to_vec(&ResultContext::new(id, time, &input.inputs))?,
             datasets: serde_json::to_vec(&sdk::wire::Output {
                 datasets: vec![sdk::wire::Dataset::encode(
                     &data,
                     &self.model.outputs[0].schema,
-                    self.model.limits,
                 )?],
                 ..Default::default()
             })?,

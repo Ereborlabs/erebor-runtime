@@ -76,16 +76,19 @@ async fn traversal_reopen_and_restore() -> TestResult {
         directory,
         store,
         requests,
+        _graph: graph_lease,
     } = fixture;
+    drop(graph_lease);
     drop(store);
     let root = directory.path().join("analysis");
     let store = Arc::new(AnalysisStore::open(&root)?);
-    store.enable_graph_owner()?;
+    let graph = store.lease_graph(vec![AnalysisSelectionV1::tenant(source().tenant_id)])?;
     store.register_graph(&source())?;
     let fixture = TraversalFixture {
         directory,
         store,
         requests,
+        _graph: graph,
     };
     let reopened = fixture
         .query(TraversalFixture::request(8), SUBJECT_SQL)
@@ -105,7 +108,7 @@ async fn traversal_reopen_and_restore() -> TestResult {
     let saved = fixture.store.package_revisions(source().tenant_id)?;
     assert_eq!(saved.len(), 4);
     assert_eq!(restored.package_revisions(source().tenant_id)?, saved);
-    restored.enable_graph_owner()?;
+    let _graph = restored.lease_graph(vec![AnalysisSelectionV1::tenant(source().tenant_id)])?;
     restored.register_graph(&source())?;
     let result = TraversalFixture::read(
         restored,

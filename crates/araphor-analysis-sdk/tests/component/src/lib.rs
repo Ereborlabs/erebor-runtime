@@ -105,11 +105,54 @@ impl RuntimeFixture {
             "hostcalls" => loop {
                 Self::cancelled();
             },
-            "cancel" => {
+            mode if mode == "cancel"
+                || cfg!(all(unix, not(target_arch = "wasm32"))) && mode.starts_with("cancel:") =>
+            {
+                #[cfg(all(unix, not(target_arch = "wasm32")))]
+                let mut peer = mode
+                    .strip_prefix("cancel:")
+                    .map(|path| {
+                        use std::io::{Read as _, Write as _};
+                        let failure = |_| {
+                            sdk::Error::contract(sdk::ErrorCode::Failed, "fixture cancellation IPC")
+                        };
+                        let mut peer =
+                            std::os::unix::net::UnixStream::connect(path).map_err(failure)?;
+                        peer.write_all(b"E").map_err(failure)?;
+                        let size = u32::try_from(evaluation.context.id.len()).map_err(|_| {
+                            sdk::Error::contract(
+                                sdk::ErrorCode::Invalid,
+                                "fixture cancellation identity",
+                            )
+                        })?;
+                        peer.write_all(&size.to_le_bytes()).map_err(failure)?;
+                        peer.write_all(evaluation.context.id.as_bytes())
+                            .map_err(failure)?;
+                        let mut release = [0];
+                        peer.read_exact(&mut release).map_err(failure)?;
+                        if release != *b"R" {
+                            return Err(sdk::Error::contract(
+                                sdk::ErrorCode::Invalid,
+                                "fixture cancellation release",
+                            ));
+                        }
+                        Ok(peer)
+                    })
+                    .transpose()?;
                 while !Self::cancelled() {
                     for value in 0..100_000 {
                         std::hint::black_box(value);
                     }
+                }
+                #[cfg(all(unix, not(target_arch = "wasm32")))]
+                if let Some(peer) = &mut peer {
+                    use std::io::Write as _;
+                    peer.write_all(b"D").map_err(|_| {
+                        sdk::Error::contract(
+                            sdk::ErrorCode::Failed,
+                            "fixture cancellation completion",
+                        )
+                    })?;
                 }
                 1
             }
@@ -151,11 +194,7 @@ impl RuntimeFixture {
             )?],
         };
         Ok(sdk::wire::Output {
-            datasets: vec![sdk::wire::Dataset::encode(
-                &data,
-                &model.outputs[0].schema,
-                model.limits,
-            )?],
+            datasets: vec![sdk::wire::Dataset::encode(&data, &model.outputs[0].schema)?],
             evidence: if mode == "invalid-evidence" {
                 vec![sdk::EvidenceLink {
                     output: sdk::RowRef {
@@ -175,15 +214,6 @@ impl RuntimeFixture {
     }
 
     fn echo_inputs(input: sdk::wire::Evaluation) -> sdk::Result<sdk::wire::Output> {
-        let limits = input.context.limits;
-        let maximum = sdk::Limits::default();
-        if limits.max_bytes > maximum.max_bytes
-            || limits.max_rows > maximum.max_rows
-            || limits.max_batches > maximum.max_batches
-            || limits.max_checkpoint_bytes > maximum.max_checkpoint_bytes
-        {
-            return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "echo limits"));
-        }
         let mut ports = Vec::new();
         for source in &input.inputs {
             let typed = (source.data.name == "context")
@@ -192,10 +222,9 @@ impl RuntimeFixture {
                 &source.data.name,
                 &source.data.arrow_ipc,
                 typed.as_ref().map(|port| &port.schema),
-                limits,
             )?;
             if let Some(port) = typed {
-                let _: Vec<builtin::ContextSelection> = Rows::decode(&port, &data, limits)?;
+                let _: Vec<builtin::ContextSelection> = Rows::decode(&port, &data)?;
             }
             let schema = data
                 .batches

@@ -155,7 +155,7 @@ fn native_capacity_is_charged() -> TestResult {
             exports: vec!["count".into()],
             target: "x86_64-unknown-linux-gnu".into(),
             cpu_features: vec!["sse2".into()],
-            contract_version: 1,
+            contract_version: araphor_analysis_sdk::CONTRACT_VERSION,
             system_libraries: vec![crate::LibraryRequirement {
                 name: "libc.so.6".into(),
                 symbols: vec!["memcpy".into()],

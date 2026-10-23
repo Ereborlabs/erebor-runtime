@@ -18,7 +18,7 @@ fn wide_source() -> TestResult<PackageBundleV1> {
 }
 
 fn projected_consumer(revision: &str, fields: &[&str]) -> TestResult<PackageBundleV1> {
-    let mut image = consumer(revision, 1024 * 1024)?;
+    let mut image = consumer(revision)?;
     let model = &mut image.artifacts[0].descriptor.exports[0];
     let schema = sdk::Schema::new(
         fields

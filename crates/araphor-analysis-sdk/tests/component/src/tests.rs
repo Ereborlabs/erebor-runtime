@@ -39,7 +39,6 @@ fn evaluation(model: &sdk::Model, values: Vec<Vec<u64>>) -> sdk::Result<sdk::Eva
             id: "sum".into(),
             time_utc_ns: 1,
             seed: None,
-            limits: model.limits,
         },
         checkpoint: None,
     })
@@ -120,7 +119,7 @@ fn echo_keeps_context_rows_revision_and_coverage() -> Result<(), Box<dyn std::er
     let evaluation = sdk::Evaluation {
         export: "echo-inputs".into(),
         inputs: vec![sdk::Input {
-            data: Rows::encode(&port, std::slice::from_ref(&row), sdk::Limits::default())?,
+            data: Rows::encode(&port, std::slice::from_ref(&row))?,
             revision: sdk::Revision {
                 owner: "discovery-context-v1".into(),
                 id: "cutoff-1999".into(),
@@ -140,13 +139,11 @@ fn echo_keeps_context_rows_revision_and_coverage() -> Result<(), Box<dyn std::er
             id: "context-echo".into(),
             time_utc_ns: 3000,
             seed: None,
-            limits: sdk::Limits::default(),
         },
         checkpoint: None,
     };
     let output = run(&package, &evaluation)?;
-    let rows: Vec<builtin::ContextSelection> =
-        Rows::decode(&port, &output.datasets[0], sdk::Limits::default())?;
+    let rows: Vec<builtin::ContextSelection> = Rows::decode(&port, &output.datasets[0])?;
     assert_eq!(serde_json::to_value(&rows[0])?, serde_json::to_value(row)?);
     let metadata = &output.datasets[1].batches[0];
     let revision: sdk::Revision =

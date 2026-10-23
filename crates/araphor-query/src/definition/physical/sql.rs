@@ -5,7 +5,7 @@ use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
 use sdk::arrow_array::{Array, StringArray, UInt64Array};
 
-use super::{external, internal, Budget, CallContext, PackageExec, Result, SourceSnapshot};
+use super::{external, internal, CallContext, PackageExec, Result, SourceSnapshot};
 
 impl PackageExec {
     pub(super) async fn sql(
@@ -70,19 +70,10 @@ impl PackageExec {
             }
         }
         let mut child = model.inputs.len() + usize::from(evaluation.parameters.is_some());
-        let mut budget = Budget::new(evaluation.context.limits);
         let mut datasets = Vec::with_capacity(model.outputs.len());
         for port in &model.outputs {
             let batches = self
-                .collect(
-                    child,
-                    &port.schema,
-                    owner,
-                    context,
-                    memory,
-                    false,
-                    &mut budget,
-                )
+                .collect(child, &port.schema, owner, context, memory, false)
                 .await?;
             child += 1;
             datasets.push(sdk::Dataset {
@@ -102,21 +93,10 @@ impl PackageExec {
             )?;
         }
         let checkpoint = if let Some(spec) = &model.checkpoint {
-            let mut limits = evaluation.context.limits;
-            limits.max_bytes = limits.max_checkpoint_bytes;
-            let mut budget = Budget::new(limits);
             let mut datasets = Vec::with_capacity(spec.datasets.len());
             for port in &spec.datasets {
                 let batches = self
-                    .collect(
-                        child,
-                        &port.schema,
-                        owner,
-                        context,
-                        memory,
-                        false,
-                        &mut budget,
-                    )
+                    .collect(child, &port.schema, owner, context, memory, false)
                     .await?;
                 child += 1;
                 datasets.push(sdk::Dataset {
@@ -131,7 +111,6 @@ impl PackageExec {
         } else {
             None
         };
-        let mut references = Budget::references(evaluation.context.limits);
         let mut evidence = Vec::new();
         if sql.evidence {
             let schema = sdk::Schema::new(vec![
@@ -141,15 +120,7 @@ impl PackageExec {
                 sdk::Field::new("input_row", sdk::DataType::UInt64, false),
             ]);
             for batch in self
-                .collect(
-                    child,
-                    &schema,
-                    owner,
-                    context,
-                    memory,
-                    false,
-                    &mut references,
-                )
+                .collect(child, &schema, owner, context, memory, false)
                 .await?
             {
                 let outputs = strings(&batch, 0)?;
@@ -195,15 +166,7 @@ impl PackageExec {
                     .collect::<Vec<_>>(),
             );
             for batch in self
-                .collect(
-                    child,
-                    &schema,
-                    owner,
-                    context,
-                    memory,
-                    false,
-                    &mut references,
-                )
+                .collect(child, &schema, owner, context, memory, false)
                 .await?
             {
                 let rows = indices(&batch, 0)?;

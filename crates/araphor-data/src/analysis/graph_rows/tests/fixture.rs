@@ -8,6 +8,7 @@ pub(in crate::analysis) struct CommitFixture {
     pub(in crate::analysis) store: Arc<AnalysisStore>,
     pub(in crate::analysis) snapshot: GraphSnapshotV1,
     pub(in crate::analysis) request: AnalysisResultCommitV1,
+    pub(in crate::analysis) _graph: GraphLease,
     pub(super) _directory: tempfile::TempDir,
 }
 
@@ -29,7 +30,7 @@ impl CommitFixture {
             Default::default(),
             storage,
         )?);
-        store.enable_graph_owner()?;
+        let graph = store.lease_graph(vec![AnalysisSelectionV1::tenant(source.tenant_id)])?;
         store.register_graph(&source)?;
         let wire = EvidenceRecord {
             observed_boottime_ns: 1_000,
@@ -123,6 +124,7 @@ impl CommitFixture {
             store,
             snapshot,
             request,
+            _graph: graph,
             _directory: directory,
         })
     }

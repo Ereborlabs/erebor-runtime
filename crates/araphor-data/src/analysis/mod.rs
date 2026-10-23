@@ -2,7 +2,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
+
+use read::locks::{Mutex as WaitMutex, RwLock};
 
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
@@ -54,6 +56,7 @@ pub use extraction::{
     AnalysisSelectionV1, AnalysisSourceSnapshotV1, AnalysisTableRead, AnalysisTableRequests,
     Selection,
 };
+pub use graph::{GraphCommit, GraphLease};
 pub use graph_rows::CanonicalGraph;
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
 pub use managed::*;
@@ -63,7 +66,9 @@ pub use progress::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisProcessorResultV1, AnalysisResultCommitV1,
     AnalysisResultReceiptV1, AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
 };
-pub use progress::{PreparedProfile, MAX_RESULT_BYTES, MAX_RESULT_REFS};
+pub use progress::{
+    DiscoveryProducer, PreparedProfile, ProfileCommit, MAX_RESULT_BYTES, MAX_RESULT_REFS,
+};
 pub use quota::WitnessUsageV1;
 pub use raw::{AnalysisStreamIdentityV1, TraceOutputPageV1, TraceOutputReceiptV1};
 pub use read::AnalysisReadControl;
@@ -76,7 +81,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceReadPermi
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-pub const ANALYSIS_SCHEMA_VERSION: i64 = 33;
+pub const ANALYSIS_SCHEMA_VERSION: i64 = 34;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -102,11 +107,11 @@ pub struct AnalysisStore {
     root: PathBuf,
     store_uuid: Uuid,
     // Close the cloned readers before their owning writer.
-    readers: [Mutex<Option<Connection>>; 2],
+    readers: [WaitMutex<Option<Connection>>; 2],
     read_monitors: [read::ReadMonitor; 2],
     write_monitor: Arc<read::ReadMonitor>,
-    writer: Mutex<Option<Connection>>,
-    raw: Mutex<raw::RawJournal>,
+    writer: WaitMutex<Option<Connection>>,
+    raw: WaitMutex<raw::RawJournal>,
     raw_dirty: AtomicBool,
     raw_pending: AtomicBool,
     read_slots: Option<Arc<tokio::sync::Semaphore>>,
@@ -114,7 +119,7 @@ pub struct AnalysisStore {
     pub(crate) package_lifecycle: Arc<Mutex<()>>,
     pub(crate) discovery_owners: AtomicUsize,
     pub(crate) notification_owner: AtomicBool,
-    pub(crate) graph_owner: AtomicBool,
+    pub(crate) graph_owner: Mutex<Option<Vec<AnalysisSelectionV1>>>,
     managed_owner: AtomicBool,
     graph_failures: Mutex<std::collections::BTreeSet<EvidenceIntakeIdentityV1>>,
     maintenance: RwLock<()>,
@@ -212,10 +217,6 @@ impl AnalysisStore {
 
     pub fn release_discovery_owner(&self) {
         self.discovery_owners.fetch_sub(1, Ordering::AcqRel);
-    }
-
-    pub fn release_graph_owner(&self) {
-        self.graph_owner.store(false, Ordering::Release);
     }
 
     pub fn enable_notification_owner(&self) -> Result<()> {
@@ -537,10 +538,10 @@ impl AnalysisStore {
         let (activations, _) = watch::channel(meta.commit_revision);
         let (capacity, _) = watch::channel(());
         let readers = [
-            Mutex::new(Some(writer.try_clone().context(AnalysisDatabaseSnafu {
+            WaitMutex::new(Some(writer.try_clone().context(AnalysisDatabaseSnafu {
                 operation: "open first trusted reader",
             })?)),
-            Mutex::new(Some(writer.try_clone().context(AnalysisDatabaseSnafu {
+            WaitMutex::new(Some(writer.try_clone().context(AnalysisDatabaseSnafu {
                 operation: "open second trusted reader",
             })?)),
         ];
@@ -548,12 +549,12 @@ impl AnalysisStore {
             root,
             store_uuid: meta.store_uuid,
             notification_owner: AtomicBool::new(false),
-            graph_owner: AtomicBool::new(false),
+            graph_owner: Mutex::new(None),
             managed_owner: AtomicBool::new(false),
             graph_failures: Mutex::new(std::collections::BTreeSet::new()),
             _lease: lease,
-            writer: Mutex::new(Some(writer)),
-            raw: Mutex::new(raw),
+            writer: WaitMutex::new(Some(writer)),
+            raw: WaitMutex::new(raw),
             raw_dirty: AtomicBool::new(false),
             raw_pending: AtomicBool::new(false),
             readers,

@@ -28,7 +28,7 @@ impl NativeAdmission {
         systems: &BTreeMap<String, Vec<u8>>,
     ) -> Result<()> {
         if qualification.target != env!("ARAPHOR_NATIVE_TARGET")
-            || qualification.contract_version != 1
+            || qualification.contract_version != araphor_analysis_sdk::CONTRACT_VERSION
         {
             return Err(crate::Error::from(
                 Code::Unsupported.error("native platform or ABI"),
@@ -495,7 +495,7 @@ mod tests {
             exports: vec!["detect".into()],
             target: "foreign-target".into(),
             cpu_features: Vec::new(),
-            contract_version: 1,
+            contract_version: araphor_analysis_sdk::CONTRACT_VERSION,
             system_libraries: Vec::new(),
             dependencies: Vec::new(),
         };

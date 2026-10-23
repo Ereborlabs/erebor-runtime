@@ -119,7 +119,17 @@ fn idle_failure_keeps_progress() -> TestResult {
             ..
         }
     ));
-    store.set_managed_running([1; 16], "counter", resumed.lifecycle, false, || Ok(()))?;
+    let denied = store.fail_managed(
+        &ManagedResume {
+            instance: resumed,
+            frontier: None,
+            completed: receipt.commit_revision,
+        },
+        Code::Denied,
+        || Ok(()),
+    )?;
+    assert!(!denied.running);
+    assert!(denied.lifecycle > stopped.lifecycle);
     let backup = root.join("backups/status");
     store.backup(&backup)?;
     drop(store);
@@ -386,6 +396,7 @@ fn failure_recovery_rejects_corruption() -> TestResult {
         let stopped = store.suspend_managed(&fixture.current(&store)?, || Ok(()))?;
         assert!(stopped.lifecycle > running.lifecycle);
         let mut failure = super::super::status::Failure {
+            origin: super::super::status::FailureOrigin::Admission,
             code: Code::Denied,
             progress: stopped.progress,
             revision: stopped.lifecycle,
@@ -432,7 +443,7 @@ fn failure_recovery_rejects_corruption() -> TestResult {
 
 #[test]
 fn terminal_status_recovery_checks_fact() -> TestResult {
-    for fault in 0..3 {
+    for fault in 0..7 {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
@@ -443,10 +454,15 @@ fn terminal_status_recovery_checks_fact() -> TestResult {
         let captured = fixture.capture(&store, false)?;
         let attempt =
             store.register_managed_attempt(&captured, &request("known-failure"), || Ok(()))?;
-        let terminal =
-            store.finish_managed(&attempt, ManagedExit::Failed(Code::Invalid), || Ok(()))?;
+        let code = if fault == 6 {
+            Code::Denied
+        } else {
+            Code::Invalid
+        };
+        let terminal = store.finish_managed(&attempt, ManagedExit::Failed(code), || Ok(()))?;
         let mut failure = super::super::status::Failure {
-            code: Code::Invalid,
+            origin: super::super::status::FailureOrigin::Attempt,
+            code,
             progress: 0,
             revision: terminal.revision,
         };
@@ -456,11 +472,28 @@ fn terminal_status_recovery_checks_fact() -> TestResult {
         if fault == 2 {
             failure.revision += 1;
         }
+        if fault == 4 {
+            failure.origin = super::super::status::FailureOrigin::Admission;
+        }
         let mut writer = store.writer()?;
         if fault == 0 {
             writer
                 .get_mut()?
                 .execute("UPDATE managed_instances SET failure = NULL", [])?;
+        } else if matches!(fault, 3 | 6) {
+            writer
+                .get_mut()?
+                .execute("DELETE FROM managed_attempts", [])?;
+        } else if fault == 5 {
+            let mut value = serde_json::to_value(&failure)?;
+            value
+                .as_object_mut()
+                .ok_or("failure object")?
+                .remove("origin");
+            writer.get_mut()?.execute(
+                "UPDATE managed_instances SET failure = ?",
+                params![serde_json::to_vec(&value)?],
+            )?;
         } else {
             writer.get_mut()?.execute(
                 "UPDATE managed_instances SET failure = ?",
@@ -471,5 +504,225 @@ fn terminal_status_recovery_checks_fact() -> TestResult {
         drop(store);
         assert!(AnalysisStore::open(&root).is_err(), "failure fact {fault}");
     }
+    Ok(())
+}
+
+#[test]
+fn admission_failure_keeps_intent() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let fixture = Fixture::admit(&store)?;
+    store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
+        Ok(())
+    })?;
+    let prior = publish(&fixture, &store, "before-admission")?;
+    let captured = fixture.capture(&store, false)?;
+    let attempt = store.register_managed_attempt(&captured, &request("real-failure"), || Ok(()))?;
+    let terminal =
+        store.finish_managed(&attempt, ManagedExit::Failed(Code::Unsupported), || Ok(()))?;
+    let expected = ManagedResume {
+        instance: fixture.current(&store)?,
+        frontier: None,
+        completed: terminal.revision,
+    };
+    let mut activations = store.subscribe_activations();
+    activations.borrow_and_update();
+    let recorded = store.fail_managed(&expected, Code::Limit, || Ok(()))?;
+    assert_eq!(recorded, expected.instance);
+    assert_eq!(recorded.progress, prior.commit_revision);
+    assert!(recorded.running);
+    assert!(!activations.has_changed()?);
+    let before = store.meta()?;
+    let mut checked = false;
+    assert_eq!(
+        store.fail_managed(&expected, Code::Limit, || {
+            checked = true;
+            Ok(())
+        })?,
+        recorded
+    );
+    assert!(checked);
+    assert_eq!(store.meta()?, before);
+    assert!(!activations.has_changed()?);
+    let (attempts, bytes): (u64, Vec<u8>) =
+        store.read_snapshot(|reader| {
+            reader.query_row(
+            "SELECT (SELECT count(*) FROM managed_attempts), failure FROM managed_instances",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(crate::AnalysisDatabaseSnafu { operation: "read admission failure proof" })
+        })?;
+    assert_eq!(attempts, 2);
+    let failure: super::super::status::Failure = serde_json::from_slice(&bytes)?;
+    assert!(failure.origin == super::super::status::FailureOrigin::Admission);
+    assert_eq!(failure.code, Code::Limit);
+    assert_eq!(failure.progress, prior.commit_revision);
+    assert_eq!(failure.revision, before.commit_revision);
+    drop(store);
+    let store = AnalysisStore::open(&root)?;
+    let saved = status(&store, &fixture)?;
+    assert_eq!(saved.instance, recorded);
+    assert!(matches!(
+        saved.readiness,
+        Readiness::Failed {
+            code: Code::Limit,
+            ..
+        }
+    ));
+    assert!(store
+        .managed_selected(
+            [1; 16],
+            "counter",
+            "before-admission",
+            &AnalysisReadControl::default()
+        )?
+        .is_some());
+    let next = publish(&fixture, &store, "after-admission")?;
+    let saved = status(&store, &fixture)?;
+    assert!(matches!(saved.readiness, Readiness::Ready));
+    assert_eq!(saved.instance.progress, next.commit_revision);
+    assert_eq!(saved.instance.lifecycle, recorded.lifecycle);
+    let empty: bool = store.read_snapshot(|reader| {
+        reader
+            .query_row("SELECT failure IS NULL FROM managed_instances", [], |row| {
+                row.get(0)
+            })
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "read cleared admission failure",
+            })
+    })?;
+    assert!(empty);
+    assert_eq!(
+        store
+            .managed_attempt(
+                [1; 16],
+                "counter",
+                "real-failure",
+                &AnalysisReadControl::default()
+            )?
+            .ok_or("historical failure absent")?
+            .terminal(),
+        Some(&terminal)
+    );
+    Ok(())
+}
+
+#[test]
+fn admission_failure_checks_fences() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let fixture = Fixture::admit(&store)?;
+    let current =
+        store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
+            Ok(())
+        })?;
+    let expected = ManagedResume {
+        instance: current.clone(),
+        frontier: None,
+        completed: 0,
+    };
+    let mut grant = current.clone();
+    grant.grant.revision += 1;
+    let mut spec = current.clone();
+    spec.spec.definition.definition.description = "Different definition.".into();
+    for stale in [
+        ManagedInstance {
+            generation: current.generation + 1,
+            ..current.clone()
+        },
+        ManagedInstance {
+            lifecycle: current.lifecycle + 1,
+            ..current.clone()
+        },
+        ManagedInstance {
+            progress: current.progress + 1,
+            ..current.clone()
+        },
+        ManagedInstance {
+            running: false,
+            ..current.clone()
+        },
+        ManagedInstance {
+            removed: true,
+            running: false,
+            ..current.clone()
+        },
+        grant,
+        spec,
+    ] {
+        let before = store.meta()?;
+        let mut checked = false;
+        assert!(store
+            .fail_managed(
+                &ManagedResume {
+                    instance: stale,
+                    ..expected.clone()
+                },
+                Code::Invalid,
+                || {
+                    checked = true;
+                    Ok(())
+                }
+            )
+            .is_err());
+        assert!(!checked);
+        assert_eq!(store.meta()?, before);
+        assert_eq!(fixture.current(&store)?, current);
+    }
+    let before = store.meta()?;
+    let cancelled = AnalysisReadControl::default();
+    cancelled.cancel()?;
+    assert!(store
+        .fail_managed(&expected, Code::Invalid, || cancelled.check())
+        .is_err());
+    assert_eq!(store.meta()?, before);
+    let captured = fixture.capture(&store, false)?;
+    let pending =
+        store.register_managed_attempt(&captured, &request("pending-admission"), || Ok(()))?;
+    let before = store.meta()?;
+    assert!(matches!(
+        store.fail_managed(&expected, Code::Invalid, || Ok(())),
+        Err(crate::Error::AnalysisBusy {
+            resource: "managed attempt",
+            ..
+        })
+    ));
+    assert_eq!(store.meta()?, before);
+    let terminal = store.finish_managed(&pending, ManagedExit::Cancelled, || Ok(()))?;
+    let before = store.meta()?;
+    assert!(matches!(
+        store.fail_managed(&expected, Code::Invalid, || Ok(())),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    assert_eq!(store.meta()?, before);
+    let expected = ManagedResume {
+        completed: terminal.revision,
+        ..expected
+    };
+    store.fail_managed(&expected, Code::Invalid, || Ok(()))?;
+    let receipt = publish(&fixture, &store, "new-progress")?;
+    let before = store.meta()?;
+    assert!(matches!(
+        store.fail_managed(&expected, Code::Limit, || Ok(())),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    assert_eq!(store.meta()?, before);
+    assert_eq!(fixture.current(&store)?.progress, receipt.commit_revision);
+    let current = fixture.current(&store)?;
+    let expected = ManagedResume {
+        instance: current.clone(),
+        completed: receipt.commit_revision,
+        frontier: None,
+    };
+    let stopped = store.stop_managed(&current, || Ok(()))?;
+    let mut renewed = stopped.grant.clone();
+    renewed.revision += 1;
+    store.renew_managed(&stopped, &renewed, || Ok(()))?;
+    let before = store.meta()?;
+    assert!(matches!(
+        store.fail_managed(&expected, Code::Invalid, || Ok(())),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    assert_eq!(store.meta()?, before);
     Ok(())
 }

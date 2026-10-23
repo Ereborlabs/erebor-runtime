@@ -51,10 +51,7 @@ fn declared_reason_preserves_typed_details() -> TestResult {
         code: "example-detector.THRESHOLD".into(),
         details,
     };
-    let reason = FindingReasonV1::Declared(DeclaredFindingReasonV1::from_value(
-        &value,
-        sdk::Limits::default(),
-    )?);
+    let reason = FindingReasonV1::Declared(DeclaredFindingReasonV1::from_value(&value)?);
     reason.validate("example-detector")?;
     assert_eq!(reason.label()?, value.code);
     assert_eq!(FindingReasonV1::restore(&reason.storage()?)?, reason);
@@ -93,17 +90,9 @@ fn declared_reason_default_bytes() -> TestResult {
         code: "example-detector.THRESHOLD".into(),
         details,
     };
-    let reason = DeclaredFindingReasonV1::from_value(&value, sdk::Limits::default())?;
+    let reason = DeclaredFindingReasonV1::from_value(&value)?;
     assert!(reason.ipc.len() > 4 * 1024 * 1024);
     reason.validate("example-detector")?;
     assert!(reason.validate("another-detector").is_err());
-    assert!(DeclaredFindingReasonV1::from_value(
-        &value,
-        sdk::Limits {
-            max_bytes: 4 * 1024 * 1024,
-            ..sdk::Limits::default()
-        }
-    )
-    .is_err());
     Ok(())
 }

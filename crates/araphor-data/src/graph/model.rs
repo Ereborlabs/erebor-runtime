@@ -381,8 +381,6 @@ pub struct GraphPackageCheckpointV1 {
     pub clock_uncertainty_ns: Option<u64>,
     pub late_action: String,
     pub window_ns: u64,
-    pub window_records: u64,
-    pub window_bytes: usize,
     pub coverage_predicate: String,
     pub replay_contract_id: String,
     pub result_states: Vec<FindingStateV1>,

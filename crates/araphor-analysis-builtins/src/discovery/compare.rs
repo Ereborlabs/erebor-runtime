@@ -59,22 +59,17 @@ impl Discovery {
             result.lifecycle_before = states[1].lifecycle.clone();
             result.lifecycle_after = states[0].lifecycle.clone();
         }
-        let mut remaining = input.evaluation().context.limits.max_bytes;
-        Self::charge_refs(&mut remaining, result.removed.len(), 8)?;
         for group in &current {
             if let Some(&before) = old.get(&group.key) {
                 if previous[before].count != group.count {
-                    Self::charge_refs(&mut remaining, 1, 16)?;
                     result.changed_counts.push(DiscoveryGroupChangeV1 {
                         before: (*previous[before]).clone(),
                         after: (**group).clone(),
                     });
                 }
             } else {
-                Self::charge_refs(&mut remaining, 1, 8)?;
                 result.added.push((**group).clone());
                 if let Some(matches) = outcomes.get(&group.key.outcome()) {
-                    Self::charge_refs(&mut remaining, matches.len(), 16)?;
                     for &before in matches {
                         result.changed_results.push(DiscoveryGroupChangeV1 {
                             before: (*previous[before]).clone(),
@@ -85,7 +80,6 @@ impl Discovery {
                 if let Some(matches) = identities.get(&group.key.identity()) {
                     for &before in matches {
                         if previous[before].key.revision() != group.key.revision() {
-                            Self::charge_refs(&mut remaining, 1, 16)?;
                             result.changed_identities.push(DiscoveryGroupChangeV1 {
                                 before: (*previous[before]).clone(),
                                 after: (**group).clone(),
@@ -95,7 +89,6 @@ impl Discovery {
                 }
             }
             if forbidden.contains(&group.key.static_key) {
-                Self::charge_refs(&mut remaining, 1, 8)?;
                 result.forbidden_groups.push((**group).clone());
             }
         }
@@ -118,13 +111,5 @@ impl Discovery {
             datasets: vec![Self::write(input, "comparison", &[result])?],
             ..sdk::Output::default()
         })
-    }
-
-    fn charge_refs(remaining: &mut u64, count: usize, width: u64) -> sdk::Result<()> {
-        *remaining = (count as u64)
-            .checked_mul(width)
-            .and_then(|bytes| remaining.checked_sub(bytes))
-            .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Limit, "comparison references"))?;
-        Ok(())
     }
 }

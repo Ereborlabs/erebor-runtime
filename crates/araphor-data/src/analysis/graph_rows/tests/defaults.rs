@@ -130,6 +130,7 @@ fn native_row_defaults() -> TestResult {
     let path = fixture.store.root.clone();
     let snapshot = fixture.snapshot.clone();
     let id = fixture.request.result_id.clone();
+    drop(fixture._graph);
     drop(fixture.store);
     let reopened = AnalysisStore::open(path)?;
     assert_eq!(reopened.graph_result(tenant, &id)?, Some(snapshot));
@@ -169,6 +170,7 @@ fn native_metadata_defaults() -> TestResult {
         Some(fixture.snapshot.clone())
     );
     let path = fixture.store.root.clone();
+    drop(fixture._graph);
     drop(fixture.store);
     let reopened = AnalysisStore::open(path)?;
     assert_eq!(
@@ -284,6 +286,7 @@ fn native_result_defaults() -> TestResult {
         Err(crate::Error::AnalysisConflict { .. })
     ));
     let path = fixture.store.root.clone();
+    drop(fixture._graph);
     drop(fixture.store);
     let reopened = AnalysisStore::open(path)?;
     assert_eq!(
@@ -415,6 +418,7 @@ fn native_witness_defaults() -> TestResult {
     assert_eq!(captured.witnesses, request.witnesses);
     assert_eq!(fixture.store.meta()?, before);
     let path = fixture.store.root.clone();
+    drop(fixture._graph);
     drop(fixture.store);
     let reopened = AnalysisStore::open(path)?;
     assert_eq!(
@@ -503,7 +507,6 @@ fn provenance_read(
                     authorized: &selection,
                     scope: "provenance",
                     outputs: &[],
-                    limits: Default::default(),
                 }),
                 mode: AnalysisReadModeV1::Metadata,
                 now: 10,
@@ -619,6 +622,7 @@ fn extracted_provenance_defaults() -> TestResult {
     assert_eq!(fixture.store.meta()?, before);
     assert!(!changes.has_changed()?);
     let path = fixture.store.root.clone();
+    drop(fixture._graph);
     drop(fixture.store);
     let reopened = AnalysisStore::open(path)?;
     let captured = provenance_read(&reopened, &ids, AnalysisExtractLimits::default(), true)?;

@@ -27,28 +27,16 @@ impl Rows {
         )
     }
 
-    pub fn encode<T: Serialize>(
-        port: &sdk::Port,
-        values: &[T],
-        bounds: sdk::Limits,
-    ) -> sdk::Result<sdk::Dataset> {
+    pub fn encode<T: Serialize>(port: &sdk::Port, values: &[T]) -> sdk::Result<sdk::Dataset> {
         Self::check_port(port)?;
-        let (bytes, _) = Self::capacity(values, bounds)?;
-        Self::encode_capacity(port, values, bounds, bytes)
+        let (bytes, _) = Self::capacity(values)?;
+        Self::encode_capacity(port, values, bytes)
     }
 
-    pub fn capacity<T: Serialize>(
-        values: &[T],
-        bounds: sdk::Limits,
-    ) -> sdk::Result<(usize, usize)> {
-        if bounds.max_batches == 0 || values.len() as u64 > bounds.max_rows {
-            return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row count"));
-        }
+    pub fn capacity<T: Serialize>(values: &[T]) -> sdk::Result<(usize, usize)> {
         let mut size = RowSize {
             bytes: 0,
-            limit: usize::try_from(bounds.max_bytes)
-                .unwrap_or(usize::MAX)
-                .min(i32::MAX as usize),
+            limit: i32::MAX as usize,
         };
         for value in values {
             serde_json::to_writer(&mut size, value).map_err(|source| {
@@ -63,9 +51,6 @@ impl Rows {
             })?;
         }
         let array = Self::array_bytes(values.len(), size.bytes)?;
-        if array as u64 > bounds.max_bytes {
-            return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row bytes"));
-        }
         let allocation = array
             .checked_add(8192.min(size.bytes))
             .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Limit, "row allocation"))?;
@@ -83,15 +68,11 @@ impl Rows {
     pub fn encode_capacity<T: Serialize>(
         port: &sdk::Port,
         values: &[T],
-        bounds: sdk::Limits,
         bytes: usize,
     ) -> sdk::Result<sdk::Dataset> {
         Self::check_port(port)?;
-        if bounds.max_batches == 0
-            || values.len() as u64 > bounds.max_rows
-            || bytes > i32::MAX as usize
-            || Self::array_bytes(values.len(), bytes)? as u64 > bounds.max_bytes
-        {
+        Self::array_bytes(values.len(), bytes)?;
+        if bytes > i32::MAX as usize {
             return Err(sdk::Error::contract(
                 sdk::ErrorCode::Limit,
                 "row allocation",
@@ -125,9 +106,6 @@ impl Rows {
             builder.append_value(b"");
         }
         let array = builder.finish();
-        if array.get_array_memory_size() as u64 > bounds.max_bytes {
-            return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row bytes"));
-        }
         let batch =
             sdk::RecordBatch::try_new(Arc::new(port.schema.clone()), vec![Arc::new(array)])?;
         Ok(sdk::Dataset {
@@ -139,17 +117,11 @@ impl Rows {
     pub fn decode<T: DeserializeOwned>(
         port: &sdk::Port,
         dataset: &sdk::Dataset,
-        bounds: sdk::Limits,
     ) -> sdk::Result<Vec<T>> {
         Self::check_port(port)?;
         if dataset.name != port.name {
             return Err(sdk::Error::contract(sdk::ErrorCode::Invalid, "row dataset"));
         }
-        if dataset.batches.len() as u64 > u64::from(bounds.max_batches) {
-            return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row batches"));
-        }
-        let mut bytes = 0u64;
-        let mut rows = 0u64;
         let mut output = Vec::new();
         for batch in &dataset.batches {
             if batch.schema().as_ref() != &port.schema {
@@ -163,11 +135,6 @@ impl Rows {
             array.to_data().validate_full()?;
             if array.null_count() != 0 {
                 return Err(sdk::Error::contract(sdk::ErrorCode::Invalid, "null row"));
-            }
-            bytes = bytes.saturating_add(array.get_array_memory_size() as u64);
-            rows = rows.saturating_add(array.len() as u64);
-            if bytes > bounds.max_bytes || rows > bounds.max_rows {
-                return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row input"));
             }
             Self::values(array, &mut output)?;
         }

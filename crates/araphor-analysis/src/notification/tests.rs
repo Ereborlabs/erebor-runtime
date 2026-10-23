@@ -18,7 +18,7 @@ mod limits;
 mod reactive;
 mod revisions;
 
-struct Authority;
+pub(crate) struct Authority;
 impl NotificationAuthorization for Authority {
     fn check(&self, grant: &NotificationGrantV1, now: u64) -> araphor_data::Result<()> {
         NotificationErrorCodeV1::Denied.require(
@@ -53,7 +53,7 @@ impl NotificationSink for Sink {
     }
 }
 
-fn grant(principal: NotificationPrincipalV1) -> NotificationGrantV1 {
+pub(crate) fn grant(principal: NotificationPrincipalV1) -> NotificationGrantV1 {
     NotificationGrantV1 {
         tenant_id: [1; 16],
         principal_id: [9; 16],
@@ -70,7 +70,7 @@ fn grant(principal: NotificationPrincipalV1) -> NotificationGrantV1 {
         expires_utc_ns: 10_000,
     }
 }
-fn policy(route: &str) -> NotificationPolicyV1 {
+pub(crate) fn policy(route: &str) -> NotificationPolicyV1 {
     NotificationPolicyV1 {
         tenant_id: [1; 16],
         route_id: route.into(),
@@ -111,7 +111,7 @@ fn source() -> EvidenceIntakeIdentityV1 {
         source_epoch: 1,
     }
 }
-fn finding(cursor: u64, severity: FindingSeverityV1) -> FindingV1 {
+pub(crate) fn finding(cursor: u64, severity: FindingSeverityV1) -> FindingV1 {
     let evidence = vec![DiscoveryRecordIdV1 {
         stream: source(),
         cpu_id: 0,
@@ -150,6 +150,15 @@ fn finding(cursor: u64, severity: FindingSeverityV1) -> FindingV1 {
     }
 }
 fn commit_finding(store: &AnalysisStore, finding: FindingV1, cursor: u64) -> Result<()> {
+    commit_finding_at(store, finding, cursor, 1)
+}
+
+pub(crate) fn commit_finding_at(
+    store: &AnalysisStore,
+    finding: FindingV1,
+    cursor: u64,
+    now: u64,
+) -> Result<()> {
     let scope = ProcessorScopeV1 {
         processor_id: GRAPH_PROCESSOR.into(),
         method_version: 1,
@@ -165,7 +174,7 @@ fn commit_finding(store: &AnalysisStore, finding: FindingV1, cursor: u64) -> Res
             cpu_id: 0,
             first_cursor,
             last_cursor: cursor,
-            intake_utc_ns: cursor,
+            intake_utc_ns: now,
             framed_records: b"frame".repeat(count as usize).into(),
             frame_ends: (1..=count).map(|index| index as usize * 5).collect(),
         },
@@ -178,7 +187,7 @@ fn commit_finding(store: &AnalysisStore, finding: FindingV1, cursor: u64) -> Res
         .map(|id| araphor_data::AnalysisWitnessV1 {
             identity: araphor_data::AnalysisStreamIdentityV1::Evidence(id.stream.clone()),
             cursor: id.durable_cursor,
-            expires_utc_ns: 1 + araphor_data::GRAPH_WITNESS_TTL_NS,
+            expires_utc_ns: now + araphor_data::GRAPH_WITNESS_TTL_NS,
         })
         .collect();
     let package = |id: &str| GraphPackageCheckpointV1 {
@@ -191,8 +200,6 @@ fn commit_finding(store: &AnalysisStore, finding: FindingV1, cursor: u64) -> Res
         clock_uncertainty_ns: None,
         late_action: "revise".into(),
         window_ns: 1,
-        window_records: 256,
-        window_bytes: araphor_data::GRAPH_WINDOW_BYTES,
         coverage_predicate: "covered".into(),
         replay_contract_id: format!("{id}/v1"),
         result_states: vec![FindingStateV1::Confirmed],
@@ -224,7 +231,7 @@ fn commit_finding(store: &AnalysisStore, finding: FindingV1, cursor: u64) -> Res
             .processor_result(&scope)?
             .map(|result| result.result_id),
         context_notice_revision: 0,
-        witness_deadline_utc_ns: 1 + araphor_data::GRAPH_WITNESS_TTL_NS,
+        witness_deadline_utc_ns: now + araphor_data::GRAPH_WITNESS_TTL_NS,
     };
     store.commit_graph(
         &AnalysisResultCommitV1 {
@@ -235,7 +242,7 @@ fn commit_finding(store: &AnalysisStore, finding: FindingV1, cursor: u64) -> Res
             context_revision: 0,
             result_id: format!("graph-test-{cursor}"),
             body: serde_json::to_vec(&snapshot).context(NotificationEncodingSnafu)?,
-            created_utc_ns: cursor,
+            created_utc_ns: now,
             witnesses,
             context_refs: vec![],
         },

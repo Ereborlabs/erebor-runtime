@@ -22,26 +22,21 @@ fn ipc_owns_binary_buffers() -> TestResult {
             ]))],
         )?],
     };
-    let encoded = Dataset::encode(&data, &schema, Limits::default())?;
-    let tight = Limits {
-        max_bytes: encoded.arrow_ipc.len() as u64,
-        ..Limits::default()
-    };
-    let decoded = encoded.decode(&schema, tight)?;
+    let encoded = Dataset::encode(&data, &schema)?;
+    let copy_bytes = encoded.arrow_ipc.len();
+    let decoded = encoded.decode(&schema)?;
     assert_eq!(decoded.batches, data.batches);
-    assert!(decoded.batches[0].get_array_memory_size() as u64 <= tight.max_bytes);
+    assert!(decoded.batches[0].get_array_memory_size() <= copy_bytes);
     assert_eq!(
-        encoded
-            .decode(
-                &schema,
-                Limits {
-                    max_bytes: tight.max_bytes - 1,
-                    ..tight
-                },
-            )
-            .err()
-            .ok_or("encoded bytes accepted")?
-            .code(),
+        Dataset::decode_ipc_bounded(
+            &encoded.name,
+            &encoded.arrow_ipc,
+            Some(&schema),
+            Some(copy_bytes - 1)
+        )
+        .err()
+        .ok_or("encoded bytes accepted")?
+        .code(),
         ErrorCode::Limit
     );
     Ok(())
@@ -84,11 +79,8 @@ fn ipc_owns_nested_buffers() -> TestResult {
             vec![Arc::new(array)],
         )?],
     };
-    let encoded = Dataset::encode(&data, &schema, Limits::default())?;
-    assert_eq!(
-        encoded.decode(&schema, Limits::default())?.batches,
-        data.batches
-    );
+    let encoded = Dataset::encode(&data, &schema)?;
+    assert_eq!(encoded.decode(&schema)?.batches, data.batches);
     Ok(())
 }
 
@@ -103,8 +95,8 @@ fn ipc_keeps_columnless_rows() -> TestResult {
             &RecordBatchOptions::new().with_row_count(Some(7)),
         )?],
     };
-    let encoded = Dataset::encode(&data, &schema, Limits::default())?;
-    let decoded = encoded.decode(&schema, Limits::default())?;
+    let encoded = Dataset::encode(&data, &schema)?;
+    let decoded = encoded.decode(&schema)?;
     assert_eq!(decoded.batches, data.batches);
     assert_eq!(decoded.batches[0].num_rows(), 7);
     Ok(())
@@ -131,19 +123,20 @@ fn ipc_bounds_sparse_nulls() -> TestResult {
             vec![Arc::new(array)],
         )?],
     };
-    let encoded = Dataset::encode(&data, &schema, Limits::default())?;
-    let tight = Limits {
-        max_bytes: 64 * 1024,
-        ..Limits::default()
-    };
-    assert!(encoded.arrow_ipc.len() as u64 <= tight.max_bytes);
-    assert!(data.batches[0].get_array_memory_size() as u64 <= tight.max_bytes);
+    let encoded = Dataset::encode(&data, &schema)?;
+    let copy_bytes = 64 * 1024;
+    assert!(encoded.arrow_ipc.len() <= copy_bytes);
+    assert!(data.batches[0].get_array_memory_size() <= copy_bytes);
     assert_eq!(
-        encoded
-            .decode(&schema, tight)
-            .err()
-            .ok_or("sparse child copy accepted")?
-            .code(),
+        Dataset::decode_ipc_bounded(
+            &encoded.name,
+            &encoded.arrow_ipc,
+            Some(&schema),
+            Some(copy_bytes)
+        )
+        .err()
+        .ok_or("sparse child copy accepted")?
+        .code(),
         ErrorCode::Limit
     );
     Ok(())

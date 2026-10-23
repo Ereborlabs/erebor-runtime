@@ -1,12 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    Checkpoint, Dataset, Error, ErrorCode, Evaluation, Limits, Model, Output, Package, Port,
-    Result, RowRef, Schema,
+    Checkpoint, Dataset, Error, ErrorCode, Evaluation, Model, Output, Package, Port, Result,
+    RowRef, Schema,
 };
 
 mod batch;
-use batch::BatchBudget;
 
 pub trait Guest {
     fn package() -> Package;
@@ -40,11 +39,10 @@ impl Package {
     pub fn validate_retained_output(
         &self,
         export: &str,
-        limits: Limits,
         inputs: &BTreeMap<String, u64>,
         output: &Output,
     ) -> Result<()> {
-        let model = self.wire_validator(export, limits)?;
+        let model = self.wire_validator(export)?;
         if inputs.keys().map(String::as_str).collect::<BTreeSet<_>>()
             != model
                 .inputs
@@ -54,40 +52,25 @@ impl Package {
         {
             return Err(Error::contract(ErrorCode::Invalid, "retained input names"));
         }
-        let rows = inputs
-            .values()
-            .try_fold(0_u64, |rows, count| rows.checked_add(*count))
-            .ok_or_else(|| Error::contract(ErrorCode::Invalid, "retained input rows"))?;
-        let rows = rows
-            .checked_add(u64::from(!model.parameters.fields().is_empty()))
-            .ok_or_else(|| Error::contract(ErrorCode::Invalid, "retained input rows"))?;
-        if rows > limits.max_rows {
-            return Err(Error::contract(ErrorCode::Limit, "retained input rows"));
-        }
-        model.output_rows(limits, inputs, output)
+        model.output_rows(inputs, output)
     }
 
     pub(crate) fn validator(&self, evaluation: &Evaluation) -> Result<&Model> {
         self.validate()?;
-        self.select_validator(&evaluation.export, evaluation.context.limits)
+        self.select_validator(&evaluation.export)
     }
 
-    pub(crate) fn wire_validator(&self, export: &str, limits: Limits) -> Result<&Model> {
+    pub(crate) fn wire_validator(&self, export: &str) -> Result<&Model> {
         self.validate()?;
-        limits.validate()?;
-        self.select_validator(export, limits)
+        self.select_validator(export)
     }
 
-    fn select_validator(&self, export: &str, limits: Limits) -> Result<&Model> {
+    fn select_validator(&self, export: &str) -> Result<&Model> {
         let model = self
             .exports
             .iter()
             .find(|model| model.name == export)
             .ok_or_else(|| Error::contract(ErrorCode::Incompatible, "export"))?;
-        limits.validate()?;
-        if !model.limits.permits(&limits) {
-            return Err(Error::contract(ErrorCode::Limit, "evaluation limits"));
-        }
         Ok(model)
     }
 }
@@ -133,44 +116,31 @@ impl<'a> CheckedEvaluation<'a> {
 
 impl Model {
     pub(crate) fn input(&self, evaluation: &Evaluation) -> Result<()> {
-        let limits = evaluation.context.limits;
         Package::text(&evaluation.context.id)?;
-        let mut budget = BatchBudget::new(limits.max_bytes, &limits);
-        budget.bytes((evaluation.context.id.len() + evaluation.export.len() + 64) as u64)?;
         match (&evaluation.parameters, self.parameters.fields().is_empty()) {
             (None, true) => {}
             (Some(parameters), false) if parameters.num_rows() == 1 => {
-                budget.batch(parameters, &self.parameters)?;
+                batch::validate(parameters, &self.parameters)?;
             }
             _ => return Err(Error::contract(ErrorCode::Invalid, "parameters")),
         }
         Self::datasets(
             self.inputs.iter().map(|input| &input.port),
             evaluation.inputs.iter().map(|input| &input.data),
-            &mut budget,
         )?;
         for input in &evaluation.inputs {
             Package::name(&input.revision.owner)?;
             Package::text(&input.revision.id)?;
             if let Some(window) = &input.revision.window {
-                if window.source.is_empty()
-                    || window.source.len() > 4096
-                    || window.start_utc_ns > window.end_utc_ns
-                {
+                if window.source.is_empty() || window.start_utc_ns > window.end_utc_ns {
                     return Err(Error::contract(ErrorCode::Invalid, "source window"));
                 }
-                budget.bytes(window.source.len() as u64)?;
             }
-            if input.coverage.limits.len() > 128 {
-                return Err(Error::contract(ErrorCode::Limit, "coverage limits"));
-            }
-            budget.bytes((input.revision.owner.len() + input.revision.id.len()) as u64)?;
             for reason in &input.coverage.limits {
                 Package::text(reason)?;
-                budget.bytes(reason.len() as u64)?;
             }
         }
-        self.checkpoint(evaluation.checkpoint.as_ref(), false, limits)
+        self.checkpoint(evaluation.checkpoint.as_ref(), false)
     }
 
     pub(crate) fn output(&self, evaluation: &Evaluation, output: &Output) -> Result<()> {
@@ -179,17 +149,11 @@ impl Model {
             .iter()
             .map(|input| (input.data.name.clone(), input.data.rows()))
             .collect();
-        self.output_rows(evaluation.context.limits, &inputs, output)
+        self.output_rows(&inputs, output)
     }
 
-    fn output_rows(
-        &self,
-        limits: Limits,
-        inputs: &BTreeMap<String, u64>,
-        output: &Output,
-    ) -> Result<()> {
-        let mut budget = BatchBudget::new(limits.max_bytes, &limits);
-        let outputs = Self::datasets(self.outputs.iter(), output.datasets.iter(), &mut budget)?;
+    fn output_rows(&self, inputs: &BTreeMap<String, u64>, output: &Output) -> Result<()> {
+        let outputs = Self::datasets(self.outputs.iter(), output.datasets.iter())?;
         let inputs = inputs
             .iter()
             .map(|(name, rows)| (name.as_str(), *rows))
@@ -201,7 +165,6 @@ impl Model {
             if !evidence.insert(link) {
                 return Err(Error::contract(ErrorCode::Invalid, "duplicate evidence"));
             }
-            budget.bytes((link.output.dataset.len() + link.input.dataset.len() + 16) as u64)?;
         }
         let cited: BTreeSet<_> = evidence.iter().map(|link| &link.output).collect();
         for port in self.outputs.iter().filter(|port| port.evidence_required) {
@@ -230,16 +193,14 @@ impl Model {
             if value.details.num_rows() != 1 {
                 return Err(Error::contract(ErrorCode::Invalid, "reason detail rows"));
             }
-            budget.batch(&value.details, &reason.details)?;
-            budget.bytes((value.output.dataset.len() + value.code.len() + 8) as u64)?;
+            batch::validate(&value.details, &reason.details)?;
         }
-        self.checkpoint(output.checkpoint.as_ref(), true, limits)
+        self.checkpoint(output.checkpoint.as_ref(), true)
     }
 
     fn datasets<'a, 'p>(
         ports: impl Clone + ExactSizeIterator<Item = &'p Port>,
         datasets: impl Iterator<Item = &'a Dataset>,
-        budget: &mut BatchBudget,
     ) -> Result<BTreeMap<&'a str, u64>> {
         let mut seen = BTreeMap::new();
         for dataset in datasets {
@@ -250,7 +211,7 @@ impl Model {
                 .clone()
                 .find(|port| port.name == dataset.name)
                 .ok_or_else(|| Error::contract(ErrorCode::Invalid, "undeclared dataset"))?;
-            let rows = dataset.validate_budget(&port.schema, budget)?;
+            let rows = dataset.validate_schema(&port.schema)?;
             seen.insert(dataset.name.as_str(), rows);
         }
         if seen.len() != ports.len() {
@@ -272,22 +233,12 @@ impl Model {
         Ok(())
     }
 
-    fn checkpoint(
-        &self,
-        checkpoint: Option<&Checkpoint>,
-        required: bool,
-        limits: Limits,
-    ) -> Result<()> {
+    fn checkpoint(&self, checkpoint: Option<&Checkpoint>, required: bool) -> Result<()> {
         match (&self.checkpoint, checkpoint) {
             (None, None) => Ok(()),
             (Some(_), None) if !required => Ok(()),
             (Some(spec), Some(checkpoint)) if spec.version == checkpoint.version => {
-                let mut budget = BatchBudget::new(limits.max_checkpoint_bytes, &limits);
-                Self::datasets(
-                    spec.datasets.iter(),
-                    checkpoint.datasets.iter(),
-                    &mut budget,
-                )?;
+                Self::datasets(spec.datasets.iter(), checkpoint.datasets.iter())?;
                 Ok(())
             }
             _ => Err(Error::contract(ErrorCode::Incompatible, "checkpoint")),
@@ -296,30 +247,20 @@ impl Model {
 }
 
 impl Dataset {
-    pub fn validate(&self, port: &Port, limits: Limits) -> Result<()> {
-        Self::validate_all(
-            std::slice::from_ref(self),
-            std::slice::from_ref(port),
-            limits,
-        )
+    pub fn validate(&self, port: &Port) -> Result<()> {
+        Self::validate_all(std::slice::from_ref(self), std::slice::from_ref(port))
     }
 
-    pub fn validate_all(datasets: &[Self], ports: &[Port], limits: Limits) -> Result<()> {
-        limits.validate()?;
+    pub fn validate_all(datasets: &[Self], ports: &[Port]) -> Result<()> {
         Model::ports(ports.iter())?;
-        Model::datasets(
-            ports.iter(),
-            datasets.iter(),
-            &mut BatchBudget::new(limits.max_bytes, &limits),
-        )?;
+        Model::datasets(ports.iter(), datasets.iter())?;
         Ok(())
     }
 
-    fn validate_budget(&self, schema: &Schema, budget: &mut BatchBudget) -> Result<u64> {
+    fn validate_schema(&self, schema: &Schema) -> Result<u64> {
         let mut rows = 0_u64;
-        budget.bytes(self.name.len() as u64)?;
         for batch in &self.batches {
-            budget.batch(batch, schema)?;
+            batch::validate(batch, schema)?;
             rows = rows
                 .checked_add(batch.num_rows() as u64)
                 .ok_or_else(|| Error::contract(ErrorCode::Limit, "dataset rows"))?;

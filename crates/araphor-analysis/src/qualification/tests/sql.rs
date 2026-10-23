@@ -125,6 +125,7 @@ async fn fixtures_repeat_saved_clock() -> TestResult {
     for (name, now, value) in [
         ("matching", 946684800000000000, 1),
         ("later", 946684801000000000, 0),
+        ("before-epoch", -1, 0),
     ] {
         let mut evaluation = Fixture::evaluation(&model);
         evaluation.context.id = name.into();
@@ -142,8 +143,58 @@ async fn fixtures_repeat_saved_clock() -> TestResult {
     let fixture = Fixture::new(&bundle)?;
     for _ in 0..2 {
         let results = fixture.run(&bundle).await?;
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 3);
         assert!(results.iter().all(|result| result.passed));
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn fixtures_keep_signed_clock() -> TestResult {
+    use sdk::arrow_array::Int64Array;
+    let schema = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Int64, false)]);
+    let model = sdk::Model::new(
+        "evaluate",
+        Vec::new(),
+        vec![sdk::Port::new("data", schema.clone())],
+    );
+    let mut bundle = Fixture::bundle(
+        "sql",
+        model.clone(),
+        SqlModelV1 {
+            outputs: BTreeMap::from([(
+                "data".into(),
+                "SELECT arrow_cast(CURRENT_TIMESTAMP, 'Int64') AS value".into(),
+            )]),
+            ..Default::default()
+        },
+    )?;
+    for now in [i64::MIN, -1000, -1, 0, i64::MAX] {
+        let mut evaluation = Fixture::evaluation(&model);
+        evaluation.context.id = format!("clock-{now}");
+        evaluation.context.time_utc_ns = now;
+        let data = sdk::Dataset {
+            name: "data".into(),
+            batches: vec![sdk::RecordBatch::try_new(
+                Arc::new(schema.clone()),
+                vec![Arc::new(Int64Array::from(vec![now]))],
+            )?],
+        };
+        Fixture::save(
+            &mut bundle,
+            &evaluation,
+            &sdk::Output {
+                datasets: vec![data],
+                ..Default::default()
+            },
+            None,
+        )?;
+    }
+    let fixture = Fixture::new(&bundle)?;
+    let before = fixture.owner.query.store().meta()?;
+    let results = fixture.run(&bundle).await?;
+    assert_eq!(results.len(), 5);
+    assert!(results.iter().all(|result| result.passed));
+    assert_eq!(fixture.owner.query.store().meta()?, before);
     Ok(())
 }

@@ -7,7 +7,7 @@ use arrow_array::{RecordBatchIterator, RecordBatchReader};
 use arrow_data::ffi::FFI_ArrowArray;
 use arrow_schema::ffi::FFI_ArrowSchema;
 
-use crate::{Error, ErrorCode, Limits, RecordBatch, Result, Schema};
+use crate::{Error, ErrorCode, RecordBatch, Result, Schema};
 
 pub(super) struct Streams {
     // The boxes keep published addresses stable when this vector grows.
@@ -96,7 +96,7 @@ unsafe extern "C" fn borrow_release(_stream: *mut FFI_ArrowArrayStream) {}
 pub(super) unsafe fn read(
     pointer: *mut FFI_ArrowArrayStream,
     schema: &Schema,
-    limits: Limits,
+    copy_bytes: Option<usize>,
 ) -> Result<Vec<RecordBatch>> {
     if pointer.is_null()
         || unsafe {
@@ -119,25 +119,20 @@ pub(super) unsafe fn read(
         return Err(Error::contract(ErrorCode::Invalid, "native stream schema"));
     }
     let mut batches = Vec::new();
-    let mut bytes = 0_u64;
-    let mut rows = 0_u64;
+    let mut bytes = 0_usize;
     for batch in reader {
         let batch = batch?;
+        let before = bytes;
         bytes = bytes
-            .saturating_add(crate::Dataset::batch_allocation(&batch) as u64)
-            .saturating_add(std::mem::size_of::<RecordBatch>() as u64);
-        rows = rows.saturating_add(batch.num_rows() as u64);
-        if bytes > limits.max_bytes
-            || rows > limits.max_rows
-            || batches.len() >= limits.max_batches as usize
-        {
+            .checked_add(crate::Dataset::batch_allocation(&batch))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<RecordBatch>()))
+            .ok_or_else(|| Error::contract(ErrorCode::Limit, "native allocation"))?;
+        if copy_bytes.is_some_and(|limit| bytes > limit) {
             return Err(Error::contract(ErrorCode::Limit, "native stream data"));
         }
         let batch = crate::wire::Dataset::owned_batch(
             &batch,
-            limits.max_bytes.saturating_sub(
-                bytes.saturating_sub(crate::Dataset::batch_allocation(&batch) as u64),
-            ),
+            copy_bytes.map(|limit| limit.saturating_sub(before)),
         )?;
         batches
             .try_reserve_exact(1)

@@ -30,6 +30,7 @@ pub struct ManagedManifest {
     pub planner: String,
     pub definition: String,
     pub calls: BTreeMap<u64, ManagedCall>,
+    pub selected_schema: sdk::Schema,
 }
 
 impl ManagedManifest {
@@ -60,9 +61,78 @@ pub struct ManagedSpec {
     pub id: String,
     pub definition: ResolvedDefinition,
     pub manifest: ManagedManifest,
+    pub destination: ManagedDestination,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedGraphOperation {
+    Evaluate,
+    Expire,
+}
+
+impl ManagedGraphOperation {
+    pub fn instance_id(self, source: &crate::EvidenceIntakeIdentityV1) -> String {
+        let key = source
+            .key()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let operation = match self {
+            Self::Evaluate => "evaluate",
+            Self::Expire => "expire",
+        };
+        format!("araphor-graph:{key}:{operation}")
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ManagedDestination {
+    Selected,
+    Notification,
+    DiscoveryProfile {
+        source: crate::EvidenceIntakeIdentityV1,
+        call: u64,
+        output: String,
+    },
+    Graph {
+        source: crate::EvidenceIntakeIdentityV1,
+        events_sql: String,
+        calls: BTreeSet<u64>,
+        operation: ManagedGraphOperation,
+    },
+}
+
+impl ManagedDestination {
+    pub fn selection(
+        &self,
+        grant: &crate::AnalysisSelectionV1,
+    ) -> Result<crate::AnalysisSelectionV1> {
+        let source = match self {
+            Self::Selected | Self::Notification => return Ok(grant.clone()),
+            Self::DiscoveryProfile { source, .. } | Self::Graph { source, .. } => source,
+        };
+        if !source.valid()
+            || source.tenant_id != grant.tenant_id
+            || !grant.sources.is_all() && !grant.sources.as_slice().contains(source)
+        {
+            return Err(Code::Denied.error("managed destination source"));
+        }
+        let mut selection = grant.clone();
+        selection.sources = crate::Selection::Exact(vec![source.clone()]);
+        Ok(selection)
+    }
 }
 
 impl ManagedSpec {
+    pub(in crate::analysis) fn same_call(&self, previous: &Self, call: u64) -> bool {
+        self.definition.sql == previous.definition.sql
+            && self.manifest.format == previous.manifest.format
+            && self.manifest.planner == previous.manifest.planner
+            && self.manifest.calls.get(&call) == previous.manifest.calls.get(&call)
+    }
+
     pub fn allocation_bytes(&self) -> Option<usize> {
         let bytes = std::mem::size_of::<Self>()
             .checked_add(self.id.capacity())?
@@ -72,7 +142,39 @@ impl ManagedSpec {
                     .checked_sub(std::mem::size_of::<ResolvedDefinition>())?,
             )?
             .checked_add(self.manifest.planner.capacity())?
-            .checked_add(self.manifest.definition.capacity())?;
+            .checked_add(self.manifest.definition.capacity())?
+            .checked_add(self.manifest.selected_schema.fields().size())?
+            .checked_add(
+                self.manifest
+                    .selected_schema
+                    .metadata()
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<(String, String)>())?,
+            )?
+            .checked_add(match &self.destination {
+                ManagedDestination::Selected | ManagedDestination::Notification => 0,
+                ManagedDestination::DiscoveryProfile { source, output, .. } => {
+                    source.node_id.capacity().checked_add(output.capacity())?
+                }
+                ManagedDestination::Graph {
+                    source,
+                    calls,
+                    events_sql,
+                    ..
+                } => source
+                    .node_id
+                    .capacity()
+                    .checked_add(events_sql.capacity())?
+                    .checked_add(calls.len().checked_mul(std::mem::size_of::<u64>())?)?,
+            })?;
+        let bytes = self.manifest.selected_schema.metadata().iter().try_fold(
+            bytes,
+            |bytes, (key, value)| {
+                bytes
+                    .checked_add(key.capacity())?
+                    .checked_add(value.capacity())
+            },
+        )?;
         self.manifest.calls.values().try_fold(bytes, |bytes, call| {
             let bytes = bytes
                 .checked_add(std::mem::size_of::<(u64, ManagedCall)>())?
@@ -118,6 +220,50 @@ impl ManagedSpec {
                 return Err(Code::Invalid.error("managed call pin"));
             }
         }
+        match &self.destination {
+            ManagedDestination::Selected => {}
+            ManagedDestination::Notification => {
+                if !self.manifest.calls.is_empty() || !self.definition.images.is_empty() {
+                    return Err(Code::Invalid.error("notification managed calls"));
+                }
+            }
+            ManagedDestination::DiscoveryProfile {
+                source,
+                call,
+                output,
+            } => {
+                if !source.valid()
+                    || source.tenant_id != self.tenant
+                    || !self.manifest.calls.contains_key(call)
+                    || output.is_empty()
+                {
+                    return Err(Code::Invalid.error("managed profile destination"));
+                }
+            }
+            ManagedDestination::Graph {
+                source,
+                calls,
+                operation,
+                events_sql,
+            } => {
+                if !source.valid()
+                    || source.tenant_id != self.tenant
+                    || calls
+                        .iter()
+                        .any(|call| !self.manifest.calls.contains_key(call))
+                    || match operation {
+                        ManagedGraphOperation::Evaluate => {
+                            calls.is_empty() || events_sql.is_empty()
+                        }
+                        ManagedGraphOperation::Expire => {
+                            !calls.is_empty() || !self.manifest.calls.is_empty()
+                        }
+                    }
+                {
+                    return Err(Code::Invalid.error("managed graph destination"));
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -130,6 +276,7 @@ pub struct ManagedInstance {
     pub generation: u64,
     pub progress: u64,
     pub running: bool,
+    pub removed: bool,
     pub lifecycle: u64,
 }
 
@@ -157,7 +304,7 @@ impl ManagedInstance {
     pub(super) fn validate(&self) -> Result<()> {
         self.spec.validate()?;
         self.grant.validate()?;
-        if self.grant.selection.tenant_id != self.spec.tenant {
+        if self.grant.selection.tenant_id != self.spec.tenant || self.removed && self.running {
             return Err(Code::Invalid.error("managed instance grant"));
         }
         Ok(())
@@ -182,9 +329,16 @@ pub struct ManagedMember {
 #[derive(Clone, Debug)]
 pub struct ManagedRead {
     pub instance: ManagedInstance,
+    pub expected: Option<ManagedInstance>,
     pub rebuild: bool,
     /// Require this completion when a native frontier was selected.
     pub completed: Option<u64>,
+}
+
+impl ManagedRead {
+    pub(super) fn expected(&self) -> &ManagedInstance {
+        self.expected.as_ref().unwrap_or(&self.instance)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -219,6 +373,32 @@ pub struct ManagedPrior {
     pub context: ResultContext,
     pub parameters: Option<sdk::Dataset>,
     pub checkpoint: Option<sdk::Checkpoint>,
+    pub retained: Option<std::sync::Arc<RetainedCall>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RetainedCall {
+    pub evaluation: sdk::Evaluation,
+    pub output: sdk::Output,
+}
+
+impl RetainedCall {
+    pub fn matches(&self, evaluation: &sdk::Evaluation) -> bool {
+        self.evaluation.export == evaluation.export
+            && self.evaluation.parameters == evaluation.parameters
+            && self.evaluation.inputs.len() == evaluation.inputs.len()
+            && self
+                .evaluation
+                .inputs
+                .iter()
+                .zip(&evaluation.inputs)
+                .all(|(left, right)| {
+                    left.data.name == right.data.name
+                        && left.data.batches == right.data.batches
+                        && left.revision == right.revision
+                        && left.coverage == right.coverage
+                })
+    }
 }
 
 impl ManagedPrior {
@@ -280,6 +460,7 @@ pub(super) struct Capture {
     pub instance: String,
     pub grant: PackageGrantV1,
     pub generation: u64,
+    pub expected_generation: u64,
     pub progress: u64,
     pub completed: u64,
     pub running: bool,
@@ -339,12 +520,44 @@ impl ManagedCapture {
                 .parameters
                 .iter()
                 .chain(prior.checkpoint.iter().flat_map(|state| &state.datasets))
+                .chain(prior.retained.iter().flat_map(|retained| {
+                    retained
+                        .evaluation
+                        .inputs
+                        .iter()
+                        .map(|input| &input.data)
+                        .chain(retained.output.datasets.iter())
+                        .chain(
+                            retained
+                                .output
+                                .checkpoint
+                                .iter()
+                                .flat_map(|state| &state.datasets),
+                        )
+                }))
         })
     }
     pub fn metadata_bytes(&self) -> usize {
-        self.bytes
-            .saturating_sub(self.datasets().fold(0usize, |bytes, data| {
-                bytes.saturating_add(data.allocated_bytes().saturating_sub(data.metadata_bytes()))
+        self.bytes.saturating_sub(
+            self.batches()
+                .flat_map(sdk::RecordBatch::columns)
+                .fold(0usize, |bytes, array| {
+                    bytes.saturating_add(array.get_buffer_memory_size())
+                }),
+        )
+    }
+
+    pub fn batches(&self) -> impl Iterator<Item = &sdk::RecordBatch> {
+        self.datasets()
+            .flat_map(|data| &data.batches)
+            .chain(self.prior.values().flat_map(|prior| {
+                prior.retained.iter().flat_map(|retained| {
+                    retained
+                        .evaluation
+                        .parameters
+                        .iter()
+                        .chain(retained.output.reasons.iter().map(|reason| &reason.details))
+                })
             }))
     }
 }
@@ -414,6 +627,14 @@ pub struct ManagedAttempt(
 );
 
 impl ManagedAttempt {
+    pub(in crate::analysis) fn switches_version(&self) -> bool {
+        self.0.capture.generation != self.0.capture.expected_generation
+    }
+
+    pub(in crate::analysis) fn witnesses(&self) -> &[AnalysisWitnessV1] {
+        &self.0.capture.witnesses
+    }
+
     pub fn request(&self) -> &ManagedRequest {
         &self.0.request
     }
@@ -432,6 +653,37 @@ pub struct ManagedReturn<'a> {
     pub call: u64,
     pub evaluation: &'a sdk::Evaluation,
     pub output: &'a sdk::Output,
+    pub retained: Option<&'a PackageResultRefV1>,
+}
+
+impl Attempt {
+    pub(super) fn retains(
+        &self,
+        spec: &ManagedSpec,
+        call: u64,
+        reference: &PackageResultRefV1,
+    ) -> bool {
+        self.request.frontier.is_some()
+            && !self.request.rebuild
+            && self.capture.generation == self.capture.expected_generation
+            && matches!(
+                &spec.destination,
+                ManagedDestination::Graph {
+                    calls,
+                    operation: ManagedGraphOperation::Evaluate,
+                    ..
+                } if calls.contains(&call)
+            )
+            && spec
+                .manifest
+                .calls
+                .get(&call)
+                .is_some_and(|declaration| matches!(declaration.target.as_str(), "wasm" | "native"))
+            && self.capture.prior.get(&call).and_then(Option::as_ref) == Some(reference)
+            && reference.commit_revision > 0
+            && reference.commit_revision <= self.capture.progress
+            && reference.commit_revision < self.registered
+    }
 }
 
 pub struct ManagedCommit<'a> {
@@ -439,8 +691,14 @@ pub struct ManagedCommit<'a> {
     pub now_utc_ns: u64,
     pub returns: &'a [ManagedReturn<'a>],
     pub selected: &'a sdk::Dataset,
-    pub selected_limits: sdk::Limits,
     pub selected_schema: &'a sdk::Schema,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct RecordInput {
+    pub name: String,
+    pub rows: u64,
+    pub batches: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -451,7 +709,7 @@ pub(super) struct Record {
     pub declaration: ManagedCall,
     pub context: ResultContext,
     pub parameters: Option<sdk::wire::Dataset>,
-    pub rows: BTreeMap<String, u64>,
+    pub inputs: Vec<RecordInput>,
     pub dependencies: Vec<PackageResultRefV1>,
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub contexts: Vec<AnalysisContextRefV1>,
@@ -461,7 +719,6 @@ pub(super) struct Record {
 pub struct ManagedResult {
     pub context: ResultContext,
     pub output: sdk::Output,
-    pub limits: sdk::Limits,
     pub commit_revision: u64,
     pub current: bool,
 }
@@ -474,6 +731,18 @@ pub(super) struct Step {
     pub dependencies: Vec<PackageResultRefV1>,
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub contexts: Vec<AnalysisContextRefV1>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ManagedOutput {
+    Call {
+        result: Box<crate::InstanceResultV1>,
+        data: sdk::Output,
+    },
+    Selected {
+        packet: sdk::wire::Dataset,
+        data: sdk::Dataset,
+    },
 }
 
 #[derive(Clone, Debug)]

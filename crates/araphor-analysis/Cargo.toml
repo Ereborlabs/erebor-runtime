@@ -15,9 +15,11 @@ araphor-package = { path = "../araphor-package" }
 araphor-data = { path = "../araphor-data" }
 araphor-query = { path = "../araphor-query" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+erebor-telemetry = { path = "../erebor-telemetry" }
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 futures-util.workspace = true
 serde.workspace = true
+serde_bytes = "=0.11.19"
 serde_json.workspace = true
 serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-58"] }
 snafu.workspace = true

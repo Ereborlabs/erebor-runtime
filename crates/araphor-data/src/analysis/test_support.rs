@@ -15,7 +15,7 @@ impl AnalysisStore {
             })?;
         let mutation = writer
             .execute(query, values)
-            .and_then(|_| writer.execute_batch("CHECKPOINT"));
+            .and_then(|_| writer.execute_batch("FORCE CHECKPOINT"));
         let restored = writer.execute_batch(&format!(
             "SET memory_limit='{}'",
             self.storage

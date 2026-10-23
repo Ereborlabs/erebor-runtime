@@ -1,6 +1,51 @@
 use super::*;
 
 #[tokio::test]
+async fn input_precedes_compilation() -> TestResult {
+    let mut model = sdk::Model::new(
+        "evaluate",
+        Vec::new(),
+        vec![sdk::Port::new("data", Fixture::schema())],
+    );
+    model.parameters = sdk::Schema::new(vec![
+        sdk::Field::new("mode", sdk::DataType::Utf8, false),
+        sdk::Field::new("amount", sdk::DataType::UInt64, false),
+    ]);
+    let parameters = serde_json::json!({"mode": "x".repeat(4096), "amount": 7});
+    let mut evaluation = Fixture::evaluation(&model);
+    evaluation.parameters = araphor_data::decode_parameters(&model.parameters, Some(&parameters))?;
+    let expected = sdk::Output {
+        datasets: vec![Fixture::data("data", &[7])?],
+        ..Default::default()
+    };
+    let mut bundle = Fixture::bundle("wasm", model, SqlModelV1::default())?;
+    Fixture::save(&mut bundle, &evaluation, &expected, Some(parameters))?;
+    let PackageImplementationV1::Wasm { artifact, .. } =
+        &mut bundle.artifacts[0].implementations[0]
+    else {
+        return Err("Wasm fixture absent".into());
+    };
+    *artifact = b"invalid component".to_vec();
+    let fixture = Fixture::limits(
+        &bundle,
+        araphor_query::execution::Limits {
+            input_bytes: 1024,
+            ..Default::default()
+        },
+    )?;
+    let before = fixture.owner.query.store().meta()?.commit_revision;
+    let error = fixture.run(&bundle).await.unwrap_err();
+    assert!(matches!(
+        error,
+        crate::Error::Query { source }
+            if araphor_query::Failure::from(&source)
+                == araphor_query::Failure::InputTooLarge
+    ));
+    assert_eq!(fixture.owner.query.store().meta()?.commit_revision, before);
+    Ok(())
+}
+
+#[tokio::test]
 async fn fixtures_execute_sql_wasm() -> TestResult {
     for target in ["sql", "wasm"] {
         accumulate(target).await?;

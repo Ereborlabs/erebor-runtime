@@ -16,24 +16,31 @@ async fn renewal_keeps_checkpoint() -> TestResult {
         .next()
         .ok_or("original call result")?
         .clone();
-    let original = fixture.query.store().managed_output(
+    let araphor_data::ManagedOutput::Call {
+        result: original, ..
+    } = fixture.query.store().managed_output(
         instance.admitted(),
         &reference.result_id,
         10,
         &AnalysisReadControl::default(),
-    )?;
+    )?
+    else {
+        return Err("package output variant".into());
+    };
     let stored = fixture
         .query
         .store()
         .managed_instance([1; 16], "renewal", &AnalysisReadControl::default())?
         .ok_or("renewal instance")?;
+    let host = InstanceHost::new(Arc::clone(&fixture.query), fixture.authority.clone());
     let mut grant = fixture.grant.clone();
     grant.revision += 1;
     fixture.authority.revoke(fixture.grant.revision);
-    let renewed = instance
+    let renewed = host
         .renew(
-            stored.lifecycle,
             grant.clone(),
+            stored.spec.id.clone(),
+            stored.lifecycle,
             &AnalysisReadControl::default(),
         )
         .await?;
@@ -43,9 +50,18 @@ async fn renewal_keeps_checkpoint() -> TestResult {
     assert_eq!(renewed.admitted().progress, first.commit_revision);
     assert!(!renewed.admitted().running);
     assert!(renewed.admitted().lifecycle > stored.lifecycle);
+    assert_eq!(renewed.prepared.resolved(), instance.prepared.resolved());
     assert_eq!(
-        renewed.prepared.images().next().ok_or("renewed image")?.0 as *const PackageBundleV1,
-        instance.prepared.images().next().ok_or("original image")?.0 as *const PackageBundleV1
+        renewed
+            .prepared
+            .images()
+            .map(|(image, _)| image.encode())
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        instance
+            .prepared
+            .images()
+            .map(|(image, _)| image.encode())
+            .collect::<std::result::Result<Vec<_>, _>>()?
     );
     let before = fixture.query.store().meta()?;
     assert_eq!(
@@ -78,6 +94,7 @@ async fn renewal_keeps_checkpoint() -> TestResult {
     let definition = renewed.admitted().spec.definition.clone();
     drop(renewed);
     drop(instance);
+    drop(host);
     let Fixture {
         directory,
         query,
@@ -113,7 +130,7 @@ async fn renewal_keeps_checkpoint() -> TestResult {
         .managed_attempt([1; 16], "renewal", "first", &AnalysisReadControl::default())?
         .ok_or("reopened attempt")?;
     assert_eq!(loaded.instance().grant, stored.grant);
-    let retained = Instance::read_output(
+    let araphor_data::PackageResponseV1::Result(retained) = Instance::read_output(
         Arc::clone(&query),
         authority.clone(),
         grant.clone(),
@@ -121,7 +138,10 @@ async fn renewal_keeps_checkpoint() -> TestResult {
         &reference.result_id,
         &AnalysisReadControl::default(),
     )
-    .await?;
+    .await?
+    else {
+        return Err("package output variant".into());
+    };
     assert_eq!(retained.output, original.output);
     assert_eq!(retained.context, original.context);
     assert_eq!(retained.commit_revision, original.commit_revision);
@@ -173,30 +193,42 @@ async fn renewal_checks_current_authority() -> TestResult {
         .store()
         .managed_instance([1; 16], "renewal-guards", &AnalysisReadControl::default())?
         .ok_or("renewal instance")?;
+    let host = InstanceHost::new(Arc::clone(&fixture.query), fixture.authority.clone());
     let mut grant = fixture.grant.clone();
     grant.revision += 1;
     let before = fixture.query.store().meta()?;
     let retained = fixture.query.memory().input_reserved();
     let notices = fixture.query.store().subscribe_activations();
     fixture.authority.deny_next.store(true, Ordering::SeqCst);
-    assert!(instance
+    assert!(host
         .renew(
-            stored.lifecycle,
             grant.clone(),
+            stored.spec.id.clone(),
+            stored.lifecycle,
             &AnalysisReadControl::default()
         )
         .await
         .is_err());
     let mut expired = grant.clone();
     expired.expires_utc_ns = Some(1);
-    assert!(instance
-        .renew(stored.lifecycle, expired, &AnalysisReadControl::default())
+    assert!(host
+        .renew(
+            expired,
+            stored.spec.id.clone(),
+            stored.lifecycle,
+            &AnalysisReadControl::default()
+        )
         .await
         .is_err());
     let mut changed = grant.clone();
     changed.selection.contexts = araphor_data::Selection::Exact(Vec::new());
-    assert!(instance
-        .renew(stored.lifecycle, changed, &AnalysisReadControl::default())
+    assert!(host
+        .renew(
+            changed,
+            stored.spec.id.clone(),
+            stored.lifecycle,
+            &AnalysisReadControl::default()
+        )
         .await
         .is_err());
     fixture
@@ -205,10 +237,11 @@ async fn renewal_checks_current_authority() -> TestResult {
         .lock()
         .map_err(|_| "image trust lock")?
         .clear();
-    assert!(instance
+    assert!(host
         .renew(
-            stored.lifecycle,
             grant.clone(),
+            stored.spec.id.clone(),
+            stored.lifecycle,
             &AnalysisReadControl::default()
         )
         .await
@@ -220,10 +253,11 @@ async fn renewal_checks_current_authority() -> TestResult {
         .map_err(|_| "image trust lock")?
         .insert(image.digest()?);
     let held = fixture.query.memory().reserve_input(CAPACITY - retained)?;
-    assert!(instance
+    assert!(host
         .renew(
-            stored.lifecycle,
             grant.clone(),
+            stored.spec.id.clone(),
+            stored.lifecycle,
             &AnalysisReadControl::default()
         )
         .await
@@ -240,10 +274,11 @@ async fn renewal_checks_current_authority() -> TestResult {
         stored
     );
     assert!(!notices.has_changed()?);
-    let renewed = instance
+    let renewed = host
         .renew(
-            stored.lifecycle,
             grant.clone(),
+            stored.spec.id.clone(),
+            stored.lifecycle,
             &AnalysisReadControl::default(),
         )
         .await?;
@@ -265,19 +300,21 @@ async fn renewal_checks_current_authority() -> TestResult {
             &AnalysisReadControl::default()
         )?
         .is_none());
-    assert!(instance
+    assert!(host
         .renew(
-            stored.lifecycle,
             grant.clone(),
+            stored.spec.id.clone(),
+            stored.lifecycle,
             &AnalysisReadControl::default()
         )
         .await
         .is_err());
     fixture.authority.deny_next.store(true, Ordering::SeqCst);
-    assert!(renewed
+    assert!(host
         .renew(
-            renewed.admitted().lifecycle,
             grant.clone(),
+            stored.spec.id.clone(),
+            renewed.admitted().lifecycle,
             &AnalysisReadControl::default()
         )
         .await
@@ -289,10 +326,11 @@ async fn renewal_checks_current_authority() -> TestResult {
             .await?,
         first
     );
-    let unchanged = renewed
+    let unchanged = host
         .renew(
-            renewed.admitted().lifecycle,
             grant,
+            stored.spec.id.clone(),
+            renewed.admitted().lifecycle,
             &AnalysisReadControl::default(),
         )
         .await?;

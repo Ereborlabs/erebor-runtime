@@ -22,11 +22,6 @@ pub trait DiscoveryValidate {
 }
 
 pub const DISCOVERY_SCHEMA_VERSION: u32 = 3;
-pub const DISCOVERY_INPUT_BYTES: usize = 256 * 1024 * 1024;
-pub const MAX_DISCOVERY_RECORDS: usize = 1_000_000;
-pub const MAX_DISCOVERY_ATOMS: usize = 50_000;
-pub const DISCOVERY_PIN_BYTES: usize = 32 * 1024;
-pub const MAX_DISCOVERY_SAMPLES: usize = 8;
 
 pub struct InputByteLimit(pub usize);
 
@@ -163,8 +158,7 @@ impl DiscoveryPinnedContextV1 {
                 && !self.target_snapshot_digest.is_empty(),
             "pinned context",
         )?;
-        serde_json::to_writer(InputByteLimit(DISCOVERY_PIN_BYTES), self)
-            .context(DiscoveryEncodingSnafu)
+        Ok(())
     }
 }
 
@@ -185,16 +179,6 @@ pub enum DiscoveryContextUnavailableV1 {
 pub enum DiscoveryContextJoinV1 {
     Available(Box<DiscoveryPinnedContextV1>),
     Unresolved(DiscoveryContextUnavailableV1),
-}
-
-impl DiscoveryContextJoinV1 {
-    pub fn into_bounded(self) -> Self {
-        if serde_json::to_writer(InputByteLimit(DISCOVERY_PIN_BYTES), &self).is_ok() {
-            self
-        } else {
-            Self::Unresolved(DiscoveryContextUnavailableV1::ContextLimit)
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -303,7 +287,6 @@ impl TryFrom<&[u8]> for DiscoveryInputManifestV1 {
     type Error = Error;
 
     fn try_from(bytes: &[u8]) -> Result<Self> {
-        require(bytes.len() <= DISCOVERY_INPUT_BYTES, "input bytes")?;
         let input: Self = serde_json::from_slice(bytes).context(DiscoveryEncodingSnafu)?;
         input.validate()?;
         Ok(input)
@@ -322,11 +305,7 @@ impl DiscoveryInputManifestV1 {
             "source revision",
         )?;
         require(
-            self.records.len() <= MAX_DISCOVERY_RECORDS
-                && self.contexts.len() <= MAX_DISCOVERY_RECORDS
-                && self.exclusions.len() <= MAX_DISCOVERY_RECORDS
-                && self.coverage.len() <= 4096
-                && self.lifecycle.len() <= DiscoveryLifecycleCaseV1::ALL.len(),
+            self.lifecycle.len() <= DiscoveryLifecycleCaseV1::ALL.len(),
             "input count",
         )?;
         let mut ranges = BTreeSet::new();
@@ -392,10 +371,6 @@ impl DiscoveryInputManifestV1 {
             match &entry.state {
                 DiscoveryLifecycleStateV1::Recorded { records } => {
                     require(
-                        !records.is_empty() && records.len() <= 64,
-                        "lifecycle records",
-                    )?;
-                    require(
                         !records.is_empty()
                             && records.iter().collect::<BTreeSet<_>>().len() == records.len()
                             && records.iter().all(|id| {
@@ -416,8 +391,7 @@ impl DiscoveryInputManifestV1 {
                 DiscoveryLifecycleStateV1::Missing => {}
             }
         }
-        serde_json::to_writer(InputByteLimit(DISCOVERY_INPUT_BYTES), self)
-            .context(DiscoveryEncodingSnafu)
+        Ok(())
     }
 }
 

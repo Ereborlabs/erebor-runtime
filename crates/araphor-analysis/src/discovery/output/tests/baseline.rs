@@ -187,3 +187,102 @@ async fn duplicates_keep_context_projection() -> TestResult {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn recorded_keeps_distinct_keys() -> TestResult {
+    let fixture = Fixture::new()?;
+    for change in 0..6 {
+        let mut input = Fixture::input()?;
+        match change {
+            0 | 1 | 3 => {
+                let mut wire = input.records[1].decode()?;
+                match change {
+                    0 => wire.kernel_result = -1,
+                    1 => wire.task_cookie += 1,
+                    _ => wire.exact_object_id = vec![31; 16].into(),
+                }
+                input.records[1].wire_record = Vec::<u8>::try_from(&wire)?;
+            }
+            2 => input.contexts[1].image_digest = "sha256:new-image".into(),
+            4 => {
+                input.contexts[1].policy_revision.signed_profile_digest =
+                    "replacement-profile".into()
+            }
+            _ => input.contexts[1].entry_instance_id[15] += 1,
+        }
+        assert_eq!(
+            fixture.recorded(&input).await?.snapshot.atoms.len(),
+            2,
+            "change {change}"
+        );
+    }
+    let mut input = Fixture::input()?;
+    let mut wire = input.records[1].decode()?;
+    wire.decision = 0;
+    wire.kernel_result = -5;
+    input.records[1].wire_record = Vec::<u8>::try_from(&wire)?;
+    let result = fixture.recorded(&input).await?;
+    assert!(result.snapshot.atoms.iter().any(|atom| {
+        atom.key.effect.kernel_result == -5
+            && atom.key.physical_result == DiscoveryPhysicalResultV1::Unknown
+    }));
+    input = Fixture::input()?;
+    let original = fixture.recorded(&input).await?.snapshot;
+    input.proof_kind = DiscoveryProofKindV1::RecordedInput;
+    assert_ne!(fixture.recorded(&input).await?.snapshot, original);
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorded_keeps_schema() -> TestResult {
+    use std::collections::BTreeSet;
+
+    let fixture = Fixture::new()?;
+    let mut input = Fixture::input()?;
+    let snapshot = fixture.recorded(&input).await?.snapshot;
+    let atom = serde_json::to_value(&snapshot.atoms[0])?;
+    assert_eq!(
+        atom.as_object()
+            .ok_or("atom object")?
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "key",
+            "count",
+            "first_cursor",
+            "last_cursor",
+            "evidence_sample"
+        ])
+    );
+    for field in [
+        "source_reason",
+        "source_decision",
+        "kernel_result",
+        "physical_result",
+        "static_key",
+    ] {
+        let mut changed = atom.clone();
+        changed[field] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<BehaviorAtomV1>(changed).is_err());
+    }
+    let retained: BehaviorSnapshotV1 = serde_json::from_slice(&serde_json::to_vec(&snapshot)?)?;
+    retained.validate()?;
+    assert_eq!(retained, snapshot);
+    assert_eq!(snapshot.lifecycle.len(), 9);
+    assert!(snapshot
+        .lifecycle
+        .iter()
+        .all(|entry| entry.state == DiscoveryLifecycleStateV1::Missing));
+    assert_eq!(
+        DiscoveryInputManifestV1::try_from(serde_json::to_vec(&input)?.as_slice())?,
+        input
+    );
+    input.schema_version = DISCOVERY_SCHEMA_VERSION - 1;
+    assert!(input.validate().is_err());
+    input.schema_version = DISCOVERY_SCHEMA_VERSION;
+    let mut encoded = serde_json::to_value(input)?;
+    encoded["contexts"][0]["static_key"]["authority"] = serde_json::json!("allow");
+    assert!(DiscoveryInputManifestV1::try_from(serde_json::to_vec(&encoded)?.as_slice()).is_err());
+    Ok(())
+}

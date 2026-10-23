@@ -4,7 +4,7 @@ use snafu::ResultExt as _;
 use super::{GraphHeader, GraphRows};
 use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, Result};
 
-type HeaderRow = (Option<Vec<u8>>, Option<Vec<u8>>, u64, u64);
+type HeaderRow = (Option<Vec<u8>>, Option<Vec<u8>>, u64, u64, u64, u64);
 
 impl GraphRows {
     pub(in crate::analysis) fn read_header(
@@ -16,7 +16,7 @@ impl GraphRows {
             .query_row(
                 "SELECT CASE WHEN octet_length(body) <= ? THEN body ELSE NULL END,
                 CASE WHEN octet_length(stream_key) <= ? THEN stream_key ELSE NULL END,
-                method_version, first_cursor FROM analysis_results
+                method_version, first_cursor, facts_revision, coverage_revision FROM analysis_results
             WHERE tenant_id = ? AND result_id = ? AND processor_id = ?
                 AND stream_key IS NOT NULL",
                 params![
@@ -26,13 +26,13 @@ impl GraphRows {
                     result_id,
                     crate::GRAPH_PROCESSOR
                 ],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .optional()
             .context(AnalysisDatabaseSnafu {
                 operation: "read native graph header",
             })?;
-        let Some((bytes, stream, method, first)) = stored else {
+        let Some((bytes, stream, method, first, facts, coverage)) = stored else {
             return Ok(None);
         };
         let bytes = bytes.ok_or_else(|| {
@@ -41,7 +41,8 @@ impl GraphRows {
             }
             .build()
         })?;
-        let header = GraphHeader::decode(&bytes)?;
+        let mut header = GraphHeader::decode(&bytes)?;
+        header.notice = (facts, coverage);
         let stream = stream.ok_or_else(|| {
             GraphInvalidSnafu {
                 field: "graph header index",

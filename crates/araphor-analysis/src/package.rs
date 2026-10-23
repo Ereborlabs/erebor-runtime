@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use araphor_data::{
-    AnalysisContextRefV1, AnalysisReadControl, AnalysisSelectionV1, EvidenceIntakeIdentityV1,
-    PackageActionV1, PackageAuthorization, PackageBundleRef, PackageBundleV1,
-    PackageErrorCodeV1 as Code, PackageGrantV1, Selection,
+    AnalysisReadControl, AnalysisSelectionV1, EvidenceIntakeIdentityV1, PackageActionV1,
+    PackageAuthorization, PackageBundleRef, PackageBundleV1, PackageErrorCodeV1 as Code,
+    PackageGrantV1, Selection,
 };
 use araphor_discovery_definition::{Definition, Program};
-use araphor_query::definition::{CallResult, PackageCall, PreparedDefinition};
+use araphor_query::definition::{PackageCall, PreparedDefinition};
 use araphor_query::execution::Engine;
-use araphor_query::follow::{Subscription, Update};
+use araphor_query::follow::Subscription;
 use datafusion::common::DataFusionError;
 use tokio::sync::OnceCell;
 
@@ -19,13 +19,12 @@ pub(crate) mod builtin;
 pub struct Package {
     pub(crate) query: Arc<Engine>,
     pub(crate) grant: PackageGrantV1,
-    authority: Arc<dyn PackageAuthorization>,
+    pub(crate) authority: Arc<dyn PackageAuthorization>,
     bundle: PackageBundleV1,
     digest: String,
     export: String,
     output: String,
     prepared: OnceCell<(PreparedDefinition, PackageCall)>,
-    pub(crate) context: AnalysisContextRefV1,
 }
 
 impl Package {
@@ -51,6 +50,8 @@ impl Package {
             );
             Ok(())
         })?;
+        let _context =
+            reference.ok_or_else(|| Code::Denied.error("package retention authority"))?;
         let package = Self {
             query,
             authority,
@@ -60,13 +61,12 @@ impl Package {
             export: export.into(),
             output: output.into(),
             prepared: OnceCell::new(),
-            context: reference.ok_or_else(|| Code::Denied.error("package retention authority"))?,
         };
         package.check()?;
         Ok(package)
     }
 
-    pub(crate) fn check(&self) -> Result<()> {
+    pub(crate) fn check(&self) -> araphor_data::Result<()> {
         let _remaining = self.grant.remaining()?;
         self.authority.check(&self.grant, PackageActionV1::Run)?;
         self.authority.admit(
@@ -195,25 +195,6 @@ impl Package {
         )?;
         self.check()?;
         Ok(stream.until_change(changes))
-    }
-
-    pub(crate) fn check_return<'a>(&self, update: &'a Update) -> Result<&'a CallResult> {
-        let (_, call) = self
-            .prepared
-            .get()
-            .ok_or_else(|| Code::Invalid.error("subscription admission"))?;
-        let returned = update
-            .calls
-            .get(&call.id())
-            .filter(|returned| returned.belongs_to(call))
-            .ok_or_else(|| Code::Denied.error("subscription return identity"))?;
-        if update.calls.values().any(|returned| {
-            let output = returned.output();
-            output.checkpoint.is_some() || !output.reasons.is_empty() || !output.evidence.is_empty()
-        }) {
-            return Err(Code::Unsupported.error("discovery auxiliary return").into());
-        }
-        Ok(returned)
     }
 
     pub(crate) fn commit<T>(

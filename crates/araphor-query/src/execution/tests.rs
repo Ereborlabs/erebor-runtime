@@ -21,7 +21,7 @@ use tokio::sync::Notify;
 use super::{Engine, Limits, Read};
 use crate::parser::Parser;
 use crate::planner::Planner;
-use crate::sources::SourceSnapshot;
+use crate::sources::{ReadMode, ScanBounds, SourceSnapshot};
 use crate::Error;
 
 mod limits;
@@ -1319,7 +1319,9 @@ async fn physical_preserves_context() {
                 .session_config()
                 .get_extension::<SourceSnapshot>()
                 .unwrap();
-            let receipt = snapshot.capture_metadata(&BTreeMap::new()).unwrap();
+            let receipt = snapshot
+                .capture(&BTreeMap::new(), ScanBounds::default(), ReadMode::Metadata)
+                .unwrap();
             assert!(self.captured.set(receipt).is_ok());
             Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&self.schema),

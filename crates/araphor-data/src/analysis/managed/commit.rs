@@ -15,6 +15,7 @@ struct Packet {
     id: String,
     record: Record,
     output: sdk::wire::Output,
+    inputs: Vec<sdk::wire::Dataset>,
 }
 
 impl AnalysisStore {
@@ -46,6 +47,15 @@ impl AnalysisStore {
                 witness.expires_utc_ns = request.witness_expiry;
             }
         }
+        contract.witnesses.sort_unstable_by(|left, right| {
+            left.identity
+                .cmp(&right.identity)
+                .then(left.cursor.cmp(&right.cursor))
+                .then(left.expires_utc_ns.cmp(&right.expires_utc_ns))
+        });
+        contract
+            .witnesses
+            .dedup_by(|left, right| left.identity == right.identity && left.cursor == right.cursor);
         let capture = &contract;
         let spec = &captured.instance.spec;
         let mut writer = self.writer()?;
@@ -73,7 +83,12 @@ impl AnalysisStore {
             ));
         }
         if request.frontier.is_some() {
-            Self::check_managed_pending(&transaction, spec.tenant, &spec.id)?;
+            Self::check_managed_pending(
+                &transaction,
+                spec.tenant,
+                &spec.id,
+                capture.expected_generation,
+            )?;
         }
         self.check_managed_capture(&transaction, capture, request.time_utc_ns)?;
         self.resolve_witnesses(&capture.witnesses, capture.revision)?;
@@ -88,8 +103,14 @@ impl AnalysisStore {
         let bytes = serde_json::to_vec(&attempt).context(crate::PackageEncodingSnafu)?;
         transaction
             .execute(
-                "INSERT INTO managed_attempts VALUES (?, ?, ?, ?, 0)",
-                params![spec.tenant.as_slice(), spec.id, request.id, bytes],
+                "INSERT INTO managed_attempts VALUES (?, ?, ?, ?, ?, 0)",
+                params![
+                    spec.tenant.as_slice(),
+                    spec.id,
+                    request.id,
+                    capture.generation,
+                    bytes
+                ],
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "insert immutable managed attempt",
@@ -107,16 +128,34 @@ impl AnalysisStore {
         ))
     }
 
+    pub(in crate::analysis) const MANAGED_RELATIONS: &'static [&'static str] = &[
+        "managed_calls",
+        "managed_instances",
+        "managed_attempts",
+        "managed_edges",
+        "managed_arrow",
+        "analysis_results",
+        "evidence_refs",
+        "context_refs",
+    ];
+
     pub fn commit_managed(
         &self,
         input: &ManagedCommit<'_>,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<ManagedReceipt> {
-        if input.now_utc_ns < input.attempt.request().time_utc_ns {
-            return Err(Code::Invalid.error("managed publication time"));
+        if input.attempt.1.spec.destination != ManagedDestination::Selected {
+            return Err(Code::Invalid.error("managed selected destination"));
         }
-        let supplied = &input.attempt.0;
-        let spec = &input.attempt.1.spec;
+        self.commit_managed_projection(input, |_, _, _| Ok(Vec::new()), check)
+    }
+
+    pub(in crate::analysis) fn commit_managed_projection(
+        &self,
+        input: &ManagedCommit<'_>,
+        project: impl FnOnce(&Transaction<'_>, u64, &ManagedReceipt) -> Result<Vec<&'static str>>,
+        check: impl FnOnce() -> Result<()>,
+    ) -> Result<ManagedReceipt> {
         let mut writer = self.writer()?;
         let transaction = writer
             .get_mut()?
@@ -124,8 +163,44 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "begin managed publication",
             })?;
+        let revision = self.package_next(&transaction)?;
+        let receipt = self.managed_commit_rows(&transaction, input, revision)?;
+        let mut relations = Self::MANAGED_RELATIONS.to_vec();
+        relations.extend(project(&transaction, revision, &receipt)?);
+        relations.sort_unstable();
+        relations.dedup();
+        let tenant = input.attempt.1.spec.tenant;
+        self.check_logical(&transaction, tenant, false)?;
+        self.check_witnesses(&transaction, tenant, input.now_utc_ns)?;
+        Self::record_revision(&transaction, revision, &relations)?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(super::super::AnalysisCommitStage::BeforeResultCommit)?;
+        check()?;
+        #[cfg(test)]
+        self.crash_at("managed.before");
+        self.commit_metadata(transaction, "commit complete managed step")?;
+        #[cfg(test)]
+        self.crash_at("managed.after");
+        self.revision.send_replace(revision);
+        if input.attempt.switches_version() {
+            self.activations.send_replace(revision);
+        }
+        Ok(receipt)
+    }
+
+    pub(in crate::analysis) fn managed_commit_rows(
+        &self,
+        transaction: &Transaction<'_>,
+        input: &ManagedCommit<'_>,
+        revision: u64,
+    ) -> Result<ManagedReceipt> {
+        if input.now_utc_ns < input.attempt.request().time_utc_ns {
+            return Err(Code::Invalid.error("managed publication time"));
+        }
+        let supplied = &input.attempt.0;
+        let spec = &input.attempt.1.spec;
         let mut attempt =
-            Self::managed_attempt_from(&transaction, spec.tenant, &spec.id, &supplied.request.id)?
+            Self::managed_attempt_from(transaction, spec.tenant, &spec.id, &supplied.request.id)?
                 .ok_or_else(|| Code::Missing.error("managed attempt"))?;
         if supplied.request != attempt.request
             || supplied.capture != attempt.capture
@@ -137,16 +212,41 @@ impl AnalysisStore {
             return crate::AnalysisConflictSnafu.fail();
         }
         self.check_managed_claim(input.attempt)?;
-        let revision = self.package_next(&transaction)?;
         let (packets, step, selected, receipt) =
-            self.prepare_managed(&transaction, &attempt, input, revision)?;
-        self.check_managed_capture(&transaction, &attempt.capture, input.now_utc_ns)?;
+            self.prepare_managed(transaction, &attempt, input, revision)?;
+        self.check_managed_capture(transaction, &attempt.capture, input.now_utc_ns)?;
         let segments = self.resolve_witnesses(&attempt.capture.witnesses, revision - 1)?;
+        if attempt.capture.generation != attempt.capture.expected_generation {
+            transaction
+                .execute(
+                    "DELETE FROM managed_calls WHERE tenant_id = ? AND instance_id = ?",
+                    params![spec.tenant.as_slice(), spec.id],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "replace managed call heads",
+                })?;
+            for (call, prior) in &attempt.capture.prior {
+                transaction
+                    .execute(
+                        "INSERT INTO managed_calls VALUES (?, ?, ?, ?, ?)",
+                        params![
+                            spec.tenant.as_slice(),
+                            spec.id,
+                            call,
+                            prior.as_ref().map_or(0, |value| value.commit_revision),
+                            prior.as_ref().map(|value| value.result_id.as_str())
+                        ],
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "select managed target state",
+                    })?;
+            }
+        }
         for packet in packets {
-            self.insert_managed(&transaction, spec, packet, revision, &segments)?;
+            self.insert_managed(transaction, spec, packet, revision, &segments)?;
         }
         Self::insert_managed_step(
-            &transaction,
+            transaction,
             spec,
             &receipt.selected.result_id,
             step,
@@ -154,7 +254,7 @@ impl AnalysisStore {
             revision,
         )?;
         Self::insert_references(
-            &transaction,
+            transaction,
             &receipt.selected.result_id,
             &attempt.capture.witnesses,
             &segments,
@@ -162,8 +262,8 @@ impl AnalysisStore {
         )?;
         transaction
             .execute(
-                "UPDATE managed_instances SET progress = ? WHERE tenant_id = ? AND instance_id = ?",
-                params![revision, spec.tenant.as_slice(), spec.id],
+                "UPDATE managed_instances SET progress = ?, generation = ?, lifecycle = CASE WHEN generation <> ? THEN ? ELSE lifecycle END, failure = NULL WHERE tenant_id = ? AND instance_id = ?",
+                params![revision, attempt.capture.generation, attempt.capture.generation, revision, spec.tenant.as_slice(), spec.id],
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "advance managed progress",
@@ -172,31 +272,6 @@ impl AnalysisStore {
         transaction.execute("UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = ? AND attempt_id = ?",
             params![serde_json::to_vec(&attempt).context(crate::PackageEncodingSnafu)?, revision, spec.tenant.as_slice(), spec.id, attempt.request.id])
             .context(AnalysisDatabaseSnafu { operation: "complete managed attempt" })?;
-        self.check_logical(&transaction, spec.tenant, false)?;
-        self.check_witnesses(&transaction, spec.tenant, input.now_utc_ns)?;
-        Self::record_revision(
-            &transaction,
-            revision,
-            &[
-                "managed_calls",
-                "managed_instances",
-                "managed_attempts",
-                "managed_edges",
-                "managed_arrow",
-                "analysis_results",
-                "evidence_refs",
-                "context_refs",
-            ],
-        )?;
-        #[cfg(any(test, feature = "test-fixtures"))]
-        self.run_commit_hook(super::super::AnalysisCommitStage::BeforeResultCommit)?;
-        check()?;
-        #[cfg(test)]
-        self.crash_at("managed.before");
-        self.commit_metadata(transaction, "commit complete managed step")?;
-        #[cfg(test)]
-        self.crash_at("managed.after");
-        self.revision.send_replace(revision);
         Ok(receipt)
     }
 
@@ -219,24 +294,39 @@ impl AnalysisStore {
     ) -> Result<()> {
         let instance = Self::managed_instance_from(reader, capture.tenant, &capture.instance)?
             .ok_or_else(|| Code::Missing.error("managed capture instance"))?;
-        let spec = &instance.spec;
+        let spec = Self::managed_version_from(
+            reader,
+            capture.tenant,
+            &capture.instance,
+            capture.generation,
+        )?;
         let meta = Self::read_meta_from(reader, &self.root.join("analysis.duckdb"))?;
         if meta.store_uuid != capture.store
             || meta.schema_version != capture.schema
             || meta.recovery_epoch != capture.recovery
             || meta.commit_revision < capture.revision
-            || instance.generation != capture.generation
+            || instance.generation != capture.expected_generation
             || instance.grant != capture.grant
             || instance.lifecycle != capture.lifecycle
             || instance.running != capture.running
             || instance.progress != capture.progress
-            || Self::managed_completed_from(reader, capture.tenant, &capture.instance)?
-                != capture.completed
+            || Self::managed_completed_from(
+                reader,
+                capture.tenant,
+                &capture.instance,
+                capture.expected_generation,
+            )? != capture.completed
             || capture.prior.keys().ne(spec.manifest.calls.keys())
         {
             return crate::AnalysisConflictSnafu.fail();
         }
         for (call, prior) in &capture.prior {
+            if !spec.same_call(&instance.spec, *call) {
+                if prior.is_some() {
+                    return crate::AnalysisConflictSnafu.fail();
+                }
+                continue;
+            }
             let (revision, id): (u64, Option<String>) = reader.query_row(
                 "SELECT state_revision, result_id FROM managed_calls WHERE tenant_id = ? AND instance_id = ? AND call_id = ?",
                 params![spec.tenant.as_slice(), spec.id, call], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -265,7 +355,7 @@ impl AnalysisStore {
         for reference in &capture.dependencies {
             if !self.managed_current(
                 reader,
-                spec,
+                &spec,
                 &reference.result_id,
                 reference.commit_revision,
                 now,
@@ -294,19 +384,42 @@ impl AnalysisStore {
         let current =
             Self::managed_instance_from(reader, attempt.capture.tenant, &attempt.capture.instance)?
                 .ok_or_else(|| Code::Missing.error("managed publication instance"))?;
-        if current.generation != attempt.capture.generation
+        if current.generation != attempt.capture.expected_generation
             || current.lifecycle != attempt.capture.lifecycle
             || current.running != attempt.capture.running
-            || current.spec != input.attempt.1.spec
+            || Self::managed_version_from(
+                reader,
+                current.spec.tenant,
+                &current.spec.id,
+                attempt.capture.generation,
+            )? != input.attempt.1.spec
         {
             return crate::AnalysisConflictSnafu.fail();
         }
-        let spec = &current.spec;
+        let spec = &input.attempt.1.spec;
+        if input.selected_schema != &spec.manifest.selected_schema {
+            return Err(Code::Invalid.error("managed selected schema"));
+        }
         let mut ids = BTreeMap::new();
         for returned in input.returns {
             if !spec.manifest.calls.contains_key(&returned.call) || ids.contains_key(&returned.call)
             {
                 return Err(Code::Invalid.error("managed returned calls"));
+            }
+            if let Some(reference) = returned.retained {
+                if !attempt.retains(spec, returned.call, reference)
+                    || input.attempt.3.get(&returned.call).is_none_or(|prior| {
+                        prior.retained.is_none()
+                            || prior.result != reference.result_id
+                            || prior.revision != reference.commit_revision
+                    })
+                    || Self::validate_managed_failure(reader, &current)?
+                        .is_some_and(|failure| failure.progress == current.progress)
+                {
+                    return Err(Code::Conflict.error("managed retained call"));
+                }
+                ids.insert(returned.call, reference.clone());
+                continue;
             }
             let id = crate::InputRevision::of(&(
                 spec.tenant,
@@ -369,10 +482,26 @@ impl AnalysisStore {
             if !same {
                 return Err(Code::Conflict.error("managed captured checkpoint"));
             }
+            if returned.retained.is_some() {
+                let retained = input
+                    .attempt
+                    .3
+                    .get(&returned.call)
+                    .and_then(|prior| prior.retained.as_ref())
+                    .ok_or_else(|| Code::Invalid.error("managed retained call"))?;
+                if !retained.matches(evaluation)
+                    || sdk::wire::Output::encode_checked(&checked, returned.output)
+                        .context(crate::AnalysisContractSnafu)?
+                        != sdk::wire::Output::encode_checked(&checked, &retained.output)
+                            .context(crate::AnalysisContractSnafu)?
+                {
+                    return Err(Code::Conflict.error("managed retained call output"));
+                }
+                continue;
+            }
             let mut context = ResultContext::new(
                 &attempt.request.id,
                 attempt.request.time_utc_ns,
-                checked.model(),
                 &evaluation.inputs,
             );
             context.context = evaluation.context.clone();
@@ -388,7 +517,6 @@ impl AnalysisStore {
                             batches: vec![batch.clone()],
                         },
                         &checked.model().parameters,
-                        evaluation.context.limits,
                     )
                     .context(crate::AnalysisContractSnafu)
                 })
@@ -402,11 +530,29 @@ impl AnalysisStore {
             );
             dependencies.sort_by(|left, right| left.result_id.cmp(&right.result_id));
             dependencies.dedup();
-            let rows = evaluation
+            let input_shapes = evaluation
                 .inputs
                 .iter()
-                .map(|input| (input.data.name.clone(), input.data.rows()))
+                .map(|input| RecordInput {
+                    name: input.data.name.clone(),
+                    rows: input.data.rows(),
+                    batches: input.data.batches.len(),
+                })
                 .collect();
+            let inputs = evaluation
+                .inputs
+                .iter()
+                .map(|input| {
+                    let port = checked
+                        .model()
+                        .inputs
+                        .iter()
+                        .find(|port| port.port.name == input.data.name)
+                        .ok_or_else(|| Code::Invalid.error("managed input port"))?;
+                    sdk::wire::Dataset::encode(&input.data, &port.port.schema)
+                        .context(crate::AnalysisContractSnafu)
+                })
+                .collect::<Result<Vec<_>>>()?;
             let record = Record {
                 instance: spec.id.clone(),
                 call: returned.call,
@@ -414,7 +560,7 @@ impl AnalysisStore {
                 declaration: declaration.clone(),
                 context,
                 parameters,
-                rows,
+                inputs: input_shapes,
                 dependencies,
                 witnesses: attempt.capture.witnesses.clone(),
                 contexts: attempt.capture.contexts.clone(),
@@ -426,10 +572,10 @@ impl AnalysisStore {
                 id: ids[&returned.call].result_id.clone(),
                 record,
                 output,
+                inputs,
             });
         }
-        let selected =
-            Self::encode_selected(input.selected, input.selected_schema, input.selected_limits)?;
+        let selected = Self::encode_selected(input.selected, input.selected_schema)?;
         let mut dependencies = attempt.capture.dependencies.clone();
         dependencies.extend(ids.values().cloned());
         dependencies.sort_by(|left, right| left.result_id.cmp(&right.result_id));
@@ -467,6 +613,15 @@ impl AnalysisStore {
         revision: u64,
         segments: &[u64],
     ) -> Result<()> {
+        for (slot, data) in packet.inputs.iter_mut().enumerate() {
+            Self::insert_managed_arrow(
+                transaction,
+                &packet.id,
+                "input",
+                slot,
+                &mut data.arrow_ipc,
+            )?;
+        }
         for (slot, data) in packet.output.datasets.iter_mut().enumerate() {
             Self::insert_managed_arrow(
                 transaction,
@@ -542,7 +697,7 @@ impl AnalysisStore {
         Self::insert_managed_edges(transaction, spec.tenant, id, &step.dependencies)
     }
 
-    fn insert_managed_edges(
+    pub(in crate::analysis) fn insert_managed_edges(
         transaction: &Transaction<'_>,
         tenant: [u8; 16],
         id: &str,

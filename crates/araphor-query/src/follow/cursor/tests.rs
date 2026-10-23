@@ -23,7 +23,7 @@ fn plan(value: i64, alias: &str) -> LogicalPlan {
 
 #[test]
 fn maximum_fields_round_trip() {
-    let cursor = Cursor::new(
+    let mut cursor = Cursor::new(
         &meta(),
         Operation::Append,
         [255; 32],
@@ -33,8 +33,18 @@ fn maximum_fields_round_trip() {
         },
         u64::MAX,
     );
+    cursor.set_windows(
+        &(0..32)
+            .map(|call| WindowRange {
+                source: WindowSource::Input { call, slot: 0 },
+                start_utc_ns: 0,
+                end_utc_ns: 1,
+                active: true,
+            })
+            .collect::<Vec<_>>(),
+        &[],
+    );
     let bytes = cursor.encode().unwrap();
-    assert!(bytes.len() <= Cursor::BYTES);
     let decoded = Cursor::decode(&bytes).unwrap();
     assert_eq!(decoded, cursor);
     assert_eq!(decoded.read_revision(), u64::MAX);
@@ -57,7 +67,7 @@ fn invalid_store_cursors() {
         0,
     );
     assert!(Cursor::decode(&[]).is_err());
-    assert!(Cursor::decode(&vec![b' '; Cursor::BYTES + 1]).is_err());
+    assert!(Cursor::decode(&vec![b' '; 1025]).is_err());
     assert!(Cursor::decode(b"{}").is_err());
     assert!(Cursor::decode(b"not a cursor").is_err());
     let mut value = serde_json::to_value(&cursor).unwrap();
@@ -70,6 +80,51 @@ fn invalid_store_cursors() {
     value["revision"] = serde_json::json!(1);
     value["position"]["commit_revision"] = serde_json::json!(2);
     assert!(Cursor::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    let window = WindowRange {
+        source: WindowSource::Query,
+        start_utc_ns: 0,
+        end_utc_ns: 2,
+        active: true,
+    };
+    let mut window_cursor = cursor.clone();
+    window_cursor.set_windows(&[window], &[window]);
+    let frame = serde_json::to_value(window_cursor).unwrap();
+    for (field, value) in [
+        ("start_utc_ns", serde_json::json!(2)),
+        ("end_utc_ns", serde_json::json!(0)),
+        ("active", serde_json::json!(false)),
+    ] {
+        let mut invalid = frame.clone();
+        invalid["windows"][0][field] = value;
+        assert!(matches!(
+            Cursor::decode(&serde_json::to_vec(&invalid).unwrap()),
+            Err(crate::Error::Invalid {
+                field: "cursor fields",
+                ..
+            })
+        ));
+    }
+    for field in ["windows", "completed_windows"] {
+        let mut invalid = frame.clone();
+        let duplicate = invalid[field][0].clone();
+        invalid[field].as_array_mut().unwrap().push(duplicate);
+        assert!(matches!(
+            Cursor::decode(&serde_json::to_vec(&invalid).unwrap()),
+            Err(crate::Error::Invalid {
+                field: "cursor fields",
+                ..
+            })
+        ));
+    }
+    let mut invalid = frame;
+    invalid["completed_windows"][0]["end_utc_ns"] = serde_json::json!(3);
+    assert!(matches!(
+        Cursor::decode(&serde_json::to_vec(&invalid).unwrap()),
+        Err(crate::Error::Invalid {
+            field: "cursor fields",
+            ..
+        })
+    ));
     let mut other = meta();
     other.store_uuid = uuid::Uuid::from_bytes([7; 16]);
     assert!(cursor.check_store(&other).is_err());

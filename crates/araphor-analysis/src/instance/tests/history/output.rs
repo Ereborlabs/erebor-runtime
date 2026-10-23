@@ -15,7 +15,7 @@ async fn raw_output_checks_scope() -> TestResult {
         .unwrap_or_else(|error| error.into_inner())
         .clear();
     let before = fixture.query.store().meta()?;
-    let output = Instance::read_output(
+    let araphor_data::PackageResponseV1::Result(output) = Instance::read_output(
         Arc::clone(&fixture.query),
         reader.clone(),
         reader.grant.clone(),
@@ -23,7 +23,10 @@ async fn raw_output_checks_scope() -> TestResult {
         id,
         &AnalysisReadControl::default(),
     )
-    .await?;
+    .await?
+    else {
+        return Err("package output variant".into());
+    };
     assert_eq!(output.context.context.id, "first");
     assert!(!output.current);
     assert_eq!(output.output.evidence.len(), 1);
@@ -84,76 +87,80 @@ async fn raw_output_checks_scope() -> TestResult {
 async fn raw_output_checks_disclosure() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
     let (_, receipt) = historical(&fixture, "history").await?;
-    let id = &receipt.results.values().next().ok_or("result")?.result_id;
-    let before = fixture.query.store().meta()?;
-    let mut reader = Reader::new(fixture.grant.clone());
-    reader.deny_at = 2;
-    let reader = Arc::new(reader);
-    let error = Instance::read_output(
-        Arc::clone(&fixture.query),
-        reader.clone(),
-        reader.grant.clone(),
-        "history",
-        id,
-        &AnalysisReadControl::default(),
-    )
-    .await
-    .err()
-    .ok_or("denied raw disclosure succeeded")?;
-    assert_eq!(
-        error.status_code(),
-        erebor_runtime_error::StatusCode::PermissionDenied
-    );
-    assert_eq!(reader.checks.load(Ordering::SeqCst), 2);
-    let reader = Arc::new(Reader::new(fixture.grant.clone()));
-    reader.announce.store(true, Ordering::SeqCst);
-    Instance::read_output(
-        Arc::clone(&fixture.query),
-        reader.clone(),
-        reader.grant.clone(),
-        "history",
-        id,
-        &AnalysisReadControl::default(),
-    )
-    .await?;
-    assert!(reader.checks.load(Ordering::SeqCst) >= 3);
-    reader.announce.store(true, Ordering::SeqCst);
-    reader.revoke.store(true, Ordering::SeqCst);
-    let parent = AnalysisReadControl::default();
-    let error = Instance::read_output(
-        Arc::clone(&fixture.query),
-        reader.clone(),
-        reader.grant.clone(),
-        "history",
-        id,
-        &parent,
-    )
-    .await
-    .err()
-    .ok_or("raw authority event ignored")?;
-    parent.check()?;
-    assert_eq!(
-        error.status_code(),
-        erebor_runtime_error::StatusCode::PermissionDenied
-    );
-    let cancelled = AnalysisReadControl::default();
-    cancelled.cancel()?;
-    let reader = Arc::new(Reader::new(fixture.grant.clone()));
-    let error = Instance::read_output(
-        Arc::clone(&fixture.query),
-        reader.clone(),
-        reader.grant.clone(),
-        "history",
-        id,
-        &cancelled,
-    )
-    .await
-    .err()
-    .ok_or("cancelled raw read succeeded")?;
-    assert_eq!(
-        error.status_code(),
-        erebor_runtime_error::StatusCode::Cancelled
-    );
-    assert_eq!(fixture.query.store().meta()?, before);
+    for id in [
+        &receipt.results.values().next().ok_or("result")?.result_id,
+        &receipt.selected.result_id,
+    ] {
+        let before = fixture.query.store().meta()?;
+        let mut reader = Reader::new(fixture.grant.clone());
+        reader.deny_at = 2;
+        let reader = Arc::new(reader);
+        let error = Instance::read_output(
+            Arc::clone(&fixture.query),
+            reader.clone(),
+            reader.grant.clone(),
+            "history",
+            id,
+            &AnalysisReadControl::default(),
+        )
+        .await
+        .err()
+        .ok_or("denied raw disclosure succeeded")?;
+        assert_eq!(
+            error.status_code(),
+            erebor_runtime_error::StatusCode::PermissionDenied
+        );
+        assert_eq!(reader.checks.load(Ordering::SeqCst), 2);
+        let reader = Arc::new(Reader::new(fixture.grant.clone()));
+        reader.announce.store(true, Ordering::SeqCst);
+        Instance::read_output(
+            Arc::clone(&fixture.query),
+            reader.clone(),
+            reader.grant.clone(),
+            "history",
+            id,
+            &AnalysisReadControl::default(),
+        )
+        .await?;
+        assert!(reader.checks.load(Ordering::SeqCst) >= 3);
+        reader.announce.store(true, Ordering::SeqCst);
+        reader.revoke.store(true, Ordering::SeqCst);
+        let parent = AnalysisReadControl::default();
+        let error = Instance::read_output(
+            Arc::clone(&fixture.query),
+            reader.clone(),
+            reader.grant.clone(),
+            "history",
+            id,
+            &parent,
+        )
+        .await
+        .err()
+        .ok_or("raw authority event ignored")?;
+        parent.check()?;
+        assert_eq!(
+            error.status_code(),
+            erebor_runtime_error::StatusCode::PermissionDenied
+        );
+        let cancelled = AnalysisReadControl::default();
+        cancelled.cancel()?;
+        let reader = Arc::new(Reader::new(fixture.grant.clone()));
+        let error = Instance::read_output(
+            Arc::clone(&fixture.query),
+            reader.clone(),
+            reader.grant.clone(),
+            "history",
+            id,
+            &cancelled,
+        )
+        .await
+        .err()
+        .ok_or("cancelled raw read succeeded")?;
+        assert_eq!(
+            error.status_code(),
+            erebor_runtime_error::StatusCode::Cancelled
+        );
+        assert_eq!(fixture.query.store().meta()?, before);
+    }
     Ok(())
 }

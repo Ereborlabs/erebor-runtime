@@ -73,12 +73,7 @@ impl Fixture {
         active.metadata = serde_json::to_vec(&installed)?;
         let active = store.activate_package(&active, None, None, || Ok(()))?;
         let mut input = commit(active, "first-1");
-        input.metadata = serde_json::to_vec(&ResultContext::new(
-            "first-1",
-            1,
-            &artifact.descriptor.exports[0],
-            &[],
-        ))?;
+        input.metadata = serde_json::to_vec(&ResultContext::new("first-1", 1, &[]))?;
         input.datasets = Self::packet(&schema, 7)?;
         input.witnesses = vec![AnalysisWitnessV1 {
             identity: identity.into(),
@@ -142,7 +137,6 @@ impl Fixture {
                 batches: vec![batch],
             },
             schema,
-            sdk::Limits::default(),
         )
         .context(crate::AnalysisContractSnafu)?;
         serde_json::to_vec(&sdk::wire::Output {
@@ -186,7 +180,6 @@ impl Fixture {
                     authorized,
                     scope: "scope",
                     outputs: &outputs,
-                    limits: sdk::Limits::default(),
                 }),
                 mode,
                 now: 1,

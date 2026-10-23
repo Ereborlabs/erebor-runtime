@@ -17,12 +17,16 @@ use sdk::arrow_array::{Array as _, UInt64Array};
 use super::*;
 
 mod checkpoint;
+mod continuation;
+mod control;
 mod finite;
 mod history;
 mod renewal;
+mod replay;
 mod restart;
 mod retained;
 mod reusing;
+pub(in crate::instance) mod version;
 
 pub(super) type TestResult<T = ()> =
     std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -89,12 +93,18 @@ impl PackageAuthorization for Authority {
         bundle: &PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
-        self.commit_many(&[(grant, None), (grant, Some(bundle))], action, operation)
+        self.commit_many(
+            &[(grant, action, None), (grant, action, Some(bundle))],
+            operation,
+        )
     }
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, Option<&PackageBundleRef<'_>>)],
-        _: PackageActionV1,
+        grants: &[(
+            &PackageGrantV1,
+            PackageActionV1,
+            Option<&PackageBundleRef<'_>>,
+        )],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         if self.deny_next.swap(false, Ordering::SeqCst) {
@@ -108,10 +118,10 @@ impl PackageAuthorization for Authority {
             .images
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if !*allowed || grants.is_empty() || !grants.iter().any(|(_, bundle)| bundle.is_none()) {
+        if !*allowed || grants.is_empty() || !grants.iter().any(|(_, _, bundle)| bundle.is_none()) {
             return Err(Code::Denied.error("instance fixture authority set"));
         }
-        for (grant, bundle) in grants {
+        for (grant, _, bundle) in grants {
             grant.remaining()?;
             if self
                 .revoked
@@ -133,7 +143,7 @@ impl PackageAuthorization for Authority {
 }
 
 pub(super) struct Fixture {
-    directory: tempfile::TempDir,
+    pub(super) directory: tempfile::TempDir,
     pub(super) query: Arc<Engine>,
     pub(super) authority: Arc<Authority>,
     pub(super) grant: PackageGrantV1,
@@ -199,7 +209,7 @@ impl Fixture {
         Ok(fixture)
     }
 
-    fn definition(sql: &str) -> Definition {
+    pub(in crate::instance) fn definition(sql: &str) -> Definition {
         Definition {
             name: "instance-fixture".into(),
             description: String::new(),
@@ -269,7 +279,7 @@ impl Fixture {
     }
 }
 
-fn request(id: &str) -> ManagedRequest {
+pub(super) fn request(id: &str) -> ManagedRequest {
     ManagedRequest {
         id: id.into(),
         time_utc_ns: 10,
@@ -304,8 +314,6 @@ pub(super) fn bundle(target: &str) -> TestResult<PackageBundleV1> {
         vec![sdk::Port::new("input", schema.clone())],
         vec![output],
     );
-    model.limits.max_bytes = 1024 * 1024;
-    model.limits.max_checkpoint_bytes = 1024 * 1024;
     model.checkpoint = Some(sdk::CheckpointSpec {
         version: 1,
         datasets: vec![sdk::Port::new("state", schema.clone())],
@@ -973,6 +981,7 @@ async fn managed_subscription(target: &str) -> TestResult {
             tenant_evaluations: Some(1),
             input_capacity: Some(INPUT),
             output_capacity: Some(OUTPUT),
+            output_bytes: 1024 * 1024,
             ..Default::default()
         },
         &bundle(target)?,
@@ -1004,8 +1013,56 @@ async fn managed_subscription(target: &str) -> TestResult {
             .copied()
             .collect(),
     );
+    let reference = first
+        .results
+        .values()
+        .next()
+        .ok_or("initial guest result")?;
+    let araphor_data::PackageResponseV1::Result(mut original) = Instance::read_output(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        fixture.grant.clone(),
+        "follow-state",
+        &reference.result_id,
+        &AnalysisReadControl::default(),
+    )
+    .await?
+    else {
+        return Err("initial guest output variant".into());
+    };
+    assert!(original.current);
+    assert_eq!(original.context.target, target);
     assert!(futures_util::poll!(stream.next()).is_pending());
     fixture.context(2)?;
+    let before = fixture.query.store().meta()?;
+    let araphor_data::PackageResponseV1::Result(changed) = Instance::read_output(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        fixture.grant.clone(),
+        "follow-state",
+        &reference.result_id,
+        &AnalysisReadControl::default(),
+    )
+    .await?
+    else {
+        return Err("changed guest output variant".into());
+    };
+    assert!(!changed.current);
+    original.current = false;
+    assert_eq!(
+        serde_json::to_value(changed)?,
+        serde_json::to_value(original)?
+    );
+    assert_eq!(fixture.progress("follow-state")?, first.commit_revision);
+    assert_eq!(
+        fixture.query.store().managed_history(
+            &fixture.grant.selection,
+            "follow-state",
+            &AnalysisReadControl::default(),
+        )?,
+        std::slice::from_ref(&first)
+    );
+    assert_eq!(fixture.query.store().meta()?, before);
     let second = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("changed stateful receipt")??;
@@ -1575,7 +1632,7 @@ async fn subscription_keeps_selected_progress() -> TestResult {
         &control,
     )?;
     let model = &package.artifacts[0].descriptor.exports[0];
-    let output = sdk::wire::Output::encode_model(&result.output, model, result.limits)?;
+    let output = sdk::wire::Output::encode_model(&result.output, model)?;
 
     let rejected = tokio::time::timeout(Duration::from_secs(30), stale.next())
         .await?
@@ -1620,9 +1677,8 @@ async fn subscription_keeps_selected_progress() -> TestResult {
     assert_eq!(retained.context, result.context);
     assert_eq!(retained.commit_revision, result.commit_revision);
     assert_eq!(retained.current, result.current);
-    assert_eq!(retained.limits, result.limits);
     assert_eq!(
-        sdk::wire::Output::encode_model(&retained.output, model, retained.limits)?,
+        sdk::wire::Output::encode_model(&retained.output, model)?,
         output
     );
     assert_eq!(fixture.selected("sealed-progress", &first.attempt)?, [10]);

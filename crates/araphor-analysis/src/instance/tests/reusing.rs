@@ -28,6 +28,35 @@ async fn retained_runs_check_authority() -> TestResult {
     assert!(retained > 0 && retained < CAPACITY);
     assert_eq!(instance.prepared.images().count(), 1);
     assert_eq!(fixture.progress("retained-authority")?, 0);
+    fixture.query.store().fault_write(
+        "UPDATE package_revisions SET artifact = 'invalid'::BLOB",
+        &[],
+    )?;
+    let session = fixture.query.session(
+        fixture.grant.selection.clone(),
+        &AnalysisReadControl::default(),
+        10,
+    )?;
+    let error = session
+        .prepare_resolved(&definition)
+        .await
+        .err()
+        .ok_or("cold corrupted image accepted")?;
+    assert!(
+        matches!(
+            &error,
+            araphor_query::Error::Data {
+                source: araphor_data::Error::AnalysisContract {
+                    source: sdk::Error::Io { path, .. },
+                    ..
+                }
+            }
+            if path.as_path() == std::path::Path::new("<OCI archive>")
+        ),
+        "{error:?}"
+    );
+    drop(session);
+    assert_eq!(fixture.query.memory().input_reserved(), retained);
     for (id, expected) in [("first", 11), ("second", 22)] {
         let receipt = instance
             .run(request(id), &AnalysisReadControl::default())

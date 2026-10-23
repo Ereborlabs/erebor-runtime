@@ -402,6 +402,13 @@ fn graph_event_coverage_fields() -> TestResult {
     );
     let manifest = &page.tables["graph_manifest"][0];
     assert_eq!(
+        serde_json::from_slice::<GraphSnapshotV1>(
+            column::<BinaryArray>(manifest, "snapshot")?.value(0)
+        )?,
+        *graph
+    );
+    assert_eq!(page.next_change, Some(graph.witness_deadline_utc_ns));
+    assert_eq!(
         column::<UInt64Array>(manifest, "subject_count")?.value(0),
         graph.graph.subjects.len() as u64
     );
@@ -940,14 +947,16 @@ fn trace_recipe_measurement_fields() -> TestResult {
 #[test]
 fn catalog_values_match_schemas() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("data"))?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
     let selection = AnalysisSelectionV1::tenant([1; 16]);
     let schemas = AnalysisStore::table_schemas();
     let canonical = &schemas["catalog"];
     for enabled in [false, true] {
+        let _graph = enabled
+            .then(|| store.lease_graph(vec![selection.clone()]))
+            .transpose()?;
         if enabled {
             store.register_discovery_owner();
-            store.enable_graph_owner()?;
             store.enable_notification_owner()?;
         }
         let page = read(&store, &selection, &["catalog"], 1)?;
@@ -963,7 +972,6 @@ fn catalog_values_match_schemas() -> TestResult {
         for (relation, schema) in schemas {
             let readiness = match relation.as_str() {
                 "behaviors"
-                | "findings"
                 | "relationships"
                 | "graph_subjects"
                 | "graph_branches"
@@ -1079,5 +1087,102 @@ fn catalog_projection_keeps_rows() -> TestResult {
             Arc::new(schemas["catalog"].project(&indices.into_iter().collect::<Vec<_>>())?)
         );
     }
+    Ok(())
+}
+
+#[test]
+fn graph_snapshot_deadline() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let receipt = fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
+    let graph = &fixture.snapshot;
+    let notice = (
+        graph.context_notice_revision + 1,
+        fixture.request.coverage_revision + 1,
+    );
+    fixture.store.mark_graph_notice(
+        &graph.scope,
+        &fixture.request.result_id,
+        receipt.commit_revision,
+        notice.0,
+        notice.1,
+        || Ok(()),
+    )?;
+    let mut selection = AnalysisSelectionV1::new(
+        graph.scope.identity.tenant_id,
+        vec![graph.scope.identity.clone()],
+    );
+    selection.select_graphs(
+        Selection::Exact(vec![fixture.request.result_id.clone()]),
+        None,
+    )?;
+    let deadline = graph.witness_deadline_utc_ns;
+    for now in [deadline - 1, deadline, deadline + 1] {
+        let page = read(&fixture.store, &selection, &["graph_manifest"], now)?;
+        let batch = &page.tables["graph_manifest"][0];
+        assert_eq!(
+            column::<UInt64Array>(batch, "notice_context_revision")?.value(0),
+            notice.0
+        );
+        assert_eq!(
+            column::<UInt64Array>(batch, "notice_coverage_revision")?.value(0),
+            notice.1
+        );
+        assert_eq!(
+            serde_json::from_slice::<GraphSnapshotV1>(
+                column::<BinaryArray>(batch, "snapshot")?.value(0)
+            )?,
+            *graph
+        );
+        assert_eq!(page.next_change, (now < deadline).then_some(deadline));
+        assert_eq!(page.extraction.witnesses, fixture.request.witnesses);
+        assert!(!column::<BooleanArray>(batch, "retained_input_expired")?.value(0));
+        assert!(page.extraction.references.iter().any(|reference| reference
+            .result()
+            .is_some_and(|result| result.result_id == fixture.request.result_id)));
+    }
+    let schema = &AnalysisStore::table_schemas()["graph_manifest"];
+    let columns = BTreeMap::from([(
+        "graph_manifest".into(),
+        Some(std::collections::BTreeSet::from([
+            schema.index_of("graph_result_id")?,
+            schema.index_of("subject_count")?,
+        ])),
+    )]);
+    fixture.store.writer()?.get_mut()?.execute(
+        "UPDATE graph_subjects SET authority = '{'::BLOB WHERE ordinal = 0",
+        [],
+    )?;
+    let page = fixture.store.read_tables(
+        &selection,
+        AnalysisTableRead {
+            requests: &columns,
+            event_ranges: None,
+            inputs: None,
+            mode: AnalysisReadModeV1::Complete,
+            now: deadline - 1,
+        },
+        AnalysisExtractLimits::default(),
+        &AnalysisReadControl::default(),
+    )?;
+    let batch = &page.tables["graph_manifest"][0];
+    assert_eq!(batch.num_rows(), 1);
+    assert!(page.extraction.witnesses.is_empty());
+    assert!(page.extraction.references.iter().any(|reference| reference
+        .result()
+        .is_some_and(|result| result.result_id == fixture.request.result_id
+            && result.commit_revision == receipt.commit_revision)));
+    assert_eq!(
+        column::<UInt64Array>(batch, "subject_count")?.value(0),
+        graph.graph.subjects.len() as u64
+    );
+    assert!(read(
+        &fixture.store,
+        &selection,
+        &["graph_manifest"],
+        deadline - 1
+    )
+    .is_err());
     Ok(())
 }

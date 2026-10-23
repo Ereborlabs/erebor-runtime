@@ -23,7 +23,7 @@ fn raw_code_preserves_native_dependencies() -> TestResult {
                 exports: vec!["native".into()],
                 target: "x86_64-unknown-linux-gnu".into(),
                 cpu_features: Vec::new(),
-                contract_version: 1,
+                contract_version: araphor_analysis_sdk::CONTRACT_VERSION,
                 system_libraries: Vec::new(),
                 dependencies: vec![crate::native::Dependency {
                     name: "helper.so".into(),

@@ -3,10 +3,7 @@ use crate::error::DiscoverySnafu;
 use araphor_data::{
     DiscoveryContextBindingV1, DiscoveryContextJoinV1, DiscoveryContextUnavailableV1,
     DiscoveryPinnedContextV1, DiscoveryPolicyKeyV1, DiscoveryPolicyRevisionV1, DiscoveryRecordV1,
-    DISCOVERY_PIN_BYTES,
 };
-
-use super::context::ContextLimit;
 
 impl ControlStore {
     pub fn discovery_context(&self, record: &DiscoveryRecordV1) -> Result<DiscoveryContextJoinV1> {
@@ -127,14 +124,6 @@ impl ControlStore {
                     {
                         return Ok(unresolved(Missing::PolicyContextMismatch));
                     }
-                    if serde_json::to_writer(
-                        ContextLimit(DISCOVERY_PIN_BYTES, std::io::sink()),
-                        workload,
-                    )
-                    .is_err()
-                    {
-                        return Ok(unresolved(Missing::ContextLimit));
-                    }
                     let next = DiscoveryPinnedContextV1 {
                         binding: DiscoveryContextBindingV1 {
                             record_id: record.id.clone(),
@@ -180,7 +169,7 @@ impl ControlStore {
             if crate::workload_target_fact_digest(&pin.workload)? != pin.binding.subject_revision {
                 return Ok(unresolved(Missing::PolicyContextMismatch));
             }
-            Ok(DiscoveryContextJoinV1::Available(Box::new(pin)).into_bounded())
+            Ok(DiscoveryContextJoinV1::Available(Box::new(pin)))
         } else {
             Ok(unresolved(Missing::MissingWorkloadFact))
         }

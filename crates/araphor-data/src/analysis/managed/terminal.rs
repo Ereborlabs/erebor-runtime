@@ -52,17 +52,26 @@ impl AnalysisStore {
         }
         let instance = Self::managed_instance_from(&transaction, spec.tenant, &spec.id)?
             .ok_or_else(|| Code::Missing.error("managed terminal instance"))?;
-        if instance.spec != *spec || instance.generation != attempt.capture.generation {
+        if Self::managed_version_from(
+            &transaction,
+            spec.tenant,
+            &spec.id,
+            attempt.capture.generation,
+        )? != *spec
+        {
             return crate::AnalysisConflictSnafu.fail();
         }
         let revision = self.package_next(&transaction)?;
         let failure = match exit {
             ManagedExit::Failed(code)
-                if instance.running == attempt.capture.running
+                if instance.generation == attempt.capture.generation
+                    && instance.generation == attempt.capture.expected_generation
+                    && instance.running == attempt.capture.running
                     && instance.lifecycle == attempt.capture.lifecycle
                     && instance.progress == attempt.capture.progress =>
             {
                 Some(super::status::Failure {
+                    origin: super::status::FailureOrigin::Attempt,
                     code,
                     progress: instance.progress,
                     revision,

@@ -77,6 +77,7 @@ fn state_uses_current_head() -> TestResult {
     assert_eq!(row.contiguous_cursor, 1);
     assert!(!row.processor_present);
     assert_eq!(row.current_result_id, None);
+    assert!(!row.current_compatible);
     assert_eq!(row.consumed_cursor, None);
     assert_eq!(row.snapshot, None);
     assert!(bootstrap.extraction.references.is_empty());
@@ -117,7 +118,7 @@ fn state_uses_current_head() -> TestResult {
     let mut historical_input = commit(&history);
     historical_input.context_revision = context.commit_revision;
     let historical =
-        store.commit_sealed_profile(historical_input, PreparedProfile::new(history)?)?;
+        store.commit_sealed_profile(historical_input, PreparedProfile::new(history.clone())?)?;
     assert!(historical.commit_revision > receipt.commit_revision);
     store.mark_notice(&profile, receipt.commit_revision, 7, 0)?;
     let captured = read_state(&store, &selection, None)?;
@@ -127,6 +128,9 @@ fn state_uses_current_head() -> TestResult {
         Some(profile.profile_id.as_str())
     );
     assert_eq!(row.result_commit_revision, Some(receipt.commit_revision));
+    assert!(!row.current_compatible);
+    assert_eq!(row.notice_facts_revision, Some(7));
+    assert_eq!(row.notice_coverage_revision, Some(0));
     assert_eq!(
         row.interval_id.as_deref(),
         Some(profile.interval_id.as_str())
@@ -147,9 +151,30 @@ fn state_uses_current_head() -> TestResult {
         .iter()
         .filter_map(|value| value.result())
         .collect::<Vec<_>>();
-    assert_eq!(refs.len(), 1);
-    assert_eq!(refs[0].result_id, profile.profile_id);
-    assert_eq!(refs[0].commit_revision, receipt.commit_revision);
+    assert_eq!(refs.len(), 2);
+    for (id, revision) in [
+        (&profile.profile_id, receipt.commit_revision),
+        (&history.profile_id, historical.commit_revision),
+    ] {
+        assert!(refs.iter().any(|reference| {
+            reference.result_id == *id && reference.commit_revision == revision
+        }));
+    }
+    assert_eq!(row.history.len(), 1);
+    assert_eq!(row.history[0].result_id, history.profile_id);
+    assert_eq!(row.history[0].commit_revision, historical.commit_revision);
+    assert_eq!(row.history[0].interval_id, history.interval_id);
+    assert_eq!(row.history[0].profile_revision, history.revision);
+    assert_eq!(row.history[0].notice_facts_revision, history.facts_revision);
+    assert_eq!(
+        row.history[0].notice_coverage_revision,
+        history.coverage_revision
+    );
+    assert!(!row.history[0].compatible);
+    assert_eq!(
+        row.history[0].snapshot.clone().into_snapshot()?,
+        history.snapshot
+    );
     let body = serde_json::to_vec(&profile)?;
     store.writer()?.get_mut()?.execute(
         "UPDATE analysis_results SET body = ? WHERE result_id = ?",
@@ -363,5 +388,58 @@ fn state_keeps_bootstrap_gap() -> TestResult {
     assert_eq!(row.consumed_cursor, Some(1));
     assert_eq!(row.resume_floor, Some(2));
     assert_eq!(row.gaps, Some(vec![gap, next]));
+    Ok(())
+}
+
+#[test]
+fn notice_keeps_frozen_profile() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = AnalysisStore::open(&root)?;
+    let mut profile = profile();
+    store.accept_validated_batch(
+        profile.scope.identity.clone(),
+        ValidatedEvidenceBatchV1 {
+            cpu_id: 0,
+            first_cursor: 1,
+            last_cursor: 1,
+            intake_utc_ns: 1,
+            framed_records: b"frame".to_vec().into(),
+            frame_ends: vec![5],
+        },
+    )?;
+    store.register_processor(&profile.scope, ProcessorClassV1::Optional, 1)?;
+    profile.sealed = true;
+    let receipt = store.commit_working_profile(
+        commit(&profile),
+        PreparedProfile::new(profile.clone())?,
+        None,
+    )?;
+    let head = store.processor_result(&profile.scope)?;
+    let health = store.processor_health(&profile.scope)?;
+    let meta = store.meta()?;
+    let frozen = store.frozen_result(&profile.profile_id)?;
+    assert_eq!(frozen.2, receipt.commit_revision);
+    let notices = vec![(profile.profile_id.clone(), receipt.commit_revision)];
+    assert_eq!(store.profile_notices(&profile.scope, 2, 2)?, notices);
+    store.mark_notice(&profile, receipt.commit_revision, 2, 2)?;
+    assert!(store.profile_notices(&profile.scope, 2, 2)?.is_empty());
+    store.mark_notice(&profile, receipt.commit_revision, 1, 1)?;
+    assert!(store.profile_notices(&profile.scope, 2, 2)?.is_empty());
+    assert!(store
+        .mark_notice(&profile, receipt.commit_revision + 1, 3, 3)
+        .is_err());
+    assert_eq!(store.frozen_result(&profile.profile_id)?, frozen);
+    assert_eq!(store.processor_result(&profile.scope)?, head);
+    assert_eq!(store.processor_health(&profile.scope)?, health);
+    assert_eq!(store.meta()?, meta);
+    drop(store);
+    let reopened = AnalysisStore::open(&root)?;
+    assert_eq!(reopened.frozen_result(&profile.profile_id)?, frozen);
+    assert_eq!(reopened.processor_result(&profile.scope)?, head);
+    assert_eq!(reopened.processor_health(&profile.scope)?, health);
+    assert_eq!(reopened.meta()?, meta);
+    assert!(reopened.profile_notices(&profile.scope, 2, 2)?.is_empty());
+    assert_eq!(reopened.profile_notices(&profile.scope, 3, 2)?, notices);
     Ok(())
 }

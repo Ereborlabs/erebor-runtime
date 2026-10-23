@@ -1,5 +1,7 @@
 use super::*;
-use crate::{DiscoveryProfileV1, DiscoverySnapshotRowV1, DiscoveryStateRowV1};
+use crate::{
+    DiscoveryHistoryRowV1, DiscoveryProfileV1, DiscoverySnapshotRowV1, DiscoveryStateRowV1,
+};
 
 impl AnalysisStore {
     pub(super) fn extract_discovery_state(
@@ -9,6 +11,7 @@ impl AnalysisStore {
         read: &AnalysisTableRead<'_>,
         output: &mut AnalysisExtractionV1,
         capture: &mut tables::Capture<'_>,
+        managed: Option<&crate::ManagedCapture>,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         let Some(projected) = read.projected("discovery_state") else {
@@ -29,6 +32,7 @@ impl AnalysisStore {
                     | "gaps"
                     | "context_refs"
                     | "snapshot"
+                    | "current_compatible"
             )
         });
         let identity = &receipt.identity;
@@ -37,7 +41,7 @@ impl AnalysisStore {
         let (mut state, body_bytes, retained): (DiscoveryStateRowV1, Option<usize>, Option<String>) = snapshot.query_row(
             "SELECT p.class, p.start_cursor, p.consumed_cursor, p.resume_floor, p.context_revision,
                 p.retired, NULLIF(p.result_id, ''), r.result_id, r.commit_revision, r.interval_id,
-                r.profile_revision, octet_length(r.body)
+                r.profile_revision, octet_length(r.body), r.facts_revision, r.coverage_revision
              FROM source_receipts s
              LEFT JOIN processor_progress p ON p.tenant_id = s.tenant_id AND p.stream_key = s.stream_key
                 AND p.processor_id = 'discovery' AND p.method_version = ?
@@ -59,10 +63,12 @@ impl AnalysisStore {
                     processor_present: class.is_some(), processor_class: class,
                     start_cursor: row.get(1)?, consumed_cursor: row.get(2)?, resume_floor: row.get(3)?,
                     context_revision: row.get(4)?, retired: row.get(5)?, current_result_id: current,
-                    result_commit_revision: row.get(8)?, interval_id: row.get(9)?,
+                    result_commit_revision: row.get(8)?, current_compatible: false,
+                    notice_facts_revision: row.get(12)?, notice_coverage_revision: row.get(13)?,
+                    interval_id: row.get(9)?,
                     profile_revision: row.get(10)?, facts_revision: None, coverage_revision: None,
                     created_utc_ns: None, updated_utc_ns: None, sealed: None, input_bytes: None,
-                    incomplete: None, gaps: None, context_refs: None, snapshot: None,
+                    incomplete: None, gaps: None, context_refs: None, snapshot: None, history: Vec::new(),
                 }, row.get(11)?, retained))
             },
         ).context(AnalysisDatabaseSnafu { operation: "read captured discovery state" })?;
@@ -100,6 +106,21 @@ impl AnalysisStore {
                     || Some(profile.revision) != state.profile_revision
                 {
                     return self.reject("the discovery head differs from its retained profile");
+                }
+                if let Some(managed) =
+                    managed.filter(|_| read.projects_field("discovery_state", "current_compatible"))
+                {
+                    let native = Self::managed_profile_version(snapshot, identity.tenant_id, id)?;
+                    if native {
+                        let current = managed.instance();
+                        state.current_compatible = Self::discovery_producer_from(
+                            snapshot,
+                            &current.grant.selection,
+                            &profile,
+                            revision,
+                        )?
+                        .matches(&current.spec);
+                    }
                 }
                 state.facts_revision = Some(profile.facts_revision);
                 state.coverage_revision = Some(profile.coverage_revision);
@@ -187,6 +208,97 @@ impl AnalysisStore {
                 gaps.push(gap);
             }
             state.gaps = Some(gaps);
+        }
+        if read.projects_field("discovery_state", "history") {
+            let mut statement = snapshot.prepare(
+                "SELECT result_id, commit_revision, facts_revision, coverage_revision, octet_length(body)
+                 FROM analysis_results WHERE tenant_id = ? AND processor_id = 'discovery'
+                     AND stream_key = ? AND method_version = ? AND interval_id IS NOT NULL
+                 QUALIFY ROW_NUMBER() OVER (PARTITION BY interval_id
+                     ORDER BY profile_revision DESC, commit_revision DESC, result_id DESC) = 1
+                 ORDER BY interval_id"
+            ).context(AnalysisDatabaseSnafu { operation: "prepare captured discovery history" })?;
+            let rows = statement
+                .query_map(
+                    params![
+                        identity.tenant_id.as_slice(),
+                        key.as_slice(),
+                        state.method_version
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, u64>(1)?,
+                            row.get::<_, u64>(2)?,
+                            row.get::<_, u64>(3)?,
+                            row.get::<_, usize>(4)?,
+                        ))
+                    },
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read captured discovery history",
+                })?;
+            for row in rows {
+                control.check()?;
+                let (id, revision, facts, coverage, bytes) =
+                    row.context(AnalysisDatabaseSnafu {
+                        operation: "decode captured discovery history",
+                    })?;
+                output.charge(bytes.checked_mul(4).ok_or_else(|| {
+                    AnalysisInputTooLargeSnafu {
+                        resource: "native discovery history",
+                    }
+                    .build()
+                })?)?;
+                let body = self
+                    .read_result_from(snapshot, identity.tenant_id, &id)?
+                    .ok_or_else(|| self.state_error("the discovery history result is absent"))?;
+                let profile = DiscoveryProfileV1::try_from(body.as_slice())?;
+                if profile.profile_id != id
+                    || profile.scope.identity != *identity
+                    || profile.scope.method_version != state.method_version
+                    || revision == 0
+                    || revision > output.meta.commit_revision
+                {
+                    return self.reject("the discovery history differs from its retained profile");
+                }
+                if !profile.sealed {
+                    continue;
+                }
+                let native = Self::managed_profile_version(snapshot, identity.tenant_id, &id)?;
+                let compatible = if let Some(managed) = managed.filter(|_| native) {
+                    let current = managed.instance();
+                    let producer = Self::discovery_producer_from(
+                        snapshot,
+                        &current.grant.selection,
+                        &profile,
+                        revision,
+                    )?;
+                    producer.matches(&current.spec)
+                } else {
+                    false
+                };
+                output.reference_result(&id, revision, AnalysisReferenceOriginV1::Profile)?;
+                output.sink(control).grow(&mut state.history)?;
+                state.history.push(DiscoveryHistoryRowV1 {
+                    result_id: id,
+                    commit_revision: revision,
+                    notice_facts_revision: facts,
+                    notice_coverage_revision: coverage,
+                    compatible,
+                    interval_id: profile.interval_id,
+                    profile_revision: profile.revision,
+                    facts_revision: profile.facts_revision,
+                    coverage_revision: profile.coverage_revision,
+                    created_utc_ns: profile.created_utc_ns,
+                    updated_utc_ns: profile.updated_utc_ns,
+                    input_bytes: profile.input_bytes,
+                    incomplete: profile.incomplete,
+                    gaps: profile.gaps,
+                    context_refs: profile.context_refs,
+                    snapshot: DiscoverySnapshotRowV1::from_snapshot(profile.snapshot)?,
+                });
+            }
         }
         capture.discovery_state(&state, &mut output.sink(control))?;
         Ok(())

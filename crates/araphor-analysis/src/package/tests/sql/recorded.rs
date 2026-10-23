@@ -299,33 +299,18 @@ impl Recorded {
                     .map(|record| self.key(record, binding)),
             })
             .collect();
-        let limits = Discovery::limits();
         let datasets = vec![
             Record::encode(&self.records)?,
-            Rows::encode(
-                &Discovery::port::<builtin::Context>("contexts"),
-                &contexts,
-                limits,
-            )?,
-            Rows::encode(
-                &Discovery::port::<Coverage>("coverage"),
-                &self.coverage,
-                limits,
-            )?,
+            Rows::encode(&Discovery::port::<builtin::Context>("contexts"), &contexts)?,
+            Rows::encode(&Discovery::port::<Coverage>("coverage"), &self.coverage)?,
             Rows::encode(
                 &Discovery::port::<Disposition>("exclusions"),
                 &self.exclusions,
-                limits,
             )?,
-            Rows::encode(
-                &Discovery::port::<Lifecycle>("lifecycle"),
-                &self.lifecycle,
-                limits,
-            )?,
+            Rows::encode(&Discovery::port::<Lifecycle>("lifecycle"), &self.lifecycle)?,
             Rows::encode(
                 &Discovery::port::<bool>("observed"),
                 &[self.metadata[0].proof_kind == Proof::ObservedRuntime],
-                limits,
             )?,
         ];
         let output = Discovery::evaluate(&sdk::Evaluation {
@@ -351,7 +336,6 @@ impl Recorded {
                 id: "fixture".into(),
                 time_utc_ns: 100,
                 seed: None,
-                limits,
             },
         })?;
         macro_rules! rows {
@@ -363,7 +347,6 @@ impl Recorded {
                         .iter()
                         .find(|data| data.name == $name)
                         .ok_or("oracle dataset absent")?,
-                    limits,
                 )?
             };
         }

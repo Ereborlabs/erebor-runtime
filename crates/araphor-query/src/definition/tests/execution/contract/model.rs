@@ -191,9 +191,6 @@ async fn model_scalar_boundaries() -> TestResult {
     );
     assert_eq!(call.output().datasets[0].batches, vec![expected]);
     drop(output);
-    let mut limited = invocation("limited-scalar");
-    limited.limits.max_bytes = 1;
-    assert!(fixture.execute(&prepared, limited).await.is_err());
     let cancelled = AnalysisReadControl::default();
     let session = fixture
         .engine

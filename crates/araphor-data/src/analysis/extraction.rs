@@ -133,6 +133,12 @@ pub struct AnalysisSelectionV1 {
 }
 
 impl AnalysisSelectionV1 {
+    pub fn includes_source(&self, source: &EvidenceIntakeIdentityV1) -> bool {
+        source.tenant_id == self.tenant_id
+            && (self.nodes.is_empty() || self.nodes.contains(&source.node_id))
+            && (self.sources.is_all() || self.sources.as_slice().contains(source))
+    }
+
     pub fn new(tenant_id: [u8; 16], sources: Vec<EvidenceIntakeIdentityV1>) -> Self {
         Self {
             tenant_id,
@@ -471,6 +477,15 @@ impl AnalysisTableRead<'_> {
         self.requests.get(name).and_then(Option::as_ref)
     }
 
+    fn projects_field(&self, relation: &str, field: &str) -> bool {
+        let schema = &AnalysisStore::table_schemas()[relation];
+        self.projected(relation).is_some_and(|columns| {
+            columns
+                .iter()
+                .any(|index| schema.field(*index).name() == field)
+        })
+    }
+
     fn needs_event_decode(&self) -> bool {
         let Some(columns) = self.projected("events") else {
             return false;
@@ -517,7 +532,6 @@ pub struct AnalysisInputTables<'a> {
     pub authorized: &'a AnalysisSelectionV1,
     pub scope: &'a str,
     pub outputs: &'a [(AnalysisInputSource, SchemaRef)],
-    pub limits: araphor_analysis_sdk::Limits,
 }
 
 pub(super) struct ReadBudget<'a> {
@@ -1562,6 +1576,9 @@ impl AnalysisStore {
             output.charge(size_of::<AnalysisExtractionV1>())?;
             output.charge(key_bytes)?;
             let mut managed = managed.map(|request| self.capture_managed(snapshot, request, read.now, &mut output, control)).transpose()?;
+            if let Some(managed) = &managed {
+                capture.graph_expiry(managed)?;
+            }
             if matches!(mode, AnalysisReadModeV1::Page(_) | AnalysisReadModeV1::Changes(_)) {
                 if let (Some(position), Some(floor)) = (after, output.replay_floor) {
                     if position < floor {
@@ -1578,7 +1595,7 @@ impl AnalysisStore {
                 let expired = self.extract_gaps(snapshot, identity, false, control, &mut output)?;
                 let recovery = self.extract_gaps(snapshot, identity, true, control, &mut output)?;
                 self.check_selected_source(snapshot, &receipt, &expired, control)?;
-                let pending = control.lock(|| self.raw.try_lock())?.pending_gaps(
+                let pending = self.raw.until(control)?.pending_gaps(
                     &receipt,
                     output.meta.commit_revision,
                     control,
@@ -1592,7 +1609,7 @@ impl AnalysisStore {
                     output.limits.input_bytes,
                 )?;
                 output.charge(added)?;
-                self.extract_discovery_state(snapshot, &receipt, &read, &mut output, &mut capture, control)?;
+                self.extract_discovery_state(snapshot, &receipt, &read, &mut output, &mut capture, managed.as_ref(), control)?;
                 self.extract_graph_state(snapshot, &receipt, &read, &mut output, &mut capture, control)?;
                 output.sources.push(AnalysisSourceSnapshotV1 {
                     receipt,
@@ -1862,6 +1879,8 @@ impl AnalysisStore {
             if let Some(request) = &selection.graph_traversal {
                 self.traverse_graphs(snapshot, selection, request, &mut output, control, &mut capture)?;
             }
+            let complete_graph = read.projects_field("graph_manifest", "snapshot");
+            let graph_contexts = read.projects_field("graph_manifest", "context_refs");
             for id in selection.graphs.as_slice().iter().filter(|_| selection.graph_traversal.is_none()) {
                 control.check()?;
                 let (key, revision): (Vec<u8>, u64) = snapshot.query_row(
@@ -1875,27 +1894,30 @@ impl AnalysisStore {
                     .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
                 let subjects = read.projected("graph_subjects").is_some();
                 let edges = read.projected("relationships").is_some();
-                let header = self.graph_input(snapshot, selection.tenant_id, id, &mut output, control)?;
+                let header = self.graph_input(snapshot, selection.tenant_id, id, &mut output, control, complete_graph)?;
                 let mut graph = header.snapshot;
                 if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
                 if !selection.permits_graph(&graph) { continue; }
                 let sensitivity = self.graph_sensitivity(snapshot, &graph.input_manifest, control)?;
-                if subjects {
+                if subjects && !complete_graph {
                     graph.graph.subjects = super::graph_rows::GraphRows::read_subjects(snapshot, id, Some(control))?;
                     if graph.graph.subjects.len() != header.subject_count {
                         return self.reject("the selected graph subject count differs");
                     }
                 }
-                if edges {
+                if edges && !complete_graph {
                     graph.graph.edges = super::graph_rows::GraphRows::read_edges(snapshot, id, Some(control))?;
                     if graph.graph.edges.len() != header.edge_count {
                         return self.reject("the selected graph relationship count differs");
                     }
                 }
                 graph.validate()?;
+                let contexts = if graph_contexts {
+                    self.graph_contexts(snapshot, selection.tenant_id, id, &mut output, control)?
+                } else { Vec::new() };
                 output.reference_result(id, revision, AnalysisReferenceOriginV1::Graph)?;
                 capture.graph(id, &graph, header.subject_count, header.edge_count,
-                    revision, sensitivity, None, &mut output.sink(control))?;
+                    revision, sensitivity, None, &contexts, header.notice, &mut output.sink(control))?;
             }
             self.extract_graph_coverage(snapshot, &read, &mut output, &mut capture, control)?;
             let mut routes = BTreeMap::new();
@@ -1919,7 +1941,7 @@ impl AnalysisStore {
                     if let Some((source_key, graph_revision)) = metadata {
                         let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
                         let header = self.graph_input(snapshot, selection.tenant_id,
-                            &reference.result_id, &mut output, control)?;
+                            &reference.result_id, &mut output, control, false)?;
                         let mut graph = header.snapshot;
                         if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
                         if !selection.permits_graph(&graph) { continue; }
@@ -1995,7 +2017,8 @@ impl AnalysisStore {
                 }
             }
             if packages.is_some() || managed.is_some() {
-                self.extract_provenance(snapshot, selection.tenant_id, &mut output, control)?;
+                self.extract_provenance(snapshot, selection.tenant_id, &mut output,
+                    capture.graph_witnesses(), control)?;
             }
             control.check()?;
             let page = capture.finish(output, after.unwrap_or(StorePositionV1 {
@@ -2015,8 +2038,8 @@ impl AnalysisStore {
         limit: usize,
         control: &AnalysisReadControl,
     ) -> Result<Option<(RawIdentity, Option<u32>, SegmentRange)>> {
-        control
-            .lock(|| self.raw.try_lock())?
+        self.raw
+            .until(control)?
             .select_position(selection, after, revision, limit, control)
     }
 
@@ -2066,7 +2089,7 @@ impl AnalysisStore {
     ) -> Result<()> {
         let identity = &receipt.identity;
         let revision = Self::read_meta_from(snapshot, &self.root)?.commit_revision;
-        let retained = control.lock(|| self.raw.try_lock())?.record_count(
+        let retained = self.raw.until(control)?.record_count(
             &identity.key(),
             1,
             receipt.contiguous_cursor,
@@ -2410,8 +2433,8 @@ mod tests {
     #[test]
     fn analysis_exact_builtin_selection() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
-        store.enable_graph_owner()?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
+        let graph = store.lease_graph(vec![AnalysisSelectionV1::tenant([1; 16])])?;
         store.enable_notification_owner()?;
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
         let key = AnalysisContextKeyV1 {
@@ -2460,7 +2483,7 @@ mod tests {
                 .any(|(name, revision)| name == expected && *revision == 7));
         }
         let disabled = AnalysisSelectionV1::new([1; 16], Vec::new());
-        store.release_graph_owner();
+        drop(graph);
         store.release_notification_owner();
         let mut reader = store.reader_until(&control)?;
         control.run(&mut reader, |snapshot| {
@@ -2515,7 +2538,7 @@ mod tests {
         replacement.created_utc_ns += 1;
         replacement.body = serde_json::to_vec(&snapshot)?;
         fixture.store.commit_graph(&replacement, false, || Ok(()))?;
-        fixture.store.release_graph_owner();
+        drop(fixture._graph);
         assert!(!fixture.store.graph_enabled());
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
         let source = fixture.snapshot.scope.identity.clone();

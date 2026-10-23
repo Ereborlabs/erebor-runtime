@@ -326,3 +326,301 @@ fn package_image_large_roundtrip() -> TestResult {
     assert!(store.package_activation_page(None)?.is_empty());
     Ok(())
 }
+
+#[test]
+fn uninstall_releases_exclusive_closure() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let first = image("v1")?;
+    let mut second = first.clone();
+    second.root.package_id = "second-root".into();
+    second.artifacts[0].descriptor.id = second.root.package_id.clone();
+    let dependency = PackageBundleV1 {
+        schema_version: 1,
+        root: first.artifacts[1].reference(),
+        artifacts: vec![first.artifacts[1].clone()],
+    };
+    let pin = |image: &PackageBundleV1| -> crate::Result<araphor_discovery_definition::ImagePin> {
+        Ok(araphor_discovery_definition::ImagePin {
+            image: image.root.clone(),
+            digest: image.digest()?,
+        })
+    };
+    for bundle in [&first, &second, &dependency] {
+        store.install_package_image([1; 16], bundle, || Ok(()))?;
+    }
+    store.install_package_image([2; 16], &first, || Ok(()))?;
+    assert!(store.uninstall_package_image([1; 16], &pin(&first)?, || Ok(()))?);
+    assert!(store
+        .package_image(
+            [1; 16],
+            &first.root.package_id,
+            None,
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+    assert!(store
+        .package_revision([1; 16], &first.root.package_id, &first.root.revision)?
+        .is_none());
+    assert_eq!(
+        store
+            .package_image(
+                [1; 16],
+                &second.root.package_id,
+                None,
+                &AnalysisReadControl::default()
+            )?
+            .ok_or("shared image")?
+            .digest()?,
+        second.digest()?
+    );
+    assert!(store
+        .package_revision(
+            [1; 16],
+            &dependency.root.package_id,
+            &dependency.root.revision
+        )?
+        .is_some());
+    assert!(store.uninstall_package_image([1; 16], &pin(&second)?, || Ok(()))?);
+    assert!(store
+        .package_revision([1; 16], &second.root.package_id, &second.root.revision)?
+        .is_none());
+    assert_eq!(
+        store
+            .package_image(
+                [1; 16],
+                &dependency.root.package_id,
+                None,
+                &AnalysisReadControl::default()
+            )?
+            .ok_or("explicit dependency")?
+            .digest()?,
+        dependency.digest()?
+    );
+    assert!(store.uninstall_package_image([1; 16], &pin(&dependency)?, || Ok(()))?);
+    assert!(store.package_revisions([1; 16])?.is_empty());
+    assert_eq!(
+        store
+            .package_image(
+                [2; 16],
+                &first.root.package_id,
+                None,
+                &AnalysisReadControl::default()
+            )?
+            .ok_or("other tenant image")?
+            .digest()?,
+        first.digest()?
+    );
+    drop(store);
+    let reopened = AnalysisStore::open(&root)?;
+    assert!(reopened.package_revisions([1; 16])?.is_empty());
+    assert_eq!(
+        reopened
+            .package_image(
+                [2; 16],
+                &first.root.package_id,
+                None,
+                &AnalysisReadControl::default()
+            )?
+            .ok_or("restored tenant image")?
+            .digest()?,
+        first.digest()?
+    );
+    Ok(())
+}
+
+#[test]
+fn uninstall_guard_keeps_closure() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let bundle = image("v1")?;
+    let installed = store.install_package_image([1; 16], &bundle, || Ok(()))?;
+    let pin = araphor_discovery_definition::ImagePin {
+        image: bundle.root.clone(),
+        digest: bundle.digest()?,
+    };
+    let before = store.meta()?;
+    let revisions = store.package_revisions([1; 16])?;
+    let mut checked = false;
+    assert!(store
+        .uninstall_package_image([1; 16], &pin, || {
+            checked = true;
+            crate::AnalysisReadDeniedSnafu.fail()
+        })
+        .is_err());
+    assert!(checked);
+    assert_eq!(store.meta()?, before);
+    assert_eq!(store.package_revisions([1; 16])?, revisions);
+    assert_eq!(inspect(&store, None)?.digest()?, pin.digest);
+    assert_eq!(
+        store.install_package_image([1; 16], &bundle, || Ok(()))?,
+        installed
+    );
+    let mut forged = pin.clone();
+    forged.digest = format!("sha256:{}", "0".repeat(64));
+    assert!(store
+        .uninstall_package_image([1; 16], &forged, || Ok(()))
+        .is_err());
+    assert_eq!(store.meta()?, before);
+    assert!(store.uninstall_package_image([1; 16], &pin, || Ok(()))?);
+    let before = store.meta()?;
+    checked = false;
+    assert!(!store.uninstall_package_image([1; 16], &pin, || {
+        checked = true;
+        Ok(())
+    })?);
+    assert!(checked);
+    assert_eq!(store.meta()?, before);
+    Ok(())
+}
+
+#[test]
+fn definitions_retain_uninstalled_images() -> TestResult {
+    use araphor_discovery_definition::{Definition, ImagePin, Program, ResolvedDefinition, Source};
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let first = image("v1")?;
+    let second = image("v2")?;
+    store.install_package_image([1; 16], &first, || Ok(()))?;
+    let installed = store.install_package_image([1; 16], &second, || Ok(()))?;
+    let pin = ImagePin {
+        image: second.root.clone(),
+        digest: second.digest()?,
+    };
+    let sql = "SELECT * FROM \"image-root\".\"v2\".model()".to_owned();
+    let definition = ResolvedDefinition::new(
+        Definition {
+            name: "retained-image".into(),
+            description: String::new(),
+            labels: Default::default(),
+            program: Program::Sql {
+                source: Source::Inline {
+                    inline: sql.clone(),
+                },
+            },
+        },
+        sql,
+        vec![pin.clone()],
+    )?;
+    store.admit_definition([1; 16], &definition, || Ok(()))?;
+    assert!(store.uninstall_package_image([1; 16], &pin, || Ok(()))?);
+    assert_eq!(inspect(&store, None)?.digest()?, first.digest()?);
+    assert!(store
+        .package_image(
+            [1; 16],
+            "image-root",
+            Some("v2"),
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+    store.collect_package_admissions()?;
+    assert_eq!(
+        store
+            .retained_package_image([1; 16], &pin, &AnalysisReadControl::default())?
+            .ok_or("retained image")?
+            .digest()?,
+        second.digest()?
+    );
+    assert_eq!(
+        store.definition(
+            [1; 16],
+            &definition.definition.name,
+            Some(&definition.digest()?),
+            &AnalysisReadControl::default()
+        )?,
+        Some(definition.clone())
+    );
+    let mut fresh = definition.clone();
+    fresh.definition.name = "fresh-image".into();
+    assert!(store.admit_definition([1; 16], &fresh, || Ok(())).is_err());
+    let mut collision = second.clone();
+    let PackageImplementationV1::Sql { program, .. } =
+        &mut collision.artifacts[0].implementations[0]
+    else {
+        return Err("SQL image fixture".into());
+    };
+    program.outputs.insert("rows".into(), "SELECT 2".into());
+    assert!(store
+        .install_package_image([1; 16], &collision, || Ok(()))
+        .is_err());
+    let before = store.meta()?;
+    drop(store);
+    let reopened = AnalysisStore::open(&root)?;
+    assert_eq!(reopened.meta()?.commit_revision, before.commit_revision);
+    assert_eq!(
+        reopened
+            .retained_package_image([1; 16], &pin, &AnalysisReadControl::default())?
+            .ok_or("restored image")?
+            .digest()?,
+        second.digest()?
+    );
+    let reinstalled = reopened.install_package_image([1; 16], &second, || Ok(()))?;
+    assert!(reinstalled > installed);
+    assert_eq!(
+        reopened.install_package_image([1; 16], &second, || Ok(()))?,
+        reinstalled
+    );
+    assert_eq!(inspect(&reopened, None)?.digest()?, second.digest()?);
+    reopened.admit_definition([1; 16], &fresh, || Ok(()))?;
+    Ok(())
+}
+
+#[test]
+fn uninstall_collects_unused_native() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let mut bundle = image("native-unused")?;
+    for artifact in &mut bundle.artifacts {
+        artifact.implementations = artifact
+            .descriptor
+            .exports
+            .iter()
+            .map(|model| crate::PackageImplementationV1::Native {
+                export: model.name.clone(),
+                artifact: vec![0],
+                qualification: None,
+            })
+            .collect();
+    }
+    let pin = araphor_discovery_definition::ImagePin {
+        image: bundle.root.clone(),
+        digest: bundle.digest()?,
+    };
+    let receipt = store.install_package_image([1; 16], &bundle, || Ok(()))?;
+    let before = store.meta()?;
+    assert_eq!(
+        store.install_package_image([1; 16], &bundle, || Ok(()))?,
+        receipt
+    );
+    assert_eq!(store.meta()?, before);
+    assert!(store.package_activation_page(None)?.is_empty());
+    assert!(store
+        .active_managed(&AnalysisReadControl::default())?
+        .1
+        .is_empty());
+    assert!(store.uninstall_package_image([1; 16], &pin, || Ok(()))?);
+    assert!(store.package_revisions([1; 16])?.is_empty());
+    assert!(store
+        .package_image(
+            [1; 16],
+            &pin.image.package_id,
+            Some(&pin.image.revision),
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+    assert!(store
+        .retained_package_image([1; 16], &pin, &AnalysisReadControl::default())?
+        .is_none());
+    drop(store);
+    let reopened = AnalysisStore::open(&root)?;
+    assert!(reopened.package_revisions([1; 16])?.is_empty());
+    assert!(reopened.package_activation_page(None)?.is_empty());
+    assert!(reopened
+        .active_managed(&AnalysisReadControl::default())?
+        .1
+        .is_empty());
+    Ok(())
+}

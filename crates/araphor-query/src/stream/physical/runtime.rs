@@ -24,6 +24,8 @@ pub(super) struct Runtime {
     maintained: Option<Maintained>,
     progress: Progress,
     snapshot: Option<Arc<ArrowSnapshot>>,
+    cut: Option<WindowCut>,
+    advance_window: bool,
     revision: u64,
     position: Option<StorePositionV1>,
     content: Option<[u8; 32]>,
@@ -31,6 +33,12 @@ pub(super) struct Runtime {
     exhausted: bool,
     ended: bool,
     initial: Option<(Arc<crate::execution::Permit>, u64, Session)>,
+}
+
+struct WindowCut {
+    snapshot: Arc<ArrowSnapshot>,
+    _calls: Arc<crate::definition::CallContext>,
+    closed: Vec<crate::follow::WindowRange>,
 }
 
 struct Maintained {
@@ -92,6 +100,8 @@ impl Runtime {
             maintained,
             progress,
             snapshot: None,
+            cut: None,
+            advance_window: false,
             content: None,
             evaluated: 0,
             exhausted: true,
@@ -101,17 +111,26 @@ impl Runtime {
     }
 
     pub(super) async fn next(&mut self) -> std::result::Result<Option<Event>, StreamError> {
-        self.next_event()
-            .await
-            .map_err(|error| (error, self.snapshot.clone()))
+        self.next_event().await.map_err(|error| {
+            crate::stream::recovery::SourceRecovery::attach(&error, &self.progress);
+            (error, self.snapshot.clone())
+        })
     }
 
     async fn next_event(&mut self) -> Result<Option<Event>> {
         if self.ended {
             return Ok(None);
         }
+        if self.advance_window {
+            self.advance_window = false;
+            if let Some(event) = self.complete_window().await? {
+                return Ok(Some(event));
+            }
+            self.cut = None;
+            return self.evaluate(true, Vec::new()).await;
+        }
         if self.snapshot.is_none() {
-            if let Some(event) = self.evaluate(false).await? {
+            if let Some(event) = self.evaluate(false, Vec::new()).await? {
                 return Ok(Some(event));
             }
         }
@@ -120,7 +139,7 @@ impl Runtime {
             return Ok(None);
         }
         if self.run.operation == Operation::Append && !self.exhausted {
-            return self.evaluate(false).await;
+            return self.evaluate(false, Vec::new()).await;
         }
         {
             match self
@@ -131,12 +150,20 @@ impl Runtime {
                 .await?
             {
                 Wake::Source => {
+                    if let Some(event) = self.complete_window().await? {
+                        return Ok(Some(event));
+                    }
                     if self.changed().await? {
-                        return self.evaluate(false).await;
+                        return self.evaluate(false, Vec::new()).await;
                     }
                     return self.metadata_update(false).await.map(Some);
                 }
-                Wake::Clock => return self.metadata_update(true).await.map(Some),
+                Wake::Clock => {
+                    if let Some(event) = self.complete_window().await? {
+                        return Ok(Some(event));
+                    }
+                    return self.metadata_update(true).await.map(Some);
+                }
             }
         }
     }
@@ -158,7 +185,23 @@ impl Runtime {
         Ok(revision > self.revision)
     }
 
-    async fn evaluate(&mut self, clock_changed: bool) -> Result<Option<Event>> {
+    async fn evaluate(
+        &mut self,
+        clock_changed: bool,
+        completion: Vec<crate::follow::WindowRange>,
+    ) -> Result<Option<Event>> {
+        let retained = self.cut.take();
+        let windows = retained.as_ref().map_or_else(Vec::new, |cut| {
+            cut.snapshot
+                .windows
+                .iter()
+                .filter(|window| {
+                    window.active && !cut.closed.iter().any(|closed| closed.same_interval(window))
+                })
+                .copied()
+                .collect()
+        });
+        let retained = retained.map(|cut| cut.snapshot);
         let (permit, now, initial) = match self.initial.take() {
             Some((permit, now, session)) => (permit, now, Some(session)),
             None => {
@@ -188,7 +231,11 @@ impl Runtime {
         let reuse = initial.is_some();
         let session = match initial {
             Some(session) => session,
-            None => self.run.session(now, &permit).await?,
+            None => {
+                self.run
+                    .session(now, &permit, completion, windows, None)
+                    .await?
+            }
         };
         let calls = session.calls.clone().ok_or_else(Self::state_error)?;
         let execution = async {
@@ -265,7 +312,7 @@ impl Runtime {
                     control: Arc::clone(session.control()),
                     active: true,
                 };
-                let captured = session
+                let mut captured = session
                     .capture_physical(
                         physical,
                         context,
@@ -274,7 +321,10 @@ impl Runtime {
                         permit,
                     )
                     .await?;
-                captured.reserve_complete(self.run.follow)?;
+                if self.run.follow || self.run.managed.is_none() {
+                    captured.reserve_complete(self.run.follow)?;
+                }
+                let recovery = captured.recovery.take();
                 let captured = CapturedExecution::new(
                     captured,
                     session.clone(),
@@ -296,6 +346,15 @@ impl Runtime {
                             let cursor = cursor.clone();
                             let (captured, mut pending) = captured.into_parts();
                             self.snapshot = Some(Arc::clone(&captured.snapshot));
+                            if captured.snapshot.windows.iter().any(|window| window.active) {
+                                self.cut = Some(WindowCut {
+                                    snapshot: Arc::clone(&captured.snapshot),
+                                    _calls: Arc::clone(&calls),
+                                    closed: calls
+                                        .completed_windows(&captured.snapshot)
+                                        .context(SqlSnafu)?,
+                                });
+                            }
                             self.revision = cursor.read_revision();
                             self.position = Some(cursor.position());
                             self.evaluated = cursor.evaluated();
@@ -309,27 +368,46 @@ impl Runtime {
                             return Ok(None);
                         }
                     }
+                    let mut cursor = crate::follow::Cursor::new(
+                        &snapshot.page.extraction.meta,
+                        self.run.operation,
+                        self.run.binding,
+                        StorePositionV1 {
+                            commit_revision: 0,
+                            ordinal: 0,
+                        },
+                        now,
+                    );
+                    cursor.set_windows(
+                        &snapshot.windows,
+                        &calls.completed_windows(&snapshot).context(SqlSnafu)?,
+                    );
                     let frontier = araphor_data::ManagedFrontier {
-                        cursor: crate::follow::Cursor::new(
-                            &snapshot.page.extraction.meta,
-                            self.run.operation,
-                            self.run.binding,
-                            StorePositionV1 {
-                                commit_revision: 0,
-                                ordinal: 0,
-                            },
-                            now,
-                        )
-                        .encode()?,
+                        cursor: cursor.encode()?,
                         next_change: snapshot.next_change,
                     };
                     let publication = Arc::clone(publication);
                     let invocation = calls.invocation().clone();
-                    captured
+                    if let Err(error) = captured
                         .blocking(move |snapshot, control| {
                             publication.admit(snapshot, &invocation, &frontier, control)
                         })
-                        .await?;
+                        .await
+                    {
+                        if self.run.follow
+                            && matches!(
+                                &error,
+                                crate::Error::Data {
+                                    source: araphor_data::Error::AnalysisConflict { .. }
+                                }
+                            )
+                        {
+                            if let Some(recovery) = recovery {
+                                return Err(recovery.invalidated().failed(error));
+                            }
+                        }
+                        return Err(error);
+                    }
                 }
                 let (captured, mut pending) = captured.into_parts();
                 let PhysicalStream {
@@ -388,6 +466,20 @@ impl Runtime {
         self.evaluated = now;
         self.exhausted = self.run.operation == Operation::Replace
             || (output.snapshot.page.exhausted && !output.limited);
+        let completed_windows = calls
+            .completed_windows(&output.snapshot)
+            .context(SqlSnafu)?;
+        drop(retained);
+        if self.run.follow && output.snapshot.windows.iter().any(|window| window.active) {
+            self.cut = Some(WindowCut {
+                snapshot: Arc::clone(&output.snapshot),
+                _calls: Arc::clone(&calls),
+                closed: completed_windows.clone(),
+            });
+        } else {
+            self.cut = None;
+        }
+        self.advance_window = !completed_windows.is_empty();
         Ok(Some(Event {
             output,
             calls: calls.results().context(SqlSnafu)?,
@@ -395,8 +487,52 @@ impl Runtime {
             revision: self.revision,
             evaluated: now,
             clock_changed,
+            completed_windows,
             exhausted: self.exhausted,
         }))
+    }
+
+    async fn complete_window(&mut self) -> Result<Option<Event>> {
+        let Some(cut) = &self.cut else {
+            return Ok(None);
+        };
+        let now = self.progress.now()?;
+        let end = cut
+            .snapshot
+            .windows
+            .iter()
+            .filter(|window| {
+                window.active && !cut.closed.iter().any(|closed| closed.same_interval(window))
+            })
+            .map(|window| window.end_utc_ns)
+            .filter(|end| i128::from(*end) <= i128::from(now))
+            .min();
+        let Some(end) = end else {
+            return Ok(None);
+        };
+        let completed = cut
+            .snapshot
+            .windows
+            .iter()
+            .filter(|window| {
+                window.active
+                    && window.end_utc_ns == end
+                    && !cut.closed.iter().any(|closed| closed.same_interval(window))
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        let (meta, _) = self
+            .run
+            .dependencies(&self.run.session, cut.snapshot.selection.clone(), None)
+            .await?;
+        self.check_store(&meta)?;
+        if meta.commit_revision < self.revision {
+            return crate::InvalidSnafu {
+                field: "cursor store",
+            }
+            .fail();
+        }
+        self.evaluate(true, completed).await
     }
 
     async fn metadata_update(&mut self, clock_changed: bool) -> Result<Event> {
@@ -406,10 +542,12 @@ impl Runtime {
                 || self
                     .snapshot
                     .as_ref()
-                    .is_some_and(|snapshot| snapshot.next_change.is_some())
-                || crate::follow::Window::clocks(&self.run.plan)? != 0)
+                    .is_some_and(|snapshot| snapshot.next_change.is_some()))
         {
-            return self.evaluate(true).await?.ok_or_else(Self::state_error);
+            return self
+                .evaluate(true, Vec::new())
+                .await?
+                .ok_or_else(Self::state_error);
         }
         let now = self.progress.time()?;
         let selection = self.run.selection(now)?;
@@ -447,6 +585,7 @@ impl Runtime {
             revision: self.revision,
             evaluated: self.evaluated,
             clock_changed,
+            completed_windows: Vec::new(),
             exhausted: self.exhausted,
         })
     }

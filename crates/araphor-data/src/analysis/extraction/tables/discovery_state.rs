@@ -28,6 +28,9 @@ impl Capture<'_> {
             "retired",
             "current_result_id",
             "result_commit_revision",
+            "current_compatible",
+            "notice_facts_revision",
+            "notice_coverage_revision",
             "interval_id",
             "profile_revision",
             "facts_revision",
@@ -40,6 +43,7 @@ impl Capture<'_> {
             "gaps",
             "context_refs",
             "snapshot",
+            "history",
         ];
         let schema = Arc::clone(&self.table("discovery_state", NAMES, budget)?.schema);
         budget.charge(schema.fields().len() * (size_of::<ArrayRef>() + 512))?;

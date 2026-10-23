@@ -36,12 +36,11 @@ pub struct PackageFixtureV1 {
 }
 
 impl PackageFixtureV1 {
-    pub fn evaluation_context(&self, model: &sdk::Model) -> sdk::EvaluationContext {
+    pub fn evaluation_context(&self) -> sdk::EvaluationContext {
         sdk::EvaluationContext {
             id: format!("fixture:{}", self.name),
             time_utc_ns: self.time_utc_ns,
             seed: self.seed,
-            limits: model.limits,
         }
     }
 }

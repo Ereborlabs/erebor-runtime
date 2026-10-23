@@ -588,9 +588,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -617,9 +615,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -646,9 +642,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "KUBERNETES_PROOF_MISSING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       }
     ],
     "previous_result_id": null,
@@ -1254,9 +1248,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -1283,9 +1275,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -1312,9 +1302,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "KUBERNETES_REQUEST",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       }
     ],
     "previous_result_id": null,
@@ -1918,9 +1906,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -1947,9 +1933,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -1976,9 +1960,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "KUBERNETES_AUDIT",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       }
     ],
     "previous_result_id": null,
@@ -2643,9 +2625,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -2672,9 +2652,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -2701,9 +2679,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "KUBERNETES_OBJECT",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       }
     ],
     "previous_result_id": null,
@@ -3364,9 +3340,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -3393,9 +3367,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -3422,9 +3394,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "KUBERNETES_SCHEDULED",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       }
     ],
     "previous_result_id": null,
@@ -4083,9 +4053,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -4112,9 +4080,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "WAITING",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       },
       {
         "accepted_cursor_watermark": 1,
@@ -4141,9 +4107,7 @@
         ],
         "retention_ttl_ns": 604800000000000,
         "state": "REMOTE_ADMISSION",
-        "window_bytes": 4194304,
-        "window_ns": 300000000000,
-        "window_records": 256
+        "window_ns": 300000000000
       }
     ],
     "previous_result_id": null,

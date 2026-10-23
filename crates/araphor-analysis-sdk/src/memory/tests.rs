@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::{
     wire, CheckpointSpec, Coverage, CoverageState, DataType, Evaluation, EvaluationContext, Field,
-    Input, InputPort, InputSource, Limits, Model, OutputRef, Package, Port, Reason, RecordBatch,
-    Revision, Schema, SourceWindow, TableRef,
+    Input, InputPort, InputSource, Model, OutputRef, Package, Port, Reason, RecordBatch, Revision,
+    Schema, SourceWindow, TableRef,
 };
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -195,7 +195,6 @@ fn wire_reserves_are_charged() -> TestResult {
             id: "evaluation".into(),
             time_utc_ns: 1,
             seed: None,
-            limits: Limits::default(),
         },
         checkpoint: Some(wire::Checkpoint {
             version: 1,
@@ -265,7 +264,6 @@ fn wire_retains_input_metadata() -> TestResult {
             id: "evaluation".into(),
             time_utc_ns: 1,
             seed: None,
-            limits: Limits::default(),
         },
         checkpoint: None,
     };

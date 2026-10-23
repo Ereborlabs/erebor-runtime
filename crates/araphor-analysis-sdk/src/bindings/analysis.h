@@ -17,18 +17,10 @@ typedef struct {
 } araphor_analysis_bytes_v1;
 
 typedef struct {
-    uint32_t max_batches;
-    uint64_t max_rows;
-    uint64_t max_bytes;
-    uint64_t max_checkpoint_bytes;
-} araphor_analysis_limits_v1;
-
-typedef struct {
     araphor_analysis_bytes_v1 id;
     int64_t time_utc_ns;
     uint64_t seed;
     uint8_t has_seed;
-    araphor_analysis_limits_v1 limits;
 } araphor_analysis_context_v1;
 
 typedef struct {

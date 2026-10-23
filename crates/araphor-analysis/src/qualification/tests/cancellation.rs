@@ -12,7 +12,6 @@ async fn fixture_cancellation_joins_guest() -> TestResult {
         Vec::new(),
         vec![sdk::Port::new("data", Fixture::schema())],
     );
-    model.limits.max_bytes = BYTES as u64;
     model.parameters = sdk::Schema::new(vec![
         sdk::Field::new("mode", sdk::DataType::Utf8, false),
         sdk::Field::new("amount", sdk::DataType::UInt64, false),

@@ -571,17 +571,22 @@ fn provided_input_missing_preserves_control() -> TestResult {
 #[test]
 fn input_failure_releases_capacity() -> TestResult {
     let fixture = Fixture::new()?;
-    let mut declared = model(vec![
+    let declared = model(vec![
         query("first", "SELECT CAST(1 AS BIGINT UNSIGNED) AS value"),
-        query("second", "SELECT CAST(2 AS BIGINT UNSIGNED) AS value"),
+        query("second", "SELECT CAST(NULL AS BIGINT UNSIGNED) AS value"),
     ]);
-    declared.limits.max_rows = 1;
+
     let definition = Arc::new(Inputs::admit(&fixture.engine, &declared)?);
     assert!(matches!(
         fixture.read(&definition),
         Err(error) if matches!(
             error.downcast_ref::<crate::Error>(),
-            Some(crate::Error::Contract { source }) if source.code() == sdk::ErrorCode::Limit
+            Some(crate::Error::Contract {
+                source: sdk::Error::Batch {
+                    source: sdk::arrow_schema::ArrowError::InvalidArgumentError(message),
+                    ..
+                }
+            }) if message == "Column 'value' is declared as non-nullable but contains null values"
         )
     ));
     drop(
@@ -882,14 +887,9 @@ fn inherited_witness_expiry_wins() -> TestResult {
             window_id: "window".into(),
             result_id: "input-upstream-1".into(),
             request: b"request".to_vec(),
-            metadata: serde_json::to_vec(&ResultContext::new(
-                "input-upstream-1",
-                NOW - 100,
-                &upstream,
-                &[],
-            ))?,
+            metadata: serde_json::to_vec(&ResultContext::new("input-upstream-1", NOW - 100, &[]))?,
             datasets: serde_json::to_vec(&sdk::wire::Output {
-                datasets: vec![sdk::wire::Dataset::encode(&data, schema, upstream.limits)?],
+                datasets: vec![sdk::wire::Dataset::encode(&data, schema)?],
                 ..Default::default()
             })?,
             checkpoint: Vec::new(),
@@ -1060,15 +1060,14 @@ fn inherited_witness_expiry_wins() -> TestResult {
 }
 
 #[test]
-fn catalog_keeps_batch_limit() -> TestResult {
+fn catalog_uses_sql_limit() -> TestResult {
     let fixture = Fixture::new()?;
     fixture.event(1, 1_000)?;
-    let mut declared = model(vec![sdk::InputPort {
+    let declared = model(vec![sdk::InputPort {
         port: port("columns", vec![("ordinal", sdk::DataType::UInt32)]),
         source: sdk::InputSource::Query("SELECT ordinal FROM catalog LIMIT 100".into()),
     }]);
-    declared.limits.max_rows = 100;
-    declared.limits.max_batches = 1;
+
     let definition = Arc::new(Inputs::admit(&fixture.engine, &declared)?);
     assert_eq!(
         definition

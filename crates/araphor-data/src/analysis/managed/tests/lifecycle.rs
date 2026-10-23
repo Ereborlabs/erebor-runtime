@@ -2,6 +2,71 @@ use super::*;
 use crate::PackageErrorCodeV1 as Code;
 
 #[test]
+fn explicit_stop_fences_birth() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let fixture = Fixture::admit(&store)?;
+    let birth = fixture.instance.clone();
+    let captured = fixture.capture(&store, false)?;
+    let before = store.meta()?;
+    assert!(store
+        .stop_managed(
+            &birth,
+            || Err(Code::Denied.error("explicit stop authority"))
+        )
+        .is_err());
+    assert_eq!(fixture.current(&store)?, birth);
+    assert_eq!(store.meta()?, before);
+    let mut wrong = birth.clone();
+    wrong.grant.principal.push_str("-other");
+    assert!(store.stop_managed(&wrong, || Ok(())).is_err());
+    assert_eq!(store.meta()?, before);
+    let stopped = store.stop_managed(&birth, || Ok(()))?;
+    assert!(!stopped.running);
+    assert!(stopped.lifecycle > birth.lifecycle);
+    assert_eq!(stopped.generation, birth.generation);
+    assert_eq!(stopped.progress, birth.progress);
+    assert_eq!(stopped.spec, birth.spec);
+    assert_eq!(stopped.grant, birth.grant);
+    let before = store.meta()?;
+    let mut checked = false;
+    assert!(store
+        .set_managed_running([1; 16], "counter", birth.lifecycle, true, || {
+            checked = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!checked);
+    assert!(store.stop_managed(&birth, || Ok(())).is_err());
+    assert!(store
+        .register_managed_attempt(&captured, &request("before-stop"), || Ok(()))
+        .is_err());
+    assert_eq!(store.meta()?, before);
+    let mut checked = false;
+    assert_eq!(
+        store.stop_managed(&stopped, || {
+            checked = true;
+            Ok(())
+        })?,
+        stopped
+    );
+    assert!(checked);
+    assert_eq!(store.meta()?, before);
+    assert!(store
+        .stop_managed(&stopped, || Err(Code::Denied.error("stopped authority")))
+        .is_err());
+    assert_eq!(store.meta()?, before);
+    drop(store);
+    let reopened = AnalysisStore::open(&root)?;
+    assert_eq!(fixture.current(&reopened)?, stopped);
+    assert!(reopened
+        .set_managed_running([1; 16], "counter", birth.lifecycle, true, || Ok(()))
+        .is_err());
+    Ok(())
+}
+
+#[test]
 fn lifecycle_cas_is_inert() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
@@ -198,6 +263,7 @@ fn transition_fences_registration() -> TestResult {
         .read_managed_tables(
             &fixture.instance.grant.selection,
             &ManagedRead {
+                expected: None,
                 instance: fixture.instance.clone(),
                 rebuild: false,
                 completed: None,

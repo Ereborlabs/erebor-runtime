@@ -66,6 +66,8 @@ pub struct ControlConfig {
     #[serde(default)]
     pub discovery: bool,
     #[serde(default)]
+    pub graph_enabled: bool,
+    #[serde(default)]
     pub control_store_directory: Option<PathBuf>,
     #[serde(default)]
     pub kubernetes_policy: Option<PolicyDesiredStateConfigV1>,
@@ -87,7 +89,9 @@ pub struct ControlRuntimeParts {
     pub kubernetes_nodes: Option<KubernetesNodeReadinessOwner>,
     pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
     pub data_error: Option<crate::Error>,
+    pub instances: Option<Arc<araphor_analysis::InstanceHost>>,
     pub discovery: Option<Arc<araphor_analysis::DiscoveryOwner>>,
+    pub graph: Option<Arc<araphor_analysis::GraphOwner>>,
     pub discovery_error: Option<crate::Error>,
 }
 
@@ -113,51 +117,69 @@ impl ControlConfig {
             .as_ref()
             .unwrap_or(&self.evidence_directory);
         let store = ControlStore::open(store_directory)?;
-        let (mut control, data_error, discovery, discovery_error) = match self.open_analysis() {
-            Ok(data) => {
-                let control = ControlPlane::from_intake(
-                    self.allowed_nodes,
-                    self.trust.clone(),
-                    EvidenceIntakeOwner::new(store.clone(), data.clone(), clock)?,
-                )?;
-                if self.discovery
-                    || self
-                        .client
-                        .as_ref()
-                        .is_some_and(|client| client.investigation.is_some())
-                {
-                    control.analysis_packages(
-                        self.client
+        let (mut control, data_error, discovery, discovery_error, instances) =
+            match self.open_analysis() {
+                Ok(data) => {
+                    let control = ControlPlane::from_intake(
+                        self.allowed_nodes,
+                        self.trust.clone(),
+                        EvidenceIntakeOwner::new(store.clone(), data.clone(), clock)?,
+                    )?
+                    .with_notifications(self.notifications.clone())?;
+                    let retained = !data
+                        .active_managed(&araphor_data::AnalysisReadControl::default())?
+                        .1
+                        .is_empty();
+                    let instances = if retained
+                        || self.discovery
+                        || self.graph_enabled
+                        || self
+                            .client
                             .as_ref()
-                            .and_then(|client| client.investigation.as_ref())
-                            .map(|config| config.query.clone()),
-                    )?;
+                            .is_some_and(|client| client.investigation.is_some())
+                    {
+                        let packages = control.configured_packages(
+                            self.client
+                                .as_ref()
+                                .and_then(|client| client.investigation.as_ref())
+                                .map(|config| config.query.clone()),
+                            self.graph_enabled,
+                        )?;
+                        if self.graph_enabled {
+                            packages.notifications(&self.notifications)?;
+                        }
+                        Some(Arc::clone(&packages.instances))
+                    } else {
+                        None
+                    };
+                    let (discovery, discovery_error) = if self.discovery {
+                        match control.analysis_packages(None)?.discovery() {
+                            Ok(owner) => (Some(Arc::new(owner)), None),
+                            Err(error) => (None, Some(error)),
+                        }
+                    } else {
+                        (None, None)
+                    };
+                    (control, None, discovery, discovery_error, instances)
                 }
-                let (discovery, discovery_error) = if self.discovery {
-                    match control.analysis_packages(None)?.discovery() {
-                        Ok(owner) => (Some(Arc::new(owner)), None),
-                        Err(error) => (None, Some(error)),
-                    }
-                } else {
-                    (None, None)
-                };
-                (control, None, discovery, discovery_error)
-            }
-            Err(error) => (
-                ControlPlane::without_intake(
-                    self.allowed_nodes,
-                    self.trust.clone(),
-                    store.clone(),
-                )?,
-                Some(error),
-                None,
-                None,
-            ),
+                Err(error) => (
+                    ControlPlane::without_intake(
+                        self.allowed_nodes,
+                        self.trust.clone(),
+                        store.clone(),
+                    )?,
+                    Some(error),
+                    None,
+                    None,
+                    None,
+                ),
+            };
+        let graph = if self.graph_enabled && control.analysis_store().is_some() {
+            Some(Arc::new(control.analysis_packages(None)?.graph()?))
+        } else {
+            None
         };
         control = control.with_evidence_limits(self.evidence_admission)?;
-        if control.analysis_store().is_some() {
-            control = control.with_notifications(self.notifications)?;
-        }
         if let Some(trust) = self.authority_trust {
             control = control.with_authority_trust(trust)?;
         }
@@ -190,7 +212,9 @@ impl ControlConfig {
             kubernetes_nodes,
             kubernetes_admission: self.kubernetes_admission,
             data_error,
+            instances,
             discovery,
+            graph,
             discovery_error,
         })
     }
@@ -358,6 +382,7 @@ mod tests {
         });
         fs::write(&path, serde_json::to_vec(&source)?)?;
         let config = ControlConfig::load(&path)?;
+        assert!(!config.graph_enabled);
         assert_eq!(config.data_retention.raw_max_age_ns, None);
         assert_eq!(config.data_retention.raw_max_bytes, None);
         assert_eq!(config.evidence_admission.total_slots, 8);
@@ -366,6 +391,7 @@ mod tests {
         assert!(parts.data_error.is_none());
         assert!(parts.discovery.is_none());
         assert!(parts.discovery_error.is_none());
+        assert!(parts.instances.is_none());
         assert!(parts
             .control
             .clone()
@@ -413,6 +439,10 @@ mod tests {
         assert!(parts.data_error.is_none());
         assert!(parts.discovery_error.is_none());
         assert!(parts.discovery.is_some());
+        assert!(Arc::ptr_eq(
+            parts.instances.as_ref().ok_or("instance host absent")?,
+            &parts.control.analysis_packages(None)?.instances,
+        ));
         assert!(parts.control.analysis_store().is_some());
         assert!(!directory.path().join("discovery").exists());
         drop(parts);
@@ -428,13 +458,19 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&source)?)?;
         let database = directory.path().join("analysis/analysis.duckdb");
         fs::write(&database, b"invalid database")?;
-        let parts = ControlConfig::load(&path)?.into_parts()?;
-        assert!(parts.data_error.is_some());
-        assert!(parts.discovery.is_none());
-        assert!(parts.control.analysis_store().is_none());
-        assert_eq!(parts.control.allowed_nodes().len(), 1);
-        assert_eq!(fs::read(&database)?, b"invalid database");
-        drop(parts);
+        for graph in [false, true] {
+            source["graph_enabled"] = serde_json::json!(graph);
+            fs::write(&path, serde_json::to_vec(&source)?)?;
+            let parts = ControlConfig::load(&path)?.into_parts()?;
+            assert!(parts.data_error.is_some());
+            assert!(parts.discovery.is_none());
+            assert!(parts.graph.is_none());
+            assert!(parts.control.analysis_store().is_none());
+            assert!(parts.instances.is_none());
+            assert_eq!(parts.control.allowed_nodes().len(), 1);
+            assert_eq!(fs::read(&database)?, b"invalid database");
+            drop(parts);
+        }
 
         source["discovery"] = serde_json::json!({"unknown": true});
         fs::write(&path, serde_json::to_vec(&source)?)?;
@@ -442,3 +478,9 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod graph;
+
+#[cfg(test)]
+mod notification;

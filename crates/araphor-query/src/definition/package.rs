@@ -230,21 +230,40 @@ impl Packages {
         export: String,
         arguments: Vec<FunctionArg>,
     ) -> Result<LogicalPlan> {
-        let index = self
+        let index = match self
             .bundles
             .binary_search_by(|(bundle, _, _)| bundle.root.cmp(&image))
-            .map_err(|_| {
-                InvalidSnafu {
-                    field: "installed package image",
+        {
+            Ok(index) => index,
+            Err(_) => {
+                let mut candidates = self
+                    .bundles
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (bundle, _, _))| bundle.artifact(&image).is_ok());
+                let index = candidates.next().map(|(index, _)| index).ok_or_else(|| {
+                    InvalidSnafu {
+                        field: "installed package image",
+                    }
+                    .build()
+                })?;
+                if candidates.next().is_some() {
+                    return InvalidSnafu {
+                        field: "ambiguous package image",
+                    }
+                    .fail();
                 }
-                .build()
-            })?;
+                index
+            }
+        };
         let (bundle, digest, reservation) = &self.bundles[index];
         let pin = ImagePin {
-            image: image.clone(),
+            image: bundle.root.clone(),
             digest: digest.clone(),
         };
-        self.state()?.pins.insert(image.clone(), pin.digest.clone());
+        self.state()?
+            .pins
+            .insert(pin.image.clone(), pin.digest.clone());
         let root = ModelRef {
             package: image,
             export,
@@ -420,6 +439,17 @@ impl Packages {
                     }
                     .build()
                 })?;
+            let implementation = artifact
+                .implementation(&key.export)
+                .map_err(araphor_data::Error::from)?;
+            if matches!(implementation, PackageImplementationV1::Native { .. }) {
+                self.limits
+                    .package
+                    .native
+                    .validate()
+                    .map_err(|source| DataFusionError::External(Box::new(source)))
+                    .context(SqlSnafu)?;
+            }
             let (inputs, origins) = self.inputs(
                 context.context_provider(),
                 model,
@@ -439,10 +469,7 @@ impl Packages {
                     &empty_parameters
                 },
             )?;
-            let sql = if let PackageImplementationV1::Sql { program, .. } = artifact
-                .implementation(&key.export)
-                .map_err(araphor_data::Error::from)?
-            {
+            let sql = if let PackageImplementationV1::Sql { program, .. } = implementation {
                 Some(self.sql(
                     context.context_provider(),
                     model,
@@ -478,7 +505,8 @@ impl Packages {
                     }
                     .build()
                 })?;
-            let metadata = self.metadata(model, &input_scope, children.len())?;
+            let metadata =
+                PackageCall::metadata(&self.memory, model, &input_scope, children.len())?;
             let admitted: Arc<[LogicalPlan]> = children.clone().into();
             let mut outputs = BTreeMap::new();
             for port in &model.outputs {
@@ -668,10 +696,13 @@ impl Packages {
                                     )
                                     .map_err(|error| DataFusionError::External(Box::new(error)))?;
                                 if let Some(scope) = scope {
-                                    let metadata =
-                                        self.metadata(model, &scope, call.children.len()).map_err(
-                                            |error| DataFusionError::External(Box::new(error)),
-                                        )?;
+                                    let metadata = PackageCall::metadata(
+                                        &self.memory,
+                                        model,
+                                        &scope,
+                                        call.children.len(),
+                                    )
+                                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
                                     let mut call = call.clone();
                                     call.input_scope = Arc::new(scope);
                                     call._metadata = metadata;
@@ -719,36 +750,6 @@ impl Packages {
         Ok((
             plans.into_values().collect(),
             scopes.into_values().collect(),
-        ))
-    }
-
-    fn metadata(
-        &self,
-        model: &sdk::Model,
-        input_scope: &Inputs,
-        children: usize,
-    ) -> Result<Arc<MemoryReservation>> {
-        let plans = model
-            .outputs
-            .len()
-            .checked_add(1)
-            .and_then(|count| count.checked_mul(children))
-            .and_then(|count| count.checked_mul(std::mem::size_of::<LogicalPlan>()))
-            .ok_or_else(|| araphor_data::PackageErrorCodeV1::Limit.error("package call memory"))?;
-        let bytes = input_scope
-            .allocated_bytes()
-            .checked_add(plans)
-            .and_then(|bytes| {
-                bytes.checked_add(
-                    model
-                        .outputs
-                        .len()
-                        .checked_mul(std::mem::size_of::<PackageCall>())?,
-                )
-            })
-            .ok_or_else(|| araphor_data::PackageErrorCodeV1::Limit.error("package call memory"))?;
-        Ok(Arc::new(
-            self.memory.reserve_input(bytes).context(SqlSnafu)?,
         ))
     }
 
@@ -1029,9 +1030,9 @@ impl Packages {
             .fail();
         }
         let scope = Scope { provider, tables };
-        let plan = SqlToRel::new(&scope)
-            .statement_to_plan(statement)
-            .context(SqlSnafu)?;
+        let plan =
+            crate::parser::Parser::stack(|| SqlToRel::new(&scope).statement_to_plan(statement))
+                .context(SqlSnafu)?;
         SQLOptions::new()
             .with_allow_ddl(false)
             .with_allow_dml(false)

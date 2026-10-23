@@ -18,10 +18,9 @@ fn exact_rows() -> sdk::Result<()> {
         identity: vec![0, 255],
         missing: None,
     }];
-    let bounds = sdk::Limits::default();
-    let mut data = Rows::encode(&port, &expected, bounds)?;
+    let mut data = Rows::encode(&port, &expected)?;
     data.batches.push(data.batches[0].clone());
-    let decoded: Vec<Sample> = Rows::decode(&port, &data, bounds)?;
+    let decoded: Vec<Sample> = Rows::decode(&port, &data)?;
     assert_eq!(decoded.len(), 2);
     assert_eq!(decoded[0], expected[0]);
     assert_eq!(decoded[1], expected[0]);
@@ -39,7 +38,6 @@ fn exact_rows() -> sdk::Result<()> {
 #[test]
 fn invalid_rows() -> sdk::Result<()> {
     let port = Rows::port::<Sample>("samples", "test.sample.v1");
-    let bounds = sdk::Limits::default();
     for values in [
         vec![None],
         vec![Some(b"{}".as_slice())],
@@ -54,70 +52,24 @@ fn invalid_rows() -> sdk::Result<()> {
                 name: port.name.clone(),
                 batches: vec![batch],
             };
-            assert!(Rows::decode::<Sample>(&port, &data, bounds).is_err());
+            assert!(Rows::decode::<Sample>(&port, &data).is_err());
         }
     }
-    let mut data = Rows::encode::<Sample>(&port, &[], bounds)?;
-    assert!(Rows::decode::<Sample>(&port, &data, bounds)?.is_empty());
+    let mut data = Rows::encode::<Sample>(&port, &[])?;
+    assert!(Rows::decode::<Sample>(&port, &data)?.is_empty());
     data.name = "other".into();
-    assert!(Rows::decode::<Sample>(&port, &data, bounds).is_err());
+    assert!(Rows::decode::<Sample>(&port, &data).is_err());
     let wrong = sdk::Port::new("samples", sdk::Schema::empty());
-    assert!(Rows::encode::<Sample>(&wrong, &[], bounds).is_err());
+    assert!(Rows::encode::<Sample>(&wrong, &[]).is_err());
     Ok(())
 }
 
 #[test]
-fn declared_row_limits() -> sdk::Result<()> {
-    let port = Rows::port::<Sample>("samples", "test.sample.v1");
-    let values = [Sample {
-        cursor: 1,
-        time_ns: 2,
-        identity: vec![3],
-        missing: None,
-    }];
-    let normal = sdk::Limits::default();
-    let data = Rows::encode(&port, &values, normal)?;
-    for bounds in [
-        sdk::Limits {
-            max_rows: 0,
-            ..normal
-        },
-        sdk::Limits {
-            max_bytes: 1,
-            ..normal
-        },
-        sdk::Limits {
-            max_batches: 0,
-            ..normal
-        },
-    ] {
-        for result in [
-            Rows::encode(&port, &values, bounds).map(|_| ()),
-            Rows::decode::<Sample>(&port, &data, bounds).map(|_| ()),
-        ] {
-            assert!(matches!(
-                result,
-                Err(sdk::Error::Contract {
-                    code: sdk::ErrorCode::Limit,
-                    ..
-                })
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn rows_fit_payload_bound() -> sdk::Result<()> {
+fn rows_preserve_payload() -> sdk::Result<()> {
     let port = Rows::port::<String>("strings", "test.string.v1");
     let values = vec!["\\\"".repeat(8193); 3];
-    let bounds = sdk::Limits {
-        max_bytes: 128 * 1024,
-        ..sdk::Limits::default()
-    };
-    let data = Rows::encode(&port, &values, bounds)?;
-    assert_eq!(Rows::decode::<String>(&port, &data, bounds)?, values);
-    assert!(data.batches[0].get_array_memory_size() as u64 <= bounds.max_bytes);
+    let data = Rows::encode(&port, &values)?;
+    assert_eq!(Rows::decode::<String>(&port, &data)?, values);
     let rows = data.batches[0]
         .column(0)
         .as_any()
@@ -129,22 +81,6 @@ fn rows_fit_payload_bound() -> sdk::Result<()> {
             location: snafu::location!(),
         })?;
         assert_eq!(rows.value(index), expected);
-    }
-    let small = sdk::Limits {
-        max_bytes: 1024,
-        ..bounds
-    };
-    for result in [
-        Rows::encode(&port, &values, small).map(|_| ()),
-        Rows::decode::<String>(&port, &data, small).map(|_| ()),
-    ] {
-        assert!(matches!(
-            result,
-            Err(sdk::Error::Contract {
-                code: sdk::ErrorCode::Limit,
-                ..
-            })
-        ));
     }
     Ok(())
 }
@@ -163,25 +99,13 @@ fn row_error_precedence() -> sdk::Result<()> {
     let port = Rows::port::<String>("strings", "test.string.v1");
     let value = "\\".repeat(20);
     let values = [FailedString(&value)];
-    let normal = sdk::Limits::default();
     assert!(matches!(
-        Rows::encode(&port, &values, normal),
+        Rows::encode(&port, &values),
         Err(sdk::Error::Encoding { .. })
     ));
-    let small = sdk::Limits {
-        max_bytes: 32,
-        ..normal
-    };
-    assert!(matches!(
-        Rows::encode(&port, &values, small),
-        Err(sdk::Error::Contract {
-            code: sdk::ErrorCode::Limit,
-            ..
-        })
-    ));
     let expected = ["complete".to_owned()];
-    let data = Rows::encode(&port, &expected, normal)?;
-    assert_eq!(Rows::decode::<String>(&port, &data, normal)?, expected);
+    let data = Rows::encode(&port, &expected)?;
+    assert_eq!(Rows::decode::<String>(&port, &data)?, expected);
     Ok(())
 }
 

@@ -114,8 +114,6 @@ impl Graph<'_> {
                     clock_uncertainty_ns: None,
                     late_action: "append-exact-revision-or-report-expired-input".into(),
                     window_ns: GRAPH_WINDOW_NS,
-                    window_records: GRAPH_WINDOW_RECORDS,
-                    window_bytes: GRAPH_WINDOW_BYTES,
                     coverage_predicate:
                         "complete-required-source-intervals-and-qualified-operation-results".into(),
                     replay_contract_id: format!("{id}/v{}", package.revision),

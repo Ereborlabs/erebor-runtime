@@ -20,12 +20,7 @@ pub struct LocalOutput {
 }
 
 impl Session {
-    pub async fn query_local(
-        &self,
-        inputs: &[sdk::Dataset],
-        sql: &str,
-        limits: sdk::Limits,
-    ) -> Result<LocalOutput> {
+    pub async fn query_local(&self, inputs: &[sdk::Dataset], sql: &str) -> Result<LocalOutput> {
         self.control.check()?;
         let ports = inputs
             .iter()
@@ -42,26 +37,12 @@ impl Session {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        sdk::Dataset::validate_all(inputs, &ports, limits)
+        sdk::Dataset::validate_all(inputs, &ports)
             .map_err(|source| DataFusionError::External(Box::new(source)))
             .context(SqlSnafu)?;
         let name = String::from("query");
         let mut session = self.clone();
         session.tables = Arc::default();
-        session.output_rows = self
-            .output_rows
-            .min(usize::try_from(limits.max_rows).unwrap_or(usize::MAX));
-        let bytes = usize::try_from(limits.max_bytes).unwrap_or(usize::MAX);
-        let bytes = if bytes == usize::MAX {
-            bytes
-        } else {
-            bytes
-                .checked_sub(name.len())
-                .ok_or_else(|| crate::Error::Sql {
-                    source: DataFusionError::ResourcesExhausted("local output bytes".into()),
-                })?
-        };
-        session.output_bytes = self.output_bytes.min(bytes);
         let input = session.memory.reserve_input(0).context(SqlSnafu)?;
         session.check_input(inputs.iter().flat_map(|data| &data.batches))?;
         for (data, port) in inputs.iter().zip(&ports) {
@@ -103,11 +84,6 @@ impl Session {
             batches: Vec::new(),
         };
         while let Some(batch) = stream.try_next().await.context(SqlSnafu)? {
-            if data.batches.len() as u64 >= u64::from(limits.max_batches) {
-                return Err(crate::Error::Sql {
-                    source: DataFusionError::ResourcesExhausted("local output batches".into()),
-                });
-            }
             metadata
                 .try_grow(size_of::<sdk::RecordBatch>())
                 .context(SqlSnafu)?;

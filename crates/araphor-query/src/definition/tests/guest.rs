@@ -12,8 +12,8 @@ use super::*;
 const BYTES: usize = 16 * 1024;
 
 async fn fixture(limits: Limits) -> TestResult<(Fixture, PackageBundleV1)> {
-    let mut bundle = component("wasm", "evaluate")?;
-    bundle.artifacts[0].descriptor.exports[0].limits.max_bytes = BYTES as u64;
+    let bundle = component("wasm", "evaluate")?;
+
     let fixture = Fixture::image_limits(limits, &bundle, &definition("'echo'")).await?;
     Ok((fixture, bundle))
 }
@@ -30,27 +30,115 @@ async fn entered(receiver: mpsc::Receiver<()>) -> TestResult {
 }
 
 #[tokio::test]
-async fn guest_transfer_reserved_before_entry() -> TestResult {
+async fn guest_input_precedes_entry() -> TestResult {
     let (fixture, _) = fixture(Limits {
-        output_bytes: BYTES * 4 - 1,
-        output_capacity: Some(BYTES * 4 - 1),
+        input_bytes: BYTES * 4,
+        output_capacity: Some(BYTES * 4),
+        global_evaluations: Some(1),
+        tenant_evaluations: Some(1),
+        ..Default::default()
+    })
+    .await?;
+    let (entry, observed) = mpsc::channel();
+    fixture.engine.guest_entry(entry, None)?;
+    let prepared = fixture
+        .prepare(&definition(&format!("'{}'", "x".repeat(BYTES * 8))))
+        .await?;
+    let before = fixture.engine.store().meta()?;
+    let retained = fixture.engine.memory().input_reserved();
+    let error = fixture
+        .execute(&prepared, invocation("oversized-parameters"))
+        .await
+        .err()
+        .ok_or("oversized invocation entered guest")?;
+    assert_eq!(crate::Failure::from(&error), crate::Failure::InputTooLarge);
+    assert!(
+        matches!(&error, crate::Error::Sql { source }
+            if matches!(source.find_root(), datafusion::common::DataFusionError::ResourcesExhausted(resource)
+                if resource == "package input bytes")),
+        "{error:?}"
+    );
+    assert!(matches!(
+        observed.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(fixture.engine.store().meta()?, before);
+    assert_eq!(fixture.engine.memory().input_reserved(), retained);
+    drop(fixture.engine.memory().reserve_output(BYTES * 4)?);
+    drop(fixture.engine.reserve_evaluation([1; 16])?);
+    drop(prepared);
+    let prepared = fixture.prepare(&definition("'echo'")).await?;
+    let output = fixture
+        .execute(&prepared, invocation("valid-parameters"))
+        .await?;
+    assert_eq!(
+        output
+            .batches
+            .iter()
+            .map(sdk::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1
+    );
+    assert_eq!(
+        output.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or("UInt64 output")?
+            .values()
+            .as_ref(),
+        &[7]
+    );
+    assert_eq!(fixture.engine.store().meta()?, before);
+    drop((output, prepared));
+    assert_eq!(fixture.engine.memory().input_reserved(), 0);
+    drop(fixture.engine.memory().reserve_output(BYTES * 4)?);
+    drop(fixture.engine.reserve_evaluation([1; 16])?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn guest_transfer_reserved_before_entry() -> TestResult {
+    let capacity = BYTES * 4;
+    let (fixture, _) = fixture(Limits {
+        output_bytes: capacity,
+        output_capacity: Some(capacity),
         ..Default::default()
     })
     .await?;
     let (entry, observed) = mpsc::channel();
     fixture.engine.guest_entry(entry, None)?;
     let prepared = fixture.prepare(&definition("'echo'")).await?;
+    let pressure = fixture.engine.memory().reserve_output(capacity)?;
+    let before = fixture.engine.store().meta()?;
     let error = fixture
         .execute(&prepared, invocation("output-quota"))
         .await
         .err()
         .ok_or("guest transfer exceeded its reservation")?;
-    assert!(format!("{error:?}").contains("requires 65536 bytes, capacity is 65535"));
+    assert_eq!(crate::Failure::from(&error), crate::Failure::Busy);
+    assert!(
+        std::iter::successors(
+            Some(&error as &(dyn std::error::Error + 'static)),
+            |source| source.source(),
+        )
+        .any(|source| matches!(
+            source.downcast_ref::<crate::Error>(),
+            Some(crate::Error::Capacity {
+                resource: "shared output",
+                source: datafusion::common::DataFusionError::ResourcesExhausted(_),
+            })
+        )),
+        "{error:?}"
+    );
     assert!(matches!(
         observed.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-    drop(fixture.engine.memory().reserve_output(BYTES * 4 - 1)?);
+    assert_eq!(fixture.engine.store().meta()?, before);
+    assert!(fixture.engine.memory().reserve_output(1).is_err());
+    drop(pressure);
+    drop(fixture.engine.memory().reserve_output(capacity)?);
     Ok(())
 }
 
@@ -128,7 +216,7 @@ async fn guest_scratch_reserved_before_entry() -> TestResult {
     let mut bundle = component("wasm", "evaluate")?;
     bundle.root.revision = "scratch".into();
     bundle.artifacts[0].descriptor.revision = "scratch".into();
-    bundle.artifacts[0].descriptor.exports[0].limits.max_bytes = (BYTES * 4) as u64;
+
     let source = Fixture::sql(format!(
         r#"SELECT * FROM "runtime-fixture"."scratch".evaluate(mode => '{}', amount => 7)"#,
         "echo".repeat(8192),
@@ -287,10 +375,8 @@ async fn guest_drop_keeps_worker_lease() -> TestResult {
             id: "dropped".into(),
             time_utc_ns: 123,
             seed: None,
-            limits: model.limits,
         },
     };
-    let limits = evaluation.context.limits;
     let lease = (
         fixture.engine.memory().reserve_input(BYTES)?,
         fixture.engine.memory().reserve_output(BYTES)?,
@@ -304,7 +390,6 @@ async fn guest_drop_keeps_worker_lease() -> TestResult {
         evaluation,
         AnalysisReadControl::default(),
         &workers,
-        limits,
         None,
         None,
         None,
@@ -344,17 +429,6 @@ async fn guest_defaults_disable_quotas() -> TestResult {
         .execute(&prepared, crate::definition::Invocation::default())
         .await?;
     assert_eq!(
-        result
-            .calls
-            .values()
-            .next()
-            .ok_or("call")?
-            .evaluation()
-            .context
-            .limits,
-        sdk::Limits::default()
-    );
-    assert_eq!(
         result.batches[0]
             .column(0)
             .as_any()
@@ -375,10 +449,6 @@ async fn wasm_preserves_input_capacity() -> TestResult {
         ..Default::default()
     })?;
     let bundle = component("wasm", "accumulate")?;
-    assert_eq!(
-        bundle.artifacts[0].descriptor.exports[0].limits,
-        sdk::Limits::default()
-    );
     fixture.install(&bundle)?;
     let prepared = fixture
         .prepare(&Fixture::sql(
@@ -390,8 +460,6 @@ async fn wasm_preserves_input_capacity() -> TestResult {
         .execute(&prepared, invocation("wasm-output-capacity"))
         .await?;
     let call = result.calls.values().next().ok_or("call")?;
-    assert_eq!(call.evaluation().context.limits, sdk::Limits::default());
-    assert_eq!(call.evaluation().context.limits.max_bytes, u64::MAX);
     assert_eq!(
         call.evaluation().inputs[0]
             .data
@@ -433,14 +501,14 @@ async fn wasm_preserves_input_capacity() -> TestResult {
 
 #[tokio::test]
 #[ignore = "requires source-built native artifacts in ARAPHOR_NATIVE_DIR"]
-async fn native_output_quota_preserves_input() -> TestResult {
+async fn native_capacity_preserves_input() -> TestResult {
     let fixture = Fixture::limits(Limits {
         output_bytes: BYTES,
         output_capacity: Some(BYTES),
         ..Default::default()
     })?;
-    let mut bundle = component("native", "count-input")?;
-    bundle.artifacts[0].descriptor.exports[0].limits.max_bytes = (BYTES * 8) as u64;
+    let bundle = component("native", "count-input")?;
+
     fixture.install(&bundle)?;
     let prepared = fixture
         .prepare(&Fixture::sql(
@@ -453,10 +521,6 @@ async fn native_output_quota_preserves_input() -> TestResult {
         .execute(&prepared, invocation("native-output-quota"))
         .await?;
     let call = result.calls.values().next().ok_or("call")?;
-    assert_eq!(
-        call.evaluation().context.limits.max_bytes,
-        (BYTES * 8) as u64
-    );
     assert_eq!(
         call.evaluation().inputs[0]
             .data

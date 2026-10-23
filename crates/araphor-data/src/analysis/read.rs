@@ -1,6 +1,7 @@
+use std::future::Future as _;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Condvar, Mutex, TryLockError, TryLockResult,
+    Arc, Mutex, TryLockError, TryLockResult,
 };
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,10 @@ use snafu::ResultExt as _;
 use super::{AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_RECORDS};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
+pub(super) mod locks;
+
+use locks::Mutex as WaitMutex;
+
 #[cfg(any(test, feature = "test-fixtures"))]
 type ReadStep = Box<dyn FnOnce() -> Result<()> + Send>;
 
@@ -18,7 +23,7 @@ pub struct AnalysisReadControl {
     deadline: Option<Instant>,
     cancelled: Arc<AtomicBool>,
     cancelled_event: Arc<tokio::sync::Notify>,
-    interrupt: Arc<Mutex<Option<Arc<duckdb::InterruptHandle>>>>,
+    interrupt: Arc<WaitMutex<Option<Arc<duckdb::InterruptHandle>>>>,
     monitor: Arc<ReadMonitor>,
     #[cfg(any(test, feature = "test-fixtures"))]
     read_step: Arc<Mutex<Option<ReadStep>>>,
@@ -42,7 +47,7 @@ impl AnalysisReadControl {
             deadline,
             cancelled: Arc::new(AtomicBool::new(false)),
             cancelled_event: Arc::new(tokio::sync::Notify::new()),
-            interrupt: Arc::new(Mutex::new(None)),
+            interrupt: Arc::new(WaitMutex::new(None)),
             monitor,
             #[cfg(any(test, feature = "test-fixtures"))]
             read_step: Arc::new(Mutex::new(None)),
@@ -182,8 +187,18 @@ impl AnalysisReadControl {
         }
     }
 
-    pub(super) fn lock<T>(&self, mut acquire: impl FnMut() -> TryLockResult<T>) -> Result<T> {
+    fn lock<T>(
+        &self,
+        available: &tokio::sync::Notify,
+        mut acquire: impl FnMut() -> TryLockResult<T>,
+    ) -> Result<T> {
         loop {
+            let available = available.notified();
+            tokio::pin!(available);
+            let _registered = available.as_mut().enable();
+            let cancelled = self.cancelled_event.notified();
+            tokio::pin!(cancelled);
+            let _registered = cancelled.as_mut().enable();
             self.check()?;
             match acquire() {
                 Ok(guard) => {
@@ -200,7 +215,10 @@ impl AnalysisReadControl {
                     {
                         let _sent = signal.send(());
                     }
-                    std::thread::sleep(Duration::from_millis(1));
+                    locks::wait(self.deadline, |context| {
+                        available.as_mut().poll(context).is_ready()
+                            || cancelled.as_mut().poll(context).is_ready()
+                    });
                 }
                 Err(TryLockError::Poisoned(_)) => return Err(Self::lock_error()),
             }
@@ -290,7 +308,7 @@ impl AnalysisReadControl {
         read: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
         self.check()?;
-        let mut slot = self.lock(|| self.interrupt.try_lock())?;
+        let mut slot = self.interrupt.until(self)?;
         if slot.is_some() {
             return crate::AnalysisBusySnafu {
                 resource: "read control",
@@ -314,8 +332,8 @@ impl AnalysisReadControl {
 
 #[derive(Default)]
 pub(super) struct ReadMonitor {
-    state: Arc<(Mutex<ReadDeadline>, Condvar)>,
-    worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    state: Arc<(WaitMutex<ReadDeadline>, tokio::sync::Notify)>,
+    worker: WaitMutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 #[derive(Default)]
@@ -331,8 +349,8 @@ impl ReadMonitor {
         deadline: Instant,
         interrupt: Arc<duckdb::InterruptHandle>,
     ) -> Result<ReadStage<'_>> {
-        let mut worker = control.lock(|| self.worker.try_lock())?;
-        let mut state = control.lock(|| self.state.0.try_lock())?;
+        let mut worker = self.worker.until(control)?;
+        let mut state = self.state.0.until(control)?;
         if state.active.is_some() {
             return crate::AnalysisBusySnafu {
                 resource: "read control",
@@ -365,35 +383,32 @@ impl ReadMonitor {
             );
         }
         state.active = Some((deadline, interrupt));
-        self.state.1.notify_one();
+        self.state.1.notify_waiters();
         Ok(ReadStage(self))
     }
 
-    fn run(shared: &(Mutex<ReadDeadline>, Condvar)) {
-        let Ok(mut state) = shared.0.lock() else {
-            return;
-        };
-        while !state.stopped {
-            let next = if let Some((deadline, interrupt)) = &state.active {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                let wait = if remaining.is_zero() {
-                    interrupt.interrupt();
-                    Duration::from_millis(1)
-                } else {
-                    remaining
-                };
-                shared
-                    .1
-                    .wait_timeout(state, wait)
-                    .ok()
-                    .map(|(state, _)| state)
-            } else {
-                shared.1.wait(state).ok()
-            };
-            let Some(next) = next else {
+    fn run(shared: &(WaitMutex<ReadDeadline>, tokio::sync::Notify)) {
+        loop {
+            let Ok(state) = shared.0.lock() else {
                 return;
             };
-            state = next;
+            let changed = shared.1.notified();
+            tokio::pin!(changed);
+            let _registered = changed.as_mut().enable();
+            if state.stopped {
+                return;
+            }
+            let next = state.active.as_ref().map(|(deadline, interrupt)| {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    interrupt.interrupt();
+                    Instant::now() + Duration::from_millis(1)
+                } else {
+                    *deadline
+                }
+            });
+            drop(state);
+            locks::wait(next, |context| changed.as_mut().poll(context).is_ready());
         }
     }
 }
@@ -403,7 +418,7 @@ impl Drop for ReadMonitor {
         if let Ok(mut state) = self.state.0.lock() {
             state.stopped = true;
         }
-        self.state.1.notify_one();
+        self.state.1.notify_waiters();
         if let Ok(worker) = self.worker.get_mut() {
             if let Some(worker) = worker.take() {
                 let _joined = worker.join();
@@ -428,7 +443,7 @@ impl Drop for ReadStage<'_> {
     fn drop(&mut self) {
         if let Ok(mut state) = self.0.state.0.lock() {
             state.active = None;
-            self.0.state.1.notify_one();
+            self.0.state.1.notify_waiters();
         }
     }
 }

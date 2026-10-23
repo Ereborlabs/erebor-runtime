@@ -15,9 +15,11 @@ mod reactive;
 mod routing;
 mod store;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use reactive::NotificationUpdate;
+
+type Effect<'a> = dyn FnMut(&NotificationDeliveryV1) -> Result<NotificationSinkResultV1> + 'a;
 
 pub struct NotificationRouter {
     store: Arc<AnalysisStore>,

@@ -74,7 +74,7 @@ impl AnalysisStore {
             let producer = Self::managed_instance_from(reader, selection.tenant_id, instance)?
                 .ok_or_else(|| Code::Missing.error("managed input instance"))?;
             producer.grant.permitted_by(selection)?;
-            let descriptor = Self::validate_managed_header(
+            let (descriptor, _) = Self::validate_managed_header(
                 reader, selection.tenant_id, &reference.result_id, &record, revision,
             )?;
             if record.instance != instance || revision != reference.commit_revision {
@@ -134,25 +134,20 @@ impl AnalysisStore {
         {
             return Err(Code::Invalid.error("captured managed input identity"));
         }
-        let limits = record.context.context.limits;
         let mut bytes = 0usize;
         for data in packet.datasets.iter().chain(record.parameters.iter()) {
             control.check()?;
             bytes = bytes
                 .checked_add(
-                    sdk::wire::Dataset::decoding_bytes(&data.arrow_ipc, limits)
+                    sdk::wire::Dataset::decoding_bytes(&data.arrow_ipc)
                         .context(crate::AnalysisContractSnafu)?,
                 )
                 .ok_or_else(|| Code::Limit.error("managed input decode"))?;
         }
         for data in packet.checkpoint.iter().flat_map(|state| &state.datasets) {
-            let checkpoint = sdk::Limits {
-                max_bytes: limits.max_checkpoint_bytes,
-                ..limits
-            };
             bytes = bytes
                 .checked_add(
-                    sdk::wire::Dataset::decoding_bytes(&data.arrow_ipc, checkpoint)
+                    sdk::wire::Dataset::decoding_bytes(&data.arrow_ipc)
                         .context(crate::AnalysisContractSnafu)?,
                 )
                 .ok_or_else(|| Code::Limit.error("managed input decode"))?;
@@ -160,13 +155,13 @@ impl AnalysisStore {
         for reason in &packet.reasons {
             bytes = bytes
                 .checked_add(
-                    sdk::wire::Dataset::decoding_bytes(&reason.details, limits)
+                    sdk::wire::Dataset::decoding_bytes(&reason.details)
                         .context(crate::AnalysisContractSnafu)?,
                 )
                 .ok_or_else(|| Code::Limit.error("managed input decode"))?;
         }
         output.charge(bytes)?;
-        let (mut decoded, _) = Self::validate_managed_record(
+        let mut decoded = Self::validate_managed_record(
             reader,
             reference.tenant,
             &reference.result.result_id,

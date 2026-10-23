@@ -20,7 +20,11 @@ impl Capture<'_> {
         );
         schema graph_state_fields;
         row(self, "graph_state", budget);
-        setup { let source = &receipt.identity; }
+        setup {
+            let source = &receipt.identity;
+            let source_key = source.key();
+            budget.charge(source_key.capacity())?;
+        }
         fields {
             tenant_id => Binary(false): Some(source.tenant_id.as_slice()),
             node_id => Utf8(false): Some(source.node_id.as_str()),
@@ -28,6 +32,7 @@ impl Capture<'_> {
             label_epoch => UInt64(false): Some(source.label_epoch),
             source_id => Binary(false): Some(source.source_id.as_slice()),
             source_epoch => UInt64(false): Some(source.source_epoch),
+            source_key => Binary(false): Some(source_key.as_slice()),
             cpu_id => UInt32(false): Some(receipt.cpu_id),
             contiguous_cursor => UInt64(false): Some(receipt.contiguous_cursor),
             retained_floor => UInt64(false): Some(receipt.retained_floor),

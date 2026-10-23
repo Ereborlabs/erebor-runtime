@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 
 use araphor_data::{
@@ -5,10 +6,11 @@ use araphor_data::{
 };
 use datafusion::logical_expr::LogicalPlan;
 use serde::{Deserialize, Serialize};
+use snafu::ResultExt as _;
 
-use super::Operation;
+use super::{Operation, Window, WindowRange, WindowSource};
 use crate::stream::physical::Fingerprint;
-use crate::{InvalidSnafu, Result};
+use crate::{InvalidSnafu, Result, SqlSnafu};
 
 #[cfg(test)]
 mod tests;
@@ -25,24 +27,22 @@ pub struct Cursor {
     position: StorePositionV1,
     revision: u64,
     evaluated: u64,
+    pub(crate) windows: Vec<WindowRange>,
+    pub(crate) completed_windows: Vec<WindowRange>,
 }
 
 impl Cursor {
-    const BYTES: usize = 1024;
-
     pub fn encode(&self) -> Result<Vec<u8>> {
-        let mut buffer = araphor_analysis_sdk::wire::BoundedBuffer::new(Self::BYTES as u64);
-        serde_json::to_writer(&mut buffer, self).map_err(|_| {
+        serde_json::to_vec(self).map_err(|_| {
             InvalidSnafu {
                 field: "cursor encoding",
             }
             .build()
-        })?;
-        Ok(buffer.finish())
+        })
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.is_empty() || bytes.len() > Self::BYTES {
+        if bytes.is_empty() {
             return InvalidSnafu {
                 field: "cursor size",
             }
@@ -54,13 +54,37 @@ impl Cursor {
             }
             .build()
         })?;
-        if cursor.version != 1 || cursor.position.commit_revision > cursor.revision {
+        cursor.check_fields()?;
+        Ok(cursor)
+    }
+
+    fn check_fields(&self) -> Result<()> {
+        let mut sources = BTreeSet::new();
+        let mut completed = BTreeSet::new();
+        if self.version != 1
+            || self.position.commit_revision > self.revision
+            || self.windows.iter().any(|window| {
+                !window.active
+                    || window.start_utc_ns >= window.end_utc_ns
+                    || window.end_utc_ns <= 0
+                    || !sources.insert(window.source)
+            })
+            || self.completed_windows.iter().any(|window| {
+                !window.active
+                    || !completed.insert(window.source)
+                    || self
+                        .completed_windows
+                        .first()
+                        .is_none_or(|first| window.end_utc_ns != first.end_utc_ns)
+                    || !self.windows.iter().any(|saved| window.same_interval(saved))
+            })
+        {
             return InvalidSnafu {
                 field: "cursor fields",
             }
             .fail();
         }
-        Ok(cursor)
+        Ok(())
     }
 
     pub fn position(&self) -> StorePositionV1 {
@@ -93,10 +117,73 @@ impl Cursor {
             position,
             revision: meta.commit_revision,
             evaluated,
+            windows: Vec::new(),
+            completed_windows: Vec::new(),
         }
     }
 
+    pub(crate) fn set_windows(&mut self, windows: &[WindowRange], completed: &[WindowRange]) {
+        self.windows = windows
+            .iter()
+            .filter(|window| window.active)
+            .chain(completed)
+            .copied()
+            .collect();
+        self.windows.sort_by_key(|window| window.source);
+        self.windows
+            .dedup_by(|next, previous| next.same_interval(previous));
+        self.completed_windows = completed.to_vec();
+    }
+
+    pub(crate) fn check_windows(&self, plan: &LogicalPlan, query: Option<&Window>) -> Result<()> {
+        for saved in &self.windows {
+            let now = saved
+                .end_utc_ns
+                .checked_sub(1)
+                .and_then(|now| u64::try_from(now).ok())
+                .ok_or_else(|| {
+                    InvalidSnafu {
+                        field: "cursor window",
+                    }
+                    .build()
+                })?;
+            let expected = match saved.source {
+                WindowSource::Query => query
+                    .map(|window| window.fixed_range(now))
+                    .transpose()
+                    .context(SqlSnafu)?
+                    .flatten(),
+                WindowSource::Input { call, slot } => {
+                    let mut expected = None;
+                    crate::definition::PackageCall::any(plan, &mut |candidate| {
+                        if candidate.id == call {
+                            expected = candidate
+                                .input_scope
+                                .window(slot)
+                                .flatten()
+                                .map(|window| window.fixed_range(now))
+                                .transpose()?
+                                .flatten();
+                            return Ok(true);
+                        }
+                        Ok(false)
+                    })
+                    .context(SqlSnafu)?;
+                    expected
+                }
+            };
+            if expected != Some((saved.start_utc_ns, saved.end_utc_ns)) {
+                return InvalidSnafu {
+                    field: "cursor window",
+                }
+                .fail();
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn check_binding(&self, binding: &[u8; 32], operation: Operation) -> Result<()> {
+        self.check_fields()?;
         if &self.binding != binding || self.operation != operation {
             return InvalidSnafu {
                 field: "cursor binding",

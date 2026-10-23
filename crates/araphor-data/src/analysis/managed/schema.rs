@@ -8,11 +8,16 @@ use crate::{AnalysisDatabaseSnafu, Result};
 
 impl AnalysisStore {
     pub(in crate::analysis) const MANAGED_SCHEMA: &'static str = "
+        CREATE TABLE managed_versions (
+            tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL,
+            generation UBIGINT NOT NULL, spec BLOB NOT NULL, scope BLOB NOT NULL,
+            PRIMARY KEY (tenant_id, instance_id, generation)
+        );
         CREATE TABLE managed_instances (
-            tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL, spec BLOB NOT NULL,
+            tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL,
             authority BLOB NOT NULL,
             generation UBIGINT NOT NULL, progress UBIGINT NOT NULL,
-            running BOOLEAN NOT NULL, lifecycle UBIGINT NOT NULL, failure BLOB,
+            running BOOLEAN NOT NULL, removed BOOLEAN NOT NULL, lifecycle UBIGINT NOT NULL, failure BLOB,
             PRIMARY KEY (tenant_id, instance_id)
         );
         CREATE TABLE managed_calls (
@@ -22,10 +27,10 @@ impl AnalysisStore {
         );
         CREATE TABLE managed_attempts (
             tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL, attempt_id VARCHAR NOT NULL,
-            contract BLOB NOT NULL, completed UBIGINT NOT NULL,
+            generation UBIGINT NOT NULL, contract BLOB NOT NULL, completed UBIGINT NOT NULL,
             PRIMARY KEY (tenant_id, instance_id, attempt_id)
         );
-        CREATE INDEX managed_completion ON managed_attempts (tenant_id, instance_id, completed);
+        CREATE INDEX managed_completion ON managed_attempts (tenant_id, instance_id, generation, completed);
         CREATE TABLE managed_edges (
             tenant_id BLOB NOT NULL, result_id VARCHAR NOT NULL, dependency_id VARCHAR NOT NULL,
             commit_revision UBIGINT NOT NULL,
@@ -37,7 +42,9 @@ impl AnalysisStore {
         );";
 
     pub(in crate::analysis) const MANAGED_CHARGES: &'static str = "
-        SELECT tenant_id, 256 + octet_length(encode(instance_id)) + octet_length(spec)
+        SELECT tenant_id, 256 + octet_length(encode(instance_id)) + octet_length(spec) + octet_length(scope)
+            AS bytes FROM managed_versions
+        UNION ALL SELECT tenant_id, 256 + octet_length(encode(instance_id))
             + octet_length(authority)
             + COALESCE(octet_length(failure), 0) AS bytes
             FROM managed_instances
@@ -63,6 +70,37 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read managed recovery revision",
             })?;
+        let mut versions = reader
+            .prepare("SELECT tenant_id, instance_id, generation FROM managed_versions")
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare managed version recovery",
+            })?;
+        let versions = versions
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u64>(2)?,
+                ))
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read managed version recovery",
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode managed version recovery",
+            })?;
+        for (tenant, id, generation) in versions {
+            let tenant = tenant
+                .try_into()
+                .map_err(|_| crate::PackageErrorCodeV1::Invalid.error("managed version tenant"))?;
+            if generation == 0 || generation > head {
+                return Self::reject_path(root, "the managed version revision is invalid");
+            }
+            let spec = Self::managed_version_from(reader, tenant, &id, generation)?;
+            Self::check_managed_images(reader, &spec)?;
+            Self::managed_scope_from(reader, tenant, &id, generation)?;
+        }
         let mut statement = reader
             .prepare("SELECT tenant_id, instance_id FROM managed_instances")
             .context(AnalysisDatabaseSnafu {
@@ -87,6 +125,11 @@ impl AnalysisStore {
                 crate::PackageErrorCodeV1::Missing.error("managed recovery instance")
             })?;
             instance.validate()?;
+            if Self::managed_scope_from(reader, tenant, &id, instance.generation)?
+                != instance.grant.selection
+            {
+                return Self::reject_path(root, "the managed authority scope differs");
+            }
             if instance.generation == 0
                 || instance.generation > head
                 || instance.progress > head
@@ -216,22 +259,27 @@ impl AnalysisStore {
                 return Self::reject_path(root, "the managed frontier receipt differs");
             }
             let capture = &attempt.capture;
+            let program =
+                Self::managed_version_from(reader, tenant, &instance, capture.generation)?;
+            let previous =
+                Self::managed_version_from(reader, tenant, &instance, capture.expected_generation)?;
             capture.grant.validate()?;
             if capture.store != meta.store_uuid
                 || capture.schema != meta.schema_version
                 || capture.recovery == 0
                 || capture.recovery > meta.recovery_epoch
-                || capture.generation != owner.generation
-                || capture.grant.selection != owner.grant.selection
+                || capture.generation > capture.revision
+                || capture.grant.selection
+                    != Self::managed_scope_from(reader, tenant, &instance, capture.generation)?
                 || (capture.lifecycle == owner.lifecycle && capture.grant != owner.grant)
-                || capture.lifecycle < owner.generation
+                || capture.lifecycle < capture.expected_generation
                 || capture.lifecycle > owner.lifecycle
                 || capture.lifecycle > capture.revision
-                || (capture.lifecycle == owner.generation && capture.running)
+                || (capture.lifecycle == capture.expected_generation && capture.running)
                 || (capture.lifecycle == owner.lifecycle && capture.running != owner.running)
                 || capture.progress > capture.completed
                 || capture.completed > capture.revision
-                || capture.prior.keys().ne(owner.spec.manifest.calls.keys())
+                || capture.prior.keys().ne(program.manifest.calls.keys())
                 || attempt.request.id.is_empty()
                 || attempt.request.time_utc_ns == 0
                 || i64::try_from(attempt.request.time_utc_ns).is_err()
@@ -279,7 +327,9 @@ impl AnalysisStore {
                     let (record, _, revision) =
                         Self::managed_record_from(reader, tenant, &reference.result_id)?;
                     if record.call != *call
+                        || !program.same_call(&previous, *call)
                         || record.instance != instance
+                        || program.manifest.calls.get(call) != Some(&record.declaration)
                         || revision != reference.commit_revision
                         || revision > capture.progress
                     {
@@ -288,8 +338,8 @@ impl AnalysisStore {
                 }
             }
             let prior_completed: u64 = reader.query_row(
-                "SELECT COALESCE(MAX(completed), 0) FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND completed <= ?",
-                params![tenant.as_slice(), instance, capture.revision], |row| row.get(0),
+                "SELECT COALESCE(MAX(completed), 0) FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND generation = ? AND completed <= ?",
+                params![tenant.as_slice(), instance, capture.expected_generation, capture.revision], |row| row.get(0),
             ).context(AnalysisDatabaseSnafu { operation: "validate captured managed completion" })?;
             if capture.completed != prior_completed {
                 return Self::reject_path(root, "the captured managed completion is invalid");
@@ -302,6 +352,8 @@ impl AnalysisStore {
             }
             if let Some(terminal) = &attempt.terminal {
                 if matches!(terminal.exit, super::ManagedExit::Failed(_))
+                    && capture.generation == owner.generation
+                    && capture.expected_generation == capture.generation
                     && capture.progress == owner.progress
                     && (capture.lifecycle == owner.lifecycle
                         || terminal.suspended && terminal.revision == owner.lifecycle)
@@ -327,19 +379,29 @@ impl AnalysisStore {
                 }
             }
             if let Some(receipt) = &attempt.receipt {
-                if let Some((_, expected)) = progress.get_mut(&(tenant, instance.clone())) {
-                    *expected = (*expected).max(receipt.commit_revision);
+                if capture.generation == owner.generation {
+                    if let Some((_, expected)) = progress.get_mut(&(tenant, instance.clone())) {
+                        *expected = (*expected).max(receipt.commit_revision);
+                    }
                 }
-                for (call, reference) in &receipt.results {
-                    let Some((_, expected)) = heads.get_mut(&(tenant, instance.clone(), *call))
-                    else {
-                        return Self::reject_path(root, "the managed receipt call is undeclared");
-                    };
-                    if expected
-                        .as_ref()
-                        .is_none_or(|prior| prior.commit_revision < reference.commit_revision)
-                    {
-                        *expected = Some(reference.clone());
+                if receipt.commit_revision == owner.progress && !owner.removed {
+                    if capture.generation != owner.generation {
+                        return Self::reject_path(
+                            root,
+                            "the current managed program differs from its progress",
+                        );
+                    }
+                    for call in owner.spec.manifest.calls.keys() {
+                        let expected = heads
+                            .get_mut(&(tenant, instance.clone(), *call))
+                            .ok_or_else(|| {
+                                crate::PackageErrorCodeV1::Missing.error("managed current head")
+                            })?;
+                        expected.1 = receipt
+                            .results
+                            .get(call)
+                            .cloned()
+                            .or_else(|| capture.prior.get(call).cloned().flatten());
                     }
                 }
                 if receipt.instance != instance
@@ -355,31 +417,17 @@ impl AnalysisStore {
                     || revision != receipt.commit_revision
                     || step.instance != instance
                     || step.attempt != id
-                    || step.witnesses != attempt.capture.witnesses
-                    || step.contexts != attempt.capture.contexts
-                    || Self::decode_selected(&selected)?.rows() != step.rows
                 {
                     return Self::reject_path(root, "the managed selected relation differs");
                 }
-                let mut dependencies = attempt.capture.dependencies.clone();
-                dependencies.extend(receipt.results.values().cloned());
-                dependencies.sort_by(|left, right| left.result_id.cmp(&right.result_id));
-                dependencies.dedup();
-                if step.dependencies != dependencies {
-                    return Self::reject_path(root, "the managed selected dependencies differ");
-                }
-                for (call, reference) in &receipt.results {
-                    let (record, _, revision) =
-                        Self::managed_record_from(reader, tenant, &reference.result_id)?;
-                    if revision != reference.commit_revision
-                        || revision != receipt.commit_revision
-                        || record.call != *call
-                        || record.attempt != id
-                        || record.instance != instance
-                    {
-                        return Self::reject_path(root, "the managed result receipt differs");
-                    }
-                }
+                let (_, schema) = Self::validate_selected_header(
+                    reader,
+                    tenant,
+                    &receipt.selected.result_id,
+                    &step,
+                    revision,
+                )?;
+                Self::decode_selected_record(&selected, &schema, step.rows)?;
             }
         }
         if progress
@@ -414,19 +462,23 @@ impl AnalysisStore {
             if processor == "managed-package-v1" {
                 let (record, output, saved) = Self::managed_record_from(reader, tenant, &id)?;
                 Self::validate_managed_record(reader, tenant, &id, &record, &output, saved)?;
+                let mut owner = Self::managed_instance_from(reader, tenant, &record.instance)?
+                    .ok_or_else(|| {
+                        crate::PackageErrorCodeV1::Missing.error("managed evaluation owner")
+                    })?;
+                let attempt =
+                    Self::managed_attempt_from(reader, tenant, &record.instance, &record.attempt)?
+                        .ok_or_else(|| {
+                            crate::PackageErrorCodeV1::Missing.error("managed evaluation attempt")
+                        })?;
+                owner.grant = attempt.capture.grant;
+                let control = crate::AnalysisReadControl::default();
+                Self::saved_evaluation_from(reader, &owner, &id, &control)?.decode(&control)?;
             } else {
                 let (step, packet, _) = Self::managed_step_from(reader, tenant, &id)?;
-                let attempt =
-                    Self::managed_attempt_from(reader, tenant, &step.instance, &step.attempt)?
-                        .ok_or_else(|| {
-                            crate::PackageErrorCodeV1::Missing.error("managed selected attempt")
-                        })?;
-                if attempt.receipt.as_ref().is_none_or(|receipt| {
-                    receipt.selected.result_id != id || receipt.selected.commit_revision != revision
-                }) || Self::decode_selected(&packet)?.rows() != step.rows
-                {
-                    return Self::reject_path(root, "the managed selected owner is invalid");
-                }
+                let (_, schema) =
+                    Self::validate_selected_header(reader, tenant, &id, &step, revision)?;
+                Self::decode_selected_record(&packet, &schema, step.rows)?;
             }
         }
         Ok(())

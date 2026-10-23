@@ -16,15 +16,19 @@ use crate::{
     PackageImplementationV1, SqlModelV1, SqlReasonV1,
 };
 
+mod destination;
 mod history;
 mod input;
 mod lifecycle;
 mod memory;
 mod metadata;
 mod output;
+mod removal;
 mod renewal;
+mod replay;
 mod status;
 mod terminal;
+mod version;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -45,6 +49,18 @@ impl Fixture {
     }
 
     fn admit(store: &AnalysisStore) -> TestResult<Self> {
+        Self::admit_inputs(store, false)
+    }
+
+    fn admit_inputs(store: &AnalysisStore, extra: bool) -> TestResult<Self> {
+        Self::admit_scope(store, extra, AnalysisSelectionV1::new([1; 16], Vec::new()))
+    }
+
+    fn admit_scope(
+        store: &AnalysisStore,
+        extra: bool,
+        selection: AnalysisSelectionV1,
+    ) -> TestResult<Self> {
         let scalar = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]);
         let mut rows = sdk::Port::new("rows", scalar.clone());
         rows.evidence_required = true;
@@ -53,6 +69,11 @@ impl Fixture {
             vec![sdk::Port::new("source", scalar.clone())],
             vec![rows],
         );
+        if extra {
+            model
+                .inputs
+                .push(sdk::Port::new("aux", scalar.clone()).into());
+        }
         model.parameters = sdk::Schema::new(vec![sdk::Field::new(
             "increment",
             sdk::DataType::UInt64,
@@ -86,6 +107,14 @@ impl Fixture {
             digest: image.digest()?,
         };
         let sql = "SELECT * FROM \"managed-fixture\".\"r1\".count(source => (SELECT 1::BIGINT UNSIGNED AS value), increment => 2) a CROSS JOIN \"managed-fixture\".\"r1\".count(source => (SELECT 1::BIGINT UNSIGNED AS value), increment => 3) b".to_owned();
+        let sql = if extra {
+            sql.replace(
+                "), increment",
+                "), aux => (SELECT 0::BIGINT UNSIGNED AS value WHERE false), increment",
+            )
+        } else {
+            sql
+        };
         let definition = ResolvedDefinition::new(
             Definition {
                 name: "independent-calls".into(),
@@ -101,7 +130,6 @@ impl Fixture {
             vec![pin.clone()],
         )?;
         store.admit_definition([1; 16], &definition, || Ok(()))?;
-        let selection = AnalysisSelectionV1::new([1; 16], Vec::new());
         let grant = PackageGrantV1 {
             principal: "fixture".into(),
             revision: 1,
@@ -109,9 +137,14 @@ impl Fixture {
             expires_utc_ns: None,
             authorization_id: Some("definition-grant".into()),
         };
-        let spec = ManagedSpec { tenant: [1; 16], id: "counter".into(), manifest: ManagedManifest {
-            format: 1, planner: "datafusion-53/sql-call-1".into(), definition: definition.digest()?, calls: [(10, 2), (11, 3)].into_iter().map(|(id, increment)| (id, ManagedCall {
-                image: pin.clone(), package: image.root.clone(), export: "count".into(), target: "sql".into(), artifact: None, arguments: vec![format!("source => (SELECT 1::BIGINT UNSIGNED AS value), increment => {increment}")], dependencies: BTreeSet::new(),
+        let auxiliary = if extra {
+            ", aux => (SELECT 0::BIGINT UNSIGNED AS value WHERE false)"
+        } else {
+            ""
+        };
+        let spec = ManagedSpec { destination: crate::ManagedDestination::Selected, tenant: [1; 16], id: "counter".into(), manifest: ManagedManifest {
+            format: 1, planner: "datafusion-53/sql-call-1".into(), definition: definition.digest()?, selected_schema: model.outputs[0].schema.clone(), calls: [(10, 2), (11, 3)].into_iter().map(|(id, increment)| (id, ManagedCall {
+                image: pin.clone(), package: image.root.clone(), export: "count".into(), target: "sql".into(), artifact: None, arguments: vec![format!("source => (SELECT 1::BIGINT UNSIGNED AS value){auxiliary}, increment => {increment}")], dependencies: BTreeSet::new(),
             })).collect(),
         }, definition };
         let instance = store.admit_managed(&spec, &grant, || Ok(()))?;
@@ -130,6 +163,7 @@ impl Fixture {
         let page = store.read_managed_tables(
             &instance.grant.selection,
             &ManagedRead {
+                expected: None,
                 instance: instance.clone(),
                 rebuild,
                 completed: None,
@@ -171,7 +205,24 @@ impl Fixture {
             },
         };
         let parameters = Self::batch(&self.model.parameters, if call == 10 { 2 } else { 3 })?;
-        let inputs = vec![input];
+        let mut inputs = vec![input];
+        if self.model.inputs.len() > 1 {
+            inputs.push(sdk::Input {
+                data: sdk::Dataset {
+                    name: "aux".into(),
+                    batches: Vec::new(),
+                },
+                revision: sdk::Revision {
+                    owner: "fixture".into(),
+                    id: format!("aux-{call}"),
+                    window: None,
+                },
+                coverage: sdk::Coverage {
+                    state: sdk::CoverageState::Complete,
+                    limits: Vec::new(),
+                },
+            });
+        }
         let checkpoint = captured
             .and_then(|capture| capture.prior(call))
             .map(|prior| prior.checkpoint(&self.model, &inputs, Some(&parameters), request.rebuild))
@@ -186,7 +237,6 @@ impl Fixture {
                 id: request.id.clone(),
                 time_utc_ns: request.time_utc_ns as i64,
                 seed: request.seed,
-                limits: self.model.limits,
             },
         })
     }
@@ -245,11 +295,23 @@ impl Fixture {
         evaluations: &[sdk::Evaluation],
         outputs: &[sdk::Output],
     ) -> TestResult<ManagedReceipt> {
+        self.publish_checked(store, attempt, evaluations, outputs, || Ok(()))
+    }
+
+    fn publish_checked(
+        &self,
+        store: &AnalysisStore,
+        attempt: &ManagedAttempt,
+        evaluations: &[sdk::Evaluation],
+        outputs: &[sdk::Output],
+        check: impl FnOnce() -> crate::Result<()>,
+    ) -> TestResult<ManagedReceipt> {
         let returns = evaluations
             .iter()
             .zip(outputs)
             .enumerate()
             .map(|(index, (evaluation, output))| ManagedReturn {
+                retained: None,
                 call: 10 + index as u64,
                 evaluation,
                 output,
@@ -266,9 +328,8 @@ impl Fixture {
                 returns: &returns,
                 selected: &selected,
                 selected_schema: &self.model.outputs[0].schema,
-                selected_limits: self.model.limits,
             },
-            || Ok(()),
+            check,
         )?)
     }
 }
@@ -285,20 +346,17 @@ fn request(id: &str) -> ManagedRequest {
 }
 
 #[test]
-fn retained_limits_keep_descriptor() -> TestResult {
+fn retained_outputs_keep_descriptor() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit(&store)?;
     let captured = fixture.capture(&store, false)?;
-    let request = request("limited-writer");
+    let request = request("retained-writer");
     let attempt = store.register_managed_attempt(&captured, &request, || Ok(()))?;
-    let mut evaluations = [
+    let evaluations = [
         fixture.evaluation(&request, 10, None)?,
         fixture.evaluation(&request, 11, None)?,
     ];
-    for evaluation in &mut evaluations {
-        evaluation.context.limits.max_rows = 2;
-    }
     let receipt = fixture.publish(
         &store,
         &attempt,
@@ -312,9 +370,11 @@ fn retained_limits_keep_descriptor() -> TestResult {
             10,
             &AnalysisReadControl::default(),
         )?;
-        assert_eq!(result.context.context.limits.max_rows, 2);
-        assert_eq!(result.limits, fixture.model.limits);
-        assert!(result.limits.max_rows > 2);
+        assert_eq!(result.context.context.id, request.id);
+        assert_eq!(
+            result.output.datasets[0].batches[0].schema().as_ref(),
+            &fixture.model.outputs[0].schema
+        );
     }
     Ok(())
 }
@@ -471,7 +531,43 @@ fn managed_calls_commit_atomically() -> TestResult {
     );
     let (headers, payloads, activation): (u64, u64, u64) = store.read_snapshot(|reader| reader.query_row(
         "SELECT (SELECT count(*) FROM analysis_results WHERE processor_id LIKE 'managed-%' AND decode(body) LIKE '%\"arrow_ipc\":[]%'), (SELECT count(*) FROM managed_arrow), (SELECT count(*) FROM package_activations)", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).context(crate::AnalysisDatabaseSnafu { operation: "read managed BLOB qualification" }))?;
-    assert_eq!((headers, payloads, activation), (3, 9, 0));
+    assert_eq!((headers, payloads, activation), (3, 11, 0));
+    let roles = store.read_snapshot(|reader| {
+        let mut statement = reader
+            .prepare(
+                "SELECT role, count(*), max(slot) FROM managed_arrow GROUP BY role ORDER BY role",
+            )
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "prepare managed Arrow roles",
+            })?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u64>(2)?,
+                ))
+            })
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "read managed Arrow roles",
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "decode managed Arrow roles",
+            })?;
+        Ok(rows)
+    })?;
+    assert_eq!(
+        roles,
+        vec![
+            ("checkpoint".into(), 2, 0),
+            ("input".into(), 2, 0),
+            ("output".into(), 2, 0),
+            ("parameters".into(), 2, 0),
+            ("reason".into(), 2, 0),
+            ("selected".into(), 1, 0),
+        ]
+    );
     let second = request("step-2");
     let second_attempt = store.register_managed_attempt(&next, &second, || Ok(()))?;
     let second_evaluations = [
@@ -643,11 +739,13 @@ fn managed_failure_is_atomic() -> TestResult {
     outputs[1].evidence[0].input.row = 0;
     let returns = [
         ManagedReturn {
+            retained: None,
             call: 10,
             evaluation: &evaluations[0],
             output: &outputs[0],
         },
         ManagedReturn {
+            retained: None,
             call: 11,
             evaluation: &evaluations[1],
             output: &outputs[1],
@@ -663,7 +761,6 @@ fn managed_failure_is_atomic() -> TestResult {
         returns: &returns,
         selected: &selected,
         selected_schema: &fixture.model.outputs[0].schema,
-        selected_limits: fixture.model.limits,
     };
     let mut checked = 0;
     assert!(matches!(
@@ -887,6 +984,7 @@ fn managed_sql_checks_authority() -> TestResult {
         authorization_id: Some("definition-grant".into()),
     };
     let spec = ManagedSpec {
+        destination: crate::ManagedDestination::Selected,
         tenant: [1; 16],
         id: "pure".into(),
         manifest: ManagedManifest {
@@ -894,6 +992,11 @@ fn managed_sql_checks_authority() -> TestResult {
             planner: "datafusion-53/sql-call-1".into(),
             definition: definition.digest()?,
             calls: BTreeMap::new(),
+            selected_schema: sdk::Schema::new(vec![sdk::Field::new(
+                "value",
+                sdk::DataType::UInt64,
+                false,
+            )]),
         },
         definition,
     };
@@ -915,6 +1018,7 @@ fn managed_sql_checks_authority() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                expected: None,
                 instance,
                 rebuild: false,
                 completed: None,
@@ -946,7 +1050,6 @@ fn managed_sql_checks_authority() -> TestResult {
         returns: &[],
         selected: &selected,
         selected_schema: &schema,
-        selected_limits: sdk::Limits::default(),
     };
     let before = store.meta()?;
     assert!(store
@@ -1168,18 +1271,6 @@ fn managed_native_selected_roundtrip() -> TestResult {
         expires_utc_ns: None,
         authorization_id: Some("definition-grant".into()),
     };
-    let spec = ManagedSpec {
-        tenant: [1; 16],
-        id: "native-selected".into(),
-        manifest: ManagedManifest {
-            format: 1,
-            planner: "datafusion-53/sql-call-1".into(),
-            definition: definition.digest()?,
-            calls: BTreeMap::new(),
-        },
-        definition,
-    };
-    store.admit_managed(&spec, &grant, || Ok(()))?;
     let dictionary = DictionaryArray::<Int8Type>::try_new(
         Int8Array::from(vec![0, 1, 0]),
         Arc::new(StringArray::from(vec!["one", "two"])),
@@ -1206,6 +1297,20 @@ fn managed_native_selected_roundtrip() -> TestResult {
     let scalar = Fixture::batch(&scalar_schema, 1)?;
     let mut receipts = Vec::new();
     for (index, batch) in [dictionary, map, empty, scalar].into_iter().enumerate() {
+        let spec = ManagedSpec {
+            destination: crate::ManagedDestination::Selected,
+            tenant: [1; 16],
+            id: format!("native-selected-{index}"),
+            manifest: ManagedManifest {
+                format: 1,
+                planner: "datafusion-53/sql-call-1".into(),
+                definition: definition.digest()?,
+                calls: BTreeMap::new(),
+                selected_schema: batch.schema_ref().as_ref().clone(),
+            },
+            definition: definition.clone(),
+        };
+        store.admit_managed(&spec, &grant, || Ok(()))?;
         let selected = sdk::Dataset {
             name: "selected".into(),
             batches: vec![batch.clone()],
@@ -1218,6 +1323,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
             .read_managed_tables(
                 &grant.selection,
                 &ManagedRead {
+                    expected: None,
                     instance,
                     rebuild: false,
                     completed: None,
@@ -1242,10 +1348,6 @@ fn managed_native_selected_roundtrip() -> TestResult {
                 returns: &[],
                 selected: &selected,
                 selected_schema: batch.schema_ref(),
-                selected_limits: sdk::Limits {
-                    max_bytes: batch.get_array_memory_size() as u64,
-                    ..sdk::Limits::default()
-                },
             },
             || Ok(()),
         )?;
@@ -1259,18 +1361,32 @@ fn managed_native_selected_roundtrip() -> TestResult {
             .ok_or("native selected result absent")?;
         assert_eq!(retained.data.batches, selected.batches);
         assert_eq!(retained.data.rows(), batch.num_rows() as u64);
+        let ManagedOutput::Selected { data, .. } = store.managed_output(
+            attempt.instance(),
+            &receipt.selected.result_id,
+            10,
+            &AnalysisReadControl::default(),
+        )?
+        else {
+            return Err("native selected output variant".into());
+        };
+        assert_eq!(data.batches, selected.batches);
         if index < 2 {
-            let packet =
-                sdk::wire::Dataset::encode(&selected, batch.schema_ref(), sdk::Limits::default())?;
-            assert!(packet.decode_any(sdk::Limits::default()).is_err());
+            let packet = sdk::wire::Dataset::encode(&selected, batch.schema_ref())?;
+            assert!(packet.decode_any().is_err());
         }
-        receipts.push((input.id, receipt, selected));
+        receipts.push((spec.id, input.id, receipt, selected));
     }
     drop(store);
     let store = AnalysisStore::open(&root)?;
-    for (attempt, receipt, selected) in receipts {
+    for (instance, attempt, receipt, selected) in receipts {
         let retained = store
-            .managed_selected([1; 16], &spec.id, &attempt, &AnalysisReadControl::default())?
+            .managed_selected(
+                [1; 16],
+                &instance,
+                &attempt,
+                &AnalysisReadControl::default(),
+            )?
             .ok_or("recovered native result absent")?;
         assert_eq!(retained.commit_revision, receipt.commit_revision);
         assert_eq!(retained.data.batches, selected.batches);
@@ -1435,6 +1551,7 @@ fn managed_registration_keeps_cut() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                expected: None,
                 instance,
                 rebuild: false,
                 completed: None,
@@ -1466,6 +1583,7 @@ fn managed_registration_keeps_cut() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                expected: None,
                 instance,
                 rebuild: false,
                 completed: None,
@@ -1527,6 +1645,7 @@ fn managed_witness_lifetime_check() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                expected: None,
                 instance: fixture.instance.clone(),
                 rebuild: false,
                 completed: None,
@@ -1552,11 +1671,13 @@ fn managed_witness_lifetime_check() -> TestResult {
     let outputs = [fixture.output(2)?, fixture.output(3)?];
     let returns = [
         ManagedReturn {
+            retained: None,
             call: 10,
             evaluation: &evaluations[0],
             output: &outputs[0],
         },
         ManagedReturn {
+            retained: None,
             call: 11,
             evaluation: &evaluations[1],
             output: &outputs[1],
@@ -1572,7 +1693,6 @@ fn managed_witness_lifetime_check() -> TestResult {
         returns: &returns,
         selected: &selected,
         selected_schema: &fixture.model.outputs[0].schema,
-        selected_limits: fixture.model.limits,
     };
     let before = store.meta()?;
     assert!(matches!(
@@ -1669,7 +1789,6 @@ fn managed_witness_lifetime_check() -> TestResult {
                     authorized: &grant.selection,
                     scope: "",
                     outputs: &inputs,
-                    limits: sdk::Limits::default(),
                 }),
                 mode: AnalysisReadModeV1::Complete,
                 now,

@@ -8,7 +8,8 @@ use araphor_analysis_sdk as sdk;
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, PackageRefV1,
 };
-use araphor_package::{PackageArtifactV1, PackageImplementationV1, SqlModelV1, SqlReasonV1};
+use araphor_package::{PackageArtifactV1, PackageImplementationV1, SqlModelV1};
+use araphor_query::follow::{Subscription, Update};
 use futures_util::{FutureExt as _, StreamExt as _};
 use sdk::arrow_array::UInt64Array;
 
@@ -170,9 +171,16 @@ async fn captures_inputs(target: &str) -> TestResult {
     let initial = package.query.store().meta()?;
     let mut stream = package.subscribe(None, true).await?;
     let update = Fixture::next(&mut stream).await?;
-    let returned = package.check_return(&update)?;
     let (prepared, call) = package.prepared.get().ok_or("admission")?;
+    let returned = update.calls.get(&call.id()).ok_or("admitted call return")?;
     assert!(returned.belongs_to(call), "{target}");
+    assert!(
+        update.calls.values().all(|returned| {
+            let output = returned.output();
+            output.checkpoint.is_none() && output.reasons.is_empty() && output.evidence.is_empty()
+        }),
+        "{target}"
+    );
     assert_eq!(update.calls.len(), 1);
     assert_eq!(returned.output().datasets.len(), 2, "{target}");
     let mut revisions = returned.evaluation().inputs[0]
@@ -208,9 +216,19 @@ async fn captures_inputs(target: &str) -> TestResult {
             && reference.key.owner_revision == 7
             && reference.commit_revision <= initial.commit_revision
     }));
-    assert!(contexts
-        .iter()
-        .any(|reference| **reference == package.context));
+    let expected = PackageBundleRef::retained(&package.bundle, &package.digest).context(
+        package.grant.selection.tenant_id,
+        &package.bundle.root,
+        &package.export,
+        &package.output,
+    )?;
+    assert_eq!(
+        package.query.store().context_version(&expected.key)?,
+        Some(expected.clone())
+    );
+    let retained = package.query.store().intern_context(&expected)?;
+    assert_eq!(package.query.store().meta()?, initial);
+    assert!(contexts.iter().any(|reference| **reference == retained));
     assert_eq!(prepared.resolved().images[0].image, package.bundle.root);
     assert_eq!(prepared.resolved().images[0].digest, package.digest);
     let digest = prepared.resolved().digest()?;
@@ -243,7 +261,15 @@ async fn subscription_retains_current_authority() -> TestResult {
     let fixture = Fixture::new(Fixture::bundle("wasm")?, "echo-inputs", "context_versions")?;
     let mut stream = fixture.package.subscribe(None, true).await?;
     let update = Fixture::next(&mut stream).await?;
-    fixture.package.check_return(&update)?;
+    let (_, call) = fixture.package.prepared.get().ok_or("admission")?;
+    assert!(update
+        .calls
+        .get(&call.id())
+        .is_some_and(|returned| returned.belongs_to(call)));
+    assert!(update.calls.values().all(|returned| {
+        let output = returned.output();
+        output.checkpoint.is_none() && output.reasons.is_empty() && output.evidence.is_empty()
+    }));
     drop(update);
     assert!(stream.next().now_or_never().is_none());
     let before = fixture.package.query.store().meta()?;
@@ -305,17 +331,20 @@ async fn subscription_checks_return_admission() -> TestResult {
     let mut first_stream = first.package.subscribe(None, false).await?;
     let mut second_stream = second.package.subscribe(None, false).await?;
     let mut update = Fixture::next(&mut first_stream).await?;
-    first.package.check_return(&update)?;
+    let (_, call) = first.package.prepared.get().ok_or("admission")?;
+    assert!(update
+        .calls
+        .get(&call.id())
+        .is_some_and(|returned| returned.belongs_to(call)));
+    assert!(update.calls.values().all(|returned| {
+        let output = returned.output();
+        output.checkpoint.is_none() && output.reasons.is_empty() && output.evidence.is_empty()
+    }));
     update.calls = Fixture::next(&mut second_stream).await?.calls;
-    assert!(matches!(
-        first.package.check_return(&update),
-        Err(crate::Error::Data {
-            source: araphor_data::Error::Package {
-                code: Code::Denied,
-                ..
-            }
-        })
-    ));
+    assert!(update
+        .calls
+        .get(&call.id())
+        .is_none_or(|returned| !returned.belongs_to(call)));
     Ok(())
 }
 
@@ -386,53 +415,6 @@ async fn subscription_rejects_reachable_state() -> TestResult {
 }
 
 #[tokio::test]
-async fn publication_rejects_auxiliary_returns() -> TestResult {
-    for evidence in [false, true] {
-        let mut bundle = Fixture::bundle("sql")?;
-        let artifact = &mut bundle.artifacts[0];
-        let PackageImplementationV1::Sql { program, .. } = &mut artifact.implementations[0] else {
-            return Err("SQL".into());
-        };
-        if evidence {
-            program.evidence = Some(
-                "SELECT 'context_versions' AS output_dataset, __row_index AS output_row, 'context_versions' AS input_dataset, __row_index AS input_row FROM context_versions".into()
-            );
-        } else {
-            let details = artifact.descriptor.exports[0].outputs[0].schema.clone();
-            artifact.descriptor.exports[0].reasons.push(sdk::Reason {
-                code: "runtime-fixture.note".into(),
-                details,
-            });
-            program.reasons.push(SqlReasonV1 {
-                output: "context_versions".into(),
-                code: "runtime-fixture.note".into(),
-                sql:
-                    "SELECT __row_index AS output_row, owner_revision FROM output_context_versions"
-                        .into(),
-            });
-        }
-        let fixture = Fixture::new(bundle, "echo-inputs", "context_versions")?;
-        let mut stream = fixture.package.subscribe(None, false).await?;
-        let update = Fixture::next(&mut stream).await?;
-        let returned = update.calls.values().next().ok_or("return")?;
-        assert_eq!(returned.output().evidence.is_empty(), !evidence);
-        assert_eq!(returned.output().reasons.is_empty(), evidence);
-        let before = fixture.package.query.store().meta()?;
-        assert!(matches!(
-            fixture.package.check_return(&update),
-            Err(crate::Error::Data {
-                source: araphor_data::Error::Package {
-                    code: Code::Unsupported,
-                    ..
-                }
-            })
-        ));
-        assert_eq!(fixture.package.query.store().meta()?, before);
-    }
-    Ok(())
-}
-
-#[tokio::test]
 #[ignore = "requires source-built native artifacts in ARAPHOR_NATIVE_DIR"]
 async fn native_subscription_uses_package() -> TestResult {
     let mut descriptor = araphor_analysis_builtins::discovery::Discovery::package();
@@ -472,7 +454,13 @@ async fn native_subscription_uses_package() -> TestResult {
     let fixture = Fixture::new(bundle, "groups", "groups")?;
     let mut stream = fixture.package.subscribe(None, false).await?;
     let update = Fixture::next(&mut stream).await?;
-    let returned = fixture.package.check_return(&update)?;
+    let (_, call) = fixture.package.prepared.get().ok_or("admission")?;
+    let returned = update.calls.get(&call.id()).ok_or("admitted call return")?;
+    assert!(returned.belongs_to(call));
+    assert!(update.calls.values().all(|returned| {
+        let output = returned.output();
+        output.checkpoint.is_none() && output.reasons.is_empty() && output.evidence.is_empty()
+    }));
     assert_eq!(update.calls.len(), 1);
     assert_eq!(returned.output().datasets.len(), 1);
     assert_eq!(returned.output().datasets[0].name, "groups");

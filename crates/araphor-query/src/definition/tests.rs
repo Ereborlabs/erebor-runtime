@@ -22,6 +22,8 @@ mod execution;
 mod guest;
 mod managed;
 mod parity;
+mod replay;
+mod retained;
 mod subscription;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -351,6 +353,76 @@ async fn native_package_call_rejections() -> TestResult {
         )
         .await
         .is_err());
+    for implementation in [
+        PackageImplementationV1::Python {
+            export: "count".into(),
+            artifact: vec![1],
+        },
+        PackageImplementationV1::Native {
+            export: "count".into(),
+            artifact: vec![1],
+            qualification: None,
+        },
+    ] {
+        let mut bundle = Fixture::bundle();
+        bundle.artifacts[0].implementations = vec![implementation];
+        assert!(!bundle.artifacts[0].prepared("count"));
+        let fixture = Fixture::installed(&bundle)?;
+        let before = fixture.engine.store().meta()?;
+        let Err(error) = fixture.prepare(&Fixture::definition()).await else {
+            return Err("unsupported selected target accepted".into());
+        };
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        let mut unsupported = false;
+        while let Some(error) = source {
+            let package = match error.downcast_ref::<crate::Error>() {
+                Some(crate::Error::Data { source }) => Some(source),
+                _ => error.downcast_ref::<araphor_data::Error>(),
+            };
+            unsupported |= matches!(
+                package,
+                Some(araphor_data::Error::Package {
+                    code: araphor_data::PackageErrorCodeV1::Unsupported,
+                    field: "model target",
+                    ..
+                })
+            );
+            source = error.source();
+        }
+        assert!(unsupported, "{error:?}");
+        assert_eq!(fixture.engine.store().meta()?, before);
+        assert_eq!(fixture.engine.memory().input_reserved(), 0);
+    }
+    let mut bundle = Fixture::bundle();
+    bundle.artifacts[0]
+        .implementations
+        .push(PackageImplementationV1::Wasm {
+            exports: vec!["count".into()],
+            artifact: vec![1],
+        });
+    assert!(!bundle.artifacts[0].prepared("count"));
+    assert!(!bundle.artifacts[0].prepared("absent"));
+    assert!(matches!(
+        bundle.artifacts[0].implementation("count"),
+        Err(araphor_package::Error::Package {
+            code: araphor_package::ErrorCode::Invalid,
+            field: "plugin execution type",
+            ..
+        })
+    ));
+    let before = fixture.engine.store().meta()?;
+    assert!(matches!(
+        fixture
+            .engine
+            .store()
+            .install_package_image([1; 16], &bundle, || Ok(())),
+        Err(araphor_data::Error::Package {
+            code: araphor_data::PackageErrorCodeV1::Invalid,
+            field: "plugin execution type",
+            ..
+        })
+    ));
+    assert_eq!(fixture.engine.store().meta()?, before);
     Ok(())
 }
 

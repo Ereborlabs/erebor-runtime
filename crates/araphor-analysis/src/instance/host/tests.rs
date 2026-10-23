@@ -9,11 +9,19 @@ use araphor_data::{ManagedInstance, PackageActionV1, PackageBundleRef, PackageGr
 use super::*;
 use crate::instance::tests::{bundle, Authority as FixtureAuthority, Fixture, TestResult};
 
+mod definition;
+mod lifecycle;
+#[cfg(unix)]
+mod native;
+mod removal;
+
 struct Authority {
     inner: Arc<FixtureAuthority>,
     denied: Mutex<BTreeSet<String>>,
     changes: watch::Sender<u64>,
     admissions: AtomicUsize,
+    install_denied: AtomicBool,
+    installs: AtomicUsize,
     gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     delivery: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     reader_busy: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -26,6 +34,8 @@ impl Authority {
             denied: Mutex::default(),
             changes: watch::channel(0).0,
             admissions: AtomicUsize::new(0),
+            install_denied: AtomicBool::new(false),
+            installs: AtomicUsize::new(0),
             gate: Mutex::default(),
             delivery: Mutex::default(),
             reader_busy: Mutex::default(),
@@ -43,6 +53,10 @@ impl Authority {
 
 impl PackageAuthorization for Authority {
     fn check(&self, grant: &PackageGrantV1, action: PackageActionV1) -> araphor_data::Result<()> {
+        if matches!(action, PackageActionV1::Install) && self.install_denied.load(Ordering::SeqCst)
+        {
+            return Err(Code::Denied.error("host fixture install"));
+        }
         self.inner.check(grant, action)?;
         if self
             .denied
@@ -84,15 +98,28 @@ impl PackageAuthorization for Authority {
         image: &PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
-        self.commit_many(&[(grant, None), (grant, Some(image))], action, operation)
+        self.commit_many(
+            &[(grant, action, None), (grant, action, Some(image))],
+            operation,
+        )
     }
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, Option<&PackageBundleRef<'_>>)],
-        action: PackageActionV1,
+        grants: &[(
+            &PackageGrantV1,
+            PackageActionV1,
+            Option<&PackageBundleRef<'_>>,
+        )],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
+        if let Some((grant, action, _)) = grants
+            .iter()
+            .find(|(_, action, _)| *action == PackageActionV1::Install)
+        {
+            self.installs.fetch_add(1, Ordering::SeqCst);
+            self.check(grant, *action)?;
+        }
         let gate = self
             .delivery
             .lock()
@@ -110,12 +137,12 @@ impl PackageAuthorization for Authority {
             .denied
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        for (grant, _) in grants {
+        for (grant, _, _) in grants {
             if denied.contains(&grant.principal) {
                 return Err(Code::Denied.error("host fixture principal"));
             }
         }
-        let result = self.inner.commit_many(grants, action, operation);
+        let result = self.inner.commit_many(grants, operation);
         if matches!(
             &result,
             Err(araphor_data::Error::AnalysisBusy {
@@ -145,7 +172,22 @@ impl Fixture {
         let mut changes = self.query.store().subscribe_revision();
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                let progress = self.progress(id)?;
+                let progress = match self.progress(id) {
+                    Ok(progress) => progress,
+                    Err(error)
+                        if matches!(
+                            error.downcast_ref::<araphor_data::Error>(),
+                            Some(araphor_data::Error::AnalysisBusy {
+                                resource: "reader",
+                                ..
+                            })
+                        ) =>
+                    {
+                        self.query.store().wait_capacity().await?;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 if progress > after {
                     return Ok(progress);
                 }
@@ -234,7 +276,13 @@ async fn host_keeps_newer_member() -> TestResult {
         .query
         .memory()
         .reserve_input(std::mem::size_of::<ManagedMember>() + current.id.capacity())?;
-    members.push(Member::new(Arc::clone(&host), current, memory, u64::MAX));
+    members.push(Member::new(
+        Arc::clone(&host),
+        current,
+        memory,
+        u64::MAX,
+        None,
+    ));
     host.reconcile(
         &members,
         older.lifecycle,
@@ -269,11 +317,12 @@ async fn host_keeps_newer_member() -> TestResult {
 #[tokio::test]
 async fn host_idle_denial_suspends() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
+    fixture.install(&bundle("sql")?)?;
     fixture.context(1)?;
     let instance = fixture
         .admit(
             "denied-idle",
-            "SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) AS value FROM context_versions",
+            r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) AS value FROM context_versions))"#,
         )
         .await?;
     fixture.start(&instance)?;
@@ -282,6 +331,10 @@ async fn host_idle_denial_suspends() -> TestResult {
     let (stop, stopped) = watch::channel(false);
     let worker = tokio::spawn(host.serve(stopped, u64::MAX));
     let progress = fixture.host_progress("denied-idle", 0).await?;
+    fixture.query.store().fault_write(
+        "UPDATE package_revisions SET artifact = 'invalid'::BLOB",
+        &[],
+    )?;
     authority.deny(&instance.admitted.grant.principal);
     let suspended = fixture.host_stopped("denied-idle").await?;
     assert_eq!(suspended.progress, progress);
@@ -555,10 +608,13 @@ async fn host_preserves_pending() -> TestResult {
         .await?;
     let entered = Arc::new(AtomicBool::new(false));
     let published = Arc::clone(&entered);
+    let control = Arc::new(AnalysisReadControl::default());
+    let cancelled = Arc::clone(&control);
     fixture.query.store().set_commit_hook(
         araphor_data::AnalysisCommitStage::BeforeResultCommit,
         move || {
             published.store(true, Ordering::SeqCst);
+            cancelled.cancel()?;
             Err(Code::Incomplete.error("pending publication fixture"))
         },
     )?;
@@ -570,10 +626,7 @@ async fn host_preserves_pending() -> TestResult {
         witness_expiry: u64::MAX,
         frontier: None,
     };
-    assert!(pending
-        .run(request.clone(), &AnalysisReadControl::default())
-        .await
-        .is_err());
+    assert!(pending.run(request.clone(), &control).await.is_err());
     assert!(entered.load(Ordering::SeqCst));
     let previous = fixture
         .query
@@ -587,6 +640,9 @@ async fn host_preserves_pending() -> TestResult {
         .ok_or("original pending claim absent")?;
     assert!(previous.receipt().is_none());
     assert!(previous.terminal().is_none());
+    let mut captured = request.clone();
+    captured.frontier = previous.request().frontier.clone();
+    assert_eq!(previous.request(), &captured);
     fixture.start(&pending)?;
     let healthy = fixture
         .admit(
@@ -613,7 +669,7 @@ async fn host_preserves_pending() -> TestResult {
             &AnalysisReadControl::default(),
         )?
         .ok_or("pending claim lost")?;
-    assert_eq!(retained.request(), &request);
+    assert_eq!(retained.request(), previous.request());
     assert!(retained.receipt().is_none());
     assert!(retained.terminal().is_none());
     assert_eq!(fixture.progress("pending-member")?, 0);
@@ -1027,9 +1083,19 @@ async fn host_crossing_expiry_joins_admission() -> TestResult {
     );
     let healthy_progress = healthy_progress?;
     fixture.context(2)?;
-    fixture
+    let healthy_progress = fixture
         .host_progress("expiry-healthy", healthy_progress)
         .await?;
+    let history = fixture.query.store().managed_history(
+        &fixture.grant.selection,
+        "expiry-healthy",
+        &AnalysisReadControl::default(),
+    )?;
+    let healthy = history
+        .iter()
+        .find(|receipt| receipt.commit_revision == healthy_progress)
+        .ok_or("healthy expiry receipt")?;
+    assert_eq!(fixture.selected("expiry-healthy", &healthy.attempt)?, [2]);
     stop.send_replace(true);
     tokio::time::timeout(Duration::from_secs(30), worker).await???;
     let first = fixture.query.reserve_evaluation([1; 16])?;
@@ -1175,7 +1241,9 @@ async fn membership_keys_keep_capacity() -> TestResult {
     assert_eq!(fixture.query.memory().input_reserved(), 0);
     let memory = fixture.query.memory().reserve_input(0)?;
     assert!(bytes >= std::mem::size_of::<ManagedMember>() + active[0].id.capacity());
-    let retained = std::mem::size_of::<ManagedMember>() + active[0].id.capacity();
+    let retained = std::mem::size_of::<ManagedMember>()
+        + active[0].id.capacity()
+        + std::mem::size_of::<Mutex<super::lifecycle::PauseState>>();
     let members = FuturesUnordered::new();
     host.reconcile(&members, revision, active, memory, u64::MAX)?;
     assert_eq!(members.len(), 1);
@@ -1423,7 +1491,7 @@ async fn projected_member_keeps_fence() -> TestResult {
     )?;
     let before = fixture.query.store().meta()?;
     let error = host
-        .member(&expected, &control, u64::MAX)
+        .member(&expected, &control, u64::MAX, None)
         .await
         .err()
         .ok_or("stale projected admission succeeded")?;
@@ -1459,7 +1527,7 @@ async fn host_bad_member_isolates() -> TestResult {
     drop(broken);
     drop(healthy);
     fixture.query.store().fault_write(
-        "UPDATE managed_instances SET spec = 'invalid'::BLOB WHERE instance_id = 'broken-spec'",
+        "UPDATE managed_versions SET spec = 'invalid'::BLOB WHERE instance_id = 'broken-spec'",
         &[],
     )?;
     let authority = Authority::new(&fixture);
@@ -1486,3 +1554,5 @@ async fn host_bad_member_isolates() -> TestResult {
 }
 
 mod admission;
+
+mod recovery;

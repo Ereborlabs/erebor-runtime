@@ -204,8 +204,8 @@ impl Engine {
             })
     }
 
-    #[cfg(test)]
-    pub(crate) fn guest_cached(&self, bytes: &[u8]) -> Result<bool> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn guest_cached(&self, bytes: &[u8]) -> Result<bool> {
         self.package_runtime
             .guest_cached(bytes)
             .map_err(|source| crate::Error::Sql {
@@ -221,6 +221,15 @@ impl Engine {
     ) -> Result<()> {
         self.package_runtime
             .preparation_entry(entered, release)
+            .map_err(|source| crate::Error::Sql {
+                source: DataFusionError::External(Box::new(source)),
+            })
+    }
+
+    pub async fn wait_package_capacity(&self, resource: &str, requested: usize) -> Result<()> {
+        self.package_runtime
+            .wait_capacity(resource, requested)
+            .await
             .map_err(|source| crate::Error::Sql {
                 source: DataFusionError::External(Box::new(source)),
             })
@@ -335,9 +344,8 @@ impl Engine {
                         }
                     }
                 }
-                let plan = context
-                    .state()
-                    .statement_to_plan(statement)
+                let plan = crate::planner::Planner::new(&context.state())
+                    .statement(statement)
                     .await
                     .context(SqlSnafu)?;
                 let _frame = context.execute_logical_plan(plan).await.context(SqlSnafu)?;
@@ -692,6 +700,7 @@ pub(crate) struct CapturedPhysical {
     physical: Arc<dyn ExecutionPlan>,
     context: TaskContext,
     pub(crate) snapshot: Arc<ArrowSnapshot>,
+    pub(crate) recovery: Option<crate::stream::recovery::SourceRecovery>,
     pub(crate) permit: Arc<Permit>,
     control: Arc<AnalysisReadControl>,
     timeout: Option<Duration>,
@@ -740,6 +749,12 @@ impl CapturedPhysical {
 }
 
 impl Session {
+    pub fn operation(&self, control: &AnalysisReadControl, now: u64) -> Result<Self> {
+        let mut session = self.at(self.selection.clone(), now);
+        session.control = Arc::new(control.within(None)?);
+        Ok(session)
+    }
+
     pub fn set_context_init(
         &mut self,
         initializer: impl Fn(&mut SessionConfig) + Send + Sync + 'static,
@@ -769,10 +784,12 @@ impl Session {
             Arc::clone(&self.memory),
             self.managed.clone(),
         );
-        let sources = sources.clone();
+        let sources = sources.keys().map(|name| (name.clone(), None)).collect();
         let scope = self.token()?;
         Engine::blocking(control, scope, move || {
-            capture.capture_metadata(&sources).context(SqlSnafu)
+            capture
+                .capture(&sources, ScanBounds::default(), ReadMode::Metadata)
+                .context(SqlSnafu)
         })
         .await
     }
@@ -1141,16 +1158,23 @@ impl Session {
     pub(crate) fn state(&self) -> Result<SessionState> {
         let mut state = self.engine.state.clone();
         state.config_mut().set_extension(Arc::clone(&self.tables));
-        let clock = chrono::DateTime::from_timestamp(
-            (self.now / 1_000_000_000) as i64,
-            (self.now % 1_000_000_000) as u32,
-        )
-        .ok_or_else(|| {
-            InvalidSnafu {
-                field: "execution time",
-            }
-            .build()
-        })?;
+        let clock = match self
+            .calls
+            .as_ref()
+            .and_then(|calls| calls.invocation().time_utc_ns)
+        {
+            Some(now) => chrono::DateTime::from_timestamp_nanos(now),
+            None => chrono::DateTime::from_timestamp(
+                (self.now / 1_000_000_000) as i64,
+                (self.now % 1_000_000_000) as u32,
+            )
+            .ok_or_else(|| {
+                InvalidSnafu {
+                    field: "execution time",
+                }
+                .build()
+            })?,
+        };
         *state.execution_props_mut() = ExecutionProps::new().with_query_execution_start_time(clock);
         Ok(state)
     }
@@ -1181,9 +1205,26 @@ impl Session {
             Arc::new(self.control.within(self.engine.limits.evaluate_timeout)?)
         };
         let plan = plan.clone();
-        let planning = state.clone();
+        let mut planning = state.clone();
+        let calls = self.calls.clone();
         let plan = Engine::blocking(Arc::clone(&control), self.token()?, move || {
-            planning.optimize(&plan).context(SqlSnafu)
+            crate::parser::Parser::stack(|| match &calls {
+                Some(calls) if calls.has_windows() => {
+                    let plan = planning.analyzer().execute_and_check(
+                        plan,
+                        planning.config_options(),
+                        |_, _| {},
+                    )?;
+                    let plan = calls.bind_window_clocks(plan, &planning)?;
+                    if let Some(clock) = calls.window_clock(crate::follow::WindowSource::Query)? {
+                        planning.execution_props_mut().query_execution_start_time =
+                            Some(chrono::DateTime::from_timestamp_nanos(clock));
+                    }
+                    planning.optimizer().optimize(plan, &planning, |_, _| {})
+                }
+                _ => planning.optimize(&plan),
+            })
+            .context(SqlSnafu)
         })
         .await?;
         control
@@ -1279,12 +1320,17 @@ impl Session {
         let run = context
             .session_config()
             .get_extension::<crate::stream::Run>();
-        let bounds = SourceSnapshot::requests(
+        let mut bounds = SourceSnapshot::requests(
             &mut requests,
             std::slice::from_ref(&physical),
             run.as_deref(),
         )
         .context(SqlSnafu)?;
+        if let Some(calls) = &self.calls {
+            for (source, _, _, clock) in &mut bounds.windows {
+                *clock = calls.window_clock(*source).context(SqlSnafu)?;
+            }
+        }
         let retained = self.inputs.as_ref().is_some_and(|inputs| {
             inputs.bindings.iter().any(|(_, source, _)| {
                 matches!(source, araphor_data::AnalysisInputSource::Managed(_))
@@ -1307,13 +1353,23 @@ impl Session {
                 .error("retained source admission")
                 .into());
         }
+        let mut recovery = run
+            .filter(|run| run.follow && run.managed.is_some())
+            .map(|run| {
+                crate::stream::recovery::SourceRecovery::new(run, self, self.now, requests.clone())
+            });
         let captured = self
             .capture(snapshot, requests, bounds, mode, Arc::clone(&permit))
-            .await?;
+            .await
+            .map_err(|error| match recovery.take() {
+                Some(recovery) => recovery.failed(error),
+                None => error,
+            })?;
         Ok(CapturedPhysical {
             physical,
             context,
             snapshot: captured,
+            recovery,
             permit,
             control: Arc::clone(&self.control),
             timeout: self.engine.limits.evaluate_timeout,

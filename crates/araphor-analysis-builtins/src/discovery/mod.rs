@@ -42,7 +42,7 @@ impl Discovery {
             Self::port::<DiscoveryLifecycleEntryV1>("lifecycle"),
             Self::port::<Counts>("counts"),
         ];
-        let mut package = sdk::Package::new(
+        sdk::Package::new(
             "discovery",
             "1",
             vec![
@@ -89,20 +89,7 @@ impl Discovery {
                     vec![Self::port::<DiscoveryComparisonV1>("comparison")],
                 ),
             ],
-        );
-        for model in &mut package.exports {
-            model.limits = Self::limits();
-        }
-        package
-    }
-
-    pub fn limits() -> sdk::Limits {
-        sdk::Limits {
-            max_batches: 1024,
-            max_rows: 4_000_000,
-            max_bytes: 2 * 1024 * 1024 * 1024,
-            max_checkpoint_bytes: 16 * 1024 * 1024,
-        }
+        )
     }
 
     pub fn evaluate(input: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
@@ -126,7 +113,7 @@ impl Discovery {
             .iter()
             .find(|port| port.name == name)
             .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "row port"))?;
-        Rows::encode(port, rows, input.evaluation().context.limits)
+        Rows::encode(port, rows)
     }
 
     fn require(valid: bool, field: &'static str) -> sdk::Result<()> {

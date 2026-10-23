@@ -13,12 +13,16 @@ pub struct Parser {
 impl Parser {
     const STACK_BYTES: usize = 8 * 1024 * 1024;
 
+    pub(crate) fn stack<T>(operation: impl FnOnce() -> T) -> T {
+        // Native expressions and spans have no stack growth checkpoints.
+        stacker::maybe_grow(Self::STACK_BYTES, Self::STACK_BYTES, operation)
+    }
+
     pub fn parse(&self, sql: &str) -> Result<Statement> {
         if self.bytes.is_some_and(|maximum| sql.len() > maximum) {
             return Err(crate::InvalidSnafu { field: "SQL size" }.build());
         }
-        // Native nested expressions have no stack growth checkpoints.
-        stacker::maybe_grow(Self::STACK_BYTES, Self::STACK_BYTES, || {
+        Self::stack(|| {
             let mut statements = DFParserBuilder::new(sql)
                 .with_recursion_limit(self.depth.unwrap_or(usize::MAX))
                 .build()

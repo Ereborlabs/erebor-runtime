@@ -148,20 +148,6 @@ impl WasmExecution {
         }
     }
 
-    pub fn limits(limits: sdk::Limits, quota: &WasmLimits) -> sdk::Limits {
-        sdk::Limits {
-            max_bytes: quota
-                .data_bytes
-                .map_or(limits.max_bytes, |maximum| limits.max_bytes.min(maximum)),
-            max_checkpoint_bytes: quota
-                .data_bytes
-                .map_or(limits.max_checkpoint_bytes, |maximum| {
-                    limits.max_checkpoint_bytes.min(maximum)
-                }),
-            ..limits
-        }
-    }
-
     pub fn new(limits: WasmLimits) -> Result<Self> {
         if limits
             .evaluations
@@ -259,15 +245,7 @@ impl WasmExecution {
     ) -> Result<sdk::Output> {
         control.check()?;
         let prepared = self.prepare(bytes, control)?;
-        self.evaluate_prepared(
-            descriptor,
-            evaluation,
-            &prepared,
-            control,
-            evaluation.context.limits,
-            copy_bytes,
-            None,
-        )
+        self.evaluate_prepared(descriptor, evaluation, &prepared, control, copy_bytes, None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -277,36 +255,24 @@ impl WasmExecution {
         evaluation: &sdk::Evaluation,
         prepared: &PreparedComponent,
         control: &AnalysisReadControl,
-        output_limits: sdk::Limits,
         copy_bytes: Option<usize>,
         admission: Option<EvaluationPermit>,
     ) -> Result<sdk::Output> {
-        use std::borrow::Cow;
-
         control.check()?;
         descriptor
             .validate_evaluation(evaluation)
             .context(crate::AnalysisContractSnafu)?;
-        let evaluation =
-            if Self::limits(evaluation.context.limits, &self.limits) == evaluation.context.limits {
-                Cow::Borrowed(evaluation)
-            } else {
-                let mut evaluation = evaluation.clone();
-                evaluation.context.limits = Self::limits(evaluation.context.limits, &self.limits);
-                Cow::Owned(evaluation)
-            };
         let input = descriptor
-            .check_evaluation(&evaluation)
+            .check_evaluation(evaluation)
             .and_then(|checked| checked.encode())
             .context(crate::AnalysisContractSnafu)?;
         control.check()?;
         let output =
             self.invoke_reserved(prepared, input.into(), control, copy_bytes, admission)?;
         let output = sdk::wire::Output::from(output);
-        let decoded = if copy_bytes.is_some() {
-            output.decode_bounded(descriptor, &evaluation, output_limits)
-        } else {
-            output.decode(descriptor, &evaluation)
+        let decoded = match copy_bytes {
+            Some(bytes) => output.decode_bounded(descriptor, evaluation, bytes),
+            None => output.decode(descriptor, evaluation),
         }
         .context(crate::AnalysisContractSnafu)?;
         control.check()?;

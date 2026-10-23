@@ -93,7 +93,7 @@ impl FindingReasonV1 {
 }
 
 impl DeclaredFindingReasonV1 {
-    pub fn from_value(value: &sdk::ReasonValue, limits: sdk::Limits) -> Result<Self> {
+    pub fn from_value(value: &sdk::ReasonValue) -> Result<Self> {
         let schema = value.details.schema().as_ref().clone();
         let encoded = sdk::wire::Dataset::encode(
             &sdk::Dataset {
@@ -101,7 +101,6 @@ impl DeclaredFindingReasonV1 {
                 batches: vec![value.details.clone()],
             },
             &schema,
-            limits,
         )
         .context(AnalysisContractSnafu)?;
         Ok(Self {
@@ -119,13 +118,7 @@ impl DeclaredFindingReasonV1 {
             }
             .fail();
         }
-        let limits = sdk::Limits {
-            max_rows: 1,
-            max_batches: 1,
-            max_bytes: super::GRAPH_WINDOW_BYTES as u64,
-            ..sdk::Limits::default()
-        };
-        let data = sdk::wire::Dataset::decode_ipc("details", &self.ipc, Some(&self.schema), limits)
+        let data = sdk::wire::Dataset::decode_ipc("details", &self.ipc, Some(&self.schema))
             .context(AnalysisContractSnafu)?;
         if data.batches.len() != 1 || data.batches[0].num_rows() != 1 {
             return GraphInvalidSnafu {

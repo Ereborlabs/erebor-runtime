@@ -1,5 +1,10 @@
+mod expiry;
+mod feed;
 mod gates;
+mod input;
+mod managed;
 mod storage;
+mod subscription;
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -29,6 +34,12 @@ impl Projection {
 struct Authority {
     changes: watch::Sender<u64>,
     allowed: AtomicBool,
+    gate: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            std::sync::mpsc::Receiver<()>,
+        )>,
+    >,
 }
 
 impl Authority {
@@ -47,6 +58,19 @@ impl PackageAuthorization for Authority {
         Ok(())
     }
     fn admit(&self, grant: &PackageGrantV1, _: &PackageBundleRef<'_>) -> araphor_data::Result<()> {
+        if let Some((entered, release)) = self
+            .gate
+            .lock()
+            .map_err(|_| Code::Incomplete.error("Graph admission gate"))?
+            .take()
+        {
+            entered
+                .send(())
+                .map_err(|_| Code::Incomplete.error("Graph admission observer"))?;
+            release
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .map_err(|_| Code::Incomplete.error("Graph admission release"))?;
+        }
         self.check(grant, PackageActionV1::Run)
     }
     fn commit(
@@ -56,19 +80,25 @@ impl PackageAuthorization for Authority {
         bundle: &PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
-        self.commit_many(&[(grant, None), (grant, Some(bundle))], action, operation)
+        self.commit_many(
+            &[(grant, action, None), (grant, action, Some(bundle))],
+            operation,
+        )
     }
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, Option<&PackageBundleRef<'_>>)],
-        action: PackageActionV1,
+        grants: &[(
+            &PackageGrantV1,
+            PackageActionV1,
+            Option<&PackageBundleRef<'_>>,
+        )],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
-        if grants.is_empty() || !grants.iter().any(|(_, image)| image.is_none()) {
+        if grants.is_empty() || !grants.iter().any(|(_, _, image)| image.is_none()) {
             return Err(Code::Denied.error("graph fixture authority"));
         }
-        for (grant, image) in grants {
-            self.check(grant, action)?;
+        for (grant, action, image) in grants {
+            self.check(grant, *action)?;
             if let Some(image) = image {
                 self.admit(grant, image)?;
             }
@@ -82,7 +112,12 @@ impl PackageAuthorization for Authority {
 
 #[derive(Default)]
 struct Facts {
+    first: Mutex<Option<std::time::Instant>>,
+    supplied: Mutex<Vec<AnalysisContextVersionV1>>,
+    failed: Mutex<Option<EvidenceIntakeIdentityV1>>,
     calls: AtomicUsize,
+    changed: Mutex<Option<AnalysisContextVersionV1>>,
+    records: Mutex<Option<std::sync::mpsc::Sender<Vec<araphor_data::DiscoveryRecordV1>>>>,
     notice: Mutex<Option<(Arc<Authority>, bool)>>,
     gate: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
@@ -101,6 +136,32 @@ impl GraphFacts for Facts {
             }
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.first
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_or_insert_with(std::time::Instant::now);
+        if self
+            .failed
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_some_and(|source| records.iter().any(|record| &record.id.stream == source))
+        {
+            return Err(araphor_data::GraphInvalidSnafu {
+                field: "Graph source failure fixture",
+            }
+            .build());
+        }
+        if let Some(observed) = self
+            .records
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            observed
+                .send(records.to_vec())
+                .map_err(|_| Code::Invalid.error("Graph record observer fixture"))?;
+        }
         if let Some((entry, release)) = self
             .gate
             .lock()
@@ -122,7 +183,7 @@ impl GraphFacts for Facts {
         {
             authority.set(allowed);
         }
-        let contexts = records
+        let mut contexts = records
             .iter()
             .map(|record| {
                 let fact = araphor_data::GraphFactV1 {
@@ -165,6 +226,29 @@ impl GraphFacts for Facts {
                 })
             })
             .collect::<araphor_data::Result<Vec<_>>>()?;
+        if let Some(changed) = self
+            .changed
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            let context = contexts
+                .iter_mut()
+                .find(|context| context.key == changed.key)
+                .ok_or_else(|| Code::Invalid.error("changed Graph fact fixture"))?;
+            *context = changed.clone();
+        }
+        contexts.extend(
+            self.supplied
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .iter()
+                .filter(|context| {
+                    serde_json::from_slice::<araphor_data::GraphFactV1>(&context.body)
+                        .is_ok_and(|fact| records.iter().any(|record| record.id == fact.record_id))
+                })
+                .cloned(),
+        );
         Ok((contexts, Vec::new()))
     }
 }
@@ -184,10 +268,52 @@ struct Fixture {
     records: Vec<araphor_data::DiscoveryRecordV1>,
     facts: Arc<Facts>,
     authority: Arc<Authority>,
+    _graph: araphor_data::GraphLease,
     _directory: tempfile::TempDir,
 }
 
 impl Fixture {
+    fn serial_guests(&mut self) -> TestResult {
+        let mut limits = self.query.limits().clone();
+        limits.package.wasm.evaluations = Some(1);
+        self.query = Engine::new(Arc::clone(self.query.store()), limits)?;
+        Ok(())
+    }
+
+    async fn observe_guests<T, E>(
+        query: Arc<Engine>,
+        execute: impl std::future::Future<Output = std::result::Result<T, E>>,
+    ) -> TestResult<(T, usize)>
+    where
+        E: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let (entry, mut entered) = std::sync::mpsc::channel();
+        let (mut release, released) = std::sync::mpsc::channel();
+        query.guest_entry(entry, Some(released))?;
+        let observed = tokio::task::spawn_blocking(move || -> TestResult<usize> {
+            let mut count = 0;
+            for index in 0..3 {
+                entered.recv_timeout(std::time::Duration::from_secs(30))?;
+                count += 1;
+                if index < 2 {
+                    let (entry, next) = std::sync::mpsc::channel();
+                    let (send, released) = std::sync::mpsc::channel();
+                    query.guest_entry(entry, Some(released))?;
+                    release.send(())?;
+                    entered = next;
+                    release = send;
+                } else {
+                    release.send(())?;
+                }
+            }
+            Ok(count)
+        });
+        let (result, observed) = tokio::join!(execute, observed);
+        let result =
+            result.map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+        Ok((result, observed??))
+    }
+
     fn target(target: Target) -> TestResult<Self> {
         let manifest = DiscoveryInputManifestV1::try_from(
             include_bytes!("../../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
@@ -220,7 +346,7 @@ impl Fixture {
             *times.iter().min().ok_or("record time")?,
             *times.iter().max().ok_or("record time")?,
         );
-        store.enable_graph_owner()?;
+        let graph = store.lease_graph(vec![AnalysisSelectionV1::tenant(source.tenant_id)])?;
         store.register_graph(&source)?;
         for record in &records {
             store.accept_validated_batch(
@@ -320,7 +446,9 @@ impl Fixture {
             authority: Arc::new(Authority {
                 changes: watch::channel(0).0,
                 allowed: AtomicBool::new(true),
+                gate: Mutex::default(),
             }),
+            _graph: graph,
             _directory: directory,
         })
     }
@@ -436,11 +564,13 @@ async fn captured_source(target: Target) -> TestResult {
     let observed = projection.observe_capture();
     let first = publication.refresh("graph:native-first".into()).await?;
     let captured = observed.try_recv()?;
-    assert!(captured
-        .graph
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .is_none());
+    assert!(
+        captured
+            .graph
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none()
+    );
     assert!(captured.source.upgrade().is_none());
     assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
     let metadata = captured
@@ -455,9 +585,11 @@ async fn captured_source(target: Target) -> TestResult {
         })
         .collect::<Vec<_>>();
     assert_eq!(metadata.len(), 3);
-    assert!(metadata
-        .windows(2)
-        .all(|pair| pair[0].1 == pair[1].1 && pair[0].2 == pair[1].2));
+    assert!(
+        metadata
+            .windows(2)
+            .all(|pair| pair[0].1 == pair[1].1 && pair[0].2 == pair[1].2)
+    );
     let range = metadata[0]
         .1
         .window
@@ -517,18 +649,21 @@ async fn captured_source(target: Target) -> TestResult {
     assert_eq!(second, first);
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 2);
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:native-unchanged")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:native-unchanged")?
+            .is_none()
+    );
     let (_, pins) = fixture
         .query
         .store()
         .package_evidence(fixture.source.tenant_id, &[first.0])?;
-    assert!(pins
-        .iter()
-        .any(|pin| pin.key.owner_id == "native-package-v1"));
+    assert!(
+        pins.iter()
+            .any(|pin| pin.key.owner_id == "native-package-v1")
+    );
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     Ok(())
 }
@@ -545,11 +680,13 @@ async fn prepared_calls_capture_fresh() -> TestResult {
         .await?;
     let original = observed.try_recv()?;
     assert!(original.source.upgrade().is_none());
-    assert!(original
-        .graph
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .is_none());
+    assert!(
+        original
+            .graph
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none()
+    );
     let before = fixture.query.store().meta()?;
     let repeated = prepared
         .clone()
@@ -579,11 +716,13 @@ async fn prepared_calls_capture_fresh() -> TestResult {
     assert!(updated.source.upgrade().is_none());
     assert_eq!(projection.projections.load(Ordering::SeqCst), 3);
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 3);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, &changed.0)?
-        .is_some());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, &changed.0)?
+            .is_some()
+    );
     fixture.authority.set(false);
     let before = fixture.query.store().meta()?;
     let error = prepared
@@ -599,11 +738,13 @@ async fn prepared_calls_capture_fresh() -> TestResult {
     assert_eq!(fixture.query.store().meta()?, before);
     assert_eq!(projection.projections.load(Ordering::SeqCst), 3);
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 3);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:prepared-denied")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:prepared-denied")?
+            .is_none()
+    );
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     Ok(())
 }
@@ -635,19 +776,23 @@ async fn graph_run_requires_projection() -> TestResult {
 async fn empty_window_is_inert() -> TestResult {
     let fixture = Fixture::target(Target::Sql)?;
     let before = fixture.query.store().meta()?;
-    assert!(fixture
-        .prepare("WHERE FALSE")
-        .await?
-        .refresh("graph:empty".into())
-        .await
-        .is_err());
+    assert!(
+        fixture
+            .prepare("WHERE FALSE")
+            .await?
+            .refresh("graph:empty".into())
+            .await
+            .is_err()
+    );
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:empty")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:empty")?
+            .is_none()
+    );
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     Ok(())
 }
@@ -665,11 +810,13 @@ async fn final_cancel_rolls_back() -> TestResult {
     assert!(owner.refresh("graph:cancelled".into()).await.is_err());
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:cancelled")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:cancelled")?
+            .is_none()
+    );
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     Ok(())
 }
@@ -682,11 +829,13 @@ async fn duplicate_records_are_rejected() -> TestResult {
     assert!(owner.refresh("graph:duplicate".into()).await.is_err());
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:duplicate")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:duplicate")?
+            .is_none()
+    );
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     Ok(())
 }
@@ -725,19 +874,23 @@ async fn denied_notice_joins() -> TestResult {
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some((Arc::clone(&fixture.authority), false));
     let before = fixture.query.store().meta()?;
-    assert!(fixture
-        .prepare("")
-        .await?
-        .refresh("graph:denied".into())
-        .await
-        .is_err());
+    assert!(
+        fixture
+            .prepare("")
+            .await?
+            .refresh("graph:denied".into())
+            .await
+            .is_err()
+    );
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:denied")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:denied")?
+            .is_none()
+    );
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     Ok(())
 }
@@ -768,11 +921,13 @@ async fn overlap_keeps_selected_facts() -> TestResult {
         .ok_or("current graph")?;
     assert_eq!(current.input_manifest.evidence.len(), 2);
     assert_eq!(current.input_manifest.context.len(), 2);
-    assert!(current
-        .graph
-        .facts
-        .iter()
-        .all(|fact| fact.record_id.durable_cursor >= 2));
+    assert!(
+        current
+            .graph
+            .facts
+            .iter()
+            .all(|fact| fact.record_id.durable_cursor >= 2)
+    );
     assert_eq!(
         current.witness_deadline_utc_ns,
         prior.witness_deadline_utc_ns
@@ -858,18 +1013,22 @@ async fn requires_all_returns() -> TestResult {
         .await
         .err()
         .ok_or("missing native result published")?;
-    assert!(std::iter::successors(
-        Some(&error as &(dyn std::error::Error + 'static)),
-        |error| error.source()
-    )
-    .any(|error| error.to_string().contains("required graph detector return")));
+    assert!(
+        std::iter::successors(
+            Some(&error as &(dyn std::error::Error + 'static)),
+            |error| error.source()
+        )
+        .any(|error| error.to_string().contains("required graph detector return"))
+    );
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:missing-return")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:missing-return")?
+            .is_none()
+    );
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     Ok(())
 }
@@ -903,11 +1062,13 @@ async fn keeps_frozen_coverage() -> TestResult {
     let observed = projection.observe_capture();
     let (first, _) = owner.refresh("graph:coverage-one".into()).await?;
     let capture = observed.try_recv()?;
-    assert!(capture
-        .inputs
-        .iter()
-        .all(|input| input.coverage.state == sdk::CoverageState::Gapped
-            && input.coverage.limits == ["SOURCE_COVERAGE_INSUFFICIENT"]));
+    assert!(
+        capture
+            .inputs
+            .iter()
+            .all(|input| input.coverage.state == sdk::CoverageState::Gapped
+                && input.coverage.limits == ["SOURCE_COVERAGE_INSUFFICIENT"])
+    );
     drop(capture);
     drop(projection);
     let original = fixture
@@ -916,13 +1077,15 @@ async fn keeps_frozen_coverage() -> TestResult {
         .graph_result(fixture.source.tenant_id, &first)?
         .ok_or("first graph")?;
     assert!(!original.input_manifest.coverage.is_empty());
-    assert!(original
-        .input_manifest
-        .coverage
-        .iter()
-        .all(|key| key.report_revision == 1
-            && key.interval_revision == 1
-            && key.state == araphor_data::DiscoveryCoverageStateV1::Gapped));
+    assert!(
+        original
+            .input_manifest
+            .coverage
+            .iter()
+            .all(|key| key.report_revision == 1
+                && key.interval_revision == 1
+                && key.state == araphor_data::DiscoveryCoverageStateV1::Gapped)
+    );
     fixture.coverage(2, Some("HEALTHY"))?;
     let (second, _) = fixture
         .prepare("")
@@ -943,11 +1106,13 @@ async fn keeps_frozen_coverage() -> TestResult {
             .collect::<std::collections::BTreeSet<_>>(),
         [1, 2].into()
     );
-    assert!(original
-        .input_manifest
-        .coverage
-        .iter()
-        .all(|key| current.input_manifest.coverage.contains(key)));
+    assert!(
+        original
+            .input_manifest
+            .coverage
+            .iter()
+            .all(|key| current.input_manifest.coverage.contains(key))
+    );
     fixture.coverage(3, None)?;
     let (same, _) = fixture
         .prepare("")
@@ -955,11 +1120,13 @@ async fn keeps_frozen_coverage() -> TestResult {
         .refresh("graph:coverage-fallback".into())
         .await?;
     assert_eq!(same, second);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:coverage-fallback")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:coverage-fallback")?
+            .is_none()
+    );
     Ok(())
 }
 
@@ -978,10 +1145,12 @@ async fn fallback_has_no_keys() -> TestResult {
         .graph_result(fixture.source.tenant_id, &id)?
         .ok_or("fallback graph")?;
     assert!(retained.input_manifest.coverage.is_empty());
-    assert!(retained
-        .packages
-        .iter()
-        .all(|package| package.state == araphor_data::GraphPackageStateV1::Waiting));
+    assert!(
+        retained
+            .packages
+            .iter()
+            .all(|package| package.state == araphor_data::GraphPackageStateV1::Waiting)
+    );
     Ok(())
 }
 
@@ -1111,11 +1280,13 @@ async fn extra_origin_changes_metadata() -> TestResult {
         "{error:?}"
     );
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:extra-source")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:extra-source")?
+            .is_none()
+    );
     Ok(())
 }
 
@@ -1144,10 +1315,12 @@ async fn cancel_joins_projection_capacity() -> TestResult {
         tokio::spawn(async move { publication.refresh("graph:held-projection".into()).await });
     tokio::task::spawn_blocking(move || observed.recv_timeout(std::time::Duration::from_secs(30)))
         .await??;
-    assert!(fixture
-        .query
-        .reserve_evaluation(fixture.source.tenant_id)
-        .is_err());
+    assert!(
+        fixture
+            .query
+            .reserve_evaluation(fixture.source.tenant_id)
+            .is_err()
+    );
     assert!(fixture.query.memory().reserve_input(CAPACITY).is_err());
     fixture.authority.set(false);
     assert!(
@@ -1155,10 +1328,12 @@ async fn cancel_joins_projection_capacity() -> TestResult {
             .await
             .is_err()
     );
-    assert!(fixture
-        .query
-        .reserve_evaluation(fixture.source.tenant_id)
-        .is_err());
+    assert!(
+        fixture
+            .query
+            .reserve_evaluation(fixture.source.tenant_id)
+            .is_err()
+    );
     assert!(fixture.query.memory().reserve_input(CAPACITY).is_err());
     release.send(())?;
     let error = execution
@@ -1170,11 +1345,13 @@ async fn cancel_joins_projection_capacity() -> TestResult {
         erebor_runtime_error::StatusCode::PermissionDenied
     );
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:held-projection")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:held-projection")?
+            .is_none()
+    );
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     drop(fixture.query.memory().reserve_input(CAPACITY)?);
     Ok(())
@@ -1194,11 +1371,13 @@ async fn rejects_missing_frozen_coverage() -> TestResult {
         .store()
         .graph_result(fixture.source.tenant_id, &id)?
         .ok_or("frozen graph")?;
-    assert!(retained
-        .input_manifest
-        .coverage
-        .iter()
-        .any(|key| key.report_revision == 1));
+    assert!(
+        retained
+            .input_manifest
+            .coverage
+            .iter()
+            .any(|key| key.report_revision == 1)
+    );
     fixture.coverage(2, Some("HEALTHY"))?;
     fixture
         .query
@@ -1216,10 +1395,12 @@ async fn rejects_missing_frozen_coverage() -> TestResult {
     assert!(format!("{error:?}").contains("frozen graph coverage is absent"));
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), calls);
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:missing-frozen")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:missing-frozen")?
+            .is_none()
+    );
     Ok(())
 }

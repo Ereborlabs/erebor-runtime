@@ -149,11 +149,20 @@ impl GraphRows {
         result_id: &str,
         header: &GraphHeader,
     ) -> Result<GraphSnapshotV1> {
+        Self::read_control(writer, result_id, header, None)
+    }
+
+    pub(super) fn read_control(
+        writer: &Connection,
+        result_id: &str,
+        header: &GraphHeader,
+        control: Option<&AnalysisReadControl>,
+    ) -> Result<GraphSnapshotV1> {
         Self::check_bytes(writer, result_id, header)?;
         let mut snapshot = header.snapshot.clone();
-        snapshot.graph.subjects = Self::read_subjects(writer, result_id, None)?;
-        snapshot.graph.edges = Self::read_edges(writer, result_id, None)?;
-        snapshot.findings = Self::read_findings(writer, result_id, header, None)?;
+        snapshot.graph.subjects = Self::read_subjects(writer, result_id, control)?;
+        snapshot.graph.edges = Self::read_edges(writer, result_id, control)?;
+        snapshot.findings = Self::read_findings(writer, result_id, header, control)?;
         if snapshot.graph.subjects.len() != header.subject_count
             || snapshot.graph.edges.len() != header.edge_count
             || snapshot.findings.len() != header.finding_count

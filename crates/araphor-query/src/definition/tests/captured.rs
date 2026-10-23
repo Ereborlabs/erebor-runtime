@@ -46,6 +46,7 @@ struct SinkState {
     admissions: AtomicUsize,
     begin_gate: Option<WriterGate>,
     admission_gate: Option<WriterGate>,
+    admission_error: Mutex<Option<crate::Error>>,
     input_evaluations: AtomicUsize,
     partitions: AtomicUsize,
     entries: AtomicUsize,
@@ -188,8 +189,8 @@ impl DataSink for Sink {
 }
 
 async fn fixture() -> TestResult<Fixture> {
-    let mut bundle = component("wasm", "count-input")?;
-    bundle.artifacts[0].descriptor.exports[0].limits.max_bytes = 16 * 1024;
+    let bundle = component("wasm", "count-input")?;
+
     let call = r#"SELECT * FROM "runtime-fixture"."1"."count-input"(
         input => (SELECT source_cursor AS value FROM events), mode => 'sum-input', amount => 0)"#;
     let fixture = Fixture::image_limits(

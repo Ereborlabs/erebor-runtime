@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use araphor_data::{
-    AnalysisReadControl, AnalysisStore, InstanceResultV1, ManagedInstance, ManagedReceipt,
+    AnalysisReadControl, AnalysisStore, ManagedInstance, ManagedOutput, ManagedReceipt,
     ManagedResult, ManagedStatus, PackageActionV1, PackageAuthorization,
-    PackageErrorCodeV1 as Code, PackageGrantV1,
+    PackageErrorCodeV1 as Code, PackageGrantV1, PackageResponseV1,
 };
 use araphor_query::execution::{Engine, LocalOutput};
 
@@ -96,10 +96,10 @@ impl Instance {
         instance: &str,
         id: &str,
         control: &AnalysisReadControl,
-    ) -> Result<InstanceResultV1> {
+    ) -> Result<PackageResponseV1> {
         let (query, grant) = (&query, &grant);
         Self::inspect(authority.as_ref(), grant, control, |read| async move {
-            Self::retained(
+            let retained = Self::retained(
                 query,
                 grant,
                 instance,
@@ -108,7 +108,11 @@ impl Instance {
                 read,
                 AnalysisStore::managed_output,
             )
-            .await
+            .await?;
+            Ok(match retained {
+                ManagedOutput::Call { result, .. } => PackageResponseV1::Result(result),
+                ManagedOutput::Selected { packet, .. } => PackageResponseV1::Output(packet),
+            })
         })
         .await
     }
@@ -118,27 +122,35 @@ impl Instance {
         authority: Arc<dyn PackageAuthorization>,
         grant: PackageGrantV1,
         instance: &str,
-        id: &str,
+        id: Option<&str>,
         sql: &str,
         control: &AnalysisReadControl,
     ) -> Result<LocalOutput> {
         let (query, grant) = (&query, &grant);
         Self::inspect(authority.as_ref(), grant, control, |read| async move {
             let now = Self::read_time()?;
-            let retained = Self::retained(
-                query,
-                grant,
-                instance,
-                id,
-                now,
-                Arc::clone(&read),
-                AnalysisStore::managed_result,
-            )
-            .await?;
+            let store = Arc::clone(query.store());
+            let selection = grant.selection.clone();
+            let instance = instance.to_owned();
+            let id = id.map(str::to_owned);
+            let stage = Arc::clone(&read);
+            let retained =
+                Engine::blocking(Arc::clone(&read), (), move || {
+                    Ok(store.managed_query_output(
+                        &selection,
+                        &instance,
+                        id.as_deref(),
+                        now,
+                        &stage,
+                    )?)
+                })
+                .await?;
+            let datasets = match retained {
+                ManagedOutput::Call { data, .. } => data.datasets,
+                ManagedOutput::Selected { data, .. } => vec![data],
+            };
             let session = query.session(grant.selection.clone(), &read, now)?;
-            Ok(session
-                .query_local(&retained.output.datasets, sql, retained.limits)
-                .await?)
+            Ok(session.query_local(&datasets, sql).await?)
         })
         .await
     }
@@ -164,16 +176,16 @@ impl Instance {
         let id = id.to_owned();
         let read = Arc::clone(&control);
         Ok(Engine::blocking(control, (), move || {
-            let stored = store
+            let mut stored = store
                 .managed_instance(grant.selection.tenant_id, &instance, &read)?
                 .ok_or_else(|| Code::Missing.error("managed instance"))?;
-            stored.grant.permitted_by(&grant.selection)?;
+            stored.grant = grant;
             Ok(output(&store, &stored, &id, now, &read)?)
         })
         .await?)
     }
 
-    async fn inspect<T, F: Future<Output = Result<T>>>(
+    pub(crate) async fn inspect<T, F: Future<Output = Result<T>>>(
         authority: &dyn PackageAuthorization,
         grant: &PackageGrantV1,
         control: &AnalysisReadControl,

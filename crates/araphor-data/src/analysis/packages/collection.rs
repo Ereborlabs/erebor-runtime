@@ -64,7 +64,11 @@ impl AnalysisStore {
         }
         self.check_logical(&transaction, tenant, false)?;
         let revision = self.package_next(&transaction)?;
-        Self::record_revision(&transaction, revision, &["package_revisions"])?;
+        Self::record_revision(
+            &transaction,
+            revision,
+            &["package_revisions", "package_images"],
+        )?;
         self.commit_metadata(transaction, "commit artifact release")?;
         self.revision.send_replace(revision);
         Ok(())
@@ -98,7 +102,12 @@ impl AnalysisStore {
         let removed = transaction.execute(
             "DELETE FROM package_revisions p WHERE p.tenant_id = ? AND p.package_id = ? AND p.revision = ?
             AND NOT EXISTS (SELECT 1 FROM package_images i WHERE i.tenant_id = p.tenant_id
-                AND i.package_id = p.package_id AND i.revision = p.revision)
+                AND i.package_id = p.package_id AND i.revision = p.revision AND i.installed)
+            AND NOT EXISTS (SELECT 1 FROM discovery_definitions d,
+                json_each(TRY_CAST(decode(d.definition) AS JSON), '$.images') j
+                WHERE d.tenant_id = p.tenant_id
+                    AND (j.value->'image'->>'package_id') = p.package_id
+                    AND (j.value->'image'->>'revision') = p.revision)
             AND NOT EXISTS (SELECT 1 FROM package_activations a WHERE a.tenant_id = p.tenant_id
                 AND a.installed AND ((a.package_id = p.package_id AND a.revision = p.revision)
                     OR (json_extract_string(TRY_CAST(decode(a.metadata) AS JSON), '$.root.package_id') = p.package_id
@@ -125,6 +134,10 @@ impl AnalysisStore {
             params![tenant.as_slice(), package, version],
         ).context(AnalysisDatabaseSnafu { operation: "release unused package artifacts" })?;
         if removed != 0 {
+            transaction.execute(
+                "DELETE FROM package_images WHERE tenant_id = ? AND package_id = ? AND revision = ? AND NOT installed",
+                params![tenant.as_slice(), package, version],
+            ).context(AnalysisDatabaseSnafu { operation: "release uninstalled image record" })?;
             for dependency in dependencies {
                 self.collect_package_rows(
                     transaction,

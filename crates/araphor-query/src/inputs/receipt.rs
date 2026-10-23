@@ -22,11 +22,12 @@ pub(super) struct PortScope {
     pub(super) slot: usize,
     pub(super) selection: AnalysisSelectionV1,
     pub(super) packages: std::collections::BTreeSet<usize>,
+    window: Option<(i64, i64)>,
 }
 
 impl Inputs {
     pub(crate) fn window(&self, slot: usize) -> Option<Option<crate::follow::Window>> {
-        self.plans.get(slot).map(|port| port.window)
+        self.plans.get(slot).map(|port| port.window.clone())
     }
 
     pub(crate) fn uses_events(&self, slot: usize) -> bool {
@@ -150,7 +151,7 @@ impl Inputs {
         &self,
         data: sdk::Dataset,
         source: &SourceSnapshot,
-        slot: usize,
+        (call, slot): (u64, usize),
         physical: &Arc<dyn ExecutionPlan>,
         inherited: &[sdk::Input],
         memory: &Memory,
@@ -215,6 +216,13 @@ impl Inputs {
                 slot,
                 selection,
                 packages: source.package_indices(&port.origins),
+                window: snapshot
+                    .windows
+                    .iter()
+                    .find(|window| {
+                        window.source == crate::follow::WindowSource::Input { call, slot }
+                    })
+                    .map(|window| (window.start_utc_ns, window.end_utc_ns)),
             },
             inherited
                 .iter()
@@ -255,6 +263,7 @@ impl Inputs {
                     || sources.contains_key("trace_measurements");
                 Ok(PortScope {
                     slot: port.slot,
+                    window: None,
                     packages: self
                         .packages
                         .iter()
@@ -440,11 +449,43 @@ impl Inputs {
                 )
             })
             .collect::<Vec<_>>();
+        let window = match scope.window {
+            Some(range) => Some(range),
+            None => port
+                .window
+                .as_ref()
+                .map(|window| window.fixed_range(snapshot.now))
+                .transpose()
+                .context(SqlSnafu)?
+                .flatten(),
+        };
+        let window = window
+            .map(|(start, end)| {
+                let sources = sources
+                    .iter()
+                    .map(|source| (&source.receipt.identity, source.receipt.cpu_id))
+                    .collect::<Vec<_>>();
+                let source = serde_json::to_vec(&(&data.name, sources))
+                    .context(araphor_data::PackageEncodingSnafu)?;
+                Ok::<_, crate::Error>(sdk::SourceWindow {
+                    source: Sha256::digest(source).to_vec(),
+                    start_utc_ns: start,
+                    end_utc_ns: end,
+                })
+            })
+            .transpose()?;
         let mut hash = Sha256::new();
         hash.update(b"ARAPHOR-SQL-INPUT-V1\0");
         serde_json::to_writer(
             &mut hash,
-            &(&scope.selection, receipts, contexts, results, &coverage),
+            &(
+                &scope.selection,
+                receipts,
+                contexts,
+                results,
+                &coverage,
+                &window,
+            ),
         )
         .context(araphor_data::PackageEncodingSnafu)?;
         if !inherited.is_empty() {
@@ -497,7 +538,7 @@ impl Inputs {
             revision: sdk::Revision {
                 owner: "araphor-query.Inputs".into(),
                 id: format!("{:x}", hash.finalize()),
-                window: None,
+                window,
             },
             coverage,
         })
@@ -694,6 +735,7 @@ mod supplied {
         let selected = PortScope {
             packages: Default::default(),
             slot: 0,
+            window: None,
             selection: snapshot.selection.clone(),
         };
         let error = scope

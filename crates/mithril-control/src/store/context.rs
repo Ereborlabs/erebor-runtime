@@ -11,26 +11,6 @@ use snafu::ResultExt as _;
 use super::{ControlStore, ControlStoreInner, ControlStoreState, PolicyRolloutKeyV1};
 use crate::{error::JsonSnafu, AllowedNodeIdentity, Result};
 
-#[cfg(test)]
-pub(super) struct ContextLimit<W>(pub(super) usize, pub(super) W);
-
-#[cfg(test)]
-impl<W: std::io::Write> std::io::Write for ContextLimit<W> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let remaining = self
-            .0
-            .checked_sub(bytes.len())
-            .ok_or_else(|| std::io::Error::other("the policy context exceeds its byte bound"))?;
-        self.1.write_all(bytes)?;
-        self.0 = remaining;
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.1.flush()
-    }
-}
-
 #[derive(Serialize)]
 struct PolicyContext<'a> {
     source: &'a crate::PolicySourceRevisionV1,

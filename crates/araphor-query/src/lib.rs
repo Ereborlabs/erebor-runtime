@@ -13,6 +13,7 @@ pub mod sources;
 mod stream;
 
 pub use araphor_data::AnalysisTableRequests;
+pub use araphor_package_runtime::Error as PackageRuntimeError;
 pub use datafusion;
 pub(crate) use error::*;
 pub use error::{Error, Failure, Result};

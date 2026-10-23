@@ -5,12 +5,6 @@ use araphor_analysis_sdk as sdk;
 #[test]
 fn oci_package_identity() -> TestResult {
     let mut package = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
-    package.artifacts[0].descriptor.exports[0].limits = sdk::Limits {
-        max_batches: 1024,
-        max_rows: 1_000_000,
-        max_bytes: 64 * 1024 * 1024,
-        max_checkpoint_bytes: 16 * 1024 * 1024,
-    };
     package.artifacts[0].implementations = vec![PackageImplementationV1::Native {
         export: "count".into(),
         artifact: (0_u8..=255).collect(),
@@ -18,7 +12,7 @@ fn oci_package_identity() -> TestResult {
             exports: vec!["count".into()],
             target: "x86_64-unknown-linux-gnu".into(),
             cpu_features: Vec::new(),
-            contract_version: 1,
+            contract_version: araphor_analysis_sdk::CONTRACT_VERSION,
             system_libraries: Vec::new(),
             dependencies: vec![super::super::native::Dependency {
                 name: "helper.so".into(),
@@ -59,10 +53,11 @@ fn oci_package_identity() -> TestResult {
         },
     });
     let bytes = package.encode()?;
-    assert_eq!(bytes.len(), 13_312);
+    let digest = package.digest()?;
+    assert_eq!(bytes.len(), 12_800, "{digest}");
     assert_eq!(
-        package.digest()?,
-        "sha256:d3b82af43995be955514922ecb39634d654c8d2bc2c1aa6b84a46c969dbe146f"
+        digest,
+        "sha256:456cd25518362e31d53ca250429fc9e4e648e258986cdbd079df00d9c7a2d458"
     );
     let content = oci::Content::from_bytes(&bytes)?;
     assert_eq!(content.layers.len(), 5);

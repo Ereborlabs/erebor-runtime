@@ -19,6 +19,7 @@ impl Fixture {
             .admit_definition([1; 16], definition.resolved(), || Ok(()))?;
         Ok(self.engine.store().admit_managed(
             &ManagedSpec {
+                destination: araphor_data::ManagedDestination::Selected,
                 tenant: [1; 16],
                 id: "constant".into(),
                 definition: definition.resolved().clone(),
@@ -27,6 +28,7 @@ impl Fixture {
                     planner: "datafusion-53/sql-call-1".into(),
                     definition: definition.resolved().digest()?,
                     calls: BTreeMap::new(),
+                    selected_schema: definition.plan.schema().as_arrow().clone(),
                 },
             },
             &PackageGrantV1 {
@@ -66,6 +68,7 @@ async fn constant_capture_keeps_state() -> TestResult {
             &definition,
             Invocation::default(),
             ManagedRead {
+                expected: None,
                 instance: instance.clone(),
                 rebuild: true,
                 completed: None,
@@ -116,6 +119,7 @@ async fn constant_capture_keeps_state() -> TestResult {
             &definition,
             Invocation::default(),
             ManagedRead {
+                expected: None,
                 instance,
                 rebuild: false,
                 completed: None,
@@ -161,6 +165,7 @@ async fn managed_capture_rejects_state() -> TestResult {
                 &definition,
                 invocation,
                 ManagedRead {
+                    expected: None,
                     instance: instance.clone(),
                     rebuild: false,
                     completed: None,
@@ -202,6 +207,7 @@ async fn managed_capture_keeps_binding() -> TestResult {
                 &definition,
                 Invocation::default(),
                 ManagedRead {
+                    expected: None,
                     instance: changed,
                     rebuild: false,
                     completed: None,

@@ -175,18 +175,6 @@ async fn large(target: Target) -> TestResult {
     drop(actual);
     drop(call);
     fixture.released()?;
-    let mut limited = evaluation.clone();
-    limited.context.limits.max_rows = 184;
-    let error = fixture
-        .run(&limited)
-        .await
-        .err()
-        .ok_or("row limit must reject")?;
-    let error = error
-        .downcast_ref::<araphor_query::Error>()
-        .ok_or("typed Query error")?;
-    assert_eq!(Failure::from(error), Failure::InputTooLarge, "{error:?}");
-    fixture.released()?;
     let (call, actual) = fixture.run(&evaluation).await?;
     fixture.compare(
         &evaluation,
@@ -224,12 +212,6 @@ async fn pressure(target: Target) -> TestResult {
     let detector = algorithm::Detector::Process;
     let package = detector.descriptor();
     let mut evaluation = evaluation(&input, detector)?;
-    evaluation.context.limits.max_bytes = if matches!(target, Target::Sql) {
-        u64::try_from(OUTPUT)?
-    } else {
-        1024 * 1024
-    };
-    evaluation.context.limits.max_checkpoint_bytes = 1024 * 1024;
     let expected = detector.evaluate(&evaluation)?;
     let fixture = Fixture::new(detector, target, &evaluation, &expected, Some(OUTPUT))?;
     let (call, actual) = fixture.run(&evaluation).await?;
@@ -329,7 +311,6 @@ fn evaluation(
     } else if Rows::decode::<algorithm::Observation>(
         &package.exports[0].inputs[0].port,
         &evaluation.input("records")?.data,
-        evaluation.context.limits,
     )?
     .iter()
     .any(|record| !record.complete)

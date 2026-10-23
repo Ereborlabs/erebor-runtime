@@ -27,7 +27,9 @@ use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
 use crate::sources::SourceSnapshot;
 
+mod clock;
 mod discovery;
+mod fixed;
 mod model;
 mod progress;
 mod runtime;
@@ -1953,6 +1955,7 @@ async fn moving_window_nanoseconds() {
     clock.set(2_000_000_001);
     let retained = next(&mut subscription).await;
     assert!(retained.clock_changed);
+    assert!(retained.completed_windows.is_empty());
     assert!(retained.batches.is_none());
     assert_eq!(
         retained.snapshot.selection.received_from,
@@ -1963,6 +1966,7 @@ async fn moving_window_nanoseconds() {
     clock.set(2_000_001_000);
     let expired = next(&mut subscription).await;
     assert!(expired.clock_changed);
+    assert!(expired.completed_windows.is_empty());
     assert_eq!(values(&expired, 0), vec![ScalarValue::Int64(Some(0))]);
     assert_eq!(
         expired.snapshot.selection.received_from,
@@ -2023,6 +2027,7 @@ async fn notification_follow_deadline() {
     clock.set(100);
     let overdue = next(&mut subscription).await;
     assert!(overdue.clock_changed);
+    assert!(overdue.completed_windows.is_empty());
     assert_eq!(overdue.evaluated_utc_ns, 100);
     assert_eq!(values(&overdue, 0), vec![ScalarValue::Boolean(Some(true))]);
     assert_eq!(overdue.snapshot.next_change, None);
@@ -2152,12 +2157,11 @@ fn cursor_admission_bindings() {
 }
 
 #[test]
-fn clock_requires_time_filter() {
+fn event_clock_requires_filter() {
     let fixture = Fixture::new(Limits::default());
     for sql in [
-        "SELECT CURRENT_TIMESTAMP FROM events",
-        "SELECT CURRENT_TIMESTAMP - INTERVAL '1 second' FROM events",
         "SELECT operation FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '1 second' OR operation = 7",
+        "SELECT operation FROM events WHERE date_trunc('second', received_at) >= CURRENT_TIMESTAMP - INTERVAL '1 second'",
     ] {
         let (plan, sources) = fixture.plan(sql, vec![]);
         assert!(
@@ -2371,5 +2375,39 @@ async fn native_join_source_capture() {
             }
         );
         assert!(subscription.next().await.is_none());
+    }
+}
+
+#[tokio::test]
+async fn stop_keeps_reason_once() {
+    for code in [
+        araphor_data::PackageErrorCodeV1::Denied,
+        araphor_data::PackageErrorCodeV1::Incomplete,
+    ] {
+        let fixture = Fixture::new(Limits {
+            global_streams: Some(1),
+            tenant_streams: Some(1),
+            ..Default::default()
+        });
+        let mut stream = fixture
+            .subscribe(
+                "SELECT source_cursor FROM events",
+                TestClock::new(1),
+                None,
+                true,
+            )
+            .until_error(std::future::ready(code.error("native stop reason").into()));
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert!(
+            matches!(error, crate::Error::Data { source: araphor_data::Error::Package { code: actual, field: "native stop reason", .. } } if actual == code)
+        );
+        assert!(stream.next().await.is_none());
+        stream.cancel_and_join().await.unwrap();
+        drop(
+            fixture
+                .engine
+                .reserve_stream(fixture.source.tenant_id)
+                .unwrap(),
+        );
     }
 }

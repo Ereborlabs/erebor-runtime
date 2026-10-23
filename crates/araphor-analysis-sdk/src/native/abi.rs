@@ -2,7 +2,7 @@ use std::ffi::c_void;
 
 use arrow_array::ffi_stream::FFI_ArrowArrayStream;
 
-use crate::{Error, ErrorCode, Limits, Result, CONTRACT_VERSION};
+use crate::{Error, ErrorCode, Result, CONTRACT_VERSION};
 
 pub const ACCESSOR_SYMBOL: &[u8] = b"araphor_analysis_get_api_v1\0";
 
@@ -29,10 +29,7 @@ pub struct Context {
     pub time_utc_ns: i64,
     pub seed: u64,
     pub has_seed: u8,
-    pub limits: NativeLimits,
 }
-
-pub type NativeLimits = Limits;
 
 #[repr(C)]
 pub struct Window {

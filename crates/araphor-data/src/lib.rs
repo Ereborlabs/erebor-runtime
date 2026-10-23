@@ -54,8 +54,8 @@ pub use analysis::{
     AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisSelectionV1, AnalysisSourceReceiptV1,
     AnalysisSourceSnapshotV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
     AnalysisStreamIdentityV1, AnalysisTableRead, AnalysisTableRequests, AnalysisWitnessV1,
-    ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1, ProcessorClassV1,
-    ProcessorHealthV1, ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1,
+    ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1, GraphLease,
+    ProcessorClassV1, ProcessorHealthV1, ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1,
     RetentionLimitsV1, RetentionStepV1, SegmentFile, Selection, StorageHealthV1, StorageLimitsV1,
     StorageUsageV1, StorePositionV1, TraceBindingV1, TraceIntentPageV1, TraceIntentV1,
     TraceOutputPageV1, TraceOutputReceiptV1, TraceStateV1, ValidatedCoverageV1,
@@ -75,8 +75,9 @@ pub use araphor_analysis_builtins::discovery::{
 pub use analysis::AnalysisCommitStage;
 
 pub use analysis::{
-    ManagedAttempt, ManagedCall, ManagedCapture, ManagedCommit, ManagedExit, ManagedFrontier,
-    ManagedInputRef, ManagedInstance, ManagedLease, ManagedManifest, ManagedMember, ManagedPage,
-    ManagedPrior, ManagedRead, ManagedReceipt, ManagedRequest, ManagedResult, ManagedResume,
-    ManagedReturn, ManagedSelected, ManagedSpec, ManagedStatus, ManagedTerminal,
+    ManagedAttempt, ManagedCall, ManagedCapture, ManagedCommit, ManagedDestination, ManagedExit,
+    ManagedFrontier, ManagedGraphOperation, ManagedInputRef, ManagedInstance, ManagedLease,
+    ManagedManifest, ManagedMember, ManagedOutput, ManagedPage, ManagedPrior, ManagedRead,
+    ManagedReceipt, ManagedRequest, ManagedResult, ManagedResume, ManagedReturn, ManagedSelected,
+    ManagedSpec, ManagedStatus, ManagedTerminal,
 };

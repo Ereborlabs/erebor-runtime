@@ -55,9 +55,9 @@ impl sdk::Guest for BurstDetector {
             .collect();
         let mut output = sdk::Output {
             datasets: vec![
-                Rows::encode(&model.outputs[0], &subjects, evaluation.context.limits)?,
-                Rows::encode::<Relationship>(&model.outputs[1], &[], evaluation.context.limits)?,
-                Rows::encode(&model.outputs[2], &findings, evaluation.context.limits)?,
+                Rows::encode(&model.outputs[0], &subjects)?,
+                Rows::encode::<Relationship>(&model.outputs[1], &[])?,
+                Rows::encode(&model.outputs[2], &findings)?,
             ],
             ..Default::default()
         };
@@ -74,7 +74,6 @@ impl sdk::Guest for BurstDetector {
                 &[State {
                     value: records.len().to_string(),
                 }],
-                evaluation.context.limits,
             )?],
         });
         Ok(output)

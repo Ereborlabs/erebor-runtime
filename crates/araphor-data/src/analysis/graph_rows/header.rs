@@ -11,6 +11,7 @@ pub(in crate::analysis) struct GraphHeader {
     pub(in crate::analysis) edge_count: usize,
     pub(in crate::analysis) finding_count: usize,
     pub(in crate::analysis) snapshot_bytes: usize,
+    pub(in crate::analysis) notice: (u64, u64),
 }
 
 impl GraphHeader {
@@ -109,6 +110,16 @@ impl GraphHeader {
             .fail();
         }
         Ok(Self {
+            notice: (
+                snapshot.context_notice_revision,
+                snapshot
+                    .input_manifest
+                    .coverage
+                    .iter()
+                    .map(|key| key.report_revision)
+                    .max()
+                    .unwrap_or(0),
+            ),
             snapshot,
             subject_count,
             edge_count,

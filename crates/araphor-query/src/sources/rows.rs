@@ -27,6 +27,8 @@ pub struct ArrowSnapshot {
     pub mutable_discovery: bool,
     pub received_min: Option<u64>,
     pub next_change: Option<u64>,
+    pub windows: Vec<crate::follow::WindowRange>,
+    pub(crate) now: u64,
     managed: Option<araphor_data::ManagedCapture>,
     _metadata: MemoryReservation,
 }
@@ -41,6 +43,20 @@ impl std::fmt::Debug for ArrowSnapshot {
 }
 
 impl ArrowSnapshot {
+    pub fn time_utc_ns(&self) -> u64 {
+        self.now
+    }
+
+    pub(super) fn set_windows(&mut self, windows: Vec<crate::follow::WindowRange>) -> Result<()> {
+        self._metadata.try_grow(
+            windows
+                .capacity()
+                .saturating_mul(2 * size_of::<crate::follow::WindowRange>()),
+        )?;
+        self.windows = windows;
+        Ok(())
+    }
+
     pub fn managed(&self) -> Option<&araphor_data::ManagedCapture> {
         self.managed.as_ref()
     }
@@ -459,14 +475,23 @@ impl SourceSnapshot {
         mode: ReadMode,
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<Captured> {
-        let reservation = self.memory.prepare_input(self.limits.input_bytes)?;
-        let prepaid =
-            self.memory.input_capacity().is_some() || self.limits.input_bytes != usize::MAX;
+        let metadata_read = matches!(mode, ReadMode::Metadata);
+        let reservation = if metadata_read {
+            self.memory.reserve_input(0)?
+        } else {
+            self.memory.prepare_input(self.limits.input_bytes)?
+        };
+        let prepaid = !metadata_read
+            && (self.memory.input_capacity().is_some() || self.limits.input_bytes != usize::MAX);
         let mut limits = self.limits;
-        if prepaid {
+        if metadata_read {
+            limits.input_bytes = limits
+                .input_bytes
+                .min(self.memory.input_capacity().unwrap_or(usize::MAX));
+        } else if prepaid {
             limits.input_bytes = reservation.size();
         }
-        let constrained = limits.input_bytes < self.limits.input_bytes;
+        let constrained = prepaid && limits.input_bytes < self.limits.input_bytes;
         let data_error = |error| {
             if constrained
                 && matches!(error, araphor_data::Error::AnalysisInputTooLarge { resource, .. }
@@ -506,7 +531,6 @@ impl SourceSnapshot {
                 authorized: &self.selection,
                 scope: &inputs.scope,
                 outputs,
-                limits: inputs.limits,
             });
         let read = AnalysisTableRead {
             requests,
@@ -706,7 +730,7 @@ impl SourceSnapshot {
             }
         }
         if let Some(managed) = &managed {
-            for batch in managed.datasets().flat_map(|data| &data.batches) {
+            for batch in managed.batches() {
                 self.memory.retain_input(batch, &reservation)?;
             }
         }
@@ -792,7 +816,12 @@ impl SourceSnapshot {
                 })
         });
         let retained = removed.saturating_add(source_bytes);
-        if prepaid && metadata.saturating_add(retained) > reservation.size() {
+        let limit = if metadata_read {
+            limits.input_bytes
+        } else {
+            reservation.size()
+        };
+        if (prepaid || metadata_read) && metadata.saturating_add(retained) > limit {
             let source = DataFusionError::ResourcesExhausted(
                 "source metadata exceeds the admitted input".into(),
             );
@@ -812,6 +841,8 @@ impl SourceSnapshot {
             mutable_discovery: std::mem::take(&mut page.mutable_discovery),
             received_min: page.received_min.take(),
             next_change: page.next_change.take(),
+            windows: Vec::new(),
+            now: self.now,
             page,
             selection,
             witnesses,

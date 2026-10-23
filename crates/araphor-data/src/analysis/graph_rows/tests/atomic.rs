@@ -242,9 +242,11 @@ fn graph_contexts_commit_atomically() -> TestResult {
         store,
         snapshot,
         request,
+        _graph,
         _directory,
     } = fixture;
     let path = _directory.path().join("analysis");
+    drop(_graph);
     drop(store);
     let store = crate::AnalysisStore::open(path)?;
     assert_eq!(

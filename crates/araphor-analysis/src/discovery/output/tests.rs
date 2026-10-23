@@ -15,6 +15,7 @@ use datafusion::logical_expr::LogicalPlan;
 use serde::Serialize;
 
 mod baseline;
+mod corpus;
 mod forged;
 mod native;
 
@@ -183,7 +184,7 @@ impl Fixture {
             .find(|input| input.port.name == name)
             .ok_or("input")?
             .port;
-        Ok(Rows::encode(port, rows, model.limits)?)
+        Ok(Rows::encode(port, rows)?)
     }
 
     async fn call(
@@ -275,7 +276,6 @@ impl Fixture {
         assert!(!evaluation.context.id.is_empty());
         assert_eq!(evaluation.context.time_utc_ns, 0);
         assert_eq!(evaluation.context.seed, None);
-        assert_eq!(evaluation.context.limits, model.limits);
         assert!(evaluation.parameters.is_none());
         assert!(evaluation.checkpoint.is_none());
         assert_eq!(evaluation.inputs.len(), inputs.len());

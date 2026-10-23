@@ -17,7 +17,6 @@ impl BehaviorSnapshotV1 {
             require(
                 !group.members.is_empty()
                     && !group.evidence_sample.is_empty()
-                    && group.evidence_sample.len() <= MAX_DISCOVERY_SAMPLES
                     && group
                         .evidence_sample
                         .windows(2)

@@ -8,10 +8,11 @@ use crate::{
     EvidenceIntakeIdentityV1, JsonSnafu, Result,
 };
 
+mod graph;
 mod notices;
 mod profile;
 
-pub use profile::PreparedProfile;
+pub use profile::{DiscoveryProducer, PreparedProfile, ProfileCommit};
 
 pub const MAX_RESULT_BYTES: usize = usize::MAX;
 pub const MAX_RESULT_REFS: usize = usize::MAX;
@@ -144,6 +145,19 @@ pub struct AnalysisGapV1 {
     pub first_cursor: u64,
     pub last_cursor: u64,
     pub commit_revision: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::analysis) enum ResultHead<'a> {
+    Unchecked,
+    Working(u64),
+    Current(Option<&'a super::PackageResultRefV1>),
+}
+
+pub(in crate::analysis) struct ProgressWrite {
+    pub(in crate::analysis) receipt: AnalysisResultReceiptV1,
+    pub(in crate::analysis) relations: Vec<&'static str>,
+    pub(in crate::analysis) commit: bool,
 }
 
 #[derive(Default)]
@@ -637,39 +651,7 @@ impl AnalysisStore {
         canonical: bool,
         check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
-        let expected: Vec<_> = graph
-            .input_manifest
-            .evidence
-            .iter()
-            .filter(|id| {
-                !graph
-                    .missing_ranges
-                    .iter()
-                    .any(|(first, last)| (*first..=*last).contains(&id.durable_cursor))
-            })
-            .map(|id| {
-                (
-                    super::AnalysisStreamIdentityV1::Evidence(id.stream.clone()),
-                    id.durable_cursor,
-                )
-            })
-            .collect();
-        let actual: Vec<_> = input
-            .witnesses
-            .iter()
-            .map(|witness| (witness.identity.clone(), witness.cursor))
-            .collect();
-        if graph.scope != input.scope
-            || expected != actual
-            || input
-                .witnesses
-                .iter()
-                .any(|witness| witness.expires_utc_ns != graph.witness_deadline_utc_ns)
-            || (advance && graph.last_cursor != input.consumed_cursor)
-            || (!advance && input.expected_cursor != input.consumed_cursor)
-        {
-            return self.reject("the graph input manifest, witnesses, or progress differ");
-        }
+        self.check_graph_commit(input, graph, advance)?;
         self.commit_progress(
             input,
             None,
@@ -750,6 +732,82 @@ impl AnalysisStore {
         canonical: bool,
         check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
+        let mut writer = self.maintenance_writer()?;
+        let transaction = writer
+            .get_mut()?
+            .transaction()
+            .context(AnalysisDatabaseSnafu {
+                operation: "begin analysis result",
+            })?;
+        let write = self.progress_rows(
+            &transaction,
+            input,
+            previous.map_or(ResultHead::Unchecked, ResultHead::Working),
+            advance,
+            profile,
+            graph.map(|graph| (graph, graph.context_notice_revision)),
+            contexts,
+            proofs,
+            sources,
+            canonical,
+        )?;
+        if !write.commit {
+            check()?;
+            return Ok(write.receipt);
+        }
+        if !write.relations.is_empty() {
+            self.check_logical(
+                &transaction,
+                input.scope.identity.tenant_id,
+                profile.is_none(),
+            )?;
+            self.check_witnesses(
+                &transaction,
+                input.scope.identity.tenant_id,
+                input.created_utc_ns,
+            )?;
+            Self::record_revision(
+                &transaction,
+                write.receipt.commit_revision,
+                &write.relations,
+            )?;
+            #[cfg(any(test, feature = "test-fixtures"))]
+            self.crash_at("result.before");
+        }
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(super::AnalysisCommitStage::BeforeResultCommit)?;
+        check()?;
+        self.commit_metadata(transaction, "commit analysis result")?;
+        if !write.relations.is_empty() {
+            #[cfg(any(test, feature = "test-fixtures"))]
+            self.crash_at("result.after");
+            self.revision.send_replace(write.receipt.commit_revision);
+        }
+        Ok(write.receipt)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The typed result rows use the caller transaction and exact captured inputs."
+    )]
+    pub(in crate::analysis) fn progress_rows(
+        &self,
+        transaction: &duckdb::Transaction<'_>,
+        input: &AnalysisResultCommitV1,
+        expected: ResultHead<'_>,
+        advance: bool,
+        profile: Option<&crate::DiscoveryProfileV1>,
+        graph: Option<(&crate::GraphSnapshotV1, u64)>,
+        contexts: &[super::AnalysisContextVersionV1],
+        proofs: &[AnalysisContextRefV1],
+        sources: &[(String, u64)],
+        canonical: bool,
+    ) -> Result<ProgressWrite> {
+        let (graph, notice) = graph.map_or((None, 0), |(graph, notice)| (Some(graph), notice));
+        let previous = match expected {
+            ResultHead::Working(revision) => Some(revision),
+            _ => None,
+        };
         if profile.is_some_and(|profile| {
             profile.scope != input.scope
                 || profile.profile_id != input.result_id
@@ -760,7 +818,7 @@ impl AnalysisStore {
         }
         if !input.scope.valid()
             || input.result_id.is_empty()
-            || input.body.is_empty()
+            || (input.body.is_empty() && (profile.is_none() || contexts.is_empty()))
             || input.created_utc_ns == 0
             || input.consumed_cursor < input.expected_cursor
             || input.witnesses.windows(2).any(|pair| {
@@ -778,7 +836,8 @@ impl AnalysisStore {
         {
             return self.reject("the analysis result or progress bounds are invalid");
         }
-        if (graph.is_none() && (!contexts.is_empty() || !proofs.is_empty() || !sources.is_empty()))
+        if (graph.is_none() && profile.is_none() && !contexts.is_empty())
+            || (graph.is_none() && (!proofs.is_empty() || !sources.is_empty()))
             || sources.windows(2).any(|pair| pair[0].0 >= pair[1].0)
             || sources.iter().any(|(relation, _)| relation.is_empty())
             || contexts.windows(2).any(|pair| pair[0].key >= pair[1].key)
@@ -844,13 +903,7 @@ impl AnalysisStore {
                 }
             })
             .transpose()?;
-        let body = graph_header.as_deref().unwrap_or(input.body.as_slice());
         let key = input.scope.identity.key();
-        let mut writer_guard = self.maintenance_writer()?;
-        let writer = writer_guard.get_mut()?;
-        let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
-            operation: "begin analysis result",
-        })?;
         let existing = transaction
             .query_row(
                 "SELECT CASE WHEN octet_length(tenant_id) = 16 THEN tenant_id ELSE NULL END,
@@ -873,10 +926,10 @@ impl AnalysisStore {
                 operation: "read immutable result",
             })?;
         if existing.is_none() {
-            let revision = Self::read_meta_from(&transaction, &self.root)?.commit_revision;
+            let revision = Self::read_meta_from(transaction, &self.root)?.commit_revision;
             if sources.iter().any(|(_, captured)| *captured > revision)
                 || !Self::package_sources_current(
-                    &transaction,
+                    transaction,
                     sources,
                     &AnalysisReadControl::default(),
                 )?
@@ -885,8 +938,7 @@ impl AnalysisStore {
             }
         }
         let mut context_write = None;
-        let inserted =
-            self.context_rows(&transaction, contexts, false, None, &mut context_write)?;
+        let inserted = self.context_rows(transaction, contexts, false, None, &mut context_write)?;
         let mut references = std::borrow::Cow::Borrowed(input.context_refs.as_slice());
         if !inserted.is_empty() || !proofs.is_empty() {
             references.to_mut().extend(inserted);
@@ -928,13 +980,29 @@ impl AnalysisStore {
             }
             return self.reject("the result context revision differs from its captured references");
         }
+        let mut encoded = None;
+        let mut retained_profile = None;
+        if let Some(profile) = profile.filter(|_| !contexts.is_empty()) {
+            let mut profile = profile.clone();
+            profile.context_refs = references.to_vec();
+            profile.validate()?;
+            let mut committed = input.clone();
+            committed.context_revision = context_revision;
+            committed.context_refs = references.to_vec();
+            committed.body = PreparedProfile::encode(&profile)?;
+            encoded = Some(committed);
+            retained_profile = Some(profile);
+        }
+        let input = encoded.as_ref().unwrap_or(input);
+        let profile = retained_profile.as_ref().or(profile);
+        let body = graph_header.as_deref().unwrap_or(input.body.as_slice());
         let header = if let Some(graph) = graph {
             ProfileHeader {
                 stream_key: Some(input.scope.identity.key()),
                 method_version: Some(input.scope.method_version),
                 interval_id: Some(graph.first_cursor.to_string()),
                 profile_revision: None,
-                facts_revision: Some(graph.context_notice_revision),
+                facts_revision: Some(notice),
                 coverage_revision: Some(input.coverage_revision),
                 first_cursor: Some(graph.first_cursor),
             }
@@ -957,7 +1025,7 @@ impl AnalysisStore {
             if tenant == input.scope.identity.tenant_id && stored == request && graph.is_some() {
                 retained = self
                     .read_result_from(
-                        &transaction,
+                        transaction,
                         input.scope.identity.tenant_id,
                         &input.result_id,
                     )?
@@ -967,13 +1035,23 @@ impl AnalysisStore {
                 && stored == request
                 && retained == input.body
             {
-                check()?;
-                return Ok(AnalysisResultReceiptV1 {
-                    commit_revision: revision,
-                    consumed_cursor: input.consumed_cursor,
+                return Ok(ProgressWrite {
+                    receipt: AnalysisResultReceiptV1 {
+                        commit_revision: revision,
+                        consumed_cursor: input.consumed_cursor,
+                    },
+                    relations: Vec::new(),
+                    commit: false,
                 });
             }
-            if tenant != input.scope.identity.tenant_id || previous != Some(revision) {
+            if tenant != input.scope.identity.tenant_id
+                || previous != Some(revision)
+                || Self::managed_profile_version(
+                    transaction,
+                    input.scope.identity.tenant_id,
+                    &input.result_id,
+                )?
+            {
                 return AnalysisConflictSnafu.fail();
             }
             let profile = crate::DiscoveryProfileV1::try_from(retained.as_slice())?;
@@ -1009,17 +1087,19 @@ impl AnalysisStore {
                 return AnalysisConflictSnafu.fail();
             }
         }
-        let progress: Option<(u64, u64, bool, String)> = transaction
+        let progress: Option<(u64, u64, bool, String, Option<u64>)> = transaction
             .query_row(
-                "SELECT consumed_cursor, resume_floor, retired, result_id FROM processor_progress
-                 WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
+                "SELECT p.consumed_cursor, p.resume_floor, p.retired, p.result_id, r.commit_revision
+                 FROM processor_progress p LEFT JOIN analysis_results r
+                   ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id AND r.processor_id = p.processor_id
+                 WHERE p.processor_id = ? AND p.method_version = ? AND p.tenant_id = ? AND p.stream_key = ?",
                 params![
                     input.scope.processor_id,
                     input.scope.method_version,
                     input.scope.identity.tenant_id.as_slice(),
                     key.as_slice(),
                 ],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .optional()
             .context(AnalysisDatabaseSnafu {
@@ -1027,16 +1107,23 @@ impl AnalysisStore {
             })?;
         if !progress
             .as_ref()
-            .is_some_and(|(consumed, resumed, retired, result)| {
+            .is_some_and(|(consumed, resumed, retired, result, revision)| {
                 !retired
                     && (*consumed).max(*resumed) == input.expected_cursor
                     && (!replacing || result == &input.result_id)
+                    && match expected {
+                        ResultHead::Current(Some(head)) => {
+                            result == &head.result_id && *revision == Some(head.commit_revision)
+                        }
+                        ResultHead::Current(None) => result.is_empty() && revision.is_none(),
+                        _ => true,
+                    }
             })
         {
             return AnalysisConflictSnafu.fail();
         }
         let receipt =
-            Self::read_receipt_from(&transaction, &self.root, &input.scope.identity, &key)?
+            Self::read_receipt_from(transaction, &self.root, &input.scope.identity, &key)?
                 .ok_or_else(|| self.state_error("the processor source is absent"))?;
         if input.consumed_cursor > receipt.contiguous_cursor
             || input.coverage_revision > receipt.coverage_revision
@@ -1044,7 +1131,7 @@ impl AnalysisStore {
             return self.reject("the result claims unavailable source or coverage progress");
         }
         let expected = input.consumed_cursor - input.expected_cursor;
-        let revision = Self::read_meta_from(&transaction, &self.root)?.commit_revision;
+        let revision = Self::read_meta_from(transaction, &self.root)?.commit_revision;
         let available = self
             .raw
             .lock()
@@ -1061,7 +1148,7 @@ impl AnalysisStore {
         let mut checked_context = 0;
         for reference in references.as_ref() {
             let Some((_, revision)) =
-                Self::read_context_from(&transaction, &self.root, &reference.key)?
+                Self::read_context_from(transaction, &self.root, &reference.key)?
             else {
                 return self.reject("the result context version is absent");
             };
@@ -1082,13 +1169,13 @@ impl AnalysisStore {
                     .map(|previous| (graph, previous))
             }) {
                 let retained = super::graph_rows::GraphRows::read_header(
-                    &transaction,
+                    transaction,
                     input.scope.identity.tenant_id,
                     previous,
                 )?
                 .ok_or_else(|| self.state_error("the expected graph header is absent"))?;
                 let retained =
-                    super::graph_rows::GraphRows::read(&transaction, previous, &retained)?;
+                    super::graph_rows::GraphRows::read(transaction, previous, &retained)?;
                 let (metadata, retained_revision): (Option<Vec<u8>>, u64) = transaction.query_row(
                     "SELECT CASE WHEN octet_length(request_meta) <= ? THEN request_meta ELSE NULL END,
                         commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
@@ -1112,25 +1199,25 @@ impl AnalysisStore {
                         return self.reject("the unchanged graph added context versions");
                     }
                     self.notice_rows(
-                        &transaction,
+                        transaction,
                         &input.scope,
                         previous,
                         retained_revision,
-                        graph.context_notice_revision,
+                        notice,
                         input.coverage_revision,
                     )?;
-                    #[cfg(any(test, feature = "test-fixtures"))]
-                    self.run_commit_hook(super::AnalysisCommitStage::BeforeResultCommit)?;
-                    check()?;
-                    self.commit_metadata(transaction, "commit unchanged graph notice")?;
-                    return Ok(AnalysisResultReceiptV1 {
-                        commit_revision: retained_revision,
-                        consumed_cursor: input.consumed_cursor,
+                    return Ok(ProgressWrite {
+                        receipt: AnalysisResultReceiptV1 {
+                            commit_revision: retained_revision,
+                            consumed_cursor: input.consumed_cursor,
+                        },
+                        relations: Vec::new(),
+                        commit: true,
                     });
                 }
             }
         }
-        let revision = Self::read_meta_from(&transaction, &path)?
+        let revision = Self::read_meta_from(transaction, &path)?
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
@@ -1201,10 +1288,10 @@ impl AnalysisStore {
                 })?;
         }
         if let Some(graph) = graph {
-            super::graph_rows::GraphRows::insert(graph, &transaction, &input.result_id)?;
+            super::graph_rows::GraphRows::insert(graph, transaction, &input.result_id)?;
         }
         Self::insert_references(
-            &transaction,
+            transaction,
             &input.result_id,
             &input.witnesses,
             &witness_segments,
@@ -1248,29 +1335,13 @@ impl AnalysisStore {
         if !references.is_empty() {
             relations.push("context_refs");
         }
-        self.check_logical(
-            &transaction,
-            input.scope.identity.tenant_id,
-            profile.is_none(),
-        )?;
-        self.check_witnesses(
-            &transaction,
-            input.scope.identity.tenant_id,
-            input.created_utc_ns,
-        )?;
-        Self::record_revision(&transaction, revision, &relations)?;
-        #[cfg(any(test, feature = "test-fixtures"))]
-        self.crash_at("result.before");
-        #[cfg(any(test, feature = "test-fixtures"))]
-        self.run_commit_hook(super::AnalysisCommitStage::BeforeResultCommit)?;
-        check()?;
-        self.commit_metadata(transaction, "commit analysis result")?;
-        #[cfg(any(test, feature = "test-fixtures"))]
-        self.crash_at("result.after");
-        self.revision.send_replace(revision);
-        Ok(AnalysisResultReceiptV1 {
-            commit_revision: revision,
-            consumed_cursor: input.consumed_cursor,
+        Ok(ProgressWrite {
+            receipt: AnalysisResultReceiptV1 {
+                commit_revision: revision,
+                consumed_cursor: input.consumed_cursor,
+            },
+            relations,
+            commit: true,
         })
     }
 }

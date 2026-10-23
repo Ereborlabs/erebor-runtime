@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow_array::NullArray;
 
-use crate::{wire::Dataset, DataType, Field, Limits, RecordBatch, Schema};
+use crate::{wire::Dataset, DataType, Field, RecordBatch, Schema};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -18,12 +18,9 @@ fn null_has_no_scratch() -> TestResult {
         name: "nulls".into(),
         batches: vec![batch],
     };
-    let encoded = Dataset::encode(&data, &schema, Limits::default())?;
+    let encoded = Dataset::encode(&data, &schema)?;
     assert!(encoded.arrow_ipc.len() < 1024);
-    assert_eq!(
-        encoded.decode(&schema, Limits::default())?.batches,
-        data.batches
-    );
+    assert_eq!(encoded.decode(&schema)?.batches, data.batches);
     Ok(())
 }
 
@@ -60,9 +57,9 @@ fn decode_bound_covers_buffers() -> TestResult {
             name: "values".into(),
             batches: vec![batch.clone(), batch],
         };
-        let encoded = Dataset::encode(&data, &schema, Limits::default())?;
-        let bound = Dataset::decoding_bytes(&encoded.arrow_ipc, Limits::default())?;
-        let decoded = encoded.decode(&schema, Limits::default())?;
+        let encoded = Dataset::encode(&data, &schema)?;
+        let bound = Dataset::decoding_bytes(&encoded.arrow_ipc)?;
+        let decoded = encoded.decode(&schema)?;
         let buffers = decoded
             .batches
             .iter()
@@ -90,12 +87,12 @@ fn decode_bound_covers_nulls() -> TestResult {
             vec![Arc::new(NullArray::new(rows))],
         )?],
     };
-    let encoded = Dataset::encode(&data, &schema, Limits::default())?;
-    let bound = Dataset::decoding_bytes(&encoded.arrow_ipc, Limits::default())?;
+    let encoded = Dataset::encode(&data, &schema)?;
+    let bound = Dataset::decoding_bytes(&encoded.arrow_ipc)?;
     assert!(encoded.arrow_ipc.len() < 1024);
     assert!(bound >= rows.div_ceil(8));
     let mut truncated = encoded.arrow_ipc;
     truncated.pop();
-    assert!(Dataset::decoding_bytes(&truncated, Limits::default()).is_err());
+    assert!(Dataset::decoding_bytes(&truncated).is_err());
     Ok(())
 }

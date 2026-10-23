@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::future::{poll_fn, Future as _};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -167,6 +168,11 @@ impl<'a> Planner<'a> {
         Self { state }
     }
 
+    pub(crate) async fn statement(&self, statement: Statement) -> NativeResult<LogicalPlan> {
+        let mut planning = std::pin::pin!(self.state.statement_to_plan(statement));
+        poll_fn(|context| crate::parser::Parser::stack(|| planning.as_mut().poll(context))).await
+    }
+
     pub(crate) fn sources(plan: &LogicalPlan) -> Result<BTreeSet<SourceOrigin>> {
         SourceDemand::collect(plan, true).context(crate::SqlSnafu)
     }
@@ -226,8 +232,8 @@ impl<'a> Planner<'a> {
         state
             .register_relation_planner(demand.clone())
             .context(crate::SqlSnafu)?;
-        let plan = state
-            .statement_to_plan(statement)
+        let plan = Planner::new(&state)
+            .statement(statement)
             .await
             .and_then(|plan| plan.with_param_values(parameters))
             .context(crate::SqlSnafu)?;

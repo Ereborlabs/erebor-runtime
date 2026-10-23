@@ -64,6 +64,26 @@ impl AnalysisStore {
         })
     }
 
+    pub(in crate::analysis) fn managed_profile_version(
+        reader: &Connection,
+        tenant: [u8; 16],
+        id: &str,
+    ) -> Result<bool> {
+        reader
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM managed_edges e JOIN analysis_results r
+                ON r.tenant_id = e.tenant_id AND r.result_id = e.dependency_id
+                    AND r.commit_revision = e.commit_revision
+                WHERE e.tenant_id = ? AND e.result_id = ?
+                    AND r.processor_id = 'managed-package-v1')",
+                params![tenant.as_slice(), id],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read immutable profile owner",
+            })
+    }
+
     pub(in crate::analysis) fn package_source_revision(
         &self,
         reader: &Connection,
@@ -76,7 +96,9 @@ impl AnalysisStore {
         ).optional().context(AnalysisDatabaseSnafu { operation: "resolve package result reference" })?
             .ok_or_else(|| self.state_error("the package result reference is absent"))?;
         if let Some(body) = body {
-            if !crate::DiscoveryProfileV1::try_from(body.as_slice())?.sealed {
+            if !crate::DiscoveryProfileV1::try_from(body.as_slice())?.sealed
+                && !Self::managed_profile_version(reader, tenant, id)?
+            {
                 return Err(crate::PackageErrorCodeV1::Unsupported.error("mutable discovery input"));
             }
         }

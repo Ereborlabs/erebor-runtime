@@ -390,7 +390,6 @@ async fn prepared_guest_keeps_identity() -> TestResult {
             id: "prepared".into(),
             time_utc_ns: 123,
             seed: Some(7),
-            limits: model.limits,
         },
     };
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
@@ -414,7 +413,6 @@ async fn prepared_guest_keeps_identity() -> TestResult {
                 evaluation.clone(),
                 control.within(None)?,
                 &workers,
-                model.limits,
                 None,
                 Some(prepared.clone()),
                 None,
@@ -441,7 +439,6 @@ async fn prepared_guest_keeps_identity() -> TestResult {
             evaluation,
             control.within(None)?,
             &workers,
-            model.limits,
             None,
             Some(prepared),
             None,
@@ -464,12 +461,6 @@ async fn prepared_guest_keeps_identity() -> TestResult {
 }
 
 fn datasets(tenant: u8, counts: [u64; 2]) -> sdk::Result<Vec<sdk::Dataset>> {
-    let limits = sdk::Limits {
-        max_batches: 4,
-        max_rows: 16,
-        max_bytes: 1024 * 1024,
-        max_checkpoint_bytes: 1024 * 1024,
-    };
     let atoms: Vec<_> = counts
         .into_iter()
         .enumerate()
@@ -492,12 +483,10 @@ fn datasets(tenant: u8, counts: [u64; 2]) -> sdk::Result<Vec<sdk::Dataset>> {
         Rows::encode(
             &builtin::Discovery::port::<builtin::BehaviorAtomV1>("atoms"),
             &atoms,
-            limits,
         )?,
         Rows::encode::<builtin::DiscoveryCoverageV1>(
             &builtin::Discovery::port::<builtin::DiscoveryCoverageV1>("coverage"),
             &[],
-            limits,
         )?,
     ];
     Ok(datasets)
@@ -509,7 +498,6 @@ fn assert_group(result: &CallResult, tenant: u8, count: u64) -> TestResult {
     let groups: Vec<builtin::BehaviorDisplayGroupV1> = Rows::decode(
         &builtin::Discovery::port::<builtin::BehaviorDisplayGroupV1>("groups"),
         &result.output().datasets[0],
-        result.evaluation().context.limits,
     )?;
     assert_eq!(groups.len(), 1);
     assert_eq!(

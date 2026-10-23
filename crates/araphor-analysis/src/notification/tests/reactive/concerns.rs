@@ -5,7 +5,7 @@ async fn native_concern_route_changes() -> TestResult {
     for case in ["live", "ack", "stale", "expired", "missing"] {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-        store.enable_graph_owner()?;
+        let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
         let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
         let engine = Engine::new(store.clone(), Limits::default())?;
         let human = grant(NotificationPrincipalV1::Human);

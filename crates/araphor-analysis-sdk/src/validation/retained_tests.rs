@@ -42,12 +42,7 @@ fn retained_output_preserves_contract() -> TestResult {
     package.validate_output(&evaluation, &output)?;
     let inputs = BTreeMap::from([("events".into(), 3)]);
     let packet = wire::Output::encode(&package, &evaluation, &output)?;
-    let retained = packet.decode_retained(
-        &package,
-        &evaluation.export,
-        evaluation.context.limits,
-        &inputs,
-    )?;
+    let retained = packet.decode_retained(&package, &evaluation.export, &inputs)?;
     assert_eq!(retained.evidence, output.evidence);
     assert_eq!(retained.datasets[0].batches, output.datasets[0].batches);
     assert_eq!(retained.reasons[0].details, output.reasons[0].details);
@@ -84,12 +79,7 @@ fn retained_output_preserves_contract() -> TestResult {
             .err()
             .ok_or("live contract accepted invalid output")?;
         let retained = package
-            .validate_retained_output(
-                &evaluation.export,
-                evaluation.context.limits,
-                &inputs,
-                &invalid,
-            )
+            .validate_retained_output(&evaluation.export, &inputs, &invalid)
             .err()
             .ok_or("retained contract accepted invalid output")?;
         assert_eq!(retained.code(), live.code(), "case {case}");
@@ -102,12 +92,7 @@ fn retained_output_preserves_contract() -> TestResult {
     ] {
         assert_eq!(
             package
-                .validate_retained_output(
-                    &evaluation.export,
-                    evaluation.context.limits,
-                    &inputs,
-                    &output
-                )
+                .validate_retained_output(&evaluation.export, &inputs, &output)
                 .err()
                 .ok_or("invalid names accepted")?
                 .code(),

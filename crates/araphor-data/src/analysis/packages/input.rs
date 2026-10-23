@@ -83,7 +83,7 @@ impl AnalysisStore {
             if witness_count == 0 {
                 return Ok(Some(expiry));
             }
-            let raw = control.lock(|| self.raw.try_lock())?;
+            let raw = self.raw.until(control)?;
             for witness in witnesses {
                 control.check()?;
                 if witness.identity.tenant() != selection.tenant_id

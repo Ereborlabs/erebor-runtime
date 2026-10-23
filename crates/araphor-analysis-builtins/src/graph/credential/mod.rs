@@ -143,9 +143,6 @@ impl Computation {
         .into();
         if matched.is_empty() {
             limits.push("AUTHORITATIVE_REMOTE_RESULT_MISSING".into());
-            if self.records.len() as u64 == self.manifest.window_records {
-                limits.push("JOIN_WINDOW_RECORD_LIMIT".into());
-            }
         }
         if !direct {
             limits.extend(

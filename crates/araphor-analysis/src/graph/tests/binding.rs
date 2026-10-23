@@ -31,7 +31,7 @@ fn input_binding_preserves_order() -> TestResult {
     let mut evaluation = graph.evaluation_for(model)?;
     let [mut records, _, _] = graph.projection().clone();
     records.swap(0, 1);
-    evaluation.inputs[0].data = Rows::encode(&model.inputs[0].port, &records, model.limits)?;
+    evaluation.inputs[0].data = Rows::encode(&model.inputs[0].port, &records)?;
     assert!(matches!(
         graph.check_inputs(model, &evaluation),
         Err(araphor_data::Error::GraphInvalid {
@@ -46,7 +46,7 @@ fn input_binding_preserves_order() -> TestResult {
         .find(|fact| fact["reviewed"] == serde_json::Value::Bool(true))
         .ok_or("reviewed fact")?;
     reviewed["reviewed"] = serde_json::Value::Bool(false);
-    evaluation.inputs[1].data = Rows::encode(&model.inputs[1].port, &facts, model.limits)?;
+    evaluation.inputs[1].data = Rows::encode(&model.inputs[1].port, &facts)?;
     assert!(graph.check_inputs(model, &evaluation).is_err());
     let mut evaluation = graph.evaluation_for(model)?;
     evaluation.inputs.pop();
@@ -111,7 +111,6 @@ async fn result_requires_exact_image() -> TestResult {
         &[algorithm::State {
             value: "WAITING".into(),
         }],
-        model.limits,
     )?;
     sql.checkpoint
         .insert("state".into(), "SELECT value FROM prior_state".into());

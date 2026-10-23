@@ -6,6 +6,7 @@ use araphor_data::{AnalysisSelectionV1, AnalysisStore};
 use araphor_package::{PackageArtifactV1, PackageImplementationV1, SqlModelV1};
 use sdk::arrow_array::{StringArray, UInt64Array};
 
+mod artifact;
 mod authority;
 mod cancellation;
 mod runtime;
@@ -128,7 +129,6 @@ impl Fixture {
                 id: "case".into(),
                 time_utc_ns: 0,
                 seed: Some(u64::MAX),
-                limits: model.limits,
             },
             checkpoint: None,
         }

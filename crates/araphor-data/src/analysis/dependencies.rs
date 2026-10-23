@@ -132,13 +132,19 @@ impl AnalysisStore {
             return self
                 .reject("the dependency selection is invalid or includes unsupported results");
         }
-        let mut relations = managed.map_or_else(Vec::new, |_| selection.source_revisions(0));
-        if tables.contains_key("discovery_state") || tables.contains_key("graph_state") {
-            relations.extend(
-                ["processor_progress", "processor_gaps", "analysis_results"]
-                    .map(|name| (name.into(), 0)),
-            );
-        }
+        let graph_notices = match tables.get("graph_manifest") {
+            Some(None) => true,
+            Some(Some(columns)) => {
+                let schema = &Self::table_schemas()["graph_manifest"];
+                columns.iter().any(|index| {
+                    matches!(
+                        schema.field(*index).name().as_str(),
+                        "notice_context_revision" | "notice_coverage_revision"
+                    )
+                })
+            }
+            None => false,
+        };
         let coordinator = self.read_coordinator(control)?;
         let all_traces = selection.traces.is_all();
         let mut reader = self.reader_until(control)?;
@@ -157,12 +163,12 @@ impl AnalysisStore {
             let selection = selection.as_ref();
             drop(coordinator);
             let mut revision = self.selected_revision(selection, meta.commit_revision, control)?;
-            if !relations.is_empty() {
+            if tables.contains_key("discovery_state") || tables.contains_key("graph_state") {
                 let mut statement = snapshot.prepare(
                     "SELECT COALESCE(MAX(last_changed_revision), 0)::UBIGINT
                      FROM relation_revisions WHERE relation_name = ? AND last_changed_revision <= ?",
                 ).context(AnalysisDatabaseSnafu { operation: "prepare relation dependencies" })?;
-                for (relation, _) in &relations {
+                for relation in ["processor_progress", "processor_gaps"] {
                     control.check()?;
                     let changed = statement.query_row(params![relation, meta.commit_revision], |row| row.get::<_, u64>(0))
                         .context(AnalysisDatabaseSnafu { operation: "read relation dependencies" })?;
@@ -185,19 +191,26 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare source dependencies",
                 })?;
-            for identity in selection.sources.as_slice() {
+            let identities = selection
+                .sources
+                .as_slice()
+                .iter()
+                .map(|identity| (identity.tenant_id, identity.key()))
+                .chain(selection.traces.as_slice().iter().map(|identity| {
+                    (identity.tenant_id, crate::AnalysisStreamIdentityV1::Diagnostic(identity.clone()).key())
+                }));
+            for (tenant, key) in identities {
                 control.check()?;
-                let key = identity.key();
                 let changed: Option<u64> = sources
                     .query_row(
                         params![
-                            identity.tenant_id.as_slice(),
+                            tenant.as_slice(),
                             key.as_slice(),
                             meta.commit_revision,
-                            identity.tenant_id.as_slice(),
+                            tenant.as_slice(),
                             key.as_slice(),
                             meta.commit_revision,
-                            identity.tenant_id.as_slice(),
+                            tenant.as_slice(),
                             key.as_slice(),
                             meta.commit_revision,
                         ],
@@ -258,13 +271,16 @@ impl AnalysisStore {
                 revision = revision.max(changed.unwrap_or(0));
             }
             let mut graphs = snapshot.prepare(
-                "SELECT MAX(commit_revision) FROM analysis_results
-                 WHERE tenant_id = ? AND processor_id = ? AND result_id = ? AND commit_revision <= ?",
+                "SELECT MAX(GREATEST(commit_revision,
+                    CASE WHEN ? THEN LEAST(COALESCE(facts_revision, 0), ?) ELSE 0 END))
+                 FROM analysis_results WHERE tenant_id = ? AND processor_id = ?
+                    AND result_id = ? AND commit_revision <= ?",
             ).context(AnalysisDatabaseSnafu { operation: "prepare graph dependencies" })?;
             for id in selection.graphs.as_slice() {
                 control.check()?;
                 let changed: Option<u64> = graphs.query_row(
-                    params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR, id, meta.commit_revision],
+                    params![graph_notices, meta.commit_revision,
+                        selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR, id, meta.commit_revision],
                     |row| row.get(0),
                 ).context(AnalysisDatabaseSnafu { operation: "read graph dependencies" })?;
                 revision = revision.max(changed.unwrap_or(0));
@@ -320,8 +336,8 @@ impl AnalysisStore {
         revision: u64,
         control: &AnalysisReadControl,
     ) -> Result<u64> {
-        control
-            .lock(|| self.raw.try_lock())?
+        self.raw
+            .until(control)?
             .selection_revision(selection, revision, control)
     }
 }
@@ -551,6 +567,103 @@ mod tests {
         drop(store);
         let reopened = AnalysisStore::open(path)?;
         assert_eq!(read(&reopened, &selection)?, (11, 11));
+        Ok(())
+    }
+
+    use crate::analysis::graph_rows::tests::fixture::CommitFixture;
+
+    #[test]
+    fn graph_notice_changes_dependency() -> TestResult {
+        let fixture = CommitFixture::new()?;
+        let mut selection = AnalysisSelectionV1::new(
+            fixture.snapshot.scope.identity.tenant_id,
+            vec![fixture.snapshot.scope.identity.clone()],
+        );
+        selection.select_graphs(crate::Selection::All, None)?;
+        let schemas = AnalysisStore::table_schemas();
+        let notices = AnalysisTableRequests::from([(
+            "graph_manifest".into(),
+            Some(std::collections::BTreeSet::from([
+                schemas["graph_manifest"].index_of("notice_context_revision")?,
+                schemas["graph_manifest"].index_of("notice_coverage_revision")?,
+            ])),
+        )]);
+        let all = AnalysisTableRequests::from([("graph_manifest".into(), None)]);
+        let immutable = AnalysisTableRequests::from([(
+            "graph_manifest".into(),
+            Some(std::collections::BTreeSet::from([schemas
+                ["graph_manifest"]
+                .index_of("graph_result_id")?])),
+        )]);
+        let control = AnalysisReadControl::default();
+        let (_, before) = fixture
+            .store
+            .dependency_revision_for(&selection, &notices, &control)?;
+        let receipt = fixture
+            .store
+            .commit_graph(&fixture.request, true, || Ok(()))?;
+        let (_, first) = fixture
+            .store
+            .dependency_revision_for(&selection, &notices, &control)?;
+        assert_eq!(first, receipt.commit_revision);
+        assert!(first > before);
+        let context = crate::AnalysisContextVersionV1 {
+            key: crate::AnalysisContextKeyV1 {
+                tenant_id: selection.tenant_id,
+                owner_id: "notice-test".into(),
+                entity_key: vec![1],
+                lifetime_key: vec![2],
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: crate::ContextSensitivityV1::Tenant,
+            body: b"notice".to_vec(),
+        };
+        let current = fixture.store.commit_context(&context)?;
+        assert!(current > first);
+        assert_eq!(
+            fixture
+                .store
+                .dependency_revision_for(&selection, &notices, &control)?
+                .1,
+            first
+        );
+        fixture.store.mark_graph_notice(
+            &fixture.request.scope,
+            &fixture.request.result_id,
+            receipt.commit_revision,
+            current,
+            fixture.request.coverage_revision,
+            || Ok(()),
+        )?;
+        assert_eq!(
+            fixture
+                .store
+                .dependency_revision_for(&selection, &notices, &control)?
+                .1,
+            current
+        );
+        assert_eq!(
+            fixture
+                .store
+                .dependency_revision_for(&selection, &all, &control)?
+                .1,
+            current
+        );
+        assert_eq!(
+            fixture
+                .store
+                .dependency_revision_for(&selection, &immutable, &control)?
+                .1,
+            first
+        );
+        assert_eq!(
+            fixture
+                .store
+                .graph_result(selection.tenant_id, &fixture.request.result_id)?,
+            Some(fixture.snapshot)
+        );
         Ok(())
     }
 }

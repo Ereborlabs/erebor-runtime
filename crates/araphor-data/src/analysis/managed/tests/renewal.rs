@@ -103,12 +103,17 @@ fn renewal_keeps_history() -> TestResult {
         .ok_or("committed attempt")?;
     assert_eq!(committed.receipt(), Some(&receipt));
     let current = fixture.current(&store)?;
-    let original = store.managed_output(
+    let ManagedOutput::Call {
+        result: original, ..
+    } = store.managed_output(
         &current,
         &receipt.results[&10].result_id,
         10,
         &AnalysisReadControl::default(),
-    )?;
+    )?
+    else {
+        return Err("package output variant".into());
+    };
     let running =
         store.set_managed_running([1; 16], "counter", current.lifecycle, true, || Ok(()))?;
     let stopped = store.suspend_managed(&running, || Ok(()))?;
@@ -117,6 +122,13 @@ fn renewal_keeps_history() -> TestResult {
         "counter",
         &AnalysisReadControl::default(),
     )?;
+    assert!(matches!(
+        &status.readiness,
+        crate::PackageReadinessV1::Failed {
+            code: Code::Denied,
+            ..
+        }
+    ));
     let stale = fixture.capture(&store, false)?;
     let mut grant = stopped.grant.clone();
     grant.revision += 1;
@@ -153,8 +165,8 @@ fn renewal_keeps_history() -> TestResult {
         captured
             .contract
             .prior
-            .iter()
-            .map(|(call, _)| (*call, receipt.results.get(call).cloned()))
+            .keys()
+            .map(|call| (*call, receipt.results.get(call).cloned()))
             .collect()
     );
     for call in [10, 11] {
@@ -178,14 +190,19 @@ fn renewal_keeps_history() -> TestResult {
     assert_eq!(loaded.instance().grant, attempt.instance().grant);
     assert_eq!(
         store.managed_history(&grant.selection, "counter", &AnalysisReadControl::default())?,
-        [receipt.clone()]
+        std::slice::from_ref(&receipt)
     );
-    let retained = store.managed_output(
+    let ManagedOutput::Call {
+        result: retained, ..
+    } = store.managed_output(
         &renewed,
         &receipt.results[&10].result_id,
         10,
         &AnalysisReadControl::default(),
-    )?;
+    )?
+    else {
+        return Err("package output variant".into());
+    };
     assert_eq!(retained.context, original.context);
     assert_eq!(retained.output, original.output);
     assert_eq!(retained.commit_revision, original.commit_revision);

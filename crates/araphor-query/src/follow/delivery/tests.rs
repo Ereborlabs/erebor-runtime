@@ -370,7 +370,7 @@ async fn package_checkpoint_releases_capacity(
         sdk::Field::new("mode", sdk::DataType::Utf8, false),
         sdk::Field::new("amount", sdk::DataType::UInt64, false),
     ]);
-    model.limits.max_bytes = (capacity / 4) as u64;
+
     store.install_package_image(
         [1; 16],
         &PackageBundleV1 {

@@ -1,7 +1,19 @@
 use super::*;
 
-use araphor_data::analysis::CanonicalGraph;
 use araphor_data::AnalysisResultCommitV1;
+use araphor_data::analysis::CanonicalGraph;
+
+struct NoAuthority;
+
+impl araphor_data::NotificationAuthorization for NoAuthority {
+    fn check(&self, _: &araphor_data::NotificationGrantV1, _: u64) -> araphor_data::Result<()> {
+        Err(araphor_data::NotificationSnafu {
+            code: araphor_data::NotificationErrorCodeV1::Denied,
+            field: "Graph recovery fixture",
+        }
+        .build())
+    }
+}
 
 impl Fixture {
     fn image_contexts(
@@ -34,12 +46,14 @@ async fn graph_refs_use_header() -> TestResult {
     let (id, receipt) = publication.refresh("graph:storage-header".into()).await?;
     let store = fixture.query.store();
     let tenant = fixture.source.tenant_id;
-    assert!(!store
-        .graph_result(tenant, &id)?
-        .ok_or("graph result")?
-        .graph
-        .subjects
-        .is_empty());
+    assert!(
+        !store
+            .graph_result(tenant, &id)?
+            .ok_or("graph result")?
+            .graph
+            .subjects
+            .is_empty()
+    );
     let before = store.meta()?;
     store.fault_write(
         "UPDATE graph_subjects SET subject_kind = repeat('X', length(subject_kind)) WHERE result_id = ?",
@@ -185,6 +199,13 @@ async fn graph_package_commit_refs() -> TestResult {
     assert_eq!(committed.commit_revision, before.commit_revision + 1);
     assert_eq!(commit(request.clone())?, receipt);
     assert_eq!(store.meta()?, committed);
+    let mut changed = request.clone();
+    changed.created_utc_ns += 1;
+    assert!(matches!(
+        commit(changed),
+        Err(araphor_data::Error::AnalysisConflict { .. })
+    ));
+    assert_eq!(store.meta()?, committed);
     assert_eq!(
         store.graph_result(tenant, &request.result_id)?,
         Some(snapshot.clone())
@@ -208,5 +229,285 @@ async fn graph_package_commit_refs() -> TestResult {
     assert_eq!(retained.result_id, request.result_id);
     assert_eq!(retained.commit_revision, receipt.commit_revision);
     assert_eq!(retained.body, serde_json::to_vec(&snapshot)?);
+    let original = snapshot
+        .previous_result_id
+        .as_ref()
+        .ok_or("Original Graph ID")?;
+    let original_body = store
+        .read_result(tenant, original)?
+        .ok_or("Original Graph bytes")?;
+    let finding = snapshot
+        .findings
+        .first()
+        .ok_or("Historical Graph finding")?
+        .clone();
+    let router = crate::NotificationRouter::new(Arc::clone(store), Arc::new(NoAuthority))?;
+    assert_eq!(
+        router.route_finding(
+            tenant,
+            &araphor_data::NotificationFindingRefV1 {
+                result_id: request.result_id.clone(),
+                finding_id: finding.finding_id.clone(),
+            },
+            request.created_utc_ns
+        )?,
+        1
+    );
+    let notification = store
+        .notification_states(
+            tenant,
+            araphor_data::analysis::NotificationLookup::Finding(
+                &finding.finding_id,
+                finding.required_action.as_deref(),
+            ),
+        )?
+        .remove(0);
+    let obligation = araphor_data::NotificationObligationV1::try_from(&notification)?;
+    assert_eq!(
+        obligation
+            .finding
+            .as_ref()
+            .ok_or("Notification finding")?
+            .result_id,
+        request.result_id
+    );
+    let mut empty = snapshot.clone();
+    empty.findings.clear();
+    empty.previous_result_id = Some(request.result_id.clone());
+    let mut replacement = request.clone();
+    replacement.result_id = "graph:storage-removed".into();
+    replacement.expected_cursor = receipt.consumed_cursor;
+    replacement.created_utc_ns += 1;
+    let replacement_body = serde_json::to_vec(&empty)?;
+    replacement.body.clear();
+    store.commit_graph_snapshot(
+        replacement.clone(),
+        CanonicalGraph::bounded(empty.clone(), usize::MAX)?,
+        &[],
+        &pins,
+        &[],
+        false,
+        || fixture.authority.check(&grant, PackageActionV1::Run),
+    )?;
+    assert!(
+        store
+            .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?
+            .is_empty()
+    );
+    assert!(
+        store
+            .graph_finding(tenant, &replacement.result_id, &finding.finding_id)?
+            .is_none()
+    );
+    let check = |store: &AnalysisStore| -> TestResult {
+        assert_eq!(
+            store.read_result(tenant, original)?,
+            Some(original_body.clone())
+        );
+        assert_eq!(
+            store.read_result(tenant, &request.result_id)?,
+            Some(retained.body.clone())
+        );
+        assert_eq!(
+            store.read_result(tenant, &replacement.result_id)?,
+            Some(replacement_body.clone())
+        );
+        assert_eq!(
+            store.graph_finding(tenant, &request.result_id, &finding.finding_id)?,
+            Some(finding.clone())
+        );
+        assert_eq!(
+            store.graph_result(tenant, &replacement.result_id)?,
+            Some(empty.clone())
+        );
+        assert_eq!(
+            store.context_version(&notification.key)?,
+            Some(notification.clone())
+        );
+        let progress = store
+            .processor_result(&request.scope)?
+            .ok_or("Restored Graph progress")?;
+        assert_eq!(progress.result_id, request.result_id);
+        assert_eq!(progress.body, retained.body);
+        store.verify_state()?;
+        Ok(())
+    };
+    check(store)?;
+    let backup = fixture._directory.path().join("data/backups/graph-history");
+    let manifest = store.backup(&backup)?;
+    let target = fixture._directory.path().join("graph-restored");
+    let restored = AnalysisStore::restore(&backup, &target)?;
+    assert_eq!(
+        restored.meta()?.schema_version,
+        araphor_data::analysis::ANALYSIS_SCHEMA_VERSION as u32
+    );
+    assert_eq!(restored.meta()?.store_uuid, store.meta()?.store_uuid);
+    assert_eq!(restored.meta()?.commit_revision, manifest.commit_revision);
+    assert_eq!(restored.meta()?.recovery_epoch, manifest.recovery_epoch + 1);
+    check(&restored)?;
+    drop(restored);
+    check(&AnalysisStore::open(&target)?)?;
+    for (index, fault) in [
+        "DELETE FROM graph_findings",
+        "UPDATE graph_subjects SET ordinal = ordinal + 10",
+        "UPDATE graph_findings SET result_id = 'orphan' WHERE result_id = 'graph:storage-committed'",
+        "UPDATE graph_findings SET tenant_id = 'foreign'::BLOB",
+        "DROP TABLE graph_relationships",
+        "UPDATE analysis_results SET body = 'invalid'::BLOB WHERE processor_id = 'graph-findings'",
+        "UPDATE analysis_results SET method_version = 99 WHERE processor_id = 'graph-findings'",
+        "UPDATE analysis_results SET first_cursor = 99 WHERE processor_id = 'graph-findings'",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let root = fixture
+            ._directory
+            .path()
+            .join(format!("graph-corrupt-{index}"));
+        let corrupted = AnalysisStore::restore(&backup, &root)?;
+        corrupted.fault_write(fault, &[])?;
+        drop(corrupted);
+        assert!(AnalysisStore::open(&root).is_err(), "Accepted {fault}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_result_crashes() -> TestResult {
+    use futures_util::StreamExt as _;
+    if let Some(root) = std::env::var_os("ARAPHOR_GRAPH_CRASH_ROOT") {
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(AnalysisStore::open(std::path::PathBuf::from(root))?);
+        let manifest = DiscoveryInputManifestV1::try_from(
+            include_bytes!("../../../../../mithril-e2e/fixtures/discovery/manifest.json")
+                .as_slice(),
+        )?;
+        let fixture = Fixture::stored(
+            Target::Wasm,
+            manifest.records.into_iter().take(3).collect(),
+            directory,
+            store,
+        )?;
+        let mut subscription = fixture
+            .prepare("")
+            .await?
+            .subscribe(b"Graph result crash")
+            .await?;
+        let _receipt = subscription
+            .next()
+            .await
+            .ok_or("Graph crash stream ended")??;
+        return Err("The Graph result crash did not occur".into());
+    }
+    let mut expected = None;
+    for boundary in ["result.before", "result.after"] {
+        let fixture = Fixture::target(Target::Wasm)?;
+        let before = fixture.query.store().meta()?;
+        let Fixture {
+            query,
+            records,
+            source,
+            _directory,
+            _graph,
+            ..
+        } = fixture;
+        drop(_graph);
+        drop(query);
+        let root = _directory.path().join("data");
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "graph::native::tests::storage::graph_result_crashes",
+            ])
+            .env("ARAPHOR_GRAPH_CRASH_ROOT", &root)
+            .env("ARAPHOR_CRASH_ROOT", &root)
+            .env("ARAPHOR_CRASH_POINT", boundary)
+            .status()?;
+        assert_eq!(status.code(), Some(73), "{boundary}");
+        let store = Arc::new(AnalysisStore::open(&root)?);
+        let committed = boundary == "result.after";
+        assert_eq!(
+            store.meta()?.commit_revision,
+            before.commit_revision + u64::from(committed)
+        );
+        assert_eq!(store.meta()?.store_uuid, before.store_uuid);
+        assert_eq!(store.meta()?.recovery_epoch, before.recovery_epoch);
+        let scope = araphor_data::ProcessorScopeV1 {
+            processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+            method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+            identity: source.clone(),
+        };
+        assert_eq!(
+            store
+                .processor_health(&scope)?
+                .ok_or("Recovered Graph progress")?
+                .consumed_cursor,
+            if committed { 3 } else { 0 }
+        );
+        let usage = store.witness_usage(source.tenant_id, 11)?;
+        assert_eq!(
+            usage.referenced_bytes,
+            if committed {
+                records
+                    .iter()
+                    .map(|record| record.wire_record.len() as u64)
+                    .sum()
+            } else {
+                0
+            }
+        );
+        assert_eq!(usage.context_bytes > 0, committed);
+        assert_eq!(store.graph_snapshot(&source)?.is_some(), committed);
+        let fixture = Fixture::stored(Target::Wasm, records, _directory, store)?;
+        let started = std::time::Instant::now();
+        let mut publication = fixture
+            .prepare("")
+            .await
+            .map_err(|error| format!("Graph {boundary} recovery preparation: {error:?}"))?;
+        publication.session = publication
+            .session
+            .operation(&AnalysisReadControl::default(), 0)?;
+        let prepared = started.elapsed();
+        let projection = Arc::clone(&publication.projection);
+        let mut subscription = publication.subscribe(b"Graph crash recovery").await?;
+        let _receipt =
+            tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next())
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Graph {boundary} recovery receipt: {error}; elapsed={:?}; prepared={prepared:?}; first_capture={:?}; facts={}; projections={}",
+                        started.elapsed(),
+                        fixture.facts.first.lock().unwrap_or_else(|error| error.into_inner())
+                            .map(|first| first.saturating_duration_since(started)),
+                        fixture.facts.calls.load(Ordering::SeqCst),
+                        projection.projections.load(Ordering::SeqCst),
+                    )
+                })?
+                .ok_or("Graph recovery stream ended")??;
+        subscription.cancel_and_join().await?;
+        let snapshot = fixture
+            .query
+            .store()
+            .graph_snapshot(&source)?
+            .ok_or("Recovered Graph")?;
+        assert_eq!(snapshot.input_manifest.evidence.len(), 3);
+        assert_eq!(snapshot.input_manifest.context.len(), 3);
+        let bytes = serde_json::to_vec(&(snapshot.graph, snapshot.findings))?;
+        if let Some(expected) = &expected {
+            assert_eq!(&bytes, expected);
+        } else {
+            expected = Some(bytes);
+        }
+        let revision = fixture.query.store().meta()?.commit_revision;
+        fixture
+            .prepare("")
+            .await
+            .map_err(|error| format!("Graph {boundary} post-join preparation: {error:?}"))?
+            .refresh("graph:after-crash".into())
+            .await
+            .map_err(|error| format!("Graph {boundary} post-join refresh: {error:?}"))?;
+        assert_eq!(fixture.query.store().meta()?.commit_revision, revision);
+        fixture.query.store().verify_state()?;
+    }
     Ok(())
 }

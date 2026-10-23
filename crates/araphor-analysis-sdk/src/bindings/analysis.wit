@@ -1,18 +1,10 @@
 package araphor:analysis@1.0.0;
 
 interface types {
-    record limits {
-        max-batches: u32,
-        max-rows: u64,
-        max-bytes: u64,
-        max-checkpoint-bytes: u64,
-    }
-
     record evaluation-context {
         id: string,
         time-utc-ns: s64,
         seed: option<u64>,
-        limits: limits,
     }
 
     record source-window {

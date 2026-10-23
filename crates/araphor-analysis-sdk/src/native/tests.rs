@@ -77,10 +77,8 @@ fn native_parity_and_checkpoint() -> TestResult {
     let mut value = evaluation()?;
     let expected = Detector::evaluate(&value)?;
     let checked = package.check_evaluation(&value)?;
-    let result = unsafe {
-        Invocation::new(&checked, || false)?
-            .call(&Api::for_guest::<Detector>(), value.context.limits)?
-    };
+    let result =
+        unsafe { Invocation::new(&checked, || false)?.call(&Api::for_guest::<Detector>(), None)? };
     assert_eq!(result.datasets.len(), expected.datasets.len());
     for (actual, expected) in result.datasets.iter().zip(&expected.datasets) {
         assert_eq!(actual.name, expected.name);
@@ -100,10 +98,8 @@ fn native_parity_and_checkpoint() -> TestResult {
     assert_eq!(actual.datasets[0].batches, expected.datasets[0].batches);
     value.checkpoint = result.checkpoint;
     let checked = package.check_evaluation(&value)?;
-    let result = unsafe {
-        Invocation::new(&checked, || false)?
-            .call(&Api::for_guest::<Detector>(), value.context.limits)?
-    };
+    let result =
+        unsafe { Invocation::new(&checked, || false)?.call(&Api::for_guest::<Detector>(), None)? };
     assert_eq!(result.reasons.len(), 2);
     drop(value);
     assert_eq!(result.datasets[0].batches[0].num_rows(), 2);
@@ -133,17 +129,12 @@ fn checked_guest_keeps_output_boundary() -> TestResult {
     let value = evaluation()?;
     let checked = package.check_evaluation(&value)?;
     let output = unsafe {
-        Invocation::new(&checked, || false)?.call(
-            &Api::for_guest::<CheckedDetector<false>>(),
-            value.context.limits,
-        )?
+        Invocation::new(&checked, || false)?
+            .call(&Api::for_guest::<CheckedDetector<false>>(), None)?
     };
     assert_eq!(output.evidence, Detector::evaluate(&value)?.evidence);
     let error = unsafe {
-        Invocation::new(&checked, || false)?.call(
-            &Api::for_guest::<CheckedDetector<true>>(),
-            value.context.limits,
-        )
+        Invocation::new(&checked, || false)?.call(&Api::for_guest::<CheckedDetector<true>>(), None)
     }
     .err()
     .ok_or("unchecked output accepted")?;
@@ -202,9 +193,15 @@ fn invalid_abi_values_are_errors() -> TestResult {
     let checked = package.check_evaluation(&value)?;
     let mut api = Api::for_guest::<Detector>();
     api.struct_size += 1;
-    let error = unsafe { Invocation::new(&checked, || false)?.call(&api, value.context.limits) }
+    let error = unsafe { Invocation::new(&checked, || false)?.call(&api, None) }
         .err()
         .ok_or("invalid table accepted")?;
+    assert_eq!(error.code(), ErrorCode::Incompatible);
+    let mut api = Api::for_guest::<Detector>();
+    api.contract_version = 2;
+    let error = unsafe { Invocation::new(&checked, || false)?.call(&api, None) }
+        .err()
+        .ok_or("mismatched contract accepted")?;
     assert_eq!(error.code(), ErrorCode::Incompatible);
     let api = Api::for_guest::<Detector>();
     let evaluate = api.evaluate.ok_or("evaluate")?;
@@ -216,7 +213,7 @@ fn invalid_abi_values_are_errors() -> TestResult {
             0 => request.context.has_seed = 2,
             1 => request.inputs = std::ptr::null(),
             2 => request.input_count = u64::MAX,
-            3 => request.context.limits.max_rows = 1,
+            3 => request.inputs = (request.inputs as usize + 1) as *const Input,
             4 => invocation.exchange.inputs[0].coverage.state = 999,
             _ => request.export_name.data = std::ptr::null(),
         }
@@ -247,12 +244,10 @@ fn panic_and_cancellation_preserve_boundary() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
     let checked = package.check_evaluation(&value)?;
-    let error = unsafe {
-        Invocation::new(&checked, || false)?
-            .call(&Api::for_guest::<Panicking>(), value.context.limits)
-    }
-    .err()
-    .ok_or("panic accepted")?;
+    let error =
+        unsafe { Invocation::new(&checked, || false)?.call(&Api::for_guest::<Panicking>(), None) }
+            .err()
+            .ok_or("panic accepted")?;
     assert_eq!(error.code(), ErrorCode::Failed);
     let polls = Cell::new(0);
     let error = unsafe {
@@ -260,7 +255,7 @@ fn panic_and_cancellation_preserve_boundary() -> TestResult {
             polls.set(polls.get() + 1);
             polls.get() > 2
         })?
-        .call(&Api::for_guest::<Detector>(), value.context.limits)
+        .call(&Api::for_guest::<Detector>(), None)
     }
     .err()
     .ok_or("cancelled output accepted")?;
@@ -288,7 +283,7 @@ unsafe extern "C" fn invalid_error(_request: *const Request, response: *mut Resp
 unsafe extern "C" fn oversized_error(_request: *const Request, response: *mut Response) -> u32 {
     unsafe {
         (*response).error.code = ErrorCode::Failed as u32;
-        (*response).error.field.size = 1025;
+        (*response).error.field.size = u64::MAX;
     }
     ErrorCode::Failed as u32
 }
@@ -317,10 +312,9 @@ fn malformed_outputs_release_response() -> TestResult {
         let mut api = Api::for_guest::<Detector>();
         api.evaluate = Some(evaluate);
         api.release = Some(count_release);
-        let error =
-            unsafe { Invocation::new(&checked, || false)?.call(&api, value.context.limits) }
-                .err()
-                .ok_or("malformed output accepted")?;
+        let error = unsafe { Invocation::new(&checked, || false)?.call(&api, None) }
+            .err()
+            .ok_or("malformed output accepted")?;
         assert_eq!(error.code(), expected);
     }
     assert_eq!(RELEASES.load(Ordering::SeqCst), 3);
@@ -365,24 +359,26 @@ fn rust_layout_matches_header() -> TestResult {
         };
     }
     layout!(Bytes, "araphor_analysis_bytes_v1");
-    layout!(NativeLimits, "araphor_analysis_limits_v1");
     writeln!(input, "#include <stddef.h>")?;
-    for (field, offset) in [
-        (
-            "max_batches",
-            std::mem::offset_of!(NativeLimits, max_batches),
-        ),
-        ("max_rows", std::mem::offset_of!(NativeLimits, max_rows)),
-        ("max_bytes", std::mem::offset_of!(NativeLimits, max_bytes)),
-        (
-            "max_checkpoint_bytes",
-            std::mem::offset_of!(NativeLimits, max_checkpoint_bytes),
-        ),
-    ] {
-        writeln!(input,
-            "_Static_assert(offsetof(araphor_analysis_limits_v1, {field}) == {offset}, \"offset\");"
-        )?;
+    macro_rules! offset {
+        ($rust:ty, $c:literal, $field:ident) => {
+            writeln!(
+                input,
+                "_Static_assert(offsetof({}, {}) == {}, \"offset\");",
+                $c,
+                stringify!($field),
+                std::mem::offset_of!($rust, $field)
+            )?;
+        };
     }
+    offset!(Context, "araphor_analysis_context_v1", id);
+    offset!(Context, "araphor_analysis_context_v1", time_utc_ns);
+    offset!(Context, "araphor_analysis_context_v1", seed);
+    offset!(Context, "araphor_analysis_context_v1", has_seed);
+    offset!(Request, "araphor_analysis_request_v1", context);
+    offset!(Request, "araphor_analysis_request_v1", checkpoint);
+    offset!(Request, "araphor_analysis_request_v1", cancelled);
+    offset!(Request, "araphor_analysis_request_v1", cancel_context);
     layout!(Context, "araphor_analysis_context_v1");
     layout!(Window, "araphor_analysis_window_v1");
     layout!(Revision, "araphor_analysis_revision_v1");
@@ -408,22 +404,18 @@ fn rust_layout_matches_header() -> TestResult {
 }
 
 #[test]
-fn caller_output_capacity_is_independent_of_input_limits() -> TestResult {
+fn caller_capacity_preserves_input() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
     let checked = package.check_evaluation(&value)?;
-    let original = value.context.limits;
-    let output_limits = crate::Limits {
-        max_bytes: 1,
-        ..original
-    };
+    let original = value.context.clone();
     let error = unsafe {
-        Invocation::new(&checked, || false)?.call(&Api::for_guest::<Detector>(), output_limits)
+        Invocation::new(&checked, || false)?.call(&Api::for_guest::<Detector>(), Some(1))
     }
     .err()
     .ok_or("output capacity ignored")?;
     assert_eq!(error.code(), ErrorCode::Limit);
-    assert_eq!(value.context.limits, original);
+    assert_eq!(value.context, original);
     Ok(())
 }
 
@@ -440,19 +432,27 @@ impl<const SIZE: usize> Guest for ErrorField<SIZE> {
 }
 
 #[test]
-fn producer_error_field_uses_existing_transport_bound() -> TestResult {
+fn producer_error_is_uncapped() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
     let checked = package.check_evaluation(&value)?;
-    for (api, expected) in [
-        (Api::for_guest::<ErrorField<1024>>(), ErrorCode::Failed),
-        (Api::for_guest::<ErrorField<1025>>(), ErrorCode::Limit),
+    for (api, size) in [
+        (Api::for_guest::<ErrorField<1024>>(), 1024),
+        (Api::for_guest::<ErrorField<1025>>(), 1025),
     ] {
-        let error =
-            unsafe { Invocation::new(&checked, || false)?.call(&api, value.context.limits) }
-                .err()
-                .ok_or("error accepted")?;
-        assert_eq!(error.code(), expected);
+        let error = unsafe { Invocation::new(&checked, || false)?.call(&api, None) }
+            .err()
+            .ok_or("error accepted")?;
+        assert!(
+            matches!(error, Error::Contract { code: ErrorCode::Failed, field, .. }
+            if field == "x".repeat(size))
+        );
     }
+    let error = unsafe {
+        Invocation::new(&checked, || false)?.call(&Api::for_guest::<ErrorField<1025>>(), Some(1024))
+    }
+    .err()
+    .ok_or("copy capacity ignored")?;
+    assert_eq!(error.code(), ErrorCode::Limit);
     Ok(())
 }

@@ -6,7 +6,7 @@ use arrow_buffer::Buffer;
 use arrow_data::transform::MutableArrayData;
 use arrow_ipc::{reader::StreamDecoder, writer::StreamWriter};
 
-use crate::{Error, ErrorCode, Limits, RecordBatch, Result, Schema};
+use crate::{Error, ErrorCode, RecordBatch, Result, Schema};
 
 use super::Dataset;
 
@@ -19,13 +19,15 @@ impl Dataset {
         super::framing::IpcFrames::validate_envelope(&self.arrow_ipc)
     }
 
+    /// Return the number of record batch messages in the IPC stream.
+    pub fn batch_count(&self) -> Result<usize> {
+        super::framing::IpcFrames::validate(&self.arrow_ipc)
+    }
+
     /// Return the buffer bound for IPC decode and owned normalization.
     /// Charge schema and dataset metadata with the decoded value.
-    pub fn decoding_bytes(ipc: &[u8], limits: Limits) -> Result<usize> {
-        if ipc.len() as u64 > limits.max_bytes {
-            return Err(Error::contract(ErrorCode::Limit, "encoded dataset bytes"));
-        }
-        super::framing::IpcFrames::decoding_bytes(ipc, limits)
+    pub fn decoding_bytes(ipc: &[u8]) -> Result<usize> {
+        super::framing::IpcFrames::decoding_bytes(ipc)
     }
 
     pub fn encoding_scratch(batch: &RecordBatch) -> Result<usize> {
@@ -34,23 +36,13 @@ impl Dataset {
             .iter()
             .map(|array| array.to_data())
             .collect::<Vec<_>>();
-        Ok(ArrayBudget::new(&arrays, u64::MAX)?.scratch)
+        Ok(ArrayBudget::new(&arrays, None)?.scratch)
     }
 
-    pub fn encode(data: &crate::Dataset, schema: &Schema, limits: Limits) -> Result<Self> {
-        let mut bytes = BoundedBuffer::new(limits.max_bytes);
+    pub fn encode(data: &crate::Dataset, schema: &Schema) -> Result<Self> {
+        let mut bytes = Vec::new();
         let mut writer = StreamWriter::try_new(&mut bytes, schema)?;
-        let mut rows = 0_u64;
-        let mut size = 0_u64;
-        for (index, batch) in data.batches.iter().enumerate() {
-            rows = rows.saturating_add(batch.num_rows() as u64);
-            size = size.saturating_add(batch.get_array_memory_size() as u64);
-            if rows > limits.max_rows
-                || size > limits.max_bytes
-                || index >= limits.max_batches as usize
-            {
-                return Err(Error::contract(ErrorCode::Limit, "encoded dataset"));
-            }
+        for batch in &data.batches {
             if batch.schema().as_ref() != schema {
                 return Err(Error::contract(ErrorCode::Invalid, "dataset schema"));
             }
@@ -60,33 +52,36 @@ impl Dataset {
         drop(writer);
         Ok(Self {
             name: data.name.clone(),
-            arrow_ipc: bytes.finish(),
+            arrow_ipc: bytes,
         })
     }
 
-    pub fn decode(&self, schema: &Schema, limits: Limits) -> Result<crate::Dataset> {
-        Self::decode_ipc(&self.name, &self.arrow_ipc, Some(schema), limits)
+    pub fn decode(&self, schema: &Schema) -> Result<crate::Dataset> {
+        Self::decode_ipc(&self.name, &self.arrow_ipc, Some(schema))
     }
 
-    pub fn decode_any(&self, limits: Limits) -> Result<crate::Dataset> {
-        Self::decode_ipc(&self.name, &self.arrow_ipc, None, limits)
+    pub fn decode_any(&self) -> Result<crate::Dataset> {
+        Self::decode_ipc(&self.name, &self.arrow_ipc, None)
     }
 
-    pub fn decode_ipc(
+    pub fn decode_ipc(name: &str, ipc: &[u8], schema: Option<&Schema>) -> Result<crate::Dataset> {
+        Self::decode_ipc_bounded(name, ipc, schema, None)
+    }
+
+    pub(super) fn decode_ipc_bounded(
         name: &str,
         ipc: &[u8],
         schema: Option<&Schema>,
-        limits: Limits,
+        copy_bytes: Option<usize>,
     ) -> Result<crate::Dataset> {
-        if ipc.len() as u64 > limits.max_bytes {
+        if copy_bytes.is_some_and(|limit| ipc.len() > limit) {
             return Err(Error::contract(ErrorCode::Limit, "encoded dataset bytes"));
         }
-        super::framing::IpcFrames::validate(ipc, limits)?;
+        super::framing::IpcFrames::validate(ipc)?;
         let mut reader = StreamDecoder::new();
         let mut input = Buffer::from(ipc);
         let mut batches = Vec::new();
-        let mut rows = 0_u64;
-        let mut bytes = 0_u64;
+        let mut bytes = 0_usize;
         while !input.is_empty() {
             let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 reader.decode(&mut input)
@@ -96,15 +91,17 @@ impl Dataset {
             if schema.is_some_and(|expected| expected != batch.schema().as_ref()) {
                 return Err(Error::contract(ErrorCode::Invalid, "dataset schema"));
             }
-            rows = rows.saturating_add(batch.num_rows() as u64);
-            if rows > limits.max_rows || batches.len() >= limits.max_batches as usize {
+            let remaining = copy_bytes.map(|limit| limit.saturating_sub(bytes));
+            let batch = Self::owned_batch(&batch, remaining)?;
+            bytes = bytes
+                .checked_add(batch.get_array_memory_size())
+                .ok_or_else(|| Error::contract(ErrorCode::Limit, "decoded dataset"))?;
+            if copy_bytes.is_some_and(|limit| bytes > limit) {
                 return Err(Error::contract(ErrorCode::Limit, "decoded dataset"));
             }
-            let batch = Self::owned_batch(&batch, limits.max_bytes.saturating_sub(bytes))?;
-            bytes = bytes.saturating_add(batch.get_array_memory_size() as u64);
-            if bytes > limits.max_bytes {
-                return Err(Error::contract(ErrorCode::Limit, "decoded dataset"));
-            }
+            batches
+                .try_reserve_exact(1)
+                .map_err(|_| Error::contract(ErrorCode::Limit, "decoded allocation"))?;
             batches.push(batch);
         }
         reader.finish()?;
@@ -123,13 +120,16 @@ impl Dataset {
         })
     }
 
-    pub(crate) fn owned_batch(batch: &RecordBatch, limit: u64) -> Result<RecordBatch> {
+    pub(crate) fn owned_batch(
+        batch: &RecordBatch,
+        copy_bytes: Option<usize>,
+    ) -> Result<RecordBatch> {
         let arrays = batch
             .columns()
             .iter()
             .map(|array| array.to_data())
             .collect::<Vec<_>>();
-        ArrayBudget::new(&arrays, limit)?;
+        ArrayBudget::new(&arrays, copy_bytes)?;
         let mut columns = Vec::with_capacity(arrays.len());
         for array in &arrays {
             array.validate_full()?;
@@ -195,63 +195,32 @@ impl<W: Write> Write for BoundedBuffer<W> {
 }
 
 pub(super) struct Codec {
-    limits: Limits,
-    encoded: u64,
-    decoded: u64,
-    rows: u64,
-    batches: u32,
-    aggregate: bool,
+    copied: usize,
+    copy_bytes: Option<usize>,
 }
 
 impl Codec {
-    pub(super) fn new(limits: Limits, aggregate: bool) -> Self {
+    pub(super) fn new(copy_bytes: Option<usize>) -> Self {
         Self {
-            limits,
-            encoded: 0,
-            decoded: 0,
-            rows: 0,
-            batches: 0,
-            aggregate,
+            copied: 0,
+            copy_bytes,
         }
     }
 
-    pub(super) fn remaining(&self, encode: bool) -> Limits {
-        let bytes = if self.aggregate {
-            self.encoded.max(self.decoded)
-        } else if encode {
-            self.encoded
-        } else {
-            self.decoded
-        };
-        Limits {
-            max_bytes: self.limits.max_bytes.saturating_sub(bytes),
-            max_rows: self.limits.max_rows.saturating_sub(self.rows),
-            max_batches: self.limits.max_batches.saturating_sub(self.batches),
-            ..self.limits
-        }
+    fn remaining(&self) -> Option<usize> {
+        self.copy_bytes
+            .map(|limit| limit.saturating_sub(self.copied))
     }
 
-    fn account(&mut self, data: &crate::Dataset, encoded: usize) {
-        self.encoded = self.encoded.saturating_add(encoded as u64);
-        for batch in &data.batches {
-            self.decoded = self
-                .decoded
-                .saturating_add(batch.get_array_memory_size() as u64);
-            if self.aggregate {
-                self.rows = self.rows.saturating_add(batch.num_rows() as u64);
-                self.batches = self.batches.saturating_add(1);
-            }
+    fn account(&mut self, data: &crate::Dataset) -> Result<()> {
+        self.copied = self
+            .copied
+            .checked_add(data.allocated_bytes())
+            .ok_or_else(|| Error::contract(ErrorCode::Limit, "decoded allocation"))?;
+        if self.copy_bytes.is_some_and(|limit| self.copied > limit) {
+            return Err(Error::contract(ErrorCode::Limit, "decoded allocation"));
         }
-    }
-
-    pub(super) fn encode(&mut self, data: &crate::Dataset, schema: &Schema) -> Result<Dataset> {
-        let encoded = Dataset::encode(data, schema, self.remaining(true))?;
-        if self.aggregate {
-            self.account(data, encoded.arrow_ipc.len());
-        } else {
-            self.encoded = self.encoded.saturating_add(encoded.arrow_ipc.len() as u64);
-        }
-        Ok(encoded)
+        Ok(())
     }
 
     pub(super) fn decode<'a>(
@@ -259,13 +228,13 @@ impl Codec {
         data: &Dataset,
         ports: impl IntoIterator<Item = &'a crate::Port>,
     ) -> Result<crate::Dataset> {
-        if !self.aggregate
-            && self.encoded.saturating_add(data.arrow_ipc.len() as u64) > self.limits.max_bytes
-        {
-            return Err(Error::contract(ErrorCode::Limit, "encoded datasets"));
-        }
-        let decoded = data.decode(Self::schema(ports, &data.name)?, self.remaining(false))?;
-        self.account(&decoded, data.arrow_ipc.len());
+        let decoded = Dataset::decode_ipc_bounded(
+            &data.name,
+            &data.arrow_ipc,
+            Some(Self::schema(ports, &data.name)?),
+            self.remaining(),
+        )?;
+        self.account(&decoded)?;
         Ok(decoded)
     }
 
@@ -274,22 +243,11 @@ impl Codec {
         name: &str,
         bytes: &[u8],
         schema: &Schema,
+        field: &str,
     ) -> Result<RecordBatch> {
-        let limits = if self.aggregate {
-            self.remaining(false)
-        } else {
-            self.limits
-        };
-        let mut data = Dataset::decode_ipc(name, bytes, Some(schema), limits)?;
-        if self.aggregate {
-            self.account(&data, bytes.len());
-        }
+        let mut data = Dataset::decode_ipc_bounded(name, bytes, Some(schema), self.remaining())?;
+        self.account(&data)?;
         if data.batches.len() != 1 || data.batches[0].num_rows() != 1 {
-            let field = if self.aggregate {
-                "single row batch"
-            } else {
-                "reason details"
-            };
             return Err(Error::contract(ErrorCode::Invalid, field));
         }
         Ok(data.batches.remove(0))

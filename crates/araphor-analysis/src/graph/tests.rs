@@ -6,7 +6,7 @@ mod contract;
 mod defaults;
 mod domain;
 mod execution;
-mod fixture;
+pub(super) mod fixture;
 mod traversal;
 mod windows;
 
@@ -25,7 +25,7 @@ impl Graph<'_> {
             .iter()
             .zip(self.projection())
             .map(|(input, values)| {
-                Rows::encode(&input.port, values, model.limits).map(|data| sdk::Input {
+                Rows::encode(&input.port, values).map(|data| sdk::Input {
                     data,
                     revision: sdk::Revision {
                         owner: "captured".into(),
@@ -49,7 +49,6 @@ impl Graph<'_> {
                 id: "fixture".into(),
                 time_utc_ns: 10,
                 seed: None,
-                limits: model.limits,
             },
         })
     }
@@ -128,10 +127,9 @@ fn candidate_requires_host_validation() -> TestResult {
     let (mut owner, evaluation, mut output) = computation(&input)?;
     let package = algorithm::Detector::Credentials.descriptor();
     let port = &package.exports[0].outputs[0];
-    let mut subjects: Vec<algorithm::Subject> =
-        Rows::decode(port, &output.datasets[0], evaluation.context.limits)?;
+    let mut subjects: Vec<algorithm::Subject> = Rows::decode(port, &output.datasets[0])?;
     subjects.first_mut().ok_or("subject candidate")?.record = u64::from(u32::MAX) + 1;
-    output.datasets[0] = Rows::encode(port, &subjects, evaluation.context.limits)?;
+    output.datasets[0] = Rows::encode(port, &subjects)?;
     package.validate_output(&evaluation, &output)?;
     assert!(matches!(
         owner.apply_output(
@@ -171,13 +169,10 @@ fn candidate_reason_is_exact() -> TestResult {
             name: port.name.clone(),
             batches: vec![reason.details.clone()],
         },
-        evaluation.context.limits,
     )?;
     let finding = details.first_mut().ok_or("candidate detail")?;
     finding.confirmed = !finding.confirmed;
-    reason.details = Rows::encode(port, &details, evaluation.context.limits)?
-        .batches
-        .remove(0);
+    reason.details = Rows::encode(port, &details)?.batches.remove(0);
     for altered in [missing, wrong_code, wrong_detail] {
         package.validate_output(&evaluation, &altered)?;
         let mut owner = Graph::new(&input)?;
@@ -235,15 +230,14 @@ fn candidate_rejects_authority_upgrade() -> TestResult {
         .iter_mut()
         .find(|data| data.name == port.name)
         .ok_or("relationships")?;
-    let mut edges: Vec<algorithm::Relationship> =
-        Rows::decode(port, data, evaluation.context.limits)?;
+    let mut edges: Vec<algorithm::Relationship> = Rows::decode(port, data)?;
     let edge = edges
         .iter_mut()
         .find(|edge| matches!(edge.kind, algorithm::EdgeKind::Authority))
         .ok_or("authority edge")?;
     assert!(matches!(edge.cause, algorithm::Cause::Contextual));
     edge.cause = algorithm::Cause::Direct;
-    *data = Rows::encode(port, &edges, evaluation.context.limits)?;
+    *data = Rows::encode(port, &edges)?;
     package.validate_output(&evaluation, &output)?;
     assert!(matches!(
         owner.apply_output(&package, &evaluation, &output),
@@ -268,23 +262,18 @@ fn candidate_rejects_missing_coverage() -> TestResult {
         .iter_mut()
         .find(|data| data.name == port.name)
         .ok_or("findings")?;
-    let mut findings: Vec<algorithm::Finding> =
-        Rows::decode(port, data, evaluation.context.limits)?;
+    let mut findings: Vec<algorithm::Finding> = Rows::decode(port, data)?;
     for finding in &mut findings {
         finding.confirmed = true;
     }
-    *data = Rows::encode(port, &findings, evaluation.context.limits)?;
+    *data = Rows::encode(port, &findings)?;
     for reason in &mut output.reasons {
         let finding = findings
             .get(reason.output.row as usize)
             .ok_or("finding detail")?;
-        reason.details = Rows::encode(
-            port,
-            std::slice::from_ref(finding),
-            evaluation.context.limits,
-        )?
-        .batches
-        .remove(0);
+        reason.details = Rows::encode(port, std::slice::from_ref(finding))?
+            .batches
+            .remove(0);
     }
     package.validate_output(&evaluation, &output)?;
     assert!(matches!(
@@ -325,12 +314,11 @@ fn declared_reason(package_id: &str, reason: &str) -> TestResult {
         .iter_mut()
         .find(|data| data.name == port.name)
         .ok_or("findings")?;
-    let mut findings: Vec<algorithm::Finding> =
-        Rows::decode(port, data, evaluation.context.limits)?;
+    let mut findings: Vec<algorithm::Finding> = Rows::decode(port, data)?;
     for finding in &mut findings {
         finding.reason = reason.into();
     }
-    *data = Rows::encode(port, &findings, evaluation.context.limits)?;
+    *data = Rows::encode(port, &findings)?;
     for value in &mut output.reasons {
         value.code = code.clone();
         value.details = sdk::RecordBatch::try_new(

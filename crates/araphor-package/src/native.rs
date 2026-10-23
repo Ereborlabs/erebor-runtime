@@ -87,7 +87,7 @@ impl Qualification {
             exports,
             target,
             cpu_features: Vec::new(),
-            contract_version: 1,
+            contract_version: araphor_analysis_sdk::CONTRACT_VERSION,
             system_libraries: libraries.into_values().collect(),
             dependencies: Vec::new(),
         })

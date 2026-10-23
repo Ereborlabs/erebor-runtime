@@ -82,16 +82,16 @@ fn graph_keeps_version_manifest() -> TestResult {
         [1, 1, 0]
     );
     assert_eq!(report.output.evidence.len(), 9);
-    let mut limited = graph.fixture.clone();
-    limited.evaluation.context.limits.max_rows = 8;
+    let mut invalid = graph.fixture.clone();
+    invalid.evaluation.inputs[0].data.name = "undeclared".into();
     let mut executed = false;
-    let result = graph.package.test(&limited, |_| {
+    let result = graph.package.test(&invalid, |_| {
         executed = true;
         Ok(Output::default())
     });
     assert_eq!(
-        result.err().ok_or("oversized input passed")?.code(),
-        ErrorCode::Limit
+        result.err().ok_or("undeclared input passed")?.code(),
+        ErrorCode::Invalid
     );
     assert!(!executed);
     Ok(())
@@ -177,13 +177,14 @@ fn dependency_has_one_binding() -> TestResult {
     extra.name = "extra".into();
     extra.inputs.truncate(1);
     package.exports.push(extra);
+    package.validate()?;
     assert_eq!(
         package
-            .validate()
-            .err()
-            .ok_or("65 output references accepted")?
-            .code(),
-        ErrorCode::Limit
+            .exports
+            .iter()
+            .map(|model| model.dependencies().count())
+            .sum::<usize>(),
+        65
     );
     Ok(())
 }

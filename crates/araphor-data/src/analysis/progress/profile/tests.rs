@@ -6,6 +6,7 @@ use crate::{
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+mod contexts;
 mod native;
 mod state;
 
@@ -93,6 +94,11 @@ fn profile_guard_rolls_back() -> TestResult {
         },
     )?;
     store.register_processor(&profile.scope, ProcessorClassV1::Optional, 1)?;
+    let mut selected = crate::AnalysisSelectionV1::new(
+        profile.scope.identity.tenant_id,
+        vec![profile.scope.identity.clone()],
+    );
+    selected.select_profiles(crate::Selection::All)?;
     let mut previous = None;
     let mut notices = store.subscribe_revision();
     for revision in 1..=2 {
@@ -124,6 +130,10 @@ fn profile_guard_rolls_back() -> TestResult {
             previous,
             || Ok(()),
         )?;
+        assert_eq!(
+            store.dependency_revision(&selected, &crate::AnalysisReadControl::default())?,
+            (store.meta()?, receipt.commit_revision)
+        );
         previous = Some(receipt.commit_revision);
         notices.borrow_and_update();
         let committed = store.meta()?;

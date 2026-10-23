@@ -5,13 +5,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
-    AnalysisReadControl, ManagedAttempt, ManagedCommit, ManagedReceipt, ManagedReturn,
-    PackageErrorCodeV1 as Code,
+    AnalysisReadControl, ManagedAttempt, ManagedCommit, ManagedDestination, ManagedGraphOperation,
+    ManagedInstance, ManagedReceipt, ManagedRequest, ManagedResume, ManagedReturn, PackageActionV1,
+    PackageErrorCodeV1 as Code, PackageGrantV1,
 };
 use araphor_query::definition::{ExecutionReceipt, PackageCall};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::{DFSchema, DataFusionError, Result};
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::{dml::InsertOp, Expr, TableType};
@@ -25,18 +26,105 @@ use super::Instance;
 #[derive(Default)]
 pub(super) struct Step {
     pub(super) completed: u64,
+    pub(super) admission: Option<ManagedResume>,
     pub(super) attempt: Option<Arc<ManagedAttempt>>,
-    pub(super) publishing: bool,
     pub(super) receipt: Option<ManagedReceipt>,
+}
+
+#[derive(Clone)]
+pub(super) enum Operation {
+    Follow {
+        lifecycle: u64,
+    },
+    Once {
+        current: ManagedInstance,
+        request: ManagedRequest,
+        caller: Option<PackageGrantV1>,
+    },
+    Version {
+        expected: ManagedInstance,
+        rebuild: bool,
+        action: PackageActionV1,
+        caller: Option<PackageGrantV1>,
+    },
+}
+
+impl Operation {
+    pub(super) fn caller(&self) -> Option<(&PackageGrantV1, PackageActionV1)> {
+        match self {
+            Self::Follow { .. } => None,
+            Self::Once { caller, .. } => caller.as_ref().map(|grant| (grant, PackageActionV1::Run)),
+            Self::Version { caller, action, .. } => caller.as_ref().map(|grant| (grant, *action)),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) enum Mode {
+    Managed {
+        operation: Box<Operation>,
+        state: Arc<Mutex<Step>>,
+        witness_expiry: u64,
+    },
+    Notification {
+        router: Arc<crate::NotificationRouter>,
+        sink: Arc<dyn araphor_data::NotificationSink>,
+        lifecycle: u64,
+    },
 }
 
 #[derive(Clone)]
 pub(super) struct Publication {
     pub(super) owner: Arc<Instance>,
     pub(super) schema: sdk::arrow_schema::SchemaRef,
-    pub(super) state: Arc<Mutex<Step>>,
-    pub(super) witness_expiry: u64,
-    pub(super) lifecycle: Option<u64>,
+    pub(super) mode: Mode,
+}
+
+impl Publication {
+    pub(super) fn managed(&self) -> araphor_data::Result<(&Arc<Mutex<Step>>, u64, &Operation)> {
+        match &self.mode {
+            Mode::Managed {
+                state,
+                witness_expiry,
+                operation,
+            } => Ok((state, *witness_expiry, operation.as_ref())),
+            Mode::Notification { .. } => {
+                Err(Code::Unsupported.error("notification managed publication"))
+            }
+        }
+    }
+
+    fn notify(
+        &self,
+        tenant: [u8; 16],
+        now: u64,
+        batches: &[sdk::RecordBatch],
+        control: &AnalysisReadControl,
+    ) -> crate::Result<()> {
+        let Mode::Notification {
+            router,
+            sink,
+            lifecycle,
+        } = &self.mode
+        else {
+            return Err(Code::Invalid.error("notification publication mode").into());
+        };
+        let check = || self.owner.check_notification(*lifecycle, control);
+        let update = router.consume_rows(tenant, now, batches, &check, &mut |delivery| {
+            Ok(sink.deliver(delivery))
+        })?;
+        for result in update
+            .routed
+            .into_iter()
+            .map(|(_, result)| result)
+            .chain(update.delivered.into_iter().map(|(_, result)| result))
+        {
+            if let Err(error) = result {
+                erebor_telemetry::warn!(error; "Notification candidate failed", instance_id = %self.owner.admitted.spec.id);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Debug for Publication {
@@ -83,7 +171,12 @@ impl TableProvider for Publication {
         input: Arc<dyn ExecutionPlan>,
         operation: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if operation != InsertOp::Append || input.schema() != self.schema {
+        let matches = match &self.mode {
+            Mode::Notification { .. } => DFSchema::try_from(Arc::clone(&self.schema))?
+                .logically_equivalent_names_and_types(&DFSchema::try_from(input.schema())?),
+            Mode::Managed { .. } => input.schema() == self.schema,
+        };
+        if operation != InsertOp::Append || !matches {
             return Err(DataFusionError::External(Box::new(
                 Code::Invalid.error("managed publication input"),
             )));
@@ -120,7 +213,7 @@ impl DataSink for Publication {
                 ))
             })?;
         let limits = self.owner.query.limits();
-        let memory = self.owner.query.memory();
+        let memory = self.owner.session.memory();
         let reservation = memory.reserve_output(0)?;
         let (mut rows, mut bytes) = (0usize, 0usize);
         let mut batches = Vec::new();
@@ -166,8 +259,34 @@ impl DataSink for Publication {
                 )));
             }
         }
-        let attempt = self
-            .state
+        if matches!(&self.mode, Mode::Notification { .. }) {
+            let snapshot = receipt.snapshot();
+            if !receipt.calls().is_empty()
+                || !snapshot.page.exhausted
+                || snapshot.selection.tenant_id != self.owner.admitted.grant.selection.tenant_id
+            {
+                return Err(DataFusionError::External(Box::new(
+                    Code::Invalid.error("notification complete native capture"),
+                )));
+            }
+            let tenant = snapshot.selection.tenant_id;
+            let now = snapshot.time_utc_ns();
+            let publication = self.clone();
+            return receipt
+                .blocking(context, reservation, move |control| {
+                    publication
+                        .notify(tenant, now, &batches, control)
+                        .map_err(|source| araphor_query::Error::Sql {
+                            source: DataFusionError::External(Box::new(source)),
+                        })?;
+                    Ok(rows as u64)
+                })
+                .await;
+        }
+        let (state, _, mode) = self
+            .managed()
+            .map_err(|source| DataFusionError::External(Box::new(source)))?;
+        let attempt = state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .attempt
@@ -178,20 +297,30 @@ impl DataSink for Publication {
                 ))
             })?;
         let calls = receipt.calls().clone();
+        let captured = receipt.clone();
+        let acknowledgement = receipt.clone();
+        let task = Arc::clone(context);
         let owner = Arc::clone(&self.owner);
-        let state = Arc::clone(&self.state);
+        let state = Arc::clone(state);
         let schema = Arc::clone(&self.schema);
         let selected = sdk::Dataset {
             name: "selected".into(),
             batches,
         };
-        let selected_limits = sdk::Limits {
-            max_rows: limits.output_rows as u64,
-            max_bytes: limits.output_bytes as u64,
-            max_batches: u32::MAX,
-            max_checkpoint_bytes: u64::MAX,
+        let actions: &'static [_] = match mode {
+            Operation::Version {
+                action: PackageActionV1::Rollback,
+                ..
+            } => &[
+                PackageActionV1::Run,
+                PackageActionV1::Update,
+                PackageActionV1::Rollback,
+            ],
+            Operation::Version { .. } => &[PackageActionV1::Run, PackageActionV1::Update],
+            _ => &[PackageActionV1::Run],
         };
-        receipt
+        let caller = mode.caller().map(|(grant, action)| (grant.clone(), action));
+        let published = receipt
             .blocking(context, reservation, move |control| {
                 let returns = calls
                     .iter()
@@ -199,6 +328,7 @@ impl DataSink for Publication {
                         call: *call,
                         evaluation: returned.evaluation(),
                         output: returned.output(),
+                        retained: returned.retained(),
                     })
                     .collect::<Vec<_>>();
                 let now = SystemTime::now()
@@ -206,37 +336,154 @@ impl DataSink for Publication {
                     .ok()
                     .and_then(|time| u64::try_from(time.as_nanos()).ok())
                     .ok_or_else(|| Code::Incomplete.error("managed publication time"))?;
-                state
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .publishing = true;
-                Instance::authorize(
+                let profile = if matches!(
+                    owner.admitted.spec.destination,
+                    ManagedDestination::DiscoveryProfile { .. }
+                ) {
+                    Some(crate::DiscoveryOwner::convert_profile(
+                        &owner.session,
+                        &owner.prepared,
+                        &owner.admitted.spec.destination,
+                        &captured,
+                        &task,
+                        control,
+                    )?)
+                } else {
+                    None
+                };
+                let graph = match &owner.admitted.spec.destination {
+                    ManagedDestination::Graph {
+                        operation: ManagedGraphOperation::Evaluate,
+                        ..
+                    } if calls.is_empty()
+                        && selected.batches.iter().all(|batch| batch.num_rows() == 0) =>
+                    {
+                        None
+                    }
+                    ManagedDestination::Graph {
+                        operation: ManagedGraphOperation::Evaluate,
+                        ..
+                    } => Some(
+                        owner
+                            .graph
+                            .as_ref()
+                            .ok_or_else(|| Code::Incomplete.error("managed graph owner"))?
+                            .convert_graph(
+                                &task,
+                                &captured,
+                                format!("graph:{}", uuid::Uuid::new_v4()),
+                                true,
+                                control,
+                            )?,
+                    ),
+                    ManagedDestination::Graph {
+                        operation: ManagedGraphOperation::Expire,
+                        ..
+                    } => crate::graph::GraphConversion::expiry(
+                        &owner.session,
+                        &task,
+                        &captured,
+                        &selected.batches,
+                        control,
+                    )?,
+                    _ => None,
+                };
+                let completed = graph.as_ref().is_none_or(|converted| converted.completed)
+                    && profile.as_ref().is_none_or(|converted| !converted.replan);
+                Instance::authorize_actions_for(
                     owner.authority.as_ref(),
                     &owner.admitted.grant,
                     &owner.prepared,
+                    actions,
+                    caller
+                        .as_ref()
+                        .map(|(grant, action)| (grant, *action, control)),
                     || {
                         control.check()?;
-                        let receipt = owner.query.store().commit_managed(
-                            &ManagedCommit {
-                                attempt: &attempt,
-                                now_utc_ns: now,
-                                returns: &returns,
-                                selected: &selected,
-                                selected_schema: schema.as_ref(),
-                                selected_limits,
-                            },
-                            || control.check(),
-                        )?;
+                        let managed = ManagedCommit {
+                            attempt: &attempt,
+                            now_utc_ns: now,
+                            returns: &returns,
+                            selected: &selected,
+                            selected_schema: schema.as_ref(),
+                        };
+                        let receipt = match &owner.admitted.spec.destination {
+                            ManagedDestination::Notification => {
+                                return Err(Code::Unsupported.error("notification managed commit"))
+                            }
+                            ManagedDestination::Selected => owner
+                                .query
+                                .store()
+                                .commit_managed(&managed, || control.check())?,
+                            ManagedDestination::DiscoveryProfile { .. } => {
+                                let converted = profile.ok_or_else(|| {
+                                    Code::Incomplete.error("managed profile conversion")
+                                })?;
+                                owner
+                                    .query
+                                    .store()
+                                    .commit_managed_profile(&managed, converted.packet, || {
+                                        control.check()
+                                    })?
+                                    .0
+                            }
+                            ManagedDestination::Graph { .. } => {
+                                if let Some(converted) = graph {
+                                    let evaluate = matches!(
+                                        owner.admitted.spec.destination,
+                                        ManagedDestination::Graph {
+                                            operation: ManagedGraphOperation::Evaluate,
+                                            ..
+                                        }
+                                    );
+                                    let deadline = converted.deadline;
+                                    if evaluate {
+                                        crate::graph::GraphConversion::check_deadline(deadline)?;
+                                    }
+                                    owner
+                                        .query
+                                        .store()
+                                        .commit_managed_graph(
+                                            &managed,
+                                            Some(converted.packet),
+                                            || {
+                                                control.check()?;
+                                                if evaluate {
+                                                    crate::graph::GraphConversion::check_deadline(
+                                                        deadline,
+                                                    )?;
+                                                }
+                                                Ok(())
+                                            },
+                                        )?
+                                        .0
+                                } else {
+                                    owner
+                                        .query
+                                        .store()
+                                        .commit_managed_graph(&managed, None, || control.check())?
+                                        .0
+                                }
+                            }
+                        };
+                        let revision = receipt.commit_revision;
                         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
                         state.attempt = None;
                         state.completed = receipt.commit_revision;
+                        if let Some(admission) = &mut state.admission {
+                            admission.instance.progress = receipt.commit_revision;
+                            admission.completed = receipt.commit_revision;
+                        }
                         state.receipt = Some(receipt);
-                        Ok(())
+                        Ok(completed.then_some(revision))
                     },
                 )
                 .map_err(araphor_query::Error::from)
             })
             .await?;
+        if let Some(revision) = published {
+            acknowledgement.acknowledge(context, revision)?;
+        }
         Ok(rows as u64)
     }
 }

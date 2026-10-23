@@ -115,14 +115,14 @@ impl NativeLibrary {
     pub fn call(
         &self,
         checked: &sdk::CheckedEvaluation<'_>,
-        output_limits: sdk::Limits,
+        copy_bytes: Option<usize>,
         control: &AnalysisReadControl,
     ) -> Result<sdk::Output> {
         control.check()?;
         let invocation = sdk::native::Invocation::new(checked, || control.check().is_err())
             .map_err(|source| crate::AnalysisContractSnafu.into_error(source))?;
         // The library pin covers copying output and all producer release callbacks.
-        let result = unsafe { invocation.call(&*self.api, output_limits) }.map_err(Self::failure);
+        let result = unsafe { invocation.call(&*self.api, copy_bytes) }.map_err(Self::failure);
         control.check()?;
         result
     }
@@ -293,7 +293,7 @@ mod tests {
             exports: vec!["detect".into()],
             target: env!("ARAPHOR_NATIVE_TARGET").into(),
             cpu_features: Vec::new(),
-            contract_version: 1,
+            contract_version: sdk::CONTRACT_VERSION,
             system_libraries: Vec::new(),
             dependencies: Vec::new(),
         };
@@ -313,7 +313,7 @@ mod tests {
                 exports: vec!["detect".into()],
                 target: env!("ARAPHOR_NATIVE_TARGET").into(),
                 cpu_features: Vec::new(),
-                contract_version: 1,
+                contract_version: sdk::CONTRACT_VERSION,
                 system_libraries: vec![araphor_data::LibraryRequirement {
                     name: name.into(),
                     symbols: Vec::new(),

@@ -266,8 +266,7 @@ async fn catalog_input_contract() -> TestResult {
         port: sdk::Port::new("columns", schema.clone()),
         source: sdk::InputSource::Query("SELECT ordinal FROM catalog LIMIT 100".into()),
     }];
-    model.limits.max_rows = 100;
-    model.limits.max_batches = 1;
+
     let fixture = Fixture::limits(capacity_limits())?;
     fixture.install(&bundle(
         model,

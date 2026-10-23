@@ -132,7 +132,6 @@ impl FilesCount {
                     id: "run.1".into(),
                     time_utc_ns: 10,
                     seed: None,
-                    limits: Limits::default(),
                 },
                 checkpoint: None,
             },

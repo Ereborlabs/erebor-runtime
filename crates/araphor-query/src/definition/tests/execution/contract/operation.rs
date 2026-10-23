@@ -70,11 +70,7 @@ async fn operation_qualified_inputs() -> TestResult {
             .zip(&package.exports[0].inputs)
             .map(|(input, port)| {
                 Ok(sdk::wire::Input {
-                    data: sdk::wire::Dataset::encode(
-                        &input.data,
-                        &port.port.schema,
-                        package.exports[0].limits,
-                    )?,
+                    data: sdk::wire::Dataset::encode(&input.data, &port.port.schema)?,
                     revision: input.revision.clone(),
                     coverage: input.coverage.clone(),
                 })
@@ -483,11 +479,7 @@ async fn reordered_input_provenance() -> TestResult {
                 Ok((
                     input.data.name.clone(),
                     sdk::wire::Input {
-                        data: sdk::wire::Dataset::encode(
-                            &input.data,
-                            &port.port.schema,
-                            declared.limits,
-                        )?,
+                        data: sdk::wire::Dataset::encode(&input.data, &port.port.schema)?,
                         revision: input.revision.clone(),
                         coverage: input.coverage.clone(),
                     },
@@ -648,21 +640,10 @@ async fn operation_error_classes() -> TestResult {
     drop(prepared);
     capacity_released(&fixture)?;
 
-    for (source, fixed) in [
-        (
-            "SELECT CAST(relation AS BIGINT UNSIGNED) AS value FROM catalog LIMIT 1",
-            false,
-        ),
-        (
-            "SELECT CAST(7 AS BIGINT UNSIGNED) AS value FROM catalog LIMIT 1",
-            true,
-        ),
-    ] {
+    {
+        let source = "SELECT CAST(relation AS BIGINT UNSIGNED) AS value FROM catalog LIMIT 1";
         let mut model = model.clone();
         model.inputs[0].source = sdk::InputSource::Query(source.into());
-        if fixed {
-            model.limits.max_bytes = 1;
-        }
         let image = bundle(
             model,
             SqlModelV1 {
@@ -681,15 +662,11 @@ async fn operation_error_classes() -> TestResult {
             .await
             .err()
             .ok_or("invalid input was accepted")?;
-        if fixed {
-            assert_eq!(
-                crate::Failure::from(&error),
-                crate::Failure::InputTooLarge,
-                "{error:?}"
-            );
-            assert_eq!(error.status_code(), StatusCode::InvalidArguments);
-            assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
-        }
+        assert_eq!(
+            crate::Failure::from(&error),
+            crate::Failure::EvaluationFailed
+        );
+        assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
         assert_eq!(fixture.engine.store().meta()?, before);
         drop(prepared);
         capacity_released(&fixture)?;

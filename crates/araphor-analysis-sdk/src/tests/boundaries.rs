@@ -13,7 +13,7 @@ fn checked_output_keeps_contract() -> TestResult {
     let mut encoded = crate::wire::Output::encode(&package, &fixture.evaluation, &output)?;
     encoded.evidence.clear();
     assert!(matches!(
-        encoded.decode_bounded(&package, &fixture.evaluation, Limits::default()),
+        encoded.decode_bounded(&package, &fixture.evaluation, encoded.allocated_bytes() + output.allocated_bytes()),
         Err(Error::Contract { code: ErrorCode::Incomplete, field, .. })
             if field == "required output evidence"
     ));
@@ -34,76 +34,46 @@ fn checked_output_keeps_contract() -> TestResult {
 }
 
 #[test]
-fn dataset_checks_shape_and_limits() -> TestResult {
+fn dataset_checks_shape() -> TestResult {
     let package = FilesCount::package();
     let fixture = FilesCount::fixture()?;
     let port = &package.exports[0].inputs[0].port;
     let mut data = fixture.evaluation.inputs[0].data.clone();
-    let limits = package.exports[0].limits;
-    data.validate(port, limits)?;
+    data.validate(port)?;
     data.name = "other".into();
     assert_eq!(
-        data.validate(port, limits).map_err(|error| error.code()),
+        data.validate(port).map_err(|error| error.code()),
         Err(ErrorCode::Invalid)
     );
     data.name = port.name.clone();
     let mut wrong = port.clone();
     wrong.schema = Schema::empty();
     assert_eq!(
-        data.validate(&wrong, limits).map_err(|error| error.code()),
+        data.validate(&wrong).map_err(|error| error.code()),
         Err(ErrorCode::Incompatible)
     );
     data.batches.push(data.batches[0].clone());
-    for limits in [
-        Limits {
-            max_rows: 5,
-            ..limits
-        },
-        Limits {
-            max_bytes: 1,
-            ..limits
-        },
-        Limits {
-            max_batches: 1,
-            ..limits
-        },
-    ] {
-        assert_eq!(
-            data.validate(port, limits).map_err(|error| error.code()),
-            Err(ErrorCode::Limit)
-        );
-    }
+    data.validate(port)?;
     data.batches.clear();
-    data.validate(port, limits)?;
-    assert_eq!(
-        data.validate(
-            port,
-            Limits {
-                max_rows: 0,
-                ..limits
-            }
-        )
-        .map_err(|error| error.code()),
-        Err(ErrorCode::Invalid)
-    );
+    data.validate(port)?;
     wrong.name = port.name.clone();
     wrong.schema = Schema::new(vec![Field::new("day", DataType::Date32, false)]);
     assert_eq!(
-        data.validate(&wrong, limits).map_err(|error| error.code()),
+        data.validate(&wrong).map_err(|error| error.code()),
         Err(ErrorCode::Incompatible)
     );
     wrong.name = "invalid name".into();
     data.name = wrong.name.clone();
     wrong.schema = Schema::empty();
     assert_eq!(
-        data.validate(&wrong, limits).map_err(|error| error.code()),
+        data.validate(&wrong).map_err(|error| error.code()),
         Err(ErrorCode::Invalid)
     );
     Ok(())
 }
 
 #[test]
-fn dataset_collection_keeps_bounds() -> TestResult {
+fn dataset_collection_checks_names() -> TestResult {
     let package = FilesCount::package();
     let fixture = FilesCount::fixture()?;
     let port = package.exports[0].inputs[0].port.clone();
@@ -114,31 +84,20 @@ fn dataset_collection_keeps_bounds() -> TestResult {
         port,
         Port::new(&other.name, data.batches[0].schema().as_ref().clone()),
     ];
-    let bytes = data.batches[0].get_array_memory_size() as u64
-        + data.name.len().max(other.name.len()) as u64;
     let datasets = [data, other];
-    for limits in [
-        Limits {
-            max_rows: 5,
-            ..Limits::default()
-        },
-        Limits {
-            max_batches: 1,
-            ..Limits::default()
-        },
-        Limits {
-            max_bytes: bytes,
-            ..Limits::default()
-        },
-    ] {
-        for (data, port) in datasets.iter().zip(&ports) {
-            data.validate(port, limits)?;
-        }
-        assert_eq!(
-            Dataset::validate_all(&datasets, &ports, limits).map_err(|error| error.code()),
-            Err(ErrorCode::Limit)
-        );
+    for (data, port) in datasets.iter().zip(&ports) {
+        data.validate(port)?;
     }
+    Dataset::validate_all(&datasets, &ports)?;
+    assert_eq!(
+        Dataset::validate_all(&datasets[..1], &ports).map_err(|error| error.code()),
+        Err(ErrorCode::Incomplete)
+    );
+    assert_eq!(
+        Dataset::validate_all(&[datasets[0].clone(), datasets[0].clone()], &ports)
+            .map_err(|error| error.code()),
+        Err(ErrorCode::Invalid)
+    );
     Ok(())
 }
 
@@ -264,50 +223,18 @@ fn reason_namespace_and_details() -> TestResult {
 }
 
 #[test]
-fn limits_reject_complete_result() -> TestResult {
-    let mut package = FilesCount::package();
-    let mut fixture = FilesCount::fixture()?;
-    for limits in [
-        Limits {
-            max_rows: 2,
-            ..Limits::default()
-        },
-        Limits {
-            max_bytes: 1,
-            ..Limits::default()
-        },
-    ] {
-        fixture.evaluation.context.limits = limits;
-        assert_eq!(
-            package
-                .validate_evaluation(&fixture.evaluation)
-                .err()
-                .ok_or("limit accepted")?
-                .code(),
-            ErrorCode::Limit
-        );
-    }
-    fixture.evaluation.context.limits = Limits {
-        max_batches: 1,
-        ..Limits::default()
-    };
-    let duplicate = fixture.evaluation.inputs[0].data.batches[0].clone();
-    fixture.evaluation.inputs[0].data.batches.push(duplicate);
-    assert_eq!(
-        package
-            .validate_evaluation(&fixture.evaluation)
-            .err()
-            .ok_or("batch limit accepted")?
-            .code(),
-        ErrorCode::Limit
-    );
-    fixture.evaluation.inputs[0].data.batches.pop();
-    package.exports[0].limits.max_rows = 1_000_000;
-    fixture.evaluation.context.limits = Limits {
-        max_rows: 1_000_001,
-        ..Limits::default()
-    };
-    assert!(package.validate_evaluation(&fixture.evaluation).is_err());
+fn metadata_omits_package_quotas() -> TestResult {
+    let package = FilesCount::package();
+    let fixture = FilesCount::fixture()?;
+    let mut model = serde_json::to_value(&package.exports[0])?;
+    let mut context = serde_json::to_value(&fixture.evaluation.context)?;
+    assert!(model.get("limits").is_none());
+    assert!(context.get("limits").is_none());
+    assert_eq!(context.as_object().ok_or("context object")?.len(), 3);
+    model["limits"] = serde_json::json!({"max_rows": 1});
+    context["limits"] = serde_json::json!({"max_rows": 1});
+    assert!(serde_json::from_value::<Model>(model).is_err());
+    assert!(serde_json::from_value::<EvaluationContext>(context).is_err());
     Ok(())
 }
 
@@ -356,13 +283,63 @@ fn rejects_descriptor_duplicates() -> TestResult {
 }
 
 #[test]
-fn limits_default_disabled() -> TestResult {
-    let limits = Limits::default();
-    assert_eq!(limits.max_batches, u32::MAX);
-    assert_eq!(limits.max_rows, u64::MAX);
-    assert_eq!(limits.max_bytes, u64::MAX);
-    assert_eq!(limits.max_checkpoint_bytes, u64::MAX);
-    let restored: Limits = serde_json::from_slice(&serde_json::to_vec(&limits)?)?;
-    assert_eq!(restored, limits);
+fn descriptor_has_no_caps() -> TestResult {
+    let mut package = Package::new(
+        "files",
+        "r".repeat(4097),
+        (0..65)
+            .map(|index| {
+                Model::new(
+                    format!("export_{index}"),
+                    Vec::new(),
+                    vec![Port::new("result", Schema::empty())],
+                )
+            })
+            .collect(),
+    );
+    let model = &mut package.exports[0];
+    model.name = "x".repeat(257);
+    model.inputs = (0..65)
+        .map(|index| Port::new(format!("input_{index}"), Schema::empty()).into())
+        .collect();
+    model.outputs = (0..65)
+        .map(|index| Port::new(format!("output_{index}"), Schema::empty()))
+        .collect();
+    model.reasons = (0..129)
+        .map(|index| Reason {
+            code: format!("files.reason_{index}"),
+            details: Schema::empty(),
+        })
+        .collect();
+    let mut nested = DataType::UInt64;
+    for _ in 0..17 {
+        nested = DataType::List(Arc::new(Field::new("item", nested, false)));
+    }
+    let mut fields = (0..1025)
+        .map(|index| Field::new(format!("field_{index}"), DataType::UInt64, false))
+        .collect::<Vec<_>>();
+    fields.push(Field::new("nested", nested, false));
+    fields.push(Field::new(
+        "binary",
+        DataType::FixedSizeBinary(65537),
+        false,
+    ));
+    fields.push(Field::new(
+        "list",
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::UInt64, false)), 65537),
+        false,
+    ));
+    model.parameters = Schema::new(fields);
+    package.validate()?;
+    let mut fixture = FilesCount::fixture()?;
+    fixture.evaluation.context.id = "x".repeat(4097);
+    fixture.evaluation.inputs[0].revision.window = Some(SourceWindow {
+        source: vec![1; 4097],
+        start_utc_ns: 0,
+        end_utc_ns: 1,
+    });
+    fixture.evaluation.inputs[0].coverage.limits =
+        (0..129).map(|index| format!("gap_{index}")).collect();
+    FilesCount::package().validate_evaluation(&fixture.evaluation)?;
     Ok(())
 }

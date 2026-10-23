@@ -17,7 +17,7 @@ impl AnalysisStore {
         );
         CREATE TABLE IF NOT EXISTS package_images (
             tenant_id BLOB NOT NULL, package_id VARCHAR NOT NULL, revision VARCHAR NOT NULL,
-            digest VARCHAR NOT NULL, commit_revision UBIGINT NOT NULL,
+            digest VARCHAR NOT NULL, commit_revision UBIGINT NOT NULL, installed BOOLEAN NOT NULL,
             PRIMARY KEY (tenant_id, package_id, revision)
         );
         CREATE TABLE IF NOT EXISTS discovery_definitions (

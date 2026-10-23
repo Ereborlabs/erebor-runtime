@@ -7,16 +7,25 @@ impl NotificationRouter {
         sink: &dyn NotificationSink,
         now: u64,
     ) -> Result<usize> {
+        self.deliver_checked(key, &mut |delivery| Ok(sink.deliver(delivery)), now)
+    }
+
+    pub(crate) fn deliver_checked(
+        &self,
+        key: NotificationKeyV1,
+        effect: &mut Effect<'_>,
+        now: u64,
+    ) -> Result<usize> {
         let _guard = self.lock()?;
         NotificationErrorCodeV1::Invalid.require(now > 0, "delivery time")?;
         let mut state = self.state(key)?;
-        self.deliver_state(&mut state, sink, now)
+        self.deliver_state(&mut state, effect, now)
     }
 
-    pub(super) fn deliver_state(
+    fn deliver_state(
         &self,
         state: &mut NotificationObligationV1,
-        sink: &dyn NotificationSink,
+        effect: &mut Effect<'_>,
         now: u64,
     ) -> Result<usize> {
         if state
@@ -33,11 +42,11 @@ impl NotificationRouter {
             self.save(state)?;
         }
         let mut delivered =
-            usize::from(self.send(state, sink, NotificationDeliveryKindV1::Finding, now)?);
+            usize::from(self.send(state, effect, NotificationDeliveryKindV1::Finding, now)?);
         if state.failure.is_some() || state.pending(NotificationDeliveryKindV1::FailureEscalation) {
             delivered += usize::from(self.send(
                 state,
-                sink,
+                effect,
                 NotificationDeliveryKindV1::FailureEscalation,
                 now,
             )?);
@@ -47,7 +56,7 @@ impl NotificationRouter {
         {
             delivered += usize::from(self.send(
                 state,
-                sink,
+                effect,
                 NotificationDeliveryKindV1::AcknowledgementEscalation,
                 now,
             )?);

@@ -118,6 +118,7 @@ fn completion_fences_capture() -> TestResult {
     let requests = AnalysisTableRequests::new();
     let before = store.meta()?;
     let selected = ManagedRead {
+        expected: None,
         instance: resumed.instance.clone(),
         rebuild: false,
         completed: Some(resumed.completed),
@@ -220,7 +221,7 @@ fn completion_fences_publication() -> TestResult {
 }
 
 #[test]
-fn ambiguous_failure_is_unavailable() -> TestResult {
+fn failed_frontier_can_resume() -> TestResult {
     for code in [Code::Incomplete, Code::Limit] {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("store"))?;
@@ -232,16 +233,11 @@ fn ambiguous_failure_is_unavailable() -> TestResult {
             next_change: None,
         });
         let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
-        store.finish_managed(&attempt, ManagedExit::Failed(code), || Ok(()))?;
+        let terminal = store.finish_managed(&attempt, ManagedExit::Failed(code), || Ok(()))?;
         let before = store.meta()?;
-        assert!(matches!(
-            store.managed_resume([1; 16], "counter", &AnalysisReadControl::default()),
-            Err(crate::Error::Package {
-                code: Code::Incomplete,
-                field: "managed capacity retry unavailable",
-                ..
-            })
-        ));
+        let resumed = store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?;
+        assert_eq!(resumed.frontier, input.frontier);
+        assert_eq!(resumed.completed, terminal.revision);
         assert_eq!(store.meta()?, before);
         assert_eq!(
             store

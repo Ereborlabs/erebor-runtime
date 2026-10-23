@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::arrow_array::UInt64Array;
-use crate::{DataType, ErrorCode, Field, Limits, RecordBatch, Schema};
+use crate::{DataType, ErrorCode, Field, RecordBatch, Schema};
 
 use super::Dataset;
 
@@ -23,7 +23,7 @@ fn values(name: &str, values: Vec<u64>) -> crate::Result<(Schema, crate::Dataset
 }
 
 #[test]
-fn ipc_preflights_schema_allocation() -> TestResult {
+fn ipc_validates_schema_layout() -> TestResult {
     let stream = |schema: &Schema| -> TestResultWithBytes {
         let mut bytes = Vec::new();
         let mut writer = arrow_ipc::writer::StreamWriter::try_new(&mut bytes, schema)?;
@@ -31,43 +31,24 @@ fn ipc_preflights_schema_allocation() -> TestResult {
         drop(writer);
         Ok(bytes)
     };
-    let schema = Schema::new(
-        (0..1024)
-            .map(|index| Field::new(format!("value-{index}"), DataType::UInt64, false))
-            .collect::<Vec<_>>(),
-    );
-    let ipc = stream(&schema)?;
-    let tight = Limits {
-        max_bytes: ipc.len() as u64,
-        ..Limits::default()
-    };
-    assert_eq!(
-        Dataset::decode_ipc("data", &ipc, None, tight)
-            .err()
-            .ok_or("schema storage accepted")?
-            .code(),
-        ErrorCode::Limit
-    );
-    assert!(Dataset::decode_ipc("data", &ipc, None, Limits::default()).is_ok());
-    let schema = Schema::new(
-        (0..1025)
-            .map(|index| Field::new(format!("value-{index}"), DataType::UInt64, false))
-            .collect::<Vec<_>>(),
-    );
-    assert_eq!(
-        Dataset::decode_ipc("data", &stream(&schema)?, None, Limits::default())
-            .err()
-            .ok_or("schema fields accepted")?
-            .code(),
-        ErrorCode::Limit
-    );
+    for fields in [1024, 1025] {
+        let schema = Schema::new(
+            (0..fields)
+                .map(|index| Field::new(format!("value-{index}"), DataType::UInt64, false))
+                .collect::<Vec<_>>(),
+        );
+        let ipc = stream(&schema)?;
+        assert!(Dataset::decoding_bytes(&ipc)? >= ipc.len());
+        let data = Dataset::decode_ipc("data", &ipc, None)?;
+        assert_eq!(data.batches[0].schema().as_ref(), &schema);
+    }
     let schema = Schema::new(vec![Field::new(
         "value",
         DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8)),
         false,
     )]);
     assert_eq!(
-        Dataset::decode_ipc("data", &stream(&schema)?, None, Limits::default())
+        Dataset::decode_ipc("data", &stream(&schema)?, None)
             .err()
             .ok_or("dictionary schema accepted")?
             .code(),
@@ -79,58 +60,22 @@ fn ipc_preflights_schema_allocation() -> TestResult {
 type TestResultWithBytes = std::result::Result<Vec<u8>, Box<dyn std::error::Error>>;
 
 #[test]
-fn ipc_round_trip_and_bounds() -> TestResult {
+fn ipc_preserves_schema() -> TestResult {
     let (schema, data) = values("values", vec![1, 2, 3])?;
-    let encoded = Dataset::encode(&data, &schema, Limits::default())?;
-    let decoded = encoded.decode(&schema, Limits::default())?;
+    let encoded = Dataset::encode(&data, &schema)?;
+    let decoded = encoded.decode(&schema)?;
     assert_eq!(decoded.batches, data.batches);
-    for (bound, result) in [
-        (
-            "row bound",
-            encoded
-                .decode(
-                    &schema,
-                    Limits {
-                        max_rows: 2,
-                        ..Limits::default()
-                    },
-                )
-                .map(|_| ()),
-        ),
-        (
-            "byte bound",
-            encoded
-                .decode(
-                    &schema,
-                    Limits {
-                        max_bytes: 1,
-                        ..Limits::default()
-                    },
-                )
-                .map(|_| ()),
-        ),
-        (
-            "encode byte bound",
-            Dataset::encode(
-                &data,
-                &schema,
-                Limits {
-                    max_bytes: 1,
-                    ..Limits::default()
-                },
-            )
-            .map(|_| ()),
-        ),
-    ] {
-        assert_eq!(result.err().ok_or(bound)?.code(), ErrorCode::Limit);
-    }
+    assert_eq!(encoded.batch_count()?, 1);
     let wrong = Schema::new(vec![Field::new("other", DataType::UInt64, false)]);
-    assert!(encoded.decode(&wrong, Limits::default()).is_err());
+    assert!(encoded.decode(&wrong).is_err());
+    assert!(Dataset::encode(&data, &wrong).is_err());
+    assert_eq!(encoded.decode_any()?.batches, data.batches);
     let truncated = Dataset {
         name: encoded.name,
         arrow_ipc: encoded.arrow_ipc[..8].to_vec(),
     };
-    assert!(truncated.decode_any(Limits::default()).is_err());
+    assert!(truncated.decode_any().is_err());
+    assert!(truncated.batch_count().is_err());
     Ok(())
 }
 
@@ -141,11 +86,19 @@ fn ipc_keeps_empty_schema() -> TestResult {
         name: "empty".into(),
         batches: Vec::new(),
     };
-    let encoded = Dataset::encode(&data, &schema, Limits::default())?;
-    let decoded = encoded.decode(&schema, Limits::default())?;
+    let encoded = Dataset::encode(&data, &schema)?;
+    let decoded = encoded.decode(&schema)?;
     assert_eq!(decoded.batches.len(), 1);
     assert_eq!(decoded.batches[0].num_rows(), 0);
     assert_eq!(decoded.batches[0].schema().as_ref(), &schema);
+    assert_eq!(encoded.batch_count()?, 0);
+    let batch = crate::Dataset {
+        name: data.name,
+        batches: vec![RecordBatch::new_empty(Arc::new(schema.clone()))],
+    };
+    let with_batch = Dataset::encode(&batch, &schema)?;
+    assert_eq!(with_batch.batch_count()?, 1);
+    assert_eq!(with_batch.decode(&schema)?.batches, decoded.batches);
     Ok(())
 }
 
@@ -167,7 +120,6 @@ fn wire_validates_evidence() -> TestResult {
             id: "test.1".into(),
             time_utc_ns: 17,
             seed: Some(3),
-            limits: Limits::default(),
         },
         checkpoint: None,
     };
@@ -219,7 +171,6 @@ fn allocation_counts_input_state() -> TestResult {
             id: "memory".into(),
             time_utc_ns: 1,
             seed: None,
-            limits: Limits::default(),
         },
         checkpoint: None,
     };
@@ -291,7 +242,7 @@ fn wire_rejects_compressed_batch() -> TestResult {
         arrow_ipc: bytes,
     };
     assert_eq!(
-        data.decode_any(Limits::default())
+        data.decode_any()
             .err()
             .ok_or("compressed stream accepted")?
             .code(),
@@ -307,7 +258,6 @@ fn generated_types_preserve_context() -> TestResult {
         id: "recorded".into(),
         time_utc_ns: 123,
         seed: Some(42),
-        limits: Limits::default(),
     };
     let wire = super::Evaluation {
         export_name: "run".into(),
@@ -345,7 +295,6 @@ fn output_budget_includes_checkpoint() -> TestResult {
             id: "bounded-output".into(),
             time_utc_ns: 1,
             seed: None,
-            limits: Limits::default(),
         },
     };
     let mut state = data.clone();
@@ -360,17 +309,13 @@ fn output_budget_includes_checkpoint() -> TestResult {
     };
     let encoded = super::Output::encode(&package, &evaluation, &output)?;
     encoded.decode(&package, &evaluation)?;
-    let tight = Limits {
-        max_bytes: 48 * 1024,
-        max_checkpoint_bytes: 48 * 1024,
-        ..Limits::default()
-    };
-    assert!(encoded.datasets[0].arrow_ipc.len() < tight.max_bytes as usize);
+    let tight = 48 * 1024;
+    assert!(encoded.datasets[0].arrow_ipc.len() < tight);
     assert!(
         encoded.checkpoint.as_ref().ok_or("checkpoint")?.datasets[0]
             .arrow_ipc
             .len()
-            < tight.max_checkpoint_bytes as usize
+            < tight
     );
     assert_eq!(
         encoded
@@ -380,15 +325,7 @@ fn output_budget_includes_checkpoint() -> TestResult {
             .code(),
         ErrorCode::Limit
     );
-    let decoded = encoded.decode_bounded(
-        &package,
-        &evaluation,
-        Limits {
-            max_bytes: 256 * 1024,
-            max_checkpoint_bytes: 256 * 1024,
-            ..Limits::default()
-        },
-    )?;
+    let decoded = encoded.decode_bounded(&package, &evaluation, 256 * 1024)?;
     assert_eq!(decoded.datasets[0].batches, output.datasets[0].batches);
     assert_eq!(
         decoded.checkpoint.ok_or("decoded checkpoint")?.datasets[0].batches,

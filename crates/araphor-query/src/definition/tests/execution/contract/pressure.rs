@@ -42,7 +42,6 @@ fn evaluation(
             id: id.into(),
             time_utc_ns: NOW as i64,
             seed: Some(7),
-            limits: model.limits,
         },
     })
 }
@@ -77,8 +76,7 @@ async fn guest_nested_encoding_preflight() -> TestResult {
         let mut image = component("wasm", "count-input")?;
         let model = &mut image.artifacts[0].descriptor.exports[0];
         model.inputs[0].port.schema = schema;
-        model.limits.max_rows = u64::MAX;
-        model.limits.max_bytes = 4 * 1024 * 1024;
+
         let evaluation = evaluation(&image, &batch, "nested-encoding")?;
         assert!(evaluation.allocated_bytes() < 32 * 1024);
         let scratch = evaluation.encoding_scratch_bytes()?;
@@ -175,37 +173,22 @@ async fn guest_schema_and_wire_preflight() -> TestResult {
         let mut image = component("wasm", "count-input")?;
         let model = &mut image.artifacts[0].descriptor.exports[0];
         model.inputs[0].port.schema = schema.clone();
-        model.limits.max_bytes = if empty { 1024 * 1024 } else { 1024 };
+
         let evaluation = evaluation(&image, &batch, "schema-encoding")?;
         let descriptor = &image.artifacts[0].descriptor;
         let checked = descriptor.check_evaluation(&evaluation)?;
-        if empty {
-            let wire = checked.encode()?;
-            let decoded = wire.decode(descriptor)?;
-            assert_eq!(decoded.inputs[0].data.batches.len(), 1);
-            assert_eq!(decoded.inputs[0].data.batches[0].num_rows(), 0);
-            assert_eq!(decoded.inputs[0].data.batches[0].schema().as_ref(), &schema);
-            let mut tight = evaluation.clone();
-            tight.context.limits.max_bytes = 1024;
-            assert_eq!(
-                descriptor
-                    .check_evaluation(&tight)?
-                    .encode()
-                    .err()
-                    .ok_or("schema wire ceiling ignored")?
-                    .code(),
-                sdk::ErrorCode::Limit
-            );
-        } else {
-            assert_eq!(
-                checked
-                    .encode()
-                    .err()
-                    .ok_or("wire schema exceeded byte ceiling")?
-                    .code(),
-                sdk::ErrorCode::Limit
-            );
-        }
+        let wire = checked.encode()?;
+        let decoded = wire.decode(descriptor)?;
+        assert_eq!(decoded.inputs[0].data.batches.len(), 1);
+        assert_eq!(
+            decoded.inputs[0].data.batches[0].num_rows(),
+            usize::from(!empty)
+        );
+        assert_eq!(decoded.inputs[0].data.batches[0].schema().as_ref(), &schema);
+        assert_eq!(
+            decoded.inputs[0].data.batches,
+            evaluation.inputs[0].data.batches
+        );
         let fixture = Fixture::limits(Limits {
             input_bytes: capacity,
             input_capacity: Some(capacity),
@@ -227,17 +210,13 @@ async fn guest_schema_and_wire_preflight() -> TestResult {
             r#"SELECT * FROM "runtime-fixture"."1"."count-input"(input => (SELECT value FROM schema_input), mode => 'cancel', amount => 7)"#,
         )).await?;
         let id = Fixture::calls(&prepared.plan)?[0].id();
-        let pressure = if empty {
-            let available = fixture.engine.memory().prepare_input(capacity)?;
-            let bytes = available
-                .size()
-                .checked_sub(4 * descriptor.allocated_bytes())
-                .ok_or("schema fixture capacity")?;
-            drop(available);
-            Some(fixture.engine.memory().reserve_input(bytes)?)
-        } else {
-            None
-        };
+        let available = fixture.engine.memory().prepare_input(capacity)?;
+        let bytes = available
+            .size()
+            .checked_sub(descriptor.allocated_bytes())
+            .ok_or("schema fixture capacity")?;
+        drop(available);
+        let pressure = fixture.engine.memory().reserve_input(bytes)?;
         let (entry, observed) = mpsc::channel();
         fixture.engine.guest_entry(entry, None)?;
         let mut request = invocation("schema-encoding");
@@ -248,35 +227,12 @@ async fn guest_schema_and_wire_preflight() -> TestResult {
             .await
             .err()
             .ok_or("schema exchange exceeded its reservation")?;
-        if empty {
-            assert_eq!(
-                crate::Failure::from(&error),
-                crate::Failure::Busy,
-                "{error:?}"
-            );
-            assert!(format!("{error:?}").contains("araphor input"), "{error:?}");
-        } else {
-            assert_eq!(
-                crate::Failure::from(&error),
-                crate::Failure::InputTooLarge,
-                "{error:?}"
-            );
-            let mut source: &(dyn std::error::Error + 'static) = &error;
-            loop {
-                if let Some(araphor_package_runtime::Error::AnalysisContract { source, .. }) =
-                    source.downcast_ref::<araphor_package_runtime::Error>()
-                {
-                    assert!(
-                        matches!(source, sdk::Error::Batch { source: sdk::arrow_schema::ArrowError::IoError(_, error), .. } if error.kind() == std::io::ErrorKind::FileTooLarge),
-                        "{error:?}"
-                    );
-                    break;
-                }
-                source = source
-                    .source()
-                    .ok_or_else(|| format!("wire encoder failure lost Runtime cause: {error:?}"))?;
-            }
-        }
+        assert_eq!(
+            crate::Failure::from(&error),
+            crate::Failure::Busy,
+            "{error:?}"
+        );
+        assert!(format!("{error:?}").contains("araphor input"), "{error:?}");
         assert!(matches!(
             observed.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -291,11 +247,8 @@ async fn guest_schema_and_wire_preflight() -> TestResult {
 #[tokio::test]
 async fn guest_checkpoint_exchange_capacity() -> TestResult {
     let capacity = 512 * 1024;
-    let mut image = component("wasm", "accumulate")?;
-    image.artifacts[0].descriptor.exports[0].limits.max_bytes = 16 * 1024;
-    image.artifacts[0].descriptor.exports[0]
-        .limits
-        .max_checkpoint_bytes = 128 * 1024;
+    let image = component("wasm", "accumulate")?;
+
     let definition = Fixture::sql(
         r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(7 AS BIGINT UNSIGNED) AS value))"#,
     );
@@ -421,12 +374,12 @@ async fn sql_normalization_preflight() -> TestResult {
         assert_eq!(valid.num_rows(), 200);
         assert!(valid.get_array_memory_size() > capacity);
         drop(valid);
-        let mut model = sdk::Model::new(
+        let model = sdk::Model::new(
             "count",
             Vec::new(),
             vec![sdk::Port::new("result", expected)],
         );
-        model.limits.max_bytes = capacity as u64;
+
         let image = bundle(
             model,
             SqlModelV1 {

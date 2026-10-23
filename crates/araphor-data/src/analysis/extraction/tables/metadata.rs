@@ -38,7 +38,6 @@ impl Capture<'_> {
     ) -> Result<()> {
         for (relation, available) in [
             ("behaviors", extraction.discovery_enabled),
-            ("findings", extraction.graph_enabled),
             ("relationships", extraction.graph_enabled),
             ("graph_subjects", extraction.graph_enabled),
             ("graph_branches", extraction.graph_enabled),
@@ -181,7 +180,7 @@ impl Capture<'_> {
             owner => Utf8(false):Some(metadata.get("araphor.owner").map_or("araphor-data.AnalysisStore",String::as_str)),
             readiness => Utf8(false):Some(match relation {
                 "behaviors"=>if enabled.0 {"enabled"} else {"disabled"},
-                "findings"|"relationships"|"graph_subjects"|"graph_branches"|"correlation_packages"|"policy_observations"|"graph_manifest"=>if enabled.1 {"enabled"} else {"disabled"},
+                "relationships"|"graph_subjects"|"graph_branches"|"correlation_packages"|"policy_observations"|"graph_manifest"=>if enabled.1 {"enabled"} else {"disabled"},
                 "notifications"=>if enabled.2 {"enabled"} else {"disabled"},
                 _=>"available",
             }),

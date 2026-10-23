@@ -7,7 +7,6 @@ async fn recorded_rejects_forged_proof() -> TestResult {
     let (call, result) = fixture.atoms(&input).await?;
     let recorded = DiscoveryOwner::recorded_result(&input, &call, &result)?;
     let original = result.output().datasets.clone();
-    let limits = result.evaluation().context.limits;
     let passthrough = Fixture::passthrough(&call)?;
     let (valid, returned) = passthrough.call("atoms", original.clone()).await?;
     assert_eq!(
@@ -22,11 +21,7 @@ async fn recorded_rejects_forged_proof() -> TestResult {
                 atoms[0].key.image_digest.push_str("-invented");
                 (
                     "atoms",
-                    Rows::encode(
-                        &builtin::Discovery::port::<BehaviorAtomV1>("atoms"),
-                        &atoms,
-                        limits,
-                    )?,
+                    Rows::encode(&builtin::Discovery::port::<BehaviorAtomV1>("atoms"), &atoms)?,
                 )
             }
             1 => {
@@ -39,7 +34,6 @@ async fn recorded_rejects_forged_proof() -> TestResult {
                     Rows::encode(
                         &builtin::Discovery::port::<DiscoveryLifecycleEntryV1>("lifecycle"),
                         &lifecycle,
-                        limits,
                     )?,
                 )
             }
@@ -57,7 +51,6 @@ async fn recorded_rejects_forged_proof() -> TestResult {
                     Rows::encode(
                         &builtin::Discovery::port::<builtin::Counts>("counts"),
                         &[counts],
-                        limits,
                     )?,
                 )
             }
@@ -94,7 +87,6 @@ async fn recorded_rejects_coverage_upgrade() -> TestResult {
     let data = Rows::encode(
         &builtin::Discovery::port::<DiscoveryCoverageV1>("coverage"),
         &recorded.snapshot.coverage,
-        result.evaluation().context.limits,
     )?;
     *outputs
         .iter_mut()

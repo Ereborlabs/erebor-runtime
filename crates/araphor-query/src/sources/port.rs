@@ -21,6 +21,7 @@ pub trait PortSource: fmt::Debug + Send + Sync {
 #[derive(Clone)]
 pub struct SourcePort {
     pub(crate) slot: usize,
+    role: String,
     schema: DFSchemaRef,
     inputs: Vec<LogicalPlan>,
     source: Arc<dyn PortSource>,
@@ -28,12 +29,14 @@ pub struct SourcePort {
 
 impl SourcePort {
     pub fn new(
+        role: String,
         schema: SchemaRef,
         inputs: Vec<LogicalPlan>,
         source: Arc<dyn PortSource>,
     ) -> crate::Result<Self> {
         Ok(Self {
             slot: SourceProvider::identity()?,
+            role,
             schema: Arc::new(
                 DFSchema::try_from(schema.as_ref().clone())
                     .map_err(|source| crate::Error::Sql { source })?,
@@ -71,7 +74,7 @@ impl PartialEq for SourcePort {
 impl Eq for SourcePort {}
 impl Hash for SourcePort {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.slot.hash(state);
+        self.role.hash(state);
         self.inputs.hash(state);
         self.schema.hash(state);
     }
@@ -123,3 +126,6 @@ impl UserDefinedLogicalNodeCore for SourcePort {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

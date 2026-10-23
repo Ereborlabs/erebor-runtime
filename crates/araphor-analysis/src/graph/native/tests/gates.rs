@@ -46,7 +46,11 @@ fn records(
         .collect()
 }
 
-fn report(fixture: &Fixture, revision: u64, intervals: &[([u8; 16], u64, &str)]) -> TestResult {
+pub(super) fn report(
+    fixture: &Fixture,
+    revision: u64,
+    intervals: &[([u8; 16], u64, &str)],
+) -> TestResult {
     let last = fixture
         .records
         .iter()
@@ -169,7 +173,6 @@ async fn payload(
         let actual = araphor_analysis_builtins::Rows::decode::<serde_json::Value>(
             &projection.ports[index],
             &input.data,
-            sdk::Limits::default(),
         )?;
         assert_eq!(actual, expected_graph.projection()[index]);
     }
@@ -178,6 +181,27 @@ async fn payload(
         .store()
         .graph_result(fixture.source.tenant_id, &id)?
         .ok_or("graph result")?;
+    let page = fixture.query.store().read_page(
+        &fixture.source,
+        expected
+            .records
+            .first()
+            .ok_or("selected Graph records")?
+            .id
+            .durable_cursor,
+    )?;
+    let positions = expected
+        .records
+        .iter()
+        .map(|record| {
+            page.records
+                .iter()
+                .find(|accepted| accepted.cursor == record.id.durable_cursor)
+                .map(|accepted| (record.id.clone(), accepted.position))
+                .ok_or("selected Graph durable position")
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(actual.input_positions, positions);
     assert_eq!(actual.input_manifest.coverage, expected.coverage_keys);
     assert_eq!(
         actual.input_manifest.context,
@@ -364,10 +388,12 @@ async fn graph_coverage_258_history() -> TestResult {
         .store()
         .graph_result(fixture.source.tenant_id, &first)?
         .ok_or("original graph")?;
-    assert!(retained
-        .findings
-        .iter()
-        .any(|finding| finding.state == araphor_data::FindingStateV1::Confirmed));
+    assert!(
+        retained
+            .findings
+            .iter()
+            .any(|finding| finding.state == araphor_data::FindingStateV1::Confirmed)
+    );
     for revision in 2..=258 {
         report(&fixture, revision, &[([7; 16], revision, "HEALTHY")])?;
     }
@@ -381,10 +407,12 @@ async fn graph_coverage_258_history() -> TestResult {
         .store()
         .graph_result(fixture.source.tenant_id, &next)?
         .ok_or("latest graph")?;
-    assert!(current
-        .findings
-        .iter()
-        .any(|finding| finding.state == araphor_data::FindingStateV1::Confirmed));
+    assert!(
+        current
+            .findings
+            .iter()
+            .any(|finding| finding.state == araphor_data::FindingStateV1::Confirmed)
+    );
     assert_eq!(
         current
             .input_manifest
@@ -464,11 +492,13 @@ async fn graph_malformed_report_rejected() -> TestResult {
     );
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), calls);
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:corrupt-report")?
-        .is_none());
+    assert!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:corrupt-report")?
+            .is_none()
+    );
     assert_eq!(
         fixture
             .query
@@ -482,7 +512,9 @@ async fn graph_malformed_report_rejected() -> TestResult {
 }
 
 fn call(id: &str, export: &str) -> String {
-    format!("SELECT * FROM \"{id}\".\"1\".\"{export}\"('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))")
+    format!(
+        "SELECT * FROM \"{id}\".\"1\".\"{export}\"('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))"
+    )
 }
 
 fn extra(fixture: &Fixture, id: &str) -> TestResult {
@@ -709,11 +741,13 @@ async fn graph_canonical_fields_rejected() -> TestResult {
         );
         assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 0);
         assert_eq!(fixture.query.store().meta()?, before);
-        assert!(fixture
-            .query
-            .store()
-            .graph_result(fixture.source.tenant_id, "graph:changed-canonical-field")?
-            .is_none());
+        assert!(
+            fixture
+                .query
+                .store()
+                .graph_result(fixture.source.tenant_id, "graph:changed-canonical-field")?
+                .is_none()
+        );
         drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     }
     Ok(())

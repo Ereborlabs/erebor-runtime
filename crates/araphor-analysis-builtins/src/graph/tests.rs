@@ -48,7 +48,6 @@ fn record_index_keeps_fact_ordinals() -> TestResult {
     let edges: Vec<Relationship> = Rows::decode(
         &detector.descriptor().exports[0].outputs[1],
         &output.datasets[1],
-        fixture.evaluation.context.limits,
     )?;
     assert_eq!(
         edges
@@ -145,7 +144,6 @@ fn kubernetes_retains_missing_proof() -> TestResult {
             .ok_or("checkpoint descriptor")?
             .datasets[0],
         &state.datasets[0],
-        sdk::Limits::default(),
     )?;
     assert_eq!(rows[0].value, "REMOTE_ADMISSION");
     Ok(())
@@ -226,11 +224,8 @@ fn credential_exact_and_missing() -> TestResult {
     authority_identity_order(&complete, &facts)?;
     let mut missing = complete;
     let model = detector.descriptor();
-    missing.evaluation.inputs[1].data = Rows::encode(
-        &model.exports[0].inputs[1].port,
-        &facts[..1],
-        missing.evaluation.context.limits,
-    )?;
+    missing.evaluation.inputs[1].data =
+        Rows::encode(&model.exports[0].inputs[1].port, &facts[..1])?;
     let (rows, _) = findings(detector, &missing)?;
     assert_eq!(rows[0].reason, "MISSING_AUTHORITY_PROOF");
     assert!(!rows[0].confirmed);
@@ -241,11 +236,8 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
     let detector = Detector::Credentials;
     let package = detector.descriptor();
     let model = &package.exports[0];
-    let records: Vec<Observation> = Rows::decode(
-        &model.inputs[0].port,
-        &complete.evaluation.inputs[0].data,
-        complete.evaluation.context.limits,
-    )?;
+    let records: Vec<Observation> =
+        Rows::decode(&model.inputs[0].port, &complete.evaluation.inputs[0].data)?;
     let mut blocked = records[1].clone();
     blocked.admitted = false;
     let mut records = vec![
@@ -280,11 +272,8 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
         records[2].network = network;
         let fixture = fixture(detector, &records, &facts)?;
         package.validate_evaluation(&fixture.evaluation)?;
-        let mut manifests: Vec<Manifest> = Rows::decode(
-            &model.inputs[2].port,
-            &fixture.evaluation.inputs[2].data,
-            fixture.evaluation.context.limits,
-        )?;
+        let mut manifests: Vec<Manifest> =
+            Rows::decode(&model.inputs[2].port, &fixture.evaluation.inputs[2].data)?;
         let mut computation = Computation::new(
             records.clone(),
             facts.clone(),
@@ -370,7 +359,6 @@ fn authority_publication(
 ) -> TestResult {
     let package = Detector::Credentials.descriptor();
     let model = &package.exports[0];
-    let bounds = fixture.evaluation.context.limits;
     let mut expected_finding = computation.findings[0].clone();
     expected_finding.evidence = expected_finding
         .evidence
@@ -380,14 +368,14 @@ fn authority_publication(
         .into_iter()
         .collect();
     let expected_state = computation.state.value.clone();
-    let output = computation.output(&package, bounds)?;
+    let output = computation.output(&package)?;
     package.validate_output(&fixture.evaluation, &output)?;
-    let edges: Vec<Relationship> = Rows::decode(&model.outputs[1], &output.datasets[1], bounds)?;
+    let edges: Vec<Relationship> = Rows::decode(&model.outputs[1], &output.datasets[1])?;
     assert_eq!(
         serde_json::to_value(edges)?,
         serde_json::to_value(expected_edges)?
     );
-    let findings: Vec<Finding> = Rows::decode(&model.outputs[2], &output.datasets[2], bounds)?;
+    let findings: Vec<Finding> = Rows::decode(&model.outputs[2], &output.datasets[2])?;
     assert_eq!(findings, [expected_finding]);
     assert_eq!(output.reasons.len(), 1);
     assert_eq!(
@@ -400,7 +388,6 @@ fn authority_publication(
             name: model.outputs[2].name.clone(),
             batches: vec![output.reasons[0].details.clone()],
         },
-        bounds,
     )?;
     assert_eq!(details, findings);
     assert_eq!(
@@ -423,7 +410,6 @@ fn authority_publication(
             .ok_or("checkpoint descriptor")?
             .datasets[0],
         &checkpoint.datasets[0],
-        bounds,
     )?;
     assert_eq!(states.len(), 1);
     assert_eq!(states[0].value, expected_state);

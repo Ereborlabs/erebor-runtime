@@ -24,8 +24,7 @@ impl Graph<'_> {
                     .build()
                 })?;
             let rows: Vec<serde_json::Value> =
-                Rows::decode(&input.port, &actual.data, evaluation.context.limits)
-                    .context(AnalysisContractSnafu)?;
+                Rows::decode(&input.port, &actual.data).context(AnalysisContractSnafu)?;
             if rows != *expected {
                 return GraphInvalidSnafu {
                     field: "graph input binding",
@@ -59,7 +58,6 @@ impl Graph<'_> {
             .collect::<Result<Vec<_>>>()?;
         let manifest = serde_json::to_value(algorithm::Manifest {
             window_ns: GRAPH_WINDOW_NS,
-            window_records: GRAPH_WINDOW_RECORDS,
         })
         .context(GraphEncodingSnafu)?;
         Ok([records, facts, vec![manifest]])

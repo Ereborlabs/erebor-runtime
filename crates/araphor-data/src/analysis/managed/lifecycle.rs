@@ -4,10 +4,18 @@ use duckdb::params;
 use snafu::ResultExt as _;
 
 use super::super::AnalysisStore;
-use super::ManagedInstance;
+use super::{ManagedInstance, ManagedResume};
 use crate::{AnalysisDatabaseSnafu, PackageErrorCodeV1 as Code, PackageGrantV1, Result};
 
 pub struct ManagedLease(Arc<AnalysisStore>);
+
+#[derive(Clone, Copy)]
+enum Change<'a> {
+    Running(bool),
+    Suspend(&'a ManagedInstance),
+    Stop(&'a ManagedInstance),
+    Admission(&'a ManagedResume, Code),
+}
 
 impl Drop for ManagedLease {
     fn drop(&mut self) {
@@ -38,10 +46,15 @@ impl AnalysisStore {
         let mut instance =
             Self::managed_instance_from(&transaction, expected.spec.tenant, &expected.spec.id)?
                 .ok_or_else(|| Code::Missing.error("managed renewal instance"))?;
-        if instance != *expected || instance.running {
+        if instance != *expected || instance.running || instance.removed {
             return crate::AnalysisConflictSnafu.fail();
         }
-        Self::check_managed_pending(&transaction, expected.spec.tenant, &expected.spec.id)?;
+        Self::check_managed_pending(
+            &transaction,
+            expected.spec.tenant,
+            &expected.spec.id,
+            expected.generation,
+        )?;
         if instance.grant == *grant {
             check()?;
             return Ok(instance);
@@ -87,7 +100,22 @@ impl AnalysisStore {
         running: bool,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<ManagedInstance> {
-        self.change_managed(tenant, id, expected, running, None, check)
+        self.change_managed(tenant, id, expected, Change::Running(running), check)
+    }
+
+    pub fn stop_managed(
+        &self,
+        expected: &ManagedInstance,
+        check: impl FnOnce() -> Result<()>,
+    ) -> Result<ManagedInstance> {
+        expected.validate()?;
+        self.change_managed(
+            expected.spec.tenant,
+            &expected.spec.id,
+            expected.lifecycle,
+            Change::Stop(expected),
+            check,
+        )
     }
 
     pub fn suspend_managed(
@@ -99,8 +127,24 @@ impl AnalysisStore {
             expected.spec.tenant,
             &expected.spec.id,
             expected.lifecycle,
-            false,
-            Some(expected),
+            Change::Suspend(expected),
+            check,
+        )
+    }
+
+    /// Join the failed preparation before this call.
+    pub fn fail_managed(
+        &self,
+        expected: &ManagedResume,
+        code: Code,
+        check: impl FnOnce() -> Result<()>,
+    ) -> Result<ManagedInstance> {
+        expected.instance.validate()?;
+        self.change_managed(
+            expected.instance.spec.tenant,
+            &expected.instance.spec.id,
+            expected.instance.lifecycle,
+            Change::Admission(expected, code),
             check,
         )
     }
@@ -110,8 +154,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         id: &str,
         expected: u64,
-        running: bool,
-        captured: Option<&ManagedInstance>,
+        change: Change<'_>,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<ManagedInstance> {
         if tenant == [0; 16] || id.is_empty() || id.chars().any(char::is_control) {
@@ -126,29 +169,80 @@ impl AnalysisStore {
             })?;
         let mut instance = Self::managed_instance_from(&transaction, tenant, id)?
             .ok_or_else(|| Code::Missing.error("managed lifecycle instance"))?;
-        if instance.lifecycle != expected
-            || captured.is_some_and(|captured| {
-                captured.generation != instance.generation || captured.progress != instance.progress
+        let admission = match change {
+            Change::Admission(expected, code) => Some((expected, code)),
+            _ => None,
+        };
+        let diagnostic = admission.is_some_and(|(_, code)| code != Code::Denied);
+        let running = if diagnostic {
+            instance.running
+        } else {
+            matches!(change, Change::Running(true))
+        };
+        let captured = match change {
+            Change::Suspend(expected) => Some(expected),
+            Change::Admission(expected, _) => Some(&expected.instance),
+            _ => None,
+        };
+        let stopped = match change {
+            Change::Stop(expected) => Some(expected),
+            _ => None,
+        };
+        if instance.removed
+            || instance.lifecycle != expected
+            || captured.is_some_and(|captured| captured != &instance)
+            || stopped.is_some_and(|stopped| {
+                stopped.spec != instance.spec
+                    || stopped.grant != instance.grant
+                    || stopped.generation != instance.generation
             })
         {
             return crate::AnalysisConflictSnafu.fail();
         }
-        if instance.running == running {
+        if let Some((expected, code)) = admission {
+            if !instance.running
+                || Self::managed_completed_from(&transaction, tenant, id, instance.generation)?
+                    != expected.completed
+            {
+                return crate::AnalysisConflictSnafu.fail();
+            }
+            Self::check_managed_idle(&transaction, tenant, id)?;
+            if diagnostic
+                && Self::validate_managed_failure(&transaction, &instance)?.is_some_and(|failure| {
+                    failure.origin == super::status::FailureOrigin::Admission
+                        && failure.code == code
+                        && failure.progress == instance.progress
+                })
+            {
+                check()?;
+                return Ok(instance);
+            }
+        }
+        if admission.is_none()
+            && instance.running == running
+            && (stopped.is_none() || instance.lifecycle != instance.generation)
+        {
             check()?;
             return Ok(instance);
         }
         let revision = self.package_next(&transaction)?;
         let failure = captured
             .map(|_| super::status::Failure {
-                code: Code::Denied,
+                origin: super::status::FailureOrigin::Admission,
+                code: admission.map_or(Code::Denied, |(_, code)| code),
                 progress: instance.progress,
                 revision,
             })
             .map(|failure| serde_json::to_vec(&failure).context(crate::PackageEncodingSnafu))
             .transpose()?;
+        let lifecycle = if diagnostic {
+            instance.lifecycle
+        } else {
+            revision
+        };
         let changed = transaction.execute(
             "UPDATE managed_instances SET running = ?, lifecycle = ?, failure = CASE WHEN ? THEN ? ELSE failure END WHERE tenant_id = ? AND instance_id = ? AND lifecycle = ?",
-            params![running, revision, captured.is_some(), failure, tenant.as_slice(), id, expected],
+            params![running, lifecycle, captured.is_some(), failure, tenant.as_slice(), id, expected],
         ).context(AnalysisDatabaseSnafu { operation: "change managed running state" })?;
         if changed != 1 {
             return crate::AnalysisConflictSnafu.fail();
@@ -158,9 +252,11 @@ impl AnalysisStore {
         check()?;
         self.commit_metadata(transaction, "commit managed lifecycle")?;
         self.revision.send_replace(revision);
-        self.activations.send_replace(revision);
+        if !diagnostic {
+            self.activations.send_replace(revision);
+        }
         instance.running = running;
-        instance.lifecycle = revision;
+        instance.lifecycle = lifecycle;
         Ok(instance)
     }
 }

@@ -98,11 +98,8 @@ impl Detector {
             let declaration = model.checkpoint.as_ref().ok_or_else(|| {
                 sdk::Error::contract(sdk::ErrorCode::Invalid, "graph checkpoint declaration")
             })?;
-            let states: Vec<State> = Rows::decode(
-                &declaration.datasets[0],
-                &checkpoint.datasets[0],
-                evaluation.context.limits,
-            )?;
+            let states: Vec<State> =
+                Rows::decode(&declaration.datasets[0], &checkpoint.datasets[0])?;
             if states.len() != 1 {
                 return Err(sdk::Error::contract(
                     sdk::ErrorCode::Invalid,
@@ -126,7 +123,7 @@ impl Detector {
             Self::Credentials => computation.credentials()?,
             Self::Kubernetes => computation.kubernetes()?,
         }
-        computation.output(package, evaluation.context.limits)
+        computation.output(package)
     }
 
     fn reasons(self) -> &'static [&'static str] {
@@ -152,11 +149,7 @@ impl Detector {
 }
 
 impl Computation {
-    pub(super) fn output(
-        mut self,
-        package: &sdk::Package,
-        limits: sdk::Limits,
-    ) -> sdk::Result<sdk::Output> {
+    pub(super) fn output(mut self, package: &sdk::Package) -> sdk::Result<sdk::Output> {
         for evidence in self.edges.iter_mut().map(|edge| &mut edge.evidence).chain(
             self.findings
                 .iter_mut()
@@ -167,9 +160,9 @@ impl Computation {
         let model = &package.exports[0];
         let mut output = sdk::Output {
             datasets: vec![
-                Rows::encode(&model.outputs[0], &self.subjects, limits)?,
-                Rows::encode(&model.outputs[1], &self.edges, limits)?,
-                Rows::encode(&model.outputs[2], &self.findings, limits)?,
+                Rows::encode(&model.outputs[0], &self.subjects)?,
+                Rows::encode(&model.outputs[1], &self.edges)?,
+                Rows::encode(&model.outputs[2], &self.findings)?,
             ],
             ..Default::default()
         };
@@ -187,7 +180,7 @@ impl Computation {
                     },
                 });
             }
-            let details = Rows::encode(&model.outputs[2], std::slice::from_ref(finding), limits)?
+            let details = Rows::encode(&model.outputs[2], std::slice::from_ref(finding))?
                 .batches
                 .remove(0);
             output.reasons.push(sdk::ReasonValue {
@@ -201,11 +194,7 @@ impl Computation {
         })?;
         output.checkpoint = Some(sdk::Checkpoint {
             version: 1,
-            datasets: vec![Rows::encode(
-                &checkpoint.datasets[0],
-                &[self.state],
-                limits,
-            )?],
+            datasets: vec![Rows::encode(&checkpoint.datasets[0], &[self.state])?],
         });
         Ok(output)
     }

@@ -12,8 +12,6 @@ pub use abi::*;
 use decode::Decoder;
 use exchange::Exchange;
 
-const MAX_ERROR_BYTES: u64 = 1024;
-
 type Cancellation = (unsafe extern "C" fn(*mut c_void) -> i32, *mut c_void);
 thread_local! { static CANCELLATION: Cell<Option<Cancellation>> = const { Cell::new(None) }; }
 
@@ -53,18 +51,12 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
     /// # Safety
     /// The table and callbacks must be valid until this call returns.
     /// The producer must obey the v1 pointer and ownership contract.
-    pub unsafe fn call(mut self, api: &Api, output_limits: crate::Limits) -> Result<Output> {
+    pub unsafe fn call(mut self, api: &Api, copy_bytes: Option<usize>) -> Result<Output> {
         api.validate()?;
-        output_limits.validate()?;
-        let evaluation = self.checked.evaluation();
-        if !evaluation.context.limits.permits(&output_limits) {
-            return Err(Error::contract(ErrorCode::Limit, "native output limits"));
-        }
         if (self.cancelled)() {
             return Err(Error::contract(ErrorCode::Incomplete, "cancelled"));
         }
         let request = self.request();
-        let context = &evaluation.context;
         let mut response = Response::default();
         let guard = ResponseGuard {
             api,
@@ -91,7 +83,11 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
                 _ => return Err(Error::contract(ErrorCode::Invalid, "native error code")),
             };
             let field = guard.response.error.field;
-            if field.size > MAX_ERROR_BYTES || field.size > context.limits.max_bytes {
+            let size = usize::try_from(field.size)
+                .ok()
+                .filter(|size| *size <= isize::MAX as usize)
+                .ok_or_else(|| Error::contract(ErrorCode::Limit, "native error field"))?;
+            if copy_bytes.is_some_and(|limit| size > limit) {
                 return Err(Error::contract(ErrorCode::Limit, "native error field"));
             }
             if field.size > 0 && field.data.is_null() {
@@ -100,14 +96,14 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
             let bytes = if field.size == 0 {
                 &[][..]
             } else {
-                unsafe { std::slice::from_raw_parts(field.data, field.size as usize) }
+                unsafe { std::slice::from_raw_parts(field.data, size) }
             };
             let field = std::str::from_utf8(bytes)
                 .map_err(|_| Error::contract(ErrorCode::Invalid, "native error UTF-8"))?;
             return Err(Error::contract(code, field));
         }
         catch_unwind(AssertUnwindSafe(|| unsafe {
-            Decoder::output(self.checked, guard.response, output_limits)
+            Decoder::output(self.checked, guard.response, copy_bytes)
         }))
         .map_err(|_| Error::contract(ErrorCode::Invalid, "native output"))?
     }
@@ -125,7 +121,6 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
                 time_utc_ns: context.time_utc_ns,
                 seed: context.seed.unwrap_or_default(),
                 has_seed: u8::from(context.seed.is_some()),
-                limits: context.limits,
             },
             checkpoint: self.exchange.checkpoint_ptr(),
             cancelled: Some(cancel_callback::<F>),
@@ -186,11 +181,7 @@ unsafe extern "C" fn evaluate<G: crate::Guest>(
     let (code, mut owned) = match result {
         Ok(owned) => (0, owned),
         Err(error) => {
-            let mut error = crate::wire::EvaluationError::from(error);
-            if error.field.len() as u64 > MAX_ERROR_BYTES {
-                error.code = ErrorCode::Limit;
-                error.field = "native error field".into();
-            }
+            let error = crate::wire::EvaluationError::from(error);
             (
                 error.code as u32,
                 Box::new(OwnedResponse {

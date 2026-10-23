@@ -29,38 +29,21 @@ impl Graph<'_> {
                     .build()
                 })
         };
-        let subjects: Vec<algorithm::Subject> = Rows::decode(
-            &model.outputs[0],
-            dataset("subjects")?,
-            evaluation.context.limits,
-        )
-        .context(AnalysisContractSnafu)?;
+        let subjects: Vec<algorithm::Subject> =
+            Rows::decode(&model.outputs[0], dataset("subjects")?).context(AnalysisContractSnafu)?;
         for subject in subjects {
             self.selected_subject(subject.record, subject.context)?;
         }
-        let edges: Vec<algorithm::Relationship> = Rows::decode(
-            &model.outputs[1],
-            dataset("relationships")?,
-            evaluation.context.limits,
-        )
-        .context(AnalysisContractSnafu)?;
+        let edges: Vec<algorithm::Relationship> =
+            Rows::decode(&model.outputs[1], dataset("relationships")?)
+                .context(AnalysisContractSnafu)?;
         for edge in edges {
             self.selected_edge(&package.id, edge)?;
         }
-        let findings: Vec<algorithm::Finding> = Rows::decode(
-            &model.outputs[2],
-            dataset("findings")?,
-            evaluation.context.limits,
-        )
-        .context(AnalysisContractSnafu)?;
+        let findings: Vec<algorithm::Finding> =
+            Rows::decode(&model.outputs[2], dataset("findings")?).context(AnalysisContractSnafu)?;
         Self::finding_evidence(&findings, &output.evidence)?;
-        let reasons = Self::finding_reasons(
-            &package.id,
-            model,
-            &findings,
-            &output.reasons,
-            evaluation.context.limits,
-        )?;
+        let reasons = Self::finding_reasons(&package.id, model, &findings, &output.reasons)?;
         for (finding, reason) in findings.into_iter().zip(reasons) {
             self.validate_finding(&finding)?;
             let record = self.selected_record(finding.record)?.clone();
@@ -92,12 +75,9 @@ impl Graph<'_> {
             }
             .build()
         })?;
-        let states: Vec<algorithm::State> = Rows::decode(
-            &declaration.datasets[0],
-            &checkpoint.datasets[0],
-            evaluation.context.limits,
-        )
-        .context(AnalysisContractSnafu)?;
+        let states: Vec<algorithm::State> =
+            Rows::decode(&declaration.datasets[0], &checkpoint.datasets[0])
+                .context(AnalysisContractSnafu)?;
         if states.len() != 1 {
             return GraphInvalidSnafu {
                 field: "graph checkpoint rows",
@@ -156,7 +136,6 @@ impl Graph<'_> {
         model: &sdk::Model,
         findings: &[algorithm::Finding],
         values: &[sdk::ReasonValue],
-        limits: sdk::Limits,
     ) -> Result<Vec<FindingReasonV1>> {
         let invalid = || {
             GraphInvalidSnafu {
@@ -197,7 +176,6 @@ impl Graph<'_> {
                             name: port.name.clone(),
                             batches: vec![reason.details.clone()],
                         },
-                        limits,
                     )
                     .context(AnalysisContractSnafu)?;
                     if details.as_slice() != std::slice::from_ref(finding) {
@@ -206,7 +184,7 @@ impl Graph<'_> {
                     Ok(legacy)
                 } else {
                     Ok(FindingReasonV1::Declared(
-                        DeclaredFindingReasonV1::from_value(reason, limits)?,
+                        DeclaredFindingReasonV1::from_value(reason)?,
                     ))
                 }
             })

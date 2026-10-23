@@ -28,6 +28,7 @@ mod window;
 mod tests;
 
 pub use crate::stream::progress::{Progress, Wake};
+pub use crate::stream::recovery::SourceRecovery;
 pub use clock::{Clock, SystemClock};
 pub use cursor::Cursor;
 pub use delivery::{Action, Consumer, Delivery};
@@ -40,6 +41,28 @@ pub enum Operation {
     Replace,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum WindowSource {
+    Query,
+    Input { call: u64, slot: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WindowRange {
+    pub source: WindowSource,
+    pub start_utc_ns: i64,
+    pub end_utc_ns: i64,
+    pub(crate) active: bool,
+}
+
+impl WindowRange {
+    pub(crate) fn same_interval(&self, other: &Self) -> bool {
+        (self.source, self.start_utc_ns, self.end_utc_ns)
+            == (other.source, other.start_utc_ns, other.end_utc_ns)
+    }
+}
+
 #[derive(Debug)]
 pub struct Update {
     pub snapshot: Arc<ArrowSnapshot>,
@@ -49,6 +72,7 @@ pub struct Update {
     pub operation: Operation,
     pub exhausted: bool,
     pub clock_changed: bool,
+    pub completed_windows: Vec<WindowRange>,
     pub positions: Vec<StorePositionV1>,
     pub evaluated_utc_ns: u64,
     pub limited: bool,
@@ -133,7 +157,7 @@ impl Subscription {
             });
         }
         let clocks = Window::clocks(&plan)?;
-        let window = if follow {
+        let window = if follow || managed.is_some() {
             Window::from_plan(&plan)?
         } else {
             None
@@ -148,9 +172,14 @@ impl Subscription {
         let binding = Fingerprint::binding(&plan, requests, selection, operation, binding)?;
         if let Some(cursor) = &resume {
             cursor.check_binding(&binding, operation)?;
+            cursor.check_windows(&plan, window.as_ref())?;
         }
         let schema = Arc::clone(plan.schema().inner());
-        let permit = engine.reserve_stream(selection.tenant_id)?;
+        let permit = if follow || managed.is_none() {
+            Some(engine.reserve_stream(selection.tenant_id)?)
+        } else {
+            None
+        };
         let run = Arc::new(Run {
             session: Arc::clone(&session),
             plan,
@@ -229,36 +258,51 @@ impl Subscription {
         })
     }
 
-    pub fn until_change(mut self, mut changes: tokio::sync::watch::Receiver<u64>) -> Self {
-        let control = Arc::clone(self.session.control());
-        let changed = Box::pin(async move {
+    pub fn until_change(self, mut changes: tokio::sync::watch::Receiver<u64>) -> Self {
+        self.until(async move {
             let _changed = changes.changed().await;
+        })
+    }
+
+    pub fn until(self, changed: impl std::future::Future<Output = ()> + Send + 'static) -> Self {
+        self.until_error(async move {
+            changed.await;
+            crate::Error::AuthorityChanged {
+                location: snafu::location!(),
+            }
+        })
+    }
+
+    pub fn until_error(
+        self,
+        changed: impl std::future::Future<Output = crate::Error> + Send + 'static,
+    ) -> Self {
+        let mut subscription = self;
+        let control = Arc::clone(subscription.session.control());
+        let changed = Box::pin(async move {
+            let error = changed.await;
             let _cancelled = control.cancel();
+            error
         });
-        let inner = std::mem::replace(&mut self.stream, Box::pin(futures_util::stream::empty()));
+        let inner = std::mem::replace(
+            &mut subscription.stream,
+            Box::pin(futures_util::stream::empty()),
+        );
         let stream = inner.take_until(changed);
-        let workers = self.workers.clone();
-        self.stream = futures_util::stream::unfold(Some(stream), move |stream| {
+        let workers = subscription.workers.clone();
+        subscription.stream = futures_util::stream::unfold(Some(stream), move |stream| {
             let workers = workers.clone();
             async move {
                 let mut stream = stream?;
                 match stream.next().await {
                     Some(update) => Some((update, Some(stream))),
                     None => {
-                        let denied = stream.take_result().is_some();
+                        let reason = stream.take_result();
                         drop(stream);
-                        if denied {
+                        if let Some(reason) = reason {
                             workers.close();
                             workers.wait().await;
-                            Some((
-                                Err((
-                                    crate::Error::AuthorityChanged {
-                                        location: snafu::location!(),
-                                    },
-                                    None,
-                                )),
-                                None,
-                            ))
+                            Some((Err((reason, None)), None))
                         } else {
                             None
                         }
@@ -267,7 +311,7 @@ impl Subscription {
             }
         })
         .boxed();
-        self
+        subscription
     }
 
     pub fn blocking<T: Send + 'static>(
@@ -336,7 +380,7 @@ struct State {
     cursor: Option<Cursor>,
     started: bool,
     stream: OutputStream,
-    _permit: Permit,
+    _permit: Option<Permit>,
 }
 
 impl State {
@@ -348,6 +392,7 @@ impl State {
             revision,
             evaluated,
             clock_changed,
+            completed_windows,
             exhausted,
         }) = self.stream.try_next().await?
         else {
@@ -387,8 +432,11 @@ impl State {
                 )
             })?
         };
-        if completed && self.run.operation == Operation::Replace {
-            cursor.set_revision(revision);
+        if completed {
+            cursor.set_windows(&snapshot.windows, &completed_windows);
+            if self.run.operation == Operation::Replace {
+                cursor.set_revision(revision);
+            }
         }
         self.started = true;
         self.cursor = Some(cursor.clone());
@@ -400,6 +448,7 @@ impl State {
             operation: self.run.operation,
             exhausted,
             clock_changed,
+            completed_windows,
             positions,
             evaluated_utc_ns: evaluated,
             limited: limited || !exhausted,

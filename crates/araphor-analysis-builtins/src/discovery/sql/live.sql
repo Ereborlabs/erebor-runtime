@@ -22,6 +22,9 @@ __live_prior AS (
 __live_unresolved AS (
     SELECT UNNEST(unresolved) AS item FROM __live_prior
 ),
+__live_unresolved_ids AS (
+    SELECT DISTINCT item['record_id'] AS record_id FROM __live_unresolved
+),
 __live_ids AS (
     SELECT record.*, named_struct('stream', named_struct('tenant_id', record.tenant_id, 'node_id', record.node_id, 'node_boot_id', record.node_boot_id, 'label_epoch', record.label_epoch, 'source_id', record.source_id, 'source_epoch', record.source_epoch), 'cpu_id', record.cpu_id, 'durable_cursor', record.source_cursor) AS record_id
     FROM __live_input_records AS record
@@ -29,8 +32,8 @@ __live_ids AS (
 __live_candidates AS (
     SELECT record.* EXCLUDE (record_id)
     FROM __live_ids AS record CROSS JOIN __live_state AS state
-    WHERE record.source_cursor > state.frontier
-        OR record.record_id IN (SELECT item['record_id'] FROM __live_unresolved)
+    LEFT JOIN __live_unresolved_ids AS unresolved ON record.record_id = unresolved.record_id
+    WHERE record.source_cursor > state.frontier OR unresolved.record_id IS NOT NULL
 ),
 __live_bindings AS (
     SELECT * FROM (
@@ -38,12 +41,16 @@ WITH events AS (SELECT * FROM __live_candidates), compiled_policies AS (SELECT *
 SELECT * FROM ({context_sql}) AS selected_bindings
     ) AS bindings
 ),
+__live_binding_ids AS (
+    SELECT DISTINCT record_id FROM __live_bindings
+),
 __live_selected AS (
     SELECT record.* EXCLUDE (record_id)
     FROM __live_ids AS record CROSS JOIN __live_state AS state
+    LEFT JOIN __live_unresolved_ids AS unresolved ON record.record_id = unresolved.record_id
+    LEFT JOIN __live_binding_ids AS binding ON record.record_id = binding.record_id
     WHERE record.source_cursor > state.frontier
-        OR (record.record_id IN (SELECT item['record_id'] FROM __live_unresolved)
-            AND record.record_id IN (SELECT record_id FROM __live_bindings))
+        OR (unresolved.record_id IS NOT NULL AND binding.record_id IS NOT NULL)
 ),
 __live_selected_ids AS (
     SELECT DISTINCT named_struct('stream', named_struct('tenant_id', record.tenant_id, 'node_id', record.node_id, 'node_boot_id', record.node_boot_id, 'label_epoch', record.label_epoch, 'source_id', record.source_id, 'source_epoch', record.source_epoch), 'cpu_id', record.cpu_id, 'durable_cursor', record.source_cursor) AS record_id, record.source_cursor
@@ -59,8 +66,8 @@ __live_repair_count AS (
 ),
 __live_unresolved_kept AS (
     SELECT COALESCE(array_agg(item ORDER BY item['record_id']), []) AS unresolved
-    FROM __live_unresolved
-    WHERE item['record_id'] NOT IN (SELECT record_id FROM __live_repairs)
+    FROM __live_unresolved AS unresolved
+    LEFT ANTI JOIN __live_repairs AS repaired ON unresolved.item['record_id'] = repaired.record_id
 ),
 __live_ranges AS (
     SELECT * FROM (
@@ -225,10 +232,11 @@ SELECT * FROM ({merge_sql}) AS selected_merge
 ),
 __live_facts AS (
     SELECT GREATEST(COALESCE(MAX(policy.commit_revision), CAST(0 AS BIGINT UNSIGNED)),
+        COALESCE(MAX(target.commit_revision), CAST(0 AS BIGINT UNSIGNED)),
         COALESCE(MAX(state.facts_revision), CAST(0 AS BIGINT UNSIGNED))) AS facts_revision
     FROM __live_state AS state LEFT JOIN targets AS target
         ON target.tenant_id = state.tenant_id AND target.node_id = state.node_id
-        AND target.node_boot_id_text = encode(state.node_boot_id, 'hex')
+        AND target.node_boot_id = state.node_boot_id
         AND target.label_epoch = state.label_epoch
     LEFT JOIN policies AS policy
         ON policy.tenant_id = target.tenant_id

@@ -48,7 +48,6 @@ fn evaluation(datasets: Vec<sdk::Dataset>) -> sdk::Evaluation {
             id: "merge".into(),
             time_utc_ns: 1,
             seed: None,
-            limits: Discovery::limits(),
         },
     }
 }
@@ -94,10 +93,9 @@ fn oracle(left: &NativeSnapshot, right: &NativeSnapshot) -> TestResult<NativeSna
             })
         })
         .collect::<araphor_data::Result<Vec<_>>>()?;
-    let limits = Discovery::limits();
     macro_rules! input {
         ($ty:ty, $name:literal, $values:expr) => {
-            Rows::encode(&Discovery::port::<$ty>($name), &$values, limits)?
+            Rows::encode(&Discovery::port::<$ty>($name), &$values)?
         };
     }
     let output = Discovery::evaluate(&evaluation(vec![
@@ -117,7 +115,6 @@ fn oracle(left: &NativeSnapshot, right: &NativeSnapshot) -> TestResult<NativeSna
                     .iter()
                     .find(|data| data.name == $name)
                     .ok_or("merge dataset")?,
-                limits,
             )?
         };
     }

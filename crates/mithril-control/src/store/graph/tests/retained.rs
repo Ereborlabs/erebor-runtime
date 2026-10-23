@@ -488,21 +488,24 @@ impl araphor_data::PackageAuthorization for GraphAuthority {
         image: &araphor_data::PackageBundleRef<'_>,
         callback: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
-        self.commit_many(&[(grant, None), (grant, Some(image))], action, callback)
+        self.commit_many(
+            &[(grant, action, None), (grant, action, Some(image))],
+            callback,
+        )
     }
     fn commit_many(
         &self,
         grants: &[(
             &araphor_data::PackageGrantV1,
+            araphor_data::PackageActionV1,
             Option<&araphor_data::PackageBundleRef<'_>>,
         )],
-        _: araphor_data::PackageActionV1,
         callback: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
-        if grants.is_empty() || !grants.iter().any(|(_, image)| image.is_none()) {
+        if grants.is_empty() || !grants.iter().any(|(_, _, image)| image.is_none()) {
             return Err(araphor_data::PackageErrorCodeV1::Denied.error("graph authority fixture"));
         }
-        for (grant, _) in grants {
+        for (grant, _, _) in grants {
             grant.remaining()?;
         }
         if let Some(mut feed) = self
@@ -582,7 +585,7 @@ async fn graph_captures_control_proofs() -> TestValue<()> {
         expected_versions.insert(rollout.transition_version);
     }
     feed.reconcile()?;
-    data.enable_graph_owner()?;
+    let _graph = data.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant(tenant)])?;
     data.register_graph(&record.id.stream)?;
     data.accept_validated_batch(
         record.id.stream.clone(),

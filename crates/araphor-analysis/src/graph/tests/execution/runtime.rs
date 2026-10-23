@@ -171,13 +171,13 @@ impl Fixture {
         let invocation = Invocation {
             id: evaluation.context.id.clone(),
             seed: evaluation.context.seed,
+            time_utc_ns: Some(evaluation.context.time_utc_ns),
             inputs: BTreeMap::from([(call.id(), evaluation.inputs.clone())]),
             checkpoints: evaluation
                 .checkpoint
                 .clone()
                 .map(|checkpoint| BTreeMap::from([(call.id(), checkpoint)]))
                 .unwrap_or_default(),
-            limits: evaluation.context.limits,
         };
         let output = session.execute_definition(&prepared, invocation).await?;
         assert_eq!(output.calls.len(), 1);

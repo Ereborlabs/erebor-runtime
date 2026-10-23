@@ -39,7 +39,16 @@ impl ClientGrpcOwner {
                 self.definition_request(grant.clone(), definition, control.clone())
                     .await?
             }
-            instance @ (PackageRequestV1::InspectInstance { .. }
+            instance @ (PackageRequestV1::AdmitInstance { .. }
+            | PackageRequestV1::StartInstance { .. }
+            | PackageRequestV1::StopInstance { .. }
+            | PackageRequestV1::RunInstance { .. }
+            | PackageRequestV1::RenewInstance { .. }
+            | PackageRequestV1::UpdateInstance { .. }
+            | PackageRequestV1::RollbackInstance { .. }
+            | PackageRequestV1::RemoveInstance { .. }
+            | PackageRequestV1::RecreateInstance { .. }
+            | PackageRequestV1::InspectInstance { .. }
             | PackageRequestV1::InspectInstanceHistory { .. }
             | PackageRequestV1::ReadInstanceResult { .. }
             | PackageRequestV1::QueryInstanceResult { .. }) => {
@@ -48,6 +57,7 @@ impl ClientGrpcOwner {
             }
             image @ (PackageRequestV1::InstallImage { .. }
             | PackageRequestV1::InspectImage { .. }
+            | PackageRequestV1::UninstallImage { .. }
             | PackageRequestV1::TestImage { .. }) => {
                 self.image_request(grant.clone(), image, control.clone())
                     .await?
@@ -163,12 +173,23 @@ impl ClientGrpcOwner {
                 "An image requires tenant selection.",
             ));
         }
-        if let PackageRequestV1::TestImage { image, fixture } = request {
+        if let PackageRequestV1::TestImage {
+            image,
+            artifact,
+            fixture,
+        } = request
+        {
             return araphor_analysis::Qualification::new(
                 self.data()?.query.clone(),
                 self.auth.clone(),
             )
-            .run(&grant, &image, fixture.as_deref(), &control)
+            .run_artifact(
+                &grant,
+                &image,
+                artifact.as_ref().unwrap_or(&image),
+                fixture.as_deref(),
+                &control,
+            )
             .await
             .map(PackageResponseV1::Tests)
             .map_err(Self::failure);
@@ -180,6 +201,19 @@ impl ClientGrpcOwner {
             grant.remaining()?;
             authority.check(&grant, action)?;
             control.check()?;
+            if let PackageRequestV1::UninstallImage { image } = request {
+                authority.commit_many(&[(&grant, PackageActionV1::Remove, None)], &mut || {
+                    store.uninstall_package_image(grant.selection.tenant_id, &image, || {
+                        grant.remaining()?;
+                        control.check()
+                    })?;
+                    Ok(())
+                })?;
+                grant.remaining()?;
+                authority.check(&grant, PackageActionV1::Remove)?;
+                control.check()?;
+                return Ok(PackageResponseV1::Uninstalled(image));
+            }
             let image = match request {
                 PackageRequestV1::InstallImage { bundle } => {
                     let image = bundle.metadata()?;
@@ -227,82 +261,15 @@ impl ClientGrpcOwner {
         request: PackageRequestV1,
         control: Arc<AnalysisReadControl>,
     ) -> Result<PackageResponseV1, Status> {
-        let query = self.data()?.query.clone();
-        let response = match request {
-            PackageRequestV1::InspectInstance { instance_id } => {
-                let status = araphor_analysis::Instance::read_status(
-                    query,
-                    self.auth.clone(),
-                    grant.clone(),
-                    &instance_id,
-                    &control,
-                )
-                .await
-                .map_err(Self::failure)?;
-                PackageResponseV1::Instance(status.try_into().map_err(Self::image_failure)?)
-            }
-            PackageRequestV1::InspectInstanceHistory { instance_id } => {
-                let history = araphor_analysis::Instance::read_history(
-                    query,
-                    self.auth.clone(),
-                    grant.clone(),
-                    &instance_id,
-                    &control,
-                )
-                .await
-                .map_err(Self::failure)?;
-                PackageResponseV1::History(history)
-            }
-            PackageRequestV1::ReadInstanceResult {
-                instance_id,
-                result_id,
-            } => {
-                let result = araphor_analysis::Instance::read_output(
-                    query,
-                    self.auth.clone(),
-                    grant.clone(),
-                    &instance_id,
-                    &result_id,
-                    &control,
-                )
-                .await
-                .map_err(Self::failure)?;
-                PackageResponseV1::Result(Box::new(result))
-            }
-            PackageRequestV1::QueryInstanceResult {
-                instance_id,
-                result_id,
-                sql,
-            } => {
-                let output = araphor_analysis::Instance::query_result(
-                    query,
-                    self.auth.clone(),
-                    grant.clone(),
-                    &instance_id,
-                    &result_id,
-                    &sql,
-                    &control,
-                )
-                .await
-                .map_err(Self::failure)?;
-                araphor_query::execution::Engine::blocking(control.clone(), (), move || {
-                    PackageResponseV1::try_from(&output.data).map_err(Into::into)
-                })
-                .await
-                .map_err(Self::failure)?
-            }
-            _ => {
-                return Err(Status::invalid_argument(
-                    "The instance operation is invalid.",
-                ))
-            }
-        };
-        grant.remaining().map_err(Self::image_failure)?;
-        self.auth
-            .check(&grant, PackageActionV1::Inspect)
-            .map_err(Self::image_failure)?;
-        control.check().map_err(Self::failure)?;
-        Ok(response)
+        let runtime = self
+            .control
+            .analysis_packages(None)
+            .map_err(Self::failure)?;
+        runtime
+            .instances
+            .execute(grant, request, &control)
+            .await
+            .map_err(Self::failure)
     }
 
     fn image_failure(error: araphor_data::Error) -> Status {

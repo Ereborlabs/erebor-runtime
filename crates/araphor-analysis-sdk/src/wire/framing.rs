@@ -1,20 +1,15 @@
 use arrow_ipc::{Message, MessageHeader};
 
-use crate::{Error, ErrorCode, Limits, Model, Result};
+use crate::{Error, ErrorCode, Model, Result};
 
 pub(super) struct IpcFrames<'a> {
     bytes: &'a [u8],
-    rows: u64,
-    batches: u32,
+    batches: usize,
 }
 
 impl<'a> IpcFrames<'a> {
     pub(super) fn validate_envelope(bytes: &'a [u8]) -> Result<()> {
-        let mut frames = Self {
-            bytes,
-            rows: 0,
-            batches: 0,
-        };
+        let mut frames = Self { bytes, batches: 0 };
         while let Some((message, _, _)) = frames.next()? {
             match message.header_type() {
                 MessageHeader::RecordBatch => {
@@ -32,17 +27,13 @@ impl<'a> IpcFrames<'a> {
         Ok(())
     }
 
-    pub(super) fn validate(bytes: &'a [u8], limits: Limits) -> Result<()> {
-        let mut frames = Self {
-            bytes,
-            rows: 0,
-            batches: 0,
-        };
+    pub(super) fn validate(bytes: &'a [u8]) -> Result<usize> {
+        let mut frames = Self { bytes, batches: 0 };
         while let Some((message, _, _)) = frames.next()? {
             match message.header_type() {
                 MessageHeader::Schema => {
                     let schema = message.header_as_schema().ok_or_else(Self::invalid)?;
-                    SchemaBudget::validate(schema, limits)?;
+                    SchemaFields::validate(schema)?;
                     let schema =
                         std::panic::catch_unwind(|| arrow_ipc::convert::fb_to_schema(schema))
                             .map_err(|_| Self::invalid())?;
@@ -50,7 +41,7 @@ impl<'a> IpcFrames<'a> {
                 }
                 MessageHeader::RecordBatch => {
                     let batch = message.header_as_record_batch().ok_or_else(Self::invalid)?;
-                    frames.record(batch, limits)?;
+                    frames.record(batch)?;
                 }
                 _ => {
                     return Err(Error::contract(
@@ -60,15 +51,11 @@ impl<'a> IpcFrames<'a> {
                 }
             }
         }
-        Ok(())
+        Ok(frames.batches)
     }
 
-    pub(super) fn decoding_bytes(bytes: &'a [u8], limits: Limits) -> Result<usize> {
-        let mut frames = Self {
-            bytes,
-            rows: 0,
-            batches: 0,
-        };
+    pub(super) fn decoding_bytes(bytes: &'a [u8]) -> Result<usize> {
+        let mut frames = Self { bytes, batches: 0 };
         let mut buffers = DecodeBuffers::default();
         buffers.add_aligned(bytes.len())?;
         while let Some((message, body, metadata)) = frames.next()? {
@@ -77,13 +64,13 @@ impl<'a> IpcFrames<'a> {
             match message.header_type() {
                 MessageHeader::Schema => {
                     let schema = message.header_as_schema().ok_or_else(Self::invalid)?;
-                    let fields = SchemaBudget::validate(schema, limits)?;
+                    let fields = SchemaFields::validate(schema)?;
                     // An empty variable-size field has one offset buffer.
                     buffers.add(fields.checked_mul(64).ok_or_else(DecodeBuffers::limit)?)?;
                 }
                 MessageHeader::RecordBatch => {
                     let batch = message.header_as_record_batch().ok_or_else(Self::invalid)?;
-                    frames.record(batch, limits)?;
+                    frames.record(batch)?;
                     for buffer in batch.buffers().ok_or_else(Self::invalid)? {
                         let offset =
                             usize::try_from(buffer.offset()).map_err(|_| Self::invalid())?;
@@ -145,16 +132,10 @@ impl<'a> IpcFrames<'a> {
         Ok(())
     }
 
-    fn record(&mut self, batch: arrow_ipc::RecordBatch<'_>, limits: Limits) -> Result<()> {
+    fn record(&mut self, batch: arrow_ipc::RecordBatch<'_>) -> Result<()> {
         Self::uncompressed(batch)?;
-        self.rows = self
-            .rows
-            .checked_add(u64::try_from(batch.length()).map_err(|_| Self::invalid())?)
-            .ok_or_else(|| Error::contract(ErrorCode::Limit, "stream rows"))?;
-        self.batches = self.batches.saturating_add(1);
-        if self.rows > limits.max_rows || self.batches > limits.max_batches {
-            return Err(Error::contract(ErrorCode::Limit, "stream rows or batches"));
-        }
+        u64::try_from(batch.length()).map_err(|_| Self::invalid())?;
+        self.batches = self.batches.checked_add(1).ok_or_else(Self::invalid)?;
         Ok(())
     }
 
@@ -175,63 +156,32 @@ impl<'a> IpcFrames<'a> {
     }
 }
 
-struct SchemaBudget {
+struct SchemaFields {
     fields: usize,
-    bytes: u64,
-    limit: u64,
 }
 
-impl SchemaBudget {
-    fn validate(schema: arrow_ipc::Schema<'_>, limits: Limits) -> Result<usize> {
-        let mut budget = Self {
-            fields: 0,
-            bytes: 0,
-            limit: limits.max_bytes,
-        };
-        budget.add(std::mem::size_of::<crate::Schema>())?;
-        budget.metadata(schema.custom_metadata().into_iter().flatten())?;
+impl SchemaFields {
+    fn validate(schema: arrow_ipc::Schema<'_>) -> Result<usize> {
+        let mut budget = Self { fields: 0 };
         for field in schema.fields().into_iter().flatten() {
-            budget.field(field, 0)?;
+            budget.field(field)?;
         }
         Ok(budget.fields)
     }
 
-    fn field(&mut self, field: arrow_ipc::Field<'_>, depth: usize) -> Result<()> {
-        self.fields = self.fields.saturating_add(1);
-        if depth > 16 || self.fields > 1024 {
-            return Err(Error::contract(ErrorCode::Limit, "schema depth or fields"));
-        }
+    fn field(&mut self, field: arrow_ipc::Field<'_>) -> Result<()> {
+        self.fields = self
+            .fields
+            .checked_add(1)
+            .ok_or_else(|| Error::contract(ErrorCode::Limit, "schema fields"))?;
         if field.dictionary().is_some() {
             return Err(Error::contract(
                 ErrorCode::Incompatible,
                 "dictionary arrow stream",
             ));
         }
-        self.add(std::mem::size_of::<crate::Field>())?;
-        self.add(field.name().map_or(0, str::len))?;
-        self.metadata(field.custom_metadata().into_iter().flatten())?;
         for child in field.children().into_iter().flatten() {
-            self.field(child, depth + 1)?;
-        }
-        Ok(())
-    }
-
-    fn metadata<'a>(
-        &mut self,
-        metadata: impl IntoIterator<Item = arrow_ipc::KeyValue<'a>>,
-    ) -> Result<()> {
-        for entry in metadata {
-            self.add(std::mem::size_of::<(String, String)>())?;
-            self.add(entry.key().map_or(0, str::len))?;
-            self.add(entry.value().map_or(0, str::len))?;
-        }
-        Ok(())
-    }
-
-    fn add(&mut self, bytes: usize) -> Result<()> {
-        self.bytes = self.bytes.saturating_add(bytes as u64);
-        if self.bytes > self.limit {
-            return Err(Error::contract(ErrorCode::Limit, "arrow schema bytes"));
+            self.field(child)?;
         }
         Ok(())
     }

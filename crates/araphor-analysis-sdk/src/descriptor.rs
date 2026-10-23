@@ -4,8 +4,8 @@ use std::path::Path;
 use snafu::ResultExt as _;
 
 use crate::{
-    DataType, Error, ErrorCode, Field, InputMode, InputSource, IoSnafu, Limits, Model, Package,
-    Port, Result, Schema, TableRef, TimeUnit, CONTRACT_VERSION,
+    DataType, Error, ErrorCode, Field, InputMode, InputSource, IoSnafu, Model, Package, Port,
+    Result, Schema, TableRef, TimeUnit, CONTRACT_VERSION,
 };
 
 impl Package {
@@ -15,20 +15,15 @@ impl Package {
         }
         Self::name(&self.id)?;
         Self::text(&self.revision)?;
-        if self.exports.is_empty() || self.exports.len() > 64 {
+        if self.exports.is_empty() {
             return Err(Error::contract(ErrorCode::Limit, "exports or dependencies"));
         }
         Self::unique(self.exports.iter().map(|model| model.name.as_str()))?;
         for model in &self.exports {
             model.validate(&self.id)?;
         }
-        let mut dependencies = 0usize;
         for model in &self.exports {
             for (input, dependency) in model.dependencies() {
-                dependencies += 1;
-                if dependencies > 64 {
-                    return Err(Error::contract(ErrorCode::Limit, "exports or dependencies"));
-                }
                 Self::name(&dependency.package)?;
                 Self::text(&dependency.revision)?;
                 Self::name(&dependency.export)?;
@@ -87,7 +82,6 @@ impl Package {
 
     pub(crate) fn name(value: &str) -> Result<()> {
         if value.is_empty()
-            || value.len() > 256
             || !value
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
@@ -98,7 +92,7 @@ impl Package {
     }
 
     pub(crate) fn text(value: &str) -> Result<()> {
-        if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
+        if value.is_empty() || value.chars().any(char::is_control) {
             return Err(Error::contract(ErrorCode::Invalid, "reference or limit"));
         }
         Ok(())
@@ -119,7 +113,6 @@ impl Package {
 impl Model {
     fn validate(&self, package: &str) -> Result<()> {
         Package::name(&self.name)?;
-        self.limits.validate()?;
         Self::ports(self.inputs.iter().map(|input| &input.port))?;
         for input in &self.inputs {
             match &input.source {
@@ -131,7 +124,7 @@ impl Model {
         }
         Self::ports(self.outputs.iter())?;
         Self::schema(&self.parameters)?;
-        if self.outputs.is_empty() || self.reasons.len() > 128 {
+        if self.outputs.is_empty() {
             return Err(Error::contract(ErrorCode::Invalid, "outputs or reasons"));
         }
         if !self.tolerance.absolute.is_finite()
@@ -174,9 +167,6 @@ impl Model {
     }
 
     pub(crate) fn ports<'a>(ports: impl Clone + ExactSizeIterator<Item = &'a Port>) -> Result<()> {
-        if ports.len() > 64 {
-            return Err(Error::contract(ErrorCode::Limit, "ports"));
-        }
         Package::unique(ports.clone().map(|port| port.name.as_str()))?;
         for port in ports {
             Self::schema(&port.schema)?;
@@ -185,25 +175,16 @@ impl Model {
     }
 
     pub(crate) fn schema(schema: &Schema) -> Result<()> {
-        let mut fields = 0;
-        Self::fields(schema.fields(), 0, &mut fields)
+        Self::fields(schema.fields())
     }
 
-    fn fields<'a>(
-        fields: impl IntoIterator<Item = &'a std::sync::Arc<Field>>,
-        depth: usize,
-        count: &mut usize,
-    ) -> Result<()> {
+    fn fields<'a>(fields: impl IntoIterator<Item = &'a std::sync::Arc<Field>>) -> Result<()> {
         let fields: Vec<_> = fields.into_iter().collect();
         let mut names = BTreeSet::new();
         for field in fields {
             Package::text(field.name())?;
             if !names.insert(field.name()) {
                 return Err(Error::contract(ErrorCode::Invalid, "duplicate field"));
-            }
-            *count += 1;
-            if depth > 16 || *count > 1024 {
-                return Err(Error::contract(ErrorCode::Limit, "schema depth or fields"));
             }
             match field.data_type() {
                 DataType::Null if field.is_nullable() => {}
@@ -222,35 +203,15 @@ impl Model {
                 | DataType::Binary => {}
                 DataType::Timestamp(TimeUnit::Nanosecond, Some(zone)) if zone.as_ref() == "UTC" => {
                 }
-                DataType::FixedSizeBinary(size) if (1..=65536).contains(size) => {}
-                DataType::List(child) => Self::fields([child], depth + 1, count)?,
-                DataType::FixedSizeList(child, size) if (1..=65536).contains(size) => {
-                    Self::fields([child], depth + 1, count)?;
+                DataType::FixedSizeBinary(size) if *size > 0 => {}
+                DataType::List(child) => Self::fields([child])?,
+                DataType::FixedSizeList(child, size) if *size > 0 => {
+                    Self::fields([child])?;
                 }
-                DataType::Struct(children) => Self::fields(children, depth + 1, count)?,
+                DataType::Struct(children) => Self::fields(children)?,
                 _ => return Err(Error::contract(ErrorCode::Incompatible, field.name())),
             }
         }
         Ok(())
-    }
-}
-
-impl Limits {
-    pub(crate) fn validate(&self) -> Result<()> {
-        if self.max_batches == 0
-            || self.max_rows == 0
-            || self.max_bytes == 0
-            || self.max_checkpoint_bytes == 0
-        {
-            return Err(Error::contract(ErrorCode::Invalid, "limits"));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn permits(&self, limits: &Self) -> bool {
-        limits.max_batches <= self.max_batches
-            && limits.max_rows <= self.max_rows
-            && limits.max_bytes <= self.max_bytes
-            && limits.max_checkpoint_bytes <= self.max_checkpoint_bytes
     }
 }

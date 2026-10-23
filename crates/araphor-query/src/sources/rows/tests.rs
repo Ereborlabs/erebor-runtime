@@ -445,36 +445,36 @@ fn catalog_native_preflight() -> TestResult {
 fn catalog_content_contract() -> TestResult {
     let expected: [[u8; 32]; 8] = [
         [
-            56, 166, 206, 136, 45, 88, 25, 65, 237, 121, 192, 53, 250, 94, 188, 94, 25, 73, 211,
-            233, 22, 41, 61, 22, 165, 199, 141, 16, 126, 93, 155, 69,
+            162, 168, 134, 175, 182, 252, 42, 145, 30, 4, 0, 212, 48, 205, 253, 77, 218, 174, 253,
+            224, 228, 124, 162, 212, 207, 164, 116, 28, 17, 7, 250, 187,
         ],
         [
-            60, 255, 12, 214, 113, 40, 51, 180, 69, 248, 88, 44, 127, 107, 18, 70, 219, 167, 140,
-            70, 40, 68, 213, 239, 58, 251, 33, 247, 12, 115, 84, 140,
+            25, 202, 116, 170, 190, 238, 162, 169, 255, 140, 54, 25, 35, 114, 216, 152, 43, 46, 36,
+            122, 81, 60, 50, 62, 7, 249, 64, 209, 156, 87, 152, 142,
         ],
         [
-            55, 27, 233, 213, 152, 249, 150, 45, 23, 114, 9, 201, 122, 73, 120, 62, 218, 178, 53,
-            43, 228, 115, 112, 67, 106, 20, 126, 129, 39, 41, 155, 94,
+            216, 34, 194, 15, 88, 127, 181, 105, 124, 163, 245, 207, 88, 93, 35, 59, 199, 231, 156,
+            45, 99, 8, 1, 246, 155, 192, 120, 99, 111, 138, 133, 110,
         ],
         [
-            44, 151, 104, 47, 240, 129, 118, 193, 189, 168, 95, 148, 2, 6, 146, 222, 8, 177, 151,
-            84, 50, 46, 198, 52, 156, 233, 41, 98, 46, 151, 79, 46,
+            127, 158, 230, 137, 249, 176, 56, 198, 88, 74, 98, 30, 174, 160, 117, 127, 40, 224, 6,
+            222, 198, 188, 106, 2, 207, 35, 161, 229, 40, 16, 239, 87,
         ],
         [
-            103, 12, 150, 199, 194, 205, 34, 17, 90, 176, 170, 255, 184, 188, 230, 172, 32, 69,
-            119, 20, 160, 151, 228, 166, 21, 150, 99, 39, 194, 130, 246, 45,
+            25, 65, 98, 87, 92, 68, 51, 68, 104, 3, 182, 234, 8, 38, 119, 49, 69, 39, 138, 35, 103,
+            18, 253, 234, 91, 171, 58, 39, 188, 38, 33, 2,
         ],
         [
-            215, 9, 175, 178, 77, 26, 152, 102, 134, 8, 205, 152, 77, 218, 190, 110, 122, 162, 147,
-            188, 204, 142, 97, 137, 163, 222, 8, 126, 157, 32, 248, 87,
+            180, 76, 164, 242, 132, 167, 226, 207, 156, 237, 244, 160, 138, 166, 217, 0, 249, 60,
+            137, 76, 76, 142, 191, 55, 131, 78, 158, 130, 150, 93, 100, 246,
         ],
         [
-            31, 17, 173, 88, 220, 29, 129, 182, 29, 18, 57, 111, 127, 60, 24, 245, 116, 183, 200,
-            173, 30, 198, 157, 188, 14, 205, 223, 209, 23, 234, 201, 198,
+            17, 72, 126, 114, 203, 72, 118, 74, 186, 240, 174, 167, 1, 82, 219, 158, 56, 232, 4,
+            33, 3, 170, 196, 201, 67, 143, 4, 245, 28, 160, 58, 145,
         ],
         [
-            178, 139, 18, 117, 245, 65, 159, 180, 130, 114, 144, 36, 254, 54, 146, 228, 90, 54,
-            134, 151, 199, 52, 135, 94, 133, 243, 144, 167, 155, 20, 45, 4,
+            72, 72, 118, 183, 169, 105, 225, 226, 222, 198, 93, 179, 216, 198, 101, 133, 16, 143,
+            168, 124, 100, 11, 78, 57, 134, 96, 187, 234, 63, 220, 189, 208,
         ],
     ];
     use std::hash::Hash as _;
@@ -489,9 +489,9 @@ fn catalog_content_contract() -> TestResult {
         if enabled & 1 != 0 {
             store.register_discovery_owner();
         }
-        if enabled & 2 != 0 {
-            store.enable_graph_owner()?;
-        }
+        let _graph = (enabled & 2 != 0)
+            .then(|| store.lease_graph(vec![AnalysisSelectionV1::tenant([1; 16])]))
+            .transpose()?;
         if enabled & 4 != 0 {
             store.enable_notification_owner()?;
         }
@@ -872,5 +872,83 @@ fn retirement_map_charges_once() -> TestResult {
     drop(available);
     drop(receipt);
     drop(memory.reserve_input(capacity)?);
+    Ok(())
+}
+
+#[test]
+fn metadata_respects_input_bounds() -> TestResult {
+    use crate::memory::Memory;
+    use araphor_data::AnalysisExtractLimits;
+
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let control = AnalysisReadControl::default();
+    let read = |memory: Arc<Memory>, input_bytes| {
+        let source = SourceSnapshot::new(
+            Arc::clone(&store),
+            AnalysisSelectionV1::new([1; 16], Vec::new()),
+            None,
+            AnalysisExtractLimits {
+                input_bytes,
+                ..Default::default()
+            },
+            control.within(None).unwrap(),
+            None,
+            1,
+            memory,
+            None,
+        );
+        source.read(
+            &BTreeMap::new(),
+            &super::ScanBounds::default(),
+            super::ReadMode::Metadata,
+            &control,
+        )
+    };
+    let unbounded = Memory::new(None, None);
+    let captured = read(Arc::clone(&unbounded), usize::MAX)?;
+    let bytes = captured.receipt._metadata.size() + captured._memory.size();
+    assert!(bytes > 1);
+    drop(captured);
+    assert_eq!(unbounded.input_reserved(), 0);
+    let error = read(Arc::clone(&unbounded), bytes - 1)
+        .err()
+        .ok_or("metadata exceeded its input bound")?;
+    assert_eq!(
+        crate::Failure::native(&error),
+        crate::Failure::InputTooLarge
+    );
+    assert_eq!(unbounded.input_reserved(), 0);
+    let exact = read(Arc::clone(&unbounded), bytes)?;
+    assert_eq!(exact.receipt._metadata.size() + exact._memory.size(), bytes);
+    drop(exact);
+    assert_eq!(unbounded.input_reserved(), 0);
+
+    let undersized = Memory::new(Some(bytes - 1), None);
+    let error = read(Arc::clone(&undersized), usize::MAX)
+        .err()
+        .ok_or("metadata exceeded its shared capacity")?;
+    assert_eq!(
+        crate::Failure::native(&error),
+        crate::Failure::InputTooLarge
+    );
+    drop(undersized.reserve_input(bytes - 1)?);
+
+    let capacity = bytes * 2;
+    let shared = Memory::new(Some(capacity), None);
+    let pressure = shared.reserve_input(capacity)?;
+    let error = read(Arc::clone(&shared), bytes)
+        .err()
+        .ok_or("metadata exceeded the full input pool")?;
+    assert_eq!(crate::Failure::native(&error), crate::Failure::Busy);
+    assert_eq!(shared.input_reserved(), capacity);
+    drop(pressure);
+    let recovered = read(Arc::clone(&shared), bytes)?;
+    assert_eq!(
+        recovered.receipt._metadata.size() + recovered._memory.size(),
+        bytes
+    );
+    drop(recovered);
+    drop(shared.reserve_input(capacity)?);
     Ok(())
 }

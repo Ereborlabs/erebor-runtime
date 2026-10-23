@@ -96,15 +96,12 @@ async fn fixtures_enforce_authority() -> TestResult {
     ));
     bundle.artifacts[0].fixtures[0].time_utc_ns = -1;
     let fixture = Fixture::new(&bundle)?;
-    assert!(matches!(
-        fixture.run(&bundle).await,
-        Err(crate::Error::Data {
-            source: araphor_data::Error::Package {
-                code: Code::Unsupported,
-                field: "negative fixture time",
-                ..
-            }
-        })
-    ));
+    assert_eq!(
+        fixture.run(&bundle).await?,
+        vec![FixtureResult {
+            fixture: "case".into(),
+            passed: true,
+        }]
+    );
     Ok(())
 }

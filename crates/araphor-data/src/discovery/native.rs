@@ -323,6 +323,63 @@ impl DiscoverySnapshotRowV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct DiscoveryHistoryRowV1 {
+    pub result_id: String,
+    pub commit_revision: u64,
+    pub notice_facts_revision: u64,
+    pub notice_coverage_revision: u64,
+    pub compatible: bool,
+    pub interval_id: String,
+    pub profile_revision: u64,
+    pub facts_revision: u64,
+    pub coverage_revision: u64,
+    pub created_utc_ns: u64,
+    pub updated_utc_ns: u64,
+    pub input_bytes: u64,
+    pub incomplete: bool,
+    pub gaps: Vec<crate::AnalysisGapV1>,
+    pub context_refs: Vec<crate::AnalysisContextRefV1>,
+    pub snapshot: DiscoverySnapshotRowV1,
+}
+
+impl DiscoveryHistoryRowV1 {
+    pub(in crate::discovery) fn schema_sample() -> Self {
+        Self {
+            result_id: String::new(),
+            commit_revision: 0,
+            notice_facts_revision: 0,
+            notice_coverage_revision: 0,
+            compatible: false,
+            interval_id: String::new(),
+            profile_revision: 0,
+            facts_revision: 0,
+            coverage_revision: 0,
+            created_utc_ns: 0,
+            updated_utc_ns: 0,
+            input_bytes: 0,
+            incomplete: false,
+            gaps: vec![crate::AnalysisGapV1 {
+                first_cursor: 0,
+                last_cursor: 0,
+                commit_revision: 0,
+            }],
+            context_refs: vec![crate::AnalysisContextRefV1 {
+                key: crate::AnalysisContextKeyV1 {
+                    tenant_id: [1; 16],
+                    owner_id: String::new(),
+                    entity_key: Vec::new(),
+                    lifetime_key: Vec::new(),
+                    owner_revision: 0,
+                },
+                commit_revision: 0,
+            }],
+            snapshot: DiscoverySnapshotRowV1::schema_sample(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DiscoveryStateRowV1 {
     #[serde(with = "serde_bytes")]
     pub tenant_id: [u8; 16],
@@ -347,6 +404,9 @@ pub struct DiscoveryStateRowV1 {
     pub retired: Option<bool>,
     pub current_result_id: Option<String>,
     pub result_commit_revision: Option<u64>,
+    pub current_compatible: bool,
+    pub notice_facts_revision: Option<u64>,
+    pub notice_coverage_revision: Option<u64>,
     pub interval_id: Option<String>,
     pub profile_revision: Option<u64>,
     pub facts_revision: Option<u64>,
@@ -359,6 +419,7 @@ pub struct DiscoveryStateRowV1 {
     pub gaps: Option<Vec<crate::AnalysisGapV1>>,
     pub context_refs: Option<Vec<crate::AnalysisContextRefV1>>,
     pub snapshot: Option<DiscoverySnapshotRowV1>,
+    pub history: Vec<DiscoveryHistoryRowV1>,
 }
 
 impl DiscoveryStateRowV1 {
@@ -386,7 +447,18 @@ impl DiscoveryStateRowV1 {
                                 true,
                             ),
                         )
-                        .expect("the state snapshot uses its nullable native schema"),
+                        .expect("the state snapshot uses its nullable native schema")
+                        .overwrite(
+                            "history.element.snapshot",
+                            sdk::Field::new(
+                                "snapshot",
+                                sdk::DataType::Struct(
+                                    DiscoverySnapshotRowV1::schema().fields().clone(),
+                                ),
+                                false,
+                            ),
+                        )
+                        .expect("the historical snapshot uses its native schema"),
                 )
                 .expect("the discovery state read row has a native Arrow schema")
                 .into_iter()
@@ -419,6 +491,9 @@ impl DiscoveryStateRowV1 {
             retired: Some(false),
             current_result_id: Some(String::new()),
             result_commit_revision: Some(0),
+            current_compatible: false,
+            notice_facts_revision: Some(0),
+            notice_coverage_revision: Some(0),
             interval_id: Some(String::new()),
             profile_revision: Some(0),
             facts_revision: Some(0),
@@ -444,6 +519,7 @@ impl DiscoveryStateRowV1 {
                 commit_revision: 0,
             }]),
             snapshot: Some(DiscoverySnapshotRowV1::schema_sample()),
+            history: vec![DiscoveryHistoryRowV1::schema_sample()],
         }
     }
 }

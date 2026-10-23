@@ -241,7 +241,7 @@ impl PackageAuthorization for ClientAuth {
         bundle: &araphor_data::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
-        self.commit_many(&[(grant, Some(bundle))], action, operation)
+        self.commit_many(&[(grant, action, Some(bundle))], operation)
     }
 
     fn changes(&self) -> watch::Receiver<u64> {
@@ -250,8 +250,11 @@ impl PackageAuthorization for ClientAuth {
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, Option<&araphor_data::PackageBundleRef<'_>>)],
-        action: PackageActionV1,
+        grants: &[(
+            &PackageGrantV1,
+            PackageActionV1,
+            Option<&araphor_data::PackageBundleRef<'_>>,
+        )],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         if grants.is_empty() {
@@ -259,11 +262,11 @@ impl PackageAuthorization for ClientAuth {
         }
         let state = self.state().map_err(Self::package_denied)?;
         let now = Self::now().map_err(Self::package_denied)?;
-        for (grant, bundle) in grants {
+        for (grant, action, bundle) in grants {
             state
-                .check_package(grant, action, now)
+                .check_package(grant, *action, now)
                 .map_err(Self::package_denied)?;
-            if action != PackageActionV1::Remove
+            if *action != PackageActionV1::Remove
                 && bundle.is_some_and(|bundle| {
                     !state
                         .package_trust

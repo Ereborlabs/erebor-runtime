@@ -15,6 +15,7 @@ use crate::sources::ArrowSnapshot;
 
 pub(crate) mod physical;
 pub(crate) mod progress;
+pub(crate) mod recovery;
 #[cfg(test)]
 mod tests;
 
@@ -43,7 +44,7 @@ impl Run {
     }
 
     pub(crate) fn selection(&self, now: u64) -> crate::Result<araphor_data::AnalysisSelectionV1> {
-        if let Some(window) = self.window {
+        if let Some(window) = &self.window {
             if !crate::definition::PackageCall::contains(&self.plan).context(crate::SqlSnafu)? {
                 return Ok(window.selection(self.session.selection(), now));
             }
@@ -113,7 +114,14 @@ impl Run {
         }
     }
 
-    pub(crate) async fn session(&self, now: u64, permit: &Arc<Permit>) -> crate::Result<Session> {
+    pub(crate) async fn session(
+        &self,
+        now: u64,
+        permit: &Arc<Permit>,
+        mut completion: Vec<crate::follow::WindowRange>,
+        mut windows: Vec<crate::follow::WindowRange>,
+        resume: Option<&crate::follow::Cursor>,
+    ) -> crate::Result<Session> {
         let (invocation, managed) = match &self.managed {
             Some((definition, publication)) => {
                 let publication = Arc::clone(publication);
@@ -134,10 +142,53 @@ impl Run {
             }
             None => (crate::definition::Invocation::default(), None),
         };
+        if let Some(cursor) =
+            resume.filter(|_| managed.as_ref().is_none_or(|managed| !managed.rebuild))
+        {
+            // Managed frontiers precede publication. Query cursors follow publication.
+            let offered = managed
+                .as_ref()
+                .is_some_and(|managed| managed.instance.progress <= cursor.read_revision());
+            windows = cursor
+                .windows
+                .iter()
+                .filter(|window| {
+                    offered
+                        || !cursor
+                            .completed_windows
+                            .iter()
+                            .any(|closed| closed.same_interval(window))
+                })
+                .copied()
+                .collect();
+            completion = if offered {
+                cursor.completed_windows.clone()
+            } else {
+                let end = windows
+                    .iter()
+                    .map(|window| window.end_utc_ns)
+                    .filter(|end| i128::from(*end) <= i128::from(now))
+                    .min();
+                windows
+                    .iter()
+                    .filter(|window| Some(window.end_utc_ns) == end)
+                    .copied()
+                    .collect()
+            };
+        }
         let selection = self.selection(now)?;
         let mut session = self.session.at(selection, now);
         session.managed = managed;
-        session.calls = Some(session.call_context(invocation));
+        let mut calls = session.call_context(invocation);
+        let context = Arc::get_mut(&mut calls).ok_or_else(|| {
+            crate::InvalidSnafu {
+                field: "new call context",
+            }
+            .build()
+        })?;
+        context.set_windows(windows)?;
+        context.completion = completion;
+        session.calls = Some(calls);
         Ok(session)
     }
 }
@@ -170,6 +221,7 @@ pub(crate) struct Event {
     pub revision: u64,
     pub evaluated: u64,
     pub clock_changed: bool,
+    pub completed_windows: Vec<crate::follow::WindowRange>,
     pub exhausted: bool,
 }
 

@@ -42,6 +42,21 @@ macro_rules! graph_row {
 }
 
 impl Capture<'_> {
+    pub(in crate::analysis::extraction) fn graph_witnesses(&self) -> bool {
+        !self.graph_expiry
+            && (self.read.projects_field("graph_manifest", "snapshot")
+                || [
+                    "findings",
+                    "relationships",
+                    "graph_subjects",
+                    "graph_branches",
+                    "correlation_packages",
+                    "policy_observations",
+                ]
+                .iter()
+                .any(|name| self.read.projected(name).is_some()))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in crate::analysis::extraction) fn graph(
         &mut self,
@@ -52,10 +67,16 @@ impl Capture<'_> {
         commit_revision: u64,
         sensitivity: ContextSensitivityV1,
         traversal_depths: Option<&[(GraphSubjectKeyV1, u32)]>,
+        contexts: &[crate::AnalysisContextRefV1],
+        notice: (u64, u64),
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
         if !self.scope.permits_graph(graph) {
             return Ok(true);
+        }
+        let deadline = graph.witness_deadline_utc_ns;
+        if deadline > self.read.now {
+            self.next_change = Some(self.next_change.map_or(deadline, |old| old.min(deadline)));
         }
         if self.read.requests.contains_key("graph_coverage") {
             for key in &graph.input_manifest.coverage {
@@ -72,14 +93,16 @@ impl Capture<'_> {
                 }
             }
         }
-        for evidence in &graph.input_manifest.evidence {
-            budget.grow(&mut self.witnesses)?;
-            budget.charge(evidence.stream.node_id.len())?;
-            self.witnesses.push(crate::AnalysisWitnessV1 {
-                identity: evidence.stream.clone().into(),
-                cursor: evidence.durable_cursor,
-                expires_utc_ns: graph.witness_deadline_utc_ns,
-            });
+        if self.graph_witnesses() {
+            for evidence in &graph.input_manifest.evidence {
+                budget.grow(&mut self.witnesses)?;
+                budget.charge(evidence.stream.node_id.len())?;
+                self.witnesses.push(crate::AnalysisWitnessV1 {
+                    identity: evidence.stream.clone().into(),
+                    cursor: evidence.durable_cursor,
+                    expires_utc_ns: graph.witness_deadline_utc_ns,
+                });
+            }
         }
         budget.charge(crate::EvidenceIntakeIdentityV1::MAX_KEY_BYTES)?;
         let source_key = graph.scope.identity.key();
@@ -194,6 +217,8 @@ impl Capture<'_> {
             &source_key,
             subject_count,
             relationship_count,
+            contexts,
+            notice,
             budget,
         )
     }
@@ -349,8 +374,6 @@ impl Capture<'_> {
         clock_uncertainty_ns => UInt64(true): package.clock_uncertainty_ns,
         late_action => Utf8(false): Some(package.late_action.as_str()),
         window_ns => UInt64(false): Some(package.window_ns),
-        window_records => UInt64(false): Some(package.window_records),
-        window_bytes => UInt64(false): Some(u64::try_from(package.window_bytes).map_err(|_| overflow())?),
         coverage_predicate => Utf8(false): Some(package.coverage_predicate.as_str()),
         replay_contract_id => Utf8(false): Some(package.replay_contract_id.as_str()),
         result_states => Json(false): Some(&package.result_states),
@@ -361,15 +384,20 @@ impl Capture<'_> {
     graph_row! {
         graph_row, graph_fields, "graph_manifest";
         self, budget, graph, result_id, commit_revision, sensitivity, source_key;
-        subject_count: usize, relationship_count: usize;
+        subject_count: usize, relationship_count: usize, contexts: &[crate::AnalysisContextRefV1], notice: (u64, u64);
         first_cursor => UInt64(false): Some(graph.first_cursor),
         last_cursor => UInt64(false): Some(graph.last_cursor),
         previous_result_id => Utf8(true): graph.previous_result_id.as_deref(),
         context_notice_revision => UInt64(false): Some(graph.context_notice_revision),
+        notice_context_revision => UInt64(false): Some(notice.0),
+        notice_coverage_revision => UInt64(false): Some(notice.1),
         witness_deadline_utc_ns => UInt64(false): Some(graph.witness_deadline_utc_ns),
+        retained_input_expired => Boolean(false): Some(graph.retained_input_expired()),
         subject_count => UInt64(false): Some(u64::try_from(subject_count).map_err(|_| overflow())?),
         relationship_count => UInt64(false): Some(u64::try_from(relationship_count).map_err(|_| overflow())?),
         max_hops => UInt32(false): Some(0),
         hop_boundary => Boolean(false): Some(false),
+        snapshot => Json(false): Some(graph),
+        context_refs => Json(false): Some(contexts),
     }
 }

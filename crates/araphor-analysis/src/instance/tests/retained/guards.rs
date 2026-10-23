@@ -40,6 +40,7 @@ async fn retained_elision_keeps_proof() -> TestResult {
             &prepared,
             invocation(),
             araphor_data::ManagedRead {
+                expected: None,
                 instance: source.admitted().clone(),
                 rebuild: false,
                 completed: None,

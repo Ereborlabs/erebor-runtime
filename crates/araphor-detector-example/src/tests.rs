@@ -27,20 +27,9 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     let mut separate = first.clone();
     separate.lifetime = vec![9];
     let inputs = vec![
-        Rows::encode(
-            &model.inputs[0].port,
-            &[first.clone(), separate, first],
-            model.limits,
-        )?,
-        Rows::encode::<Fact>(&model.inputs[1].port, &[], model.limits)?,
-        Rows::encode(
-            &model.inputs[2].port,
-            &[Manifest {
-                window_ns: 100,
-                window_records: 3,
-            }],
-            model.limits,
-        )?,
+        Rows::encode(&model.inputs[0].port, &[first.clone(), separate, first])?,
+        Rows::encode::<Fact>(&model.inputs[1].port, &[])?,
+        Rows::encode(&model.inputs[2].port, &[Manifest { window_ns: 100 }])?,
     ];
     let mut evaluation = sdk::Evaluation {
         export: "detect".into(),
@@ -67,7 +56,6 @@ fn threshold_retains_evidence_and_state() -> TestResult {
             id: "example".into(),
             time_utc_ns: 10,
             seed: Some(3),
-            limits: model.limits,
         },
         checkpoint: None,
     };
@@ -84,8 +72,7 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     let other = other.check_evaluation(&evaluation)?;
     assert!(matches!(<BurstDetector as sdk::Guest>::compute(&other),
         Err(sdk::Error::Contract { code: sdk::ErrorCode::Incompatible, field, .. }) if field == "detector package"));
-    let findings: Vec<Finding> =
-        Rows::decode(&model.outputs[2], &output.datasets[2], model.limits)?;
+    let findings: Vec<Finding> = Rows::decode(&model.outputs[2], &output.datasets[2])?;
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].evidence, vec![0, 2]);
     assert!(!findings[0].confirmed);

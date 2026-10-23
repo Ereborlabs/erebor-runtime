@@ -7,6 +7,7 @@ struct Live {
     records: Recorded,
     state: NativeState,
     resolved: bool,
+    target_revision: u64,
 }
 
 #[derive(Deserialize)]
@@ -16,6 +17,11 @@ struct Output {
     facts_revision: u64,
     incomplete: bool,
     gaps: Option<Vec<araphor_data::AnalysisGapV1>>,
+    repair: bool,
+    notice_only: bool,
+    notice_facts_revision: u64,
+    current_result_id: Option<String>,
+    result_commit_revision: Option<u64>,
 }
 
 impl Live {
@@ -56,6 +62,9 @@ impl Live {
                 retired: Some(false),
                 current_result_id: None,
                 result_commit_revision: None,
+                current_compatible: false,
+                notice_facts_revision: None,
+                notice_coverage_revision: None,
                 interval_id: None,
                 profile_revision: None,
                 facts_revision: None,
@@ -67,9 +76,11 @@ impl Live {
                 incomplete: None,
                 gaps: None,
                 context_refs: None,
+                history: Vec::new(),
                 snapshot: None,
             },
             resolved: false,
+            target_revision: 0,
         }
     }
 
@@ -105,10 +116,12 @@ impl Live {
         let mut target = defaults(&tables["targets"]);
         for (name, value) in [
             ("tenant_id", json!(vec![1u8; 16])),
+            ("commit_revision", json!(self.target_revision)),
             ("node_id", json!("node")),
+            ("node_boot_id", json!(vec![2u8; 16])),
             (
                 "node_boot_id_text",
-                json!("02020202020202020202020202020202"),
+                json!("02020202-0202-0202-0202-020202020202"),
             ),
             ("label_epoch", json!(1)),
             (
@@ -171,6 +184,28 @@ impl Live {
 
     async fn query(&self, split: bool) -> TestResult<Vec<Output>> {
         let fixture = self.fixture(split)?;
+        let bundle = crate::Package::discovery_bundle()?;
+        let input = bundle.artifacts[0].descriptor.exports[0]
+            .inputs
+            .iter()
+            .find(|input| input.port.name == "discovery_state")
+            .ok_or("state input absent")?;
+        let sdk::InputSource::Query(sql) = &input.source else {
+            return Err("state input query absent".into());
+        };
+        let schema = Arc::new(input.port.schema.clone());
+        let batches = native_frame(&fixture.context, sql)
+            .await?
+            .collect()
+            .await?
+            .into_iter()
+            .map(|batch| sdk::Dataset::normalize_batch(batch, Arc::clone(&schema)))
+            .collect::<sdk::Result<Vec<_>>>()?;
+        let _previous = fixture.context.deregister_table("discovery_state")?;
+        fixture.context.register_table(
+            "discovery_state",
+            Arc::new(MemTable::try_new(schema, vec![batches])?),
+        )?;
         let sql = LIVE_SQL.as_str();
         let frame = native_frame(&fixture.context, sql).await?;
         frame.logical_plan().apply_with_subqueries(|plan| {
@@ -183,6 +218,11 @@ impl Live {
             datafusion::logical_expr::col("facts_revision"),
             datafusion::logical_expr::col("incomplete"),
             datafusion::logical_expr::col("gaps"),
+            datafusion::logical_expr::col("repair"),
+            datafusion::logical_expr::col("notice_only"),
+            datafusion::logical_expr::col("notice_facts_revision"),
+            datafusion::logical_expr::col("current_result_id"),
+            datafusion::logical_expr::col("result_commit_revision"),
         ])?;
         let schema = Arc::new(frame.schema().as_arrow().clone());
         let plan = frame.create_physical_plan().await?;
@@ -199,6 +239,8 @@ impl Live {
     fn advance(&mut self, output: &Output) {
         self.state.consumed_cursor = Some(self.state.contiguous_cursor);
         self.state.facts_revision = Some(output.facts_revision);
+        self.state.notice_facts_revision = Some(output.notice_facts_revision);
+        self.state.notice_coverage_revision = Some(self.state.source_coverage_revision);
         self.state.coverage_revision = Some(self.state.source_coverage_revision);
         self.state.input_bytes = Some(output.input_bytes);
         self.state.snapshot = Some(output.snapshot.clone());
@@ -491,10 +533,95 @@ fn live_bundle_pins_body() -> TestResult {
     assert!(!program.outputs["snapshot"].contains("@@"));
     assert!(!program.outputs["snapshot"].contains("discovery."));
     for input in &artifact.descriptor.exports[0].inputs {
-        assert_eq!(
-            input.source,
-            sdk::InputSource::Table(sdk::TableRef::Named(input.port.name.clone()))
-        );
+        if input.port.name == "discovery_state" {
+            let sdk::InputSource::Query(sql) = &input.source else {
+                return Err("state input query absent".into());
+            };
+            assert!(matches!(
+                native_statement(sql)?,
+                datafusion::sql::parser::Statement::Statement(_)
+            ));
+            assert!(!sql.contains("@@"));
+            for name in ["required_facts", "pending", "prior", "repair", "available"] {
+                input.port.schema.field_with_name(name)?;
+            }
+            assert!(input.port.schema.field_with_name("prior")?.is_nullable());
+        } else {
+            assert_eq!(
+                input.source,
+                sdk::InputSource::Table(sdk::TableRef::Named(input.port.name.clone()))
+            );
+        }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_repairs_sealed_history() -> TestResult {
+    let mut live = Live::new(3);
+    let original = live.query(false).await?.remove(0);
+    live.advance(&original);
+    live.state.sealed = Some(true);
+    live.state.facts_revision = Some(7);
+    live.state.current_result_id = Some("new-head".into());
+    live.state
+        .history
+        .push(araphor_data::DiscoveryHistoryRowV1 {
+            result_id: "sealed-prior".into(),
+            commit_revision: 4,
+            notice_facts_revision: 0,
+            notice_coverage_revision: 0,
+            compatible: true,
+            interval_id: "sealed-interval".into(),
+            profile_revision: 2,
+            facts_revision: 0,
+            coverage_revision: 0,
+            created_utc_ns: 1,
+            updated_utc_ns: 2,
+            input_bytes: original.input_bytes,
+            incomplete: false,
+            gaps: Vec::new(),
+            context_refs: Vec::new(),
+            snapshot: original.snapshot.clone(),
+        });
+    live.resolved = true;
+    let prior = live.state.history.clone();
+    let repaired = live.query(true).await?.remove(0);
+    assert!(repaired.repair);
+    assert!(!repaired.notice_only);
+    assert_eq!(repaired.current_result_id.as_deref(), Some("sealed-prior"));
+    assert_eq!(repaired.result_commit_revision, Some(4));
+    assert_eq!(repaired.input_bytes, original.input_bytes);
+    assert_eq!(
+        (
+            repaired.snapshot.accepted_records,
+            repaired.snapshot.included_records,
+            repaired.snapshot.unresolved_records
+        ),
+        (3, 3, 0)
+    );
+    assert_eq!(repaired.facts_revision, 7);
+    assert_eq!(live.state.current_result_id.as_deref(), Some("new-head"));
+    assert_eq!(live.state.consumed_cursor, Some(3));
+    assert_eq!(live.state.history, prior);
+    live.state.history[0].notice_facts_revision = 7;
+    live.target_revision = 8;
+    let target = live.query(false).await?.remove(0);
+    assert!(target.repair && !target.notice_only);
+    assert_eq!(target.facts_revision, 8);
+    assert_eq!(target.snapshot.included_records, 3);
+    live.state.history[0].compatible = false;
+    let incompatible = live.query(false).await?.remove(0);
+    assert!(incompatible.repair && incompatible.notice_only);
+    assert_eq!(incompatible.snapshot, original.snapshot);
+    assert_eq!(incompatible.facts_revision, 0);
+    assert_eq!(incompatible.notice_facts_revision, 8);
+    live.state.history[0].compatible = true;
+    live.records.records.remove(1);
+    let missing = live.query(false).await?.remove(0);
+    assert!(missing.repair && missing.notice_only);
+    assert_eq!(missing.snapshot, original.snapshot);
+    live.state.history[0].notice_facts_revision = 8;
+    assert!(live.query(false).await?.is_empty());
     Ok(())
 }

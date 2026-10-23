@@ -45,7 +45,7 @@ impl Capture<'_> {
                         location: snafu::location!(),
                     }
                 })?;
-            self.target(context, &target, budget)
+            self.target(context, &target, revision, budget)
         } else {
             Ok(true)
         }
@@ -220,6 +220,7 @@ impl Capture<'_> {
             &mut self,
             context: &AnalysisContextVersionV1,
             target: &TargetContextV1,
+            revision: u64,
             budget: &mut ReadBudget<'_>,
         );
         schema target_fields;
@@ -243,6 +244,7 @@ impl Capture<'_> {
             entity_key => Binary(false):Some(&context.key.entity_key),
             lifetime_key => Binary(false):Some(&context.key.lifetime_key),
             owner_revision => UInt64(false):Some(context.key.owner_revision),
+            commit_revision => UInt64(false):Some(revision),
             node_id => Utf8(false):Some(&fact.node_id),
             node_boot_id => Binary(true):boot.as_ref().map(|value|value.as_bytes().as_slice()),
             node_boot_id_text => Utf8(true):kube.map(|value| value.node_boot_id.as_str()),

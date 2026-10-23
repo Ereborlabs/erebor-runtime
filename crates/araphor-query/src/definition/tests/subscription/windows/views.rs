@@ -159,13 +159,86 @@ async fn view_port_windows() -> TestResult {
 }
 
 #[tokio::test]
+async fn view_clock_waits_source() -> TestResult {
+    use datafusion::common::ScalarValue;
+
+    let moments = |update: &crate::follow::Update| -> TestResult<Vec<ScalarValue>> {
+        update
+            .batches
+            .as_deref()
+            .ok_or("view output absent")?
+            .iter()
+            .flat_map(|batch| {
+                (0..batch.num_rows())
+                    .map(move |row| ScalarValue::try_from_array(batch.column(0), row))
+            })
+            .collect::<datafusion::common::Result<Vec<_>>>()
+            .map_err(Into::into)
+    };
+    for (sql, source) in [
+        ("SELECT moment FROM scalar_rows", false),
+        ("SELECT moment FROM scalar_rows CROSS JOIN events", true),
+    ] {
+        let mut fixture = Fixture::new()?;
+        Arc::get_mut(&mut fixture.engine)
+            .ok_or("shared engine")?
+            .register_views("CREATE VIEW scalar_rows AS SELECT now() AS moment;")?;
+        fixture.timed_event(1, NOW - SECOND)?;
+        let prepared = fixture.prepare(&Fixture::sql(sql)).await?;
+        inlined_views(&prepared, 1)?;
+        assert!(crate::follow::Window::from_plan(&prepared.plan)?.is_none());
+        assert_eq!(prepared.sources().contains_key("events"), source);
+        assert!(prepared.resolved().images.is_empty());
+        let clock = Clock::new();
+        let mut stream = fixture.follow(&prepared, clock.clone())?;
+        let first = next(&mut stream).await?;
+        assert_eq!(
+            moments(&first)?,
+            [ScalarValue::TimestampNanosecond(Some(NOW as i64), None)]
+        );
+        assert_eq!(first.evaluated_utc_ns, NOW);
+        assert_eq!(first.snapshot.next_change, None);
+        assert!(first.calls.is_empty());
+        assert!(first.completed_windows.is_empty());
+        let before = fixture.engine.store().meta()?;
+        assert!(futures_util::poll!(stream.next()).is_pending());
+        clock.set(NOW + SECOND);
+        let idle = next(&mut stream).await?;
+        assert!(idle.clock_changed);
+        assert!(idle.batches.is_none());
+        assert_eq!(idle.evaluated_utc_ns, NOW);
+        assert_eq!(idle.snapshot.next_change, None);
+        assert!(idle.calls.is_empty());
+        assert!(idle.completed_windows.is_empty());
+        assert_eq!(fixture.engine.store().meta()?, before);
+        assert!(futures_util::poll!(stream.next()).is_pending());
+        if source {
+            fixture.timed_event(2, NOW + SECOND / 2)?;
+            let after = fixture.engine.store().meta()?;
+            let changed = next(&mut stream).await?;
+            assert_eq!(
+                moments(&changed)?,
+                vec![ScalarValue::TimestampNanosecond(Some((NOW + SECOND) as i64), None); 2]
+            );
+            assert_eq!(changed.evaluated_utc_ns, NOW + SECOND);
+            assert_eq!(changed.snapshot.next_change, None);
+            assert!(changed.calls.is_empty());
+            assert!(changed.completed_windows.is_empty());
+            assert_eq!(fixture.engine.store().meta()?, after);
+            assert!(futures_util::poll!(stream.next()).is_pending());
+        }
+        stream.cancel_and_join().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn view_clock_guard() -> TestResult {
     let mut fixture = Fixture::new()?;
     Arc::get_mut(&mut fixture.engine)
         .ok_or("shared engine")?
         .register_views(
-            "CREATE VIEW scalar_rows AS SELECT now() AS moment;
-         CREATE VIEW or_rows AS SELECT source_cursor AS value FROM events
+            "CREATE VIEW or_rows AS SELECT source_cursor AS value FROM events
             WHERE received_at >= now() - INTERVAL '2 seconds' OR operation = 7;
          CREATE VIEW plain_rows AS SELECT source_cursor FROM events;
          CREATE VIEW recent_rows AS SELECT source_cursor FROM events
@@ -176,7 +249,6 @@ async fn view_clock_guard() -> TestResult {
             WHERE received_at >= CAST(now() - INTERVAL '2 seconds' AS TIMESTAMP(3));",
         )?;
     for (sql, clocks) in [
-        ("SELECT moment FROM scalar_rows", 1),
         ("SELECT value FROM or_rows", 1),
         ("SELECT value FROM coarse_rows", 1),
         (

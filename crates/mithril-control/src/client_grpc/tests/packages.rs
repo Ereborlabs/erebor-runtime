@@ -9,7 +9,9 @@ use araphor_data::{
 use super::*;
 
 mod instance;
+mod lifecycle;
 mod qualification;
+mod removal;
 
 fn bundle() -> PackageBundleV1 {
     let mut descriptor = Package::new(

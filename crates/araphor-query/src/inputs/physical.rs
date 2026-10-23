@@ -97,12 +97,7 @@ impl Inputs {
                 }
             }
         }
-        let input_limit = self
-            .limits
-            .max_bytes
-            .min(engine.limits().input_bytes as u64) as usize;
-        let mut limits = self.limits;
-        limits.max_bytes = input_limit as u64;
+        let input_limit = engine.limits().input_bytes;
         let capture = InputCapture {
             scope,
             bindings: self
@@ -116,7 +111,6 @@ impl Inputs {
                     )
                 })
                 .collect(),
-            limits,
             ranges,
             include_results: self.packages.len() < self.plans.len(),
             retained: None,
@@ -159,7 +153,7 @@ impl Inputs {
         }
         let mut expiry = snapshot.next_change;
         for (port, scope) in self.plans.iter().zip(&scopes) {
-            if let Some(window) = port.window {
+            if let Some(window) = &port.window {
                 let selected = window.selection(&scope.selection, now);
                 let received = selected
                     .time_range()
@@ -174,7 +168,6 @@ impl Inputs {
         let context = state.task_ctx();
         let memory = memory_owner.prepare_input(input_limit).context(SqlSnafu)?;
         let mut inputs = Vec::<sdk::Input>::with_capacity(self.ports.len());
-        let (mut rows, mut bytes, mut count) = (0u64, 0u64, 0u64);
         let mut indexed_bytes = 0usize;
         for ((input, physical), scope) in self.plans.iter().zip(physical).zip(&scopes) {
             let port = &self.ports[input.slot];
@@ -196,19 +189,12 @@ impl Inputs {
                     .try_resize(InputSet::metadata_bytes(&inputs).saturating_add(conversion))
                     .context(SqlSnafu)?;
                 let batch = sdk::Dataset::normalize_batch(batch, Arc::clone(&schema))?;
-                rows = rows.saturating_add(batch.num_rows() as u64);
-                bytes = bytes.saturating_add(batch.get_array_memory_size() as u64);
                 indexed_bytes = indexed_bytes
                     .saturating_add(batch.get_array_memory_size())
                     .saturating_add(size_of::<sdk::RecordBatch>())
                     .saturating_add(batch.num_columns().saturating_mul(size_of::<ArrayRef>()))
                     .saturating_add(batch.num_rows().saturating_mul(size_of::<u64>()));
-                count = count.saturating_add(1);
-                if rows > limits.max_rows
-                    || bytes > limits.max_bytes
-                    || count > u64::from(limits.max_batches)
-                    || indexed_bytes > engine.limits().input_bytes
-                {
+                if indexed_bytes > engine.limits().input_bytes {
                     return Err(sdk::Error::contract(
                         sdk::ErrorCode::Limit,
                         "selected model inputs",
@@ -221,13 +207,10 @@ impl Inputs {
                 batches.push(batch);
             }
             if batches.is_empty() {
-                count = count.saturating_add(1);
                 indexed_bytes = indexed_bytes
                     .saturating_add(size_of::<sdk::RecordBatch>())
                     .saturating_add(schema.fields().len().saturating_mul(size_of::<ArrayRef>()));
-                if count > u64::from(limits.max_batches)
-                    || indexed_bytes > engine.limits().input_bytes
-                {
+                if indexed_bytes > engine.limits().input_bytes {
                     return Err(sdk::Error::contract(
                         sdk::ErrorCode::Limit,
                         "selected model inputs",
@@ -240,7 +223,7 @@ impl Inputs {
                 name: port.name.clone(),
                 batches,
             };
-            data.validate(port, limits)?;
+            data.validate(port)?;
             let inherited = input
                 .origins
                 .iter()
@@ -308,14 +291,6 @@ impl Inputs {
         memory
             .try_resize(InputSet::metadata_bytes(&inputs))
             .context(SqlSnafu)?;
-        if snapshot.witnesses.len() > 8192
-            || snapshot.contexts().count() > 256
-            || snapshot.results().count() > 64
-        {
-            return Err(
-                sdk::Error::contract(sdk::ErrorCode::Limit, "selected model references").into(),
-            );
-        }
         engine.check_read(&snapshot).await?;
         source.retain_ports().context(SqlSnafu)?;
         execution.check()?;

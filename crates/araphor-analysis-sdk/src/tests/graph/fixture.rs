@@ -147,12 +147,6 @@ impl SelectedGraph {
                     id: "selected.1".into(),
                     time_utc_ns: WINDOW_START + 19,
                     seed: None,
-                    limits: Limits {
-                        max_batches: 3,
-                        max_rows: 9,
-                        max_bytes: 16_384,
-                        max_checkpoint_bytes: 1024,
-                    },
                 },
                 checkpoint: None,
             },

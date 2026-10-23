@@ -254,7 +254,7 @@ impl DiscoveryOwner {
                 .get("araphor.encoding")
                 .is_some_and(|encoding| encoding == "serde-json-v1")
         {
-            return Rows::decode(port, data, result.evaluation().context.limits)
+            return Rows::decode(port, data)
                 .context(araphor_data::AnalysisContractSnafu)
                 .map_err(Into::into);
         }

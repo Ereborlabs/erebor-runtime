@@ -231,6 +231,25 @@ mod encoding_tests {
                 source: sdk::InputSource::Query("SELECT 1::BIGINT UNSIGNED AS count".into()),
             });
         let original = sql.digest()?;
+        let mut changed = sql.clone();
+        let PackageImplementationV1::Sql { program, .. } =
+            &mut changed.artifacts[0].implementations[0]
+        else {
+            return Err("SQL fixture absent".into());
+        };
+        program.outputs.insert(
+            "rows".into(),
+            "SELECT count + 1 AS count FROM source".into(),
+        );
+        assert_eq!(changed.root, sql.root);
+        assert_eq!(changed.artifacts[0].descriptor, sql.artifacts[0].descriptor);
+        assert_ne!(changed.digest()?, original);
+        assert!(!sql.artifacts[0].prepared("count"));
+        let mut provided = sql.clone();
+        provided.artifacts[0].descriptor.exports[0].input_mode = sdk::InputMode::Provided;
+        provided.artifacts[0].descriptor.exports[0].inputs[0].source =
+            sdk::InputSource::Table(sdk::TableRef::Named("source".into()));
+        assert!(provided.artifacts[0].prepared("count"));
         sql.artifacts[0].descriptor.exports[0].inputs[0].source =
             sdk::InputSource::Query("SELECT 2::BIGINT UNSIGNED AS count".into());
         assert_ne!(sql.digest()?, original);
@@ -239,19 +258,54 @@ mod encoding_tests {
             exports: vec!["count".into()],
             artifact: (0_u8..=255).cycle().take(16 * 1024 + 1).collect(),
         }];
-        for package in [sql, component] {
+        component.artifacts[0].descriptor.exports[0].outputs[0].schema =
+            sdk::Schema::new(vec![sdk::Field::new("count", sdk::DataType::UInt64, false)
+                .with_metadata(
+                    [
+                        ("z".into(), "last".into()),
+                        ("a".into(), "first".into()),
+                        ("m".into(), "middle".into()),
+                    ]
+                    .into(),
+                )]);
+        for mut package in [sql, provided, component] {
+            assert_eq!(
+                package.artifacts[0].descriptor_bytes()?,
+                package.artifacts[0]
+                    .descriptor
+                    .interfaces()?
+                    .descriptor_json
+                    .as_bytes()
+            );
             let bytes = package.encode()?;
             let content = sdk::oci::Content::from_bytes(&bytes)?;
+            if matches!(
+                package.artifacts[0].implementations[0],
+                PackageImplementationV1::Sql { .. }
+            ) {
+                assert!(content.layers.is_empty());
+                assert_eq!(
+                    serde_json::to_value(content.package::<PackageBundleV1>()?)?,
+                    serde_json::to_value(&package)?
+                );
+            }
             use sha2::{Digest as _, Sha256};
             assert_eq!(
                 package.digest()?,
                 format!("sha256:{:x}", Sha256::digest(&content.manifest))
             );
             package.check_encoding()?;
-            assert_eq!(
-                PackageBundleV1::from_bytes(&bytes)?.digest()?,
-                package.digest()?
-            );
+            let restored = PackageBundleV1::from_bytes(&bytes)?;
+            assert_eq!(restored.root, package.root);
+            assert_eq!(restored.artifacts, package.artifacts);
+            assert_eq!(restored.digest()?, package.digest()?);
+            let digest = package.digest()?;
+            for _ in 0..8 {
+                assert_eq!(package.encode()?, bytes);
+                package = PackageBundleV1::from_bytes(&bytes)?;
+                assert_eq!(package.digest()?, digest);
+                assert_eq!(package.artifacts, restored.artifacts);
+            }
         }
         Ok(())
     }

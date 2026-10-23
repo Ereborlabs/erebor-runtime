@@ -44,7 +44,7 @@ fn schema_contract() -> TestResult {
         ),
         (
             "correlation_packages",
-            "b6244d9d0f578e2b413dca4e790c192d27b212ae930206f89eef30597167e344",
+            "b438f86d1fd306dd7fe7381263c27377f31876332384625d92f01ee9331fe5bf",
         ),
         (
             "coverage",
@@ -52,7 +52,7 @@ fn schema_contract() -> TestResult {
         ),
         (
             "discovery_state",
-            "69e5eb64516e1ed6cf3a806c9417311d82c04e09e0bfa1f476c9aea51bc82adf",
+            "05062c00c4f93ab4cf9b6af7e975ade6a2438d6af6ebe2611fc30099a69efe6b",
         ),
         (
             "events",
@@ -72,11 +72,11 @@ fn schema_contract() -> TestResult {
         ),
         (
             "graph_manifest",
-            "30ec5662638f395a6245ace0f2142bb407fb5354ed4772139b6268e9b26482cd",
+            "39deb63a04577fa65171a9f927f427dbd0ef9036d07c8639221a6aee468aea3e",
         ),
         (
             "graph_state",
-            "be410750acbcbd3016299acd864357e90ad468ef973ca64e9e7b8f6657aa6fb1",
+            "3f30178d737e1e89b863e37b14d72df9430890ab9853abda9ecd3cda87fa8fbb",
         ),
         (
             "graph_subjects",
@@ -100,7 +100,7 @@ fn schema_contract() -> TestResult {
         ),
         (
             "targets",
-            "20539b0c81d065c54359b4307ec7f97d7df0aebbb088b466de9759c789c80f2a",
+            "b16720782f71482b42ec46a411bf4bf15d1599ce226daf48c6e503f8a00d435d",
         ),
         (
             "trace_measurements",
@@ -605,7 +605,7 @@ fn omitted_display_is_unevaluated() -> TestResult {
 fn bulk_boolean_reservation() -> TestResult {
     use std::mem::size_of;
 
-    use sdk::arrow_array::{builder::BooleanBuilder, Array, ArrayRef, BooleanArray, RecordBatch};
+    use sdk::arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, builder::BooleanBuilder};
 
     let (mut output, control) = extraction()?;
     let schema = Arc::new(sdk::Schema::new(vec![

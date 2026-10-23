@@ -106,7 +106,7 @@ __binding_candidates AS (
     FROM __binding_identities AS record
     JOIN __binding_targets AS target
         ON target.tenant_id = record.tenant_id AND target.node_id = record.node_id
-        AND target.node_boot_id_text = encode(record.node_boot_id, 'hex')
+        AND target.node_boot_id = record.node_boot_id
         AND target.label_epoch = record.label_epoch
         AND target.binding_id_text = record.binding_uuid
         AND target.profile_id = record.catalog_profile_id

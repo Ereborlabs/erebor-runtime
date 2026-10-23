@@ -11,13 +11,14 @@ pub(super) struct TraversalFixture {
     pub(super) store: Arc<AnalysisStore>,
     pub(super) directory: tempfile::TempDir,
     pub(super) requests: Vec<AnalysisResultCommitV1>,
+    pub(super) _graph: araphor_data::GraphLease,
 }
 
 impl TraversalFixture {
     pub(super) fn new(large: bool) -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
-        store.enable_graph_owner()?;
+        let graph = store.lease_graph(vec![AnalysisSelectionV1::tenant(source().tenant_id)])?;
         store.register_graph(&source())?;
         for (descriptor, bytes) in [
             (
@@ -89,6 +90,7 @@ impl TraversalFixture {
             directory,
             store,
             requests: Vec::new(),
+            _graph: graph,
         };
         for window in 0..if large { 17 } else { 3 } {
             fixture.commit_window(window, large)?;

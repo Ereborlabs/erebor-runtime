@@ -48,10 +48,8 @@ macro_rules! component_conversions {
     ($types:path) => {
         use $types as component_types;
 
-        $crate::__component_record!($crate::Limits, component_types::Limits;
-            [max_batches, max_rows, max_bytes, max_checkpoint_bytes]; []; []; []);
         $crate::__component_record!($crate::EvaluationContext, component_types::EvaluationContext;
-            [id, time_utc_ns, seed]; [limits]; []; []);
+            [id, time_utc_ns, seed]; []; []; []);
         $crate::__component_record!($crate::SourceWindow, component_types::SourceWindow;
             [source, start_utc_ns, end_utc_ns]; []; []; []);
         $crate::__component_record!($crate::Revision, component_types::Revision;

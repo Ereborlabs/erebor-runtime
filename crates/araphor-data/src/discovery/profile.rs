@@ -84,8 +84,6 @@ impl DiscoveryProfileV1 {
                 && self.revision > 0
                 && self.created_utc_ns > 0
                 && self.updated_utc_ns >= self.created_utc_ns
-                && self.input_bytes <= DISCOVERY_INPUT_BYTES as u64
-                && self.gaps.len() <= 256
                 && (self.gaps.is_empty() || self.incomplete)
                 && self.gaps.iter().all(|gap| {
                     gap.first_cursor > 0
@@ -96,7 +94,6 @@ impl DiscoveryProfileV1 {
                     .gaps
                     .windows(2)
                     .all(|pair| pair[0].last_cursor < pair[1].first_cursor)
-                && self.context_refs.len() <= 256
                 && self
                     .context_refs
                     .windows(2)
@@ -158,7 +155,6 @@ impl TryFrom<&DiscoveryPinnedContextV1> for AnalysisContextVersionV1 {
             "control_commit_index": pinned.control_commit_index,
         }))
         .context(DiscoveryEncodingSnafu)?;
-        require(body.len() <= DISCOVERY_PIN_BYTES, "qualified context bytes")?;
         Ok(Self {
             key,
             valid_from_utc_ns: None,

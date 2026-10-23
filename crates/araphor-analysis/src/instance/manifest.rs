@@ -93,6 +93,7 @@ impl Instance {
                 .digest()
                 .map_err(araphor_data::Error::from)?,
             calls: declarations,
+            selected_schema: definition.plan.schema().as_arrow().clone(),
         };
         manifest.order()?;
         Ok((manifest, calls))

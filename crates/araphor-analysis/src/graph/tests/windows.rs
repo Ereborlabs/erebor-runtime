@@ -4,9 +4,11 @@ use araphor_data::{
     CoverageReport, EvidenceIntakeIdentityV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
 };
 use prost::Message as _;
+use std::sync::Arc;
 
 struct WindowFixture {
-    store: AnalysisStore,
+    store: Arc<AnalysisStore>,
+    _graph: araphor_data::GraphLease,
     first: GraphSnapshotV1,
     first_request: AnalysisResultCommitV1,
     second: GraphSnapshotV1,
@@ -17,9 +19,11 @@ struct WindowFixture {
 impl WindowFixture {
     fn new() -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
         let source = fixture::source();
-        store.enable_graph_owner()?;
+        let graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant(
+            source.tenant_id,
+        )])?;
         store.register_graph(&source)?;
         let mut windows = Vec::new();
         for cursor in 1..=2 {
@@ -103,6 +107,7 @@ impl WindowFixture {
         let [first, second]: [_; 2] = windows.try_into().map_err(|_| "two windows")?;
         Ok(Self {
             store,
+            _graph: graph,
             first: first.0,
             first_request: first.1,
             second: second.0,

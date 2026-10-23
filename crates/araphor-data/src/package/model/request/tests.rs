@@ -116,8 +116,13 @@ fn package_request_metadata_roundtrip() -> TestResult {
         },
         PackageRequestV1::QueryInstanceResult {
             instance_id: "counts".into(),
-            result_id: "retained-result".into(),
+            result_id: Some("retained-result".into()),
             sql: "SELECT value, __row_index FROM rows".into(),
+        },
+        PackageRequestV1::QueryInstanceResult {
+            instance_id: "counts".into(),
+            result_id: None,
+            sql: "SELECT value FROM selected".into(),
         },
         PackageRequestV1::InspectImage {
             package_id: "example".into(),
@@ -190,8 +195,13 @@ fn instance_requests_are_readonly() -> TestResult {
         },
         PackageRequestV1::QueryInstanceResult {
             instance_id: "counts".into(),
-            result_id: "retained-result".into(),
+            result_id: Some("retained-result".into()),
             sql: "SELECT * FROM rows".into(),
+        },
+        PackageRequestV1::QueryInstanceResult {
+            instance_id: "counts".into(),
+            result_id: None,
+            sql: "SELECT value FROM selected".into(),
         },
     ] {
         assert_eq!(operation.action(), crate::PackageActionV1::Inspect);
@@ -216,38 +226,177 @@ fn instance_requests_are_readonly() -> TestResult {
 #[test]
 fn image_test_request() -> TestResult {
     for name in [None, Some("equal".to_owned())] {
-        let operation = PackageRequestV1::TestImage {
-            image: crate::PackageRefV1 {
-                package_id: "fixture".into(),
-                revision: "exact".into(),
-            },
-            fixture: name,
-        };
-        assert_eq!(operation.action(), crate::PackageActionV1::Test);
-        let bytes = operation.encode()?;
-        let actual = PackageRequestV1::from_bytes(&bytes)?;
-        assert_eq!(
-            serde_json::to_value(&actual)?,
-            serde_json::to_value(&operation)?
-        );
-        assert_eq!(actual.action(), crate::PackageActionV1::Test);
-        assert!(PackageRequestV1::from_bytes(&bytes[..bytes.len() - 1]).is_err());
-        assert!(PackageRequestV1::from_bytes(&[bytes.as_slice(), &[0]].concat()).is_err());
-        assert!(PackageRequestV1::from_bytes(&envelope(
-            &serde_json::to_vec(&operation)?,
-            b"archive"
-        )?)
-        .is_err());
+        for artifact in [
+            None,
+            Some(crate::PackageRefV1 {
+                package_id: "child".into(),
+                revision: "nested-exact".into(),
+            }),
+        ] {
+            let operation = PackageRequestV1::TestImage {
+                image: crate::PackageRefV1 {
+                    package_id: "fixture".into(),
+                    revision: "exact".into(),
+                },
+                artifact,
+                fixture: name.clone(),
+            };
+            assert_eq!(operation.action(), crate::PackageActionV1::Test);
+            let bytes = operation.encode()?;
+            let actual = PackageRequestV1::from_bytes(&bytes)?;
+            assert_eq!(
+                serde_json::to_value(&actual)?,
+                serde_json::to_value(&operation)?
+            );
+            assert_eq!(actual.action(), crate::PackageActionV1::Test);
+            assert!(PackageRequestV1::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+            assert!(PackageRequestV1::from_bytes(&[bytes.as_slice(), &[0]].concat()).is_err());
+            assert!(PackageRequestV1::from_bytes(&envelope(
+                &serde_json::to_vec(&operation)?,
+                b"archive"
+            )?)
+            .is_err());
+        }
     }
     for metadata in [
         serde_json::json!({"operation":"test_image","fixture":null}),
         serde_json::json!({"operation":"test_image","image":{"package_id":"fixture"}}),
         serde_json::json!({"operation":"test_image","image":{"package_id":"fixture","revision":"exact","extra":true}}),
         serde_json::json!({"operation":"test_image","image":{"package_id":"fixture","revision":"exact"},"scope":"team"}),
+        serde_json::json!({"operation":"test_image","image":{"package_id":"fixture","revision":"exact"},"artifact":{"package_id":"child"}}),
+        serde_json::json!({"operation":"test_image","image":{"package_id":"fixture","revision":"exact"},"artifact":{"package_id":"child","revision":"exact","extra":true}}),
     ] {
         assert!(
             PackageRequestV1::from_bytes(&envelope(&serde_json::to_vec(&metadata)?, &[])?).is_err()
         );
     }
+    Ok(())
+}
+
+#[test]
+fn removal_requests_are_explicit() -> TestResult {
+    let image = araphor_discovery_definition::ImagePin {
+        image: crate::PackageRefV1 {
+            package_id: "example".into(),
+            revision: "1".into(),
+        },
+        digest: format!("sha256:{}", "1".repeat(64)),
+    };
+    for (request, action) in [
+        (
+            PackageRequestV1::AdmitInstance {
+                instance_id: "counts".into(),
+                definition_name: "counts".into(),
+                definition_revision: format!("sha256:{}", "2".repeat(64)),
+            },
+            crate::PackageActionV1::Run,
+        ),
+        (
+            PackageRequestV1::StartInstance {
+                instance_id: "counts".into(),
+                expected_lifecycle: 17,
+            },
+            crate::PackageActionV1::Run,
+        ),
+        (
+            PackageRequestV1::StopInstance {
+                instance_id: "counts".into(),
+                expected_lifecycle: 17,
+            },
+            crate::PackageActionV1::Run,
+        ),
+        (
+            PackageRequestV1::RunInstance {
+                instance_id: "counts".into(),
+                expected_lifecycle: 17,
+                evaluation_id: "once".into(),
+                rebuild: false,
+            },
+            crate::PackageActionV1::Run,
+        ),
+        (
+            PackageRequestV1::RenewInstance {
+                instance_id: "counts".into(),
+                expected_lifecycle: 17,
+            },
+            crate::PackageActionV1::Run,
+        ),
+        (
+            PackageRequestV1::UpdateInstance {
+                instance_id: "counts".into(),
+                expected_lifecycle: 17,
+                definition_name: "count-events".into(),
+                definition_revision: "exact".into(),
+                rebuild: true,
+            },
+            crate::PackageActionV1::Update,
+        ),
+        (
+            PackageRequestV1::RollbackInstance {
+                instance_id: "counts".into(),
+                expected_lifecycle: 17,
+                generation: 11,
+                rebuild: true,
+            },
+            crate::PackageActionV1::Rollback,
+        ),
+        (
+            PackageRequestV1::UninstallImage {
+                image: image.clone(),
+            },
+            crate::PackageActionV1::Remove,
+        ),
+        (
+            PackageRequestV1::RemoveInstance {
+                instance_id: "counts".into(),
+                expected_lifecycle: 17,
+            },
+            crate::PackageActionV1::Remove,
+        ),
+        (
+            PackageRequestV1::RecreateInstance {
+                instance_id: "counts".into(),
+                expected_lifecycle: 19,
+                definition_name: "counts".into(),
+                definition_revision: format!("sha256:{}", "2".repeat(64)),
+            },
+            crate::PackageActionV1::Run,
+        ),
+    ] {
+        let encoded = request.encode()?;
+        let decoded = PackageRequestV1::from_bytes(&encoded)?;
+        assert_eq!(
+            serde_json::to_value(&decoded)?,
+            serde_json::to_value(&request)?
+        );
+        assert_eq!(decoded.action(), action);
+        let mut value = serde_json::to_value(&request)?;
+        for field in ["grant", "running", "force"] {
+            value[field] = serde_json::json!(true);
+            assert!(
+                PackageRequestV1::from_bytes(&envelope(&serde_json::to_vec(&value)?, &[])?)
+                    .is_err()
+            );
+            value.as_object_mut().ok_or("request object")?.remove(field);
+        }
+        assert!(PackageRequestV1::from_bytes(&envelope(
+            &serde_json::to_vec(&request)?,
+            b"archive"
+        )?)
+        .is_err());
+    }
+    for value in [
+        serde_json::json!({"operation":"remove_instance", "instance_id":"counts"}),
+        serde_json::json!({"operation":"recreate_instance", "instance_id":"counts", "expected_lifecycle":19, "definition_name":"counts"}),
+        serde_json::json!({"operation":"uninstall_image", "image":{"image":{"package_id":"example","revision":"1"}}}),
+    ] {
+        assert!(
+            PackageRequestV1::from_bytes(&envelope(&serde_json::to_vec(&value)?, &[])?).is_err()
+        );
+    }
+    let response = crate::PackageResponseV1::Uninstalled(image.clone());
+    assert!(
+        matches!(crate::PackageResponseV1::from_bytes(&response.encode()?)?, crate::PackageResponseV1::Uninstalled(actual) if actual == image)
+    );
     Ok(())
 }

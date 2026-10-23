@@ -57,16 +57,20 @@ async fn restart_skips_input_capacity() -> TestResult {
     assert_eq!(checkpoint.datasets.len(), 1);
     assert_eq!(values(&checkpoint.datasets[0].batches)?, [1]);
     let model = &package.artifacts[0].descriptor.exports[0];
-    let encoded = sdk::wire::Output::encode_model(&result.output, model, result.limits)?;
+    let encoded = sdk::wire::Output::encode_model(&result.output, model)?;
     drop(result);
     let before = store.meta()?;
-    let pressure = fixture.query.memory().reserve_input(CAPACITY - retained)?;
-    assert!(fixture.query.memory().reserve_input(1).is_err());
     let mut resumed = instance.subscribe(
         Arc::new(AnalysisReadControl::default()),
         u64::MAX,
         lifecycle,
     )?;
+    let subscribed = fixture.query.memory().input_reserved();
+    let pressure = fixture
+        .query
+        .memory()
+        .reserve_input(CAPACITY - subscribed)?;
+    assert!(fixture.query.memory().reserve_input(1).is_err());
     let mut next = Box::pin(resumed.next());
     assert!(
         tokio::time::timeout(Duration::from_millis(50), next.as_mut())
@@ -92,13 +96,62 @@ async fn restart_skips_input_capacity() -> TestResult {
     )?;
     assert_eq!(result.commit_revision, receipt.commit_revision);
     assert_eq!(
-        sdk::wire::Output::encode_model(&result.output, model, result.limits)?,
+        sdk::wire::Output::encode_model(&result.output, model)?,
+        encoded
+    );
+    drop(result);
+    fixture.context(2)?;
+    let changed_meta = store.meta()?;
+    let error = tokio::time::timeout(Duration::from_secs(30), next)
+        .await?
+        .ok_or("changed pressured restart ended")?
+        .err()
+        .ok_or("changed pressured restart executed")?;
+    let crate::Error::Query { source } = &error else {
+        return Err(format!("shared input error missing: {error:?}").into());
+    };
+    assert_eq!(
+        araphor_query::Failure::from(source),
+        araphor_query::Failure::Busy
+    );
+    assert!(
+        matches!(source, araphor_query::Error::Sql { source }
+        if matches!(source, datafusion::error::DataFusionError::External(capacity)
+            if matches!(capacity.downcast_ref::<araphor_query::Error>(), Some(araphor_query::Error::Capacity {
+                resource: "shared input",
+                source: datafusion::error::DataFusionError::ResourcesExhausted(_),
+            })))),
+        "{error:?}"
+    );
+    assert_eq!(resumed.cancel_and_join(&control).await?, None);
+    assert_eq!(
+        fixture.query.memory().input_reserved(),
+        retained + pressure.size()
+    );
+    assert_eq!(store.meta()?, changed_meta);
+    assert_eq!(store.managed_resume([1; 16], "restart", &control)?, saved);
+    assert_eq!(fixture.progress("restart")?, receipt.commit_revision);
+    assert_eq!(fixture.selected("restart", &receipt.attempt)?, [1]);
+    let result = store.managed_result(
+        instance.admitted(),
+        &reference.result_id,
+        u64::MAX,
+        &control,
+    )?;
+    assert_eq!(result.commit_revision, receipt.commit_revision);
+    assert_eq!(
+        sdk::wire::Output::encode_model(&result.output, model)?,
         encoded
     );
     drop(result);
     drop(pressure);
-    fixture.context(2)?;
-    let changed = tokio::time::timeout(Duration::from_secs(30), next)
+    assert_eq!(fixture.query.memory().input_reserved(), retained);
+    let mut resumed = instance.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        lifecycle,
+    )?;
+    let changed = tokio::time::timeout(Duration::from_secs(30), resumed.next())
         .await?
         .ok_or("changed restart receipt")??;
     assert_ne!(changed.attempt, receipt.attempt);

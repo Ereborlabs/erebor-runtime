@@ -2,9 +2,7 @@ use super::*;
 
 impl Fixture {
     fn limits() -> TestResult<Limits> {
-        let output = usize::try_from(builtin::Discovery::limits().max_bytes)?
-            .checked_mul(4)
-            .ok_or("output reservation overflow")?;
+        let output = usize::try_from(8_u64 * 1024 * 1024 * 1024)?;
         Ok(Limits {
             input_capacity: Some(128 * 1024 * 1024),
             output_capacity: Some(output),

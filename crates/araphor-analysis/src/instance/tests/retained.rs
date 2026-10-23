@@ -9,7 +9,7 @@ use araphor_data::analysis::PackageResultRefV1;
 use araphor_query::definition::Invocation;
 use araphor_query::Failure;
 
-fn consumer(revision: &str, bytes: u64) -> TestResult<PackageBundleV1> {
+fn consumer(revision: &str) -> TestResult<PackageBundleV1> {
     let mut image = bundle("sql")?;
     let artifact = &mut image.artifacts[0];
     artifact.descriptor.id = "retained-consumer".into();
@@ -25,7 +25,6 @@ fn consumer(revision: &str, bytes: u64) -> TestResult<PackageBundleV1> {
         .collect();
     model.checkpoint = None;
     model.reasons.clear();
-    model.limits.max_bytes = bytes;
     artifact.implementations = vec![PackageImplementationV1::Sql {
         export: "echo".into(),
         program: SqlModelV1 {
@@ -74,7 +73,7 @@ async fn retained_alias_keeps_identity() -> TestResult {
         tenant_evaluations: Some(1),
         ..Default::default()
     })?;
-    fixture.install(&consumer("1", 1024 * 1024)?)?;
+    fixture.install(&consumer("1")?)?;
     let (source, reference) = producer(&fixture).await?;
     let original = fixture.query.store().managed_result(
         source.admitted(),
@@ -219,7 +218,7 @@ async fn retained_alias_fences_head() -> TestResult {
 #[tokio::test]
 async fn retained_alias_checks_scope() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
-    fixture.install(&consumer("1", 1024 * 1024)?)?;
+    fixture.install(&consumer("1")?)?;
     let (_, reference) = producer(&fixture).await?;
     let control = AnalysisReadControl::default();
     let mut denied =
@@ -285,7 +284,7 @@ async fn retained_alias_checks_scope() -> TestResult {
 #[tokio::test]
 async fn retained_alias_counts_inputs() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
-    fixture.install(&consumer("1", 1024 * 1024)?)?;
+    fixture.install(&consumer("1")?)?;
     let rows = (0..256)
         .map(|value| format!("({value})"))
         .collect::<Vec<_>>()
@@ -321,6 +320,7 @@ async fn retained_alias_counts_inputs() -> TestResult {
     let first = session
         .prepare_definition(&Fixture::definition(&sql("1")))
         .await?;
+    let before = fixture.query.store().meta()?;
     let output = session.execute_definition(&first, invocation()).await?;
     let evaluation = output
         .calls
@@ -361,36 +361,8 @@ async fn retained_alias_counts_inputs() -> TestResult {
             right.column(0).to_data().buffers()[0].as_ptr()
         );
     }
-    let bytes = sizes[0]
-        .checked_add(sizes[0] / 2)
-        .ok_or("alias input bound")?;
-    assert!(sizes[0] < bytes);
-    assert!(bytes < sizes[0].checked_add(sizes[1]).ok_or("alias input bytes")?);
-    let limited = consumer("2", u64::try_from(bytes)?)?;
-    let mut one_input = evaluation.clone();
-    one_input.context.limits.max_bytes = u64::try_from(bytes)?;
-    one_input.inputs[1].data.batches = vec![sdk::RecordBatch::new_empty(
-        evaluation.inputs[1].data.batches[0].schema(),
-    )];
-    limited.artifacts[0]
-        .descriptor
-        .check_evaluation(&one_input)?;
-    drop(one_input);
-    drop(output);
-    fixture.install(&limited)?;
-    let second = session
-        .prepare_definition(&Fixture::definition(&sql("2")))
-        .await?;
-    let held = fixture.query.memory().input_reserved();
-    let before = fixture.query.store().meta()?;
-    let error = session
-        .execute_definition(&second, invocation())
-        .await
-        .err()
-        .ok_or("assembled input bound accepted")?;
-    assert_eq!(Failure::from(&error), Failure::InputTooLarge);
-    assert_eq!(fixture.query.memory().input_reserved(), held);
     assert_eq!(fixture.query.store().meta()?, before);
+    drop(output);
     drop(fixture.query.reserve_evaluation([1; 16])?);
     let healthy = session
         .prepare_definition(&Fixture::definition(
@@ -429,6 +401,7 @@ async fn retained_alias_rejects_managed() -> TestResult {
             &prepared,
             invocation(),
             araphor_data::ManagedRead {
+                expected: None,
                 instance: source.admitted().clone(),
                 rebuild: false,
                 completed: None,

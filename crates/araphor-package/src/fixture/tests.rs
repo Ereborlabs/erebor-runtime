@@ -51,7 +51,7 @@ fn fixture(
         inputs: Vec::new(),
         parameters: None,
         checkpoint: None,
-        expected: sdk::wire::Output::encode_model(expected, &model, model.limits)?,
+        expected: sdk::wire::Output::encode_model(expected, &model)?,
     };
     let evaluation = sdk::Evaluation {
         export: model.name.clone(),
@@ -69,7 +69,7 @@ fn fixture(
         }],
         parameters: None,
         checkpoint: None,
-        context: saved.evaluation_context(&model),
+        context: saved.evaluation_context(),
     };
     Ok((
         saved,
@@ -273,17 +273,16 @@ fn fixture_context_roundtrip() -> TestResult {
         saved.time_utc_ns = now;
         let restored: PackageFixtureV1 = serde_json::from_slice(&serde_json::to_vec(&saved)?)?;
         assert_eq!(restored, saved);
-        let context = restored.evaluation_context(&model);
+        let context = restored.evaluation_context();
         assert_eq!(context.time_utc_ns, now);
         assert_eq!(context.seed, Some(u64::MAX));
-        assert_eq!(context.limits, model.limits);
         let mut json = serde_json::to_value(&restored)?;
         let fields = json.as_object_mut().ok_or("fixture object")?;
         fields.remove("time_utc_ns");
         fields.remove("seed");
         let defaults: PackageFixtureV1 = serde_json::from_value(json)?;
-        assert_eq!(defaults.evaluation_context(&model).time_utc_ns, 0);
-        assert_eq!(defaults.evaluation_context(&model).seed, None);
+        assert_eq!(defaults.evaluation_context().time_utc_ns, 0);
+        assert_eq!(defaults.evaluation_context().seed, None);
     }
     Ok(())
 }

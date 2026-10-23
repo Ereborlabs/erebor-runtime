@@ -45,10 +45,21 @@ impl Qualification {
         name: Option<&str>,
         control: &AnalysisReadControl,
     ) -> Result<Vec<FixtureResult>> {
+        self.run_artifact(grant, image, image, name, control).await
+    }
+
+    pub async fn run_artifact(
+        &self,
+        grant: &PackageGrantV1,
+        image: &PackageRefV1,
+        artifact: &PackageRefV1,
+        name: Option<&str>,
+        control: &AnalysisReadControl,
+    ) -> Result<Vec<FixtureResult>> {
         let mut changes = self.authority.changes_for(grant);
         self.authority.check(grant, PackageActionV1::Test)?;
         let operation = ReadOperation(Arc::new(control.operation()?.within(grant.remaining()?)?));
-        let execution = self.run_inner(grant, image, name, &operation.0);
+        let execution = self.run_inner(grant, image, artifact, name, &operation.0);
         tokio::pin!(execution);
         let result = tokio::select! {
             biased;
@@ -75,6 +86,7 @@ impl Qualification {
         &self,
         grant: &PackageGrantV1,
         image: &PackageRefV1,
+        target: &PackageRefV1,
         name: Option<&str>,
         control: &Arc<AnalysisReadControl>,
     ) -> Result<Vec<FixtureResult>> {
@@ -83,7 +95,7 @@ impl Qualification {
             .await?;
         let retained = PackageBundleRef::new(&bundle)?;
         self.check(grant, &retained, control)?;
-        let artifact = bundle.artifact(image)?;
+        let artifact = bundle.artifact(target)?;
         let fixtures = artifact
             .fixtures
             .iter()
@@ -101,9 +113,7 @@ impl Qualification {
                 .iter()
                 .find(|model| model.name == fixture.export)
                 .ok_or_else(|| Code::Invalid.error("fixture export"))?;
-            let now = u64::try_from(fixture.time_utc_ns)
-                .map_err(|_| Code::Unsupported.error("negative fixture time"))?;
-            let mut session = self.query.session(grant.selection.clone(), control, now)?;
+            let mut session = self.query.session(grant.selection.clone(), control, 0)?;
             let mut inputs = Vec::new();
             for (index, input) in fixture.inputs.iter().enumerate() {
                 let port = model
@@ -114,7 +124,7 @@ impl Qualification {
                     .ok_or_else(|| Code::Invalid.error("fixture input"))?;
                 let data = input
                     .data
-                    .decode(&port.schema, model.limits)
+                    .decode(&port.schema)
                     .context(araphor_data::AnalysisContractSnafu)?;
                 session.register(
                     &format!("__fixture_input_{index}"),
@@ -136,8 +146,8 @@ impl Qualification {
                     &[parameters],
                 )?;
             }
-            let definition = Self::definition(image, fixture, model)?;
-            let prepared = session.prepare_definition(&definition).await?;
+            let definition = Self::definition(target, fixture, model)?;
+            let prepared = session.prepare_image(&definition, image.clone()).await?;
             if prepared.resolved().images.len() != 1
                 || prepared.resolved().images[0].image != *image
                 || prepared.resolved().images[0].digest != retained.digest()
@@ -151,7 +161,7 @@ impl Qualification {
                     if let LogicalPlan::Extension(extension) = plan {
                         if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
                             if call.image().image == *image
-                                && call.package() == image
+                                && call.package() == target
                                 && call.export() == fixture.export
                             {
                                 calls.insert(call.id());
@@ -173,10 +183,11 @@ impl Qualification {
                 .map(|checkpoint| checkpoint.decode_model(model))
                 .transpose()
                 .context(araphor_data::AnalysisContractSnafu)?;
-            let context = fixture.evaluation_context(model);
+            let context = fixture.evaluation_context();
             let invocation = Invocation {
                 id: context.id,
                 seed: context.seed,
+                time_utc_ns: Some(context.time_utc_ns),
                 checkpoints: checkpoint
                     .into_iter()
                     .map(|checkpoint| (id, checkpoint))
@@ -186,7 +197,6 @@ impl Qualification {
                 } else {
                     BTreeMap::from([(id, inputs)])
                 },
-                limits: context.limits,
             };
             let output = session.execute_definition(&prepared, invocation).await?;
             let call = output

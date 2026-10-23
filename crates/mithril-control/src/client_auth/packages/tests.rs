@@ -447,13 +447,13 @@ fn definition_commit_requires_grant() -> std::result::Result<(), Box<dyn std::er
     let grant = access.package_grant(AnalysisSelectionV1::tenant([1; 16]), PackageActionV1::Run)?;
     let mut committed = false;
     assert!(owner
-        .commit_many(&[], PackageActionV1::Run, &mut || {
+        .commit_many(&[], &mut || {
             committed = true;
             Ok(())
         })
         .is_err());
     assert!(!committed);
-    owner.commit_many(&[(&grant, None)], PackageActionV1::Run, &mut || {
+    owner.commit_many(&[(&grant, PackageActionV1::Run, None)], &mut || {
         assert!(matches!(
             owner.state.try_lock(),
             Err(std::sync::TryLockError::WouldBlock)
@@ -465,7 +465,7 @@ fn definition_commit_requires_grant() -> std::result::Result<(), Box<dyn std::er
     owner.logout(&session.token, &owner.origin, &session.csrf)?;
     committed = false;
     assert!(owner
-        .commit_many(&[(&grant, None)], PackageActionV1::Run, &mut || {
+        .commit_many(&[(&grant, PackageActionV1::Run, None)], &mut || {
             committed = true;
             Ok(())
         })
@@ -493,20 +493,20 @@ fn definition_commit_checks_images() -> std::result::Result<(), Box<dyn std::err
     };
     owner.replace_package_trust(vec![pin(&first)?])?;
     let grants = [
-        (&grant, None),
-        (&grant, Some(&first_ref)),
-        (&grant, Some(&second_ref)),
+        (&grant, PackageActionV1::Run, None),
+        (&grant, PackageActionV1::Update, Some(&first_ref)),
+        (&grant, PackageActionV1::Rollback, Some(&second_ref)),
     ];
     let mut committed = false;
     assert!(owner
-        .commit_many(&grants, PackageActionV1::Run, &mut || {
+        .commit_many(&grants, &mut || {
             committed = true;
             Ok(())
         })
         .is_err());
     assert!(!committed);
     owner.replace_package_trust(vec![pin(&first)?, pin(&second)?])?;
-    owner.commit_many(&grants, PackageActionV1::Run, &mut || {
+    owner.commit_many(&grants, &mut || {
         assert!(matches!(
             owner.state.try_lock(),
             Err(std::sync::TryLockError::WouldBlock)

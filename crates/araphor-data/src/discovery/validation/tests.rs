@@ -90,6 +90,26 @@ fn merge_groups_preserve_attribution() -> TestResult {
     candidate.atoms[0].key.image_digest.push_str("-invented");
     candidate.validate()?;
     assert!(snapshot.validate_merge(&snapshot, &candidate).is_err());
+    let mut uncapped = snapshot.clone();
+    let atom = uncapped.atoms.first_mut().ok_or("source atom absent")?;
+    let range = uncapped
+        .coverage
+        .iter_mut()
+        .find(|range| {
+            range.stream == atom.key.stream
+                && range.cpu_id == atom.key.cpu_id
+                && range.coverage_interval_id == atom.key.coverage_interval_id
+                && range.first_cursor <= atom.first_cursor
+                && range.last_cursor >= atom.last_cursor
+        })
+        .ok_or("source atom range absent")?;
+    atom.count += 1_000_001;
+    range.expected_records += 1_000_001;
+    range.last_cursor += 1_000_001;
+    atom.last_cursor = range.last_cursor;
+    uncapped.included_records += 1_000_001;
+    uncapped.accepted_records += 1_000_001;
+    uncapped.validate()?;
     let (_, _, mut groups) = fixture()?;
     groups[0].key.image_digest.push_str("-invented");
     assert!(snapshot.validate_groups(&groups).is_err());

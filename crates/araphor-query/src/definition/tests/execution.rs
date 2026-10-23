@@ -135,9 +135,9 @@ pub(super) fn invocation(id: &str) -> Invocation {
     Invocation {
         id: id.into(),
         seed: Some(7),
+        time_utc_ns: None,
         checkpoints: BTreeMap::new(),
         inputs: BTreeMap::new(),
-        limits: sdk::Limits::default(),
     }
 }
 
@@ -823,8 +823,8 @@ async fn physical_failure_keeps_session() -> TestResult {
 }
 
 async fn guest_failures(target: &str) -> TestResult {
-    let mut bundle = component(target, "evaluate")?;
-    bundle.artifacts[0].descriptor.exports[0].limits.max_bytes = 16 * 1024;
+    let bundle = component(target, "evaluate")?;
+
     let fixture = Fixture::image_limits(
         capacity_limits(),
         &bundle,
@@ -1464,3 +1464,127 @@ async fn combined_input_respects_limit() -> TestResult {
 mod contract;
 mod descriptors;
 mod reusing;
+mod supplied;
+
+#[tokio::test]
+async fn native_caps_keep_targets() -> TestResult {
+    let mut limits = capacity_limits();
+    limits.package.native.memory_bytes = Some(1024);
+    let runtime = araphor_package_runtime::Runtime::new(limits.package)?;
+    let fixture = Fixture::limits(limits)?;
+    for (target, revision) in [("sql", "1"), ("wasm", "2")] {
+        let mut bundle = component(target, "accumulate")?;
+        bundle.root.revision = revision.into();
+        bundle.artifacts[0].descriptor.revision = revision.into();
+        fixture.install(&bundle)?;
+        let prepared = fixture.prepare(&Fixture::sql(format!(
+            r#"SELECT * FROM "runtime-fixture"."{revision}".accumulate(input => (SELECT CAST(7 AS BIGINT UNSIGNED) AS value))"#
+        ))).await?;
+        let before = fixture.engine.store().meta()?;
+        let output = fixture.execute(&prepared, invocation(target)).await?;
+        assert_eq!(values(&output.batches)?, [7]);
+        assert_eq!(output.calls.len(), 1);
+        assert_eq!(fixture.engine.store().meta()?, before);
+        drop((output, prepared));
+        capacity_released(&fixture)?;
+    }
+    let mut bundle = component("wasm", "accumulate")?;
+    bundle.root.revision = "3".into();
+    bundle.artifacts[0].descriptor.revision = "3".into();
+    bundle.artifacts[0].implementations = vec![PackageImplementationV1::Native {
+        export: "accumulate".into(),
+        artifact: b"invalid".to_vec(),
+        qualification: Some(araphor_package::Qualification {
+            exports: vec!["accumulate".into()],
+            target: "foreign-target".into(),
+            cpu_features: Vec::new(),
+            contract_version: sdk::CONTRACT_VERSION,
+            system_libraries: Vec::new(),
+            dependencies: Vec::new(),
+        }),
+    }];
+    fixture.install(&bundle)?;
+    let before = fixture.engine.store().meta()?;
+    let error = fixture.prepare(&Fixture::sql(
+        r#"SELECT * FROM "runtime-fixture"."3".accumulate(input => (SELECT CAST(7 AS BIGINT UNSIGNED) AS value))"#
+    )).await.err().ok_or("capped Native call admitted")?;
+    let bundle = Arc::new(bundle);
+    let control = AnalysisReadControl::default();
+    let workers = araphor_package_runtime::TaskTracker::new();
+    let prepared = runtime
+        .prepare(
+            Arc::clone(&bundle),
+            bundle.root.clone(),
+            "accumulate".into(),
+            &control,
+        )
+        .err()
+        .ok_or("capped Native preparation succeeded")?;
+    let evaluation = sdk::Evaluation {
+        export: "accumulate".into(),
+        inputs: Vec::new(),
+        parameters: None,
+        checkpoint: None,
+        context: sdk::EvaluationContext {
+            id: "caps".into(),
+            time_utc_ns: 0,
+            seed: None,
+        },
+    };
+    let called = runtime
+        .evaluate(
+            Arc::clone(&bundle),
+            bundle.root.clone(),
+            evaluation,
+            control.within(None)?,
+            &workers,
+        )
+        .await
+        .err()
+        .ok_or("capped Native execution succeeded")?;
+    let wrap = |source| crate::Error::Sql {
+        source: DataFusionError::External(Box::new(source)),
+    };
+    for error in [error, wrap(prepared), wrap(called)] {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        let mut exact = false;
+        while let Some(current) = source {
+            if matches!(
+                current.downcast_ref::<araphor_package_runtime::Error>(),
+                Some(araphor_package_runtime::Error::Data {
+                    source: araphor_data::Error::Package {
+                        code: araphor_data::PackageErrorCodeV1::Unsupported,
+                        field: "in-process native resource limits",
+                        ..
+                    }
+                })
+            ) {
+                exact = true;
+                break;
+            }
+            source = current.source();
+        }
+        assert!(exact, "Native cap error was replaced: {error:?}");
+    }
+    assert!(workers.is_empty());
+    control.cancel()?;
+    assert!(matches!(
+        runtime.prepare(
+            Arc::clone(&bundle),
+            bundle.root.clone(),
+            "accumulate".into(),
+            &control
+        ),
+        Err(araphor_package_runtime::Error::Data {
+            source: araphor_data::Error::AnalysisReadCancelled { .. }
+        })
+    ));
+    assert_eq!(fixture.engine.store().meta()?, before);
+    assert!(fixture
+        .engine
+        .store()
+        .package_activation_page(None)?
+        .is_empty());
+    capacity_released(&fixture)?;
+    Ok(())
+}

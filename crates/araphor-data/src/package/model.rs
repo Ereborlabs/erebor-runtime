@@ -122,7 +122,7 @@ impl ResultContext {
                 .eq(inputs.iter().map(|input| &input.coverage))
     }
 
-    pub fn new(id: &str, now: u64, model: &sdk::Model, inputs: &[sdk::Input]) -> Self {
+    pub fn new(id: &str, now: u64, inputs: &[sdk::Input]) -> Self {
         let input_coverage: Vec<_> = inputs.iter().map(|input| input.coverage.clone()).collect();
         let coverage = Self::coverage(&input_coverage);
         Self {
@@ -132,7 +132,6 @@ impl ResultContext {
                 id: id.into(),
                 time_utc_ns: now as i64,
                 seed: None,
-                limits: model.limits,
             },
             inputs: inputs.iter().map(|input| input.revision.clone()).collect(),
             input_coverage,
@@ -186,14 +185,17 @@ pub trait PackageAuthorization: Send + Sync + 'static {
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, Option<&PackageBundleRef<'_>>)],
-        action: PackageActionV1,
+        grants: &[(
+            &PackageGrantV1,
+            PackageActionV1,
+            Option<&PackageBundleRef<'_>>,
+        )],
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
-        let [(grant, Some(bundle))] = grants else {
+        let [(grant, action, Some(bundle))] = grants else {
             return Err(PackageErrorCodeV1::Unsupported.error("atomic package authority set"));
         };
-        self.commit(grant, action, bundle, operation)
+        self.commit(grant, *action, bundle, operation)
     }
 }
 
@@ -215,9 +217,59 @@ pub enum PackageRequestV1 {
         package_id: String,
         revision: Option<String>,
     },
+    UninstallImage {
+        image: araphor_discovery_definition::ImagePin,
+    },
     TestImage {
         image: PackageRefV1,
+        artifact: Option<PackageRefV1>,
         fixture: Option<String>,
+    },
+    AdmitInstance {
+        instance_id: String,
+        definition_name: String,
+        definition_revision: String,
+    },
+    StartInstance {
+        instance_id: String,
+        expected_lifecycle: u64,
+    },
+    StopInstance {
+        instance_id: String,
+        expected_lifecycle: u64,
+    },
+    RunInstance {
+        instance_id: String,
+        expected_lifecycle: u64,
+        evaluation_id: String,
+        rebuild: bool,
+    },
+    RenewInstance {
+        instance_id: String,
+        expected_lifecycle: u64,
+    },
+    UpdateInstance {
+        instance_id: String,
+        expected_lifecycle: u64,
+        definition_name: String,
+        definition_revision: String,
+        rebuild: bool,
+    },
+    RollbackInstance {
+        instance_id: String,
+        expected_lifecycle: u64,
+        generation: u64,
+        rebuild: bool,
+    },
+    RemoveInstance {
+        instance_id: String,
+        expected_lifecycle: u64,
+    },
+    RecreateInstance {
+        instance_id: String,
+        expected_lifecycle: u64,
+        definition_name: String,
+        definition_revision: String,
     },
     InspectInstance {
         instance_id: String,
@@ -231,7 +283,7 @@ pub enum PackageRequestV1 {
     },
     QueryInstanceResult {
         instance_id: String,
-        result_id: String,
+        result_id: Option<String>,
         sql: String,
     },
 }
@@ -241,6 +293,15 @@ impl PackageRequestV1 {
         match self {
             Self::AdmitDefinition { .. } | Self::InstallImage { .. } => PackageActionV1::Install,
             Self::TestImage { .. } => PackageActionV1::Test,
+            Self::UninstallImage { .. } | Self::RemoveInstance { .. } => PackageActionV1::Remove,
+            Self::AdmitInstance { .. }
+            | Self::StartInstance { .. }
+            | Self::StopInstance { .. }
+            | Self::RunInstance { .. }
+            | Self::RenewInstance { .. }
+            | Self::RecreateInstance { .. } => PackageActionV1::Run,
+            Self::UpdateInstance { .. } => PackageActionV1::Update,
+            Self::RollbackInstance { .. } => PackageActionV1::Rollback,
             Self::InspectDefinition { .. }
             | Self::InspectImage { .. }
             | Self::InspectInstance { .. }
@@ -259,6 +320,7 @@ pub struct InstanceStatusV1 {
     pub generation: u64,
     pub lifecycle: u64,
     pub running: bool,
+    pub removed: bool,
     pub progress: u64,
     pub readiness: PackageReadinessV1,
     pub status_progress: u64,
@@ -274,6 +336,7 @@ impl TryFrom<crate::ManagedStatus> for InstanceStatusV1 {
             generation: status.instance.generation,
             lifecycle: status.instance.lifecycle,
             running: status.instance.running,
+            removed: status.instance.removed,
             progress: status.instance.progress,
             readiness: status.readiness,
             status_progress: status.status_progress,
@@ -290,7 +353,6 @@ pub struct InstanceResultV1 {
     pub package: super::PackageRefV1,
     pub export: String,
     pub context: ResultContext,
-    pub limits: sdk::Limits,
     pub commit_revision: u64,
     pub current: bool,
     pub output: sdk::wire::Output,
@@ -308,6 +370,7 @@ pub struct FixtureResult {
 pub enum PackageResponseV1 {
     Definition(araphor_discovery_definition::ResolvedDefinition),
     Image(araphor_package::PackageImageV1),
+    Uninstalled(araphor_discovery_definition::ImagePin),
     Tests(Vec<FixtureResult>),
     Instance(InstanceStatusV1),
     History(Vec<crate::ManagedReceipt>),
@@ -352,8 +415,8 @@ impl TryFrom<&sdk::Dataset> for PackageResponseV1 {
             .first()
             .ok_or_else(|| PackageErrorCodeV1::Incomplete.error("retained query schema"))?
             .schema();
-        let output = sdk::wire::Dataset::encode(data, &schema, sdk::Limits::default())
-            .context(crate::AnalysisContractSnafu)?;
+        let output =
+            sdk::wire::Dataset::encode(data, &schema).context(crate::AnalysisContractSnafu)?;
         Ok(Self::Output(output))
     }
 }
@@ -461,6 +524,7 @@ mod inspection_tests {
         let status = crate::ManagedStatus {
             instance: crate::ManagedInstance {
                 spec: crate::ManagedSpec {
+                    destination: crate::ManagedDestination::Selected,
                     tenant: [1; 16],
                     id: "counts".into(),
                     definition,
@@ -469,6 +533,7 @@ mod inspection_tests {
                         planner: "native".into(),
                         definition: revision.clone(),
                         calls: Default::default(),
+                        selected_schema: sdk::Schema::empty(),
                     },
                 },
                 grant: PackageGrantV1 {
@@ -481,6 +546,7 @@ mod inspection_tests {
                 generation: 10,
                 progress: 12,
                 running: false,
+                removed: false,
                 lifecycle: 14,
             },
             readiness: PackageReadinessV1::Failed {
@@ -494,7 +560,7 @@ mod inspection_tests {
             serde_json::to_value(&status)?,
             serde_json::json!({
                 "id":"counts", "definition_revision":revision,
-                "generation":10, "lifecycle":14, "running":false,
+                "generation":10, "lifecycle":14, "running":false, "removed":false,
                 "progress":12, "status_progress":12,
                 "readiness":{"state":"failed", "code":"invalid", "field":"model evaluation"}
             }),
@@ -522,7 +588,7 @@ mod inspection_tests {
             let PackageResponseV1::Output(output) = PackageResponseV1::from_bytes(&bytes)? else {
                 return Err("selected output variant".into());
             };
-            let decoded = output.decode_any(Default::default())?;
+            let decoded = output.decode_any()?;
             assert_eq!(decoded.name, data.name);
             assert_eq!(decoded.batches, data.batches);
             assert_eq!(decoded.batches[0].schema().as_ref(), &schema);
