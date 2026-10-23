@@ -2447,3 +2447,25 @@ in 180.11 seconds with its original observers. Read the
 [consolidation record](../../recovery/araphor-native-layout-validation-20261023.json)
 for source, command, binary and log hashes. The final nine reference files
 remain. Final reference removal is **Not done**.
+
+
+## Complete reference retirement
+
+Result: **Done** for removal of `araphor-analysis_back`. All 208 original
+files are retired; zero remain. The final 42 focused checks, affected library
+compilation, formatting and strict Clippy pass. These checks include pending
+continuation, windows, cancellation, atomic publication, artifact corruption,
+Graph repair, Discovery repair, restart and replay. The original recovery
+observers remain unchanged.
+
+The [final record](../../recovery/araphor-analysis-back-retirement-20261023.json)
+identifies the source, method map, commands, binaries, logs and deletion cut.
+The [verified archive](../../recovery/araphor-final-checkpoint-20261023.tar.gz)
+contains all 208 original files, 56 selected current source files, and 124
+proof files. Its member hashes and original Git bytes were verified before
+the final nine files were removed. No active Back dependency remains.
+
+Execution stays in native Query subscriptions, the shared Instance Host and
+Data transactions. Complete migration, `DataReadMonitor` removal, and the
+required 6,000-line net production reduction remain **Not done**. This result
+claims no full-workspace pass or whole-migration production total.

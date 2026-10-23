@@ -20,6 +20,10 @@ The user authorizes the complete reference migration on 2026-10-19. The
 production source files, root exports, required rules, and test families.
 It is the source checklist for retirement. Keep the reference unchanged
 until replacements pass qualification. Complete migration: **Not done**.
+Reference removal: **Done**. All 208 original files are retired; zero remain.
+Read the [final result](araphor-analysis-migration.md#complete-reference-retirement)
+for the exact proof and archive custody. Earlier counts below describe their
+original source states.
 
 Keep the accepted package, SDK, graph, detector, and notification behavior.
 Run SQL through native DataFusion parsing, logical planning, optimization,
@@ -1007,3 +1011,21 @@ Read the [bounded result](araphor-analysis-migration.md#native-publication-conti
 and [retirement record](../../recovery/araphor-graph-package-retirement-20261023.json).
 Complete retirement and the required overall production reduction remain
 **Not done**. No whole-migration production total is claimed.
+
+
+### Complete reference retirement
+
+The final nine Discovery and facade files retire after the mapped native
+checks and archive verification. All 208 original files are retired; zero
+remain. The [final record](../../recovery/araphor-analysis-back-retirement-20261023.json) gives the
+source identity, exact proof, original hashes and deletion check.
+
+The committed source checkpoint already proves both Discovery managed checks
+on source state 367. Its Graph group has five individual passes and one
+same-frontier failure; these remain historical records. The exact current
+Graph check passes in `graph-recovery369`. Read the
+[owner route](../guides/araphor-discovery-definition-review.md#saved-native-continuation-and-current-proof)
+and [retirement result](araphor-analysis-migration.md#complete-reference-retirement).
+Complete migration, `DataReadMonitor` removal and the required 6,000-line net
+production reduction remain **Not done**. No full-workspace pass or
+whole-migration production total is claimed.

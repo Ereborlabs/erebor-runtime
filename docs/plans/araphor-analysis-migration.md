@@ -16,7 +16,11 @@ keep this ownership rule before its reference file can retire.
 The user authorizes this migration on 2026-10-19 after recovery of the
 reference source. The reference crate remains unchanged until each replacement
 has source coverage and passing tests. A source move does not prove coverage.
-The complete migration and reference removal are **Not done**.
+The complete migration remains **Not done**. Reference removal is **Done**:
+all 208 original files are retired; zero remain. The
+[final retirement record](../../recovery/araphor-analysis-back-retirement-20261023.json) contains the
+qualified source, checks and archive custody. Earlier counts and failed checks
+below describe their original source states.
 
 ```text
 An admitted instance receives a subscription update
@@ -40,7 +44,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 19 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The verified archive retains all 208 original files; no reference file remains. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -57,7 +61,7 @@ Every replacement passes its required checks
 | Data coordination waits | Contended Data locks now wait on unlock and cancellation notifications or an exact deadline. All 19 read and lock cases pass. The native deadline monitor still repeats interrupts after expiry in analysis/read.rs. That remaining loop must be replaced without loss of cancellation or deadline guarantees. | Not done |
 | Package quotas | SDK export, invocation, and retained-result quotas are removed. Non-time Graph window sizes are removed. External time windows remain. Native SQL selects rows. All 143 focused checks, strict Clippy, formatting, and workspace library test compilation pass. Versions stay unchanged. | Done for this removal |
 | Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public binary transport, CLI presentation, and current selected-result resolution pass focused checks. Full per-window heads remain open. | Focused checks pass |
-| Final retirement | Individual replacement checks qualify 189 removed files. The 19 remaining files retain unqualified or mixed rules. The final shared Rust procedure does not cover the current source. Complete reference removal remains open. | Not done |
+| Final retirement | All 208 reference files are retired after mapped replacement checks and verified archive custody. The [final record](../../recovery/araphor-analysis-back-retirement-20261023.json) identifies the qualified source and confirms zero remaining files. Relevant checks cover this delivery; no full-workspace pass is claimed. | Done for reference removal |
 
 On 2026-10-23, the user removes the package quota contract. The only package
 window setting outside SQL is the time window. This instruction replaces the
@@ -3156,3 +3160,35 @@ or its remaining reference owners. These are focused checks; the full
 workspace test suite is not run for this delivery. Complete migration and the
 required overall production reduction remain **Not done**. No whole-migration
 production total is claimed.
+
+
+### Complete reference retirement
+
+Result: **Done** for removal of `araphor-analysis_back`. All 208 original files
+are retired; zero remain. The
+[final retirement record](../../recovery/araphor-analysis-back-retirement-20261023.json) binds the
+old method and assertion maps to the exact qualified source and deletion cut.
+
+The committed [source checkpoint](../../recovery/araphor-analysis-source-checkpoint-20261023.json)
+is `4f0eae6a18a321331a0b2c73fc17ecc1dcddc813`. Its two Discovery managed checks
+pass on source state 367. That Graph group has five individual passes and one
+failure at the unchanged 30-second same-frontier observer. Its debugger sample
+is diagnostic evidence. Those historical failures remain in the final archive.
+
+The final affected proof records are `compile369, format369, package-layout369, data-context369, query-managed369, graph-recovery369, analysis-managed369, clippy369`. The exact Graph
+recovery check passes in `graph-recovery369`. The final source manifest is
+`proof/tmp/source369-final.json` with SHA-256 `294448db4d41e0c66c4dbeac314dae6eeb90537dd1d0297ef9eda339a5fbd5b0`.
+The retirement record supplies commands, outcomes, binary hashes and log hashes.
+Earlier checks are reused only with an exact source and assertion map.
+
+The verified [archive](../../recovery/araphor-final-checkpoint-20261023.tar.gz) has SHA-256
+`ae9f2569909707dd83ff529566f681f40581dd179b36dac9934b5820e9c2e289`. It contains all 208 original Git payloads, the qualified
+selected replacement source, assertion maps, and positive and negative proof records.
+It was verified before the final nine files were removed. The deletion check
+confirms zero remaining files and no active Back dependency.
+
+Read the [current owner route](../guides/araphor-discovery-definition-review.md#saved-native-continuation-and-current-proof).
+Execution stays in native Query subscriptions, the shared Instance Host and
+Data transactions. Complete migration, `DataReadMonitor` removal, and the
+required 6,000-line net production reduction remain **Not done**. This result
+closes reference removal; it claims no whole-migration production total.
