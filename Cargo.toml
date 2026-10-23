@@ -41,7 +41,12 @@ members = [
     "crates/mithril-e2e-macros",
     "crates/mithril-node",
 ]
+exclude = ["vendor/duckdb", "vendor/libduckdb-sys"]
 resolver = "2"
+
+[patch.crates-io]
+duckdb = { path = "vendor/duckdb" }
+libduckdb-sys = { path = "vendor/libduckdb-sys" }
 
 [workspace.package]
 version = "0.1.0"

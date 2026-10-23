@@ -58,7 +58,7 @@ Every replacement passes its required checks
 | Discovery producer | The native source feed uses the shared Host. Source membership, current authority, owner registration, and live Profile publication pass focused checks. Interval split, frozen facts, witnesses, seals, replay, and reviewed baselines remain required. The complete producer is not qualified. | Not done |
 | Notification producer | Native SQL and the shared Host select and deliver candidates. All nine focused Analysis checks and six Control checks pass on source state 302. These checks include bounded capture, guarded pending attempts, clean reopen, retry and ACK deadlines, cancellation, startup, and disabled configuration. Complete source-failure recovery remains open. | Partial qualification |
 | Public callers | Fresh Inspect status, original successful receipt history, complete output reads, and native retained queries pass through Control and CLI. Lightweight image and definition E2E cases pass with binary replies. Public start, stop, restart, and complete history selection remain open. | Partial qualification |
-| Data coordination waits | Contended Data locks now wait on unlock and cancellation notifications or an exact deadline. All 19 read and lock cases pass. The native deadline monitor still repeats interrupts after expiry in analysis/read.rs. That remaining loop must be replaced without loss of cancellation or deadline guarantees. | Not done |
+| Data coordination waits | Contended locks wait on unlock and cancellation notifications or an exact deadline. Native deadlines now send one interrupt and wait for an event. A native interrupt scope preserves cancellation across statement resets. All 21 Data, six Query and six Runtime focused checks pass. Read the scoped native interruption record below. | Done |
 | Package quotas | SDK export, invocation, and retained-result quotas are removed. Non-time Graph window sizes are removed. External time windows remain. Native SQL selects rows. All 143 focused checks, strict Clippy, formatting, and workspace library test compilation pass. Versions stay unchanged. | Done for this removal |
 | Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public binary transport, CLI presentation, and current selected-result resolution pass focused checks. Full per-window heads remain open. | Focused checks pass |
 | Final retirement | All 208 reference files are retired after mapped replacement checks and verified archive custody. The [final record](../../recovery/araphor-analysis-back-retirement-20261023.json) identifies the qualified source and confirms zero remaining files. Relevant checks cover this delivery; no full-workspace pass is claimed. | Done for reference removal |
@@ -75,7 +75,8 @@ Data reader admission is now StorageLimitsV1.reader_admissions. Its default
 is None, which creates no admission semaphore. Some(0) rejects reads with the
 existing fixed quota error. Positive values use the native semaphore. The two
 reader connections remain a separate execution pool. Focused checks pass.
-The native-interrupt polling described above remains open.
+The native-interrupt repetition is removed. Read the scoped native interruption
+record below for current behavior and proof.
 
 The old Query input executor has no active production caller. Its historical
 removal preview estimated 986 production code lines. That preview also removes
@@ -3192,3 +3193,53 @@ Execution stays in native Query subscriptions, the shared Instance Host and
 Data transactions. Complete migration, `DataReadMonitor` removal, and the
 required 6,000-line net production reduction remain **Not done**. This result
 closes reference removal; it claims no whole-migration production total.
+
+## Scoped native interruption
+
+Result: **Done** for TODO 12. This delivery covers the working-tree changes
+based on `d596f463`. DataFusion retains native query planning and execution.
+Data retains DuckDB transactions. Wasm retains its existing event-driven
+Wasmtime interruption. No planner, executor or result decoder is added.
+
+A Data read registers its native interrupt scope
+  -> Data registers an exact deadline only when configured
+  -> cancellation or expiry sends one native interrupt
+  -> DuckDB preserves cancellation across statement resets
+  -> Data removes both interrupt sources and ends the scope
+  -> Data rolls back the read snapshot and rejects cancelled output
+
+The deadline worker keeps the expired read reserved until cleanup. It then
+waits for a notification instead of sending another interrupt every millisecond.
+A default read starts no deadline worker. Existing Data lock and Wasm waits
+already use notifications and exact deadlines; their implementations are
+unchanged. This closes the periodic-interrupt gap named in earlier records.
+The reusable native deadline worker remains; no polling remains in that worker.
+
+The existing pinned Rust driver has no scoped interrupt API. The
+[local dependency patch](../../vendor/README.md) adds this primitive at its
+native interrupt owner. The copied 99 dependency files contain 8,179,916 bytes
+before local changes. This copied source is separate from authored changes and
+from production Rust reduction counts. Versions and the native source archive
+remain unchanged. No external source checkout is modified.
+
+All 33 focused checks pass: 17 Data read checks, four Data lock checks, six
+Query execution checks and six Wasm Runtime checks. The Data cancellation
+helpers now send one event. The checks retain active native interruption,
+pre-start cancellation, expiry between statements, rollback, reader replacement,
+worker cleanup and capacity release. The
+[implementation review](../guides/araphor-discovery-definition-review.md#scoped-native-interruption)
+gives the source route and exact selections. Formatting and strict Clippy pass
+for the affected owners. All commands use `CARGO_INCREMENTAL=0`,
+`CARGO_PROFILE_DEV_DEBUG=1` and `CARGO_PROFILE_TEST_DEBUG=1`.
+
+```sh
+cargo test --locked --offline -p araphor-data --lib analysis::read::tests:: -- --test-threads=4
+cargo test --locked --offline -p araphor-data --lib analysis::read::locks:: -- --test-threads=4
+cargo test --locked --offline -p araphor-query -p araphor-package-runtime --lib --no-run --message-format=short
+cargo clippy --locked --offline -p araphor-data -p araphor-query -p araphor-package-runtime --lib --tests --message-format=short -- -D warnings
+```
+
+Qualification covers the bundled cc backend on this Linux host. CMake and
+other platforms are not executed. No full-workspace CI or benchmark runs.
+The remaining parity items are 3, 7, 8 and 13. Complete migration and the
+6,000-line production Rust reduction target remain **Not done**.

@@ -2469,3 +2469,92 @@ Execution stays in native Query subscriptions, the shared Instance Host and
 Data transactions. Complete migration, `DataReadMonitor` removal, and the
 required 6,000-line net production reduction remain **Not done**. This result
 claims no full-workspace pass or whole-migration production total.
+
+## Scoped native interruption
+
+This section covers the TODO 12 working-tree changes based on `d596f463`.
+DataFusion retains parsing, planning, optimization and query execution. Data
+retains DuckDB transactions. The pinned DuckDB driver lacks an interrupt scope;
+its statement reset can erase a cancellation sent before a statement starts.
+The local driver patch supplies that scope at the native storage boundary.
+Read the [source and patch record](../../vendor/README.md).
+
+### Intended end state
+
+Data and Wasm wait for cancellation, completion or an explicit deadline.
+Neither owner sends periodic interrupts. Cancelled work releases its resources
+and cannot return a successful result. A later operation can reuse the reader.
+
+[AnalysisReadControl::native_run](../../crates/araphor-data/src/analysis/read.rs) Data registers a read and its native interrupt scope
+  -> [ReadMonitor::enter](../../crates/araphor-data/src/analysis/read.rs) Data registers the optional exact deadline
+  -> [ReadMonitor::run](../../crates/araphor-data/src/analysis/read.rs) the deadline worker sends one interrupt at expiry
+  -> [native interrupt patch](../../vendor/libduckdb-sys/interrupt_scope.rs) DuckDB retains cancellation across statement resets
+
+[AnalysisReadControl::cancel](../../crates/araphor-data/src/analysis/read.rs) A caller cancels the read
+  -> [InterruptHandle](../../vendor/duckdb/src/inner_connection.rs) the existing handle interrupts the active native scope
+  -> [AnalysisReadControl::native_run](../../crates/araphor-data/src/analysis/read.rs) Data stops both interrupt sources and releases the scope
+  -> [AnalysisReadControl::run](../../crates/araphor-data/src/analysis/read.rs) Data rolls back the snapshot and rejects cancelled output
+
+```mermaid
+sequenceDiagram
+    participant Data
+    participant Deadline
+    participant DuckDB
+    Data->>DuckDB: Begin interrupt scope
+    Data->>Deadline: Register optional deadline
+    alt Deadline expires
+        Deadline->>DuckDB: Interrupt once
+    else Caller cancels
+        Data->>DuckDB: Interrupt once
+    end
+    DuckDB-->>Data: Return interrupted result
+    Data->>Deadline: Remove active read
+    Data->>DuckDB: End scope, then roll back
+```
+
+`ReadMonitor` owns one active deadline and reuses its worker. An expired read
+keeps its reservation until `ReadStage` drops. The worker disarms the deadline
+after one interrupt and waits on `Notify`. A default read starts no worker.
+[Data lock waits](../../crates/araphor-data/src/analysis/read/locks.rs) already
+use unlock notifications, cancellation and exact deadlines; they are unchanged.
+
+The native scope has one atomic state: inactive, active or cancelled. A failed
+nested scope leaves the outer state unchanged. Every native interrupt reset
+preserves a cancelled scope. Data removes the deadline registration and the
+cancellation handle before the Rust guard ends the scope. Rollback then uses
+ordinary DuckDB behavior. The guard also permits safe drop after connection
+close. No new query planner, executor, result decoder or contract is added.
+
+[Wasm EpochWatch](../../crates/araphor-package-runtime/src/wasm/execution.rs)
+already waits on completion, cancellation and an exact deadline. It sends the
+native Wasmtime epoch interrupt for that event. Its implementation is unchanged.
+
+### Focused proof
+
+The 17 [Data read checks](../../crates/araphor-data/src/analysis/read.rs) and
+four [lock checks](../../crates/araphor-data/src/analysis/read/locks/tests.rs)
+pass. New checks prove cancellation before native startup, between statements,
+prepared execution, nested-scope rejection, closed-connection guard drop and
+reuse after expiry. Existing checks retain active-query interruption, rollback,
+reader replacement and repeated connection reuse. Cancellation helpers send
+one event; they no longer repeat cancellation in a loop.
+
+Six [Query execution checks](../../crates/araphor-query/src/execution/tests.rs)
+pass: `blocking_cancel_joins_worker`, `blocking_drop_orders_cleanup`,
+`blocking_deadline_keeps_parent`, `cancellation_stops_native_producers`,
+`local_producer_cancel` and `planning_cancel_joins_worker`.
+Six [Wasm Runtime checks](../../crates/araphor-package-runtime/src/wasm/tests/runtime.rs)
+pass: `component_control_interrupts_runs`,
+`runtime_cancellation_joins_guest_and_releases_capacity`,
+`dropped_runtime_future_retains_worker_until_completion`,
+`runtime_deadline_joins_queued_worker`,
+[`explicit_timeout_interrupts_component`](../../crates/araphor-package-runtime/src/wasm/tests/runtime/quotas.rs)
+and [`admission_cancellation_and_zero`](../../crates/araphor-package-runtime/src/wasm/tests/runtime/admission.rs).
+The current binaries are `araphor_query-d0b4984f12e9417d` and
+`araphor_package_runtime-0a4627c47c1a8174` under `target/debug/deps`. Each runs
+the six listed names as positional filters with `--test-threads=2`.
+
+The bundled cc backend is tested on this Linux host. Strict Clippy passes for
+Data, Query and Package Runtime, including their test targets. The CMake
+backend and other platforms are not executed. No
+full-workspace CI or performance result is claimed.

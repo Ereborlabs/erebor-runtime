@@ -315,17 +315,21 @@ impl AnalysisReadControl {
             }
             .fail();
         }
+        let scope = interrupt.scope().context(AnalysisDatabaseSnafu {
+            operation: "begin native read interrupt scope",
+        })?;
         *slot = Some(interrupt.clone());
         drop(slot);
         let guard = ReadInterrupt(self);
         let deadline = self
             .deadline
-            .map(|deadline| monitor.enter(self, deadline, interrupt))
+            .map(|deadline| monitor.enter(self, deadline, Arc::clone(&interrupt)))
             .transpose()?;
         self.check()?;
         let result = read();
         drop(deadline);
         drop(guard);
+        drop(scope);
         result
     }
 }
@@ -338,8 +342,10 @@ pub(super) struct ReadMonitor {
 
 #[derive(Default)]
 struct ReadDeadline {
-    active: Option<(Instant, Arc<duckdb::InterruptHandle>)>,
+    active: Option<(Option<Instant>, Arc<duckdb::InterruptHandle>)>,
     stopped: bool,
+    #[cfg(test)]
+    expired: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl ReadMonitor {
@@ -382,14 +388,14 @@ impl ReadMonitor {
                     })?,
             );
         }
-        state.active = Some((deadline, interrupt));
+        state.active = Some((Some(deadline), interrupt));
         self.state.1.notify_waiters();
         Ok(ReadStage(self))
     }
 
     fn run(shared: &(WaitMutex<ReadDeadline>, tokio::sync::Notify)) {
         loop {
-            let Ok(state) = shared.0.lock() else {
+            let Ok(mut state) = shared.0.lock() else {
                 return;
             };
             let changed = shared.1.notified();
@@ -398,15 +404,22 @@ impl ReadMonitor {
             if state.stopped {
                 return;
             }
-            let next = state.active.as_ref().map(|(deadline, interrupt)| {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
+            let next = state.active.as_mut().and_then(|(deadline, interrupt)| {
+                let due = (*deadline)?;
+                if Instant::now() >= due {
                     interrupt.interrupt();
-                    Instant::now() + Duration::from_millis(1)
+                    *deadline = None;
+                    None
                 } else {
-                    *deadline
+                    Some(due)
                 }
             });
+            #[cfg(test)]
+            if state.active.as_ref().is_some_and(|(due, _)| due.is_none()) {
+                if let Some(expired) = state.expired.take() {
+                    let _sent = expired.send(());
+                }
+            }
             drop(state);
             locks::wait(next, |context| changed.as_mut().poll(context).is_ready());
         }
@@ -867,6 +880,112 @@ mod tests {
     }
 
     #[test]
+    fn native_scope_keeps_cancellation() -> TestResult {
+        let connection = Connection::open_in_memory()?;
+        let interrupt = connection.interrupt_handle();
+        let mut prepared = connection.prepare("SELECT 1")?;
+        {
+            let _scope = interrupt.scope()?;
+            assert_eq!(
+                connection.query_row("SELECT 7", [], |row| row.get::<_, i64>(0))?,
+                7
+            );
+            interrupt.interrupt();
+            assert!(interrupt.scope().is_err());
+            assert!(connection.prepare("SELECT 1").is_err());
+            assert!(prepared.query_row([], |row| row.get::<_, i64>(0)).is_err());
+            assert!(connection.execute_batch("SELECT 1; SELECT 2").is_err());
+        }
+        interrupt.interrupt();
+        assert_eq!(
+            connection.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?,
+            1
+        );
+        drop(prepared);
+        let scope = interrupt.scope()?;
+        drop(connection);
+        drop(scope);
+        interrupt.interrupt();
+        Ok(())
+    }
+
+    #[test]
+    fn native_deadline_stays_expired() -> TestResult {
+        let connection = Connection::open_in_memory()?;
+        for first in [false, true] {
+            let control = AnalysisReadControl::with_timeout(Duration::from_millis(50))?;
+            let (expired, observed) = std::sync::mpsc::channel();
+            control
+                .monitor
+                .state
+                .0
+                .lock()
+                .map_err(|_| "monitor poisoned")?
+                .expired = Some(expired);
+            let mut rejected = false;
+            let result = control.query_run(&connection, || {
+                if first {
+                    assert_eq!(
+                        connection
+                            .query_row("SELECT 7", [], |row| row.get::<_, i64>(0))
+                            .context(AnalysisDatabaseSnafu {
+                                operation: "test before deadline"
+                            })?,
+                        7
+                    );
+                }
+                observed
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|error| {
+                        crate::AnalysisStateSnafu {
+                            path: "<test>",
+                            reason: error.to_string(),
+                        }
+                        .build()
+                    })?;
+                let fresh = AnalysisReadControl::default();
+                assert!(matches!(
+                    control.monitor.enter(
+                        &fresh,
+                        Instant::now() + Duration::from_secs(1),
+                        connection.interrupt_handle()
+                    ),
+                    Err(crate::Error::AnalysisBusy { .. })
+                ));
+                let result = connection.query_row("SELECT 1", [], |row| row.get::<_, i64>(0));
+                rejected = result.is_err();
+                result.context(AnalysisDatabaseSnafu {
+                    operation: "test expired native start",
+                })
+            });
+            assert!(matches!(
+                result,
+                Err(crate::Error::AnalysisReadDeadline { .. })
+            ));
+            assert!(rejected);
+            assert!(control
+                .monitor
+                .state
+                .0
+                .lock()
+                .map_err(|_| "monitor poisoned")?
+                .active
+                .is_none());
+            assert_eq!(
+                AnalysisReadControl::default().query_run(&connection, || {
+                    connection
+                        .query_row("SELECT 1", [], |row| row.get::<_, i64>(0))
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "test after deadline scope",
+                        })
+                })?,
+                1
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn query_scope_reader_recovery() -> TestResult {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
@@ -947,15 +1066,11 @@ mod tests {
         let evaluation = control.stage(Duration::from_secs(2))?;
         evaluation.check()?;
         let (start, started) = mpsc::channel();
-        let (stop, stopped) = mpsc::channel::<()>();
         std::thread::scope(|scope| -> TestResult {
             let control = &control;
             let cancel = scope.spawn(move || -> TestResult {
                 started.recv_timeout(Duration::from_secs(2))?;
-                while matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)) {
-                    control.cancel()?;
-                    std::thread::yield_now();
-                }
+                control.cancel()?;
                 Ok(())
             });
             let mut native_failed = false;
@@ -973,7 +1088,6 @@ mod tests {
                     operation: "test direct native cancellation",
                 })
             });
-            drop(stop);
             cancel.join().map_err(|_| "cancel worker panicked")??;
             assert!(native_failed);
             assert!(
@@ -1273,31 +1387,33 @@ mod tests {
         for _ in 0..16 {
             let control = AnalysisReadControl::default();
             let (start, started) = mpsc::channel();
-            let (stop, stopped) = mpsc::channel::<()>();
+            let (cancelled, observed) = mpsc::channel();
+            let mut rejected = false;
             let result = std::thread::scope(|scope| -> TestResult {
                 let control = &control;
                 let cancel = scope.spawn(move || -> TestResult {
                     started.recv_timeout(Duration::from_secs(2))?;
-                    while matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)) {
-                        control.cancel()?;
-                        std::thread::yield_now();
-                    }
+                    control.cancel()?;
+                    cancelled.send(())?;
                     Ok(())
                 });
                 let result = control.run(&mut reader, |snapshot| {
                     let _sent = start.send(());
-                    while !control.cancelled.load(Ordering::Acquire) {
-                        std::thread::yield_now();
-                    }
-                    snapshot
-                        .query_row("SELECT sum(range) FROM range(100000000000)", [], |row| {
-                            row.get::<_, i64>(0)
-                        })
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "test repeated cancellation",
-                        })
+                    observed
+                        .recv_timeout(Duration::from_secs(2))
+                        .map_err(|error| {
+                            crate::AnalysisStateSnafu {
+                                path: "<test>",
+                                reason: error.to_string(),
+                            }
+                            .build()
+                        })?;
+                    let result = snapshot.query_row("SELECT 1", [], |row| row.get::<_, i64>(0));
+                    rejected = result.is_err();
+                    result.context(AnalysisDatabaseSnafu {
+                        operation: "test cancellation before native start",
+                    })
                 });
-                drop(stop);
                 cancel.join().map_err(|_| "cancel worker panicked")??;
                 assert!(
                     matches!(result, Err(crate::Error::AnalysisReadCancelled { .. })),
@@ -1306,6 +1422,7 @@ mod tests {
                 Ok(())
             });
             result?;
+            assert!(rejected);
             let snapshot = reader.get_mut()?.transaction()?;
             assert_eq!(
                 snapshot.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?,

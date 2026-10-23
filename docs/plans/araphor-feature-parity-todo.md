@@ -46,12 +46,13 @@ The call fails, loses permission, or is cancelled
 
 ## Current status on 2026-10-23
 
-Source checked: `9243df7030e735fc3ae4ec48f94235406d7dfc8b`. The check covers
-current production owners, their tests, and the recorded focused results.
-No Rust source changed and no tests ran for this status update. `Done` means
-that the stated behavior has a current implementation and mapped focused
-checks. It does not claim a new full-workspace CI result. `Not done` identifies
-a specific remaining part of an otherwise implemented item.
+The status audit checked `9243df7030e735fc3ae4ec48f94235406d7dfc8b`. Item 12
+now includes the working-tree changes based on `d596f463` and 33 passing focused
+checks. Its [completion record](araphor-analysis-migration.md#scoped-native-interruption)
+identifies the source and verification. The other rows retain the status audit.
+`Done` means that the stated behavior has a current implementation and mapped
+focused checks. It does not claim a new full-workspace CI result. `Not done`
+identifies a specific remaining part of an otherwise implemented item.
 
 | TODO | Result | Current behavior or remaining work |
 | --- | --- | --- |
@@ -69,11 +70,10 @@ a specific remaining part of an otherwise implemented item.
 | 9. Graph and detector execution from Query events | Done | Native source subscriptions use the shared Host for detector execution, graph publication, expiry and recovery. Control starts this path independently of Discovery. |
 | 10. Notification execution from Query events | Done | Native subscriptions and the shared Host drive delivery, retries, ACK deadlines, restart and current permission checks. |
 | 11. Runtime configuration through Control | Done | Control passes configured Query and package runtime limits at construction and rejects reuse with different limits. Runtime quotas default to disabled. |
-| 12. Data and Wasm cancellation without periodic checks | Not done | Wasm and Data lock waits use events and exact deadlines. The Data deadline monitor still repeats native interrupts every millisecond after expiry. |
+| 12. Data and Wasm cancellation without periodic checks | Done | Wasm and Data lock waits use events and exact deadlines. Data sends one native interrupt at expiry and waits for an event. A native interrupt scope preserves cancellation across statement resets. |
 | 13. Configurable quotas, disabled by default | Not done | SDK package quotas are removed and Query/runtime quotas default to disabled. Mandatory evidence-admission defaults and the remaining resource-boundary audit are still open. |
 
-Result: **11 Done; 5 Not done**. The remaining items are **3, 7, 8, 12 and
-13**. Finish item 12 next to remove the confirmed periodic Data interruption.
+Result: **12 Done; 4 Not done**. The remaining items are **3, 7, 8 and 13**.
 The separate 6,000-line production Rust reduction target still requires a
 current count and further simplification. Reference removal is complete.
 
@@ -751,8 +751,8 @@ continuation across an interior expired range is missing.
 
 ### 12. Data and Wasm cancellation without periodic checks
 
-**Status: Not done.** Wasm interruption and Data lock waits use events. The
-native deadline monitor still repeats interrupts.
+**Status: Done.** Wasm interruption, Data lock waits and native deadlines use
+events. The native deadline worker sends one interrupt at expiry.
 
 - **Before:** Data used repeated lock and interruption checks. Wasm used a
   periodic epoch tick to interrupt execution.
@@ -760,9 +760,11 @@ native deadline monitor still repeats interrupts.
   waits for cancellation, an exact deadline or completion. Data lock waits
   register unlock and cancellation notifications and use an exact deadline.
   The [read monitor](../../crates/araphor-data/src/analysis/read.rs) reuses its
-  worker, but after expiry it sends another native interrupt every millisecond.
-  Remove that repetition while preserving native cancellation, deadline
-  enforcement and reader cleanup. The existing lock and read checks remain.
+  worker, sends one interrupt at expiry and waits for a notification. A native
+  [interrupt scope](../../vendor/README.md) keeps cancellation active across
+  statement resets. Data releases both interrupt sources before it ends that
+  scope and rolls back. All 21 Data, six Query and six Runtime focused checks
+  pass. Cancellation, deadline enforcement and reader cleanup remain intact.
 - **Required:** Wait for lock release, cancellation, completion, or an actual
   deadline. Preserve interruption and reject cancelled output. Do not poll.
 - **Reuse:** Compatible Wasm admission, cache, execution, and cleanup code.
