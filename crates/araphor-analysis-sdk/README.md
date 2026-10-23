@@ -34,7 +34,7 @@ package.validate()?;
 Define the algorithm as an ordinary Rust function with this signature:
 `fn(&Evaluation) -> Result<Output>`. Call `package.test(&fixture, algorithm)`.
 The fixture supplies exact named input revisions, coverage, parameters, time,
-seed, limits, and any prior checkpoint. The SDK validates inputs before the
+seed, and any prior checkpoint. The SDK validates inputs before the
 function runs. The SDK validates the complete output before it returns a
 `FixtureReport`. Assert expected computation results in the Rust test.
 
@@ -130,15 +130,14 @@ these files. The author commands above still build the package folder that an
 operator installs without an author compiler or installation hook.
 
 `wire` carries uncompressed Arrow IPC streams. It rejects dictionary messages,
-compressed batches, unsupported schemas, and row or batch limits before batch
-decoding. Supported types are nullable `Null`, Boolean, signed and unsigned
+compressed batches, unsupported schemas, and invalid message lengths before
+batch decoding. Supported types are nullable `Null`, Boolean, signed and unsigned
 integers, Float32, Float64, Utf8, Binary, UTC nanosecond timestamps,
-FixedSizeBinary, List, FixedSizeList, and Struct. Fixed-size lengths are from
-1 through 65,536. Schema nesting is at most 16 levels with at most 1,024 fields.
-Encoding and decoding copy buffers. The wire bounds apply to encoded bytes
-and decoded Arrow storage. They do not claim a zero-copy interface.
-Decoding copies each batch into owned Arrow storage. It checks the copy size
-before allocation, including temporary validity buffers for nested null data.
+FixedSizeBinary, List, FixedSizeList, and Struct. Fixed-size lengths must be
+positive Arrow lengths. Encoding and decoding copy buffers into owned storage.
+A host can supply an operational copy capacity when it decodes guest output.
+The decoder checks that capacity before allocation, including temporary validity
+buffers for nested null data.
 
 ## Data and result rules
 
@@ -223,26 +222,16 @@ Read input schema fields through `model.inputs[index].port`. Output ports remain
 `Port` values. Routing metadata does not cross the native or Wasm evaluation ABI;
 both sides validate the supplied computation datasets.
 
-## Bounds and graph inputs
+## Storage and graph inputs
 
-`Model.limits` declares maximum batches, rows, data bytes, and checkpoint bytes.
-An evaluation can reduce these bounds. It cannot increase them. Input data and
-output data have separate budgets. Parameters consume the input budget.
-Evidence and reason details consume the output budget. Prior and next state
-each have a separate checkpoint budget. These budgets also check dataset names,
-revision text, coverage limits, and reference text. Shared Arrow allocations
-can be charged more than once. These checks are data bounds, not a hard process
-memory limit or execution timeout.
+Models and evaluation contexts have no row, batch, byte, or checkpoint quota.
+The SDK validates names, schemas, Arrow values, evidence, and checkpoint versions.
+`Coverage.limits` retains reasons for incomplete source coverage. It does not
+set an execution quota.
 `Evaluation::allocated_bytes` and `Output::allocated_bytes` measure retained
 Arrow storage, schemas, and owned metadata for host memory reservations.
-
-Default bounds are 1,024 batches, 1,000,000 rows, 64 MiB of data, and 16 MiB of
-checkpoint data. Descriptors, OCI packages, stored package revisions, and package
-gRPC messages have no separate aggregate size cap. OCI descriptor sizes and hashes,
-frame validation, store usage charges, runtime leases, and model data limits
-still apply. Schema checks limit nesting to depth 16 and 1,024 fields per schema. Larger workloads need
-explicit bounds and bounded input selection. Client SQL display limits do not
-apply to SDK inputs. Tests supply 300 event rows across three batches.
+OCI sizes and hashes, IPC framing, store usage charges, and runtime leases
+remain host checks. Client SQL display limits do not apply to SDK inputs.
 
 Graph inputs use selected native relations and a typed selection manifest.
 The manifest retains every selected version ID, including an empty replacement,
@@ -261,7 +250,7 @@ The WIT declaration carries named Arrow IPC streams and the versioned
 evaluation/result envelope. The native C declaration uses Arrow C stream
 interfaces in the host process. Both use the same computation port contract.
 Syntax tests parse the WIT and compile the C header. The guest feature supplies
-the generated component bindings and bounded IPC transport. The package
+the generated component bindings and IPC transport. The package
 execution owner supplies cancellation and Wasmtime isolation. Native execution
 shares the host process and has cooperative cancellation.
 

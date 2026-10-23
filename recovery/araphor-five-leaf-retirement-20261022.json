@@ -1,0 +1,1630 @@
+{
+  "created_at": "2026-10-22T21:33:34.767390+00:00",
+  "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+  "result": "Qualified for these five whole files; complete retirement and final Rust CI are Not done",
+  "original_archive": {
+    "path": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+    "sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420"
+  },
+  "checkpoint": {
+    "archive": "recovery/araphor-retirement-checkpoint-20261022T213330Z.tar.gz",
+    "sha256": "dd167aaa3285b805370ba50668671e0e6808c495d8935d10346fd0a779742dc4",
+    "source_files": 1921,
+    "remaining_back_files": 76
+  },
+  "files": [
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/installed.rs",
+      "sha256": "06a3d98bd5359114ea32a94a7d20d4234909f72ef8a9a1da8e3cc7406bc1dc4f",
+      "bytes": 2593,
+      "physical_lines": 75,
+      "nonblank_lines": 71,
+      "production_nonblank": 71,
+      "matches_baseline": true,
+      "baseline_sha256": "06a3d98bd5359114ea32a94a7d20d4234909f72ef8a9a1da8e3cc7406bc1dc4f",
+      "archive_member": "araphor-recovery-20261019-24zu3vty/pre-restore/crates/araphor-analysis_back/src/discovery/installed.rs",
+      "matches_archive": true
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/discovery/replay.rs",
+      "sha256": "0105edd2a71be18925168aee890cfe040150d77f155db4ca9bc8f7ed511ac797",
+      "bytes": 31766,
+      "physical_lines": 817,
+      "nonblank_lines": 796,
+      "production_nonblank": 351,
+      "matches_baseline": true,
+      "baseline_sha256": "0105edd2a71be18925168aee890cfe040150d77f155db4ca9bc8f7ed511ac797",
+      "archive_member": "araphor-recovery-20261019-24zu3vty/pre-restore/crates/araphor-analysis_back/src/discovery/replay.rs",
+      "matches_archive": true
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/graph/chunks.rs",
+      "sha256": "ca2be0fcce880537c78435772c0c22e34bdf1d89dc84333c04756520fe8cdc44",
+      "bytes": 3405,
+      "physical_lines": 99,
+      "nonblank_lines": 95,
+      "production_nonblank": 95,
+      "matches_baseline": true,
+      "baseline_sha256": "ca2be0fcce880537c78435772c0c22e34bdf1d89dc84333c04756520fe8cdc44",
+      "archive_member": "araphor-recovery-20261019-24zu3vty/pre-restore/crates/araphor-analysis_back/src/graph/chunks.rs",
+      "matches_archive": true
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/installed/history.rs",
+      "sha256": "f0717d973432cfad491692c963fb5ca106a0bba58d2e1094bbb309a2db02ad9c",
+      "baseline_sha256": "f0717d973432cfad491692c963fb5ca106a0bba58d2e1094bbb309a2db02ad9c",
+      "matches_baseline": true,
+      "bytes": 5995,
+      "nonblank": 140,
+      "production_nonblank": 140
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/installed/commit.rs",
+      "sha256": "748ef327fce597795b70f41fcc620dc7152410a64e10e09e23b1c6b81e7f2438",
+      "baseline_sha256": "748ef327fce597795b70f41fcc620dc7152410a64e10e09e23b1c6b81e7f2438",
+      "matches_baseline": true,
+      "bytes": 3171,
+      "nonblank": 82,
+      "production_nonblank": 80
+    }
+  ],
+  "method_and_assertion_maps": {
+    "discovery_and_chunks": {
+      "schema_version": 1,
+      "generated_at": "2026-10-22T21:15:24.150175+00:00",
+      "status": "Qualified for bounded whole-file retirement on observed source290. Actual deletion and archive are owned by the root agent. Complete migration remains Not done.",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "read_only_source": true,
+      "live_edits": false,
+      "cargo_or_test_runs_by_this_agent": false,
+      "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+      "baseline_files": 208,
+      "retired_before": 132,
+      "remaining_before": 76,
+      "retired_after_if_all_three_qualified": 135,
+      "remaining_after_if_all_three_qualified": 73,
+      "production_nonblank_removed_if_qualified": 517,
+      "full_migration_or_net_reduction_claimed": false,
+      "original_archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+      "original_archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+      "candidate_files": [
+        {
+          "path": "crates/araphor-analysis_back/src/discovery/installed.rs",
+          "sha256": "06a3d98bd5359114ea32a94a7d20d4234909f72ef8a9a1da8e3cc7406bc1dc4f",
+          "bytes": 2593,
+          "physical_lines": 75,
+          "nonblank_lines": 71,
+          "production_nonblank": 71,
+          "matches_baseline": true,
+          "baseline_sha256": "06a3d98bd5359114ea32a94a7d20d4234909f72ef8a9a1da8e3cc7406bc1dc4f",
+          "archive_member": "araphor-recovery-20261019-24zu3vty/pre-restore/crates/araphor-analysis_back/src/discovery/installed.rs",
+          "matches_archive": true
+        },
+        {
+          "path": "crates/araphor-analysis_back/src/discovery/replay.rs",
+          "sha256": "0105edd2a71be18925168aee890cfe040150d77f155db4ca9bc8f7ed511ac797",
+          "bytes": 31766,
+          "physical_lines": 817,
+          "nonblank_lines": 796,
+          "production_nonblank": 351,
+          "matches_baseline": true,
+          "baseline_sha256": "0105edd2a71be18925168aee890cfe040150d77f155db4ca9bc8f7ed511ac797",
+          "archive_member": "araphor-recovery-20261019-24zu3vty/pre-restore/crates/araphor-analysis_back/src/discovery/replay.rs",
+          "matches_archive": true
+        },
+        {
+          "path": "crates/araphor-analysis_back/src/graph/chunks.rs",
+          "sha256": "ca2be0fcce880537c78435772c0c22e34bdf1d89dc84333c04756520fe8cdc44",
+          "bytes": 3405,
+          "physical_lines": 99,
+          "nonblank_lines": 95,
+          "production_nonblank": 95,
+          "matches_baseline": true,
+          "baseline_sha256": "ca2be0fcce880537c78435772c0c22e34bdf1d89dc84333c04756520fe8cdc44",
+          "archive_member": "araphor-recovery-20261019-24zu3vty/pre-restore/crates/araphor-analysis_back/src/graph/chunks.rs",
+          "matches_archive": true
+        }
+      ],
+      "all_13_methods": [
+        {
+          "old": "DiscoveryOwner::installed_refs",
+          "line": 5,
+          "file": "crates/araphor-analysis_back/src/discovery/installed.rs",
+          "rule": "Validate the profile. Select one complete installed-code context with the exact stream lifetime and Tenant sensitivity.",
+          "new": [
+            "crates/araphor-analysis/src/discovery/replay.rs:15 DiscoveryOwner::{installed_refs,read_packages,producer}",
+            "crates/araphor-data/src/analysis/progress/profile/replay.rs:19 AnalysisStore::discovery_producer",
+            "crates/araphor-data/src/analysis/managed/replay.rs:23 AnalysisStore::managed_producer_from"
+          ],
+          "rule_now": "Data requires the exact stored profile body, one retained producer edge, the original generation and call, and the exact Discovery destination. Inspect checks and captured selection precede payload reads. The retained definition supplies immutable image closures.",
+          "tests": [
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "discovery::tests::replay::closed_replay_keeps_origin",
+            "instance::tests::version::retained_replay_uses_generation",
+            "instance::tests::version::retained_replay_checks_inspect"
+          ]
+        },
+        {
+          "old": "DiscoveryOwner::analysis_refs",
+          "line": 36,
+          "file": "crates/araphor-analysis_back/src/discovery/installed.rs",
+          "rule": "Select all required Discovery exports and reject an incomplete installed set.",
+          "new": [
+            "crates/araphor-analysis/src/instance/manifest.rs",
+            "crates/araphor-analysis/src/discovery/publication/managed.rs",
+            "crates/araphor-query/src/definition/call.rs"
+          ],
+          "rule_now": "Native admission pins the actual selected destination call and its complete immutable closure. The old requirement to activate all four exports does not apply to one admitted image call. Destination and return identity checks remain.",
+          "tests": [
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "discovery::tests::replay::closed_replay_keeps_origin",
+            "definition::tests::replay::replay_uses_captured_inputs"
+          ]
+        },
+        {
+          "old": "DiscoveryOwner::package_revisions",
+          "line": 50,
+          "file": "crates/araphor-analysis_back/src/discovery/installed.rs",
+          "rule": "Return sorted unique package revisions for authorization.",
+          "new": [
+            "crates/araphor-analysis/src/instance/manifest.rs",
+            "crates/araphor-analysis/src/instance/mod.rs:475 Instance::authorize_actions",
+            "crates/araphor-analysis/src/instance/replay.rs"
+          ],
+          "rule_now": "The manifest records actual image, digest, artifact, export, arguments, and dependencies. Current Run, Inspect, and image trust protect replay, including its final result.",
+          "tests": [
+            "instance::tests::version::retained_replay_uses_generation",
+            "instance::tests::version::replay_checks_final_authority",
+            "instance::tests::replay::replay_checks_current_authority"
+          ]
+        },
+        {
+          "old": "DiscoveryOwner::complete_refs",
+          "line": 58,
+          "file": "crates/araphor-analysis_back/src/discovery/installed.rs",
+          "rule": "Reject a wrong package, missing export, or repeated export.",
+          "new": [
+            "crates/araphor-query/src/definition/replay.rs:11 Session::replay_call",
+            "crates/araphor-analysis/src/instance/manifest.rs",
+            "crates/araphor-data/src/analysis/progress/profile/replay.rs:19 AnalysisStore::discovery_producer"
+          ],
+          "rule_now": "The retained call ID, destination, descriptor, image identity, and closure must agree. No new active-export registry is used.",
+          "tests": [
+            "definition::tests::replay::replay_uses_captured_inputs",
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "discovery::tests::replay::replay_distinguishes_missing_inputs"
+          ]
+        },
+        {
+          "old": "DiscoveryOwner::replay_records",
+          "line": 14,
+          "file": "crates/araphor-analysis_back/src/discovery/replay.rs",
+          "rule": "Read only one exact source and inclusive cursor range. Keep original framed bytes and order. Reject partial or capped input.",
+          "new": [
+            "crates/araphor-query/src/sources/mod.rs",
+            "crates/araphor-query/src/sources/mod.rs:251/348 SourceSnapshot::{requests,capture}",
+            "crates/araphor-query/src/definition/replay.rs",
+            "crates/araphor-data/src/analysis/managed/replay.rs"
+          ],
+          "rule_now": "Query captures complete typed inputs once through native source plans. Data retains their Arrow bytes, order, revisions and coverage. Replay scans those saved tables and performs no live source read. Configured native input and row limits remain checked.",
+          "tests": [
+            "sources::tests::cursor_scan_keeps_frames",
+            "sources::bounds::cursor_bounds_keep_scope",
+            "sources::tests::exact_ranges_preserve_receipt",
+            "sources::tests::source_scope_and_time",
+            "definition::tests::replay::replay_uses_captured_inputs",
+            "definition::tests::execution::combined_input_respects_limit",
+            "definition::tests::execution::contract::sql_limit_precedes_references"
+          ]
+        },
+        {
+          "old": "DiscoveryOwner::replay",
+          "line": 77,
+          "file": "crates/araphor-analysis_back/src/discovery/replay.rs",
+          "rule": "Use exact frozen code and input, compare the whole snapshot, and report missing input or packages as Unavailable. Do not publish.",
+          "new": [
+            "crates/araphor-analysis/src/discovery/replay.rs:78 DiscoveryOwner::replay_profile",
+            "crates/araphor-analysis/src/discovery/publication/managed.rs:204 Publication::replay_snapshot",
+            "crates/araphor-analysis/src/instance/replay.rs:74 Instance::replay_retained"
+          ],
+          "rule_now": "The native call reuses original input, parameters, seed, time, state and exact historical closure. Analysis compares the complete returned snapshot. Missing saved input/code is Unavailable with original cursor bounds. Corrupt payloads remain errors. Final combined Run and Inspect checks protect the response.",
+          "tests": [
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "discovery::tests::replay::closed_replay_keeps_origin",
+            "discovery::tests::replay::replay_survives_raw_retention",
+            "discovery::tests::replay::replay_distinguishes_missing_inputs",
+            "instance::tests::replay::replay_keeps_captured_state",
+            "instance::tests::replay::replay_wasm_captured_state",
+            "instance::tests::replay::replay_native_captured_state",
+            "instance::tests::version::replay_checks_final_authority"
+          ]
+        },
+        {
+          "old": "DiscoveryOwner::replay_input",
+          "line": 123,
+          "file": "crates/araphor-analysis_back/src/discovery/replay.rs",
+          "rule": "Check source, CPU, contiguous cursor, coverage interval, accepted count, frozen facts and input bounds.",
+          "new": [
+            "crates/araphor-data/src/analysis/managed/replay.rs:72 AnalysisStore::saved_evaluation_from",
+            "crates/araphor-data/src/analysis/managed/replay.rs:348 SavedEvaluation::decode",
+            "crates/araphor-query/src/definition/replay.rs:11 Session::replay_call",
+            "crates/araphor-data/src/discovery/validation/recorded.rs"
+          ],
+          "rule_now": "The original typed relation is saved with the exact attempt, call, generation, descriptor, context and coverage. Data checks retained input membership, slots, schema, batch count and row count. Native replay validates the descriptor and input shape before execution. Query memory and explicit input_bytes replace JSON and fixed-record ceilings. Original provenance validation remains on initial publication.",
+          "tests": [
+            "analysis::managed::tests::replay::saved_evaluation_keeps_inputs",
+            "analysis::managed::tests::replay::saved_evaluation_rejects_corruption",
+            "analysis::managed::tests::replay::saved_history_rejects_corruption",
+            "definition::tests::execution::supplied::supplied_inputs_reject_shape",
+            "definition::tests::execution::combined_input_respects_limit",
+            "definition::tests::captured::managed::capture_limits_precede_admission",
+            "discovery::tests::replay::replay_distinguishes_missing_inputs",
+            "instance::tests::replay::replay_checks_current_authority"
+          ]
+        },
+        {
+          "old": "source_matches",
+          "line": 265,
+          "file": "crates/araphor-analysis_back/src/discovery/replay.rs",
+          "rule": "Match cursor, process, entry, binding, role, state, rule, kernel sequence and proof kind.",
+          "new": [
+            "crates/araphor-data/src/discovery/validation/recorded.rs:69 DiscoveryInputManifestV1::validate_source_atoms",
+            "crates/araphor-analysis/src/discovery/output.rs",
+            "crates/araphor-query/src/definition/replay.rs"
+          ],
+          "rule_now": "Initial result validation binds returned atoms to captured typed record metadata. Replay uses those exact retained record inputs and performs no new host join.",
+          "tests": [
+            "discovery::validation::tests::recorded_rejects_host_changes",
+            "discovery::output::tests::forged::recorded_rejects_forged_proof",
+            "discovery::output::tests::native::durable_record_projection",
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "definition::tests::replay::replay_uses_captured_inputs"
+          ]
+        },
+        {
+          "old": "fact_matches",
+          "line": 287,
+          "file": "crates/araphor-analysis_back/src/discovery/replay.rs",
+          "rule": "Keep the exact subject, image, configuration, process, entry, binding, role, state, rule, catalog, static key and policy.",
+          "new": [
+            "crates/araphor-data/src/discovery/validation/recorded.rs:140 DiscoveryInputManifestV1::context_matches",
+            "crates/araphor-data/src/analysis/managed/replay.rs",
+            "crates/araphor-query/src/definition/replay.rs"
+          ],
+          "rule_now": "The exact typed context input and its revision are retained. Replay does not query current context or reconstruct a weaker fact key.",
+          "tests": [
+            "discovery::output::tests::native::context_content_changes_revision",
+            "instance::tests::replay::replay_keeps_captured_state",
+            "instance::tests::replay::replay_wasm_captured_state",
+            "instance::tests::replay::replay_native_captured_state",
+            "analysis::managed::tests::replay::saved_evaluation_keeps_inputs"
+          ]
+        },
+        {
+          "old": "retained_binding",
+          "line": 302,
+          "file": "crates/araphor-analysis_back/src/discovery/replay.rs",
+          "rule": "Decode and validate the frozen fact object, all required pinned fields, and exact Control commit revision.",
+          "new": [
+            "crates/araphor-data/src/discovery/validation/recorded.rs",
+            "crates/araphor-analysis/src/discovery/output.rs",
+            "crates/araphor-data/src/analysis/managed/replay.rs",
+            "crates/araphor-query/src/definition/replay.rs"
+          ],
+          "rule_now": "Native typed context capture and domain provenance checks validate the original input. The saved SDK Evaluation retains the exact admitted context bytes and revision. Corrupt saved payloads fail.",
+          "tests": [
+            "discovery::validation::tests::recorded_rejects_host_changes",
+            "discovery::output::tests::forged::recorded_rejects_forged_proof",
+            "analysis::managed::tests::replay::saved_evaluation_rejects_corruption",
+            "discovery::tests::replay::replay_distinguishes_missing_inputs"
+          ]
+        },
+        {
+          "old": "GraphAndFindingOwner::commit_chunks",
+          "line": 9,
+          "file": "crates/araphor-analysis_back/src/graph/chunks.rs",
+          "rule": "Process unconsumed chunks in order, retry a rejected chunk by splitting it, OR committed changes, and advance at most one accepted prefix.",
+          "new": [
+            "crates/araphor-analysis/src/graph/native/capture.rs:68 Projection::read",
+            "crates/araphor-analysis/src/graph/native/commit.rs:33 GraphPublication::convert_graph",
+            "crates/araphor-analysis/src/graph/native/sink.rs",
+            "crates/araphor-analysis/src/instance/sink.rs:273/357 Graph conversion and commit"
+          ],
+          "rule_now": "Native plans pass the complete declared relation to each detector. Data makes one guarded atomic publication. Declared SQL controls a prefix; native Query acknowledgements drain later prefixes. A failed result advances no cursor. Fixed byte-driven split-and-retry is removed under disabled-default quotas.",
+          "tests": [
+            "graph::native::tests::input::native_input_spans_pages",
+            "graph::native::tests::managed::notices::managed_drains_prefixes",
+            "graph::native::tests::managed::graph_conversion_failure_finishes",
+            "graph::native::tests::final_cancel_rolls_back",
+            "graph::native::tests::empty_window_is_inert"
+          ]
+        },
+        {
+          "old": "GraphAndFindingOwner::context_chunks",
+          "line": 57,
+          "file": "crates/araphor-analysis_back/src/graph/chunks.rs",
+          "rule": "Partition records before the fixed 255-context total, and reject one record with more than 255 contexts.",
+          "new": [
+            "crates/araphor-analysis/src/graph/native/capture.rs:111 Projection::project",
+            "crates/araphor-analysis/src/graph/projection.rs",
+            "crates/araphor-query/src/definition/physical.rs"
+          ],
+          "rule_now": "Complete Arrow relations replace fixed 255-context batching. Checked arithmetic, Query reservations and explicit limits remain. One record can retain more than 255 facts by default.",
+          "tests": [
+            "graph::tests::defaults::graph_accepts_retained_facts",
+            "graph::tests::defaults::graph_accepts_large_window",
+            "graph::tests::defaults::graph_omits_record_ceiling",
+            "graph::tests::defaults::graph_preserves_boottime_horizon",
+            "graph::native::tests::input::immutable_facts_precede_guests",
+            "graph::native::tests::input::native_input_spans_pages"
+          ]
+        },
+        {
+          "old": "GraphAndFindingOwner::chunk_bounds",
+          "line": 86,
+          "file": "crates/araphor-analysis_back/src/graph/chunks.rs",
+          "rule": "Return the first and last cursor or reject an empty window.",
+          "new": [
+            "crates/araphor-analysis/src/graph/native/capture.rs:555 Projection::records",
+            "crates/araphor-analysis/src/graph/native/capture.rs:111 Projection::project",
+            "crates/araphor-analysis/src/graph/finish.rs",
+            "crates/araphor-analysis/src/graph/native/commit.rs:198 advanced/completed"
+          ],
+          "rule_now": "Canonical records are sorted by exact identity. Empty input fails before facts or publication. Graph output carries exact first and last cursors; guarded progress advances only to the accepted result end.",
+          "tests": [
+            "graph::native::tests::input::native_input_spans_pages",
+            "graph::native::tests::managed::notices::managed_drains_prefixes",
+            "graph::native::tests::empty_window_is_inert",
+            "graph::tests::defaults::graph_accepts_large_window"
+          ]
+        }
+      ],
+      "all_six_old_replay_tests": [
+        {
+          "old": "discovery::replay::tests::replay_query_keeps_range",
+          "line": 516,
+          "assertions": [
+            "Keep unknown protobuf wire fields without re-encoding.",
+            "Exclude foreign source and CPU rows; retain every cursor in the inclusive range.",
+            "Read 258 records across the old 256 boundary.",
+            "Return the original complete snapshot.",
+            "Enforce an explicit output row quota."
+          ],
+          "new_tests": [
+            "sources::tests::cursor_scan_keeps_frames",
+            "sources::bounds::cursor_bounds_keep_scope",
+            "sources::tests::source_scope_and_time",
+            "graph::native::tests::input::native_input_spans_pages",
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "definition::tests::execution::contract::sql_limit_precedes_references"
+          ],
+          "translation": "Native source capture and saved Arrow input replace replay raw-range reads. The fixed DiscoveryConfig interval cap is removed; explicit native quotas remain."
+        },
+        {
+          "old": "discovery::replay::tests::discovery_replay_frozen_facts",
+          "line": 594,
+          "assertions": [
+            "Replay the complete original snapshot.",
+            "Keep original unresolved/excluded reasons and lifecycle records.",
+            "Make no current context-provider calls."
+          ],
+          "new_tests": [
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "definition::tests::replay::replay_uses_captured_inputs",
+            "instance::tests::replay::replay_keeps_captured_state",
+            "instance::tests::replay::replay_wasm_captured_state",
+            "instance::tests::replay::replay_native_captured_state"
+          ],
+          "translation": "The current API only accepts the exact retained profile. The old test edits a caller-owned profile and expects the edited value to replay. Data now rejects that edit as Conflict. This stronger retained-profile boundary is explicit; the old mutation-acceptance assertion is not a literal current assertion."
+        },
+        {
+          "old": "discovery::replay::tests::discovery_replay_missing_manifest",
+          "line": 624,
+          "assertions": [
+            "Reject absent retained context references.",
+            "Reject a context key that was not retained.",
+            "Reject ambiguous atom attribution.",
+            "Reject a changed whole snapshot."
+          ],
+          "new_tests": [
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "discovery::tests::replay::replay_distinguishes_missing_inputs",
+            "analysis::managed::tests::replay::saved_evaluation_rejects_corruption",
+            "analysis::managed::tests::replay::saved_history_rejects_corruption"
+          ],
+          "translation": "Exact stored profile equality rejects caller manifest/atom/snapshot edits. Missing actual saved inputs or image data is Unavailable. Malformed inputs and forged profiles remain errors; no false successful replay is returned."
+        },
+        {
+          "old": "discovery::replay::tests::discovery_replay_input_bounds",
+          "line": 668,
+          "assertions": [
+            "Reject input one byte above its explicit byte limit.",
+            "Accept input at its exact explicit byte limit.",
+            "Reject an explicit record-count overflow."
+          ],
+          "new_tests": [
+            "definition::tests::execution::combined_input_respects_limit",
+            "definition::tests::execution::contract::sql_limit_precedes_references",
+            "definition::tests::captured::managed::capture_limits_precede_admission",
+            "instance::tests::replay::replay_checks_current_authority"
+          ],
+          "translation": "Limits measure native Evaluation allocations rather than old JSON bytes. Combined native input has exact total-1 rejection and total acceptance tests. The fixed default interval ceiling is removed."
+        },
+        {
+          "old": "discovery::replay::tests::discovery_replay_retained_counts",
+          "line": 722,
+          "assertions": [
+            "Preserve the retained profile after raw retention.",
+            "Do not query a current fact provider.",
+            "Give exact original first/last cursors if the historical input is missing."
+          ],
+          "new_tests": [
+            "discovery::tests::replay::replay_survives_raw_retention",
+            "discovery::tests::replay::replay_distinguishes_missing_inputs",
+            "discovery::tests::replay::profile_replay_keeps_capture"
+          ],
+          "translation": "Raw expiry no longer removes saved managed input, so replay succeeds after raw retention. Removing the actual saved input returns Unavailable with exact saved coverage bounds. The old raw-expiry Unavailable assertion is replaced by the stronger retained-input contract."
+        },
+        {
+          "old": "discovery::replay::tests::discovery_replay_retains_revision",
+          "line": 745,
+          "assertions": [
+            "Keep the original exact code references after a new version is installed.",
+            "Replay the original snapshot through original code.",
+            "Do not let historical activation authorize current publication.",
+            "Preserve the profile when current execution is denied."
+          ],
+          "new_tests": [
+            "discovery::tests::replay::closed_replay_keeps_origin",
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "definition::tests::replay::replay_uses_captured_inputs",
+            "instance::tests::version::retained_replay_uses_generation",
+            "instance::tests::version::replay_checks_final_authority",
+            "instance::tests::replay::replay_checks_current_authority",
+            "analysis::packages::tests::image::definitions_retain_uninstalled_images",
+            "analysis::managed::tests::removal::uninstall_keeps_admitted_program"
+          ],
+          "translation": "Images and dependency closures remain pinned by admitted definitions after uninstall. New/current grant and original-image trust still protect replay. The old rule that removing current activation destroys historical replay is not the new image contract."
+        }
+      ],
+      "recommended_existing_qualifiers": {
+        "analysis_replay": {
+          "binary": "target/debug/deps/araphor_analysis-4531512e6104de4f",
+          "selectors": [
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "discovery::tests::replay::closed_replay_keeps_origin",
+            "discovery::tests::replay::replay_survives_raw_retention",
+            "discovery::tests::replay::replay_distinguishes_missing_inputs",
+            "instance::tests::replay::replay_keeps_captured_state",
+            "instance::tests::replay::replay_wasm_captured_state",
+            "instance::tests::replay::replay_native_captured_state",
+            "instance::tests::replay::replay_checks_current_authority",
+            "instance::tests::version::retained_replay_uses_generation",
+            "instance::tests::version::retained_replay_checks_inspect",
+            "instance::tests::version::replay_checks_final_authority"
+          ],
+          "include_ignored": true,
+          "native_artifacts_required": true
+        },
+        "analysis_discovery_origin": {
+          "binary": "target/debug/deps/araphor_analysis-4531512e6104de4f",
+          "selectors": [
+            "discovery::output::tests::native::durable_record_projection",
+            "discovery::output::tests::native::context_content_changes_revision",
+            "discovery::output::tests::forged::recorded_rejects_forged_proof",
+            "discovery::output::tests::forged::results_reject_foreign_attribution"
+          ]
+        },
+        "analysis_graph_chunks": {
+          "binary": "target/debug/deps/araphor_analysis-4531512e6104de4f",
+          "selectors": [
+            "graph::native::tests::input::native_input_spans_pages",
+            "graph::native::tests::input::immutable_facts_precede_guests",
+            "graph::native::tests::managed::notices::managed_drains_prefixes",
+            "graph::native::tests::managed::graph_conversion_failure_finishes",
+            "graph::native::tests::empty_window_is_inert",
+            "graph::native::tests::final_cancel_rolls_back",
+            "graph::tests::defaults::graph_accepts_large_window",
+            "graph::tests::defaults::graph_accepts_retained_facts",
+            "graph::tests::defaults::graph_omits_record_ceiling",
+            "graph::tests::defaults::graph_preserves_boottime_horizon"
+          ]
+        },
+        "query_replay_range_limits": {
+          "binary": "target/debug/deps/araphor_query-44e57ad344e0eb34",
+          "selectors": [
+            "sources::tests::cursor_scan_keeps_frames",
+            "sources::bounds::cursor_bounds_keep_scope",
+            "sources::tests::source_scope_and_time",
+            "sources::tests::exact_ranges_preserve_receipt",
+            "definition::tests::replay::replay_uses_captured_inputs",
+            "definition::tests::execution::combined_input_respects_limit",
+            "definition::tests::execution::contract::sql_limit_precedes_references",
+            "definition::tests::captured::managed::capture_limits_precede_admission",
+            "definition::tests::execution::supplied::supplied_inputs_reject_shape"
+          ]
+        },
+        "data_saved_input": {
+          "binary": "target/debug/deps/araphor_data-6c4e5d902cf7ca6f",
+          "selectors": [
+            "analysis::managed::tests::replay::saved_evaluation_keeps_inputs",
+            "analysis::managed::tests::replay::saved_evaluation_rejects_corruption",
+            "analysis::managed::tests::replay::saved_inputs_commit_atomically",
+            "analysis::managed::tests::replay::saved_history_rejects_corruption",
+            "discovery::validation::tests::recorded_rejects_host_changes",
+            "analysis::packages::tests::image::definitions_retain_uninstalled_images",
+            "analysis::managed::tests::removal::uninstall_keeps_admitted_program"
+          ]
+        }
+      },
+      "available_proof_records": [
+        {
+          "record": "/tmp/araphor-retirement-resume-20261022/restored/proof/data-removal284.json",
+          "record_sha256": "efa5e69b094e3fd92a7f844ff566cc767ecd695ffd4863049285b5c5222fefd2",
+          "log": "/tmp/araphor-retirement-resume-20261022/restored/proof/data-removal284.log",
+          "log_sha256": "6861070b066f2afeac8ad9b21bd90c3685ef17bfe0a1fabf6073b825eb500023",
+          "log_matches_record": true,
+          "recorded_exit": 0,
+          "passing_tests": [
+            "analysis::managed::tests::destination::managed_destination_selection",
+            "analysis::managed::tests::frontier::finite_result_rejects_resume",
+            "analysis::managed::tests::frontier::frontier_commits_with_receipt",
+            "analysis::managed::tests::frontier::frontier_rejects_corrupt_completion",
+            "analysis::managed::tests::frontier::pending_frontier_blocks_restart",
+            "analysis::managed::tests::frontier::frontier_expiry_keeps_history",
+            "analysis::managed::tests::history::history_checks_stored_binding",
+            "analysis::managed::tests::input::retained_header_skips_ipc",
+            "analysis::managed::tests::lifecycle::active_membership_keeps_revision",
+            "analysis::managed::tests::lifecycle::active_metadata_honors_cancel",
+            "analysis::managed::tests::history::history_keeps_original_receipts",
+            "analysis::managed::tests::lifecycle::explicit_stop_fences_birth",
+            "analysis::managed::tests::lifecycle::host_lease_is_exclusive",
+            "analysis::managed::tests::lifecycle::idle_suspend_checks_fences",
+            "analysis::managed::tests::lifecycle::lifecycle_cas_is_inert",
+            "analysis::managed::tests::lifecycle::lifecycle_notice_excludes_data",
+            "analysis::managed::tests::lifecycle::lifecycle_history_survives_reopen",
+            "analysis::managed::tests::lifecycle::prior_schema_is_rejected",
+            "analysis::managed::tests::lifecycle::transition_fences_publication",
+            "analysis::managed::tests::lifecycle::transition_fences_registration",
+            "analysis::managed::tests::lifecycle::lifecycle_recovery_rejects_corruption",
+            "analysis::managed::tests::managed_capture_keeps_guards",
+            "analysis::managed::tests::managed_calls_commit_atomically",
+            "analysis::managed::tests::managed_failure_is_atomic",
+            "analysis::managed::tests::managed_commit_crashes",
+            "analysis::managed::tests::managed_native_selected_roundtrip",
+            "analysis::managed::tests::managed_registration_keeps_cut",
+            "analysis::managed::tests::managed_sql_checks_authority",
+            "analysis::managed::tests::managed_witness_lifetime_check",
+            "analysis::managed::tests::memory::metadata_counts_spare_capacity",
+            "analysis::managed::tests::managed_recovery_checks_outputs",
+            "analysis::managed::tests::metadata::metadata_fences_managed_head",
+            "analysis::managed::tests::metadata::metadata_skips_prior_ipc",
+            "analysis::managed::tests::native_selection_rejects_corruption",
+            "analysis::managed::tests::native_selection_row_overflow",
+            "analysis::managed::tests::output::raw_output_keeps_packet",
+            "analysis::managed::tests::metadata::attempt_witnesses_keep_earliest",
+            "analysis::managed::tests::readiness::ambiguous_failure_is_unavailable",
+            "analysis::managed::tests::readiness::cancelled_frontier_is_unconsumed",
+            "analysis::managed::tests::readiness::completion_fences_capture",
+            "analysis::managed::tests::readiness::completion_fences_publication",
+            "analysis::managed::tests::readiness::completion_fences_registration",
+            "analysis::managed::tests::readiness::completion_recovery_rejects_corruption",
+            "analysis::managed::tests::readiness::failed_frontier_keeps_progress",
+            "analysis::managed::tests::removal::historical_scope_precedes_hydration",
+            "analysis::managed::tests::removal::recreation_keeps_scoped_history",
+            "analysis::managed::tests::removal::recovery_rejects_scope_changes",
+            "analysis::managed::tests::removal::removal_waits_all_attempts",
+            "analysis::managed::tests::removal::removal_keeps_exact_history",
+            "analysis::managed::tests::removal::uninstall_keeps_admitted_program",
+            "analysis::managed::tests::renewal::renewal_cas_is_inert",
+            "analysis::managed::tests::renewal::renewal_keeps_history",
+            "analysis::managed::tests::removal::rollback_keeps_recreated_scope",
+            "analysis::managed::tests::renewal::renewal_requires_finished_work",
+            "analysis::managed::tests::replay::saved_evaluation_keeps_inputs",
+            "analysis::managed::tests::replay::saved_history_rejects_corruption",
+            "analysis::managed::tests::replay::saved_evaluation_rejects_corruption",
+            "analysis::managed::tests::replay::saved_inputs_commit_atomically",
+            "analysis::managed::tests::retained_limits_keep_descriptor",
+            "analysis::managed::tests::status::attempted_failure_uses_history",
+            "analysis::managed::tests::status::failure_recovery_rejects_corruption",
+            "analysis::managed::tests::status::idle_failure_keeps_progress",
+            "analysis::managed::tests::status::status_read_is_scoped_metadata",
+            "analysis::managed::tests::terminal::denied_exit_fences_lifecycle",
+            "analysis::managed::tests::status::terminal_status_recovery_checks_fact",
+            "analysis::managed::tests::terminal::terminal_keeps_successful_state",
+            "analysis::managed::tests::terminal::recovery_checks_terminal_contract",
+            "analysis::managed::tests::terminal::unknown_claim_cannot_finish",
+            "analysis::managed::tests::version::pending_versions_stay_unavailable",
+            "analysis::managed::tests::version::failed_versions_keep_current",
+            "analysis::managed::tests::version::versions_keep_state_history",
+            "analysis::managed::tests::version::versions_keep_call_identity",
+            "analysis::managed::tests::version::versions_require_explicit_rebuild",
+            "analysis::packages::tests::image::package_image_install_is_atomic",
+            "analysis::packages::tests::image::definitions_retain_uninstalled_images",
+            "analysis::packages::tests::image::package_image_recovery_checks_digest",
+            "analysis::packages::tests::image::package_image_rejects_invalid_closure",
+            "analysis::packages::tests::image::package_image_retains_closure",
+            "analysis::packages::tests::image::package_image_versions_and_tenants",
+            "analysis::packages::tests::image::uninstall_collects_unused_native",
+            "analysis::packages::tests::image::uninstall_guard_keeps_closure",
+            "analysis::packages::tests::image::uninstall_releases_exclusive_closure",
+            "package::model::request::tests::image_request_runtime_fields",
+            "package::model::request::tests::image_test_request",
+            "package::model::request::tests::instance_requests_are_readonly",
+            "package::model::request::tests::package_request_archive_mismatch",
+            "package::model::request::tests::package_request_archive_roundtrip",
+            "package::model::request::tests::package_request_metadata_roundtrip",
+            "package::model::request::tests::removal_requests_are_explicit",
+            "analysis::packages::tests::image::package_image_large_roundtrip"
+          ],
+          "recorded_source_unchanged": true,
+          "changed_relevant_files_since_run": [
+            "crates/araphor-analysis/src/instance/host.rs",
+            "crates/araphor-analysis/src/instance/host/tests.rs",
+            "crates/araphor-analysis/src/instance/host/tests/admission.rs",
+            "crates/araphor-analysis/src/instance/tests/history/freshness.rs",
+            "crates/araphor-query/src/definition.rs",
+            "crates/araphor-query/src/definition/tests/execution/supplied.rs",
+            "crates/araphor-query/src/definition/tests/retained.rs",
+            "crates/araphor-query/src/execution.rs",
+            "crates/araphor-query/src/sources/mod.rs"
+          ],
+          "qualifies_current_complete_source": false
+        },
+        {
+          "record": "/tmp/araphor-retirement-resume-20261022/restored/proof/analysis-retained286.json",
+          "record_sha256": "dab0da16568985175a2c9965bbbc13be99166158cf3f1bf88e37a7a9216cd85e",
+          "log": "/tmp/araphor-retirement-resume-20261022/restored/proof/analysis-retained286.log",
+          "log_sha256": "72ed17ae4ecbdcaa2dd2f89f27a09cf11403105c4f99834606da737d318c65ae",
+          "log_matches_record": true,
+          "recorded_exit": 101,
+          "passing_tests": [
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "discovery::tests::replay::closed_replay_keeps_origin",
+            "discovery::tests::replay::replay_survives_raw_retention",
+            "instance::tests::history::historical_inspect_binds_scope",
+            "instance::tests::history::historical_inspect_checks_disclosure",
+            "instance::tests::history::historical_inspect_keeps_result",
+            "instance::tests::history::historical_query_keeps_limits",
+            "instance::tests::history::historical_query_preserves_indices",
+            "instance::tests::history::output::raw_output_checks_disclosure",
+            "instance::tests::history::output::raw_output_checks_scope",
+            "instance::tests::history::receipts::history_checks_final_disclosure",
+            "instance::tests::history::receipts::history_reads_original_receipts",
+            "instance::tests::history::status::status_inspect_binds_reader",
+            "instance::tests::history::status::status_inspect_checks_disclosure",
+            "instance::tests::history::status::status_inspect_keeps_failure",
+            "discovery::tests::replay::replay_distinguishes_missing_inputs",
+            "instance::tests::replay::replay_checks_current_authority",
+            "instance::tests::replay::replay_keeps_captured_state",
+            "instance::tests::replay::replay_native_captured_state",
+            "instance::tests::replay::replay_wasm_captured_state",
+            "instance::tests::version::failed_versions_keep_running",
+            "instance::tests::version::preparation_keeps_old_worker",
+            "instance::tests::version::native_versions_keep_history",
+            "instance::tests::version::replay_checks_final_authority",
+            "instance::tests::version::retained_replay_checks_inspect",
+            "instance::tests::version::retained_replay_uses_generation",
+            "instance::tests::version::versions_capture_joined_state",
+            "instance::tests::version::versions_check_actions",
+            "instance::tests::version::versions_fence_revoked_run",
+            "instance::tests::version::version_cancellation_joins_workers",
+            "instance::tests::version::versions_keep_history",
+            "instance::tests::version::versions_use_target_trust"
+          ],
+          "recorded_source_unchanged": true,
+          "changed_relevant_files_since_run": [
+            "crates/araphor-analysis/src/instance/host.rs",
+            "crates/araphor-analysis/src/instance/host/tests.rs",
+            "crates/araphor-analysis/src/instance/host/tests/admission.rs",
+            "crates/araphor-analysis/src/instance/tests/history/freshness.rs",
+            "crates/araphor-query/src/definition.rs",
+            "crates/araphor-query/src/definition/tests/execution/supplied.rs",
+            "crates/araphor-query/src/definition/tests/retained.rs",
+            "crates/araphor-query/src/execution.rs",
+            "crates/araphor-query/src/sources/mod.rs"
+          ],
+          "qualifies_current_complete_source": false
+        },
+        {
+          "record": "/tmp/araphor-retirement-resume-20261022/restored/proof/analysis-lifecycle287.json",
+          "record_sha256": "785f11cca41bdffeef342e8a4b4265de4c60c2d70f1d47f1027803ae2fb7178e",
+          "log": "/tmp/araphor-retirement-resume-20261022/restored/proof/analysis-lifecycle287.log",
+          "log_sha256": "8bd5517a2ac9eb5507c395bfa9d38e2a8befb68f854e3d328f2964d4df8947e7",
+          "log_matches_record": true,
+          "recorded_exit": 101,
+          "passing_tests": [
+            "instance::host::tests::admission::opening_keeps_unknown_busy",
+            "instance::host::tests::admission::opening_waits_reader",
+            "instance::host::tests::definition::prepared_definition_requires_install",
+            "instance::host::tests::host_bad_member_isolates",
+            "instance::host::tests::host_crossing_expiry_joins_admission",
+            "instance::host::tests::host_delivery_keeps_healthy",
+            "instance::host::tests::host_drives_without_observer",
+            "instance::host::tests::host_drop_retains_lease",
+            "instance::host::tests::host_expiry_keeps_healthy",
+            "instance::host::tests::host_guest_keeps_healthy",
+            "instance::host::tests::host_idle_denial_suspends",
+            "instance::host::tests::host_isolates_failure",
+            "instance::host::tests::host_keeps_newer_member",
+            "instance::host::tests::host_keeps_benign_notice",
+            "instance::host::tests::host_metadata_error_drains",
+            "instance::host::tests::host_replaces_one_lifecycle",
+            "instance::host::tests::host_source_denial_suspends",
+            "instance::host::tests::host_stop_joins_admission",
+            "instance::host::tests::host_stop_joins_guest",
+            "instance::host::tests::lifecycle::explicit_stop_joins_guest",
+            "instance::host::tests::lifecycle::host_uses_current_authority",
+            "instance::host::tests::lifecycle::explicit_stop_preserves_intent",
+            "instance::host::tests::lifecycle::restore_keeps_stopped_jobs",
+            "instance::host::tests::lifecycle::paused_member_keeps_ownership",
+            "instance::host::tests::lifecycle::unpolled_host_releases_registration",
+            "instance::host::tests::membership_keys_keep_capacity",
+            "instance::host::tests::lifecycle::start_reuses_prepared_owner",
+            "instance::host::tests::pressure_keeps_stop_reactive",
+            "instance::host::tests::projected_member_keeps_fence",
+            "instance::host::tests::removal::recreation_changes_scope_explicitly",
+            "instance::host::tests::removal::removal_keeps_shared_instance",
+            "instance::host::tests::removal::removal_needs_only_remove",
+            "instance::host::tests::removal::restoration_keeps_tombstones",
+            "instance::host::tests::removal::removal_joins_native_guest",
+            "instance::host::tests::replacement_releases_before_admission",
+            "instance::tests::checkpoint::native_overflow_keeps_checkpoint",
+            "instance::tests::checkpoint::native_checkpoint_reopens",
+            "instance::tests::completed_retry_survives_reopen",
+            "instance::tests::continuation::finite_follow_keeps_frontier",
+            "instance::tests::finite::failed_publication_stays_pending",
+            "instance::tests::finite::finite_busy_keeps_attempt",
+            "instance::tests::checkpoint::wasm_checkpoint_reopens",
+            "instance::tests::finite::finite_sql_preserves_progress",
+            "instance::tests::history::freshness::timed_inspection_precedes_arrow",
+            "instance::tests::image_authority_precedes_preparation",
+            "instance::tests::later_failure_is_atomic",
+            "instance::tests::native_keeps_call_state",
+            "instance::tests::nested_calls_publish_together",
+            "instance::tests::renewal::renewal_checks_current_authority",
+            "instance::tests::renewal::renewal_keeps_checkpoint",
+            "instance::tests::retained::retained_alias_fences_head",
+            "instance::tests::reusing::retained_runs_check_authority",
+            "instance::tests::revoked_guest_joins_attempt",
+            "instance::tests::sql_frontier_survives_reopen",
+            "instance::tests::sql_instance_is_inert",
+            "instance::tests::finite::finite_guest_failure_persists",
+            "qualification::tests::artifact::fixture_selects_contained_artifact",
+            "qualification::tests::authority::fixtures_enforce_authority",
+            "instance::tests::sql_wasm_keep_state",
+            "qualification::tests::cancellation::fixture_cancellation_joins_guest",
+            "qualification::tests::runtime::fixtures_execute_sql_wasm",
+            "qualification::tests::runtime::fixtures_keep_clock_seed",
+            "qualification::tests::runtime::native_fixture_accumulates",
+            "qualification::tests::runtime::fixtures_keep_input_provenance",
+            "qualification::tests::sql::fixtures_compare_complete_return",
+            "qualification::tests::sql::fixtures_keep_signed_clock",
+            "qualification::tests::sql::fixtures_repeat_saved_clock",
+            "qualification::tests::runtime::native_fixture_clock_seed"
+          ],
+          "recorded_source_unchanged": true,
+          "changed_relevant_files_since_run": [
+            "crates/araphor-analysis/src/instance/host.rs",
+            "crates/araphor-analysis/src/instance/host/tests.rs",
+            "crates/araphor-analysis/src/instance/host/tests/admission.rs",
+            "crates/araphor-analysis/src/instance/tests/history/freshness.rs",
+            "crates/araphor-query/src/definition.rs",
+            "crates/araphor-query/src/execution.rs"
+          ],
+          "qualifies_current_complete_source": false
+        },
+        {
+          "record": "/tmp/araphor-retirement-resume-20261022/restored/proof/query-corrections287.json",
+          "record_sha256": "9923f9a2641e2f8e0226be7c315ae1188b4ac74bc4a367989072e33d4d306969",
+          "log": "/tmp/araphor-retirement-resume-20261022/restored/proof/query-corrections287.log",
+          "log_sha256": "62f18a4e84d66b64e7d38d5659cb6621a99500cd7d919b1476235ec15cf9b27f",
+          "log_matches_record": true,
+          "recorded_exit": 0,
+          "passing_tests": [
+            "definition::tests::capacity::image_admission_rejects_short_capacity",
+            "definition::tests::captured::managed::window_keeps_full_grant",
+            "definition::tests::execution::contract::model::model_input_clocks",
+            "definition::tests::execution::contract::model::model_state_provenance",
+            "definition::tests::execution::physical_calls_keep_capture_and_clock",
+            "definition::tests::execution::supplied::supplied_inputs_reject_shape",
+            "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+            "definition::tests::retained::retained_images_use_plans"
+          ],
+          "recorded_source_unchanged": true,
+          "changed_relevant_files_since_run": [
+            "crates/araphor-analysis/src/instance/host.rs",
+            "crates/araphor-analysis/src/instance/host/tests.rs",
+            "crates/araphor-analysis/src/instance/host/tests/admission.rs",
+            "crates/araphor-analysis/src/instance/tests/history/freshness.rs",
+            "crates/araphor-query/src/definition.rs",
+            "crates/araphor-query/src/execution.rs"
+          ],
+          "qualifies_current_complete_source": false
+        },
+        {
+          "record": "/tmp/araphor-retirement-resume-20261022/restored/proof/query-source287.json",
+          "record_sha256": "371e0e25312bf3fdf85b8253d9b8a9ec1779770dc207aafe4f6dfe40944580d3",
+          "log": "/tmp/araphor-retirement-resume-20261022/restored/proof/query-source287.log",
+          "log_sha256": "981378a7c5c81a92a19c9fc096bc6f8024bb22e8d9ef0261c42fdd0ff00ad511",
+          "log_matches_record": true,
+          "recorded_exit": 0,
+          "passing_tests": [
+            "sources::bounds::cursor_bounds_keep_scope",
+            "definition::tests::subscription::package_window_expires_without_intake",
+            "sources::tests::cursor_scan_keeps_frames",
+            "sources::tests::exact_ranges_preserve_receipt",
+            "sources::tests::snapshot_shares_local_capacity"
+          ],
+          "recorded_source_unchanged": true,
+          "changed_relevant_files_since_run": [
+            "crates/araphor-analysis/src/instance/host.rs",
+            "crates/araphor-analysis/src/instance/host/tests.rs",
+            "crates/araphor-analysis/src/instance/host/tests/admission.rs",
+            "crates/araphor-analysis/src/instance/tests/history/freshness.rs",
+            "crates/araphor-query/src/definition.rs",
+            "crates/araphor-query/src/execution.rs"
+          ],
+          "qualifies_current_complete_source": false
+        }
+      ],
+      "reported_but_not_recovered": [
+        "analysis replay288: 9/9",
+        "analysis corrections288: 4/5; memory denial case failed",
+        "graph input288: 7/7"
+      ],
+      "reported_but_not_recovered_qualification": "Parent-reported context only. No log file or source manifest was recovered for these records. Do not label them available or archive-verified.",
+      "prior_map_recovery": "All recovery tar archives were inspected by member name. No prior installed/replay/chunks map was found. T1855 has the earlier mod.rs retirement map. This audit reconstructs the candidate map from current and baseline source.",
+      "current_source_sha256": {
+        "crates/araphor-analysis/src/discovery/output.rs": "97859c0db6c6ff748b88fce5bf21ff59f61bdeeafd50914bf81b921fa50d1ab8",
+        "crates/araphor-analysis/src/discovery/output/tests/forged.rs": "013ccbd7051326600614ba603216bd0525a8569e6bd4e504809636ed4e39ebeb",
+        "crates/araphor-analysis/src/discovery/output/tests/native.rs": "5e2b72455e25bc5cf0e9e51672610970b9509e9996ecf74e507341717b191547",
+        "crates/araphor-analysis/src/discovery/publication/managed.rs": "ae06034451372b027144a409fafa76e74974527e0df058eae736bd53ecba0dc6",
+        "crates/araphor-analysis/src/discovery/replay.rs": "7b02466a0bdb3cce76d6a6583ec3774433198ce0cec8c3cd580f3a9788d54205",
+        "crates/araphor-analysis/src/discovery/tests/replay.rs": "dd55c2afae93f3f0f9f0767fa4eb4df61d7e6f4b5e14ce64d23260bf0cf0c48d",
+        "crates/araphor-analysis/src/graph/finish.rs": "9411519533139b4b7b52aecf6ec31c1444d524d57c5878b009596f1b41e542ad",
+        "crates/araphor-analysis/src/graph/native/capture.rs": "cd21f5f376d593ed4de0ce408c27977633c97515efa2ee5889f5c2860396ee9f",
+        "crates/araphor-analysis/src/graph/native/commit.rs": "21476b241754e87a465d215945af85d35d24960991abf51bc4868124bffee238",
+        "crates/araphor-analysis/src/graph/native/sink.rs": "d6959be2c5e241b66128e362319bcccae2c5c9e3debc2154287a1af4e2e61700",
+        "crates/araphor-analysis/src/graph/native/tests.rs": "037665e5dde70a7d5e5f844d7e4b3d6ca89dd30df52f1bd76a513e33c825b7e0",
+        "crates/araphor-analysis/src/graph/native/tests/input.rs": "d0752e2d2532cdc81e4b481af8d47e6fb1e5d93efd9f4f1672741890a6515156",
+        "crates/araphor-analysis/src/graph/native/tests/managed.rs": "1470435a2c95916a71baa5de11601c6d5291ad15a39af087b52fb369dcd8cd51",
+        "crates/araphor-analysis/src/graph/native/tests/managed/notices.rs": "8369139cb22791a907023d34c3c9a713a9d0ec7ef2d7431ab66b4c28fbff8e61",
+        "crates/araphor-analysis/src/graph/projection.rs": "fa527b6294ab86a6a63a192f3f167e0d7d08bd71c204b5c8b04771b4535a781d",
+        "crates/araphor-analysis/src/graph/tests/defaults.rs": "5e41850e45b6a62bc46ac48df72669c413fc9f65cea9a66e97aeecb013a64d53",
+        "crates/araphor-analysis/src/instance/manifest.rs": "37b7379f7cc538d554341a7fa94040044bc38d0d29cc50ad625faa6cdfc0cfff",
+        "crates/araphor-analysis/src/instance/mod.rs": "bd0692602ee4e5a516c3c7fd44c0dbeaf5037d7b2fcdf260554b0e1d76a6b7e0",
+        "crates/araphor-analysis/src/instance/replay.rs": "d6e28426b02a570afeced9144b73654988c2da76ad1a36f9bc6fd3468ff645f3",
+        "crates/araphor-analysis/src/instance/sink.rs": "2c09ac700d7e846eeac19d632fab8292e0ddf28a37a78b491f6d49bd44bd4a18",
+        "crates/araphor-analysis/src/instance/tests/replay.rs": "f5f62169f1641c66a1fa0729de94313a0a639dfc79789ed3581a43d0d0e83928",
+        "crates/araphor-analysis/src/instance/tests/version.rs": "12606cc93ad44f5501f90c6d0505fe57a6b2d00444c4e912058b67974f59a874",
+        "crates/araphor-analysis_back/src/discovery/installed.rs": "06a3d98bd5359114ea32a94a7d20d4234909f72ef8a9a1da8e3cc7406bc1dc4f",
+        "crates/araphor-analysis_back/src/discovery/replay.rs": "0105edd2a71be18925168aee890cfe040150d77f155db4ca9bc8f7ed511ac797",
+        "crates/araphor-analysis_back/src/graph/chunks.rs": "ca2be0fcce880537c78435772c0c22e34bdf1d89dc84333c04756520fe8cdc44",
+        "crates/araphor-data/src/analysis/managed/replay.rs": "e743aa824f055e8da73aa797b165e6c36f927e2d59b967c590a005b11c43019a",
+        "crates/araphor-data/src/analysis/managed/tests/replay.rs": "ea323c1ea5a12326a2b14934b0fa8c0448c53d21319252f01bf44d68801c766d",
+        "crates/araphor-data/src/analysis/progress/profile/replay.rs": "8a0fbf932378e1de0ac146440e9980cb5014f961de57cb7452567b98b020f5e3",
+        "crates/araphor-data/src/discovery/validation/recorded.rs": "773d21339125ff4ce9c2197e92adf2c7739eda8cc766e4ca73336afcce515a01",
+        "crates/araphor-data/src/discovery/validation/tests.rs": "be92f861aae8e4b88d457aaa5ac600ac963f8892011d5935c10441e321651af7",
+        "crates/araphor-query/src/definition/call.rs": "67f9598953c5a09e1c5229d57bc34894ab330842251b6edc1fc4c045ebd9aba3",
+        "crates/araphor-query/src/definition/physical.rs": "f256eecd27842e389903ad8c7ec2f3f0cdb7c4971278732ab45f8b4abb216c0a",
+        "crates/araphor-query/src/definition/replay.rs": "11d0df4fc5c18186028944bc12d13f3449f9decf121aed99ebdd857691ac068d",
+        "crates/araphor-query/src/definition/tests/captured/managed.rs": "4e7539ca31438df23842c736abccc5dd66c719f7cce6558548214582fcb1b768",
+        "crates/araphor-query/src/definition/tests/execution.rs": "fe5d19f8848fde42debebb2520392cc483fbd4b5180862e97c2ef361fda3ac49",
+        "crates/araphor-query/src/definition/tests/execution/contract.rs": "71d7602b6d37eb2da8db6a6921500070c3261f79370ed052f30d1a4b07580905",
+        "crates/araphor-query/src/definition/tests/execution/supplied.rs": "631e2685a6ce582f7422c0e0639d6b5f5cf11d587c3da7e8aed76a1d0c6e0bcd",
+        "crates/araphor-query/src/definition/tests/replay.rs": "b2e61f3c44b6a7da36f014bfa1d7a8d9d846b217d87366cc597a56f673aecbb8",
+        "crates/araphor-query/src/sources/bounds.rs": "56ca602777c234251f7e8fa619609e61ff3af3fbd9f2d9618f0b70bbd7b1b91f",
+        "crates/araphor-query/src/sources/mod.rs": "45e770f34548d7ae9bf78ecebdeb6f970cfed2396c8c49096a82261be75f7d79",
+        "crates/araphor-query/src/sources/tests.rs": "9287406a0a1284f543a37c02bba22abae25d85f740772c308fad5e32c6001088"
+      },
+      "unresolved_source_paths": [],
+      "required_before_delete": [
+        "Archive exact current source, all originals, maps, build/artifact identities and the named qualification records before deletion.",
+        "Remove only the listed complete files. Keep all mixed caller tests and the old public owner/Inspect/execution/supervision files."
+      ],
+      "graph_boundary_limit": "The existing complete-native-input test proves all records across a raw-page boundary. The default-domain tests prove no fixed record/context ceilings and retain the 300-second credential horizon. No dedicated native credential join at cursors 256/257/258 was found. Keep the original boundary-join test in graph/tests.rs; do not retire that test leaf from this audit.",
+      "active_callers": "Back functions remain referenced by Back live/window leaves. Those leaves are retained as reference source. Current workspace Cargo dependencies use active Analysis; dormant old Control/E2E files still contain Back names but are not declared by their current module roots. No caller or configuration edit is needed for only these reference deletions.",
+      "not_checked": [
+        "No Cargo command or test binary was run by this agent.",
+        "No live source, plan, baseline, or Cargo file was edited.",
+        "No final Rust CI, physical qualification, benchmark, or complete public lifecycle result is claimed."
+      ],
+      "current_proof_attachments": "/tmp/araphor-retirement-resume-20261022/maps/current-proof-attachments.json",
+      "current_proof_records": [
+        {
+          "name": "query-optimize290",
+          "record": "/tmp/araphor-retirement-resume-20261022/query-optimize290.json",
+          "record_sha256": "a0d36abc065f211f694caaa679e416e31fe030fe41331625cf660e9cac3a00c7",
+          "log": "/tmp/araphor-retirement-resume-20261022/query-optimize290.log",
+          "log_sha256": "d46e69e28e8aa764eb73270ec9517cdbda6dba82fab3fafc000612c0ebbc6dae",
+          "log_matches_record": true,
+          "command": [
+            "target/debug/deps/araphor_query-44e57ad344e0eb34",
+            "definition::tests::native_package_body_optimization",
+            "definition::tests::captured::capture_cancel_joins_optimizer",
+            "execution::tests::local::",
+            "definition::tests::execution::native::",
+            "definition::tests::retained::",
+            "definition::tests::execution::supplied::",
+            "definition::tests::execution::combined_input_respects_limit",
+            "definition::tests::execution::contract::sql_limit_precedes_references",
+            "sources::tests::cursor_scan_keeps_frames",
+            "sources::bounds::cursor_bounds_keep_scope",
+            "sources::tests::exact_ranges_preserve_receipt",
+            "--include-ignored"
+          ],
+          "environment": {
+            "ARAPHOR_VERIFY_BRIEF": "1",
+            "ARAPHOR_NATIVE_DIR": "/tmp/araphor-retirement-resume-20261022/native",
+            "ARAPHOR_NATIVE_TARGET": "x86_64-unknown-linux-gnu",
+            "RUST_TEST_THREADS": "2"
+          },
+          "binary_sha256": "7cca19760d35b73413ee6cfe8b87b0387e21f20509141470c8f8d0f71f8162ed",
+          "exit_code": 0,
+          "recorded_source_unchanged": true,
+          "passing_tests": [
+            "definition::tests::captured::capture_cancel_joins_optimizer",
+            "definition::tests::execution::combined_input_respects_limit",
+            "definition::tests::execution::contract::sql_limit_precedes_references",
+            "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+            "definition::tests::native_package_body_optimization",
+            "definition::tests::retained::retained_images_use_plans",
+            "execution::tests::local::local_query_closes_catalog",
+            "execution::tests::local::local_query_keeps_indices",
+            "execution::tests::local::local_query_limits_batches",
+            "execution::tests::local::local_query_releases_capacity",
+            "sources::bounds::cursor_bounds_keep_scope",
+            "sources::tests::cursor_scan_keeps_frames",
+            "sources::tests::exact_ranges_preserve_receipt",
+            "definition::tests::execution::supplied::supplied_inputs_reject_shape"
+          ],
+          "ignored_tests": [],
+          "changed_covered_files_since_run": [],
+          "qualifies_observed_source": true
+        },
+        {
+          "name": "query-native290",
+          "record": "/tmp/araphor-retirement-resume-20261022/query-native290.json",
+          "record_sha256": "86a3c75a24d78cb21271d4751ec1ef22c0420203471dfe397d39fdf07ca333b6",
+          "log": "/tmp/araphor-retirement-resume-20261022/query-native290.log",
+          "log_sha256": "915d05371d224d8398f183b7702b8a8c13f238af43ddcc3b2a5c93aa96e25161",
+          "log_matches_record": true,
+          "command": [
+            "target/debug/deps/araphor_query-44e57ad344e0eb34",
+            "definition::tests::execution::physical_native_complete_relation",
+            "definition::tests::execution::physical_native_failures_release",
+            "definition::tests::guest::native_output_quota_preserves_input",
+            "definition::tests::guest::native_checkpoint_shares_output_budget",
+            "--include-ignored"
+          ],
+          "environment": {
+            "ARAPHOR_VERIFY_BRIEF": "1",
+            "RUST_TEST_THREADS": "2",
+            "ARAPHOR_NATIVE_DIR": "/tmp/araphor-retirement-resume-20261022/native",
+            "ARAPHOR_NATIVE_TARGET": "x86_64-unknown-linux-gnu"
+          },
+          "binary_sha256": "28e24f347daa24f97e9503e3b41b971044e1926b7e64f73bee26772537ad8d85",
+          "exit_code": 0,
+          "recorded_source_unchanged": true,
+          "passing_tests": [
+            "definition::tests::execution::physical_native_failures_release",
+            "definition::tests::execution::physical_native_complete_relation",
+            "definition::tests::guest::native_output_quota_preserves_input",
+            "definition::tests::guest::native_checkpoint_shares_output_budget"
+          ],
+          "ignored_tests": [],
+          "changed_covered_files_since_run": [],
+          "qualifies_observed_source": true
+        },
+        {
+          "name": "discovery-optimize290",
+          "record": "/tmp/araphor-retirement-resume-20261022/discovery-optimize290.json",
+          "record_sha256": "1ed8c5e34d3fd6d3ba02b1cdee19ea351ae9ac49936c868e29cac64795af8206",
+          "log": "/tmp/araphor-retirement-resume-20261022/discovery-optimize290.log",
+          "log_sha256": "dfebca04cf2b7081e6330a2ce5131ebb787ab8d2da246a7a82766530416199fa",
+          "log_matches_record": true,
+          "command": [
+            "target/debug/deps/araphor_analysis-4531512e6104de4f",
+            "discovery::tests::managed::",
+            "package::tests::sql::recorded::recorded_snapshot_matches_oracle",
+            "--include-ignored"
+          ],
+          "environment": {
+            "ARAPHOR_VERIFY_BRIEF": "1",
+            "RUST_TEST_THREADS": "1",
+            "ARAPHOR_NATIVE_DIR": "/tmp/araphor-retirement-resume-20261022/native",
+            "ARAPHOR_NATIVE_TARGET": "x86_64-unknown-linux-gnu"
+          },
+          "binary_sha256": "adfd27371acfa8f772e795c9f577ce2de114c60c16ff7a041db09a2e5ff89a69",
+          "exit_code": 0,
+          "recorded_source_unchanged": true,
+          "passing_tests": [
+            "discovery::tests::managed::code_cut_keeps_evidence",
+            "discovery::tests::managed::managed_filtered_frontier",
+            "discovery::tests::managed::managed_profile_versions",
+            "discovery::tests::managed::managed_window_frontier",
+            "discovery::tests::managed::profile_conversion_failure_finishes",
+            "package::tests::sql::recorded::recorded_snapshot_matches_oracle"
+          ],
+          "ignored_tests": [],
+          "changed_covered_files_since_run": [],
+          "qualifies_observed_source": true
+        },
+        {
+          "name": "native-replay290",
+          "record": "/tmp/araphor-retirement-resume-20261022/native-replay290.json",
+          "record_sha256": "68653299583d1a250f43ae5e351d6e1194ad0398914939569d0839024a9713bd",
+          "log": "/tmp/araphor-retirement-resume-20261022/native-replay290.log",
+          "log_sha256": "d6b8e5b092e03ba3d26ae9bee864c973581f1a727481790a63214052704f1703",
+          "log_matches_record": true,
+          "command": [
+            "target/debug/deps/araphor_analysis-4531512e6104de4f",
+            "instance::tests::replay::",
+            "instance::tests::version::native_versions_keep_history",
+            "--include-ignored"
+          ],
+          "environment": {
+            "ARAPHOR_VERIFY_BRIEF": "1",
+            "RUST_TEST_THREADS": "2",
+            "ARAPHOR_NATIVE_DIR": "/tmp/araphor-retirement-resume-20261022/native",
+            "ARAPHOR_NATIVE_TARGET": "x86_64-unknown-linux-gnu"
+          },
+          "binary_sha256": "adfd27371acfa8f772e795c9f577ce2de114c60c16ff7a041db09a2e5ff89a69",
+          "exit_code": 0,
+          "recorded_source_unchanged": true,
+          "passing_tests": [
+            "instance::tests::replay::replay_checks_current_authority",
+            "instance::tests::replay::replay_keeps_captured_state",
+            "instance::tests::replay::replay_native_captured_state",
+            "instance::tests::replay::replay_wasm_captured_state",
+            "instance::tests::version::native_versions_keep_history"
+          ],
+          "ignored_tests": [],
+          "changed_covered_files_since_run": [],
+          "qualifies_observed_source": true
+        },
+        {
+          "name": "retirement-source290",
+          "record": "/tmp/araphor-retirement-resume-20261022/retirement-source290.json",
+          "record_sha256": "98824edcc90546ffc32e2fb2315434920517bd98f3a8b384dc373ee0dce6dcc9",
+          "log": "/tmp/araphor-retirement-resume-20261022/retirement-source290.log",
+          "log_sha256": "1f39fb17152b8961fb8c4c4c6d02378e52734f895a01161e8fba6921fa127f03",
+          "log_matches_record": true,
+          "command": [
+            "target/debug/deps/araphor_analysis-4531512e6104de4f",
+            "discovery::tests::replay::",
+            "graph::native::tests::managed::replay::graph_replay_survives_removal",
+            "graph::native::tests::input::",
+            "graph::native::tests::empty_window_is_inert",
+            "graph::native::tests::final_cancel_rolls_back",
+            "graph::native::tests::managed::graph_conversion_failure_finishes",
+            "graph::native::tests::managed::notices::managed_drains_prefixes",
+            "graph::tests::defaults::graph_accepts_large_window",
+            "graph::tests::defaults::graph_accepts_retained_facts",
+            "graph::tests::defaults::graph_omits_record_ceiling",
+            "graph::tests::defaults::graph_preserves_boottime_horizon"
+          ],
+          "environment": {
+            "ARAPHOR_VERIFY_BRIEF": "1",
+            "RUST_TEST_THREADS": "2",
+            "ARAPHOR_NATIVE_DIR": "/tmp/araphor-retirement-resume-20261022/native",
+            "ARAPHOR_NATIVE_TARGET": "x86_64-unknown-linux-gnu"
+          },
+          "binary_sha256": "adfd27371acfa8f772e795c9f577ce2de114c60c16ff7a041db09a2e5ff89a69",
+          "exit_code": 0,
+          "recorded_source_unchanged": true,
+          "passing_tests": [
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "discovery::tests::replay::closed_replay_keeps_origin",
+            "discovery::tests::replay::replay_survives_raw_retention",
+            "graph::native::tests::empty_window_is_inert",
+            "graph::native::tests::final_cancel_rolls_back",
+            "discovery::tests::replay::replay_distinguishes_missing_inputs",
+            "graph::native::tests::input::native_input_spans_pages",
+            "graph::native::tests::managed::graph_conversion_failure_finishes",
+            "graph::native::tests::managed::notices::managed_drains_prefixes",
+            "graph::native::tests::managed::replay::graph_replay_survives_removal",
+            "graph::tests::defaults::graph_accepts_large_window",
+            "graph::tests::defaults::graph_accepts_retained_facts",
+            "graph::tests::defaults::graph_omits_record_ceiling",
+            "graph::tests::defaults::graph_preserves_boottime_horizon",
+            "graph::native::tests::input::immutable_facts_precede_guests"
+          ],
+          "ignored_tests": [],
+          "changed_covered_files_since_run": [],
+          "qualifies_observed_source": true
+        },
+        {
+          "name": "retirement-guards290",
+          "record": "/tmp/araphor-retirement-resume-20261022/retirement-guards290.json",
+          "record_sha256": "a9244c468431f3509e7e228b3ed1b2767a5e3315646eee818cbf05750b4ed63b",
+          "log": "/tmp/araphor-retirement-resume-20261022/retirement-guards290.log",
+          "log_sha256": "515ebaa0345986ad8265c495e9d91632a748bf07c7b4d85090270e0e75651ab4",
+          "log_matches_record": true,
+          "command": [
+            "target/debug/deps/araphor_analysis-4531512e6104de4f",
+            "instance::host::tests::admission::",
+            "instance::host::tests::host_idle_denial_suspends",
+            "instance::host::tests::host_source_denial_suspends",
+            "instance::host::tests::removal::",
+            "instance::tests::renewal::",
+            "instance::tests::finite::",
+            "instance::tests::later_failure_is_atomic",
+            "instance::tests::nested_calls_publish_together",
+            "instance::tests::version::versions_check_actions",
+            "instance::tests::version::versions_use_target_trust",
+            "--include-ignored"
+          ],
+          "environment": {
+            "ARAPHOR_VERIFY_BRIEF": "1",
+            "RUST_TEST_THREADS": "2",
+            "ARAPHOR_NATIVE_DIR": "/tmp/araphor-retirement-resume-20261022/native",
+            "ARAPHOR_NATIVE_TARGET": "x86_64-unknown-linux-gnu"
+          },
+          "binary_sha256": "adfd27371acfa8f772e795c9f577ce2de114c60c16ff7a041db09a2e5ff89a69",
+          "exit_code": 0,
+          "recorded_source_unchanged": true,
+          "passing_tests": [
+            "instance::host::tests::admission::assembly_waits_reader",
+            "instance::host::tests::admission::opening_keeps_unknown_busy",
+            "instance::host::tests::admission::admission_waits_capacity",
+            "instance::host::tests::admission::opening_waits_reader",
+            "instance::host::tests::host_idle_denial_suspends",
+            "instance::host::tests::host_source_denial_suspends",
+            "instance::host::tests::removal::recreation_changes_scope_explicitly",
+            "instance::host::tests::removal::removal_keeps_shared_instance",
+            "instance::host::tests::removal::removal_needs_only_remove",
+            "instance::host::tests::removal::restoration_keeps_tombstones",
+            "instance::tests::finite::failed_publication_stays_pending",
+            "instance::tests::finite::finite_busy_keeps_attempt",
+            "instance::host::tests::removal::removal_joins_native_guest",
+            "instance::tests::finite::finite_sql_preserves_progress",
+            "instance::tests::later_failure_is_atomic",
+            "instance::tests::nested_calls_publish_together",
+            "instance::tests::renewal::renewal_checks_current_authority",
+            "instance::tests::renewal::renewal_keeps_checkpoint",
+            "instance::tests::version::versions_check_actions",
+            "instance::tests::version::versions_use_target_trust",
+            "instance::tests::finite::finite_guest_failure_persists"
+          ],
+          "ignored_tests": [],
+          "changed_covered_files_since_run": [],
+          "qualifies_observed_source": true
+        }
+      ],
+      "native_artifact_manifest": {
+        "record": "/tmp/araphor-retirement-resume-20261022/native-artifacts289.json",
+        "record_sha256": "b61cac7fe224c244d0576e2eedbdef2ee6eb3c6eb19fd025f9fc6f9a644d1d21",
+        "content": {
+          "builder": "ff4f6c0d1ea26eb124ba0002380de469dd7dbc05b92f9cdf8d30f197b4006dae",
+          "artifacts": {
+            "credentials.so": "0bfd5987afe40d968e7c8873a6b0a28dfa624e61f83d62b35ce0239d3efe094e",
+            "detector.so": "ad13bb121d89b034829c17538059575a0e2986f36ce2439d841c50e41e0da9ee",
+            "discovery.so": "538e9935a291b970f903b7ca29f6736dbfdec9500f411edcebf7868706667f34",
+            "kubernetes.so": "c49b7fd51ae39b9e763d19c15f5a75f2a9b919ac84576dd70ab067149d9947a4",
+            "process.so": "41a978fe89a3ddc224b0bccd1472b88991471323f1cecd11770b45b3d465dbdc",
+            "runtime.so": "1bd9f4ae3b99418ddd760c60223f59d0793f0654ee99db6b8e20d622ae7409ce"
+          }
+        },
+        "qualification": "Parent built the six source-built native artifacts. The record contains their SHA-256 values. This audit did not run the builder or load the artifacts."
+      },
+      "updated_at": "2026-10-22T21:33:20.064187+00:00",
+      "final_qualification": {
+        "records": [
+          "query-optimize290",
+          "query-native290",
+          "discovery-optimize290",
+          "native-replay290",
+          "retirement-source290",
+          "retirement-guards290"
+        ],
+        "distinct_passing_tests": 65,
+        "qualified_for_listed_leaves": true,
+        "additional_leaf_specific_gates_found": false
+      }
+    },
+    "package_history_and_commit": {
+      "schema_version": 1,
+      "generated_at": "2026-10-22T21:22:40.980148+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "status": "Qualified for bounded whole-file retirement on observed source290. Actual deletion and archive are owned by the root agent. Complete migration remains Not done.",
+      "read_only_source": true,
+      "cargo_or_test_runs_by_this_agent": false,
+      "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+      "files": [
+        {
+          "path": "crates/araphor-analysis_back/src/package/installed/history.rs",
+          "sha256": "f0717d973432cfad491692c963fb5ca106a0bba58d2e1094bbb309a2db02ad9c",
+          "baseline_sha256": "f0717d973432cfad491692c963fb5ca106a0bba58d2e1094bbb309a2db02ad9c",
+          "matches_baseline": true,
+          "bytes": 5995,
+          "nonblank": 140,
+          "production_nonblank": 140
+        },
+        {
+          "path": "crates/araphor-analysis_back/src/package/installed/commit.rs",
+          "sha256": "748ef327fce597795b70f41fcc620dc7152410a64e10e09e23b1c6b81e7f2438",
+          "baseline_sha256": "748ef327fce597795b70f41fcc620dc7152410a64e10e09e23b1c6b81e7f2438",
+          "matches_baseline": true,
+          "bytes": 3171,
+          "nonblank": 82,
+          "production_nonblank": 80
+        }
+      ],
+      "production_nonblank_removed_if_qualified": 220,
+      "method_map": [
+        {
+          "old": "InstalledAnalysis::refs",
+          "file": "crates/araphor-analysis_back/src/package/installed/history.rs",
+          "line": 12,
+          "old_rules": [
+            "Require a pinned snapshot.",
+            "Return package ID, export, revision, generation, root, parameters, target, and complete artifact identity.",
+            "Resolve the exact descriptor and selected implementation from the retained bundle."
+          ],
+          "current": [
+            "crates/araphor-analysis/src/instance/manifest.rs:13 Instance::manifest",
+            "crates/araphor-analysis/src/instance/read.rs",
+            "crates/araphor-data/src/analysis/managed/replay.rs:23 AnalysisStore::managed_producer_from",
+            "crates/araphor-package/src/metadata.rs:49 PackageBundleV1::metadata"
+          ],
+          "current_rules": [
+            "ManagedSpec binds the native definition digest and exact call IDs.",
+            "Each ManagedCall records image and image digest, package revision, export, target, artifact digest/closure/platform, native arguments, and dependencies.",
+            "Managed version/generation and saved Evaluation retain the exact input parameters and original result attribution.",
+            "Image inspection retains complete descriptors and implementation metadata. No active-export registry is used."
+          ],
+          "tests": [
+            "definition::tests::retained::retained_images_use_plans",
+            "definition::tests::execution::reusing::prepared_closures_stay_pinned",
+            "definition::tests::execution::reusing::prepared_dependency_stays_pinned",
+            "instance::tests::version::retained_replay_uses_generation",
+            "analysis::managed::tests::version::versions_keep_state_history",
+            "analysis::managed::tests::version::versions_keep_call_identity"
+          ]
+        },
+        {
+          "old": "InstalledAnalysis::pin_at",
+          "file": "crates/araphor-analysis_back/src/package/installed/history.rs",
+          "line": 42,
+          "old_rules": [
+            "Reject empty references, zero generation, repeated package/export, invalid names and unsupported targets.",
+            "Require tenant scope and current Run authority before loading original code.",
+            "Keep exact old root, export revision, parameters, target and artifact digest even after a new version becomes current.",
+            "Validate original parameter types.",
+            "Set historical mode so replay cannot commit current state.",
+            "Keep code and memory alive through use."
+          ],
+          "current": [
+            "crates/araphor-analysis/src/instance/replay.rs:74 Instance::replay_retained",
+            "crates/araphor-analysis/src/instance/replay.rs:90 Instance::replay_saved",
+            "crates/araphor-query/src/definition/replay.rs:11 Session::replay_call",
+            "crates/araphor-query/src/definition.rs Session::prepare_resolved",
+            "crates/araphor-data/src/analysis/managed/replay.rs:72 AnalysisStore::saved_evaluation_from"
+          ],
+          "current_rules": [
+            "Inspect and captured-scope validation precede payload hydration. Current Run and original image trust protect execution.",
+            "Data selects the original stored generation and exact definition/call manifest. Query prepares that retained closure and checks its manifest.",
+            "The saved Evaluation keeps original context, parameters, all input relations and state. Descriptor validation rejects a wrong call, export, schema, parameter or tenant.",
+            "Native replay has no publication sink and changes no progress, history, evidence or current head. Final combined Run/Inspect checks protect disclosure.",
+            "Reservations and retained Arrow owners remain alive through use.",
+            "Images retained by admitted definitions survive uninstall. The old active-export requirement is removed by the new image contract. Fixed reference-count ceilings are removed by disabled-default quota rules."
+          ],
+          "tests": [
+            "definition::tests::retained::retained_images_use_plans",
+            "definition::tests::replay::replay_uses_captured_inputs",
+            "instance::tests::replay::replay_keeps_captured_state",
+            "instance::tests::replay::replay_wasm_captured_state",
+            "instance::tests::replay::replay_native_captured_state",
+            "instance::tests::replay::replay_checks_current_authority",
+            "instance::tests::version::retained_replay_uses_generation",
+            "instance::tests::version::retained_replay_checks_inspect",
+            "instance::tests::version::replay_checks_final_authority",
+            "graph::native::tests::managed::replay::graph_replay_survives_removal",
+            "analysis::managed::tests::replay::saved_evaluation_keeps_inputs",
+            "analysis::managed::tests::replay::saved_evaluation_rejects_corruption"
+          ]
+        },
+        {
+          "old": "InstalledAnalysis::authorize",
+          "file": "crates/araphor-analysis_back/src/package/installed/commit.rs",
+          "line": 14,
+          "old_rules": [
+            "Deny historical publication.",
+            "Take a fresh current snapshot and serialize lifecycle changes with publication.",
+            "Require each expected package/revision and exact active generation/revision/metadata.",
+            "Check every distinct retained grant and its exact bundle under one commit_many callback.",
+            "Call the operation at most once, and reject an authority provider that never invokes it."
+          ],
+          "current": [
+            "crates/araphor-analysis/src/instance/mod.rs:475 Instance::authorize_actions",
+            "crates/araphor-analysis/src/instance/sink.rs:295 final authority",
+            "crates/araphor-data/src/analysis/managed/commit.rs",
+            "crates/araphor-data/src/analysis/managed/lifecycle.rs",
+            "crates/araphor-analysis/src/instance/host/removal.rs",
+            "crates/araphor-analysis/src/instance/lifecycle.rs"
+          ],
+          "current_rules": [
+            "One admitted Instance owns one execution grant and its complete exact image closure; independent grants require independent instances. The old process-wide mixed-export snapshot is removed.",
+            "Instance::authorize_actions checks all actual images and required actions together. Option::take enforces one operation and a missing callback returns Denied.",
+            "The Data transaction verifies the exact spec, grant, generation, lifecycle, prior state, pending attempt, source revisions and current authority before mutation.",
+            "Host removal drains the native worker before completing the transition. Renewal, Stop and version replacement use the Data lifecycle CAS.",
+            "Replay has no publication target. A stale owner or captured attempt cannot publish after renewal, suspension, replacement or removal."
+          ],
+          "tests": [
+            "instance::tests::later_failure_is_atomic",
+            "instance::tests::nested_calls_publish_together",
+            "instance::tests::reusing::retained_runs_check_authority",
+            "instance::tests::version::versions_fence_revoked_run",
+            "instance::tests::version::failed_versions_keep_running",
+            "instance::tests::version::version_cancellation_joins_workers",
+            "instance::tests::renewal::renewal_keeps_checkpoint",
+            "instance::tests::renewal::renewal_checks_current_authority",
+            "instance::host::tests::removal::removal_joins_native_guest",
+            "analysis::managed::tests::managed_calls_commit_atomically",
+            "analysis::managed::tests::managed_failure_is_atomic",
+            "analysis::managed::tests::lifecycle::transition_fences_publication",
+            "analysis::managed::tests::renewal::renewal_cas_is_inert",
+            "analysis::managed::tests::removal::removal_waits_all_attempts"
+          ]
+        }
+      ],
+      "old_assertion_map": [
+        {
+          "old_test": "package::installed::commit::tests::shared_root_checks_grants",
+          "assertions": [
+            "A valid shared-root commit calls its operation once.",
+            "Denying a second retained grant prevents the operation despite the first grant remaining valid."
+          ],
+          "current_tests": [
+            "instance::tests::reusing::retained_runs_check_authority",
+            "instance::tests::nested_calls_publish_together",
+            "instance::tests::later_failure_is_atomic"
+          ],
+          "translation": "There is no mixed-grant active-export registry. Each Instance has one grant, with every actual image checked together. Independent grants have separate Instance owners. The old exact two-grant export-registry fixture is not a native API assertion."
+        },
+        {
+          "old_test": "package::installed::commit::tests::shared_store_fences_removal",
+          "assertions": [
+            "Two owners share the lifecycle boundary.",
+            "Removal cannot pass the publication critical section.",
+            "An old snapshot cannot commit after removal."
+          ],
+          "current_tests": [
+            "instance::host::tests::removal::removal_joins_native_guest",
+            "analysis::managed::tests::removal::removal_waits_all_attempts",
+            "analysis::managed::tests::lifecycle::transition_fences_publication"
+          ],
+          "translation": "The Data transaction and native worker drain replace the process-local lifecycle mutex. No stale attempt can publish after the terminal lifecycle transition."
+        },
+        {
+          "old_test": "package::installed::commit::tests::constructor_fences_admission_cleanup",
+          "assertions": [
+            "A second owner cannot collect a package while another owner holds the lifecycle boundary.",
+            "Cleanup occurs only after the boundary releases."
+          ],
+          "current_tests": [
+            "analysis::packages::tests::image::package_image_install_is_atomic",
+            "analysis::packages::tests::image::uninstall_guard_keeps_closure",
+            "analysis::packages::tests::image::uninstall_releases_exclusive_closure",
+            "analysis::managed::tests::removal::uninstall_keeps_admitted_program"
+          ],
+          "translation": "Native owner construction performs no implicit package cleanup. Explicit Data image install/uninstall transactions retain closures referenced by admitted definitions. Constructor-driven garbage collection is absent."
+        },
+        {
+          "old_test": "package::installed::commit::tests::changes::domain_commit_fences_renewal",
+          "assertions": [
+            "Renewal waits for the active commit.",
+            "No generation change occurs inside that commit.",
+            "The old snapshot fails after renewal."
+          ],
+          "current_tests": [
+            "analysis::managed::tests::renewal::renewal_cas_is_inert",
+            "analysis::managed::tests::renewal::renewal_keeps_history",
+            "analysis::managed::tests::lifecycle::transition_fences_publication",
+            "instance::tests::renewal::renewal_keeps_checkpoint",
+            "instance::tests::renewal::renewal_checks_current_authority"
+          ],
+          "translation": "Data lifecycle CAS and final transaction checks replace the shared legacy lock. Public renewal after reopen stays assigned to the retained owner.rs gap."
+        },
+        {
+          "old_test": "package::installed::commit::tests::changes::domain_commit_fences_suspension",
+          "assertions": [
+            "Suspension waits for an active commit.",
+            "The activation stays active with one exact generation inside the commit.",
+            "The old snapshot fails after suspension."
+          ],
+          "current_tests": [
+            "analysis::managed::tests::lifecycle::transition_fences_publication",
+            "analysis::managed::tests::lifecycle::idle_suspend_checks_fences",
+            "instance::host::tests::lifecycle::host_uses_current_authority",
+            "instance::host::tests::host_idle_denial_suspends"
+          ],
+          "translation": "Native current-authority checks, cancellation/join and Data lifecycle CAS preserve one order between publication and suspension."
+        },
+        {
+          "old_test": "package::installed::read::tests::retained::snapshot_reuses_bundle",
+          "assertions": [
+            "Keep one bundle across repeated snapshots and multiple exports.",
+            "Reject another tenant.",
+            "Read descriptors and evaluate while readers are occupied.",
+            "Keep per-export parameters and output.",
+            "Historical evaluation cannot authorize current commit.",
+            "Current revoked authority rejects retained execution."
+          ],
+          "current_tests": [
+            "definition::tests::execution::reusing::prepared_closures_stay_pinned",
+            "definition::tests::execution::reusing::prepared_owners_keep_scope",
+            "definition::tests::retained::retained_images_use_plans",
+            "instance::tests::reusing::retained_runs_check_authority",
+            "instance::tests::version::retained_replay_uses_generation",
+            "instance::tests::version::retained_replay_checks_inspect"
+          ],
+          "translation": "Immutable native definition admission replaces cached active-export snapshots. Historical replay has no sink. Reader-pool and full current inspection behavior also belong to retained read/Inspect leaves, which this map does not delete."
+        },
+        {
+          "old_test": "package::installed::read::tests::retained::historical_snapshot_replaces_bundle",
+          "assertions": [
+            "A fresh grant can pin the exact old bundle after update.",
+            "Keep exact old references, revision, parameters and result.",
+            "Historical/current retained executions keep their own revision.",
+            "Old owners cannot publish after update or removal.",
+            "Unavailable current activation cannot create a new historical legacy pin."
+          ],
+          "current_tests": [
+            "definition::tests::execution::reusing::prepared_dependency_stays_pinned",
+            "definition::tests::retained::retained_images_use_plans",
+            "instance::tests::version::retained_replay_uses_generation",
+            "instance::tests::version::versions_keep_history",
+            "instance::tests::version::native_versions_keep_history",
+            "instance::tests::renewal::renewal_keeps_checkpoint",
+            "graph::native::tests::managed::replay::graph_replay_survives_removal"
+          ],
+          "translation": "Original immutable images survive uninstall while an admitted definition refers to them. Fresh historical reads use a caller grant and exact saved scope; they need no current activation. The old pin failure after uninstall is superseded by this explicit contract."
+        },
+        {
+          "old_test": "graph::tests::installed::installed_history_preserves_expiry",
+          "assertions": [
+            "An update changes current graph code but preserves exact old code and output.",
+            "Historical code cannot authorize current publication.",
+            "Exact old pins survive reopen.",
+            "Expiry keeps the exact old references while downgrading graph proofs."
+          ],
+          "current_tests": [
+            "instance::tests::version::retained_replay_uses_generation",
+            "graph::native::tests::managed::replay::graph_replay_survives_removal",
+            "graph::native::tests::managed::notices::managed_expiry_drains_heads"
+          ],
+          "translation": "The historical image and replay assertions transfer here. Graph expiry transformation and all callers stay in the retained Graph leaves; this audit does not retire those old test leaves."
+        },
+        {
+          "old_test": "discovery::replay::tests::discovery_replay_retains_revision",
+          "assertions": [
+            "Keep original code references after update.",
+            "Replay the original exact snapshot.",
+            "Historical code cannot publish as current.",
+            "Removal/denial leaves the profile unchanged."
+          ],
+          "current_tests": [
+            "discovery::tests::replay::closed_replay_keeps_origin",
+            "discovery::tests::replay::profile_replay_keeps_capture",
+            "instance::tests::version::retained_replay_uses_generation",
+            "instance::tests::version::replay_checks_final_authority"
+          ],
+          "translation": "The separate three-leaf audit records exact stored-profile and retained-image semantics. Current image trust remains required."
+        }
+      ],
+      "current_source_sha256": {
+        "crates/araphor-analysis/src/instance/host/removal.rs": "a944e94e7afaad8e6816a6557c409b91980134a78953cbe7bef12024ac3c69b4",
+        "crates/araphor-analysis/src/instance/lifecycle.rs": "65b2ea87dca85bb5173c0ffca8181cc9359420e6210ce471f3bea3ce4326f474",
+        "crates/araphor-analysis/src/instance/manifest.rs": "37b7379f7cc538d554341a7fa94040044bc38d0d29cc50ad625faa6cdfc0cfff",
+        "crates/araphor-analysis/src/instance/mod.rs": "bd0692602ee4e5a516c3c7fd44c0dbeaf5037d7b2fcdf260554b0e1d76a6b7e0",
+        "crates/araphor-analysis/src/instance/read.rs": "6c0b239af9cd59f444f0b8e0212b4eeb6ed57ac90b6b6f41d15fc22c95429cbb",
+        "crates/araphor-analysis/src/instance/replay.rs": "d6e28426b02a570afeced9144b73654988c2da76ad1a36f9bc6fd3468ff645f3",
+        "crates/araphor-analysis/src/instance/sink.rs": "2c09ac700d7e846eeac19d632fab8292e0ddf28a37a78b491f6d49bd44bd4a18",
+        "crates/araphor-analysis/src/instance/tests/renewal.rs": "757e3ee8e27eb73a1d55b0d6a1ef660edeb31020bb119d1a348f2293d5b2d3c4",
+        "crates/araphor-analysis/src/instance/tests/replay.rs": "f5f62169f1641c66a1fa0729de94313a0a639dfc79789ed3581a43d0d0e83928",
+        "crates/araphor-analysis/src/instance/tests/reusing.rs": "c2cfdc6a61fc88a3a09db1e8fc21b1723882a6f9bd513e827dd3875bbf1748f0",
+        "crates/araphor-analysis/src/instance/tests/version.rs": "12606cc93ad44f5501f90c6d0505fe57a6b2d00444c4e912058b67974f59a874",
+        "crates/araphor-analysis_back/src/package/installed/commit.rs": "748ef327fce597795b70f41fcc620dc7152410a64e10e09e23b1c6b81e7f2438",
+        "crates/araphor-analysis_back/src/package/installed/commit/tests.rs": "3d397a54601ce1691acdd997c35c0ba2009dd3603b89313c6d72890ce8d69a3a",
+        "crates/araphor-analysis_back/src/package/installed/commit/tests/changes.rs": "43939a4fd3d627b543c1557a9284b334860465994740d0e03b11c9c61515c02f",
+        "crates/araphor-analysis_back/src/package/installed/history.rs": "f0717d973432cfad491692c963fb5ca106a0bba58d2e1094bbb309a2db02ad9c",
+        "crates/araphor-analysis_back/src/package/installed/read/tests/retained.rs": "4c56e971e5483d73afba0ae050c9d4f9a5a15633afeff93a2ca1432e5069cb3b",
+        "crates/araphor-data/src/analysis/managed/commit.rs": "aae1715c8ffe6769b4e591808cc4c1aa85c0c628fbb9fcad7efb76306235e137",
+        "crates/araphor-data/src/analysis/managed/lifecycle.rs": "77b5adc1900d38ad6b5741177233c513ab45b2ed34c3bab5db893fec4ee61892",
+        "crates/araphor-data/src/analysis/managed/replay.rs": "e743aa824f055e8da73aa797b165e6c36f927e2d59b967c590a005b11c43019a",
+        "crates/araphor-package/src/metadata.rs": "67cb6c523cff92005f0dc16a08a9041ebdfeda2aee2126abdbc000c0e7379050",
+        "crates/araphor-query/src/definition.rs": "5864f019258eda344926a5b9d77a57b96c5b3488a76400c106113c8a4b08b22e",
+        "crates/araphor-query/src/definition/replay.rs": "11d0df4fc5c18186028944bc12d13f3449f9decf121aed99ebdd857691ac068d",
+        "crates/araphor-query/src/definition/tests/execution/reusing.rs": "1784a6cf0d88c76c3dd25fd333653e044d24eec0c7ea40854ded5b6a5d4d0771",
+        "crates/araphor-query/src/definition/tests/retained.rs": "d3a7143191c3e3a11ef8453110e6eff7eddd067839f4eb7c586892773933713c"
+      },
+      "unresolved_source_paths": [],
+      "proof_relation": "The restored data-removal284 record contains the Data transaction, lifecycle, renewal, version, input and uninstall cases. retirement-cases289 contains ordinary Analysis version and retained replay checks, with the native version case ignored. query-parity289 contains retained_images_use_plans. Source changes and the pending optimizer guard prevent a final-source claim here.",
+      "still_required": [],
+      "retained_boundaries": [
+        "package/owner.rs: public lifecycle and fresh renewal after reopen",
+        "package/inspect.rs: public selected-root output",
+        "package/execution.rs: input admission before cold compilation",
+        "package/mod.rs: remaining declarations",
+        "All package installed/read and Graph/Discovery caller test leaves remain."
+      ],
+      "other_ten_candidates": "Not fully audited in this incremental map. No deletion is recommended for them from this record.",
+      "not_claimed": [
+        "No live edits, Cargo commands or new tests.",
+        "No complete twelve-file replacement, public lifecycle, final Rust CI, physical qualification, or complete net reduction."
+      ],
+      "updated_at": "2026-10-22T21:33:20.064187+00:00",
+      "current_proof_attachments": "/tmp/araphor-retirement-resume-20261022/maps/current-proof-attachments.json",
+      "final_qualification": {
+        "records": [
+          "query-optimize290",
+          "query-native290",
+          "discovery-optimize290",
+          "native-replay290",
+          "retirement-source290",
+          "retirement-guards290"
+        ],
+        "distinct_passing_tests": 65,
+        "qualified_for_listed_leaves": true,
+        "additional_leaf_specific_gates_found": false
+      },
+      "required_before_delete": [
+        "Archive exact current source, all originals, maps, build/artifact identities and the named qualification records before deletion.",
+        "Remove only the listed complete files. Keep all mixed caller tests and the old public owner/Inspect/execution/supervision files."
+      ]
+    }
+  },
+  "proof": {
+    "query-optimize290": {
+      "record_sha256": "a0d36abc065f211f694caaa679e416e31fe030fe41331625cf660e9cac3a00c7",
+      "log_sha256": "d46e69e28e8aa764eb73270ec9517cdbda6dba82fab3fafc000612c0ebbc6dae",
+      "passing_tests": 14,
+      "binary_sha256": "7cca19760d35b73413ee6cfe8b87b0387e21f20509141470c8f8d0f71f8162ed"
+    },
+    "query-native290": {
+      "record_sha256": "86a3c75a24d78cb21271d4751ec1ef22c0420203471dfe397d39fdf07ca333b6",
+      "log_sha256": "915d05371d224d8398f183b7702b8a8c13f238af43ddcc3b2a5c93aa96e25161",
+      "passing_tests": 4,
+      "binary_sha256": "28e24f347daa24f97e9503e3b41b971044e1926b7e64f73bee26772537ad8d85"
+    },
+    "discovery-optimize290": {
+      "record_sha256": "1ed8c5e34d3fd6d3ba02b1cdee19ea351ae9ac49936c868e29cac64795af8206",
+      "log_sha256": "dfebca04cf2b7081e6330a2ce5131ebb787ab8d2da246a7a82766530416199fa",
+      "passing_tests": 6,
+      "binary_sha256": "adfd27371acfa8f772e795c9f577ce2de114c60c16ff7a041db09a2e5ff89a69"
+    },
+    "native-replay290": {
+      "record_sha256": "68653299583d1a250f43ae5e351d6e1194ad0398914939569d0839024a9713bd",
+      "log_sha256": "d6b8e5b092e03ba3d26ae9bee864c973581f1a727481790a63214052704f1703",
+      "passing_tests": 5,
+      "binary_sha256": "adfd27371acfa8f772e795c9f577ce2de114c60c16ff7a041db09a2e5ff89a69"
+    },
+    "retirement-source290": {
+      "record_sha256": "98824edcc90546ffc32e2fb2315434920517bd98f3a8b384dc373ee0dce6dcc9",
+      "log_sha256": "1f39fb17152b8961fb8c4c4c6d02378e52734f895a01161e8fba6921fa127f03",
+      "passing_tests": 15,
+      "binary_sha256": "adfd27371acfa8f772e795c9f577ce2de114c60c16ff7a041db09a2e5ff89a69"
+    },
+    "retirement-guards290": {
+      "record_sha256": "a9244c468431f3509e7e228b3ed1b2767a5e3315646eee818cbf05750b4ed63b",
+      "log_sha256": "515ebaa0345986ad8265c495e9d91632a748bf07c7b4d85090270e0e75651ab4",
+      "passing_tests": 21,
+      "binary_sha256": "adfd27371acfa8f772e795c9f577ce2de114c60c16ff7a041db09a2e5ff89a69"
+    }
+  },
+  "production_nonblank_removed": 737,
+  "retired_before": 132,
+  "retired_after": 137,
+  "remaining_after": 71,
+  "net_reduction_target_met": false,
+  "removed": [
+    "crates/araphor-analysis_back/src/discovery/installed.rs",
+    "crates/araphor-analysis_back/src/discovery/replay.rs",
+    "crates/araphor-analysis_back/src/graph/chunks.rs",
+    "crates/araphor-analysis_back/src/package/installed/history.rs",
+    "crates/araphor-analysis_back/src/package/installed/commit.rs"
+  ]
+}

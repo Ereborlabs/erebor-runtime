@@ -10,6 +10,8 @@ Keep authorization, attribution, recovery, evidence, and atomic commit rules.
 Every program uses native SQL parsing, logical planning, optimization,
 physical planning, and execution. Data owns durable transactions. Query
 subscriptions supply source and window events. Do not add polling.
+Running execution derives from these subscription streams. A replacement must
+keep this ownership rule before its reference file can retire.
 
 The user authorizes this migration on 2026-10-19 after recovery of the
 reference source. The reference crate remains unchanged until each replacement
@@ -38,7 +40,7 @@ Every replacement passes its required checks
 
 | Work | Current implementation | Result |
 | --- | --- | --- |
-| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 80 remaining files still match the baseline. | Done |
+| Source recovery | All 208 reference files were recovered from local commit `6a25ba1b`. The archive retains the complete source and exact later prototype. The 19 remaining files still match the baseline. | Done |
 | Complete source map | The tables below cover all 95 production source files and the root exports. Test families are listed with their rules. | Done |
 | Native and Wasm runtime | Package Runtime passes all 46 current tests in migration-runtime61. The 15 relevant Query cases also pass. Native calls remain in process. Wasm uses native compilation and exact cancellation events. Configured compiler memory limits are Unsupported. Installed lifecycle parity remains open. | Partial qualification |
 | Finite OCI execution | PackageCall and PackageExec retain complete typed returns. All 8 focused SQL contract cases and 4 source-built native Query cases pass. Separate admissions cannot share cached calls. The current final Rust gate is pending. | Focused checks pass |
@@ -48,30 +50,28 @@ Every replacement passes its required checks
 | Context | All 17 focused Context tests pass. Active Analysis retains import authorization and native selection. Quotas are explicit options and disabled by default. | Finite boundary qualified |
 | Fixture qualification | All 4 comparator cases and the corrected entered-guest cancellation/revocation case pass. Active Analysis uses native calls and current Test authority. Native accumulation and clock/seed cases pass. Negative saved fixture time returns Unsupported. | Partial qualification |
 | Managed state and lifecycle | Finite and native subscription checks pass for immutable attempts, guarded state, atomic multi-call publication, saved frontiers, lifecycle comparisons, authority, cancellation, and known terminal outcomes. The internal reactive host admits retained running instances and drains actual workers before replacement. Original live claims cannot publish after clean reopen. Data admission starts no work. Public lifecycle and recovery integration remain open. | Focused checks pass; public integration Not done |
-| Graph producer | Data final authority, immutable retry, notice acknowledgement, and exact previous-window-head checks pass focused qualification. Capture immutable ACK history, source proofs, graph heads and frozen coverage in the same view. Bind detector relations and consume subscriptions. The native producer remains absent. | Not done |
-| Discovery producer | The current adapter subscribes to an admitted PackageCall. Interval split, frozen facts, witnesses, seals, replay, and reviewed baselines remain required. The complete producer is not qualified. | Not done |
-| Notification producer | Finite operations are moved. All 5 reactive tests pass. Native SQL selects route and delivery candidates. Data supplies exact retry and grant-expiry deadlines. Managed supervision is absent. | Not done |
+| Graph producer | Native source subscriptions admit Evaluate and Expire instances through the shared Host. Six feed cases pass, including source intake, stopped intent, retirement, denial isolation, stale grants, and caller abort. Control startup wiring and complete notice, expiry, and window qualification remain open. | Not done |
+| Discovery producer | The native source feed uses the shared Host. Source membership, current authority, owner registration, and live Profile publication pass focused checks. Interval split, frozen facts, witnesses, seals, replay, and reviewed baselines remain required. The complete producer is not qualified. | Not done |
+| Notification producer | Native SQL and the shared Host select and deliver candidates. All nine focused Analysis checks and six Control checks pass on source state 302. These checks include bounded capture, guarded pending attempts, clean reopen, retry and ACK deadlines, cancellation, startup, and disabled configuration. Complete source-failure recovery remains open. | Partial qualification |
 | Public callers | Fresh Inspect status, original successful receipt history, complete output reads, and native retained queries pass through Control and CLI. Lightweight image and definition E2E cases pass with binary replies. Public start, stop, restart, and complete history selection remain open. | Partial qualification |
-| Data coordination waits | Analysis, Query, and Package Runtime use subscription events and exact deadlines. Data still retries contended read locks every 1 ms and repeats native interrupts after expiry in analysis/read.rs. Replace both loops with event-driven ownership without loss of cancellation or deadline guarantees. | Not done |
-| Quotas | SDK bulk, Query bulk/count, Data extraction and DuckDB memory/temp defaults are disabled. Focused SDK, runtime, extraction and finite pressure checks pass. Explicit configured limits and buffer lifetime checks remain. The final Rust gate and remaining resource-boundary audit are pending. Keep identity, format, type, and checked arithmetic validation. | Not done |
-| Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices, descriptor limits, and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public binary transport and CLI presentation now pass focused checks. Full per-window heads and latest selection remain open. | Focused checks pass |
-| Final retirement | Individual replacement checks qualify 128 removed files. The 80 remaining files retain unqualified or mixed rules. The final shared Rust procedure passes on the current source. Complete reference removal remains open. | Partial |
+| Data coordination waits | Contended Data locks now wait on unlock and cancellation notifications or an exact deadline. All 19 read and lock cases pass. The native deadline monitor still repeats interrupts after expiry in analysis/read.rs. That remaining loop must be replaced without loss of cancellation or deadline guarantees. | Not done |
+| Package quotas | SDK export, invocation, and retained-result quotas are removed. Non-time Graph window sizes are removed. External time windows remain. Native SQL selects rows. All 143 focused checks, strict Clippy, formatting, and workspace library test compilation pass. Versions stay unchanged. | Done for this removal |
+| Retained result reads | Fresh Inspect authority, exact stored scope, native local SQL, original row indices and memory lifetime pass focused checks. Historical reads need no current Run permission or image execution trust. Public binary transport, CLI presentation, and current selected-result resolution pass focused checks. Full per-window heads remain open. | Focused checks pass |
+| Final retirement | Individual replacement checks qualify 189 removed files. The 19 remaining files retain unqualified or mixed rules. The final shared Rust procedure does not cover the current source. Complete reference removal remains open. | Not done |
 
-The earlier quota audit found default caps outside the moved owners. Current
-SDK bulk defaults use numeric maxima. Query bulk defaults also use numeric
-maxima; count and pool limits are optional. Data extraction key limits and
-native memory/temp limits are optional. Focused checks pass, but the final
-Rust gate and remaining boundary payload audit are pending. Resource bounds
-must stay configurable with disabled defaults. Preserve identity, type,
-format, and checked arithmetic validation. SDK limits remain shared with the
-native ABI and WIT. Query Memory does not charge every Data writer allocation.
-The complete quota audit is **Not done**.
+On 2026-10-23, the user removes the package quota contract. The only package
+window setting outside SQL is the time window. This instruction replaces the
+earlier requirement to retain configurable SDK quotas with disabled defaults.
+The current change removes all four SDK quota fields and their enforcement.
+Identity, schema, Arrow validity, references, state, authority, and atomic
+publication checks remain. Shared engine configuration remains separate.
+Focused qualification passes. The record below identifies the exact source.
 
 Data reader admission is now StorageLimitsV1.reader_admissions. Its default
 is None, which creates no admission semaphore. Some(0) rejects reads with the
 existing fixed quota error. Positive values use the native semaphore. The two
 reader connections remain a separate execution pool. Focused checks pass.
-The contended-lock and native-interrupt polling described above remain open.
+The native-interrupt polling described above remains open.
 
 The old Query input executor has no active production caller. Its historical
 removal preview estimated 986 production code lines. That preview also removes
@@ -2092,3 +2092,1020 @@ identified lifecycle gap is renewal of a suspended instance under a new grant.
 The replacement must retain original attempt attribution, successful output,
 checkpoint history and generation fences. Keep the old lifecycle files until
 their complete replacements pass.
+
+## Stopped retirement checkpoint
+
+Status: **Not done**. There are 129 retired reference files and 79 remaining
+files. All remaining files and the complete recovery archive retain their
+original bytes. No additional reference file was removed at this checkpoint.
+
+The frozen source passes workspace checking in `check221`. `data223` passes
+70 Managed and Profile cases. `query223` passes eight clock, fixed-window and
+replay cases. `control225` passes the actual Host shutdown case. `analysis223`
+passes two historical replay cases and the contained-artifact fixture case.
+It fails four new domain admission cases. `preflight222` records compilation
+before oversized input rejection. These results do not qualify the later
+Profile provenance correction or the new finite-continuation regression.
+
+Automatic approval review rejected shared Host wiring into Control startup,
+client state and shutdown. The production patch was not applied. Specific
+approval is required for the [proposed integration](../../recovery/araphor-control-host-proposal-20261022.md).
+Implementation stopped at this boundary. The
+[checkpoint record](../../recovery/araphor-retirement-stop-20261022.json)
+contains exact commands, results and custody checks. The recorded work archive
+retains all 805 current source files and the implementation drafts.
+
+The final shared Rust procedure does not cover this source. Complete retirement,
+native finite continuation, active lifecycle changes, source feeds, delayed
+window recovery and the required production reduction remain **Not done**.
+
+
+## Shared execution owner
+
+The user approves the shared Host consolidation on 2026-10-22. Control and
+Discovery now share one `InstanceHost`. Control uses its existing task slot to
+start and join that Host and the source subscription feed. The feed admits,
+starts, and stops membership. It owns no second package execution stream.
+Image installation and definition admission start no work.
+
+Status: **Not done**. The shared Host shutdown test and independent startup
+configuration test pass in `control250`. Fourteen Host and restart checks pass
+in `host249`. The finite Discovery publisher is removed. Finite calls and
+subscriptions use the same native Query publication path. The prepared-instance
+handoff now retains that prepared owner through the existing Host pause channel.
+Its new immediate start, stop, restart, and recovery check is not yet qualified.
+
+The corrected frozen Graph input and native clock expiry checks pass in
+`graph253`. Eleven Profile and package subscription checks pass in
+`discovery253`. The source-built native package subscription passes in
+`native-package253`. These runs preserve exact returned-call identity,
+auxiliary-output rejection, unchanged domain state on failure, retained context,
+and current authority. The source-isolation test fails in `source253` before
+revocation: it waits for a raw-row hook that a metadata subscription does not
+call. Its replacement checks actual native stream admission. That replacement
+and the public contained-artifact fixture selector are not yet qualified.
+
+No reference file is removed by this consolidation. There are 129 retired
+files and 79 unchanged reference files. The complete source checkpoint is
+`recovery/araphor-consolidation-20261022T1501Z.tar.gz`, with SHA-256
+`9a17da34f9e0b4d47b8aec1cba7206d329d0e3fe80776cba88ba0e35a07b76f6`.
+The earlier approval rejection above is historical. The user has approved the
+shared Host integration. No new approval is required for that integration.
+
+Complete producer supervision, delayed-window recovery, removal and version
+operations, source-isolation qualification, native Data coordination waits,
+the required production code reduction, and the final shared Rust procedure
+remain **Not done**. The final procedure must run after the last covered edit.
+
+
+## Native input and fixture leaf retirement
+
+Status: **Done** for the two reference leaves. Complete retirement remains
+**Not done**. The [qualification record](../../recovery/araphor-input-fixture-retirement-20261022.json)
+contains exact commands, source and binary hashes, passing selectors, source
+coverage, and the proof archive. The source archive retains both original files.
+
+The native events TableProvider and Graph projection replace Graph input
+paging and assembly. Twenty-two input checks pass in `graph-input249`. The
+corrected immutable-facts check passes in `graph253`. Both current mixed-origin
+checks pass in `graph-origin255`. The production dependency audit permits the
+22 unchanged checks to carry forward; the failed observer assertion does not
+count as a pass. SQL defines the selected window. The remaining chunk and window
+files retain the separate automatic scheduling duties. No complete producer
+claim is made.
+
+All 11 Qualification checks pass in `fixture-owner255`, including SQL, Wasm,
+and actual source-built native fixtures. Control passes three fixture calls;
+Data passes request encoding; the CLI passes six image command checks. The
+public request can select an exact artifact inside its exact root OCI image.
+Without that selector, it tests the root artifact. Testing starts no Discovery
+and writes no package execution state.
+
+The two removals delete 311 nonblank production lines. There are now 131
+retired files and 77 unchanged reference files. This is a deletion count,
+not the complete redesign reduction. The required overall production reduction
+and the final shared Rust procedure remain **Not done**.
+
+### Shared Host qualification and Discovery owner retirement
+
+The shared Host owns the execution collection. Discovery and Graph source
+subscriptions only admit instances and change running intent. Control supplies
+the same Host to its public APIs and startup task. A prepared-instance handoff
+uses the existing pause channel and waits for collection acceptance. Stop and
+replacement join the actual worker before the Data lifecycle write. Caller
+abort cancels a feed, but the feed retains its owner until admission workers
+join.
+
+The frozen source in `manifest268` passes compilation of workspace library
+tests. `ownership270` passes all 12 selected lifecycle, slot-wait, source-denial,
+and caller-abort cases. `joined270` passes the version case that captures the
+joined worker's saved state. `discovery-owner272` passes six constructor,
+context, membership, and finite-publication cases. `query-owner272` passes both
+native clock cases. These are focused results, not the final shared Rust gate.
+
+`live270` passes the existing live publication and shutdown case with its
+128 MiB input pool, 16 MiB output pool, and original deadlines. A concurrent
+metadata read previously reserved all free input memory. Profile conversion
+then failed despite its small input. Metadata reads now retain their per-read
+byte bound and charge their actual retained memory. Full Snapshot, Page, and
+Changes reads retain their existing prepayment. The metadata boundary, memory
+scope, remaining-capacity, local-capacity, and notification-deadline cases pass
+in `query-metadata271`. Its catalog digest case fails because the native Graph
+manifest has five new fields; the updated digest still requires qualification.
+No speed benchmark or strict bound on all transient allocations is claimed.
+
+`data-waits269` passes all 19 read and lock cases. `data-managed269` passes all
+72 Managed and Profile cases. `data-graph269` passes the six Graph-interest
+cases, the notice-dependency case, and 32 Graph storage cases. Six other Graph
+storage cases fail because reopen fixtures retain the new lease or their local
+schema omits the mutable notice fields. The source corrections are under
+qualification. `graph-notices270` passes prefix drain and exact-source
+invalidation. Three multi-head notice and expiry cases still need qualification.
+
+The complete owner map permits removal of
+`crates/araphor-analysis_back/src/discovery/mod.rs`. Its 52 nonblank lines
+define the old owner, context contract, constructor, memory scope, operation
+mutex, and registration lifetime. Native input plans and captured receipts
+replace the callback contract. The shared Host replaces the execution owner
+and operation mutex. Constructor and Drop checks preserve registration.
+The separate live, replay, installed, corpus, and crash files remain.
+
+The [retirement record](../../recovery/araphor-discovery-owner-retirement-20261022.json)
+contains the exact method map, source hashes, commands, and passing test names.
+The source archive is `recovery/araphor-consolidation-20261022T1855Z.tar.gz`,
+SHA-256 `055fc924b4ea54c633867e9b676f1c93fba6b58691e7dd8070dd6b7a16c1c8fc`.
+The original leaf in that archive and the current leaf matched baseline
+`6a25ba1b` before removal.
+
+This owner-leaf retirement is **Done**. There are 132 retired files and
+76 unchanged reference files. Complete producer replacement, source removal,
+the required overall production reduction, and the final Rust procedure are
+**Not done**. Control Graph startup, removal and recreation, historical
+Discovery replay, fixed-window recovery, and native interrupt cancellation
+still require work.
+
+### Graph integration qualification
+
+Status: **Not done**. The frozen source in `manifest274` compiles all workspace
+library tests. `data-reopen275` passes all ten selected Graph storage checks,
+including the six failures recorded above. The reopen fixtures now release
+their Graph lease before they reopen the store. The integrity fixture uses
+the current notice fields. No production storage check is removed.
+
+`graph-notices275` passes all five notice and expiry cases. These checks retain
+all window heads, atomic rollback, exact source invalidation, and unchanged
+state on a denied writer. The denied-writer hook returns Denied at the writer
+boundary. It does not prove a reentrant authority change under a commit lock.
+`catalog276` passes the complete catalog digest and Arrow lifetime check.
+The earlier `catalog275` selector matched no tests and provides no proof.
+
+`control-graph275` passes four checks: independent Graph configuration, inert
+definitions, exact node scope, and startup when Data is unavailable. The fifth
+check, `graph_sources_use_host`, times out before complete source processing.
+Control now prepares the Graph source feed for its shared Host, but automatic
+Graph processing is not qualified. No timeout or quota was increased. There
+are still 132 retired files and 76 unchanged reference files. No additional
+reference file can retire from these results alone.
+
+`versions277` passes all eight ordinary version cases on the same frozen
+source. `native-version278` passes the ninth case with source-built native
+artifacts. These checks include failed replacement, current Run permission,
+target image trust, worker cancellation, saved history, and joined saved state.
+
+The diagnostic `control-stack276` finds native Wasmtime compilation still
+active after 40 seconds. It is not a test pass or a benchmark. The source
+audit finds one shared Runtime and a strong component cache. The new Control
+test now uses the existing Discovery test's 90-second publication bound. It
+checks that all three components are cold before execution and cached after
+each source. Production deadlines, quotas, and cache options are unchanged.
+The corrected test still requires qualification.
+
+The checkpoint archive is
+`recovery/araphor-consolidation-20261022T1918Z.tar.gz`, SHA-256
+`9544843ac4258b74d913cf8ec22885f1467724571e7b0c6cfa7556b360ffd200`.
+It retains the frozen source and the earlier build and Graph check records.
+Package removal, image uninstall, and explicit recreation are now under
+compilation. They have no passing result on this source yet. No backup file
+was removed for those changes.
+
+
+### Removal and replay qualification in progress
+
+Status: **Not done**. `manifest281` compiles all workspace library tests.
+`control-cold282` passes `graph_sources_use_host` in 77.891 seconds. The test
+starts both Graph sources through the same Host. It checks cold compilation,
+component reuse, exact node scope, durable publication, and joined shutdown.
+The new test uses the 90-second publication bound described above. This result
+does not qualify all Graph window, reuse, or failure-reporting behavior.
+
+`data-removal281` passes 87 selected cases and fails two. The failed checks find
+that actual capture accepts a Removed instance and that explicit rebuild
+still decodes prior state. The shared capture validator now rejects Removed
+instances. Rebuild retains the prior result identity for the commit comparison,
+but does not decode or supply that prior state. These corrections require
+qualification. The pending-attempt policy for finite capture is unchanged.
+
+`analysis-removal281` passes 22 selected cases and fails one. All five Host
+removal cases pass, including native worker join, recreation, retained history,
+and Removed-instance recovery. The failed Discovery replay case reports a
+missing definition image with a field name absent from the existing narrow
+resource classification. That exact name is now included. Corrupt inputs and
+authority denial keep their existing error classes. The correction requires
+qualification.
+
+The checkpoint archive is
+`recovery/araphor-consolidation-20261022T1951Z.tar.gz`, SHA-256
+`d1cbce497ce98962e93634e2400944c03e31dd6d07497bb2960a346f0210994c`.
+It contains source state 281 and the complete build and focused test records,
+including all failures. Later capture, freshness, and supplied-input changes
+are outside this checkpoint. `manifest283` fails on a new Query test that
+compares Dataset values without a PartialEq implementation. The test now
+compares the dataset name and Arrow batches. Its assertions are retained.
+
+There are still 132 retired files and 76 unchanged reference files. No
+reference file is removed for an unqualified correction. Complete retirement,
+the required overall production reduction, and final shared Rust CI are
+**Not done**.
+
+
+### Native lifecycle and source qualification
+
+Status: **Not done**. `manifest284`, `manifest285`, `manifest286`, and
+`manifest287` compile all workspace library tests. The Data capture corrections
+pass all 90 selected cases in `data-removal284`. The eight selected Control
+checks pass in `control-removal284`. The ten CLI removal and output checks pass
+in `cli-removal286`. These are focused checks, not complete workspace CI.
+
+`analysis-retained286` passes 32 cases and fails two new timed-output cases.
+Its passing cases include all four Discovery replay cases, SQL and Wasm saved
+state, source-built native replay, exact historical generations, current Inspect,
+and the final combined authority check. The timed cases find that finite
+managed calls do not retain package input expiry metadata. SourceScan now
+retains that metadata for both Follow and managed finite execution. The
+ordinary SQL plan and its captured time are unchanged.
+
+`query-retirement286` passes 25 cases and fails two new lifetime checks.
+The new tests still retain their own PackageCall clones and original input
+buffers at their final capacity check. The corrected tests release those
+owners before they require complete capacity release. No production lease or
+quota changes. `query-corrections287` passes all eight selected cases, including
+both failures, typed supplied inputs, exact retained pins, captured time,
+state provenance, and managed window capture. `query-source287` passes five
+source-frame, range, capacity, and deadline-only window cases.
+
+`analysis-lifecycle287` passes 68 cases and fails four. The passing cases cover
+native removal joins, separate instance state, stopped intent, SQL/Wasm/native
+checkpoints, immutable retry, native finite publication, current authority,
+and complete fixture returns. The failures are reader contention in a test
+observer, admission under memory pressure, a pending request compared with the
+uncaptured input request, and an empty-window fixture whose output requires
+input evidence. Corrections retain the existing 30-second admission bounds,
+the exact stored native frontier, and required output evidence. The new
+window fixture supplies a native COUNT row when the event window is empty.
+The corrections require qualification. No failure is treated as a pass.
+
+The checkpoint is `recovery/araphor-consolidation-20261022T2042Z.tar.gz`,
+SHA-256 `1df3ef1b8e41c65ce51d072b46ee6c1735af1f2dfcb4f3e835e0eb3024471a00`.
+It retains source state 287, the two later test corrections, and all listed
+build and test records. The later observer correction is outside that archive.
+No reference file retires from these results alone. There are 132 retired
+files and 76 unchanged reference files.
+
+### Public Instance gaps found by the source audit
+
+Status: **Not done**. The native library owners support first admission,
+Start, finite Run, Stop, Update, Rollback, and stopped authority renewal. The
+public Control request enum and CLI do not yet expose these operations.
+Recreate requires an existing Removed instance and cannot create a first job.
+Keep the old package owner until those public routes have a replacement.
+
+A public execution operation has a fresh authenticated caller grant. The
+running Instance has a separate stored execution grant and attribution.
+The user permits a current authorized caller to operate an existing Instance
+when its selection permits the saved scope. Ordinary Start, Stop, finite Run,
+Update, and Rollback keep the saved execution grant and attribution. The
+existing atomic commit_many seam must check both grants at the effect boundary.
+Explicit Renew requires a stopped and joined Instance with the exact saved
+selection. This operation replaces its execution grant.
+Fresh renewal after reopen must prepare exact retained code under the new
+grant without requiring the revoked or expired old grant.
+
+Each added route or helper must replace an existing responsibility with a
+simpler implementation. Do not add a sharing framework, permission model,
+owner registry, or separate executor. Public lifecycle implementation and
+qualification remain **Not done**. The statements above record the user's
+decision; they do not record a test result.
+
+A pure SQL or PRQL job can have no package calls. Its selected root output is
+retained in the existing Managed store. The public result reader currently
+accepts only package-call output. It must also read and query an exact selected
+root result after fresh Inspect and captured-scope checks, before Arrow payload
+hydration. This requires no second output store or fabricated package metadata.
+Keep the old Inspect leaf until that route has a qualified replacement.
+
+The configured input-before-cold-compilation contract, native interrupt loop,
+Graph reuse and durable failure reporting, full window recovery, automatic
+Notification supervision, complete source retirement, required overall code
+reduction, and final shared Rust CI remain **Not done**.
+
+### Native optimizer and admission corrections
+
+Status: **Not done** for complete retirement. `manifest289` and `manifest290`
+compile workspace library tests. These commands do not run full workspace CI.
+Host restore now checks current Run authority before native preparation.
+Previously, a denied instance could wait for memory before it found the denial.
+All five selected admission and pending-request checks pass in
+`host-admission289`, with the original capacity and deadline assertions.
+
+`retirement-cases289` passes 26 checks and leaves one native version check
+ignored. `query-parity289` passes nine input, scope, retained-image, and configured
+limit checks. These records cover source state 289. They do not qualify the
+later optimizer correction by themselves.
+
+The existing Discovery code-change check found a native stack fault during
+admission optimization. DataFusion tree recursion protection was active. An
+Arrow constant cast used more stack than the native recursion checkpoint
+reserved. Both Query optimizer calls now use the existing Parser stack guard.
+The SQL, optimizer rules, stack constant, test deadlines, and fixtures stay
+unchanged. The guard does not change native recursion segments or Arrow
+checkpoints. Very deep native plans are not qualified by this correction.
+
+On source state 290, `query-optimize290` passes all 14 selected checks, including
+native optimizer errors and cancellation joins. `discovery-optimize290` passes
+all six selected checks, including code change, window frontiers, conversion
+failure, and the recorded-snapshot oracle. `native-replay290` passes all five
+saved replay and native version checks. `query-native290` passes all four
+source-built native execution and resource checks. No test stack setting,
+timeout, or quota was increased.
+
+The checkpoint is
+`recovery/araphor-retirement-checkpoint-20261022T211945Z.tar.gz`, SHA-256
+`e87544bb0bc41c893c85c47c86abfe12aa1e5882a297eaa81e0e2575f966da39`.
+It retains the source, earlier completed records, current diagnostic maps,
+and all six native artifacts. The later completed state-290 check records
+require a new checkpoint before a reference file can retire.
+
+The source audit also finds a remaining admission-status gap. The Host logs
+non-denial restore errors before an attempt exists, but does not retain Failed
+readiness. Keep the old supervision file until that behavior has a qualified
+replacement. There are still 132 retired files and 76 reference files.
+
+### Discovery replay and package commit retirement
+
+Result: **Done** for five complete reference files. Native Query, Analysis,
+Package, and Data owners now replace Discovery image lookup and replay, Graph
+chunk splitting, installed image history, and the installed commit guard.
+The method and assertion maps cover all removed methods and six old replay
+tests. Current input, replay, authority, renewal, removal, atomic-publication,
+and native execution checks retain their assertions. All 65 distinct checks
+pass on source state 290, with no ignored case.
+
+The current model uses one grant per Instance and its complete image set.
+Independent grants have independent Instances. Exact saved images survive
+uninstall while a definition retains them. Retained replay uses the exact
+stored profile and saved inputs; it does not accept caller-edited profiles.
+Raw-input expiry does not remove those saved managed inputs. These are explicit
+contract changes from the old callback and global activation model.
+
+The removal deletes 737 nonblank production Rust lines. It does not count test
+code, comments, blank lines, or a complete net reduction. The original mixed
+Graph and package caller tests stay. The public package owner, Inspect,
+execution, supervision, and remaining window files stay for their recorded
+gaps. There are now 137 retired files and 71 unchanged reference files.
+
+The [retirement record](../../recovery/araphor-five-leaf-retirement-20261022.json)
+contains every removed file hash, replacement map, test record hash, and native
+artifact identity. The source and complete proof checkpoint is
+`recovery/araphor-retirement-checkpoint-20261022T213330Z.tar.gz`, SHA-256
+`dd167aaa3285b805370ba50668671e0e6808c495d8935d10346fd0a779742dc4`.
+The checkpoint retains all five original files before removal. All remaining
+reference files match baseline `6a25ba1b` after removal. Complete retirement,
+the required net reduction, and final shared Rust CI remain **Not done**.
+
+### Exact selected SQL and PRQL output qualification
+
+Result: **Done** for exact saved output reads and queries. ManagedOutput now
+distinguishes a package-call result from the selected root result in the
+existing Data reader. The reader checks the captured scope before IPC loading.
+It checks the saved generation schema and each receipt-to-call binding. The
+public route uses the existing binary Output and Result replies. Local queries
+use decoded datasets through native Query tables and release unused wire
+buffers before execution. There is no second store or producer execution.
+
+`manifest291` is interrupted because its narrower feature graph starts a new
+bundled DuckDB build. It supplies no passing compilation result. `manifest292`
+uses the existing workspace feature graph and fails on four field accesses in
+one freshness test that still expects the old output type. The corrected test
+matches the package-call variant and keeps all original assertions. Three
+redundant field patterns are also corrected. `manifest293` compiles workspace
+library tests without warnings.
+
+On source state 293, `data-selected293` passes all 95 selected Data checks.
+`analysis-selected293` passes all 22 selected history, disclosure, renewal, and
+SQL/Wasm/native replay checks. `query-selected293` passes all nine local-table,
+PRQL, retained-image, and typed-input checks. `control-selected293` passes all
+seven selected binary RPC checks. No test is ignored. The call-swap regression
+keeps the declared ID and dependency sets unchanged and requires Invalid before
+and after IPC corruption.
+
+The current retained manifest requires selected_schema from the native logical
+plan. The field has no compatibility default. The
+[review route](../guides/araphor-discovery-definition-review.md#saved-sql-and-prql-result-reads)
+names the owners and checks. No reference file retires for this change alone.
+There are still 137 retired files and 71 unchanged reference files. Public
+lifecycle, admission failure status, complete window recovery, Notification
+supervision, native interrupt replacement, required net reduction, and final
+shared Rust CI remain **Not done**.
+
+The [selected-output qualification record](../../recovery/araphor-selected-output-qualification-20261022.json)
+retains all 133 focused results and their source hashes. The later checkpoint
+`recovery/araphor-retirement-checkpoint-20261022T220327Z.tar.gz`, SHA-256
+`f0b045f03138ca46c247a49b2d7067f7ea05f141991f0bcfee003266f1087f43`,
+retains source state 293, its complete proof records, and the current drafts.
+
+### Admission failure and Notification continuation checks
+
+Status: **Not done** for complete supervision. Data now records an admission
+failure when no managed attempt exists. The write checks the saved Instance,
+completed revision, and lifecycle. It preserves running intent, output, saved
+state, and progress. Denial uses the existing suspension rule. Busy and
+cancellation do not create a Failed record. A later successful publication
+clears the current failure and preserves its history.
+
+`data-notification296` passes all 97 selected Data checks. The first admission
+checks found two test errors: one corruption case retained its terminal row,
+and one SQL fixture used a supported moving-window predicate. The corrected
+cases keep the original validation rules. On source state 299, the opening
+and capture failure cases pass. The retained-image case also passes after its
+new corruption assertion uses the current OCI error type.
+
+`manifest299` compiles all workspace library tests. It does not run the final
+Rust CI procedure. The first Notification runtime group passes four cases and
+fails five. One failure opens a pre-created test directory instead of a private
+Data subdirectory. Four failures occur before delivery at the native sink
+schema check. These failures require correction and another qualification run.
+The Notification replacement is not qualified by compilation alone.
+
+The source audit finds a remaining recovery path. A failed source capture
+must retry when a relevant source changes. The current Host records the failure
+but waits for a lifecycle change. Use Query subscriptions for this path. Do
+not add a polling task or a second clock owner. A new Notification grant
+revision does not renew a route's captured approval. The required route
+configuration already emits a Data event. Current authority checks remain at
+the actual effect. No additional grant watcher is required by that rule.
+Keep the complete old supervision file until its
+replacement passes the required checks. There are still 137 retired files and
+71 reference files. Complete retirement, the required code reduction, and the
+final shared Rust procedure remain **Not done**.
+
+### Native package lifecycle and retained-image retirement
+
+Result: **Done** for seven complete reference files. Native Instance admission,
+Data image storage, native package-call planning, and Data publication replace
+installation, activation, finite execution, removal, retained-image reads,
+snapshot ownership, and saved-result freshness. The method maps cover all 36
+removed methods. All 48 selected Analysis cases and 30 selected Query cases
+pass on source state 300. Native checkpoint and version cases run with the
+source-built artifacts; no selected case is ignored.
+
+The earlier 97-case Data run remains applicable. All 207 Data source hashes,
+its dependencies, and its exact test executable are unchanged. Later changes
+belong to its consumers and their tests. The new target checks require typed
+Unsupported errors for selected Python and unqualified Native code. An image
+with ambiguous SQL and Wasm implementations is rejected before installation.
+The existing OCI corruption checks preserve held-code execution, current
+authority, complete auxiliary descriptors, and memory ownership.
+
+This removal deletes 1,420 nonblank production Rust lines from the reference
+files. It excludes their test declarations, comments, and blank lines. It is
+not the complete net reduction. The remaining 64 reference files match the
+original baseline. Keep installed execution for input-before-compilation
+ordering, preparation and window files for complete window recovery, and
+supervision for source and capacity recovery. Public lifecycle, Graph and
+Discovery producer parity, Notification delivery, the required net reduction,
+and final shared Rust CI remain **Not done**.
+
+The [retirement record](../../recovery/araphor-seven-package-retirement-20261022.json)
+contains the complete method and assertion maps, exact proof hashes, and all
+seven removed file hashes. The checkpoint is
+`recovery/araphor-retirement-checkpoint-20261022T233130Z.tar.gz`, SHA-256
+`e5843149214c10feb03985f21d11e99cd850e3a86905755ff9bf3e7f5d5dba11`.
+It retains all seven files before removal and records the independent
+Notification failures. Those failures do not qualify Notification supervision.
+
+### Shared Notification execution and capacity release
+
+Result: **Done** for the bounded continuation checks on source state 302.
+`analysis-notification302` passes all nine selected cases in 10.633 seconds.
+`control-notification302` passes all six selected cases in 65.961 seconds.
+`manifest302` compiles all workspace library tests. `format302` passes. These
+commands do not replace the final shared Rust procedure.
+
+The native sink accepts DataFusion's equivalent Utf8View fields and field
+metadata. It still rejects changed column names, types, and counts. The
+captured selection must have the admitted tenant. The exact canonical
+definition, tenant-only grant, empty image set, and absence of package calls
+are checked before admission and restore. The capture remains complete and
+untruncated before the first effect.
+
+The Host uses the same native subscription collection for Notification and
+package instances. A Notification stores lifecycle and running intent; it
+does not create package attempts, package receipts, or managed progress.
+The actual effect checks current authority and lifecycle after the pending
+attempt is durable. Cancellation preserves that pending attempt. A clean
+reopen sends its exact original route and subject before the new candidate.
+The retry and ACK tests add no input writes after startup. Query's existing
+deadline events cause each delivery and escalation.
+
+`host-capacity301` passes 48 selected Host and finite execution cases in
+77.117 seconds. Its production source is unchanged in state 302. The only
+source difference corrects a retained test Arc; the nine-case rerun covers
+that corrected test. When initial stream capture reports shared output
+pressure, the Host joins its workers and waits on the existing capacity
+event. Releasing capacity resumes execution without a new input commit.
+Cancellation while capacity is held joins without a partial publication.
+
+The startup test restores a retained running Notification while Graph is
+disabled. The disabled configuration creates no image, instance, source
+registration, or subscription task. Grant and route count options default to
+None. Explicit count limits remain atomic across startup and runtime updates.
+Updating a grant does not renew a route's captured approval; route
+configuration already emits the required Data event.
+
+No additional reference file is removed by these checks. Complete source
+failure recovery, the native interrupt loop, complete producer parity, the
+required net reduction, and final shared Rust CI remain **Not done**.
+
+### Prepared SQL test retirement
+
+Status: **Done** for the complete reference test file
+`package/installed/read/tests/prepared.rs`. Complete retirement remains
+**Not done**. The [assertion and custody record](../../recovery/araphor-prepared-test-retirement-20261023.json)
+maps all five old tests and their fixture helper to the current owners.
+
+The OCI codec check passes on the current Package source. It checks exact
+root, artifact, SQL and digest round trips, a valid Provided input, the
+prepared predicate, and a digest change for an output-SQL-only change. Six
+required Query checks pass within the seven-case `prepared-query309` run.
+They check target rejection, exact input shapes, retained descriptors and
+image identity, and SQL body scope. The separate `image309` run passes both
+Data image checks for retained closure and atomic installation. These ten
+checks qualify this test file. Installation remains inert; selected native
+definition preparation validates the SQL body.
+
+The wider Data run passes 105 checks and fails one old dependency-revision
+expectation. The new Host recovery check fails when its initial status read
+finds a pending attempt. The wider Host run passes 46 checks and fails one
+admission-count assertion; an unchanged run of that exact case passes.
+These results do not qualify recovery or supervision retirement.
+
+The verified checkpoint is
+`recovery/araphor-retirement-checkpoint-20261023T010642Z.tar.gz`, SHA-256
+`24d0dd7c698c2364200616035cfac52fbc8fb372403e9b2a96a31df7cdb0c745`.
+It preserves all 64 reference files before removal. There are now 145
+retired files and 63 unchanged reference files. This removal contains no
+production code and does not count toward the production reduction target.
+Keep the `prepared` predicate: Data activation preflight still uses it.
+
+### Native failure and interruption retirement
+
+Status: **Done** for the complete reference test files
+`package/tests/native/failures.rs` and `package/tests/native/interruption.rs`.
+The [assertion and custody record](../../recovery/araphor-native-failure-interruption-retirement-20261023.json)
+maps all five old tests to current checks. Native lifecycle and process-abort
+recovery remain separate requirements; their reference files stay in place.
+
+The fresh Native fixture build passes for `x86_64-unknown-linux-gnu`.
+`native310` passes all six selected cases. Its Native failure case checks six
+error modes before and after a clean store reopen. Each mode keeps its exact
+error, failed status, saved request and terminal record. No result, checkpoint
+or progress commits. All four evaluation slots return. Native checkpoint
+overflow and a cap-rejected Native replacement preserve the complete prior
+output, checkpoint, context, receipt and commit revision.
+
+`host311` passes all 53 cases. Actual Native cancellation, revocation and
+expiry retain a running guest until it joins. A socket event comes from
+inside Native compute; no file polling is used. After guest release, one
+five-second guard covers compute completion and the API join. Explicit Host
+stop checks the exact saved Cancelled terminal. Already-expired admission
+creates no instance or attempt. The connected Wasm, version and checkpoint
+run passes eight cases. Query and Runtime each pass their two selected Native
+checks. Formatting and strict workspace Clippy pass on source311.
+
+Nonzero unsupported Native resource caps are checked only for selected Native
+execution. SQL and Wasm remain usable. Zero caps remain Invalid configuration
+at Runtime construction. No process isolation or fallback target is added.
+
+The admitted-failure recovery case also passes in `host311`. It resumes from
+the real saved frontier after an Incomplete or Limit result. Unrelated writes
+do not trigger another call. A relevant source change or the query's saved
+window deadline triggers one fresh evaluation. The same generation, running
+intent, prior result and captured parameters remain intact. The correction
+removes global relation revisions from this managed dependency read and uses
+scoped dependencies. A real profile-change assertion and diagnostic retention
+assertion pass in the eight-case `metadata310` run. Pre-attempt source failure
+and typed Busy after an attempt remain **Not done**.
+
+The verified checkpoint is
+`recovery/araphor-retirement-checkpoint-20261023T013505Z.tar.gz`, SHA-256
+`691b7c354309e03db9d8a4e6da9836bbc889c576033d1cb45c49628cbf2b3c6b`.
+It preserves all 63 reference files before the two removals. There are now
+147 retired files and 61 unchanged reference files. These two test removals
+contain no production code. Complete retirement, the required production
+reduction and the final shared Rust procedure remain **Not done**.
+
+### Native lifecycle and restart retirement
+
+Result: **Done** for the three complete Native reference files
+`package/tests/native/lifecycle.rs`, `restart.rs`, and `mod.rs`.
+The private helper has no caller outside these two test files. All remaining
+reference files, including their parent module declarations, retain their
+baseline bytes.
+
+The current `InstanceHost` tests execute the installed Native image through
+native DataFusion physical execution. The shared version test checks image
+identity, Native output, Wasm update, exact receipt replay, rollback, two clean
+store reopens, removal, retained history, and all four operation permits.
+Image installation starts no instance. A completed finite run reports
+`Inactive`.
+
+The restart test calls public `InstanceHost::update` in each fault child.
+The panic child checks the actual SDK panic result and preserves the current
+instance. The abort child must exit with Linux `SIGABRT`. The parent reopens
+the store after each child, compares complete saved output and state, and
+replays prior receipts without a write. After abort, the current generation
+executes successfully. The unfinished candidate generation remains blocked
+by its exact pending attempt. The children provide fault injection for the
+test. They add no production process owner.
+
+| Check | Result | Seconds |
+| --- | --- | --- |
+| `manifest313` | Workspace library test targets compile | 40.428 |
+| `lifecycle313` | SQL and Native version cases pass | 42.618 |
+| `restart313` | Native panic, abort, and recovery case passes | 68.976 |
+| `clippy313` | All workspace targets and features pass with warnings denied | 21.943 |
+| `format313b` | Formatting passes | 4.550 |
+
+The qualified Native artifact is `runtime.so`, SHA-256
+`2c8bf062ac29642afff532ca1cd8f2ba2b9ed90352ae148136cc67c577b62cb8`,
+for `x86_64-unknown-linux-gnu`. The exact assertion map, source hashes, test
+commands, binary hashes, and removal record are in
+`recovery/araphor-native-lifecycle-restart-retirement-20261023.json`.
+
+The verified checkpoint is
+`recovery/araphor-retirement-checkpoint-20261023T021945Z.tar.gz`, SHA-256
+`08783763f490b0963d6808f325288ded3f128d43f1e96fb18cf1559b83dc8a05`.
+It preserves all 61 reference files before this removal. The actual count is
+150 retired files and 58 remaining files. These three removals contain no
+production code. Complete retirement, the required production reduction, and
+the final shared Rust procedure remain **Not done**.
+
+### Admitted source or capacity recovery
+
+Result: **Done** for live recovery after an admitted capacity failure.
+The existing Host member select races its ordinary native Query subscription
+with the original typed resource wait. Source changes and captured window
+deadlines remain in Query. No new task, source watcher, clock, schema, or
+durable state is added.
+
+After a resource event, the Host cancels and joins the ordinary stream. A fresh
+capture is allowed only when the exact failed completion is still latest and
+newer than successful progress. A newer finite result prevents duplicate
+execution. If the resource event cancels a new source attempt, Data retains
+its newer completion and the actual prior receipt frontier. The normal native
+dependency check can then execute that newer source cut.
+
+The sink now uses the retained Session memory scope. The pool and configured
+bounds stay the same. The member's own buffer release cannot trigger its
+external capacity wait.
+
+| Check | Result | Seconds |
+| --- | --- | --- |
+| `manifest318` | Workspace library test targets compile | 41.654 |
+| `capacity318` | Release, source-first, finite-head, and cancellation cases pass | 5.135 |
+| `host318` | All 54 connected Host, delivery, and joined-state cases pass | 97.236 |
+| `memory317` | Scope and child release cases pass | 0.012 |
+| `encoding315` | Canonical field metadata, raw SQL OCI metadata, and eight archive cycles pass | 0.050 |
+| `clippy318` | All workspace targets and features pass with warnings denied | 80.768 |
+| `format318` | Formatting passes | 4.865 |
+
+The first build found a private existing test helper. The first runtime check
+used an old handle after a lifecycle change. The corrected test uses public
+`InstanceHost::start` and its returned handle. No production lifecycle fence
+was weakened. The earlier failed records remain in the
+[qualification record](../../recovery/araphor-reactive-capacity-recovery-20261023.json).
+
+The three production files add 117 nonblank lines and remove 55. The four-case
+test uses the existing native `JoinedInput` provider. These additions do not
+qualify removal of the complete reference supervision implementation.
+Pre-attempt capture recovery, compiler and cache forwarding, complete
+retirement, the required production reduction, and the final shared Rust
+procedure remain **Not done**.
+
+### Supervision test retirement
+
+Result: **Done** for the complete reference file
+`package/supervision/tests.rs`. All three methods and all 14 assertion groups
+have passing replacements. `host318` includes the exact healthy `COUNT` value
+after another job expires. `cold-query318` checks the complete retained image
+and auxiliary descriptor. `cold-analysis318` checks retained code, current
+authority, and inert admission. These three runs pass all 57 selected cases.
+The old file has no private helper definition or external helper caller.
+
+The verified checkpoint is
+`recovery/araphor-retirement-checkpoint-20261023T030259Z.tar.gz`, SHA-256
+`2ba19fe5ce0f17c6febad665b7c52feb086ef6e679b794950ba534ddcb5af870`.
+It contains all 58 reference files before the removal. The
+[removal record](../../recovery/araphor-supervision-test-retirement-20261023.json)
+contains the full assertion map, source identities, commands, and binary hashes.
+The actual count is 151 retired files and 57 remaining files. All remaining
+reference files keep their baseline bytes. The removed file contains 204
+nonblank test lines and no production code.
+
+The complete reference production supervision file remains. Pre-attempt
+capture recovery is still required. Compiler and cache forwarding is under
+qualification. Complete retirement, the required production reduction, and
+the final shared Rust procedure remain **Not done**.
+
+
+### Package inspection and latest-result retirement
+
+Result: **Done** for the complete reference `package/inspect.rs` file.
+Analysis retains fresh Inspect authorization and joins cancelled readers.
+Data resolves an explicit result ID or the current generation's successful
+selected result in one read transaction. Data checks scope and the exact
+receipt before it decodes Arrow. Query executes the reader's local SQL with
+native DataFusion. Control and CLI pass the optional result ID to these owners.
+Installation and inspection start no Discovery.
+
+The replacement qualifies all seven old methods and all 35 required exact
+selectors: 12 Data, 18 Analysis, four Control, and one CLI. The SQL and Native
+version cases retain output history through update, rollback, and removal.
+A recreated instance has no current result until a successful step commits.
+A later failed step does not hide the last successful result. Explicit result
+IDs retain their original packet, schema, row indices, and descriptor limits.
+The old unconditional 64-export cap is removed under the user's quota rule.
+
+The source321 focused runs and source322 quality runs keep their exact source
+identities in the
+[removal record](../../recovery/araphor-inspect-retirement-20261023.json).
+`manifest322` passes in 307.663 seconds. `format322` passes in 5.392 seconds.
+Strict workspace `clippy322` passes in 141.518 seconds. These checks do not
+replace the required final shared Rust procedure.
+
+The verified checkpoint is
+`recovery/araphor-retirement-checkpoint-20261023T034819Z.tar.gz`, SHA-256
+`654743b5358b37e8b44c2e0ac3142c02074e1c7c0ccd6c6deb9fdb59ca688088`.
+It preserves all 57 reference files before this removal. The actual count is
+152 retired files and 56 remaining files. All remaining files retain their
+baseline bytes. This removal deletes 266 nonblank production Rust lines.
+Complete retirement and the required production reduction remain **Not done**.
+
+### Scoped window clocks and native capacity waits
+
+Result: **Done** for the qualified execution boundaries below. A retained
+fixed input keeps its original SQL time and range after a late close. Other
+input windows keep their own ranges. The call context and SDK evaluation time
+retain the actual call time. DataFusion analyzes the execution clone once.
+Its native expression simplifier folds each child at its scoped time. Its
+native optimizer then runs once on the complete plan. No parser, aggregate,
+clock task, or second source read is added.
+
+All five fixed-window cases pass in `windows322` in 2.461 seconds. All six
+connected clock cases pass in `clocks322` in 2.917 seconds. Durable window
+recovery, older occupied intervals, and failed close recovery remain open.
+The scalar-view rejection was a stale test contract. `scalar323` passes all
+four view cases and both event-window guard cases. The scalar package matrix
+first expected a repeated selected batch after equal output. The corrected
+`scalar324` case checks native suppression of that batch and retains the new
+call, input, SDK time, and auxiliary clock assertions. All four matrix rows
+pass. `guard323` also preserves the typed Analysis admission rejection. These
+changes add no production code. The failed records remain in the evidence.
+
+Query also forwards the original typed Runtime capacity error. The shared
+Host waits on the existing compiler or component-cache capacity notice.
+Three Runtime cases and three Analysis cases pass on source321. The actual
+cache pin, cancellation, release, source-first recovery, and finite progress
+guards pass. These checks add no polling or new capacity owner. The immutable
+six-case record is `maps/supervision-runtime318/qualification321-final.json`
+in the checkpoint evidence. Pre-attempt source capture recovery remains open.
+The complete supervision file and final shared Rust procedure remain
+**Not done**.
+
+
+### Current verification and preparation decision
+
+Result: **Not done** for the complete retirement and final Rust procedure.
+`manifest324` compiles the workspace library test targets. `scalar324` passes
+the complete four-row scalar clock matrix. All 56 remaining reference files
+still match the saved baseline. The three audit agents are idle.
+
+The final command is `bash .github/scripts/verify-rust-ci.sh`, recorded as
+`final-ci324`. Formatting, workspace checking, and strict Clippy pass. The root
+agent interrupts the test stage after 549.925 seconds before the required
+preparation contract decision. The exit code is `-2` and the source is unchanged.
+The full test suite is incomplete. This result is not a passing final gate.
+The interruption record lists only that command's own process IDs.
+
+The focused `preflight324` run reproduces the unresolved contract. The cold
+invalid component returns `InvalidQuery` before the engine checks the actual
+input. That input has two rows and an explicit one-row limit. `input_preflight_precedes_compilation` fails because it
+requires `InputTooLarge` before compilation. The separate
+`preparation_precedes_evaluation_deadline` test passes and requires a cached
+component before the one-nanosecond Query timeout rejects execution.
+
+The proposed change checks actual inputs before that call's compilation and
+counts compilation in the same configured Query execution timeout. Compilation
+would run inside the existing physical execution stream. Nested inputs would
+use the same native stream. No new runner or divided timeout is proposed.
+This change is **not approved or implemented**. Keep the complete reference
+preparation, installed execution, and mixed test files. The complete migration,
+required production reduction, and final Rust gate remain **Not done**.
+
+
+### Package quota removal
+
+Result: **Done** for package quota removal.
+The user requires removal before further reference retirement. Export metadata,
+invocation context, native and Wasm interfaces, retained results, and callers
+no longer carry SDK row, batch, byte, or checkpoint quotas. Native SQL owns row
+selection. External time windows remain. Non-time Graph window sizes are
+removed. Existing shared engine capacity and cancellation controls remain.
+
+The historical source is the
+[Analysis contract and SDK plan](mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-2-analysis-contract-and-sdk.md)
+and the
+[package lifecycle plan](mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-3-package-lifecycle.md).
+Commit `c85be1d7` introduces the four fields. Commit `95e9bb4d` carries their
+checks into native Query execution. Commit `7315cabd` disables their defaults
+but retains the contract. These records explain the code origin. They do not
+supply separate approval for retaining that contract in the new design.
+
+The earlier input-first preparation proposal is withdrawn. Its one-row quota
+test checks removed behavior. This removal does not change preparation timeout
+policy. The user requires stable version identifiers during development.
+The SDK contract stays at version 1. The native accessor and Wasm version
+identifiers stay unchanged. Source-built fixtures require rebuild.
+All 56 remaining reference files stay unchanged. No additional reference file
+retires in this change.
+
+
+The [qualification record](../../recovery/araphor-package-quota-removal-20261023.json)
+records 143 passing focused checks. These checks cover the SDK contract,
+SQL row selection, Wasm and native calls, retained results, replay corruption,
+Graph fixtures, atomic state, CLI output, Control transport, and inert image
+and definition admission. `clippy330` passes strict workspace Clippy in
+144.084 seconds. `format330` passes. `manifest330` compiles workspace library
+tests without execution in 44.933 seconds. The user requires focused tests;
+the full workspace suite is not run for this removal.
+
+The OCI identity test retains an exact archive length and manifest digest.
+Its new values reflect removal of the quota metadata. Native and Wasm test
+artifacts are rebuilt from current source. Native checks retain contract
+version 1. A failed native setup run omitted `ARAPHOR_NATIVE_TARGET`; only its
+two failed selectors run again after that environment value is supplied.
+The earlier `runtime326` run used an old executable and is excluded from the
+current qualification. All failed and excluded records remain in the evidence.
+
+No reference file is removed in this change. All 56 remaining reference files
+retain their baseline bytes. Complete retirement and the required production
+reduction remain **Not done**.
+
+
+### Native preparation and installed execution retirement
+
+Result: **Done** for seven complete reference files. Complete retirement is
+**Not done**. The [qualification and source record](../../recovery/araphor-preparation-execution-retirement-20261023.json)
+identifies each old rule, its current owner, and the exact passing selectors.
+
+The removed files are `package/evaluation/preparation.rs`, its test file,
+`package/execution.rs`, `package/installed.rs`, and the Wasm `lifecycle.rs`,
+`metadata.rs`, and `flow.rs` test files. Their replacements use the same route:
+Analysis opens a Query subscription; native DataFusion executes the admitted
+SQL and package calls; Data commits complete output, state, and progress.
+Finite runs use that subscription route with one step. No package executor,
+clock, or polling loop is added. Cold preparation keeps its existing position
+in native physical planning and its existing timeout policy.
+
+The restart regression keeps input capacity occupied when a relevant source
+changes. An unchanged subscription stays idle. A changed source returns the
+typed capacity error before publication. Saved output, checkpoint, progress,
+and frontier remain unchanged. The subscription joins, capacity is released,
+and a new subscription consumes the source change. Subscription admission
+metadata remains charged until the subscription closes.
+
+The Wasm and Native checks inspect the same saved result before another
+execution. A source addition makes that result noncurrent. Inspection changes
+no packet, history, progress, or stored revision. Existing tests retain image
+closure, canonical metadata, update, rollback, state, and restart assertions.
+
+Focused checks found that guest exchange reservation ignored the existing
+Query output byte setting and took all available shared output capacity. The
+physical executor now uses that setting for the reservation. Concurrent test
+fixtures explicitly configure an operation budget below the shared capacity.
+No package quota, new configuration field, or enabled default is added.
+The fixed 64 KiB transfer expectation came from the removed descriptor quota.
+Its replacement fills the configured shared pool and checks the typed capacity
+error, no guest entry, unchanged Data, and released reservation.
+
+All 61 distinct focused selectors have passing results. The record retains
+failed runs and identifies each corrected selector. It reuses unchanged
+assertions and records source differences explicitly. Only affected checks
+run after corrections. Native checks use the current source-built artifact.
+Formatting, strict workspace Clippy, and library test compilation pass. The
+full workspace test suite is not run, as the user requires relevant tests only.
+
+The verified archive preserves all 56 reference files before removal and the
+qualified replacement source. After removal, 159 of 208 files are retired.
+All 49 remaining files retain their baseline bytes. This change removes 540
+nonblank reference production Rust lines and adds eight production lines.
+The net production reduction is 532 lines. The required overall reduction is
+not complete. Pre-attempt source recovery, durable window recovery, and the
+remaining mixed product and lifecycle rules remain open.
+
+
+### Package lifecycle and retained-output test retirement
+
+Result: **Done** for eleven complete reference test files. Complete retirement
+is **Not done**. The [qualification record](../../recovery/araphor-package-tests-retirement-20261023.json)
+maps each old assertion to its current owner and passing check. It records 83
+distinct selectors. Failed and interrupted runs remain in the verified archive.
+
+The removed tests cover image admission, grant changes, lifecycle transitions,
+retained output, removal, interruption, input relations, and Wasm failure. Their
+current checks use the shared Instance Host, Query execution, Runtime, and Data
+transactions. Ordinary control requests preserve the saved execution grant.
+Explicit stopped renewal changes that grant. Cold renewal checks exact image
+bytes and revisions, checkpoint continuation, prior output, and restart. It
+does not require the allocation address from a separate prior owner.
+
+The archive preserves each removed file before deletion. There are now 170
+retired files and 38 unchanged reference files. This removal deletes 3,163
+nonblank test lines and no production lines. No production reduction is claimed
+for this removal. The full workspace suite is not run, as the user requires
+relevant tests only.
+
+Pre-admission stale-source recovery, Graph feed qualification, and native
+Discovery SQL and managed-window qualification remain open. Their reference
+owners remain in place.
+
+
+### Qualified reference leaf retirement
+
+Result: **Done** for nineteen complete reference files. Complete retirement is
+**Not done**. The [qualification record](../../recovery/araphor-qualified-leaves-retirement-20261023.json)
+records 189 retired files and 19 unchanged reference files. This batch removes
+623 nonblank production Rust lines and 2,255 nonblank test lines. These counts
+do not establish the whole-migration net reduction. The verified
+[archive](../../recovery/araphor-retirement-checkpoint-20261023T161725Z.tar.gz)
+has SHA-256 `360bdcd406d89cca11fbc8f1312d742bc72373b7cf7febcd96481b5c2cc9ca6f`.
+
+The source comparison corrects the recovery gate. The old deadline tests first
+capture successfully. Expiry after a first failed capture is not an old parity
+requirement. SourceRecovery keeps attached Query Progress deadlines and scoped
+Run.dependencies recovery. Removing the extra metadata read, saved bounds,
+and forwarding method removes 24 net nonblank production lines. All five
+existing recovery checks pass in `analysis-recovery-sql350` and
+`query-recovery350`. The Analysis aggregate contains six failed native SQL
+selectors; the record does not treat that aggregate as passing.
+
+`admission_rejects_domain_execution` checks that installation is inert. It does
+not test Discovery output conversion. Existing inert-admission and closure
+checks qualify that leaf. Pre-admission stale-source recovery, Graph feed
+qualification, and native Discovery SQL and managed-window qualification
+remain **Not done**. Their reference owners remain in place.
+
+
+### Joined cleanup after known rollback
+
+Result: **Done** for known rollback cleanup after native execution joins. Finite
+Run and Follow use the existing Data `finish_managed` owner. The consolidation
+removes the `Step.publishing` flag and its writes. This change removes 19 net
+nonblank production Rust lines. It adds no API or recovery owner. This bounded
+count is not a whole-migration reduction.
+
+A known failure before commit saves the terminal result for the original live
+claim. The same Instance then accepts a new request. Caller cancellation keeps
+the pending claim. A loaded claim cannot finish the original execution. An
+uncertain database commit keeps writes closed until the existing Data recovery
+check runs. A saved success receipt remains authoritative. Crash checks retain
+all-or-none output and receipt state immediately before and after commit.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `compile359` | Six affected crates compile with all features; tests do not execute. | 102.96 |
+| `rollback-core359` | Four exact finite, Follow, pending-claim, and receipt checks pass. | 4.03 |
+| `rollback-data359` | Three exact uncertain-commit, claim, and crash checks pass. | 9.62 |
+| `discovery-repair359` | Historical repair fails later with `Elapsed`. | 224.11 |
+
+The [source and command record](../../recovery/araphor-analysis-consolidation-20261023.json)
+retains the committed source hashes and exact commands.
+
+The records are in `/tmp/araphor-retirement-resume-20261022/`. Each JSON record
+contains its exact command, source hashes, and log hash. The test records also
+contain the executable hash. The repair run no longer fails at the previous
+`managed pending attempt` error. That result does not qualify the complete
+historical repair route. Graph failed-feed recovery still fails at cursor 258
+in `graph-feed358`. No remaining reference file retires. There are 189 retired
+files and 19 unchanged reference files. Complete retirement and the required
+overall reduction remain **Not done**.

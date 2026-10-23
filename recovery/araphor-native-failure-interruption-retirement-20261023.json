@@ -1,0 +1,1100 @@
+{
+  "created_at": "2026-10-23T01:33:55.692457+00:00",
+  "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+  "result": "Done for the two complete Native failure and interruption reference test files. Complete retirement and final Rust CI are Not done.",
+  "files": [
+    {
+      "path": "crates/araphor-analysis_back/src/package/tests/native/failures.rs",
+      "sha256": "b40a39c512f5451d8ddce5071936b68769f2b026c8e641803e6b1cc6dcd0f74f",
+      "physical_lines": 188,
+      "test_nonblank": 184,
+      "production_nonblank": 0
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/tests/native/interruption.rs",
+      "sha256": "097dad5819bfb1e442ee3085e7afad76c4b3862f29b4ab703a835b228433b5cd",
+      "physical_lines": 52,
+      "test_nonblank": 49,
+      "production_nonblank": 0
+    }
+  ],
+  "proof": {
+    "native-build310": {
+      "command": [
+        "target/debug/examples/workspace",
+        ".",
+        "target/analysis-native",
+        "/tmp/araphor-retirement-resume-20261022/native",
+        "--native"
+      ],
+      "started_at": "2026-10-23T01:10:14.711947+00:00",
+      "elapsed_seconds": 34.00210659500044,
+      "exit_code": 0,
+      "log_sha256": "a53e4119075e7c0a6e2532ac5ee743b032d541892491000ad3afe1f5af1a56aa",
+      "source_unchanged": true,
+      "record_sha256": "b5a29eb1a2ed8ab637abe7ff1016cf62996bbaa8cbb4ca2cfef884108d5bd799",
+      "binary_sha256": "ff4f6c0d1ea26eb124ba0002380de469dd7dbc05b92f9cdf8d30f197b4006dae"
+    },
+    "manifest310": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "started_at": "2026-10-23T01:09:47.533088+00:00",
+      "elapsed_seconds": 460.0579962060001,
+      "exit_code": 0,
+      "log_sha256": "ab8946da00df1c8b30369649b3b35c6b03b191ea1631770c71fe8121baff4e74",
+      "source_unchanged": true,
+      "record_sha256": "0f63ef8db27f3fd06aeecddbae0a82abe663a417236319f9267b3643906aea54"
+    },
+    "native310": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "instance::host::tests::native::",
+        "instance::tests::finite::native_failures_survive_reopen",
+        "instance::tests::checkpoint::native_overflow_keeps_checkpoint",
+        "instance::tests::version::native_caps_keep_receipt",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-23T01:16:03.009583+00:00",
+      "elapsed_seconds": 102.6892042870004,
+      "exit_code": 0,
+      "log_sha256": "cafaca363e96dc01756145911925a83aba98c6c86d5cbf56dd6439fb99c36781",
+      "source_unchanged": true,
+      "record_sha256": "db2979c454f9a7efbd95f8a50a442300bc2b08273f99bf6214cab05e42551bac",
+      "binary_sha256": "67fac1a0b93d8eb5f6b9e2c82edaaba98a6285af204f2e8671e6a4f59acbeb11"
+    },
+    "native-query310": {
+      "command": [
+        "target/debug/deps/araphor_query-44e57ad344e0eb34",
+        "definition::tests::execution::native_caps_keep_targets",
+        "definition::tests::execution::physical_native_failures_release",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-23T01:19:27.183974+00:00",
+      "elapsed_seconds": 6.979677658999208,
+      "exit_code": 0,
+      "log_sha256": "5b3f6631e276a0bc594fc44d8d89f6c3afbddcb7bf17b42192f543a12a1e98b5",
+      "source_unchanged": true,
+      "record_sha256": "17e950c0d5e7c818bdb6b9e1547a455b4969636fbc8a9381a7dc2c3ff079f5ff",
+      "binary_sha256": "993960b62c152e280f2092be9075d0455c62903599b6a307414471850b8020c7"
+    },
+    "native-runtime310": {
+      "command": [
+        "target/debug/deps/araphor_package_runtime-d531032642d16c85",
+        "native::tests::disabled_limits_allow_execution",
+        "native::loading::tests::cancellation_prevents_native_load",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-23T01:19:27.507065+00:00",
+      "elapsed_seconds": 0.0046017740005481755,
+      "exit_code": 0,
+      "log_sha256": "2fe17b1245fe11f61fdb6c1ad38d6df6e231c5debffc70766a26627ed9195d15",
+      "source_unchanged": true,
+      "record_sha256": "2082a45b363dce5ba815adcc7d3ff7a2aa8cd28c6b73b0012925a02bfc34f2a9",
+      "binary_sha256": "faf11182e1dd0c4915046dd029d7a8b4c4009f7e9b3d49172da44ae781a4325c"
+    },
+    "wasm-joined310": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "instance::host::tests::host_stop_joins_guest",
+        "instance::host::tests::lifecycle::explicit_stop_joins_guest",
+        "instance::tests::revoked_guest_joins_attempt",
+        "instance::tests::finite::finite_guest_failure_persists",
+        "instance::host::tests::removal::removal_joins_native_guest",
+        "instance::tests::version::native_versions_keep_history",
+        "instance::tests::checkpoint::native_checkpoint_reopens",
+        "instance::tests::checkpoint::wasm_checkpoint_reopens",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-23T01:19:27.546518+00:00",
+      "elapsed_seconds": 79.73704305300089,
+      "exit_code": 0,
+      "log_sha256": "bb25786c29963a90524775173af6316f6df1178d6ce475f414b75cab20fad97b",
+      "source_unchanged": true,
+      "record_sha256": "4e6173d76c8e469bac4a92b197885ae6513b25cb74f8d49dc42d5a90e9fb6180",
+      "binary_sha256": "67fac1a0b93d8eb5f6b9e2c82edaaba98a6285af204f2e8671e6a4f59acbeb11"
+    },
+    "manifest311": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "started_at": "2026-10-23T01:22:23.018476+00:00",
+      "elapsed_seconds": 41.06129540999973,
+      "exit_code": 0,
+      "log_sha256": "120f4fc7b1fe71690a9906af104ddaa7f54bb1e593d642349bf52d5c4ddf954b",
+      "source_unchanged": true,
+      "record_sha256": "314f5a9683668fcd3d8a132aea2fccaf19d306d1bf685f54865fec566ea4cdb2"
+    },
+    "host311": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "instance::host::",
+        "instance::tests::checkpoint::native_overflow_keeps_checkpoint",
+        "instance::tests::version::native_caps_keep_receipt",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-23T01:24:23.001348+00:00",
+      "elapsed_seconds": 104.83434561099966,
+      "exit_code": 0,
+      "log_sha256": "3289e531787fa31affd432ed31bfb91ae709f2eb2b44acb407f9a5672876133d",
+      "source_unchanged": true,
+      "record_sha256": "0b6f9a1295ee4bb9b34d3677327a3e703a1a43cdee69ff115398fb54f0d7c1fd",
+      "binary_sha256": "5d7bb80a7422927edb6d5a8488d6f4174dac3eb119c8ef8478d2c87c7b715484"
+    },
+    "clippy311": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "started_at": "2026-10-23T01:24:22.879064+00:00",
+      "elapsed_seconds": 89.06881628300107,
+      "exit_code": 0,
+      "log_sha256": "192b68258ccd75c5eb78b36c8aef06caa26d23adefd7b34ec0252e302aa7ef69",
+      "source_unchanged": true,
+      "record_sha256": "0ad2842f36e5dfcc7fbee221b6c76d380e33ccc65c917c042879ca01c1c9398e"
+    },
+    "format311": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "started_at": "2026-10-23T01:22:27.572168+00:00",
+      "elapsed_seconds": 4.630596980001428,
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_unchanged": true,
+      "record_sha256": "46987b54c3a306aa80cebb35694fd31e263560f12e3e621dbcb3f533439b1632"
+    },
+    "metadata310": {
+      "command": [
+        "target/debug/deps/araphor_data-6c4e5d902cf7ca6f",
+        "analysis::managed::tests::metadata::metadata_skips_prior_ipc",
+        "analysis::progress::profile::tests::profile_guard_rolls_back",
+        "analysis::managed::tests::readiness::failed_frontier_can_resume",
+        "analysis::dependencies::tests::",
+        "analysis::retention::tests::observability_retention_sweep",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-23T01:14:40.455940+00:00",
+      "elapsed_seconds": 7.105463855999915,
+      "exit_code": 0,
+      "log_sha256": "239166f58808227826b6c4b5e430836c3ffdfd73bb0d244d4f738060ae650486",
+      "source_unchanged": true,
+      "record_sha256": "6fca4c2045ada0b52910db7a81140bec3c2d60ed530a384501f717e54e3dd68d",
+      "binary_sha256": "929a74c0ba210f584b9a0e5f75fb6d197153f082f32d143d5fdcfb9368f02af0"
+    },
+    "notification311": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "notification::tests::reactive::native_notification_follow",
+        "--exact",
+        "--include-ignored",
+        "--test-threads=1"
+      ],
+      "started_at": "2026-10-23T01:30:09.515133+00:00",
+      "elapsed_seconds": 1.291319822999867,
+      "exit_code": 0,
+      "log_sha256": "938725debc386bf4ce4b9b61539216e6db2c706fa5f5980b1838fbb436464d3d",
+      "source_unchanged": true,
+      "record_sha256": "cbdee220ec9e86ec15be34b286c6edaeea8304f62c40878975c2d18c10a16909",
+      "binary_sha256": "5d7bb80a7422927edb6d5a8488d6f4174dac3eb119c8ef8478d2c87c7b715484"
+    }
+  },
+  "method_and_assertion_map": {
+    "status": "Done for failures.rs and interruption.rs. Eligible for whole-leaf retirement after parent archive and identity check. No Back file was changed by this audit.",
+    "created_at": "2026-10-23T01:31:16.931395+00:00",
+    "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+    "old_files": [
+      {
+        "path": "crates/araphor-analysis_back/src/package/tests/native/failures.rs",
+        "lines": 188,
+        "nonblank": 184,
+        "sha256": "b40a39c512f5451d8ddce5071936b68769f2b026c8e641803e6b1cc6dcd0f74f",
+        "baseline_sha256": "b40a39c512f5451d8ddce5071936b68769f2b026c8e641803e6b1cc6dcd0f74f",
+        "matches_baseline": true,
+        "functions": [
+          "native_caps_defer_admission",
+          "native_errors_commit_no_output",
+          "native_caps_leave_other_targets_available"
+        ],
+        "current_sha256": "b40a39c512f5451d8ddce5071936b68769f2b026c8e641803e6b1cc6dcd0f74f",
+        "unchanged_since_baseline_audit": true
+      },
+      {
+        "path": "crates/araphor-analysis_back/src/package/tests/native/interruption.rs",
+        "lines": 52,
+        "nonblank": 49,
+        "sha256": "097dad5819bfb1e442ee3085e7afad76c4b3862f29b4ab703a835b228433b5cd",
+        "baseline_sha256": "097dad5819bfb1e442ee3085e7afad76c4b3862f29b4ab703a835b228433b5cd",
+        "matches_baseline": true,
+        "functions": [
+          "native_cancellation_revocation_and_expiry",
+          "native_expired_grant_denies_admission"
+        ],
+        "current_sha256": "097dad5819bfb1e442ee3085e7afad76c4b3862f29b4ab703a835b228433b5cd",
+        "unchanged_since_baseline_audit": true
+      },
+      {
+        "path": "crates/araphor-analysis_back/src/package/tests/native/mod.rs",
+        "lines": 37,
+        "nonblank": 34,
+        "sha256": "3fc3fbd95758d9a50e46519187ee63d44a6759b4f44a598d6e6429cc34849173",
+        "baseline_sha256": "3fc3fbd95758d9a50e46519187ee63d44a6759b4f44a598d6e6429cc34849173",
+        "matches_baseline": true,
+        "functions": [
+          "native"
+        ],
+        "current_sha256": "3fc3fbd95758d9a50e46519187ee63d44a6759b4f44a598d6e6429cc34849173",
+        "unchanged_since_baseline_audit": true
+      },
+      {
+        "path": "crates/araphor-analysis_back/src/package/tests/native/lifecycle.rs",
+        "lines": 84,
+        "nonblank": 83,
+        "sha256": "be680599327fdf9f8d412ad987db6d3c6d2fbe84b114e2caac545966a3e314dd",
+        "baseline_sha256": "be680599327fdf9f8d412ad987db6d3c6d2fbe84b114e2caac545966a3e314dd",
+        "matches_baseline": true,
+        "functions": [
+          "native_declared_type_lifecycle"
+        ],
+        "current_sha256": "be680599327fdf9f8d412ad987db6d3c6d2fbe84b114e2caac545966a3e314dd",
+        "unchanged_since_baseline_audit": true
+      },
+      {
+        "path": "crates/araphor-analysis_back/src/package/tests/native/restart.rs",
+        "lines": 109,
+        "nonblank": 105,
+        "sha256": "439c19c05f411b8d412386b06b889692d8f331a52e4635889757db1d4b02623c",
+        "baseline_sha256": "439c19c05f411b8d412386b06b889692d8f331a52e4635889757db1d4b02623c",
+        "matches_baseline": true,
+        "functions": [
+          "native_host_fault_restart"
+        ],
+        "current_sha256": "439c19c05f411b8d412386b06b889692d8f331a52e4635889757db1d4b02623c",
+        "unchanged_since_baseline_audit": true
+      }
+    ],
+    "methods": [
+      {
+        "old_method": "failures.rs::native_caps_defer_admission",
+        "old_line": 4,
+        "status": "Done",
+        "selector_gates": [
+          "native::tests::disabled_limits_allow_execution",
+          "native::loading::tests::cancellation_prevents_native_load",
+          "definition::tests::execution::native_caps_keep_targets"
+        ],
+        "assertions": [
+          {
+            "old": "Native memory 0 gives Invalid with field native resource configuration.",
+            "destination": "crates/araphor-package-runtime/src/native/mod.rs:42",
+            "exact": "disabled_limits_allow_execution checks Runtime::new with zero memory and zero CPU, exact Invalid and field. NativeLimits::validate is the common validator.",
+            "proof": "native-runtime310"
+          },
+          {
+            "old": "Native memory 1024 gives Unsupported with field in-process native resource limits before parsing invalid foreign Native bytes, at admission and evaluation.",
+            "destination": "crates/araphor-query/src/definition/tests/execution.rs:1471",
+            "exact": "native_caps_keep_targets supplies memory 1024 and invalid foreign Native bytes; Query prepare, Runtime::prepare and Runtime::evaluate each preserve exact Unsupported and field, tracker empty, Data metadata unchanged, activation page empty and all pools free.",
+            "proof": "native-query310"
+          },
+          {
+            "old": "Cancelled admission returns AnalysisReadCancelled.",
+            "destination": "crates/araphor-query/src/definition/tests/execution.rs:1572",
+            "exact": "The capped Runtime::prepare checks the cancelled control before Native selection. cancellation_prevents_native_load independently checks NativeLibrary::load with invalid bytes and cancelled control.",
+            "proof": [
+              "native-query310",
+              "native-runtime310"
+            ]
+          }
+        ],
+        "model_translation": "The validation boundary changed: zero Native caps return Invalid/native resource configuration at Runtime construction; Back deferred that check to Native backend admission. Nonzero unsupported caps are checked when Native is selected. SQL and Wasm can run. The exact code and field are preserved; the old construction/admission boundary is not claimed to be identical."
+      },
+      {
+        "old_method": "failures.rs::native_errors_commit_no_output",
+        "old_line": 108,
+        "status": "Done",
+        "selector_gates": [
+          "instance::tests::finite::native_failures_survive_reopen"
+        ],
+        "assertions": [
+          {
+            "old": "Actual Native trap, limit, denied, invalid-name, invalid-evidence, oversized return respectively Incomplete, Limit, Denied, Invalid, Invalid, Invalid.",
+            "destination": "crates/araphor-analysis/src/instance/tests/finite.rs:220",
+            "exact": "The native wrapper passes all six modes to guest_failure_persists. It calls terminal_target with native, then asserts Subscription::failure and saved terminal.exit exactly for every mode before and after clean reopen.",
+            "proof": "native310"
+          },
+          {
+            "old": "Failed inspection has empty results and exact Failed readiness.",
+            "destination": "crates/araphor-analysis/src/instance/tests/finite.rs:37",
+            "exact": "Exact Failed code from public Instance::read_status; status_progress 0; receipt absent; managed_selected absent; progress 0; saved request includes a valid captured cursor. After reopen, exact terminal/request/Failed status remain. Fresh retry has no receipt or selected output, empty history and progress 0.",
+            "proof": "native310"
+          },
+          {
+            "old": "All four operation permits return.",
+            "destination": "crates/araphor-analysis/src/instance/tests/finite.rs:70",
+            "exact": "After initial and post-reopen retry failure, all four global/tenant evaluation slots can be held together, a fifth fails, retained input returns to its pre-run value and the complete 8 MiB output pool can be reserved.",
+            "proof": "native310"
+          },
+          {
+            "old": "Reopen; a new retry still fails; result ID stays absent and checkpoint revision stays 0.",
+            "destination": "crates/araphor-analysis/src/instance/tests/finite.rs:94",
+            "exact": "Consume Fixture, drop Instance and Engine, then AnalysisStore::open. Known ID remains Conflict/managed attempt terminated without metadata change. New retry-error ID executes and has exact Failed terminal, no receipt or selected output, empty history and progress 0. The evaluate model has no checkpoint, so no receipt/output publication is the direct replacement for the old zero checkpoint counter.",
+            "proof": "native310"
+          }
+        ],
+        "fixture_boundary": "trap is a returned SDK Failed value, not a CPU trap. oversized at amount 0 returns empty IPC, which is Invalid because a decoded schema is absent. This is not a Native memory enforcement claim. No production process isolation is added.",
+        "reopen_ownership": "ManagedStatus, ManagedResult, requests and terminals are owned metadata. ManagedAttempt revision receivers do not retain Store or Engine. Explicit drop(instance) and drop(query) precede open. No shadowed Fixture retains the writer.",
+        "additional_regression": "native_overflow_keeps_checkpoint proves real Native Limit keeps a prior full output/checkpoint/context/commit, original instance and receipt history, including clean reopen. Passed native310 and host311."
+      },
+      {
+        "old_method": "failures.rs::native_caps_leave_other_targets_available",
+        "old_line": 144,
+        "status": "Done",
+        "selector_gates": [
+          "definition::tests::execution::native_caps_keep_targets",
+          "instance::tests::version::native_caps_keep_receipt"
+        ],
+        "assertions": [
+          {
+            "old": "SQL and Wasm stay usable with Native memory cap 1024.",
+            "destination": "crates/araphor-query/src/definition/tests/execution.rs:1471",
+            "exact": "Runs actual SQL and Wasm selected artifacts under memory 1024; each produces value 7, one call, unchanged metadata and full returned pools.",
+            "proof": "native-query310"
+          },
+          {
+            "old": "Native replacement is Unsupported. Prior revision 1 and Wasm result ID remain selected.",
+            "destination": "crates/araphor-analysis/src/instance/tests/version.rs:1539",
+            "exact": "native_caps_keep_receipt installs/pins invalid foreign Native revision 2, then runs actual Wasm revision 1 under the cap. Host.update rejects with Failed(Unsupported) and exact root field. Data metadata and full ManagedInstance remain identical, history is the single original receipt, progress stays at its commit, full Wasm context/output/checkpoint/commit stay identical, current is true, same ID returns identical receipt without metadata change, and all four slots return.",
+            "proof": [
+              "native310",
+              "host311"
+            ]
+          }
+        ],
+        "boundary": "The capped Native image intentionally has invalid bytes. Rejection before loading is required; no shared-library execution is claimed for this cap test. Engine replacement shares the same Store intentionally; this test does not claim a clean reopen."
+      },
+      {
+        "old_method": "interruption.rs::native_cancellation_revocation_and_expiry",
+        "old_line": 9,
+        "expanded_helper": "crates/araphor-analysis_back/src/package/tests/interruption.rs:320",
+        "status": "Done",
+        "selector_gates": [
+          "instance::host::tests::native::native_control_joins"
+        ],
+        "assertions": [
+          {
+            "old": "Use actual Native evaluate with cooperative cancel mode for cancel, revoke and expiry.",
+            "destination": "crates/araphor-analysis/src/instance/host/tests/native.rs:88",
+            "exact": "All three causes use terminal_target(native). Manifest has exactly one native call. The source-built fixture sends E plus exact EvaluationContext.id from inside compute; the test asserts interrupted ID and three free slots while the fourth is held.",
+            "proof": "host311"
+          },
+          {
+            "old": "Cancel gives AnalysisReadCancelled; revoke gives Denied; expiry gives deadline or grant Denied.",
+            "destination": "crates/araphor-analysis/src/instance/host/tests/native.rs:132",
+            "exact": "Cancel checks AnalysisReadCancelled. Revocation checks Denied/managed authority change. Grant is now+5 seconds; expiry uses its captured control and checks Denied/managed grant expiry. Revoke and expiry leave the caller control valid.",
+            "proof": "host311"
+          },
+          {
+            "old": "Join within 5 seconds and return all four permits.",
+            "destination": "crates/araphor-analysis/src/instance/host/tests/native.rs:146",
+            "exact": "While actual compute is blocked on R, cancelled worker remains unfinished and still holds one slot. After R, one five-second timeout encloses fixture D and worker join. All four slots and complete free input/output capacity are available immediately after joined return. The source311 timing patch preserves the original post-cancellation join criterion.",
+            "proof": "host311"
+          },
+          {
+            "old": "No results, no activation result ID, no checkpoint advance.",
+            "destination": "crates/araphor-analysis/src/instance/host/tests/native.rs:56",
+            "exact": "native_empty asserts progress 0, history empty, captured real attempt has no receipt, managed_selected absent before and after cancellation. No receipt is the current publication boundary.",
+            "proof": "host311"
+          }
+        ],
+        "timing_boundary": "The fixture intentionally waits for R to prove the API joins a live Native worker. The five-second guard starts at R and includes D plus join. Entry uses 30 seconds to observe actual compute after cold library loading; Back used 5 seconds to observe an activation metadata row before compute. No five-second cold-load or forced interruption of non-cooperative Native code is claimed.",
+        "extra_host_stop": "native_stop_joins passed host311: actual Native E, Host.stop unfinished before R, D plus stop join in one five-second timeout, exact stored Cancelled terminal, terminal revision equals ManagedResume.completed, no frontier/publication, joined Host serve shutdown within five seconds, all slots/input/output plus store lease returned."
+      },
+      {
+        "old_method": "interruption.rs::native_expired_grant_denies_admission",
+        "old_line": 19,
+        "status": "Done",
+        "selector_gates": [
+          "instance::host::tests::native::native_expired_admission"
+        ],
+        "assertions": [
+          {
+            "old": "An already expired grant gives Denied/package grant for Native admission.",
+            "destination": "crates/araphor-analysis/src/instance/host/tests/native.rs:264",
+            "exact": "Prepares a valid source-built Native template, then calls public Instance::admit with a new ID and expires_utc_ns 0. Exact Denied/package grant is required.",
+            "proof": [
+              "native310",
+              "host311"
+            ]
+          },
+          {
+            "old": "No activation and all four permits available.",
+            "destination": "crates/araphor-analysis/src/instance/host/tests/native.rs:300",
+            "exact": "Data metadata unchanged; no managed instance or attempt for expired ID; a single nonblocking Unix listener accept is WouldBlock, proving no fixture entry; all four evaluation slots and free input/output pools remain available.",
+            "proof": [
+              "native310",
+              "host311"
+            ]
+          }
+        ],
+        "model_translation": "Install starts no execution in the new owner. Public Instance admission is the corresponding authority boundary; no fake activation or Attempt is written."
+      }
+    ],
+    "proof_records": [
+      {
+        "name": "native-build310",
+        "record": "/tmp/araphor-retirement-resume-20261022/native-build310.json",
+        "record_sha256": "b5a29eb1a2ed8ab637abe7ff1016cf62996bbaa8cbb4ca2cfef884108d5bd799",
+        "log": "/tmp/araphor-retirement-resume-20261022/native-build310.log",
+        "log_sha256": "a53e4119075e7c0a6e2532ac5ee743b032d541892491000ad3afe1f5af1a56aa",
+        "command": [
+          "target/debug/examples/workspace",
+          ".",
+          "target/analysis-native",
+          "/tmp/araphor-retirement-resume-20261022/native",
+          "--native"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 34.00210659500044,
+        "source_unchanged": true,
+        "binary_sha256": "ff4f6c0d1ea26eb124ba0002380de469dd7dbc05b92f9cdf8d30f197b4006dae",
+        "passed_tests": [],
+        "test_results": []
+      },
+      {
+        "name": "manifest310",
+        "record": "/tmp/araphor-retirement-resume-20261022/manifest310.json",
+        "record_sha256": "0f63ef8db27f3fd06aeecddbae0a82abe663a417236319f9267b3643906aea54",
+        "log": "/tmp/araphor-retirement-resume-20261022/manifest310.log",
+        "log_sha256": "ab8946da00df1c8b30369649b3b35c6b03b191ea1631770c71fe8121baff4e74",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--workspace",
+          "--all-features",
+          "--lib",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 460.0579962060001,
+        "source_unchanged": true,
+        "binary_sha256": null,
+        "passed_tests": [],
+        "test_results": []
+      },
+      {
+        "name": "native310",
+        "record": "/tmp/araphor-retirement-resume-20261022/native310.json",
+        "record_sha256": "db2979c454f9a7efbd95f8a50a442300bc2b08273f99bf6214cab05e42551bac",
+        "log": "/tmp/araphor-retirement-resume-20261022/native310.log",
+        "log_sha256": "cafaca363e96dc01756145911925a83aba98c6c86d5cbf56dd6439fb99c36781",
+        "command": [
+          "target/debug/deps/araphor_analysis-4531512e6104de4f",
+          "instance::host::tests::native::",
+          "instance::tests::finite::native_failures_survive_reopen",
+          "instance::tests::checkpoint::native_overflow_keeps_checkpoint",
+          "instance::tests::version::native_caps_keep_receipt",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 102.6892042870004,
+        "source_unchanged": true,
+        "binary_sha256": "67fac1a0b93d8eb5f6b9e2c82edaaba98a6285af204f2e8671e6a4f59acbeb11",
+        "passed_tests": [
+          "instance::host::tests::native::native_expired_admission",
+          "instance::host::tests::native::native_stop_joins",
+          "instance::host::tests::native::native_control_joins",
+          "instance::tests::checkpoint::native_overflow_keeps_checkpoint",
+          "instance::tests::version::native_caps_keep_receipt",
+          "instance::tests::finite::native_failures_survive_reopen"
+        ],
+        "test_results": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 400 filtered out; finished in 102.66s"
+        ]
+      },
+      {
+        "name": "native-query310",
+        "record": "/tmp/araphor-retirement-resume-20261022/native-query310.json",
+        "record_sha256": "17e950c0d5e7c818bdb6b9e1547a455b4969636fbc8a9381a7dc2c3ff079f5ff",
+        "log": "/tmp/araphor-retirement-resume-20261022/native-query310.log",
+        "log_sha256": "5b3f6631e276a0bc594fc44d8d89f6c3afbddcb7bf17b42192f543a12a1e98b5",
+        "command": [
+          "target/debug/deps/araphor_query-44e57ad344e0eb34",
+          "definition::tests::execution::native_caps_keep_targets",
+          "definition::tests::execution::physical_native_failures_release",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 6.979677658999208,
+        "source_unchanged": true,
+        "binary_sha256": "993960b62c152e280f2092be9075d0455c62903599b6a307414471850b8020c7",
+        "passed_tests": [
+          "definition::tests::execution::physical_native_failures_release",
+          "definition::tests::execution::native_caps_keep_targets"
+        ],
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 453 filtered out; finished in 6.96s"
+        ]
+      },
+      {
+        "name": "native-runtime310",
+        "record": "/tmp/araphor-retirement-resume-20261022/native-runtime310.json",
+        "record_sha256": "2082a45b363dce5ba815adcc7d3ff7a2aa8cd28c6b73b0012925a02bfc34f2a9",
+        "log": "/tmp/araphor-retirement-resume-20261022/native-runtime310.log",
+        "log_sha256": "2fe17b1245fe11f61fdb6c1ad38d6df6e231c5debffc70766a26627ed9195d15",
+        "command": [
+          "target/debug/deps/araphor_package_runtime-d531032642d16c85",
+          "native::tests::disabled_limits_allow_execution",
+          "native::loading::tests::cancellation_prevents_native_load",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.0046017740005481755,
+        "source_unchanged": true,
+        "binary_sha256": "faf11182e1dd0c4915046dd029d7a8b4c4009f7e9b3d49172da44ae781a4325c",
+        "passed_tests": [
+          "native::tests::disabled_limits_allow_execution",
+          "native::loading::tests::cancellation_prevents_native_load"
+        ],
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 48 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "name": "wasm-joined310",
+        "record": "/tmp/araphor-retirement-resume-20261022/wasm-joined310.json",
+        "record_sha256": "4e6173d76c8e469bac4a92b197885ae6513b25cb74f8d49dc42d5a90e9fb6180",
+        "log": "/tmp/araphor-retirement-resume-20261022/wasm-joined310.log",
+        "log_sha256": "bb25786c29963a90524775173af6316f6df1178d6ce475f414b75cab20fad97b",
+        "command": [
+          "target/debug/deps/araphor_analysis-4531512e6104de4f",
+          "instance::host::tests::host_stop_joins_guest",
+          "instance::host::tests::lifecycle::explicit_stop_joins_guest",
+          "instance::tests::revoked_guest_joins_attempt",
+          "instance::tests::finite::finite_guest_failure_persists",
+          "instance::host::tests::removal::removal_joins_native_guest",
+          "instance::tests::version::native_versions_keep_history",
+          "instance::tests::checkpoint::native_checkpoint_reopens",
+          "instance::tests::checkpoint::wasm_checkpoint_reopens",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 79.73704305300089,
+        "source_unchanged": true,
+        "binary_sha256": "67fac1a0b93d8eb5f6b9e2c82edaaba98a6285af204f2e8671e6a4f59acbeb11",
+        "passed_tests": [
+          "instance::host::tests::lifecycle::explicit_stop_joins_guest",
+          "instance::host::tests::host_stop_joins_guest",
+          "instance::host::tests::removal::removal_joins_native_guest",
+          "instance::tests::checkpoint::native_checkpoint_reopens",
+          "instance::tests::checkpoint::wasm_checkpoint_reopens",
+          "instance::tests::revoked_guest_joins_attempt",
+          "instance::tests::version::native_versions_keep_history",
+          "instance::tests::finite::finite_guest_failure_persists"
+        ],
+        "test_results": [
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 398 filtered out; finished in 79.70s"
+        ]
+      },
+      {
+        "name": "manifest311",
+        "record": "/tmp/araphor-retirement-resume-20261022/manifest311.json",
+        "record_sha256": "314f5a9683668fcd3d8a132aea2fccaf19d306d1bf685f54865fec566ea4cdb2",
+        "log": "/tmp/araphor-retirement-resume-20261022/manifest311.log",
+        "log_sha256": "120f4fc7b1fe71690a9906af104ddaa7f54bb1e593d642349bf52d5c4ddf954b",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--workspace",
+          "--all-features",
+          "--lib",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 41.06129540999973,
+        "source_unchanged": true,
+        "binary_sha256": null,
+        "passed_tests": [],
+        "test_results": []
+      },
+      {
+        "name": "host311",
+        "record": "/tmp/araphor-retirement-resume-20261022/host311.json",
+        "record_sha256": "0b6f9a1295ee4bb9b34d3677327a3e703a1a43cdee69ff115398fb54f0d7c1fd",
+        "log": "/tmp/araphor-retirement-resume-20261022/host311.log",
+        "log_sha256": "3289e531787fa31affd432ed31bfb91ae709f2eb2b44acb407f9a5672876133d",
+        "command": [
+          "target/debug/deps/araphor_analysis-4531512e6104de4f",
+          "instance::host::",
+          "instance::tests::checkpoint::native_overflow_keeps_checkpoint",
+          "instance::tests::version::native_caps_keep_receipt",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 104.83434561099966,
+        "source_unchanged": true,
+        "binary_sha256": "5d7bb80a7422927edb6d5a8488d6f4174dac3eb119c8ef8478d2c87c7b715484",
+        "passed_tests": [
+          "instance::host::notification::tests::notification_child_is_independent",
+          "instance::host::notification::tests::notification_capture_is_bounded",
+          "instance::host::notification::tests::notification_guard_keeps_pending",
+          "instance::host::notification::tests::notification_host_stop_records",
+          "instance::host::notification::tests::notification_host_keeps_deadlines",
+          "instance::host::notification::tests::notification_item_error_keeps_following",
+          "instance::host::notification::tests::notification_target_is_sealed",
+          "instance::host::tests::admission::assembly_waits_reader",
+          "instance::host::tests::admission::opening_keeps_unknown_busy",
+          "instance::host::tests::admission::admission_waits_capacity",
+          "instance::host::tests::admission::opening_waits_reader",
+          "instance::host::tests::admission::stream_waits_output_capacity",
+          "instance::host::tests::admission::preparation_failure_keeps_intent",
+          "instance::host::tests::definition::prepared_definition_requires_install",
+          "instance::host::tests::host_bad_member_isolates",
+          "instance::host::tests::host_delivery_keeps_healthy",
+          "instance::host::tests::host_drives_without_observer",
+          "instance::host::tests::host_crossing_expiry_joins_admission",
+          "instance::host::tests::host_expiry_keeps_healthy",
+          "instance::host::tests::host_drop_retains_lease",
+          "instance::host::tests::host_idle_denial_suspends",
+          "instance::host::tests::host_guest_keeps_healthy",
+          "instance::host::tests::host_isolates_failure",
+          "instance::host::tests::host_keeps_benign_notice",
+          "instance::host::tests::host_keeps_newer_member",
+          "instance::host::tests::host_metadata_error_drains",
+          "instance::host::tests::host_preserves_pending",
+          "instance::host::tests::host_replaces_one_lifecycle",
+          "instance::host::tests::host_source_denial_suspends",
+          "instance::host::tests::host_stop_joins_admission",
+          "instance::host::tests::lifecycle::explicit_stop_joins_guest",
+          "instance::host::tests::host_stop_joins_guest",
+          "instance::host::tests::lifecycle::host_uses_current_authority",
+          "instance::host::tests::lifecycle::explicit_stop_preserves_intent",
+          "instance::host::tests::lifecycle::restore_keeps_stopped_jobs",
+          "instance::host::tests::lifecycle::paused_member_keeps_ownership",
+          "instance::host::tests::lifecycle::unpolled_host_releases_registration",
+          "instance::host::tests::membership_keys_keep_capacity",
+          "instance::host::tests::lifecycle::start_reuses_prepared_owner",
+          "instance::host::tests::native::native_expired_admission",
+          "instance::host::tests::native::native_stop_joins",
+          "instance::host::tests::pressure_keeps_stop_reactive",
+          "instance::host::tests::projected_member_keeps_fence",
+          "instance::host::tests::native::native_control_joins",
+          "instance::host::tests::removal::recreation_changes_scope_explicitly",
+          "instance::host::tests::removal::removal_joins_native_guest",
+          "instance::host::tests::removal::removal_keeps_shared_instance",
+          "instance::host::tests::removal::removal_needs_only_remove",
+          "instance::host::tests::removal::restoration_keeps_tombstones",
+          "instance::host::tests::replacement_releases_before_admission",
+          "instance::host::tests::recovery::host_recovers_failed_frontier",
+          "instance::tests::checkpoint::native_overflow_keeps_checkpoint",
+          "instance::tests::version::native_caps_keep_receipt"
+        ],
+        "test_results": [
+          "test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 353 filtered out; finished in 104.80s"
+        ]
+      },
+      {
+        "name": "clippy311",
+        "record": "/tmp/araphor-retirement-resume-20261022/clippy311.json",
+        "record_sha256": "0ad2842f36e5dfcc7fbee221b6c76d380e33ccc65c917c042879ca01c1c9398e",
+        "log": "/tmp/araphor-retirement-resume-20261022/clippy311.log",
+        "log_sha256": "192b68258ccd75c5eb78b36c8aef06caa26d23adefd7b34ec0252e302aa7ef69",
+        "command": [
+          "cargo",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--all-features",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 89.06881628300107,
+        "source_unchanged": true,
+        "binary_sha256": null,
+        "passed_tests": [],
+        "test_results": []
+      },
+      {
+        "name": "format311",
+        "record": "/tmp/araphor-retirement-resume-20261022/format311.json",
+        "record_sha256": "46987b54c3a306aa80cebb35694fd31e263560f12e3e621dbcb3f533439b1632",
+        "log": "/tmp/araphor-retirement-resume-20261022/format311.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 4.630596980001428,
+        "source_unchanged": true,
+        "binary_sha256": null,
+        "passed_tests": [],
+        "test_results": []
+      }
+    ],
+    "native_artifacts": {
+      "created_at": "2026-10-23T01:12:14.116074+00:00",
+      "build_record": "native-build310.json",
+      "build_record_sha256": "b5a29eb1a2ed8ab637abe7ff1016cf62996bbaa8cbb4ca2cfef884108d5bd799",
+      "target": "x86_64-unknown-linux-gnu",
+      "fixture_source_sha256": "d1ede11f970d828b7889c0a6713c414104658f8a2b511184868db28f06e2aaa0",
+      "artifacts": {
+        "native/credentials.so": {
+          "bytes": 4659888,
+          "sha256": "0bfd5987afe40d968e7c8873a6b0a28dfa624e61f83d62b35ce0239d3efe094e"
+        },
+        "native/detector.so": {
+          "bytes": 4070696,
+          "sha256": "ad13bb121d89b034829c17538059575a0e2986f36ce2439d841c50e41e0da9ee"
+        },
+        "native/discovery.so": {
+          "bytes": 5678536,
+          "sha256": "538e9935a291b970f903b7ca29f6736dbfdec9500f411edcebf7868706667f34"
+        },
+        "native/kubernetes.so": {
+          "bytes": 4659848,
+          "sha256": "c49b7fd51ae39b9e763d19c15f5a75f2a9b919ac84576dd70ab067149d9947a4"
+        },
+        "native/process.so": {
+          "bytes": 4659744,
+          "sha256": "41a978fe89a3ddc224b0bccd1472b88991471323f1cecd11770b45b3d465dbdc"
+        },
+        "native/runtime.so": {
+          "bytes": 5981816,
+          "sha256": "2c8bf062ac29642afff532ca1cd8f2ba2b9ed90352ae148136cc67c577b62cb8"
+        }
+      },
+      "result": "Source-built artifacts. Native runtime qualification is pending."
+    },
+    "native_artifacts_record_sha256": "ee8feaa40c7dd3e90a517ae2def5dc414bdf9886bd4622593bef7b7dea269de9",
+    "actual_platform": "Linux 6.8.0-147-generic x86_64; x86_64-unknown-linux-gnu",
+    "source_identity": [
+      {
+        "path": "crates/araphor-analysis/src/instance/tests/finite.rs",
+        "source310_sha256": "d40311db7561f991f293b2276f939d2d6697b22c37f15bedb2e2ae9e99c19f86",
+        "source311_sha256": "d40311db7561f991f293b2276f939d2d6697b22c37f15bedb2e2ae9e99c19f86",
+        "current_sha256": "d40311db7561f991f293b2276f939d2d6697b22c37f15bedb2e2ae9e99c19f86",
+        "current_matches_source311": true
+      },
+      {
+        "path": "crates/araphor-analysis/src/instance/tests/checkpoint.rs",
+        "source310_sha256": "41778f0cfbc000b1e6bc157956b0bcbaf46da795e2453ea854b47992650164be",
+        "source311_sha256": "356b6f53ba39d34037f97402f5553c4def2abec63cbd75ae169a4df577ccabec",
+        "current_sha256": "356b6f53ba39d34037f97402f5553c4def2abec63cbd75ae169a4df577ccabec",
+        "current_matches_source311": true
+      },
+      {
+        "path": "crates/araphor-analysis/src/instance/tests/version.rs",
+        "source310_sha256": "80843d022e825af7cceea01b9371775b41a68dec339458984222c208542460ed",
+        "source311_sha256": "5bad9438a7f0a9ac84818d6b9c0e379f6852d17a7369e27f2f37bd3824684df6",
+        "current_sha256": "5bad9438a7f0a9ac84818d6b9c0e379f6852d17a7369e27f2f37bd3824684df6",
+        "current_matches_source311": true
+      },
+      {
+        "path": "crates/araphor-analysis/src/instance/host/tests/native.rs",
+        "source310_sha256": "907b113395c7a434c5ceb312e07ac3617def55cb00eff9afb1bf59bb6f4bedd7",
+        "source311_sha256": "fe50d698a95a2602d929743b41560e64a4cc5bfd452c9f6585448c8d5c9f9f70",
+        "current_sha256": "fe50d698a95a2602d929743b41560e64a4cc5bfd452c9f6585448c8d5c9f9f70",
+        "current_matches_source311": true
+      },
+      {
+        "path": "crates/araphor-analysis/src/instance/subscription/tests.rs",
+        "source310_sha256": "9bfa611b29c6e59f1d61ca345841872edefed7e6c26602fd331c16ae4b7ef0f9",
+        "source311_sha256": "9bfa611b29c6e59f1d61ca345841872edefed7e6c26602fd331c16ae4b7ef0f9",
+        "current_sha256": "9bfa611b29c6e59f1d61ca345841872edefed7e6c26602fd331c16ae4b7ef0f9",
+        "current_matches_source311": true
+      },
+      {
+        "path": "crates/araphor-query/src/definition/tests/execution.rs",
+        "source310_sha256": "5965c8fe589fff2f34f5d9ac02ea553801defebaa1c4b8325b3525830f5f124c",
+        "source311_sha256": "5965c8fe589fff2f34f5d9ac02ea553801defebaa1c4b8325b3525830f5f124c",
+        "current_sha256": "5965c8fe589fff2f34f5d9ac02ea553801defebaa1c4b8325b3525830f5f124c",
+        "current_matches_source311": true
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/lib.rs",
+        "source310_sha256": "1126ed4cf948dc0ce179922539a3ee4a8c2d231996a9296b985c99836670e2a1",
+        "source311_sha256": "1126ed4cf948dc0ce179922539a3ee4a8c2d231996a9296b985c99836670e2a1",
+        "current_sha256": "1126ed4cf948dc0ce179922539a3ee4a8c2d231996a9296b985c99836670e2a1",
+        "current_matches_source311": true
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/mod.rs",
+        "source310_sha256": "9bea054c0b3f2405d9fb25f1595283402aa86ad06267d396d044aa871388dc3f",
+        "source311_sha256": "9bea054c0b3f2405d9fb25f1595283402aa86ad06267d396d044aa871388dc3f",
+        "current_sha256": "9bea054c0b3f2405d9fb25f1595283402aa86ad06267d396d044aa871388dc3f",
+        "current_matches_source311": true
+      },
+      {
+        "path": "crates/araphor-package-runtime/src/native/loading.rs",
+        "source310_sha256": "7a9722dcd223ca7c62e00f703594b81bd5ffbc547ca7f0ea5245257895dac43b",
+        "source311_sha256": "7a9722dcd223ca7c62e00f703594b81bd5ffbc547ca7f0ea5245257895dac43b",
+        "current_sha256": "7a9722dcd223ca7c62e00f703594b81bd5ffbc547ca7f0ea5245257895dac43b",
+        "current_matches_source311": true
+      },
+      {
+        "path": "crates/araphor-analysis-sdk/tests/component/src/lib.rs",
+        "source310_sha256": "d1ede11f970d828b7889c0a6713c414104658f8a2b511184868db28f06e2aaa0",
+        "source311_sha256": "d1ede11f970d828b7889c0a6713c414104658f8a2b511184868db28f06e2aaa0",
+        "current_sha256": "d1ede11f970d828b7889c0a6713c414104658f8a2b511184868db28f06e2aaa0",
+        "current_matches_source311": true
+      },
+      {
+        "path": "crates/araphor-analysis_back/src/package/tests/interruption.rs",
+        "source310_sha256": "da4e16503d6e3fb7edfab53d8867a6edd383fd8c877a62a91c506ec5e6f0087d",
+        "source311_sha256": "da4e16503d6e3fb7edfab53d8867a6edd383fd8c877a62a91c506ec5e6f0087d",
+        "current_sha256": "da4e16503d6e3fb7edfab53d8867a6edd383fd8c877a62a91c506ec5e6f0087d",
+        "current_matches_source311": true
+      }
+    ],
+    "source310_to_311": [
+      {
+        "path": "crates/araphor-analysis/src/instance/host/tests/native.rs",
+        "source310": "907b113395c7a434c5ceb312e07ac3617def55cb00eff9afb1bf59bb6f4bedd7",
+        "source311": "fe50d698a95a2602d929743b41560e64a4cc5bfd452c9f6585448c8d5c9f9f70"
+      },
+      {
+        "path": "crates/araphor-analysis/src/instance/host/tests/recovery.rs",
+        "source310": "516b339387d166840088cde2ec44b794a0e95a9bb12de01d83e92b2933268e32",
+        "source311": "4a1cd311fc05d0774e7b7c5b3a60ad06d96dbe55c0720a2c394566ceb6d86a7f"
+      },
+      {
+        "path": "crates/araphor-analysis/src/instance/tests/checkpoint.rs",
+        "source310": "41778f0cfbc000b1e6bc157956b0bcbaf46da795e2453ea854b47992650164be",
+        "source311": "356b6f53ba39d34037f97402f5553c4def2abec63cbd75ae169a4df577ccabec"
+      },
+      {
+        "path": "crates/araphor-analysis/src/instance/tests/version.rs",
+        "source310": "80843d022e825af7cceea01b9371775b41a68dec339458984222c208542460ed",
+        "source311": "5bad9438a7f0a9ac84818d6b9c0e379f6852d17a7369e27f2f37bd3824684df6"
+      }
+    ],
+    "source_transfer": "Only four test files differ. Host native changes restore five-second D+join/serve guards. Checkpoint/version replace one cloned singleton slice with std::slice::from_ref; assertions stay equivalent and both selectors pass again in host311. Recovery removes the disconnected Echo gate while retaining cancellation. All production sources and fixture source are unchanged. Native six-mode finite.rs, Query/Runtime cap tests and fixture artifact are identical between 310 and 311. Their source310 passes apply to the same code; this is an explicit identity transfer, not a claimed rerun.",
+    "leaf_checklists": [
+      {
+        "leaf": "failures.rs",
+        "methods": 3,
+        "status": "Done. No known assertion gap.",
+        "required_selectors": [
+          "native::tests::disabled_limits_allow_execution",
+          "native::loading::tests::cancellation_prevents_native_load",
+          "definition::tests::execution::native_caps_keep_targets",
+          "instance::tests::finite::native_failures_survive_reopen",
+          "instance::tests::version::native_caps_keep_receipt"
+        ],
+        "proofs": [
+          "native-runtime310",
+          "native-query310",
+          "native310",
+          "host311"
+        ],
+        "extra_regression": "native_overflow_keeps_checkpoint passed twice. physical_native_failures_release passed native-query310. Original Wasm finite failure selector passed wasm-joined310."
+      },
+      {
+        "leaf": "interruption.rs",
+        "methods": 2,
+        "status": "Done. No known assertion gap.",
+        "required_selectors": [
+          "instance::host::tests::native::native_control_joins",
+          "instance::host::tests::native::native_expired_admission"
+        ],
+        "extra_guard_selector": "instance::host::tests::native::native_stop_joins",
+        "proofs": [
+          "host311"
+        ],
+        "timing_packet": "native-interruption-five-second/draft.patch",
+        "timing_packet_sha256": "cd3b6ffd3603e9d33846eb21d23b12324d9d28314995cb39d6f5c62d3dff0a34",
+        "timing_packet_applied": true
+      },
+      {
+        "before_delete": [
+          "Archive both exact old leaf bytes, source identities, maps, native artifact metadata and all proof records/logs.",
+          "Check live old-leaf hashes against the baseline hashes in this map.",
+          "Check current replacement source hashes against source311 or explicitly assess any later change.",
+          "Delete only the two whole failures.rs and interruption.rs leaves. Keep mod.rs, its declarations and all remaining Back parent bytes unchanged until the family root can retire. Back is excluded from the active build.",
+          "Record actual retirement and check post-cut source/compile state in the parent workflow."
+        ]
+      }
+    ],
+    "siblings": [
+      {
+        "leaf": "lifecycle.rs",
+        "method": "native_declared_type_lifecycle",
+        "status": "Not done. Keep Back leaf.",
+        "qualified_current_tests": [
+          "instance::tests::version::native_versions_keep_history",
+          "instance::tests::checkpoint::native_checkpoint_reopens"
+        ],
+        "proof": "wasm-joined310",
+        "checklist": [
+          {
+            "old": "Actual Native admission/readiness, target native and first value 7.",
+            "current": "Native checkpoint helper asserts source-built target, artifact digest, closure digest, platform and successful full output. Version wrapper uses actual Native but its first value is 3. No explicit Ready assertion in the wrapper.",
+            "state": "Partial; add exact Ready and first value in the lifecycle regression."
+          },
+          {
+            "old": "Same attempt returns identical result ID and commit; reinstall same image is immutable.",
+            "current": "Version/checkpoint helpers assert exact receipt replay and original full output/context/commit. Data image owner provides immutable installation.",
+            "state": "Covered compositionally; the lifecycle extension should directly assert image identity and replay."
+          },
+          {
+            "old": "Native revision 1 updates to Wasm revision 2; old ID conflicts.",
+            "current": "Version wrapper uses actual Native revision 1 and actual Wasm revision 2, rejects old-generation ID and checks selected value. It does not assert intermediate context.target wasm.",
+            "state": "Partial; add exact Wasm selected target/context."
+          },
+          {
+            "old": "Clean reopen while Wasm is selected; new run remains Wasm.",
+            "current": "Existing Native version helper reopens only after rollback to Native.",
+            "state": "Missing actual Native-to-Wasm selected reopen."
+          },
+          {
+            "old": "Rollback to Native revision 1; original first attempt remains replayable.",
+            "current": "Existing version helper restores exact original generation/spec, receipt/full context/output/limits/commit, then reopens Native.",
+            "state": "Covered by native_versions_keep_history; new sequence must retain it."
+          },
+          {
+            "old": "Remove stops new execution while historical Native output remains value 7; return all four permits.",
+            "current": "Generic Host removal tests retain output. removal_joins_native_guest uses terminal_instance, which remains Wasm. Existing version helper does not remove its restored Native instance.",
+            "state": "Missing actual restored-Native removal and retained packet/read/replay denial with explicit four-slot configuration."
+          }
+        ],
+        "smallest_next_test": "One ignored Native lifecycle function in existing instance/tests/version.rs. Reuse image, target, Fixture and InstanceHost. Sequence actual Native -> Wasm -> clean reopen -> Native rollback -> clean reopen -> remove. Compare exact owned receipts, complete encoded output/checkpoint/context/commit, saved manifest targets and all four returned slots. Drop all Host/Instance/Engine Arcs before each AnalysisStore::open."
+      },
+      {
+        "leaf": "restart.rs",
+        "method": "native_host_fault_restart",
+        "status": "Not done. Keep Back leaf.",
+        "checklist": [
+          {
+            "old": "Actual loaded Native fixture panic marker, returned PackageNative Incomplete, unchanged prior current output/checkpoint/metadata, four returned slots and next success value 9.",
+            "current": "SDK in-binary panic unit test and Runtime error-code mapping exist; fixture has a one-shot native_fault panic path. No current call invokes this source-built fault path.",
+            "state": "Missing actual loaded Native panic and managed preservation/recovery assertions."
+          },
+          {
+            "old": "Fixture abort marker and physical SIGABRT child termination; parent reopens same store with full prior/current packets and commit metadata unchanged. Original replay 6, post-panic replay 9, and post-abort new success 12.",
+            "current": "Native fixture calls process::abort for the existing fault mode. Current graceful checkpoint reopen tests do not invoke it.",
+            "state": "Missing physical process-abort/reopen proof. A test subprocess may contain the deliberate abort. Production Native remains in process."
+          }
+        ],
+        "required_boundary": "A returned SDK Failed/trap value is not a CPU trap or process abort. A graceful store reopen is not an abrupt host abort proof. Do not add a production process owner or isolation claim."
+      },
+      {
+        "leaf": "mod.rs",
+        "method": "native",
+        "status": "Not done. Keep Back family root.",
+        "current": "Fixture::bundle(native) reads source-built runtime shared library and qualifies accumulate. terminal_target renames/qualifies evaluate. Query component helper qualifies its selected export. Native checkpoint tests assert captured artifact/closure/platform identity.",
+        "remaining": "The root still declares lifecycle and restart. It cannot be removed while those children stay."
+      }
+    ],
+    "honesty_limits": [
+      "This audit did not run Cargo, build Native artifacts or execute tests. The parent-owned records above provide the proof.",
+      "clippy310 failed two cloned singleton slice lints and recovery310 failed the disconnected Echo fixture. These historical failures are preserved. Current clippy311, Host recovery and format pass; this map does not claim the full workspace test suite passed.",
+      "The wasm-joined310 label includes actual Native checkpoint/version selectors. Conversely removal_joins_native_guest is Wasm through terminal_instance. Test names and cohort labels do not establish the selected target.",
+      "The current Native failure, cooperative cancellation and graceful recovery proofs do not cover actual source-built panic or physical host abort. Keep restart.rs."
+    ]
+  },
+  "map_sha256": "34e769a661d23f1dec0d27de59fdbfd72aaa406e91080a7a8f16a89d38e07e39",
+  "native_artifacts": {
+    "created_at": "2026-10-23T01:12:14.116074+00:00",
+    "build_record": "native-build310.json",
+    "build_record_sha256": "b5a29eb1a2ed8ab637abe7ff1016cf62996bbaa8cbb4ca2cfef884108d5bd799",
+    "target": "x86_64-unknown-linux-gnu",
+    "fixture_source_sha256": "d1ede11f970d828b7889c0a6713c414104658f8a2b511184868db28f06e2aaa0",
+    "artifacts": {
+      "native/credentials.so": {
+        "bytes": 4659888,
+        "sha256": "0bfd5987afe40d968e7c8873a6b0a28dfa624e61f83d62b35ce0239d3efe094e"
+      },
+      "native/detector.so": {
+        "bytes": 4070696,
+        "sha256": "ad13bb121d89b034829c17538059575a0e2986f36ce2439d841c50e41e0da9ee"
+      },
+      "native/discovery.so": {
+        "bytes": 5678536,
+        "sha256": "538e9935a291b970f903b7ca29f6736dbfdec9500f411edcebf7868706667f34"
+      },
+      "native/kubernetes.so": {
+        "bytes": 4659848,
+        "sha256": "c49b7fd51ae39b9e763d19c15f5a75f2a9b919ac84576dd70ab067149d9947a4"
+      },
+      "native/process.so": {
+        "bytes": 4659744,
+        "sha256": "41a978fe89a3ddc224b0bccd1472b88991471323f1cecd11770b45b3d465dbdc"
+      },
+      "native/runtime.so": {
+        "bytes": 5981816,
+        "sha256": "2c8bf062ac29642afff532ca1cd8f2ba2b9ed90352ae148136cc67c577b62cb8"
+      }
+    },
+    "result": "Source-built artifacts. Native runtime qualification is pending."
+  },
+  "retired_before": 145,
+  "retired_after": 147,
+  "remaining_before": 63,
+  "remaining_after": 61,
+  "production_nonblank_removed": 0,
+  "net_reduction_target_met": false,
+  "limits": [
+    "Native runtime qualification covers x86_64-unknown-linux-gnu.",
+    "Keep Native lifecycle and restart reference files. Physical host-abort continuation is not qualified.",
+    "Keep supervision for pre-attempt source/deadline recovery and typed Busy after an admitted attempt. Admitted terminal-frontier recovery passes Host311.",
+    "Full shared Rust CI is Not done on this source."
+  ],
+  "checkpoint": {
+    "archive": "recovery/araphor-retirement-checkpoint-20261023T013505Z.tar.gz",
+    "sha256": "691b7c354309e03db9d8a4e6da9836bbc889c576033d1cb45c49628cbf2b3c6b",
+    "source_files": 1920,
+    "remaining_back_files": 63
+  },
+  "removed": [
+    "crates/araphor-analysis_back/src/package/tests/native/failures.rs",
+    "crates/araphor-analysis_back/src/package/tests/native/interruption.rs"
+  ],
+  "remaining_baseline_comparison": {
+    "commit": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+    "files": 61,
+    "changed": []
+  }
+}

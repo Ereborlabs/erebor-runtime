@@ -1,0 +1,238 @@
+{
+  "created_at": "2026-10-23T02:55:52.898798+00:00",
+  "result": "Done for live admitted source-or-capacity recovery. Complete supervision replacement, retirement, production reduction and final Rust CI are Not done.",
+  "owners": {
+    "Query": "The ordinary native subscription owns scoped source changes and captured window deadlines.",
+    "Analysis": "The existing Host member select races that stream with the original typed capacity wait. The retained Session owns sink memory.",
+    "Data": "Existing terminal, generation, lifecycle, completed revision, saved state and atomic publication fences remain unchanged."
+  },
+  "rules": [
+    "A source-first receipt clears the old capacity cause while external pressure can remain held.",
+    "A resource-first event cancels and joins the ordinary subscription before one forced fresh capture.",
+    "Force is permitted only when the exact failed completion is still latest and newer than successful progress.",
+    "A newer finite receipt prevents forced duplicate execution.",
+    "A cancelled newer attempt resumes from the actual prior receipt frontier and can still execute its newer source cut.",
+    "Committed delivery errors cannot force a second execution.",
+    "The existing Session scope excludes the sink's own cleanup from external capacity release."
+  ],
+  "source": {
+    "crates/araphor-analysis/src/instance/subscription.rs": "b834217eeeaea2a8e48d0aca5b8e225956ec37061eecf6f5ce8490cf5d89dc6e",
+    "crates/araphor-analysis/src/instance/sink.rs": "a2bf21dfff58c6f2416e24a09d87660fa799ac4611ddde43638a7e9b658142f5",
+    "crates/araphor-analysis/src/instance/host.rs": "e750bb35ad452744bdabeccb2e9cef8fd35839211b1f4e949af4263531a66f81",
+    "crates/araphor-analysis/src/instance/tests.rs": "28824e07183ff480f6f9476e46c8db2de196d80ab35ea069eeb68690e97d0ffb",
+    "crates/araphor-analysis/src/instance/tests/version.rs": "df2b8b30cfae170e5652f86d116e02d1ae8ace634061c0f3ba79b41f9a232b07",
+    "crates/araphor-analysis/src/instance/host/tests/admission.rs": "61c4aaea4ff37357bcdf323c0b1c7a237b63e6be1117b4c938a11d6f2846b36a"
+  },
+  "proof": {
+    "manifest316": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "started_at": "2026-10-23T02:39:18.422154+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "exit_code": 101,
+      "elapsed_seconds": 22.628084603999014,
+      "log_sha256": "6a6e84a58159cecfae6b64b3786fbb882806c911ef939dc166385330a05140af",
+      "source_unchanged": true,
+      "record_sha256": "68540a86fb60c48e2c153d0d05f1d719df3f4276433bb64d405f4cb5a9842747"
+    },
+    "manifest317": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "started_at": "2026-10-23T02:41:07.367784+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "exit_code": 0,
+      "elapsed_seconds": 171.37824953699965,
+      "log_sha256": "576086696bac0c3c34862ecea618c13b02c150fc5fa110a8dd3057ba34747b6e",
+      "source_unchanged": true,
+      "record_sha256": "321079b9f02f88265e628814674a2c0be1106bdaf985c3ed2f8497926f0c8298"
+    },
+    "capacity317": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "instance::host::tests::admission::admitted_busy_retries_capacity",
+        "--exact",
+        "--include-ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "started_at": "2026-10-23T02:44:57.993182+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "binary_sha256": "ed6ae18c9055af43382df7c8b299d8ac6b48a7b77803996ecb17648a787e15e2",
+      "exit_code": 101,
+      "elapsed_seconds": 3.1124851620006666,
+      "log_sha256": "bf1e09a8aee22034c151d74318bcfa23137a9e74f04e2bdafbd70b5beebdd0d6",
+      "source_unchanged": true,
+      "record_sha256": "fd6e4dfa20e0a066f50094eb7cb1b07bc58f1ffa4b4826a1370c6d0b8d6afe36"
+    },
+    "clippy317": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "started_at": "2026-10-23T02:44:58.054414+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "exit_code": 101,
+      "elapsed_seconds": 71.68468377599856,
+      "log_sha256": "1f50a9d310fa29fb7b3246f5e9b5fee4263ef653c09e96bbca835755036f1f38",
+      "source_unchanged": true,
+      "record_sha256": "6e907d37337d47d25b4a75786db17525657e772c14914a122a18e6023c32fe50"
+    },
+    "manifest318": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "started_at": "2026-10-23T02:47:44.822604+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "exit_code": 0,
+      "elapsed_seconds": 41.65443576999678,
+      "log_sha256": "76fd6041a274f71189371b708f29f49a559df90107d10744b6f3d0de2a8ce5c1",
+      "source_unchanged": true,
+      "record_sha256": "cd34fe5db61ee0d3d9499fb6d2cc6143a0dc969833a7ccefad331022daf86de2"
+    },
+    "capacity318": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "instance::host::tests::admission::admitted_busy_retries_capacity",
+        "--exact",
+        "--include-ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "started_at": "2026-10-23T02:49:17.490677+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "binary_sha256": "2b0a8214ec813f7c9c0e75a9118ef477068a4ec5febca74e736422606e2f8dcd",
+      "exit_code": 0,
+      "elapsed_seconds": 5.135294250001607,
+      "log_sha256": "3bb49626f2d3dbfdcc8aabe453a902de69f333504627c3c342b1e4a61e14d80d",
+      "source_unchanged": true,
+      "record_sha256": "ed5fa11c70802cf86804f1ff0ad004e0869a7a70bed79720bf4201718169dd69"
+    },
+    "host318": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "instance::host::",
+        "instance::subscription::tests::postcommit_notice_keeps_receipt",
+        "instance::tests::version::versions_capture_joined_state",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-23T02:51:19.196439+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "binary_sha256": "2b0a8214ec813f7c9c0e75a9118ef477068a4ec5febca74e736422606e2f8dcd",
+      "exit_code": 0,
+      "elapsed_seconds": 97.23642192799889,
+      "log_sha256": "152715338f0df2bcb344512d3e44ca22b06ed21637babd1a24c4cec772d33746",
+      "source_unchanged": true,
+      "record_sha256": "808ce6ef3fadcb3df84d7fbf22364d102a4ed5e50267f95afbd8a0c2befcb828"
+    },
+    "memory317": {
+      "command": [
+        "target/debug/deps/araphor_query-44e57ad344e0eb34",
+        "memory::tests::scoped_releases_ignore_self",
+        "memory::tests::children_share_wake_group",
+        "--include-ignored",
+        "--test-threads=1"
+      ],
+      "started_at": "2026-10-23T02:45:23.097575+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "binary_sha256": "25dbe55b47ef54ad071bf08835ddbad7ac37f38821c0bce7932d0627dc788ffc",
+      "exit_code": 0,
+      "elapsed_seconds": 0.012167974997282727,
+      "log_sha256": "247ab5ee75b5397dec3405ab557e2b12f6091c16aa8d1c6b1d05c48f6a79ded8",
+      "source_unchanged": true,
+      "record_sha256": "9fc9c58ff6f53c8e34ffffeca733713b35571fede17f578ff0decf171ccf3173"
+    },
+    "encoding315": {
+      "command": [
+        "target/debug/deps/araphor_package-ee9b41fecce12d0f",
+        "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+        "--exact",
+        "--include-ignored",
+        "--test-threads=1"
+      ],
+      "started_at": "2026-10-23T02:38:47.069311+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "binary_sha256": "eac488eac894e606300bdea09be32b6cb0f3cdd6a843aa1302489154c34ecb3a",
+      "exit_code": 0,
+      "elapsed_seconds": 0.050338863002252765,
+      "log_sha256": "7865335595035207ece261785b50fc9f90a80550a15f017f81b182aac2d4ca75",
+      "source_unchanged": true,
+      "record_sha256": "a39a4ae60d72e141f5a04899c52d78b150b012260b279e041f25097e7fd9e2f7"
+    },
+    "clippy318": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "started_at": "2026-10-23T02:49:16.981062+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "exit_code": 0,
+      "elapsed_seconds": 80.767679812001,
+      "log_sha256": "2d1e5db4c4ca90c96ab6d8613140608eff8fbe470d09baaf1ae5a9173eb4bcb8",
+      "source_unchanged": true,
+      "record_sha256": "0a2ce3a711940e52360388f39db407d81107f77d54d430ee9b6a8c1d2cf546ed"
+    },
+    "format318": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "started_at": "2026-10-23T02:51:19.616048+00:00",
+      "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "exit_code": 0,
+      "elapsed_seconds": 4.865312601999904,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_unchanged": true,
+      "record_sha256": "39fbbb8a852fa2f306c3f9fae82dc2b3a4e9c8f6be753f19a08d5ee90f6b71f3"
+    }
+  },
+  "diagnostics": [
+    "manifest316 failed because the existing Fixture::definition helper was private. Its visibility now matches its Instance test callers.",
+    "capacity317 failed because Fixture::start changed lifecycle without returning a fresh finite execution handle. The corrected test uses public InstanceHost::start. No production fence was changed.",
+    "clippy317 found one cloned reference slice in the new test. The corrected test uses std::slice::from_ref."
+  ],
+  "remaining": [
+    "Pre-attempt capture failure does not retain an authoritative frozen source observation or native window deadline.",
+    "Compiler and cache capacity forwarding is not part of this qualification.",
+    "The complete reference production supervision file remains unchanged.",
+    "The final repository Rust CI procedure has not run for this source."
+  ]
+}

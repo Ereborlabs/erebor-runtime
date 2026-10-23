@@ -21,7 +21,7 @@ results. A candidate cannot grant authority or perform a preventive action.
 
 The built-in row types use one Arrow binary value per typed row. `Rows::port`
 puts the type, JSON encoding, and generated JSON schema in field metadata.
-`Rows::encode` and `Rows::decode` check schemas and row, batch, and byte bounds.
+`Rows::encode` and `Rows::decode` check schemas and Arrow values.
 Integer values retain their exact widths. This format does not put a complete
 graph in one row. SDK authors can also use ordinary Arrow columns directly.
 

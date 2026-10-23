@@ -1,0 +1,569 @@
+{
+  "schema_version": 1,
+  "status": "Done for this leaf; complete retirement Not done",
+  "generated_at": "2026-10-22T18:42:39.599239+00:00",
+  "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+  "read_only": true,
+  "live_edits": false,
+  "cargo_or_test_runs_by_this_agent": false,
+  "whole_leaf": "crates/araphor-analysis_back/src/discovery/mod.rs",
+  "boundary": "This leaf defines the owner and context-provider contract. Its functions are replaced. Full live execution and replay remain in other reference leaves.",
+  "reference": {
+    "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+    "sha256": "7708b2a6402b7ea221d79cd33f44ffffe26a467eec1754a3d9af4c43bc27eb6d",
+    "bytes": 1581,
+    "physical_lines": 61,
+    "nonblank_lines": 52,
+    "matches_baseline": true,
+    "archive": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+    "archive_sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420",
+    "archive_member": "araphor-recovery-20261019-24zu3vty/pre-restore/crates/araphor-analysis_back/src/discovery/mod.rs",
+    "archive_member_sha256": "7708b2a6402b7ea221d79cd33f44ffffe26a467eec1754a3d9af4c43bc27eb6d",
+    "matches_archive": true
+  },
+  "behavior_map": [
+    {
+      "old": "DiscoveryContextProvider::context",
+      "replacement": [
+        "crates/araphor-query/src/sources/mod.rs",
+        "crates/araphor-query/src/inputs/receipt.rs",
+        "crates/araphor-analysis/src/package/builtin.rs"
+      ],
+      "behavior": "Native input plans read context tables through DataFusion providers. Query captures the exact input bytes, source revisions, context references, and witnesses. There is no Analysis per-record callback.",
+      "tests": [
+        "discovery::output::tests::native::durable_record_projection",
+        "discovery::output::tests::native::context_content_changes_revision"
+      ],
+      "qualification": "discovery-owner265: durable_record_projection and context_content_changes_revision passed. The callback API is replaced by admitted native SQL inputs, with no backward callback API promised.",
+      "current_native_paths": [
+        "crates/araphor-query/src/sources/mod.rs::SourceProvider",
+        "crates/araphor-query/src/inputs/receipt.rs::Inputs::{input_for,input}",
+        "crates/araphor-analysis/src/package/builtin.rs::Package::discovery_bundle"
+      ]
+    },
+    {
+      "old": "DiscoveryContextProvider::{changes,revision}",
+      "replacement": [
+        "crates/araphor-query/src/stream/progress.rs",
+        "crates/araphor-query/src/inputs/receipt.rs",
+        "crates/araphor-data/src/analysis/dependencies.rs"
+      ],
+      "behavior": "Query waits on source-revision notices and captured exact deadlines. Native context content defines the input revision. There is no optional host notice loop.",
+      "tests": [
+        "discovery::output::tests::native::context_content_changes_revision",
+        "follow::tests::clock::native_predicate_captures_deadline",
+        "follow::tests::clock::bare_clock_without_deadline"
+      ],
+      "qualification": "discovery-owner265 proves native content revisions. query-owner267 proves deadline capture and no bare-clock deadline. Full live context refresh remains assigned to live.rs, not this declaration leaf."
+    },
+    {
+      "old": "DiscoveryOwner::{store,execution,provider,config,operation}",
+      "replacement": [
+        "crates/araphor-analysis/src/discovery/mod.rs",
+        "crates/araphor-analysis/src/discovery/feed.rs",
+        "crates/araphor-analysis/src/instance/host.rs",
+        "crates/araphor-analysis/src/instance/sink.rs"
+      ],
+      "behavior": "Discovery retains packages and the shared InstanceHost. The feed owns source membership only. The one Host owns running instances. Native Query plans and one Data writer commit inputs, result, state, progress, and Profile together. Per-owner sweeps and the operation mutex are absent.",
+      "tests": [
+        "discovery::tests::native_source_stream_lifecycle",
+        "discovery::tests::native_membership_restores_intent",
+        "instance::host::tests::lifecycle::unpolled_host_releases_registration",
+        "instance::host::tests::lifecycle::explicit_stop_joins_guest"
+      ],
+      "qualification": "discovery-owner265, handoff265, and source264 passed their exact listed owner, membership, lifecycle, denial, and cancellation cases. Their source snapshots precede the current Data read and Query metadata changes.",
+      "current_native_paths": [
+        "crates/araphor-analysis/src/discovery/feed.rs::DiscoveryOwner::{sources,feed,derive,admit}",
+        "crates/araphor-analysis/src/instance/host.rs::InstanceHost::{serve,member}",
+        "crates/araphor-analysis/src/instance/sink.rs::Publication",
+        "crates/araphor-data/src/analysis/progress/profile.rs::AnalysisStore::commit_managed_profile"
+      ]
+    },
+    {
+      "old": "DiscoveryOwner::new",
+      "replacement": [
+        "crates/araphor-analysis/src/discovery/mod.rs:DiscoveryOwner::new",
+        "crates/araphor-analysis/src/instance/host.rs:InstanceHost::check_query"
+      ],
+      "behavior": "Reject empty packages, duplicate tenants, mixed Query owners, invalid current grants, and a Host with another Query. Register the Data owner only after all checks. Fixed caps and seal polling are removed by the user instruction; optional runtime limits remain in Query and Package Runtime.",
+      "tests": [
+        "discovery::tests::owner_registration_is_balanced"
+      ],
+      "qualification": "owner_registration_is_balanced passed in discovery-owner265. It checks invalid construction, mixed Query/Host rejection before store effects, current grant expiry, and two-owner Drop accounting.",
+      "current_native_paths": [
+        "crates/araphor-analysis/src/discovery/mod.rs::DiscoveryOwner::new",
+        "crates/araphor-analysis/src/instance/host.rs::InstanceHost::check_query"
+      ]
+    },
+    {
+      "old": "DiscoveryOwner::new scoped memory and operation mutex",
+      "replacement": [
+        "crates/araphor-query/src/memory.rs",
+        "crates/araphor-analysis/src/instance/subscription.rs",
+        "crates/araphor-analysis/src/instance/host/lifecycle.rs"
+      ],
+      "behavior": "Native execution retains Query memory reservations and the shared Host serializes each durable instance through its existing Managed lease and fences. No second discovery execution owner is added.",
+      "tests": [
+        "instance::subscription::tests::capacity::slot_wait_keeps_capture_and_progresses",
+        "instance::subscription::tests::capacity::slot_wait_cancellation_joins",
+        "discovery::tests::native_finite_progress"
+      ],
+      "qualification": "native_finite_progress passed in discovery-owner265. Both slot-wait tests passed in the durable focused206/full CI records and their test file is unchanged. Their final-binary reruns remain required.",
+      "current_native_paths": [
+        "crates/araphor-query/src/memory.rs::Memory",
+        "crates/araphor-analysis/src/instance/subscription.rs::Instance::subscribe",
+        "crates/araphor-analysis/src/instance/host/lifecycle.rs"
+      ]
+    },
+    {
+      "old": "DiscoveryOwner::new register and Drop release",
+      "replacement": [
+        "crates/araphor-analysis/src/discovery/mod.rs:DiscoveryOwner::{new,drop}",
+        "crates/araphor-data/src/analysis/mod.rs:register_discovery_owner/release_discovery_owner"
+      ],
+      "behavior": "Invalid construction changes no count. Dropping one of two owners retains enabled=true. The last Drop sets enabled=false.",
+      "tests": [
+        "discovery::tests::owner_registration_is_balanced"
+      ],
+      "qualification": "owner_registration_is_balanced passed in discovery-owner265. It checks invalid construction, mixed Query/Host rejection before store effects, current grant expiry, and two-owner Drop accounting."
+    }
+  ],
+  "qualified_runs": {
+    "source264": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "discovery::tests::sources::denied_program_keeps_sibling",
+        "aborted_admission_keeps_owner",
+        "--nocapture"
+      ],
+      "started_at": "2026-10-22T18:25:08.382357+00:00",
+      "head_before": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "environment": {
+        "RUST_TEST_THREADS": "1",
+        "ARAPHOR_NATIVE_DIR": "/tmp/araphor-native-built-20261022-postsql",
+        "ARAPHOR_NATIVE_TARGET": "x86_64-unknown-linux-gnu"
+      },
+      "wrapper_sha256": "bb618876c274c9e0cab178fa0de9218e09509b29b30d003d629de888f951bf59",
+      "binary_sha256": "1d270c3f564931bb65d9a7f80c6765d2d72b386e24bd9abde72f3621773d9b16",
+      "head_after": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "elapsed_seconds": 13.213,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "b5ebbc94a893ee48a72acd765b834c89f6e1b633fb3482284d578bc8bbe5df88",
+      "passing_tests": [
+        "discovery::tests::sources::aborted_admission_keeps_owner",
+        "discovery::tests::sources::denied_program_keeps_sibling",
+        "graph::native::tests::feed::aborted_admission_keeps_owner"
+      ],
+      "record_path": "/tmp/araphor-retirement-final-20261021/source264.json",
+      "record_sha256": "2f18c43b57b26a20d31c77a17e9dcb3329ad7e3c499d5134c17a7fba43a7c13a",
+      "observed_log_sha256": "b5ebbc94a893ee48a72acd765b834c89f6e1b633fb3482284d578bc8bbe5df88",
+      "log_hash_matches": true,
+      "source_manifest_paths": 1901,
+      "current_source_differences": [
+        "crates/araphor-analysis/src/graph/native/commit.rs",
+        "crates/araphor-analysis/src/graph/native/tests/managed.rs",
+        "crates/araphor-analysis/src/instance/tests/version.rs",
+        "crates/araphor-analysis_back/src/graph/input.rs",
+        "crates/araphor-analysis_back/src/package/fixtures.rs",
+        "crates/araphor-data/src/analysis/connection.rs",
+        "crates/araphor-data/src/analysis/dependencies.rs",
+        "crates/araphor-data/src/analysis/extraction.rs",
+        "crates/araphor-data/src/analysis/graph/interest/tests.rs",
+        "crates/araphor-data/src/analysis/mod.rs",
+        "crates/araphor-data/src/analysis/packages/input.rs",
+        "crates/araphor-data/src/analysis/progress.rs",
+        "crates/araphor-data/src/analysis/progress/graph.rs",
+        "crates/araphor-data/src/analysis/raw.rs",
+        "crates/araphor-data/src/analysis/read.rs",
+        "crates/araphor-query/src/sources/rows.rs",
+        "crates/araphor-query/src/sources/rows/tests.rs"
+      ]
+    },
+    "discovery-owner265": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "discovery::tests::native_source_stream_lifecycle",
+        "discovery::tests::native_membership_restores_intent",
+        "discovery::tests::owner_registration_is_balanced",
+        "discovery::tests::native_finite_progress",
+        "discovery::output::tests::native::durable_record_projection",
+        "discovery::output::tests::native::context_content_changes_revision",
+        "--nocapture"
+      ],
+      "started_at": "2026-10-22T18:26:59.368463+00:00",
+      "head_before": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "environment": {
+        "RUST_TEST_THREADS": "1",
+        "ARAPHOR_NATIVE_DIR": "/tmp/araphor-native-built-20261022-postsql",
+        "ARAPHOR_NATIVE_TARGET": "x86_64-unknown-linux-gnu"
+      },
+      "wrapper_sha256": "bb618876c274c9e0cab178fa0de9218e09509b29b30d003d629de888f951bf59",
+      "binary_sha256": "1d270c3f564931bb65d9a7f80c6765d2d72b386e24bd9abde72f3621773d9b16",
+      "head_after": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "elapsed_seconds": 152.183,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "822cb6a4819ed96ec49d3206b8273a3813ecb4235c1fbe3dad6ed1a0473dc739",
+      "passing_tests": [
+        "discovery::output::tests::native::context_content_changes_revision",
+        "discovery::output::tests::native::durable_record_projection",
+        "discovery::tests::native_finite_progress",
+        "discovery::tests::native_membership_restores_intent",
+        "discovery::tests::native_source_stream_lifecycle",
+        "discovery::tests::owner_registration_is_balanced"
+      ],
+      "record_path": "/tmp/araphor-retirement-final-20261021/discovery-owner265.json",
+      "record_sha256": "b82ed859f0bdb0f64fb49c223ba422c0c4bfee771caa8986f4f6b94fb6b7e3e4",
+      "observed_log_sha256": "822cb6a4819ed96ec49d3206b8273a3813ecb4235c1fbe3dad6ed1a0473dc739",
+      "log_hash_matches": true,
+      "source_manifest_paths": 1901,
+      "current_source_differences": [
+        "crates/araphor-analysis/src/graph/native/commit.rs",
+        "crates/araphor-analysis/src/graph/native/tests/managed.rs",
+        "crates/araphor-analysis/src/instance/tests/version.rs",
+        "crates/araphor-analysis_back/src/graph/input.rs",
+        "crates/araphor-analysis_back/src/package/fixtures.rs",
+        "crates/araphor-data/src/analysis/connection.rs",
+        "crates/araphor-data/src/analysis/dependencies.rs",
+        "crates/araphor-data/src/analysis/extraction.rs",
+        "crates/araphor-data/src/analysis/graph/interest/tests.rs",
+        "crates/araphor-data/src/analysis/mod.rs",
+        "crates/araphor-data/src/analysis/packages/input.rs",
+        "crates/araphor-data/src/analysis/progress.rs",
+        "crates/araphor-data/src/analysis/progress/graph.rs",
+        "crates/araphor-data/src/analysis/raw.rs",
+        "crates/araphor-data/src/analysis/read.rs",
+        "crates/araphor-query/src/sources/rows.rs",
+        "crates/araphor-query/src/sources/rows/tests.rs"
+      ]
+    },
+    "handoff265": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "instance::host::tests::lifecycle::",
+        "--nocapture"
+      ],
+      "started_at": "2026-10-22T18:26:59.117037+00:00",
+      "head_before": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "environment": {
+        "RUST_TEST_THREADS": "1",
+        "ARAPHOR_NATIVE_DIR": "/tmp/araphor-native-built-20261022-postsql",
+        "ARAPHOR_NATIVE_TARGET": "x86_64-unknown-linux-gnu"
+      },
+      "wrapper_sha256": "bb618876c274c9e0cab178fa0de9218e09509b29b30d003d629de888f951bf59",
+      "binary_sha256": "1d270c3f564931bb65d9a7f80c6765d2d72b386e24bd9abde72f3621773d9b16",
+      "head_after": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "elapsed_seconds": 18.738,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "869e0216f548b4fc7c862e385bd166eeb0fdbfd8d0081d97b081bb0e56b1ee5d",
+      "passing_tests": [
+        "instance::host::tests::lifecycle::explicit_stop_joins_guest",
+        "instance::host::tests::lifecycle::explicit_stop_preserves_intent",
+        "instance::host::tests::lifecycle::host_uses_current_authority",
+        "instance::host::tests::lifecycle::paused_member_keeps_ownership",
+        "instance::host::tests::lifecycle::restore_keeps_stopped_jobs",
+        "instance::host::tests::lifecycle::start_reuses_prepared_owner",
+        "instance::host::tests::lifecycle::unpolled_host_releases_registration"
+      ],
+      "record_path": "/tmp/araphor-retirement-final-20261021/handoff265.json",
+      "record_sha256": "f177eb2600f2e278e2663a754f339f1448f417a4e11b8e7fafae77d8d6bbe0d3",
+      "observed_log_sha256": "869e0216f548b4fc7c862e385bd166eeb0fdbfd8d0081d97b081bb0e56b1ee5d",
+      "log_hash_matches": true,
+      "source_manifest_paths": 1901,
+      "current_source_differences": [
+        "crates/araphor-analysis/src/graph/native/commit.rs",
+        "crates/araphor-analysis/src/graph/native/tests/managed.rs",
+        "crates/araphor-analysis/src/instance/tests/version.rs",
+        "crates/araphor-analysis_back/src/graph/input.rs",
+        "crates/araphor-analysis_back/src/package/fixtures.rs",
+        "crates/araphor-data/src/analysis/connection.rs",
+        "crates/araphor-data/src/analysis/dependencies.rs",
+        "crates/araphor-data/src/analysis/extraction.rs",
+        "crates/araphor-data/src/analysis/graph/interest/tests.rs",
+        "crates/araphor-data/src/analysis/mod.rs",
+        "crates/araphor-data/src/analysis/packages/input.rs",
+        "crates/araphor-data/src/analysis/progress.rs",
+        "crates/araphor-data/src/analysis/progress/graph.rs",
+        "crates/araphor-data/src/analysis/raw.rs",
+        "crates/araphor-data/src/analysis/read.rs",
+        "crates/araphor-query/src/sources/rows.rs",
+        "crates/araphor-query/src/sources/rows/tests.rs"
+      ]
+    },
+    "query-owner267": {
+      "command": [
+        "target/debug/deps/araphor_query-44e57ad344e0eb34",
+        "follow::tests::clock::native_predicate_captures_deadline",
+        "follow::tests::clock::bare_clock_without_deadline",
+        "--nocapture"
+      ],
+      "started_at": "2026-10-22T18:30:01.121349+00:00",
+      "head_before": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "environment": {
+        "RUST_TEST_THREADS": "1"
+      },
+      "wrapper_sha256": "bb618876c274c9e0cab178fa0de9218e09509b29b30d003d629de888f951bf59",
+      "binary_sha256": "5bb183bab300a20eba4da6515ca50776d09b53938f9a558c420e8680bb46b6d1",
+      "head_after": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+      "elapsed_seconds": 3.824,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "9d8739cf671f5835c45faa7d69918dc38dd02adb43a54bddd764bd7afa8b84bf",
+      "passing_tests": [
+        "follow::tests::clock::bare_clock_without_deadline",
+        "follow::tests::clock::native_predicate_captures_deadline"
+      ],
+      "record_path": "/tmp/araphor-retirement-final-20261021/query-owner267.json",
+      "record_sha256": "6a410e9f29a06fca6f277fd276cca3e31017b8a47b94bf1b114ac575d3d5260e",
+      "observed_log_sha256": "9d8739cf671f5835c45faa7d69918dc38dd02adb43a54bddd764bd7afa8b84bf",
+      "log_hash_matches": true,
+      "source_manifest_paths": 1901,
+      "current_source_differences": [
+        "crates/araphor-analysis/src/graph/native/commit.rs",
+        "crates/araphor-analysis/src/graph/native/tests/managed.rs",
+        "crates/araphor-analysis/src/instance/tests/version.rs",
+        "crates/araphor-analysis_back/src/graph/input.rs",
+        "crates/araphor-analysis_back/src/package/fixtures.rs",
+        "crates/araphor-data/src/analysis/connection.rs",
+        "crates/araphor-data/src/analysis/dependencies.rs",
+        "crates/araphor-data/src/analysis/extraction.rs",
+        "crates/araphor-data/src/analysis/graph/interest/tests.rs",
+        "crates/araphor-data/src/analysis/mod.rs",
+        "crates/araphor-data/src/analysis/packages/input.rs",
+        "crates/araphor-data/src/analysis/progress.rs",
+        "crates/araphor-data/src/analysis/progress/graph.rs",
+        "crates/araphor-data/src/analysis/raw.rs",
+        "crates/araphor-data/src/analysis/read.rs",
+        "crates/araphor-query/src/sources/rows.rs",
+        "crates/araphor-query/src/sources/rows/tests.rs"
+      ]
+    }
+  },
+  "historical_slot_wait_proof": {
+    "durable_record": "recovery/araphor-wasm-exchange-lifetime-20261021.json",
+    "durable_record_sha256": "28b98934df79169a1196fd01ef386bd62e01275ac7f0ce8b49ef9c85d25eae08",
+    "record_section": "qualification.focused206-araphor_analysis",
+    "focused_run": {
+      "command": [
+        "target/debug/deps/araphor_analysis-d255de3cbcd16f15",
+        "--exact",
+        "--nocapture",
+        "--test-threads=4",
+        "graph::tests::traversal::recovery::traversal_reopen_and_restore",
+        "graph::tests::execution::wasm_graph_adapter",
+        "discovery::output::tests::baseline::recorded_matches_corpus",
+        "discovery::output::tests::baseline::merge_matches_corpus",
+        "discovery::output::tests::baseline::comparison_matches_corpus",
+        "instance::subscription::tests::capacity::slot_wait_keeps_capture_and_progresses",
+        "instance::subscription::tests::capacity::slot_wait_cancellation_joins"
+      ],
+      "started_at": "2026-10-22T01:42:39.878001+00:00",
+      "head_before": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+      "environment": {
+        "RUST_TEST_THREADS": "4",
+        "RUST_BACKTRACE": "1"
+      },
+      "wrapper_sha256": "96827e477cd26c82842ed8b713fc69a1a6e6bbb20e0201024af5f2b12747ffb5",
+      "binary_sha256": "8c1e650a5e42687795672c36dd24c9f6900926d03d701707b565315564e33ee5",
+      "head_after": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+      "elapsed_seconds": 96.025,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "18e268dac2aae2ee85c32aceb54769feaed2a05b5bdbd6ffd3b8b4e9ee92395f",
+      "passing_tests": [
+        "discovery::output::tests::baseline::recorded_matches_corpus",
+        "discovery::output::tests::baseline::merge_matches_corpus",
+        "discovery::output::tests::baseline::comparison_matches_corpus",
+        "instance::subscription::tests::capacity::slot_wait_cancellation_joins",
+        "instance::subscription::tests::capacity::slot_wait_keeps_capture_and_progresses",
+        "graph::tests::traversal::recovery::traversal_reopen_and_restore",
+        "graph::tests::execution::wasm_graph_adapter"
+      ],
+      "record_sha256": "af20357d4830df9e4ba277435b12640512b986dc71d4a9d326e7f7fdbd2c7a5b",
+      "source_manifest_before_sha256": "14d2de908b0c22a7fd69ece9786af4a66891e7a4c4949ba76fe4cdf950b634ff",
+      "source_manifest_after_sha256": "14d2de908b0c22a7fd69ece9786af4a66891e7a4c4949ba76fe4cdf950b634ff"
+    },
+    "full_procedure": {
+      "command": [
+        "bash",
+        ".github/scripts/verify-rust-ci.sh"
+      ],
+      "cwd": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime",
+      "started_at": "2026-10-22T01:45:14.594927+00:00",
+      "head_before": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+      "environment": {
+        "CARGO_BUILD_JOBS": "2",
+        "CARGO_NET_OFFLINE": "true",
+        "RUST_TEST_THREADS": "4",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_PROFILE_DEV_DEBUG": "1",
+        "CARGO_PROFILE_TEST_DEBUG": "1"
+      },
+      "wrapper_sha256": "1ebbf8c8dcc8b219d6fad99eb4cdc632e4c042be98e25da5c1cfa21ed5eaccd0",
+      "finished_at": "2026-10-22T02:12:35.186570+00:00",
+      "head_after": "cd843f23c3bb0bcc9b08192b8de351c2c43152e5",
+      "elapsed_seconds": 1640.673,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "33aabd136039fc2af9d3d685639ab0b64a1eadc1f43d7371d7080404de67ba7e",
+      "record_sha256": "ca5946b8203d2f2be98ed29d938c83f85aba87a590405929c2289be4b59ce916",
+      "source_manifest_sha256": "bbed2773e007d7d4ec5b7761d8d0e38f92262e120970be08768ae19a86a6e77b",
+      "script_sha256": "bcab1478aa03262b211d0d189dcca6f37da2107d7110e75cfdb56e6d771580de",
+      "totals": {
+        "passed": 2779,
+        "failed": 0,
+        "ignored": 564
+      }
+    },
+    "current_test_file": "crates/araphor-analysis/src/instance/subscription/tests/capacity.rs",
+    "current_test_sha256": "ebb543178a0c702ce89726863cb4fecb2bb885709d8fe87fb3ae627cd723cb0c",
+    "test_file_matches_focused206_source_manifest": true,
+    "scope_limit": "These are real earlier passes, with exact commands and outcomes. Current production owners changed; rerun both names on the final binary before retirement."
+  },
+  "remaining_exact_slot_wait_tests": [
+    "instance::subscription::tests::capacity::slot_wait_keeps_capture_and_progresses",
+    "instance::subscription::tests::capacity::slot_wait_cancellation_joins"
+  ],
+  "required_before_retirement": [
+    "Root records current-source results for both exact slot-wait tests.",
+    "Root records affected metadata input-bound, native_run_stops, notice, and Data lock/cancel checks after the current changes.",
+    "Root archives the final frozen current source and records exact commands, logs, outcomes, source hashes, and archive hash before deleting this whole leaf."
+  ],
+  "not_claimed": [
+    "Earlier passing results do not qualify later Data read or Query metadata changes.",
+    "The context-content revision test proves Arrow content identity; it does not itself prove every live context refresh behavior.",
+    "Complete live, installed, replay, corpus, notice, crash, and event leaves remain separate retirement work.",
+    "The held fixed-window draft is not live and is not qualified by this owner-contract map.",
+    "No Back source was changed or deleted."
+  ],
+  "deletion_authorized_after_qualification": true,
+  "qualification_current": {
+    "manifest268": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "binary_sha256": null,
+      "elapsed_seconds": 520.969,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "21d81dcad2023600eb2e7426475b90d2e0b3536523999c357e54b3072fcf09a3",
+      "passing_tests": [],
+      "record_sha256": "f68683ae310ff7fab57b42b0ef63f35ab22794e833beae4630839717388b960c"
+    },
+    "ownership270": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "instance::subscription::tests::capacity::slot_wait_keeps_capture_and_progresses",
+        "instance::subscription::tests::capacity::slot_wait_cancellation_joins",
+        "instance::host::tests::lifecycle::",
+        "discovery::tests::sources::denied_program_keeps_sibling",
+        "aborted_admission_keeps_owner",
+        "--nocapture"
+      ],
+      "binary_sha256": "bd1a30cdf245920755b6a692a4265f84f8339682352dad3fffdc23a01d1e3436",
+      "elapsed_seconds": 35.08,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "ac977aaa38d062075b9e797781d12a1099e5861a458edd5eff536c510d5c0344",
+      "passing_tests": [
+        "discovery::tests::sources::aborted_admission_keeps_owner",
+        "discovery::tests::sources::denied_program_keeps_sibling",
+        "graph::native::tests::feed::aborted_admission_keeps_owner",
+        "instance::host::tests::lifecycle::explicit_stop_preserves_intent",
+        "instance::host::tests::lifecycle::host_uses_current_authority",
+        "instance::host::tests::lifecycle::paused_member_keeps_ownership",
+        "instance::host::tests::lifecycle::restore_keeps_stopped_jobs",
+        "instance::host::tests::lifecycle::explicit_stop_joins_guest",
+        "instance::host::tests::lifecycle::start_reuses_prepared_owner",
+        "instance::host::tests::lifecycle::unpolled_host_releases_registration",
+        "instance::subscription::tests::capacity::slot_wait_cancellation_joins",
+        "instance::subscription::tests::capacity::slot_wait_keeps_capture_and_progresses"
+      ],
+      "record_sha256": "aadc9d453b57ba3523f19a24dda6b5b1bf634ad26f11fa4bf59e3a063d98bd84"
+    },
+    "live270": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "discovery::tests::native_run_stops",
+        "--exact",
+        "--nocapture"
+      ],
+      "binary_sha256": "bd1a30cdf245920755b6a692a4265f84f8339682352dad3fffdc23a01d1e3436",
+      "elapsed_seconds": 61.008,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "f0a4935af6f4459cff65f0bcbcceded6e4bbca2fc475940b35303039f9b1478a",
+      "passing_tests": [
+        "discovery::tests::native_run_stops"
+      ],
+      "record_sha256": "df36eeddf33b145f4585c3c62cfd5eee2884da85b197be12fd46135e79eeaa7a"
+    },
+    "discovery-owner272": {
+      "command": [
+        "target/debug/deps/araphor_analysis-4531512e6104de4f",
+        "discovery::tests::native_source_stream_lifecycle",
+        "discovery::tests::native_membership_restores_intent",
+        "discovery::tests::owner_registration_is_balanced",
+        "discovery::tests::native_finite_progress",
+        "discovery::output::tests::native::durable_record_projection",
+        "discovery::output::tests::native::context_content_changes_revision",
+        "--nocapture"
+      ],
+      "binary_sha256": "bd1a30cdf245920755b6a692a4265f84f8339682352dad3fffdc23a01d1e3436",
+      "elapsed_seconds": 76.878,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "a1d4c71ae50fa9e7e8585098cd8cbb3eba71eb902e252d717eae0585bb356a7d",
+      "passing_tests": [
+        "discovery::output::tests::native::durable_record_projection",
+        "discovery::output::tests::native::context_content_changes_revision",
+        "discovery::tests::native_membership_restores_intent",
+        "discovery::tests::native_finite_progress",
+        "discovery::tests::owner_registration_is_balanced",
+        "discovery::tests::native_source_stream_lifecycle"
+      ],
+      "record_sha256": "95276d070f01a3209298b8ea65b874161160e245d6cbd9da2fb514e4344a664a"
+    },
+    "query-owner272": {
+      "command": [
+        "target/debug/deps/araphor_query-44e57ad344e0eb34",
+        "follow::tests::clock::native_predicate_captures_deadline",
+        "follow::tests::clock::bare_clock_without_deadline",
+        "--nocapture"
+      ],
+      "binary_sha256": "54fb562f2cf8e7a72c54666dc90906fdcf0fa700770b1829e1d7b7e0018b9873",
+      "elapsed_seconds": 2.754,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "log_sha256": "4ec2a9431b552cd1349d242da71be39934891fac1a259bbd10102ec2f5f794c5",
+      "passing_tests": [
+        "follow::tests::clock::bare_clock_without_deadline",
+        "follow::tests::clock::native_predicate_captures_deadline"
+      ],
+      "record_sha256": "fadbfef318adaea5b086c70d24e8c341a96cb7c330e84086820ce78a3c46c111"
+    }
+  },
+  "source_reference": "manifest268.json",
+  "limits_current": [
+    "Graph notice qualification remains open.",
+    "Data and Query fixture corrections remain open.",
+    "Control Graph startup draft is not applied.",
+    "Complete retirement, final Rust CI, and overall production reduction are Not done."
+  ],
+  "retired_before": 131,
+  "retired_after": 132,
+  "remaining_after": 76,
+  "removed_nonblank": 52,
+  "archive": "recovery/araphor-consolidation-20261022T1855Z.tar.gz",
+  "archive_sha256": "055fc924b4ea54c633867e9b676f1c93fba6b58691e7dd8070dd6b7a16c1c8fc",
+  "archive_member": "source/crates/araphor-analysis_back/src/discovery/mod.rs"
+}

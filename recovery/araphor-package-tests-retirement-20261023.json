@@ -1,0 +1,2646 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-23T15:35:07.323812+00:00",
+  "result": "Done for eleven reference test files. Complete Analysis Back retirement is Not done.",
+  "archive": "recovery/araphor-retirement-checkpoint-20261023T153339Z.tar.gz",
+  "archive_sha256": "d1ebec1c2d49ad024dfbaedc4c8bc4347ff518e6c5b67c1aed6e868a6c4ea720",
+  "map_archive_path": "evidence/maps/package-closure348/audit.json",
+  "map_sha256": "7759442ee67814a98d583bd3a33d631f0d2facd29515b586c65f482f8e95390f",
+  "files": [
+    {
+      "path": "crates/araphor-analysis_back/src/package/installed/commit/tests.rs",
+      "sha256": "3d397a54601ce1691acdd997c35c0ba2009dd3603b89313c6d72890ce8d69a3a",
+      "baseline_sha256": "3d397a54601ce1691acdd997c35c0ba2009dd3603b89313c6d72890ce8d69a3a",
+      "baseline_identical": true,
+      "methods": [
+        "shared_root_checks_grants",
+        "shared_store_fences_removal",
+        "constructor_fences_admission_cleanup"
+      ],
+      "selectors": [
+        "analysis::managed::tests::lifecycle::transition_fences_publication",
+        "analysis::managed::tests::removal::removal_waits_all_attempts",
+        "analysis::managed::tests::removal::uninstall_keeps_admitted_program",
+        "analysis::packages::tests::image::package_image_install_is_atomic",
+        "analysis::packages::tests::image::uninstall_guard_keeps_closure",
+        "instance::host::tests::removal::removal_joins_native_guest",
+        "instance::tests::later_failure_is_atomic",
+        "instance::tests::nested_calls_publish_together",
+        "instance::tests::reusing::retained_runs_check_authority"
+      ],
+      "current_affected_checks_pending_348": [],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 241
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/installed/commit/tests/changes.rs",
+      "sha256": "43939a4fd3d627b543c1557a9284b334860465994740d0e03b11c9c61515c02f",
+      "baseline_sha256": "43939a4fd3d627b543c1557a9284b334860465994740d0e03b11c9c61515c02f",
+      "baseline_identical": true,
+      "methods": [
+        "domain_commit_fences_renewal",
+        "domain_commit_fences_suspension"
+      ],
+      "selectors": [
+        "analysis::managed::tests::lifecycle::idle_suspend_checks_fences",
+        "analysis::managed::tests::lifecycle::transition_fences_publication",
+        "analysis::managed::tests::renewal::renewal_cas_is_inert",
+        "instance::host::tests::host_idle_denial_suspends",
+        "instance::host::tests::lifecycle::host_uses_current_authority",
+        "instance::tests::renewal::renewal_checks_current_authority",
+        "instance::tests::renewal::renewal_keeps_checkpoint"
+      ],
+      "current_affected_checks_pending_348": [
+        "instance::host::tests::lifecycle::host_uses_current_authority",
+        "instance::tests::renewal::renewal_checks_current_authority",
+        "instance::tests::renewal::renewal_keeps_checkpoint"
+      ],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 168
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/installed/read/tests.rs",
+      "sha256": "e4b3058e05abc54f55aa04ab9941c6ec7d8e6427d682a7d898d83d6074538812",
+      "baseline_sha256": "e4b3058e05abc54f55aa04ab9941c6ec7d8e6427d682a7d898d83d6074538812",
+      "baseline_identical": true,
+      "methods": [
+        "exact_export_checks_bundle"
+      ],
+      "selectors": [
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary",
+        "definition::tests::native_package_call_rejections",
+        "instance::tests::reusing::retained_runs_check_authority"
+      ],
+      "current_affected_checks_pending_348": [],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 227
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/installed/read/tests/retained.rs",
+      "sha256": "4c56e971e5483d73afba0ae050c9d4f9a5a15633afeff93a2ca1432e5069cb3b",
+      "baseline_sha256": "4c56e971e5483d73afba0ae050c9d4f9a5a15633afeff93a2ca1432e5069cb3b",
+      "baseline_identical": true,
+      "methods": [
+        "snapshot_reuses_bundle",
+        "snapshot_leases_release",
+        "result_metadata_keeps_lease",
+        "retained_trap_releases_capacity",
+        "historical_snapshot_replaces_bundle"
+      ],
+      "selectors": [
+        "definition::tests::capacity::admission_keeps_memory_scope",
+        "definition::tests::capacity::metadata_clones_share_capacity",
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary",
+        "definition::tests::execution::physical_call_cancellation_joins",
+        "definition::tests::execution::physical_sql_return_retains_contract",
+        "definition::tests::execution::physical_wasm_failures_release",
+        "definition::tests::execution::reusing::prepared_closures_stay_pinned",
+        "definition::tests::execution::reusing::prepared_dependency_stays_pinned",
+        "definition::tests::execution::reusing::prepared_owners_keep_scope",
+        "definition::tests::retained::retained_images_use_plans",
+        "instance::tests::finite::finite_guest_failure_persists",
+        "instance::tests::reusing::retained_runs_check_authority",
+        "instance::tests::version::retained_replay_checks_inspect",
+        "instance::tests::version::retained_replay_uses_generation",
+        "instance::tests::version::versions_keep_history"
+      ],
+      "current_affected_checks_pending_348": [
+        "instance::tests::version::versions_keep_history"
+      ],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 352
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/lifecycle/tests.rs",
+      "sha256": "9a5ba344d4cbad9ac7afe85cee772aaa1dc790b3a054a3717387bb86e0f8e28e",
+      "baseline_sha256": "9a5ba344d4cbad9ac7afe85cee772aaa1dc790b3a054a3717387bb86e0f8e28e",
+      "baseline_identical": true,
+      "methods": [
+        "graph_accepts_output_sources",
+        "admitted_inspection_tracks_replacement",
+        "parameters_checked_before_installation",
+        "renewal_preserves_failed_readiness",
+        "missing_dependency_target_status",
+        "shared_dependency_parameter_comparison",
+        "oversized_parameters_preserve_store"
+      ],
+      "selectors": [
+        "analysis::managed::tests::renewal::renewal_keeps_history",
+        "analysis::managed::tests::version::versions_require_explicit_rebuild",
+        "analysis::packages::tests::image::package_image_install_is_atomic",
+        "analysis::packages::tests::image::package_image_large_roundtrip",
+        "definition::tests::execution::contract::model::model_scalar_boundaries",
+        "definition::tests::execution::physical_calls_keep_state_identity",
+        "definition::tests::execution::reusing::prepared_dependency_stays_pinned",
+        "definition::tests::native_package_call_rejections",
+        "graph::tests::contract::support_requires_exact_ports",
+        "instance::host::tests::removal::removal_keeps_shared_instance",
+        "instance::tests::history::historical_inspect_binds_scope",
+        "instance::tests::history::historical_inspect_checks_disclosure",
+        "instance::tests::renewal::renewal_keeps_checkpoint",
+        "instance::tests::version::versions_keep_history"
+      ],
+      "current_affected_checks_pending_348": [
+        "instance::tests::renewal::renewal_keeps_checkpoint",
+        "instance::tests::version::versions_keep_history"
+      ],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 374
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/lifecycle/tests/admissions.rs",
+      "sha256": "1817de94012d79e1f52c06d6795bd8e790bfc73cf69a9c3dce97d6cc9c60f6c8",
+      "baseline_sha256": "1817de94012d79e1f52c06d6795bd8e790bfc73cf69a9c3dce97d6cc9c60f6c8",
+      "baseline_identical": true,
+      "methods": [
+        "failed_upgrade_preserves_state",
+        "startup_releases_unreferenced_admissions"
+      ],
+      "selectors": [
+        "analysis::managed::tests::version::failed_versions_keep_current",
+        "analysis::packages::tests::image::definitions_retain_uninstalled_images",
+        "analysis::packages::tests::image::package_image_retains_closure",
+        "analysis::packages::tests::image::uninstall_collects_unused_native",
+        "instance::tests::version::failed_versions_keep_running",
+        "instance::tests::version::versions_keep_history"
+      ],
+      "current_affected_checks_pending_348": [
+        "instance::tests::version::versions_keep_history"
+      ],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 91
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/removal/tests.rs",
+      "sha256": "fffb976f5f861370acc066c666ea025ca422c8f76eb4943cbca29f6ac2678dac",
+      "baseline_sha256": "fffb976f5f861370acc066c666ea025ca422c8f76eb4943cbca29f6ac2678dac",
+      "baseline_identical": true,
+      "methods": [
+        "removal_releases_exclusive_models",
+        "removal_retains_shared_models",
+        "removal_retains_explicit_dependency",
+        "removal_releases_unused_artifacts",
+        "removal_reconciles_upgrade_orphan"
+      ],
+      "selectors": [
+        "analysis::managed::tests::removal::removal_keeps_exact_history",
+        "analysis::managed::tests::removal::uninstall_keeps_admitted_program",
+        "analysis::packages::tests::image::definitions_retain_uninstalled_images",
+        "analysis::packages::tests::image::package_image_retains_closure",
+        "analysis::packages::tests::image::package_image_versions_and_tenants",
+        "analysis::packages::tests::image::uninstall_collects_unused_native",
+        "analysis::packages::tests::image::uninstall_guard_keeps_closure",
+        "instance::host::tests::removal::removal_keeps_shared_instance",
+        "instance::tests::version::versions_keep_history"
+      ],
+      "current_affected_checks_pending_348": [
+        "instance::tests::version::versions_keep_history"
+      ],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 199
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/tests/interruption.rs",
+      "sha256": "da4e16503d6e3fb7edfab53d8867a6edd383fd8c877a62a91c506ec5e6f0087d",
+      "baseline_sha256": "da4e16503d6e3fb7edfab53d8867a6edd383fd8c877a62a91c506ec5e6f0087d",
+      "baseline_identical": true,
+      "methods": [
+        "package_supervisor_stop_during_admission",
+        "package_cancelled_failure_preserves_state",
+        "package_stop_before_commit",
+        "package_busy_preserves_result"
+      ],
+      "selectors": [
+        "definition::tests::execution::physical_call_cancellation_joins",
+        "instance::host::tests::admission::admitted_busy_retries_capacity",
+        "instance::host::tests::host_stop_joins_admission",
+        "instance::host::tests::pressure_keeps_stop_reactive",
+        "instance::subscription::tests::capacity::slot_wait_cancellation_joins",
+        "instance::subscription::tests::diagnostic_cancellation_keeps_pending",
+        "instance::subscription::tests::failed_writer_keeps_claim",
+        "instance::subscription::tests::postcommit_notice_keeps_receipt",
+        "instance::tests::denied_ack_keeps_receipt",
+        "instance::tests::finite::failed_publication_stays_pending",
+        "instance::tests::finite::finite_busy_keeps_attempt",
+        "instance::tests::prior_pressure_preserves_success",
+        "instance::tests::restart::restart_skips_input_capacity",
+        "instance::tests::revoked_guest_joins_attempt"
+      ],
+      "current_affected_checks_pending_348": [
+        "instance::tests::finite::failed_publication_stays_pending"
+      ],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 416
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/tests/lifecycle.rs",
+      "sha256": "12163c93e5e6e72584842e740cff6e5829e8f75210e45d8afdb7d0e0fb176092",
+      "baseline_sha256": "12163c93e5e6e72584842e740cff6e5829e8f75210e45d8afdb7d0e0fb176092",
+      "baseline_identical": true,
+      "methods": [
+        "package_historical_scope",
+        "package_retry_revision",
+        "package_cancel_capacity"
+      ],
+      "selectors": [
+        "definition::tests::execution::contract::model::model_deadline_keeps_parent",
+        "definition::tests::execution::physical_call_cancellation_joins",
+        "instance::host::tests::host_expiry_keeps_healthy",
+        "instance::host::tests::host_idle_denial_suspends",
+        "instance::host::tests::removal::recreation_changes_scope_explicitly",
+        "instance::tests::completed_retry_survives_reopen",
+        "instance::tests::history::historical_inspect_binds_scope",
+        "instance::tests::history::output::raw_output_checks_scope",
+        "instance::tests::renewal::renewal_keeps_checkpoint",
+        "instance::tests::version::versions_keep_history"
+      ],
+      "current_affected_checks_pending_348": [
+        "instance::tests::renewal::renewal_keeps_checkpoint",
+        "instance::tests::version::versions_keep_history"
+      ],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 190
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/tests/relations.rs",
+      "sha256": "67f2bb2c9f293e7c72f29096e0378e407dedb4e415a686bd4d4e91d5009fb989",
+      "baseline_sha256": "67f2bb2c9f293e7c72f29096e0378e407dedb4e415a686bd4d4e91d5009fb989",
+      "baseline_identical": true,
+      "methods": [
+        "inspect_incomplete_input_marks_stale",
+        "input_authority_rejects_foreign_or_revoked_grants",
+        "query_reads_later_output",
+        "output_read_shares_capacity",
+        "alias_import_budget"
+      ],
+      "selectors": [
+        "analysis::managed::tests::managed_capture_keeps_guards",
+        "definition::tests::execution::combined_input_respects_limit",
+        "definition::tests::execution::contract::inputs::captured_trace_revocation",
+        "definition::tests::execution::contract::inputs::catalog_input_contract",
+        "definition::tests::execution::contract::inputs::durable_input_indices",
+        "definition::tests::execution::contract::inputs::input_receipts_stay_scoped",
+        "definition::tests::execution::contract::operation::reordered_input_provenance",
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary",
+        "definition::tests::execution::physical_definition_denies_other_tenant",
+        "instance::tests::completed_retry_survives_reopen",
+        "instance::tests::history::freshness::timed_results_keep_history",
+        "instance::tests::nested_calls_publish_together",
+        "instance::tests::retained::guards::retained_elision_keeps_proof",
+        "instance::tests::retained::retained_alias_checks_scope",
+        "instance::tests::retained::retained_alias_counts_inputs",
+        "instance::tests::retained::retained_alias_fences_head",
+        "instance::tests::retained::retained_alias_keeps_identity",
+        "instance::tests::reusing::retained_runs_check_authority"
+      ],
+      "current_affected_checks_pending_348": [],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 692
+    },
+    {
+      "path": "crates/araphor-analysis_back/src/package/tests/wasm.rs",
+      "sha256": "856cea86136cb776c60a3de9f0853b5dc186fcfc78b4941a8db6fe83969aaa23",
+      "baseline_sha256": "856cea86136cb776c60a3de9f0853b5dc186fcfc78b4941a8db6fe83969aaa23",
+      "baseline_identical": true,
+      "methods": [
+        "oversized_input_precedes_compilation",
+        "wasm_failure_retains_state",
+        "ambiguous_type_rejects_activation"
+      ],
+      "selectors": [
+        "definition::tests::guest::guest_input_precedes_entry",
+        "definition::tests::native_package_call_rejections",
+        "definition::tests::parity::preparation_precedes_evaluation_deadline",
+        "instance::subscription::tests::failure_keeps_package_codes",
+        "instance::tests::finite::finite_guest_failure_persists",
+        "qualification::tests::runtime::input_precedes_compilation",
+        "wasm::tests::runtime::component_recovers_after_failure"
+      ],
+      "current_affected_checks_pending_348": [],
+      "deleted": true,
+      "kind": "test_leaf",
+      "eligibility": "All mapped selectors and affected lifecycle checks have passing results.",
+      "gap": null,
+      "nonblank_lines": 213
+    }
+  ],
+  "method_map": [
+    {
+      "file": "crates/araphor-analysis_back/src/package/lifecycle/tests.rs",
+      "symbol": "graph_accepts_output_sources",
+      "assertions": "Accept an exact Graph input port with an OutputRef source; reject a changed port name.",
+      "selectors": [
+        "graph::tests::contract::support_requires_exact_ports",
+        "definition::tests::execution::reusing::prepared_dependency_stays_pinned"
+      ],
+      "latest_observations": {
+        "graph::tests::contract::support_requires_exact_ports": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "definition::tests::execution::reusing::prepared_dependency_stays_pinned": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/lifecycle/tests.rs",
+      "symbol": "admitted_inspection_tracks_replacement",
+      "assertions": "Read the new current revision after replacement through either held code owner. Reject wrong scope and revoked Inspect.",
+      "selectors": [
+        "instance::tests::version::versions_keep_history",
+        "instance::tests::history::historical_inspect_binds_scope",
+        "instance::tests::history::historical_inspect_checks_disclosure"
+      ],
+      "latest_observations": {
+        "instance::tests::version::versions_keep_history": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::history::historical_inspect_binds_scope": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::history::historical_inspect_checks_disclosure": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Read current Data status and exact saved history through fresh Inspect. A held immutable program is not a mutable active-export cache."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/lifecycle/tests.rs",
+      "symbol": "parameters_checked_before_installation",
+      "assertions": "Reject missing, unknown and wrongly typed arguments before any execution result or current state. Accept two valid selected exports.",
+      "selectors": [
+        "definition::tests::native_package_call_rejections",
+        "definition::tests::execution::contract::model::model_scalar_boundaries",
+        "definition::tests::execution::physical_calls_keep_state_identity",
+        "analysis::packages::tests::image::package_image_install_is_atomic"
+      ],
+      "latest_observations": {
+        "definition::tests::native_package_call_rejections": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::contract::model::model_scalar_boundaries": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::physical_calls_keep_state_identity": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::package_image_install_is_atomic": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Image installation is inert. Typed SQL named arguments are validated when the selected definition is admitted. There is no global JSON parameter namespace or implicit activation of every export."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/lifecycle/tests.rs",
+      "symbol": "renewal_preserves_failed_readiness",
+      "assertions": "Explicit renewal changes the grant while Failed readiness, progress, checkpoint and saved output stay exact.",
+      "selectors": [
+        "analysis::managed::tests::renewal::renewal_keeps_history",
+        "instance::tests::renewal::renewal_keeps_checkpoint"
+      ],
+      "latest_observations": {
+        "analysis::managed::tests::renewal::renewal_keeps_history": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "instance::tests::renewal::renewal_keeps_checkpoint": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/lifecycle/tests.rs",
+      "symbol": "missing_dependency_target_status",
+      "assertions": "Retain unsupported code metadata; reject execution of an unsupported selected dependency; repeat storage without effects.",
+      "selectors": [
+        "analysis::packages::tests::image::package_image_large_roundtrip",
+        "definition::tests::native_package_call_rejections",
+        "definition::tests::execution::reusing::prepared_dependency_stays_pinned"
+      ],
+      "latest_observations": {
+        "analysis::packages::tests::image::package_image_large_roundtrip": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "definition::tests::native_package_call_rejections": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::reusing::prepared_dependency_stays_pinned": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Unsupported images remain inert metadata. A selected native call must have a supported implementation. Installation does not create dependency activations or a MissingInput status row."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/lifecycle/tests.rs",
+      "symbol": "shared_dependency_parameter_comparison",
+      "assertions": "Separate roots keep separate arguments and state; changed arguments require explicit rebuild for state reuse.",
+      "selectors": [
+        "definition::tests::execution::physical_calls_keep_state_identity",
+        "analysis::managed::tests::version::versions_require_explicit_rebuild",
+        "instance::host::tests::removal::removal_keeps_shared_instance"
+      ],
+      "latest_observations": {
+        "definition::tests::execution::physical_calls_keep_state_identity": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "analysis::managed::tests::version::versions_require_explicit_rebuild": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "instance::host::tests::removal::removal_keeps_shared_instance": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Independent Instances and call identities replace the shared global parameter activation. Shared immutable code does not imply shared arguments, grant or checkpoint."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/lifecycle/tests.rs",
+      "symbol": "oversized_parameters_preserve_store",
+      "assertions": "The old fixed MAX_PACKAGE_METADATA_BYTES rejection is abolished.",
+      "selectors": [],
+      "latest_observations": {},
+      "contract_translation": "The user removed package count, text, row, byte and checkpoint caps. Keep schema validity and shared engine operational capacity at their current owners. Do not add a replacement package ceiling."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/lifecycle/tests/admissions.rs",
+      "symbol": "failed_upgrade_preserves_state",
+      "assertions": "A failed candidate preserves current generation, progress and prior output before and after reopen.",
+      "selectors": [
+        "instance::tests::version::failed_versions_keep_running",
+        "analysis::managed::tests::version::failed_versions_keep_current",
+        "instance::tests::version::versions_keep_history"
+      ],
+      "latest_observations": {
+        "instance::tests::version::failed_versions_keep_running": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "analysis::managed::tests::version::failed_versions_keep_current": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "instance::tests::version::versions_keep_history": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "An explicitly installed image and a durable candidate can remain after failure. Current generation changes only on atomic successful version publication."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/lifecycle/tests/admissions.rs",
+      "symbol": "startup_releases_unreferenced_admissions",
+      "assertions": "Keep every live or inactive durable image reference; collect unreferenced code and leave repeat collection inert.",
+      "selectors": [
+        "analysis::packages::tests::image::package_image_retains_closure",
+        "analysis::packages::tests::image::uninstall_collects_unused_native",
+        "analysis::packages::tests::image::definitions_retain_uninstalled_images"
+      ],
+      "latest_observations": {
+        "analysis::packages::tests::image::package_image_retains_closure": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::uninstall_collects_unused_native": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::definitions_retain_uninstalled_images": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Explicit guarded uninstall and reference-aware collection replace startup activation-registry cleanup. The old 33 orphan activation records are not objects in the native model. Constructor admission starts no work."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/read/tests.rs",
+      "symbol": "exact_export_checks_bundle",
+      "assertions": "Return exact original descriptor, revision and value; retain only selected executable code; reject unsupported selected export and revoked execution.",
+      "selectors": [
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary",
+        "instance::tests::reusing::retained_runs_check_authority",
+        "definition::tests::native_package_call_rejections"
+      ],
+      "latest_observations": {
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "instance::tests::reusing::retained_runs_check_authority": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "definition::tests::native_package_call_rejections": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "One admitted native definition owns its complete immutable image. It does not scan or admit unrelated active grants. Exact callback counts from that scan are obsolete."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/read/tests/retained.rs",
+      "symbol": "snapshot_reuses_bundle",
+      "assertions": "Share exact immutable image ownership across selected calls and clones, retain complete descriptor and per-call arguments, reject another tenant, preserve read-only historical replay, and recheck current authority.",
+      "selectors": [
+        "definition::tests::execution::reusing::prepared_closures_stay_pinned",
+        "definition::tests::execution::reusing::prepared_owners_keep_scope",
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary",
+        "instance::tests::reusing::retained_runs_check_authority",
+        "instance::tests::version::retained_replay_uses_generation"
+      ],
+      "latest_observations": {
+        "definition::tests::execution::reusing::prepared_closures_stay_pinned": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::reusing::prepared_owners_keep_scope": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "instance::tests::reusing::retained_runs_check_authority": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::version::retained_replay_uses_generation": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Current source execution still captures through Data. Occupying all legacy Data readers is not a requirement to execute current source queries without a reader. Saved replay uses saved inputs and has no publication sink."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/read/tests/retained.rs",
+      "symbol": "snapshot_leases_release",
+      "assertions": "The final prepared owner or clone drop releases image, code, metadata and shared capacity.",
+      "selectors": [
+        "definition::tests::execution::reusing::prepared_closures_stay_pinned",
+        "definition::tests::capacity::metadata_clones_share_capacity",
+        "definition::tests::capacity::admission_keeps_memory_scope"
+      ],
+      "latest_observations": {
+        "definition::tests::execution::reusing::prepared_closures_stay_pinned": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::capacity::metadata_clones_share_capacity": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::capacity::admission_keeps_memory_scope": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/read/tests/retained.rs",
+      "symbol": "result_metadata_keeps_lease",
+      "assertions": "Retained call output keeps original descriptor, revision, target, context and parameters; borrowed arrays remain charged until the last buffer drops.",
+      "selectors": [
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary",
+        "definition::tests::execution::physical_sql_return_retains_contract",
+        "definition::tests::capacity::metadata_clones_share_capacity"
+      ],
+      "latest_observations": {
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::physical_sql_return_retains_contract": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::capacity::metadata_clones_share_capacity": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/read/tests/retained.rs",
+      "symbol": "retained_trap_releases_capacity",
+      "assertions": "Guest trap and cancellation release execution permits and temporary input/output capacity after joined cleanup; later valid work succeeds.",
+      "selectors": [
+        "definition::tests::execution::physical_wasm_failures_release",
+        "definition::tests::execution::physical_call_cancellation_joins",
+        "instance::tests::finite::finite_guest_failure_persists"
+      ],
+      "latest_observations": {
+        "definition::tests::execution::physical_wasm_failures_release": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::physical_call_cancellation_joins": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "instance::tests::finite::finite_guest_failure_persists": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/read/tests/retained.rs",
+      "symbol": "historical_snapshot_replaces_bundle",
+      "assertions": "Exact old and current images remain distinct; retained old replay keeps its original code and cannot publish; current scope and authority still apply.",
+      "selectors": [
+        "definition::tests::execution::reusing::prepared_dependency_stays_pinned",
+        "instance::tests::version::versions_keep_history",
+        "instance::tests::version::retained_replay_uses_generation",
+        "instance::tests::version::retained_replay_checks_inspect",
+        "definition::tests::retained::retained_images_use_plans"
+      ],
+      "latest_observations": {
+        "definition::tests::execution::reusing::prepared_dependency_stays_pinned": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "instance::tests::version::versions_keep_history": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::version::retained_replay_uses_generation": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::version::retained_replay_checks_inspect": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "definition::tests::retained::retained_images_use_plans": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Admitted exact images survive uninstall while a durable definition refers to them. The old requirement that removal prevents all old-image repinning is superseded by retained read-only history."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/commit/tests.rs",
+      "symbol": "shared_root_checks_grants",
+      "assertions": "All actual retained images and current execution authority are checked atomically before an effect; a later failed call leaves the prior state intact.",
+      "selectors": [
+        "instance::tests::reusing::retained_runs_check_authority",
+        "instance::tests::nested_calls_publish_together",
+        "instance::tests::later_failure_is_atomic"
+      ],
+      "latest_observations": {
+        "instance::tests::reusing::retained_runs_check_authority": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::nested_calls_publish_together": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::later_failure_is_atomic": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Independent grants use independent Instances. A mixed-grant global active-export registry and its exact callback count are absent."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/commit/tests.rs",
+      "symbol": "shared_store_fences_removal",
+      "assertions": "Removal and publication have one durable order; joined removal fences old owners and preserves original result history.",
+      "selectors": [
+        "analysis::managed::tests::lifecycle::transition_fences_publication",
+        "instance::host::tests::removal::removal_joins_native_guest",
+        "analysis::managed::tests::removal::removal_waits_all_attempts"
+      ],
+      "latest_observations": {
+        "analysis::managed::tests::lifecycle::transition_fences_publication": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "instance::host::tests::removal::removal_joins_native_guest": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "analysis::managed::tests::removal::removal_waits_all_attempts": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "The Data transaction and worker join replace the process-local legacy lifecycle mutex."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/commit/tests.rs",
+      "symbol": "constructor_fences_admission_cleanup",
+      "assertions": "Explicit collection cannot remove a live admitted image closure; a released exclusive closure can be collected.",
+      "selectors": [
+        "analysis::packages::tests::image::package_image_install_is_atomic",
+        "analysis::packages::tests::image::uninstall_guard_keeps_closure",
+        "analysis::managed::tests::removal::uninstall_keeps_admitted_program"
+      ],
+      "latest_observations": {
+        "analysis::packages::tests::image::package_image_install_is_atomic": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::uninstall_guard_keeps_closure": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::managed::tests::removal::uninstall_keeps_admitted_program": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Constructing a Host does not perform legacy admission cleanup. No constructor lock or automatic registry collection is required."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/commit/tests/changes.rs",
+      "symbol": "domain_commit_fences_renewal",
+      "assertions": "Renewal uses exact lifecycle CAS, preserves prior state, and prevents stale capture or publication.",
+      "selectors": [
+        "analysis::managed::tests::renewal::renewal_cas_is_inert",
+        "instance::tests::renewal::renewal_keeps_checkpoint",
+        "instance::tests::renewal::renewal_checks_current_authority",
+        "analysis::managed::tests::lifecycle::transition_fences_publication"
+      ],
+      "latest_observations": {
+        "analysis::managed::tests::renewal::renewal_cas_is_inert": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "instance::tests::renewal::renewal_keeps_checkpoint": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::renewal::renewal_checks_current_authority": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "analysis::managed::tests::lifecycle::transition_fences_publication": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Run does not implicitly renew the stored grant. Explicit stopped renewal replaces the old Run-triggered renewal."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/installed/commit/tests/changes.rs",
+      "symbol": "domain_commit_fences_suspension",
+      "assertions": "Publication and suspension have one order; old generation/lifecycle cannot commit after authority suspension.",
+      "selectors": [
+        "analysis::managed::tests::lifecycle::transition_fences_publication",
+        "analysis::managed::tests::lifecycle::idle_suspend_checks_fences",
+        "instance::host::tests::lifecycle::host_uses_current_authority",
+        "instance::host::tests::host_idle_denial_suspends"
+      ],
+      "latest_observations": {
+        "analysis::managed::tests::lifecycle::transition_fences_publication": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::managed::tests::lifecycle::idle_suspend_checks_fences": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "instance::host::tests::lifecycle::host_uses_current_authority": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::host::tests::host_idle_denial_suspends": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/admission.rs",
+      "symbol": "admission_rejects_invalid_closures",
+      "assertions": "Reject dependency cycles, changed input schema and conflicting immutable package revisions without partial image rows or activation.",
+      "selectors": [
+        "analysis::packages::tests::image::package_image_rejects_invalid_closure",
+        "definition::tests::execution::contract::cycles::image_rejects_artifact_cycles",
+        "definition::tests::native_package_call_rejections",
+        "analysis::packages::tests::image::package_image_install_is_atomic"
+      ],
+      "latest_observations": {
+        "analysis::packages::tests::image::package_image_rejects_invalid_closure": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::contract::cycles::image_rejects_artifact_cycles": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::native_package_call_rejections": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::package_image_install_is_atomic": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/admission.rs",
+      "symbol": "admission_rejects_domain_execution",
+      "assertions": "Installing domain-kind code produces no automatic domain result. Domain publication requires the destination-specific conversion and atomic Data path.",
+      "selectors": [
+        "analysis::packages::tests::image::package_image_retains_closure",
+        "graph::native::tests::managed::graph_conversion_failure_finishes",
+        "discovery::tests::managed::profile_conversion_failure_finishes"
+      ],
+      "latest_observations": {
+        "analysis::packages::tests::image::package_image_retains_closure": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "graph::native::tests::managed::graph_conversion_failure_finishes": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "discovery::tests::managed::profile_conversion_failure_finishes": {
+          "record": "discovery347",
+          "result": "FAILED"
+        }
+      },
+      "contract_translation": "Generic SQL calls compute Arrow values. Model kind metadata is not a domain publication authority. The old install-time Unsupported status is replaced by inert image installation and explicit Graph or Discovery publication owners."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/lifecycle.rs",
+      "symbol": "package_historical_scope",
+      "assertions": "Removal and narrower recreation do not widen access to old scope; whole-scope fresh Inspect can read the exact original result.",
+      "selectors": [
+        "instance::host::tests::removal::recreation_changes_scope_explicitly",
+        "instance::tests::history::historical_inspect_binds_scope",
+        "instance::tests::history::output::raw_output_checks_scope"
+      ],
+      "latest_observations": {
+        "instance::host::tests::removal::recreation_changes_scope_explicitly": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::history::historical_inspect_binds_scope": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::history::output::raw_output_checks_scope": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/lifecycle.rs",
+      "symbol": "package_retry_revision",
+      "assertions": "An exact retry returns the original receipt without new Data writes; changed request or version conflicts; old revision output remains readable after update and reopen.",
+      "selectors": [
+        "instance::tests::completed_retry_survives_reopen",
+        "instance::tests::version::versions_keep_history",
+        "instance::tests::renewal::renewal_keeps_checkpoint"
+      ],
+      "latest_observations": {
+        "instance::tests::completed_retry_survives_reopen": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::version::versions_keep_history": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::renewal::renewal_keeps_checkpoint": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/lifecycle.rs",
+      "symbol": "package_cancel_capacity",
+      "assertions": "Grant expiry and inherited caller cancellation prevent effects and release held execution resources; current revoked authority suspends a running member.",
+      "selectors": [
+        "definition::tests::execution::contract::model::model_deadline_keeps_parent",
+        "definition::tests::execution::physical_call_cancellation_joins",
+        "instance::host::tests::host_expiry_keeps_healthy",
+        "instance::host::tests::host_idle_denial_suspends"
+      ],
+      "latest_observations": {
+        "definition::tests::execution::contract::model::model_deadline_keeps_parent": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::physical_call_cancellation_joins": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "instance::host::tests::host_expiry_keeps_healthy": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::host::tests::host_idle_denial_suspends": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "There is no fixed four-operation package semaphore. Existing Query and Runtime shared capacity owners supply operational limits."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/relations.rs",
+      "symbol": "inspect_incomplete_input_marks_stale",
+      "assertions": "A no-longer-current source proof makes retained output noncurrent. Inspection preserves the original packet, context, commit and successful progress; unavailable source capture cannot create an initial output.",
+      "selectors": [
+        "instance::tests::history::freshness::timed_results_keep_history",
+        "instance::tests::retained::retained_alias_fences_head",
+        "instance::tests::retained::guards::retained_elision_keeps_proof",
+        "analysis::managed::tests::managed_capture_keeps_guards"
+      ],
+      "latest_observations": {
+        "instance::tests::history::freshness::timed_results_keep_history": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::retained::retained_alias_fences_head": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::retained::guards::retained_elision_keeps_proof": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "analysis::managed::tests::managed_capture_keeps_guards": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Native Inspect is read-only. It derives currentness from saved source and deadline facts. It does not mutate stale rows, suspend dependency activations, or insert a fabricated downstream output."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/relations.rs",
+      "symbol": "input_authority_rejects_foreign_or_revoked_grants",
+      "assertions": "Foreign tenant and revoked current grants reject capture or disclosure without output/progress changes or retained capacity leaks.",
+      "selectors": [
+        "definition::tests::execution::physical_definition_denies_other_tenant",
+        "instance::tests::reusing::retained_runs_check_authority",
+        "instance::tests::retained::retained_alias_checks_scope",
+        "definition::tests::execution::contract::inputs::captured_trace_revocation"
+      ],
+      "latest_observations": {
+        "definition::tests::execution::physical_definition_denies_other_tenant": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "instance::tests::reusing::retained_runs_check_authority": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::retained::retained_alias_checks_scope": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "definition::tests::execution::contract::inputs::captured_trace_revocation": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/relations.rs",
+      "symbol": "query_reads_later_output",
+      "assertions": "A declared input can refer to a later declared input, including an empty relation. Keep original input order, exact schema, revisions, coverage, dependency identity and immutable retry across reopen.",
+      "selectors": [
+        "definition::tests::execution::contract::operation::reordered_input_provenance",
+        "definition::tests::execution::contract::inputs::durable_input_indices",
+        "definition::tests::execution::contract::inputs::input_receipts_stay_scoped",
+        "instance::tests::nested_calls_publish_together",
+        "instance::tests::completed_retry_survives_reopen"
+      ],
+      "latest_observations": {
+        "definition::tests::execution::contract::operation::reordered_input_provenance": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::contract::inputs::durable_input_indices": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::contract::inputs::input_receipts_stay_scoped": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "instance::tests::nested_calls_publish_together": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::completed_retry_survives_reopen": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Native named input plans replace activation ordering. SQL input revision and captured dependency references remain exact."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/relations.rs",
+      "symbol": "output_read_shares_capacity",
+      "assertions": "Retained output aliases share Arrow buffers, exact result identity and scoped metadata while held buffers remain charged. Released owners return shared capacity.",
+      "selectors": [
+        "instance::tests::retained::retained_alias_counts_inputs",
+        "instance::tests::retained::retained_alias_keeps_identity",
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary"
+      ],
+      "latest_observations": {
+        "instance::tests::retained::retained_alias_counts_inputs": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::retained::retained_alias_keeps_identity": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "There is no per-model input budget. Reuse stays within the captured native source and memory owners."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/relations.rs",
+      "symbol": "alias_import_budget",
+      "assertions": "Alias inputs retain exact rows, revisions, coverage, witnesses and contexts, including empty selected relations and catalog inputs. Shared engine pressure remains typed and releases on cleanup.",
+      "selectors": [
+        "instance::tests::retained::retained_alias_counts_inputs",
+        "definition::tests::execution::contract::inputs::input_receipts_stay_scoped",
+        "definition::tests::execution::contract::inputs::catalog_input_contract",
+        "definition::tests::execution::combined_input_respects_limit"
+      ],
+      "latest_observations": {
+        "instance::tests::retained::retained_alias_counts_inputs": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "definition::tests::execution::contract::inputs::input_receipts_stay_scoped": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::contract::inputs::catalog_input_contract": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::execution::combined_input_respects_limit": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "The old per-model byte-limit matrix is abolished. Two aliases of one immutable result share actual buffer ownership. SQL controls selected row count; existing shared engine capacity is separate."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/wasm.rs",
+      "symbol": "oversized_input_precedes_compilation",
+      "assertions": "An oversized invocation must fail the configured engine input budget without guest entry or state effects; the old fixture also expects this error before corrupt component compilation.",
+      "selectors": [
+        "definition::tests::guest::guest_input_precedes_entry",
+        "definition::tests::parity::preparation_precedes_evaluation_deadline",
+        "qualification::tests::runtime::input_precedes_compilation"
+      ],
+      "latest_observations": {
+        "definition::tests::guest::guest_input_precedes_entry": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "definition::tests::parity::preparation_precedes_evaluation_deadline": {
+          "record": "query-parity346",
+          "result": "ok"
+        },
+        "qualification::tests::runtime::input_precedes_compilation": {
+          "record": "replacements345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Current native preparation compiles selected guest code before execution. The engine input-budget and no-guest-entry assertions remain. Exact pre-compilation error precedence is not established by these tests; the withdrawn SDK max_rows proposal is not proof that this engine-bound assertion is abolished."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/wasm.rs",
+      "symbol": "wasm_failure_retains_state",
+      "assertions": "Trap, runtime host-call failure, declared guest Limit and invalid evidence produce the correct failure class, no successful output, saved Failed readiness and no progress; reopen preserves failure and permits a new request.",
+      "selectors": [
+        "instance::tests::finite::finite_guest_failure_persists",
+        "instance::subscription::tests::failure_keeps_package_codes",
+        "wasm::tests::runtime::component_recovers_after_failure"
+      ],
+      "latest_observations": {
+        "instance::tests::finite::finite_guest_failure_persists": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::subscription::tests::failure_keeps_package_codes": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "wasm::tests::runtime::component_recovers_after_failure": null
+      },
+      "contract_translation": "Install is inert; failures occur on explicit execution. Known terminal request IDs conflict on retry; a fresh request can run the same failing code after reopen. This replaces install-time execution and old implicit retry."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/wasm.rs",
+      "symbol": "ambiguous_type_rejects_activation",
+      "assertions": "Duplicate execution implementations reject atomically before any code admission or activation.",
+      "selectors": [
+        "definition::tests::native_package_call_rejections"
+      ],
+      "latest_observations": {
+        "definition::tests::native_package_call_rejections": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/interruption.rs",
+      "symbol": "package_supervisor_stop_during_admission",
+      "assertions": "Stop stays responsive while admission is held; shutdown waits for the real worker, retains resources until join, then leaves prior state exact.",
+      "selectors": [
+        "instance::host::tests::host_stop_joins_admission",
+        "instance::host::tests::pressure_keeps_stop_reactive",
+        "instance::subscription::tests::capacity::slot_wait_cancellation_joins"
+      ],
+      "latest_observations": {
+        "instance::host::tests::host_stop_joins_admission": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::host::tests::pressure_keeps_stop_reactive": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::subscription::tests::capacity::slot_wait_cancellation_joins": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/interruption.rs",
+      "symbol": "package_cancelled_failure_preserves_state",
+      "assertions": "Cancelled diagnostic persistence cannot overwrite current output/progress or fabricate a durable terminal outcome.",
+      "selectors": [
+        "instance::subscription::tests::diagnostic_cancellation_keeps_pending",
+        "instance::subscription::tests::failed_writer_keeps_claim",
+        "instance::tests::finite::failed_publication_stays_pending"
+      ],
+      "latest_observations": {
+        "instance::subscription::tests::diagnostic_cancellation_keeps_pending": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::subscription::tests::failed_writer_keeps_claim": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::finite::failed_publication_stays_pending": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/interruption.rs",
+      "symbol": "package_stop_before_commit",
+      "assertions": "Cancel or revoke at the real commit boundary prevents publication and joins held work; prior checkpoint/result remains exact and later valid work can proceed.",
+      "selectors": [
+        "instance::tests::denied_ack_keeps_receipt",
+        "instance::subscription::tests::postcommit_notice_keeps_receipt",
+        "instance::tests::revoked_guest_joins_attempt",
+        "definition::tests::execution::physical_call_cancellation_joins"
+      ],
+      "latest_observations": {
+        "instance::tests::denied_ack_keeps_receipt": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::subscription::tests::postcommit_notice_keeps_receipt": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::revoked_guest_joins_attempt": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "definition::tests::execution::physical_call_cancellation_joins": {
+          "record": "query-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/tests/interruption.rs",
+      "symbol": "package_busy_preserves_result",
+      "assertions": "Operational pressure retains the prior output, currentness facts, and successful progress; no false failure or partial result is saved; resources release and supported work resumes from the same capture.",
+      "selectors": [
+        "instance::tests::prior_pressure_preserves_success",
+        "instance::tests::finite::finite_busy_keeps_attempt",
+        "instance::host::tests::admission::admitted_busy_retries_capacity",
+        "instance::tests::restart::restart_skips_input_capacity"
+      ],
+      "latest_observations": {
+        "instance::tests::prior_pressure_preserves_success": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::finite::finite_busy_keeps_attempt": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::host::tests::admission::admitted_busy_retries_capacity": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "instance::tests::restart::restart_skips_input_capacity": {
+          "record": "package-parity345",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "Managed attempt ownership keeps the exact admitted capture under pressure. It does not silently replace a pending finite attempt with a fresh input cut."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/removal/tests.rs",
+      "symbol": "removal_releases_exclusive_models",
+      "assertions": "Remove an Instance while preserving exact history; collect exclusive code only after its durable references release.",
+      "selectors": [
+        "analysis::managed::tests::removal::removal_keeps_exact_history",
+        "analysis::managed::tests::removal::uninstall_keeps_admitted_program",
+        "analysis::packages::tests::image::uninstall_collects_unused_native"
+      ],
+      "latest_observations": {
+        "analysis::managed::tests::removal::removal_keeps_exact_history": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::managed::tests::removal::uninstall_keeps_admitted_program": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::uninstall_collects_unused_native": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/removal/tests.rs",
+      "symbol": "removal_retains_shared_models",
+      "assertions": "Removing one Instance keeps another independent Instance and retained shared code; uninstall does not invalidate admitted code.",
+      "selectors": [
+        "instance::host::tests::removal::removal_keeps_shared_instance",
+        "analysis::managed::tests::removal::uninstall_keeps_admitted_program",
+        "analysis::packages::tests::image::uninstall_guard_keeps_closure"
+      ],
+      "latest_observations": {
+        "instance::host::tests::removal::removal_keeps_shared_instance": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "analysis::managed::tests::removal::uninstall_keeps_admitted_program": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::uninstall_guard_keeps_closure": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "There is no shared activation rehome or mixed-grant dependency owner."
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/removal/tests.rs",
+      "symbol": "removal_retains_explicit_dependency",
+      "assertions": "An explicitly installed image root remains a durable reference after removing its consumer.",
+      "selectors": [
+        "analysis::packages::tests::image::package_image_retains_closure",
+        "analysis::packages::tests::image::uninstall_guard_keeps_closure"
+      ],
+      "latest_observations": {
+        "analysis::packages::tests::image::package_image_retains_closure": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::uninstall_guard_keeps_closure": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/removal/tests.rs",
+      "symbol": "removal_releases_unused_artifacts",
+      "assertions": "Uninstall and collection release unused exclusive artifacts, preserve other tenant references, and repeat without writes.",
+      "selectors": [
+        "analysis::packages::tests::image::uninstall_collects_unused_native",
+        "analysis::packages::tests::image::uninstall_guard_keeps_closure",
+        "analysis::packages::tests::image::package_image_versions_and_tenants"
+      ],
+      "latest_observations": {
+        "analysis::packages::tests::image::uninstall_collects_unused_native": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::uninstall_guard_keeps_closure": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::package_image_versions_and_tenants": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": null
+    },
+    {
+      "file": "crates/araphor-analysis_back/src/package/removal/tests.rs",
+      "symbol": "removal_reconciles_upgrade_orphan",
+      "assertions": "Immutable definitions and current version changes do not leave mutable dependency activation orphans; collect unreferenced code while retaining exact historical images.",
+      "selectors": [
+        "instance::tests::version::versions_keep_history",
+        "analysis::packages::tests::image::package_image_retains_closure",
+        "analysis::packages::tests::image::definitions_retain_uninstalled_images"
+      ],
+      "latest_observations": {
+        "instance::tests::version::versions_keep_history": {
+          "record": "package-parity345",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::package_image_retains_closure": {
+          "record": "data-parity346",
+          "result": "ok"
+        },
+        "analysis::packages::tests::image::definitions_retain_uninstalled_images": {
+          "record": "data-parity346",
+          "result": "ok"
+        }
+      },
+      "contract_translation": "There is no obsolete shared activation to reconcile. Durable definition and retained result references control collection."
+    }
+  ],
+  "contract_translations": [
+    "Image and first Instance admission are inert; explicit execution owns results.",
+    "Independent grants and call sites own independent Instance state. No global active-export registry is added.",
+    "Run does not renew or change stored execution attribution. Explicit stopped renewal changes the grant.",
+    "Historical disclosure uses fresh Inspect and captured exact scope; retained images survive uninstall while durable references exist.",
+    "Native SQL selects rows. SDK package quotas and fixed metadata caps are abolished. Existing shared engine and Runtime operational controls remain separate.",
+    "Inspect derives currentness without old stale-row mutations. Native Query subscriptions supply relevant source and window events; no recurring source or clock polling is restored.",
+    "The user approved current-scope callers to control an existing Instance. Normal operations keep saved execution identity. Explicit stopped, joined, exact-selection Renew replaces the grant. No sharing policy or authority adapter is added.",
+    "Native Query source/window events replace old autonomous scalar/model polling. Clock-only idle is an intended native contract; no recurring clock watcher is required.",
+    "Cold Host renewal compares exact resolved pins and canonical image archives. Allocation address identity applies only to the removed in-memory clone route.",
+    "Runtime348 passes current Wasm recovery.",
+    "public349 passes renewal; its new source-window fixture fails before Query due to an invalid test batch and is not qualification for source recovery."
+  ],
+  "qualification": {
+    "replacements345": {
+      "path": "/tmp/araphor-retirement-resume-20261022/replacements345.json",
+      "sha256": "797370580814800f697182be6bdfe0e1de0dfad32d9c5c8672981a7172c5ed86",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/replacements345.log",
+        "sha256": "73caa97a74c7264ed57795c7589c427fd89796fba8ab65ae44adee3e3c0db1ef"
+      },
+      "exit_code": 101,
+      "binary_sha256": "b7e46f5417bd5e49c7c00a8595447a786ca5f6c6196563c607dc43fcc871ebb7",
+      "source_unchanged": true,
+      "elapsed_seconds": 121.71905075800169,
+      "passed": 2,
+      "failed": 5,
+      "outcomes": [
+        {
+          "selector": "graph::native::tests::feed::failed_feed_recovers_source",
+          "result": "FAILED"
+        },
+        {
+          "selector": "graph::native::tests::managed::expiry::expiry_allows_new_input",
+          "result": "FAILED"
+        },
+        {
+          "selector": "graph::native::tests::managed::notices::unchanged_notice_reuses_calls",
+          "result": "FAILED"
+        },
+        {
+          "selector": "instance::host::tests::recovery::host_recovers_source_capture",
+          "result": "FAILED"
+        },
+        {
+          "selector": "instance::host::tests::recovery::source_capture_recovers_on_change",
+          "result": "ok"
+        },
+        {
+          "selector": "qualification::tests::runtime::input_precedes_compilation",
+          "result": "ok"
+        },
+        {
+          "selector": "graph::native::tests::managed::versions::managed_versions_rebuild_graph",
+          "result": "FAILED"
+        }
+      ],
+      "changed_sources": [],
+      "started_at": "2026-10-23T14:13:24.298272+00:00"
+    },
+    "package-parity345": {
+      "path": "/tmp/araphor-retirement-resume-20261022/package-parity345.json",
+      "sha256": "147c432e22c4d79514abe22e363d398f41f1909d2165937cd16ad054d439a2c7",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/package-parity345.log",
+        "sha256": "c4016f2ed2be1c0a93642019351dda71659f11afe476ba58423d615500469dc4"
+      },
+      "exit_code": 101,
+      "binary_sha256": "b7e46f5417bd5e49c7c00a8595447a786ca5f6c6196563c607dc43fcc871ebb7",
+      "source_unchanged": false,
+      "elapsed_seconds": 238.46507167600066,
+      "passed": 42,
+      "failed": 1,
+      "outcomes": [
+        {
+          "selector": "graph::native::tests::managed::graph_conversion_failure_finishes",
+          "result": "ok"
+        },
+        {
+          "selector": "graph::tests::contract::support_requires_exact_ports",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::admission::admitted_busy_retries_capacity",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_expiry_keeps_healthy",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_idle_denial_suspends",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_stop_joins_admission",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::host_uses_current_authority",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::pressure_keeps_stop_reactive",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::removal::recreation_changes_scope_explicitly",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::removal::removal_joins_native_guest",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::removal::removal_keeps_shared_instance",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::subscription::tests::capacity::slot_wait_cancellation_joins",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::subscription::tests::diagnostic_cancellation_keeps_pending",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::subscription::tests::failed_writer_keeps_claim",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::subscription::tests::failure_keeps_package_codes",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::subscription::tests::postcommit_notice_keeps_receipt",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::completed_retry_survives_reopen",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::denied_ack_keeps_receipt",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::finite::failed_publication_stays_pending",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::finite::finite_busy_keeps_attempt",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::finite::finite_guest_failure_persists",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::history::freshness::timed_results_keep_history",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::history::historical_inspect_binds_scope",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::history::historical_inspect_checks_disclosure",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::history::output::raw_output_checks_scope",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::later_failure_is_atomic",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::nested_calls_publish_together",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::prior_pressure_preserves_success",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::renewal::renewal_checks_current_authority",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::renewal::renewal_keeps_checkpoint",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::restart::restart_skips_input_capacity",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::retained::guards::retained_elision_keeps_proof",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::retained::retained_alias_checks_scope",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::retained::retained_alias_counts_inputs",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::retained::retained_alias_fences_head",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::retained::retained_alias_keeps_identity",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::reusing::retained_runs_check_authority",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::revoked_guest_joins_attempt",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::version::failed_versions_keep_running",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::version::retained_replay_checks_inspect",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::version::retained_replay_uses_generation",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::version::versions_keep_history",
+          "result": "ok"
+        },
+        {
+          "selector": "discovery::tests::managed::profile_conversion_failure_finishes",
+          "result": "FAILED"
+        }
+      ],
+      "changed_sources": [
+        "crates/araphor-analysis/src/graph/native/tests/feed.rs",
+        "crates/araphor-analysis/src/graph/native/tests/managed/expiry.rs",
+        "crates/araphor-analysis/src/graph/native/tests/managed/notices.rs",
+        "crates/araphor-analysis/src/graph/native/tests/managed/versions.rs"
+      ],
+      "started_at": "2026-10-23T14:15:10.470669+00:00"
+    },
+    "query-parity346": {
+      "path": "/tmp/araphor-retirement-resume-20261022/query-parity346.json",
+      "sha256": "97704630e7ce8fe2fbf84c1bf04664a613dc4471bbd78de2632e40852c690f55",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/query-parity346.log",
+        "sha256": "58349684d6de4061e0c4cfa7aaac6ad24e6d30db5239dc3b1b6c4d61050e3a9f"
+      },
+      "exit_code": 0,
+      "binary_sha256": "7e48c93ef3bed64571ed3eca188542e7cdb78eeef59b36769cd2aa3964cb655f",
+      "source_unchanged": true,
+      "elapsed_seconds": 30.224202313002024,
+      "passed": 24,
+      "failed": 0,
+      "outcomes": [
+        {
+          "selector": "definition::tests::capacity::metadata_clones_share_capacity",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::capacity::admission_keeps_memory_scope",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::contract::cycles::image_rejects_artifact_cycles",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::contract::inputs::captured_trace_revocation",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::contract::inputs::catalog_input_contract",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::combined_input_respects_limit",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::contract::inputs::durable_input_indices",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::contract::model::model_deadline_keeps_parent",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::contract::inputs::input_receipts_stay_scoped",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::contract::model::model_scalar_boundaries",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::contract::operation::reordered_input_provenance",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::physical_call_cancellation_joins",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::physical_calls_keep_state_identity",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::physical_definition_denies_other_tenant",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::physical_sql_return_retains_contract",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::reusing::prepared_closures_stay_pinned",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::reusing::prepared_dependency_stays_pinned",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::reusing::prepared_owners_keep_scope",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::execution::physical_wasm_failures_release",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::native_package_call_rejections",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::guest::guest_input_precedes_entry",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::retained::retained_images_use_plans",
+          "result": "ok"
+        },
+        {
+          "selector": "definition::tests::parity::preparation_precedes_evaluation_deadline",
+          "result": "ok"
+        }
+      ],
+      "changed_sources": [],
+      "started_at": "2026-10-23T14:31:32.166602+00:00"
+    },
+    "data-parity346": {
+      "path": "/tmp/araphor-retirement-resume-20261022/data-parity346.json",
+      "sha256": "c789e6e3f0c16a4ceedc9d18e14351cfb19637a9759166516879ef10a35d7c33",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/data-parity346.log",
+        "sha256": "d20007f94a170d01d7b9d2ef8beba0bb8858aad4d17e614d0facca1c109dc4bb"
+      },
+      "exit_code": 101,
+      "binary_sha256": "e66dca86a22f009726cad2e38d8aa9a45c242837186206938e12ebe568ec767f",
+      "source_unchanged": true,
+      "elapsed_seconds": 40.26590941299946,
+      "passed": 18,
+      "failed": 1,
+      "outcomes": [
+        {
+          "selector": "analysis::managed::tests::lifecycle::idle_suspend_checks_fences",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::lifecycle::transition_fences_publication",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::managed_capture_keeps_guards",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::removal::removal_waits_all_attempts",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::removal::removal_keeps_exact_history",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::renewal::renewal_cas_is_inert",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::removal::uninstall_keeps_admitted_program",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::renewal::renewal_keeps_history",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::version::versions_require_explicit_rebuild",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::version::failed_versions_keep_current",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::packages::tests::image::definitions_retain_uninstalled_images",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::packages::tests::image::package_image_install_is_atomic",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::packages::tests::image::package_image_rejects_invalid_closure",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::packages::tests::image::package_image_retains_closure",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::packages::tests::image::package_image_versions_and_tenants",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::packages::tests::image::uninstall_collects_unused_native",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::packages::tests::image::uninstall_guard_keeps_closure",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::progress::profile::tests::state::state_uses_current_head",
+          "result": "FAILED"
+        },
+        {
+          "selector": "analysis::packages::tests::image::package_image_large_roundtrip",
+          "result": "ok"
+        }
+      ],
+      "changed_sources": [],
+      "started_at": "2026-10-23T14:31:32.166602+00:00"
+    },
+    "replacements346": {
+      "path": "/tmp/araphor-retirement-resume-20261022/replacements346.json",
+      "sha256": "dbfad5f1b10e777cb9a3b215d9fa3aea53021a6aee03cefafaf67dfc2142326a",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/replacements346.log",
+        "sha256": "c1f278feb5947f61eaf8207dd6be00427f5cf2a394f250389fbc8b11e6151d37"
+      },
+      "exit_code": 101,
+      "binary_sha256": "9679fe55f6c2fbf50eb0d8b6e24fcf5d843d7e757ba8b7fbf20a255821a37a7e",
+      "source_unchanged": false,
+      "elapsed_seconds": 137.25511945499602,
+      "passed": 3,
+      "failed": 2,
+      "outcomes": [
+        {
+          "selector": "graph::native::tests::feed::failed_feed_recovers_source",
+          "result": "FAILED"
+        },
+        {
+          "selector": "graph::native::tests::managed::expiry::expiry_allows_new_input",
+          "result": "ok"
+        },
+        {
+          "selector": "graph::native::tests::managed::notices::unchanged_notice_reuses_calls",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::recovery::host_recovers_source_capture",
+          "result": "ok"
+        },
+        {
+          "selector": "graph::native::tests::managed::versions::managed_versions_rebuild_graph",
+          "result": "FAILED"
+        }
+      ],
+      "changed_sources": [
+        "crates/araphor-analysis/src/graph/native/tests/input.rs",
+        "crates/araphor-analysis/src/graph/native/tests/storage.rs",
+        "crates/araphor-analysis/src/graph/tests/fixture.rs",
+        "crates/araphor-data/src/analysis/managed/capture.rs",
+        "crates/araphor-data/src/analysis/managed/model.rs"
+      ],
+      "started_at": "2026-10-23T14:31:28.091447+00:00"
+    },
+    "data347": {
+      "path": "/tmp/araphor-retirement-resume-20261022/data347.json",
+      "sha256": "f078c22687733430e22c25a75257414d7b8b0446a69641ab7fedbfe1655bc822",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/data347.log",
+        "sha256": "19fb043b4b0659e7a4839eb4f6cd2731f285c78d26af2ce675b1aca7766ee31f"
+      },
+      "exit_code": 101,
+      "binary_sha256": "61b19583976b0a64292aee3b4d1c3caf259aca0e43fbcdff3c9a6bebc2a10601",
+      "source_unchanged": true,
+      "elapsed_seconds": 1.8685484820016427,
+      "passed": 3,
+      "failed": 1,
+      "outcomes": [
+        {
+          "selector": "analysis::extraction::tables::tests::schema_contract",
+          "result": "FAILED"
+        },
+        {
+          "selector": "analysis::progress::profile::tests::state::notice_keeps_frozen_profile",
+          "result": "ok"
+        },
+        {
+          "selector": "discovery::native::tests::native_discovery_schema_roundtrip",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::progress::profile::tests::state::state_uses_current_head",
+          "result": "ok"
+        }
+      ],
+      "changed_sources": [],
+      "started_at": "2026-10-23T14:42:38.455961+00:00"
+    },
+    "host347": {
+      "path": "/tmp/araphor-retirement-resume-20261022/host347.json",
+      "sha256": "0db876787364ed9c4e7841dad850e8d6eb3387bd0acdc9b99dd13a8e3cd5ce2b",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/host347.log",
+        "sha256": "36f995a740b38a93262f688d9b5c32a2cc63b48c651694799261456bd6ebfe80"
+      },
+      "exit_code": 0,
+      "binary_sha256": "9679fe55f6c2fbf50eb0d8b6e24fcf5d843d7e757ba8b7fbf20a255821a37a7e",
+      "source_unchanged": true,
+      "elapsed_seconds": 1.5071777479970478,
+      "passed": 1,
+      "failed": 0,
+      "outcomes": [
+        {
+          "selector": "instance::host::tests::recovery::host_recovers_source_capture",
+          "result": "ok"
+        }
+      ],
+      "changed_sources": [],
+      "started_at": "2026-10-23T14:32:51.447003+00:00"
+    },
+    "discovery347": {
+      "path": "/tmp/araphor-retirement-resume-20261022/discovery347.json",
+      "sha256": "188662b9f1dce56d405ca21b7235ce57187d62e6c1f801dc7199a181d4894658",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/discovery347.log",
+        "sha256": "6b0e58e41fe9ae7b5aa8245949053b2232a19937e5a2f81d078c413dec796751"
+      },
+      "exit_code": -2,
+      "binary_sha256": "cb650c55e277cc33403de373b54016e251de3f73708a62886c12aee3b8a3f617",
+      "source_unchanged": false,
+      "elapsed_seconds": 308.37645673299994,
+      "passed": 2,
+      "failed": 2,
+      "outcomes": [
+        {
+          "selector": "discovery::output::tests::corpus::recorded_pilot_corpus",
+          "result": "ok"
+        },
+        {
+          "selector": "discovery::tests::managed::profile_conversion_failure_finishes",
+          "result": "FAILED"
+        },
+        {
+          "selector": "package::tests::sql::recorded::live::live_bundle_pins_body",
+          "result": "ok"
+        },
+        {
+          "selector": "discovery::tests::managed::sealed_repair_keeps_head",
+          "result": "FAILED"
+        }
+      ],
+      "changed_sources": [
+        "crates/araphor-analysis/src/discovery/tests/managed.rs",
+        "crates/araphor-analysis/src/graph/native/tests/feed.rs",
+        "crates/araphor-analysis/src/graph/native/tests/managed/versions.rs",
+        "crates/araphor-analysis/src/graph/native/tests/storage.rs",
+        "crates/araphor-data/src/analysis/extraction/tables/tests.rs"
+      ],
+      "started_at": "2026-10-23T14:42:34.648704+00:00"
+    },
+    "graph-proof347": {
+      "path": "/tmp/araphor-retirement-resume-20261022/graph-proof347.json",
+      "sha256": "06da51e49f0fa765c6409834d3c9dfca578e1bdc957847266905912656ca1147",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/graph-proof347.log",
+        "sha256": "6459ba0c8623eca45fb137d728b00ed01582b7acf439cb77926d058fdf5a27cd"
+      },
+      "exit_code": 101,
+      "binary_sha256": "cb650c55e277cc33403de373b54016e251de3f73708a62886c12aee3b8a3f617",
+      "source_unchanged": false,
+      "elapsed_seconds": 117.1881120830003,
+      "passed": 0,
+      "failed": 3,
+      "outcomes": [
+        {
+          "selector": "graph::native::tests::input::source_keeps_credential_join",
+          "result": "FAILED"
+        },
+        {
+          "selector": "graph::native::tests::input::source_preserves_dense_findings",
+          "result": "FAILED"
+        },
+        {
+          "selector": "graph::native::tests::storage::graph_result_crashes",
+          "result": "FAILED"
+        }
+      ],
+      "changed_sources": [
+        "crates/araphor-analysis/src/discovery/tests/managed.rs",
+        "crates/araphor-data/src/analysis/extraction/tables/tests.rs"
+      ],
+      "started_at": "2026-10-23T14:42:42.336892+00:00"
+    },
+    "graph-isolated347": {
+      "path": "/tmp/araphor-retirement-resume-20261022/graph-isolated347.json",
+      "sha256": "dc2b9850b6cecf3a2a3521a5e94adc39795e7aa42b0f6a3a0de3886f90be9eff",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/graph-isolated347.log",
+        "sha256": "3df7be7c1c20356e856284b8e3a65197fb6c85b6ac86206fea2963704398088d"
+      },
+      "exit_code": 101,
+      "binary_sha256": "cb650c55e277cc33403de373b54016e251de3f73708a62886c12aee3b8a3f617",
+      "source_unchanged": true,
+      "elapsed_seconds": 34.93499546300154,
+      "passed": 0,
+      "failed": 0,
+      "outcomes": [],
+      "changed_sources": [],
+      "started_at": "2026-10-23T14:47:47.923357+00:00"
+    },
+    "compile345": {
+      "path": "/tmp/araphor-retirement-resume-20261022/compile345.json",
+      "sha256": "d98549a7954707fdbc48a057e47d8a2bafd1e742546e3d99c598d75766346261",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/compile345.log",
+        "sha256": "a0af759d6091b5726bb09c19ba2a61d5d70b8ba29df9db0b226f376ae181fb3d"
+      },
+      "exit_code": 0,
+      "binary_sha256": null,
+      "source_unchanged": true,
+      "elapsed_seconds": 140.52979123499972,
+      "passed": 0,
+      "failed": 0,
+      "outcomes": [],
+      "changed_sources": [],
+      "started_at": "2026-10-23T14:10:44.668292+00:00"
+    },
+    "compile346": {
+      "path": "/tmp/araphor-retirement-resume-20261022/compile346.json",
+      "sha256": "3342c6416f6fd0d297d7147137ad63fb0dbf56602c5638db03182f9651d883c7",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/compile346.log",
+        "sha256": "4211dfaaf2365211e881d78b8981097725af5ec26f80f0dcddd7f7f28ea82d04"
+      },
+      "exit_code": 0,
+      "binary_sha256": null,
+      "source_unchanged": true,
+      "elapsed_seconds": 416.6686877519969,
+      "passed": 0,
+      "failed": 0,
+      "outcomes": [],
+      "changed_sources": [],
+      "started_at": "2026-10-23T14:23:40.307992+00:00"
+    },
+    "compile347": {
+      "path": "/tmp/araphor-retirement-resume-20261022/compile347.json",
+      "sha256": "4b9ef1875033326efc7b9c029d7a2db162b90f8b4fabe598a10eff192f365eb7",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/compile347.log",
+        "sha256": "91b2dcfe3e4ba667136e333543ff43c6a4d499c694befca26b5a6c45643845b8"
+      },
+      "exit_code": 0,
+      "binary_sha256": null,
+      "source_unchanged": true,
+      "elapsed_seconds": 410.7353653329992,
+      "passed": 0,
+      "failed": 0,
+      "outcomes": [],
+      "changed_sources": [],
+      "started_at": "2026-10-23T14:34:57.793119+00:00"
+    },
+    "host311": {
+      "path": "/tmp/araphor-retirement-resume-20261022/host311.json",
+      "sha256": "0b6f9a1295ee4bb9b34d3677327a3e703a1a43cdee69ff115398fb54f0d7c1fd",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/host311.log",
+        "sha256": "3289e531787fa31affd432ed31bfb91ae709f2eb2b44acb407f9a5672876133d"
+      },
+      "exit_code": 0,
+      "binary_sha256": "5d7bb80a7422927edb6d5a8488d6f4174dac3eb119c8ef8478d2c87c7b715484",
+      "source_unchanged": true,
+      "elapsed_seconds": 104.83434561099966,
+      "passed": 53,
+      "failed": 0,
+      "outcomes": [
+        {
+          "selector": "instance::host::notification::tests::notification_child_is_independent",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::notification::tests::notification_capture_is_bounded",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::notification::tests::notification_guard_keeps_pending",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::notification::tests::notification_host_stop_records",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::notification::tests::notification_host_keeps_deadlines",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::notification::tests::notification_item_error_keeps_following",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::notification::tests::notification_target_is_sealed",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::admission::assembly_waits_reader",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::admission::opening_keeps_unknown_busy",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::admission::admission_waits_capacity",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::admission::opening_waits_reader",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::admission::stream_waits_output_capacity",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::admission::preparation_failure_keeps_intent",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::definition::prepared_definition_requires_install",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_bad_member_isolates",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_delivery_keeps_healthy",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_drives_without_observer",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_crossing_expiry_joins_admission",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_expiry_keeps_healthy",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_drop_retains_lease",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_idle_denial_suspends",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_guest_keeps_healthy",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_isolates_failure",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_keeps_benign_notice",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_keeps_newer_member",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_metadata_error_drains",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_preserves_pending",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_replaces_one_lifecycle",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_source_denial_suspends",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_stop_joins_admission",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::explicit_stop_joins_guest",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::host_stop_joins_guest",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::host_uses_current_authority",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::explicit_stop_preserves_intent",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::restore_keeps_stopped_jobs",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::paused_member_keeps_ownership",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::unpolled_host_releases_registration",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::membership_keys_keep_capacity",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::start_reuses_prepared_owner",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::native::native_expired_admission",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::native::native_stop_joins",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::pressure_keeps_stop_reactive",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::projected_member_keeps_fence",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::native::native_control_joins",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::removal::recreation_changes_scope_explicitly",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::removal::removal_joins_native_guest",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::removal::removal_keeps_shared_instance",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::removal::removal_needs_only_remove",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::removal::restoration_keeps_tombstones",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::replacement_releases_before_admission",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::recovery::host_recovers_failed_frontier",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::checkpoint::native_overflow_keeps_checkpoint",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::version::native_caps_keep_receipt",
+          "result": "ok"
+        }
+      ],
+      "changed_sources": [],
+      "started_at": "2026-10-23T01:24:23.001348+00:00"
+    },
+    "metadata310": {
+      "path": "/tmp/araphor-retirement-resume-20261022/metadata310.json",
+      "sha256": "6fca4c2045ada0b52910db7a81140bec3c2d60ed530a384501f717e54e3dd68d",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/metadata310.log",
+        "sha256": "239166f58808227826b6c4b5e430836c3ffdfd73bb0d244d4f738060ae650486"
+      },
+      "exit_code": 0,
+      "binary_sha256": "929a74c0ba210f584b9a0e5f75fb6d197153f082f32d143d5fdcfb9368f02af0",
+      "source_unchanged": true,
+      "elapsed_seconds": 7.105463855999915,
+      "passed": 8,
+      "failed": 0,
+      "outcomes": [
+        {
+          "selector": "analysis::dependencies::tests::graph_notice_changes_dependency",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::dependencies::tests::query_follow_scoped_dependencies",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::dependencies::tests::query_state_dependencies",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::dependencies::tests::query_tenant_dependencies",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::metadata::metadata_skips_prior_ipc",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::managed::tests::readiness::failed_frontier_can_resume",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::progress::profile::tests::profile_guard_rolls_back",
+          "result": "ok"
+        },
+        {
+          "selector": "analysis::retention::tests::observability_retention_sweep",
+          "result": "ok"
+        }
+      ],
+      "changed_sources": [],
+      "started_at": "2026-10-23T01:14:40.455940+00:00"
+    },
+    "bridge-runtime321": {
+      "path": "/tmp/araphor-retirement-resume-20261022/bridge-runtime321.json",
+      "sha256": "eb3f7f830479bf4d46144dd69339d04f87b65c943d1869df82bba1ff755142cd",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/bridge-runtime321.log",
+        "sha256": "4b0a722321a8c941441f67f41607cbb24fd971a0e8a6bf448eb5eb72ad0e39a6"
+      },
+      "exit_code": 0,
+      "binary_sha256": "8d0eb43bbcc15e0ace759a2a4f914a79beb1cda3571c0d19b6e797bc98a30e29",
+      "source_unchanged": true,
+      "elapsed_seconds": 6.58186748099979,
+      "passed": 3,
+      "failed": 0,
+      "outcomes": [
+        {
+          "selector": "wasm::tests::evaluation_capacity_recovers",
+          "result": "ok"
+        },
+        {
+          "selector": "wasm::tests::wait_checks_resource",
+          "result": "ok"
+        },
+        {
+          "selector": "wasm::tests::runtime::prepared::prepared_handle_keeps_binding",
+          "result": "ok"
+        }
+      ],
+      "changed_sources": [],
+      "started_at": "2026-10-23T03:20:12.353430+00:00"
+    },
+    "bridge-analysis321": {
+      "path": "/tmp/araphor-retirement-resume-20261022/bridge-analysis321.json",
+      "sha256": "5e397c1111ce1db64ee50f2c8459c537bec691874b0a71612461c76d992673d2",
+      "log": {
+        "path": "/tmp/araphor-retirement-resume-20261022/bridge-analysis321.log",
+        "sha256": "fb034f5f78262d265bdad2cc643d47a94e327ef9645dcc065050ee1412ca685d"
+      },
+      "exit_code": 0,
+      "binary_sha256": "d14fe6a9b47842e37f3daa0a736d60277eec5584c87e0d1d6c4923f8e3c3fc00",
+      "source_unchanged": true,
+      "elapsed_seconds": 28.079646230002254,
+      "passed": 3,
+      "failed": 0,
+      "outcomes": [
+        {
+          "selector": "instance::host::tests::admission::admitted_busy_retries_capacity",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::admission::opening_keeps_unknown_busy",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::admission::opening_waits_component_cache",
+          "result": "ok"
+        }
+      ],
+      "changed_sources": [],
+      "started_at": "2026-10-23T03:22:39.017293+00:00"
+    },
+    "public348": {
+      "record_sha256": "a1f2bf0ffa2869f7ac9f2c70778a2201ecfbc35acfa4901de0948b71793ad02c",
+      "log_sha256": "9ab1f939d7a61a3ef09dd155fa3c927446dfdba013096479df018274653a1d08",
+      "exit_code": 101,
+      "binary_sha256": "8e0fe87936a81eba2e86320141494822869c25e91de5ec581e301380c3c56c09",
+      "source_unchanged": true,
+      "outcomes": [
+        {
+          "selector": "instance::host::tests::lifecycle::explicit_stop_joins_guest",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::explicit_stop_preserves_intent",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::host_uses_current_authority",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::restore_keeps_stopped_jobs",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::host::tests::lifecycle::start_reuses_prepared_owner",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::control::operator_revocation_fences_publication",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::control::public_control_keeps_identity",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::finite::failed_publication_stays_pending",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::renewal::renewal_checks_current_authority",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::replay::replay_checks_current_authority",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::version::version_cancellation_joins_workers",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::version::versions_check_actions",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::version::versions_fence_revoked_run",
+          "result": "ok"
+        },
+        {
+          "selector": "instance::tests::version::versions_keep_history",
+          "result": "ok"
+        }
+      ]
+    },
+    "public349": {
+      "record_sha256": "baa50597dc42f91e7f79dd779343e67749df0522f849c8386ce345dfb1b56b05",
+      "log_sha256": "78e31b1c370e559d71ca5b555b7d09dddf337f6dfb057d00999555ea8930668b",
+      "exit_code": 101,
+      "binary_sha256": "6d4dbc042c82a1c9a89324c58632a9206a5e69d50daa086f25c25de90e663821",
+      "source_unchanged": true,
+      "outcomes": [
+        {
+          "selector": "instance::tests::renewal::renewal_keeps_checkpoint",
+          "result": "ok"
+        }
+      ]
+    },
+    "araphor-package-runtime348": {
+      "record_sha256": "1f546f582e514a0b34232b7a30210ce3876db0355ba8340fe4fdac59cd10b924",
+      "log_sha256": "2c016a36344512edd9a208aab8ce22b25a5dc0abda0712b0534ac64f0a9541b8",
+      "exit_code": 0,
+      "binary_sha256": "ba0ff03ef030bfe77849d00b84308377fb20a8cb6b7d2fa99aa5b73b6946c1ac",
+      "source_unchanged": true,
+      "outcomes": [
+        {
+          "selector": "wasm::tests::runtime::component_recovers_after_failure",
+          "result": "ok"
+        }
+      ]
+    },
+    "mithril-control348": {
+      "record_sha256": "4f16cc3c61a86270b1e4c7e206647fe15c10aac439b88a12678a1e1efc2c9841",
+      "log_sha256": "27f9ca8f18f429113ff70a6bb699821a64ce061c30b6412e786e6b236de95985",
+      "exit_code": 0,
+      "binary_sha256": "d8e3ebf1f00e319464d62ca68afa38cd932b8c8eaf0bb7a4f0f44ea695d9dbf0",
+      "source_unchanged": true,
+      "outcomes": [
+        {
+          "selector": "client_grpc::tests::packages::lifecycle::instance_admission_is_inert",
+          "result": "ok"
+        },
+        {
+          "selector": "client_grpc::tests::packages::lifecycle::instance_rpc_controls_lifecycle",
+          "result": "ok"
+        },
+        {
+          "selector": "client_grpc::tests::packages::removal::removal_rpc_keeps_history",
+          "result": "ok"
+        }
+      ]
+    },
+    "araphor-cli348": {
+      "record_sha256": "8cd368ca2e80a2675d884a99f58a99d5c7d8486c27fdc79e3a37be3d1297fb50",
+      "log_sha256": "9cd85cbb56d258d58a237b3bf112c1d9ee1897439414543adc3230c4d675daa0",
+      "exit_code": 0,
+      "binary_sha256": "c22024d2ce327cbe857e7b9c6e9740a7046898fc637a79fb19d536c01cb6ff13",
+      "source_unchanged": true,
+      "outcomes": [
+        {
+          "selector": "cli::araphor::packages::tests::instance_admission_is_explicit",
+          "result": "ok"
+        },
+        {
+          "selector": "cli::araphor::packages::tests::lifecycle_cli_is_explicit",
+          "result": "ok"
+        },
+        {
+          "selector": "cli::araphor::packages::tests::removal_cli_is_explicit",
+          "result": "ok"
+        }
+      ]
+    },
+    "araphor-data348": {
+      "record_sha256": "902fcb7f43144ad1463ba5c767275146d70cd7676ca821721727921d4df87a13",
+      "log_sha256": "f0a5b7ac1de11828fe386313d25fd74a9f81c751308ad16b0e7bfa526cc91d0b",
+      "exit_code": 0,
+      "binary_sha256": "677e7093fe1086df701ece7c53841637b74901bd3c5959c6e1f76d2f25442ef0",
+      "source_unchanged": true,
+      "outcomes": [
+        {
+          "selector": "analysis::extraction::tables::tests::schema_contract",
+          "result": "ok"
+        },
+        {
+          "selector": "package::model::request::tests::removal_requests_are_explicit",
+          "result": "ok"
+        }
+      ]
+    }
+  },
+  "distinct_passing_selectors": 83,
+  "remaining_back_files": 38,
+  "retired_back_files": 170,
+  "removed_production_nonblank": 0,
+  "removed_test_nonblank": 3163,
+  "remaining": "Source-window recovery, Discovery native selection and window recovery, and Graph qualification remain open. No production Back owner is removed in this change.",
+  "verification_scope": "Focused checks only, as required by the user. Failed and interrupted runs remain in the archive."
+}

@@ -6,8 +6,8 @@ and the old code that can be reused.
 
 The user requires three TODOs first: 14, the OCI package image; 15, the
 Discovery definition file; and 16, running Discovery instances. Complete them
-before items 1-13. YAML definitions contain metadata and select SQL, PRQL, or
-a structured package call. The call form produces native SQL. The
+before items 1-13. YAML definitions contain metadata and inline or referenced
+SQL or PRQL. Package calls are expressions inside that program. The
 [active package and job plan](araphor-package-jobs.md#first-deliverable-definition-files-and-running-instances)
 records that priority. Items 1-13 remain recorded TODOs. Existing uncommitted
 code from the stopped attempts is an unverified draft. The local backup is
@@ -639,17 +639,21 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 - **Before:** Several limits were mandatory.
 - **Now:** Wasm/native options, shared memory capacities, storage, Query bulk,
-  SDK bulk and extraction limits have disabled defaults. Graph domain,
+  extraction limits have disabled defaults. The current user instruction
+  removes SDK package quotas, including explicit values. All 143 focused
+  checks, strict Clippy, formatting, and library test compilation pass. Graph domain,
   retained-result and traversal resource defaults are now removed. All 159
   connected cases, formatting and strict Clippy pass. Evidence intake, coverage reports,
   Discovery batching, notification policy, legacy package literals and SDK
   descriptor boundaries still need their separate audit.
-- **Required:** Make the remaining quotas configurable and disabled by
-  default. Keep identity, type, format, and arithmetic validation.
+- **Required:** Keep the package contract free of row, batch, byte, and
+  checkpoint quotas. Only the time window can be set outside SQL. Keep
+  separate engine quotas configurable and disabled by default. Keep identity,
+  type, format, and arithmetic validation.
 - **Reuse:** Existing option handling and configured-limit checks. Change
   their configuration and disabled path. Do not add another resource owner.
   This includes [Query limits](../../crates/araphor-query/src/execution.rs),
-  [SDK limits](../../crates/araphor-analysis-sdk/src/model.rs),
+  [SDK schemas](../../crates/araphor-analysis-sdk/src/model.rs),
   Data extraction limits, and current runtime configured-limit checks. The
   former compiler address-space option returns Unsupported for in-process
   compilation.
@@ -856,3 +860,129 @@ Result for this bounded change: **Done**. Update and rollback, saved-input
 replay, automatic Graph publication, Discovery interval completion, complete
 retirement, the required net reduction, and the final shared Rust procedure
 remain **Not done**. Implementation continues within the current request.
+
+
+## Shared Host and retirement qualification
+
+The shared Host is implemented for Control, Graph, and Discovery. Control cold
+startup passes with both Graph sources. Image uninstall, instance removal,
+explicit recreation, exact historical scope, and SQL/Wasm/native replay pass
+focused checks. There are 132 retired reference files and 76 unchanged files.
+
+The later [five-file retirement](araphor-analysis-migration.md#discovery-replay-and-package-commit-retirement)
+replaces Discovery image lookup and replay, Graph chunk splitting, installed
+image history, and the installed commit guard. All 65 distinct focused checks
+pass on source state 290. The removal deletes 737 nonblank production Rust
+lines. There are now 137 retired files and 71 unchanged files. Public lifecycle,
+selected SQL/PRQL output reads, admission failure status, complete window
+recovery, Notification supervision, and native interrupt cancellation remain
+open. Complete retirement and final shared Rust CI are **Not done**.
+The [migration record](araphor-analysis-migration.md#native-lifecycle-and-source-qualification)
+retains exact passing and failing checks. These results do not close item 16.
+
+The source audit finds missing public first admission, Start, finite Run, Stop,
+Renew, Update, and Rollback routes. Existing native library APIs must own them.
+Public reads must also support the selected root output of a SQL or PRQL job
+with no package calls. Keep the old owner and Inspect leaves until these
+replacement routes pass their checks. Automatic Notification supervision,
+complete window recovery, remaining native polling, complete retirement,
+required code reduction, and final Rust CI remain **Not done**.
+
+### Saved SQL and PRQL result qualification
+
+Result: **Done** for exact saved root-output reads and local queries. The
+existing Data reader returns package-call results or selected SQL and PRQL
+results. It checks saved call bindings, generation schema, and scope before
+payload disclosure. Control uses the existing binary replies. All 133 focused
+Data, Analysis, Query, and Control checks pass on source state 293.
+The [qualification record](../../recovery/araphor-selected-output-qualification-20261022.json)
+retains the commands, source hashes, and result hashes. No reference file
+retires for this change alone. Public lifecycle, admission failures, complete
+window recovery, Notification supervision, remaining native polling, and final
+shared Rust CI remain **Not done**.
+
+### Shared Notification continuation qualification
+
+- **Before:** Control exposed finite routing and delivery. Automatic
+  Notification supervision was not qualified.
+- **Now:** Control uses the shared Instance Host and native SQL publication
+  sink. Nine Analysis cases and six Control cases pass on source state 302.
+  They cover pending-attempt reopen, exact retry and ACK deadlines, item-error
+  isolation, cancellation, startup, disabled configuration, and count options.
+- **Required:** Complete recovery after source capture fails. Preserve the
+  unchanged failed cut until a relevant Query event permits another attempt.
+- **Reuse:** Keep the finite Router, durable attempts, existing Query Progress,
+  and shared Host. Do not add another clock, task collection, or status store.
+
+The [bounded result](araphor-analysis-migration.md#shared-notification-execution-and-capacity-release)
+also records capacity-release recovery. This work removes no further reference
+file and does not close the running-instance item or final Rust CI.
+
+
+### Native preparation and execution replacement
+
+- **Before:** The old package owner prepared inputs, selected state, dispatched
+  execution, and returned installed results through separate wrappers.
+- **Now:** Query subscriptions and native physical package calls own execution.
+  Data owns atomic state and result publication. Seven complete reference files
+  retire after 61 focused checks. There are 159 retired files and 49 unchanged
+  reference files. The net production reduction for this change is 532 lines.
+- **Required:** Complete source-failure and durable window recovery, then qualify
+  the remaining mixed product and lifecycle rules before their files retire.
+- **Reuse:** Keep native Query subscriptions, physical package calls, Runtime,
+  the shared Host, and Data transactions. Add no package clock or polling loop.
+
+Read the [exact result and evidence](araphor-analysis-migration.md#native-preparation-and-installed-execution-retirement).
+This result does not close the running-instance item or complete retirement.
+
+
+### Package lifecycle and retained-output test retirement
+
+- **Before:** Eleven reference test files checked the separate package owner.
+- **Now:** Their assertions have passing checks at the shared Host, Query,
+  Runtime, and Data owners. Exact source and archive records cover 83 selectors.
+  There are 170 retired files and 38 unchanged reference files.
+- **Required:** Complete pre-admission stale-source recovery, Graph feed
+  qualification, and native Discovery SQL and managed-window qualification
+  before removing those owners.
+- **Reuse:** Keep the shared Host and native Query subscription. Cold renewal
+  checks exact image bytes and saved state through the existing admission route.
+
+Read the [result and evidence](araphor-analysis-migration.md#package-lifecycle-and-retained-output-test-retirement).
+This removal deletes test duplication. It does not claim a production reduction
+or complete retirement.
+
+
+### Qualified reference leaf retirement
+
+Nineteen more complete reference files retire. There are now 189 retired files
+and 19 unchanged reference files. This batch removes 623 nonblank production
+Rust lines and 2,255 nonblank test lines. The
+[qualification record](../../recovery/araphor-qualified-leaves-retirement-20261023.json)
+contains the archive hash and exact proof. No whole-migration net reduction is
+claimed.
+
+The old deadline tests begin with successful captures. A deadline after the
+first failed capture is not an old parity gate. SourceRecovery keeps attached
+Progress deadlines and scoped dependencies with 24 fewer production lines;
+all five existing recovery checks pass on source state 350. The old
+`admission_rejects_domain_execution` case checks inert installation, not
+Discovery conversion. Read the [bounded result](araphor-analysis-migration.md#qualified-reference-leaf-retirement).
+Pre-admission stale-source recovery, Graph feed qualification, native Discovery
+SQL and managed-window qualification, complete retirement, and final Rust CI
+remain **Not done**.
+
+
+### Joined known-rollback cleanup
+
+Finite Run and Follow now use the existing Data terminal owner after native
+execution joins. The consolidation removes 19 net nonblank production Rust
+lines. It adds no API. Four Analysis checks and three Data checks pass on source
+state 359. These checks retain caller-cancelled pending claims, exact live-claim
+authority, uncertain-commit recovery, saved receipts, and commit crash behavior.
+
+The complete Discovery historical-repair case still fails later with `Elapsed`.
+Graph failed-feed recovery still fails at cursor 258. No further reference file
+retires: 189 are retired and 19 remain unchanged. Complete retirement and the
+whole-migration reduction remain **Not done**. Read the
+[bounded result and records](araphor-analysis-migration.md#joined-cleanup-after-known-rollback).

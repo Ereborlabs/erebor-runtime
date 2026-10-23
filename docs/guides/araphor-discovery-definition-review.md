@@ -1,22 +1,23 @@
 # Discovery Definition Review
 
-This guide covers Discovery definition admission, finite OCI execution, and
-the new finite Instance owner. The definition selects reusable code and inputs.
-Admission starts no Discovery. Focused finite managed checks pass. The final
+This guide covers Discovery definition admission, native OCI execution, and
+the shared Instance owner. The definition selects reusable code and inputs.
+Admission starts no Discovery. Focused finite and live checks pass. The final
 Rust gate and complete migration remain **Not done**.
 
 ## Intended end state
 
-A YAML definition contains metadata and exactly one SQL, PRQL, or package-call
-form. The package-call form produces a native SQL relation. Every program uses
-the native DataFusion pipeline. A separate running instance owns permission,
+A YAML definition contains metadata and one SQL or PRQL program. Package calls
+are relations in that program. Source code can be inline or in a file captured
+once at admission. Every program uses the native DataFusion pipeline. A separate
+running instance owns permission,
 progress, saved state, and subscription lifetime.
 
 ## Review flow
 
 ```text
 An operator admits a definition file
-  -> the file owner captures source files and converts a YAML call to SQL
+  -> the file owner captures the SQL or PRQL source once
   -> the CLI sends metadata and captured SQL or PRQL
   -> Control checks the current tenant and manager permission
   -> Query admits SQL or compiled PRQL and resolves package calls in that SQL
@@ -180,9 +181,11 @@ checks saved identities, content digests, store revisions, and exact image
 pins during store open. Inspection checks content and image pins again.
 
 Definition recovery restores immutable definitions. Caller-owned finite
-execution returns proposed state without a write. The new finite Instance
-owner below connects saved state, progress, and recovery checks. Managed
-start, current inspection, stop, and automatic restart remain unimplemented.
+execution returns proposed state without a write. The shared Instance owner
+connects saved state, progress, and recovery checks. Read the
+[shared lifecycle route](#shared-lifecycle-and-retained-output-qualification)
+for managed start, inspection, stop, and retained running-instance restoration.
+Complete source recovery remains open.
 
 ```mermaid
 sequenceDiagram
@@ -222,7 +225,7 @@ activation or result.
   -> [CallContext::finish](../../crates/araphor-query/src/definition/physical.rs) closes call registration and waits for the native task tracker
   -> Data receives no automatic result, state, or progress write
 
-The finite caller creates the invocation identity, seed, caller limits, and
+The finite caller creates the invocation identity, seed, and
 prior checkpoint map. An invocation has separate cancellation state. Query
 forwards parent cancellation and waits for active work. An ordinary invocation
 error does not cancel the parent Session. The map uses admitted call identities.
@@ -345,9 +348,9 @@ sequenceDiagram
 ```
 
 This API does not authorize a durable commit. The caller retains responsibility
-for current authority and domain checks. The finite Instance owner below adds
-the authority and Data transaction route. Long-running supervision and public
-lifecycle operations remain in TODO 16. Package-issued internal SQL requires
+for current authority and domain checks. The Instance owner adds the authority
+and Data transaction route. The shared Host owns managed lifecycle operations.
+Complete producer recovery remains in TODO 16. Package-issued internal SQL requires
 a future SDK capability; the current guest ABI supplies no database handle.
 
 Qualification is in progress for the current worktree. The physical execution
@@ -483,7 +486,8 @@ accepts a current reader grant and exact instance/result IDs.
   -> [Instance::inspect](../../crates/araphor-analysis/src/instance/read.rs) checks current reader authority and expiry before disclosure.
 
 [Instance::query_result](../../crates/araphor-analysis/src/instance/read.rs)
-uses that same retained read.
+accepts an exact result ID or no result ID under the same fresh Inspect guard.
+  -> [AnalysisStore::managed_query_output](../../crates/araphor-data/src/analysis/managed/read.rs) resolves the current generation's successful selected receipt when no ID is supplied. It checks scope, instance, attempt, generation, and commit revision in one read transaction before Arrow decoding.
   -> [Session::query_local](../../crates/araphor-query/src/execution/local.rs) registers only the retained output datasets in a private native catalog.
   -> [Session indexing](../../crates/araphor-query/src/execution/tables.rs) adds original row indices before filtering across Arrow batches.
   -> [Planner](../../crates/araphor-query/src/planner/mod.rs) uses the existing native SQL parser and logical planner.
@@ -493,9 +497,9 @@ uses that same retained read.
 The catalog contains no inherited view, external catalog, undeclared local
 table, or durable source. Native admission rejects DDL, DML, multiple
 statements, and unused undeclared CTEs. A retained SELECT executes no historical
-package export and captures no current evidence source. Its configured bounds
-combine the native Session limits with the retained descriptor limits. Data
-already reads that descriptor during validation. No second descriptor read or
+package export and captures no current evidence source. Native SQL selects
+rows. The native Session retains its configured shared resource bounds. Data
+checks the retained descriptor schema. No second descriptor read or
 current image execution trust check is required.
 
 Current Inspect authority is independent of the original writer principal,
@@ -507,10 +511,22 @@ check those rules. The [native local tests](../../crates/araphor-query/src/execu
 also check catalog exclusion, original indices, empty metadata, native interval
 output, explicit limits, and last-alias memory release.
 
-These Rust library entry points pass focused qualification. Public Control and
-CLI result operations and direct expiration of a previously valid writer grant
-remain **Not done**. Keep the mixed Inspect, lifecycle, presentation, and codec
-reference files until their complete replacements pass.
+[Control package reads](../../crates/mithril-control/src/service/packages.rs)
+and [CLI package reads](../../crates/araphor-cli/src/cli/araphor/packages.rs)
+pass the optional result ID to these owners. `query INSTANCE SQL` selects the
+current successful root. `query INSTANCE RESULT SQL` selects an exact retained
+result. Rollback selects the new current receipt. Removal keeps history.
+Recreation starts with no current result. A failed later step keeps the last
+successful result. An invalid current receipt cannot select an older result.
+
+All 35 mapped inspection cases pass on source321. The source322 compile,
+format, and strict Clippy checks also pass. Two post-removal inspection cases
+pass on unchanged active source. The
+[retirement record](../../recovery/araphor-inspect-retirement-20261023.json)
+retains exact selectors, source identities, binary hashes, and the verified
+checkpoint. The complete old `package/inspect.rs` file is removed. Other mixed
+reference files, complete lifecycle migration, and the final shared Rust
+procedure remain **Not done**.
 
 ## Finite managed execution
 
@@ -616,10 +632,11 @@ pools. Evaluation and stream counts are optional global and tenant limits.
 Bulk bounds default to the numeric maximum; optional limits default to None.
 These defaults do not preallocate that maximum.
 
-[SDK limits](../../crates/araphor-analysis-sdk/src/model.rs) retain separate
-`max_rows`, `max_batches`, `max_bytes`, and `max_checkpoint_bytes` contracts.
-Each call uses the minimum requested and model bounds; the runtime also applies its
-configured backend limits. SDK defaults impose no bulk quota.
+[SDK models](../../crates/araphor-analysis-sdk/src/model.rs) define schemas,
+inputs, outputs, parameters, reasons, and saved state. Models and invocation
+contexts contain no row, batch, byte, or checkpoint quota. Native SQL selects
+rows. External time windows remain. Contract version identifiers stay
+unchanged during development.
 [Data extraction](../../crates/araphor-data/src/analysis/extraction.rs) and
 [native storage limits](../../crates/araphor-data/src/analysis/capacity.rs)
 retain their own configured bounds. `native_memory_bytes` and
@@ -886,6 +903,97 @@ actual token before it sends the existing capacity notice. The two native
 connections stay unchanged. All 25 host and nine Query capacity cases pass.
 The native lock and interrupt polling in Data remain open.
 
+### Admitted source or capacity recovery
+
+[InstanceHost::member](../../crates/araphor-analysis/src/instance/host.rs)
+retains the original typed capacity error and failed completion after the
+attempt joins. It opens the ordinary Query subscription at that failed
+frontier. The same member select waits for the stream or the existing resource
+event. Query owns source changes and captured window deadlines.
+
+A source receipt clears the old resource cause. A resource event cancels and
+joins the open stream before a fresh capture. `Instance::subscribe_on` permits
+that capture only while the exact failed completion is still current. A newer
+finite result prevents duplicate execution. Cancellation of a newer attempt
+retains the prior committed frontier, so its newer source cut can still run.
+The native sink uses the Instance Session memory scope. Its own cleanup cannot
+act as an external capacity release.
+
+The [capacity case](../../crates/araphor-analysis/src/instance/host/tests/admission.rs)
+checks resource release, source-first recovery while pressure remains held,
+a newer finite result, and cancellation of a newly started source attempt.
+All 54 connected Host, delivery, and joined-state cases pass in
+`host318`. Strict Clippy and formatting also pass. Read the
+[source and command record](../../recovery/araphor-reactive-capacity-recovery-20261023.json).
+Pre-attempt capture recovery, compiler and cache capacity forwarding, complete
+supervision retirement, and the final shared Rust procedure remain **Not done**.
+
+### Native compiler and cache capacity
+
+Intended result: a known component capacity failure waits for the actual
+resource. Cancellation and grant expiry end that wait. The current bridge
+implements this result without a new capacity owner.
+
+[PackageExec::new](../../crates/araphor-query/src/definition/physical.rs) prepares the selected component before source capture and attempt admission.
+  -> [PackageRuntimeError](../../crates/araphor-query/src/lib.rs) exposes the original Runtime error through Query. The error type, resource and requested count stay unchanged.
+  -> [InstanceHost::open_resource](../../crates/araphor-analysis/src/instance/host.rs) recognizes typed `component compiler` and `component cache capacity` errors.
+  -> [InstanceHost::wait_open](../../crates/araphor-analysis/src/instance/host.rs) applies the existing operation control and selects the resource wait.
+  -> [Engine::wait_package_capacity](../../crates/araphor-query/src/execution.rs) forwards the exact resource and requested count.
+  -> [Runtime::wait_capacity](../../crates/araphor-package-runtime/src/lib.rs) calls the existing Wasm owner.
+  -> [WasmExecution::wait_capacity](../../crates/araphor-package-runtime/src/wasm.rs) subscribes to the native capacity watch, checks the actual resource, and waits while that resource is full.
+
+```mermaid
+sequenceDiagram
+    participant H as InstanceHost
+    participant Q as Query Engine
+    participant R as Runtime and Wasm
+    H->>Q: Wait for resource and requested count
+    Q->>R: Await existing native capacity
+    R-->>Q: Resource is ready or wait fails
+    Q-->>H: Preserve the result
+```
+
+[CodeCache::available](../../crates/araphor-package-runtime/src/wasm/cache.rs)
+checks the requested bytes and actual component pins. Compiler release and
+component pin release send the existing native capacity notice. An unrelated
+notice does not make a full resource ready. The Host joins the failed execution
+before this wait. A cancelled wait starts no worker. Reader and shared-memory
+waits keep their existing owners. Unknown Busy is not a resource retry trigger.
+Query re-exports the original error; Analysis adds no Runtime dependency or
+error adapter.
+
+The source321 manifest build passes. The three Runtime cases pass in 6.582
+seconds. The three Analysis cases pass in 28.080 seconds. Each run reports
+unchanged source.
+
+| Exact test | Required assertion |
+|---|---|
+| [instance::host::tests::admission::opening_waits_component_cache](../../crates/araphor-analysis/src/instance/host/tests/admission.rs) | A real guest pins the only cache entry. A different valid component returns typed Busy and requested bytes. The wait stays Pending, cancellation works, actual join permits release, and a fresh call returns `[7]`. |
+| [instance::host::tests::admission::opening_keeps_unknown_busy](../../crates/araphor-analysis/src/instance/host/tests/admission.rs) | Unknown Busy and fixed bounds do not enter a resource wait or change Data. |
+| [instance::host::tests::admission::admitted_busy_retries_capacity](../../crates/araphor-analysis/src/instance/host/tests/admission.rs) | Resource release, source-first recovery, a newer finite result, and a cancelled fresh source attempt preserve exact completion and progress fences. |
+| [wasm::tests::wait_checks_resource](../../crates/araphor-package-runtime/src/wasm/tests.rs) | The public Runtime wait stays Pending under the actual compiler mutex, ignores an unrelated notice, and returns after release. |
+| [wasm::tests::evaluation_capacity_recovers](../../crates/araphor-package-runtime/src/wasm/tests.rs) | Actual evaluation permits become available after release. |
+| [wasm::tests::runtime::prepared::prepared_handle_keeps_binding](../../crates/araphor-package-runtime/src/wasm/tests/runtime/prepared.rs) | An uncached compile returns typed compiler Busy while the real mutex is held. A prepared handle retains its exact binding. |
+
+The cache case tests the shared Host wait method. This result does not claim a
+complete Host compiler-contention run. Pre-attempt source recovery and the final
+shared Rust procedure remain **Not done**. The source321 result closes the
+earlier compiler and cache capacity forwarding limit only.
+
+### Fixed input clocks in native execution
+
+[Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) retains each active input range from the captured Query snapshot.
+  -> [CallContext::bind_window_clocks](../../crates/araphor-query/src/definition/physical.rs) uses DataFusion's native expression simplifier at each input's retained SQL time. Nested calls keep their own scopes.
+  -> [Session::physical](../../crates/araphor-query/src/execution.rs) analyzes the complete execution clone once and optimizes it once. Executions without retained windows use `SessionState::optimize` directly.
+  -> [SourceSnapshot::bounds](../../crates/araphor-query/src/sources/mod.rs) uses the same scoped time for range metadata.
+  -> [Inputs::input_for](../../crates/araphor-query/src/inputs/receipt.rs) retains the captured range for the exact call and input slot.
+
+The call context and SDK time keep the actual evaluation time. A late close
+uses the retained fixed interval for input SQL. It does not change other input
+windows or the root SQL clock. Five fixed-window and six connected clock cases
+pass on source322. This result does not qualify durable interval recovery,
+older occupied intervals, or failed close recovery.
+
 ## Native operation validation
 
 Read [PackageExec::collect](../../crates/araphor-query/src/definition/physical.rs)
@@ -898,8 +1006,8 @@ limits keep their existing classification. No second executor is present.
 The [operation tests](../../crates/araphor-query/src/definition/tests/execution/contract/operation.rs)
 check full input metadata, qualified table names, exact declared scope, stable
 revisions, quoted aliases, input order, child deadlines, and capacity cleanup.
-The [output contract test](../../crates/araphor-query/src/definition/tests/execution/contract.rs)
-checks descriptor and invocation row limits before evidence execution.
+The former output quota test is removed under the user's 2026-10-23
+instruction. Current output validation retains schemas and evidence references.
 All 67 connected execution and guest cases and seven finite Analysis failure
 and pressure cases pass. These checks qualify the
 [operation test retirement](../../recovery/araphor-analysis-operation-retirement-20261020.json).
@@ -971,8 +1079,10 @@ Run permission or image execution trust. Cancellation joins the existing worker.
 [AnalysisStore::managed_history](../../crates/araphor-data/src/analysis/managed/history.rs) lists original successful receipts in completion order.
 [AnalysisStore::managed_output](../../crates/araphor-data/src/analysis/managed/read.rs) returns the validated original packet. Valid pending
 or terminal attempts do not fabricate success. Corrupt bindings reject the read.
-This list is not the old per-window head index. Public latest selection,
-cross-generation history and selected SQL-only output reads remain open.
+This list does not maintain the old per-window head index. Current-result
+selection and selected SQL/PRQL reads now pass the focused checks in
+[Retained result inspection](#retained-result-inspection). Complete per-window
+and cross-generation history qualification remain open.
 
 Package inputs retain independent windows through native child plans. Native
 SQL already expands views before clock admission. Exact native timestamp bound
@@ -1653,12 +1763,23 @@ existing finite Router. Read the owners in this order:
    remain quiet. Exact primary and escalation reference changes remain visible.
    Each of the seven DISTINCT predicates has its own parentheses so the pinned
    native parser does not consume a following AND or OR in the right operand.
-3. [NotificationRouter::consume](../../crates/araphor-analysis/src/notification/reactive.rs)
-   accepts an exhausted, untruncated Query update. It decodes eligible finding
-   refs and obligation IDs, then retains each finite routing or delivery result.
-   One failed item does not stop a later item. Query owns source subscriptions
-   and deadline wakes; this consumer adds no clock or polling loop.
-4. [Routing](../../crates/araphor-analysis/src/notification/routing.rs) checks the
+3. [The shared Host](../../crates/araphor-analysis/src/instance/host/notification.rs)
+   admits the exact canonical SQL definition and a tenant-only grant. Admission
+   starts no work. Its running subscription uses native INSERT planning and
+   the existing publication TableProvider. The definition contains no images
+   or package calls.
+4. [The publication sink](../../crates/araphor-analysis/src/instance/sink.rs)
+   uses native DataSinkExec. It collects the complete bounded candidate set
+   before the first effect. DataFusion's native schema comparison accepts
+   equivalent Utf8View fields; changed names, types, and counts still fail.
+   The captured tenant must match the admitted grant. The sink calls
+   [NotificationRouter::consume_rows](../../crates/araphor-analysis/src/notification/reactive.rs).
+   The explicit finite consume API checks the same exhausted, untruncated
+   Query update. Both paths decode finding refs and obligation IDs. One item
+   error does not stop a later item. A job guard error stops delivery. Query
+   owns source subscriptions and deadline wakes; neither consumer adds a clock
+   or polling loop.
+5. [Routing](../../crates/araphor-analysis/src/notification/routing.rs) checks the
    current finding reference and actual route authority.
    [Obligation updates](../../crates/araphor-analysis/src/notification/obligation.rs)
    preserve action identity and monotonic priority and sensitivity.
@@ -1666,7 +1787,7 @@ existing finite Router. Read the owners in this order:
    updates the saved primary and escalation references through an authorized
    current primary. Missing or expired primary approval does not refresh early.
    Escalation metadata can be retained before final send authorization.
-5. [Delivery](../../crates/araphor-analysis/src/notification/delivery.rs) returns
+6. [Delivery](../../crates/araphor-analysis/src/notification/delivery.rs) returns
    early for an ACK of the current finding revision. A stale ACK does not block
    concern refresh. [Attempts](../../crates/araphor-analysis/src/notification/attempt.rs)
    retain the captured finding, route, sequence, and deadline; they check actual
@@ -1680,13 +1801,23 @@ uses these counts and the existing Data context_max_bytes persistence limit.
 Configured excesses still fail. Context decoding keeps identity and type checks;
 removing a default resource ceiling does not remove those guards.
 
+[Control package startup](../../crates/mithril-control/src/service/packages.rs)
+uses the shared Host for retained Notification instances. Graph is not required
+to restore a retained running Notification. Disabled Notification configuration
+creates no job or task. Control grant and route count limits are optional and
+default to None. The finite
 [Control Notification methods](../../crates/mithril-control/src/notification.rs)
-currently expose explicit finite routing and delivery. Automatic subscription
-installation, failed-offer retry and shutdown remain **Not done**. Control,
-policy and retained-attempt ceilings are separate remaining work. Read the
-[bounded result](../plans/araphor-analysis-migration.md#finite-native-notification-retirement)
-for qualification and custody. Complete migration, required net
-reduction, and the final shared Rust procedure remain **Not done**.
+remain available.
+
+A pending attempt is durable before the actual effect checks current job
+authority and lifecycle. Cancellation preserves it. Reopen retains its exact
+subject, route, sequence, and original ACK deadline. A completed accepted
+attempt is not sent again. Notification lifecycle does not create package
+attempts, package progress, or package receipts. Read the
+[bounded result](../plans/araphor-analysis-migration.md#shared-notification-execution-and-capacity-release)
+for the 15 passing Analysis and Control checks and the separate capacity proof.
+Complete source-failure recovery, complete migration, required net reduction,
+and the final shared Rust procedure remain **Not done**.
 
 
 ### Complete native Graph adapter proof
@@ -1769,6 +1900,29 @@ retain their 8 MiB output pool, two-step progress check, healthy SQL work,
 cancelled waiter and complete release assertions. These cases and the final
 shared Rust procedure pass. Read the [failure and source record](../../recovery/araphor-wasm-exchange-lifetime-20261021.json).
 
+### Native version and fault recovery
+
+Read [InstanceHost::update](../../crates/araphor-analysis/src/instance/host/version.rs)
+and [managed version admission](../../crates/araphor-data/src/analysis/managed/version.rs).
+The candidate generation uses the same finite Query subscription and native
+publication path. Data changes the current generation only after successful
+publication. A failed candidate cannot replace the current instance or its
+saved output and state.
+
+The [version cases](../../crates/araphor-analysis/src/instance/tests/version.rs)
+check actual Native execution, Wasm update, rollback, clean reopen, removal,
+and complete historical packets. The [fault case](../../crates/araphor-analysis/src/instance/tests/checkpoint.rs)
+calls the public update owner in a panic child and an abort child. After
+reopen, the current generation can execute. The unfinished candidate remains
+blocked by its pending attempt. The child processes supply test faults only.
+Production Native execution remains in process.
+
+These three cases, workspace library compilation, strict Clippy, and formatting
+pass in the [bounded retirement record](../../recovery/araphor-native-lifecycle-restart-retirement-20261023.json).
+That record does not qualify an unknown pending attempt in the current
+generation or the complete migration. The final shared Rust procedure remains
+**Not done** for the current source.
+
 ### Built-in image installation proof
 
 The [traversal fixture](../../crates/araphor-analysis/src/graph/tests/traversal/fixtures.rs)
@@ -1830,10 +1984,10 @@ the sink object, so it cannot supply this shared state. The
 [native Graph cases](../../crates/araphor-analysis/src/graph/native/tests.rs)
 check repeated changed cuts, exact retries, current denial, and retained memory.
 
-[DiscoveryOwner::process](../../crates/araphor-analysis/src/discovery/mod.rs)
-uses the same finite Query subscription as live execution and joins it before
-return. Its source-scoped profile read checks current authority before and
-after the read. The finite progress case checks unchanged metadata on a no-op,
+[Instance::run](../../crates/araphor-analysis/src/instance/mod.rs) uses the same
+finite Query subscription and publication path as live execution. It joins the
+workers before return. [DiscoveryOwner::profile](../../crates/araphor-analysis/src/discovery/mod.rs)
+checks current authority before and after its source-scoped read. The finite progress case checks unchanged metadata on a no-op,
 cumulative counts after intake, source denial, and released resources.
 
 The [checkpoint record](../../recovery/araphor-renewal-retirement-20261022.json)
@@ -1841,3 +1995,321 @@ names the focused checks and the replaced reference test. The result for this
 bounded change is **Done**. Complete lifecycle replacement, saved input replay,
 automatic Graph publication, Discovery window completion, the required net
 reduction, and the final shared Rust procedure remain **Not done**.
+
+
+### One execution owner for Control and source subscriptions
+
+This route covers the working tree after `manifest254`. Later version, Graph
+feed, and SQL membership changes are under qualification. The complete native
+producer migration remains **Not done**.
+
+[ControlPlane::analysis_packages](../../crates/mithril-control/src/service/packages.rs) Control opens the Analysis owners
+  -> [ControlPackages](../../crates/mithril-control/src/service/packages.rs) Control retains one Query engine and one shared InstanceHost
+  -> [ControlConfig::into_parts](../../crates/mithril-control/src/config.rs) configuration supplies that Host to the existing startup task
+  -> [main](../../crates/mithril-control/src/main.rs) the startup task serves the Host before the source feed
+
+[DiscoveryOwner::feed](../../crates/araphor-analysis/src/discovery/feed.rs) A native source subscription returns membership
+  -> [DiscoveryOwner::derive](../../crates/araphor-analysis/src/discovery/feed.rs) the feed admits a source instance and changes running intent
+  -> [InstanceHost::drive](../../crates/araphor-analysis/src/instance/host.rs) the sole execution collection owns the running instance
+  -> [Instance::subscribe](../../crates/araphor-analysis/src/instance/subscription.rs) Query receives the exact definition, current grant, and saved frontier
+  -> [Publication](../../crates/araphor-analysis/src/instance/sink.rs) the native sink checks typed returns and selects one Data commit
+  -> [AnalysisStore](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits outputs, state, progress, history, and evidence atomically
+
+[InstanceHost::stop](../../crates/araphor-analysis/src/instance/host/lifecycle.rs) A caller stops an instance
+  -> [PauseLease](../../crates/araphor-analysis/src/instance/host/lifecycle.rs) the Host cancels and joins its exact worker before the lifecycle write
+  -> [AnalysisStore::stop_managed](../../crates/araphor-data/src/analysis/managed/lifecycle.rs) Data compares the expected lifecycle and stores stopped intent
+  -> [InstanceHost::drive](../../crates/araphor-analysis/src/instance/host.rs) the same collection removes or replaces the joined worker
+
+```mermaid
+sequenceDiagram
+    participant Control
+    participant Feed as Source subscription
+    participant Host as InstanceHost
+    participant Query
+    participant Data
+    Control->>Host: serve
+    Control->>Feed: run
+    Feed->>Host: admit and start exact source
+    Host->>Query: subscribe with saved frontier
+    Query->>Data: guarded atomic publication
+    Control->>Host: stop service
+    Host->>Query: cancel and join
+```
+
+The Host owns one Data lease and one `FuturesUnordered` member collection.
+The source feed owns membership and its source streams. The feed does not own
+package execution streams. The prepared-instance handoff uses the existing
+pause channel and waits for collection acceptance. Recovery without a retained
+prepared owner uses native admission again. Installation and definition
+admission start no worker. Service shutdown joins workers and preserves running
+intent for restart. An explicit instance stop stores stopped intent.
+
+Read the [Host lifecycle cases](../../crates/araphor-analysis/src/instance/host/tests/lifecycle.rs),
+then the [Control shutdown case](../../crates/mithril-control/src/client_grpc/tests/packages/instance.rs).
+`handoff255` passes all seven Host lifecycle cases. `fixture-owner255` passes
+all 11 fixture cases, including actual source-built native calls. Control, Data,
+and CLI fixture selection checks also pass. The exact [retirement record](../../recovery/araphor-input-fixture-retirement-20261022.json)
+retains the commands, hashes, limits, and source archives. Source-isolation and
+live Profile execution still have failed checks. The final shared Rust
+procedure does not cover the current source.
+
+### Current shared-owner qualification
+
+The later frozen source in `manifest268` passes the focused shared-owner
+checks. `ownership270` passes 12 lifecycle, slot-wait, source-denial, and caller
+abort cases. `discovery-owner272` passes six constructor, context, source
+membership, and finite-publication cases. `query-owner272` passes both native
+clock cases. `joined270` passes saved-state capture after the old worker joins.
+`live270` passes successive Profile publication, idle behavior, and shutdown
+with the existing pool limits and deadlines.
+
+[Shutdown::join](../../crates/araphor-analysis/src/instance/host.rs) retains the
+source owner in a task that drains admission workers after cancellation.
+Both feed-abort cases hold a real admission worker and verify that registration
+or Graph interest stays held until that worker finishes. The feed still owns
+no package execution collection.
+
+[SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) treats an
+explicit metadata read separately from a full source capture. It applies the
+configured per-read byte bound and charges actual retained metadata. It does
+not reserve all free input memory while it waits for Data. This prevents a
+concurrent metadata read from rejecting a small Profile publication. Full
+Snapshot, Page, and Changes reads keep their existing prepayment. The exact
+metadata limit, full-pool rejection, release, recovery, and remaining-capacity
+cases pass. A bound on all transient writer allocations is not established.
+
+[Data lock guards](../../crates/araphor-data/src/analysis/read/locks.rs) release
+the native lock before they notify waiters. A waiter registers for unlock and
+cancellation before it tries the lock. A blocked synchronous caller waits for
+those events or its exact deadline. The native lock still owns exclusion and
+poison state. All 19 Data read and lock cases pass. The Data deadline monitor
+still repeats a native interrupt after expiry; that remaining loop is not
+qualified as an event-driven replacement.
+
+[GraphOwner](../../crates/araphor-analysis/src/graph/feed.rs) derives source
+membership from native Query streams and uses the same Host for Evaluate and
+Expire instances. The scoped Data lease registers interest in future intake.
+It does not remove durable Required progress when the feed stops. Six source
+feed cases pass. [Control Graph startup](../../crates/mithril-control/src/service/packages/graph.rs)
+now has an explicit, independent `graph_enabled` flag, disabled by default.
+Its ordinary SQL program calls installed detector images. That restored
+startup route and the complete Graph notice and expiry cases are still under
+qualification.
+
+The [owner retirement record](../../recovery/araphor-discovery-owner-retirement-20261022.json)
+maps every declaration and method in the removed reference Discovery owner.
+Its original bytes and exact test records are archived. There are 76 remaining
+reference files. Complete retirement and the final shared Rust procedure are
+**Not done**.
+
+### Saved SQL and PRQL result reads
+
+This route covers source state 293. The result is **Done** for exact saved
+root-result reads and local queries. Public lifecycle, latest selection,
+complete retirement, and final shared Rust CI remain **Not done**.
+
+[Instance::manifest](../../crates/araphor-analysis/src/instance/manifest.rs) Native admission produces the root Arrow schema
+  -> [ManagedManifest](../../crates/araphor-data/src/analysis/managed/model.rs) the immutable generation retains that schema with its call declarations
+  -> [AnalysisStore::prepare_managed](../../crates/araphor-data/src/analysis/managed/commit.rs) publication checks the schema before it writes the root packet
+
+[Control instance route](../../crates/mithril-control/src/client_grpc/packages.rs) An Inspect caller supplies an exact saved result ID
+  -> [Instance::inspect](../../crates/araphor-analysis/src/instance/read.rs) Analysis checks fresh Inspect authority
+  -> [AnalysisStore::managed_output](../../crates/araphor-data/src/analysis/managed/read.rs) Data selects a package-call result or a selected root result
+  -> [AnalysisStore::validate_selected_header](../../crates/araphor-data/src/analysis/managed/selected.rs) Data checks the saved attempt, receipt, generation, scope, dependencies, and call bindings
+  -> [AnalysisStore::managed_output](../../crates/araphor-data/src/analysis/managed/read.rs) Data checks the captured selection before it loads the selected Arrow payload
+  -> [AnalysisStore::decode_selected_record](../../crates/araphor-data/src/analysis/managed/selected.rs) Data checks the decoded row count and exact saved schema
+  -> [Instance::read_output](../../crates/araphor-analysis/src/instance/read.rs) Analysis returns the original packet through the existing Output or Result reply
+  -> [Instance::inspect](../../crates/araphor-analysis/src/instance/read.rs) Analysis checks current Inspect authority before disclosure
+
+[Instance::query_result](../../crates/araphor-analysis/src/instance/read.rs) A caller queries the exact saved result
+  -> [AnalysisStore::managed_output](../../crates/araphor-data/src/analysis/managed/read.rs) Data supplies the same guarded read and decoded arrays
+  -> [Instance::query_result](../../crates/araphor-analysis/src/instance/read.rs) Analysis releases the unused wire packet before query execution
+  -> [Session::query_local](../../crates/araphor-query/src/execution/local.rs) Query uses the decoded datasets as native local tables
+
+```mermaid
+sequenceDiagram
+    participant Control
+    participant Analysis
+    participant Data
+    participant Query
+    Control->>Analysis: Inspect exact saved result
+    Analysis->>Data: managed_output
+    Data->>Data: Check bindings and scope before IPC
+    Data-->>Analysis: Decoded arrays and original packet
+    opt Local query
+        Analysis->>Query: query_local with decoded arrays
+        Query-->>Analysis: Native SQL result
+    end
+    Analysis->>Analysis: Final Inspect check
+    Analysis-->>Control: Existing binary reply
+```
+
+ManagedOutput is an internal typed result. It adds no wire variant or output
+store. Each Data result read uses one reader transaction and one Arrow
+Interprocess Communication (IPC) decode. The existing outer Instance metadata
+lookup remains separate. A read does not execute the producer or require its
+current Run permission. Call results retain their complete metadata and model
+limits. Selected results use the existing Query configuration and native SQL.
+
+The shared selected-header validator also serves recovery. A result reference
+must match its stored call ID, attempt, instance, revision, and saved manifest
+declaration. Membership in the set of declared call IDs is insufficient.
+The [swapped-call check](../../crates/araphor-data/src/analysis/managed/tests/output.rs)
+exchanges two valid IDs without changing dependency references. The reader
+rejects that corruption before it decodes selected IPC.
+
+The retained manifest now requires selected_schema. No decoder for an older
+manifest format is added. Native storage keeps dictionary, map, zero-column,
+and scalar Arrow checks. The public local-query route keeps its existing SDK
+type-validation boundary.
+
+Read the [Data output checks](../../crates/araphor-data/src/analysis/managed/tests/output.rs),
+the [Analysis selected-result checks](../../crates/araphor-analysis/src/instance/tests/history/selected.rs),
+and the [Control binary route check](../../crates/mithril-control/src/client_grpc/tests/packages/instance.rs).
+The source-state-293 groups pass 95 Data, 22 Analysis, nine Query, and seven
+Control checks. They include actual SQL, empty SQL, PRQL compilation, historical
+schemas, scope before corrupt payload, final disclosure, and native replay.
+These focused results do not replace the final shared Rust procedure.
+
+
+### Earlier verification limit
+
+The earlier unchanged-source run is `final-ci324`. Formatting, workspace
+checking, and strict Clippy pass. The root agent interrupts the test stage
+before the preparation contract decision. Full Rust CI remains **Not done**.
+`preflight324` separately confirms the input-error precedence failure and the
+passing compile-before-Query-timeout contract. The implementation and tests
+for that conflict remain unchanged. The 56 remaining reference files stay intact.
+Running execution must continue to derive from Query subscription streams.
+
+
+## Package contract without quotas
+
+The 2026-10-23 working tree removes package-specific size and count policies.
+Current focused qualification passes. Read the owners in execution order:
+
+[Model](../../crates/araphor-analysis-sdk/src/model.rs) defines the typed package export.
+  -> [EvaluationContext](../../crates/araphor-analysis-sdk/src/evaluation.rs) carries identity, time, and seed.
+  -> [PackageExec](../../crates/araphor-query/src/definition/physical.rs) consumes native Arrow streams and retains shared buffer leases.
+  -> [SQL children](../../crates/araphor-query/src/definition/physical/sql.rs) use the native physical execution plans.
+  -> [Runtime](../../crates/araphor-package-runtime/src/lib.rs) invokes Wasm or the in-process native accessor.
+  -> [CheckedEvaluation](../../crates/araphor-analysis-sdk/src/validation.rs) validates schema, state, and row references.
+  -> [Data](../../crates/araphor-data/src/analysis/managed/commit.rs) retains atomic publication authority.
+
+The SDK native producer exports `araphor_analysis_get_api_v1`. The C header
+and Rust context have the same current layout. The Wasm interface stays
+`araphor:analysis@1.0.0`. Development changes do not increase version numbers.
+Rebuild native and Wasm artifacts after the context fields change.
+The host copy allowance describes an existing shared memory reservation.
+The allowance is not a field in package metadata or an invocation policy.
+
+The local SQL tests check native `LIMIT` selection and unrestricted batches.
+Schema, catalog exclusion, original indices, empty metadata, cancellation,
+state, provenance, and final buffer release checks remain. No polling task or
+new execution owner is added. All 143 focused checks, strict Clippy, formatting,
+and library test compilation pass. The
+[qualification record](../../recovery/araphor-package-quota-removal-20261023.json)
+contains commands, source identities, binary hashes, and exact results. The user
+requires relevant tests only. The full workspace test suite is not run.
+
+
+## Native replacement for preparation and installed execution
+
+The 2026-10-23 working tree retires the old preparation and installed execution
+owners after focused qualification. Read the current owners in this order:
+
+[Instance::run](../../crates/araphor-analysis/src/instance/mod.rs) requests one managed step.
+  -> [Session::run_managed](../../crates/araphor-query/src/execution/admission.rs) opens the same Query subscription used by continuous execution.
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) captures the native source view and saved state.
+  -> [PackageExec](../../crates/araphor-query/src/definition/physical.rs) consumes native Arrow children and checks the complete return.
+  -> [Publication](../../crates/araphor-analysis/src/instance/sink.rs) checks current authority and returned call identity.
+  -> [Data](../../crates/araphor-data/src/analysis/managed/commit.rs) commits outputs, state, and progress together.
+
+[The restart test](../../crates/araphor-analysis/src/instance/tests/restart.rs)
+keeps shared input capacity occupied through a relevant source change. It
+checks idle reuse, the typed capacity failure, unchanged saved state, joined
+cancellation, and successful restart after release.
+[The guest tests](../../crates/araphor-query/src/definition/tests/guest.rs)
+check actual invocation bytes before guest execution and shared output
+reservation before transfer. The
+[physical exchange](../../crates/araphor-query/src/definition/physical/guest.rs)
+uses the existing engine output setting; it does not restore SDK quotas.
+[The slot tests](../../crates/araphor-analysis/src/instance/subscription/tests/capacity.rs)
+keep the original captured offer while another guest occupies its execution
+slot. Unrelated SQL can complete, and cancellation joins the original worker.
+
+[managed_subscription](../../crates/araphor-analysis/src/instance/tests.rs)
+checks actual Wasm and Native results through public inspection. A source
+addition makes the retained result noncurrent before the next stream step.
+The complete packet, prior receipt, progress, and Data revision stay unchanged.
+The source hashes, exact selectors, retained failures, and removal archive are
+in the [qualification record](../../recovery/araphor-preparation-execution-retirement-20261023.json).
+The 61 focused checks, formatting, strict Clippy, and test compilation pass.
+The full workspace suite is not run. Complete retirement remains **Not done**.
+
+
+## Shared lifecycle and retained-output qualification
+
+Read [Host request dispatch](../../crates/araphor-analysis/src/instance/host/request.rs),
+then [Host lifecycle](../../crates/araphor-analysis/src/instance/host/lifecycle.rs),
+then [Instance publication](../../crates/araphor-analysis/src/instance/sink.rs).
+The caller grant authorizes the requested control operation. The saved execution
+grant remains the execution identity until explicit stopped renewal. Data checks
+both authorities before publication.
+
+[Public control tests](../../crates/araphor-analysis/src/instance/tests/control.rs)
+check shared control and caller revocation.
+[Renewal tests](../../crates/araphor-analysis/src/instance/tests/renewal.rs) check
+exact pins and canonical image bytes, saved state, prior output, and restart.
+Cold Host renewal uses the common admission constructor; it does not reuse an
+allocation owned by a separate Instance.
+
+The [qualification record](../../recovery/araphor-package-tests-retirement-20261023.json)
+contains the old-to-current assertion map, 83 passing selectors, and verified
+archive hashes for eleven removed reference test files.
+
+For current capture recovery, read [SourceRecovery::changed](../../crates/araphor-query/src/stream/recovery.rs)
+after the Host joins the failed subscription. It keeps attached Query Progress
+deadlines and scoped dependency checks. The reduction removes 24 net nonblank
+production lines, and all five existing recovery checks pass on source state
+350. The old deadline tests first capture successfully. They do not require a
+deadline after a first failed capture. The
+[latest retirement record](../../recovery/araphor-qualified-leaves-retirement-20261023.json)
+records 189 retired files and 19 unchanged reference files, with the archive
+hash and exact proof. Pre-admission stale-source recovery, Graph feed
+qualification, and native Discovery SQL and managed-window qualification
+remain **Not done**.
+
+
+## Known rollback after joined execution
+
+Read [Instance::execute_step](../../crates/araphor-analysis/src/instance/mod.rs)
+and [Subscription::cancel_and_join](../../crates/araphor-analysis/src/instance/subscription.rs).
+Both paths use [Data::finish_managed](../../crates/araphor-data/src/analysis/managed/terminal.rs)
+after Query joins the native work. Data checks the original live claim, capture,
+and registration before it saves a terminal result. A loaded pending claim
+cannot finish that execution. The removed `Step.publishing` flag does not supply
+a second publication-state decision.
+
+The [Data writer](../../crates/araphor-data/src/analysis/connection.rs) rejects
+writes after an uncertain commit. Existing recovery must check durable state
+before writes resume. Terminal cleanup does not replace a saved success receipt
+or infer rollback from an uncertain commit.
+
+[Finite rollback](../../crates/araphor-analysis/src/instance/tests/finite.rs)
+checks terminal `Failed(Invalid)`, no selected output, zero progress, exact
+request rejection after termination, and a new successful request on the same
+Instance. [Pending-claim checks](../../crates/araphor-analysis/src/instance/host/tests.rs)
+keep the cancelled claim unresolved. [Follow checks](../../crates/araphor-analysis/src/instance/subscription/tests.rs)
+retain failed-writer cleanup and the saved receipt after a notice error.
+[Data claim checks](../../crates/araphor-data/src/analysis/managed/tests/terminal.rs),
+[commit checks](../../crates/araphor-data/src/analysis/connection.rs), and
+[crash checks](../../crates/araphor-data/src/analysis/managed/tests.rs) retain the
+existing uncertainty and all-or-none commit guarantees.
+
+The four Analysis checks and three Data checks pass on source state 359.
+The [bounded result](../plans/araphor-analysis-migration.md#joined-cleanup-after-known-rollback)
+records the commands and evidence locations. Discovery historical repair still
+fails later with `Elapsed`; Graph failed-feed recovery still fails at cursor
+258. No reference file retires. The totals stay at 189 retired and 19 unchanged
+files. These results do not establish complete retirement or overall reduction.

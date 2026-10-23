@@ -1,0 +1,452 @@
+{
+  "created_at": "2026-10-23T01:07:41.639550+00:00",
+  "head": "fa1291e744dea0f10ca4a3e10b27741a2bdbf47b",
+  "result": "Done for the one complete prepared SQL test file. Complete retirement and final Rust CI are Not done.",
+  "original_archive": {
+    "path": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+    "sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420"
+  },
+  "checkpoint": {
+    "archive": "recovery/araphor-retirement-checkpoint-20261023T010642Z.tar.gz",
+    "sha256": "24d0dd7c698c2364200616035cfac52fbc8fb372403e9b2a96a31df7cdb0c745",
+    "remaining_back_files": 64,
+    "source_files": 1918
+  },
+  "file": {
+    "path": "crates/araphor-analysis_back/src/package/installed/read/tests/prepared.rs",
+    "sha256": "541646c9b356060f1f8cf49d8e7b9c796f5314bb817794ea789e6ad010aadf9a",
+    "physical_lines": 221,
+    "production_nonblank": 0
+  },
+  "proof": {
+    "manifest309": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "started_at": "2026-10-23T00:47:38.021964+00:00",
+      "elapsed_seconds": 441.27869903400097,
+      "exit_code": 0,
+      "log_sha256": "42f05dc76334773bda9f60128caf10aa2110c476d630da13236affe897734000",
+      "source_unchanged": true,
+      "record_sha256": "97fd8953df69e647e19bf28b32844d2d16fa8cd617a633e5baf834d7a684dbc8"
+    },
+    "prepared-query309": {
+      "command": [
+        "target/debug/deps/araphor_query-44e57ad344e0eb34",
+        "definition::tests::execution::native_caps_keep_targets",
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary",
+        "definition::tests::execution::sql_body_scope",
+        "definition::tests::execution::supplied::supplied_inputs_reject_shape",
+        "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+        "definition::tests::native_package_call_rejections",
+        "definition::tests::retained::retained_images_use_plans",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-23T00:59:24.629226+00:00",
+      "elapsed_seconds": 13.82798179800011,
+      "exit_code": 0,
+      "log_sha256": "032a8a7564d09a6aa68a65dd3514da39288d48f180690457e0644745b2d4a3da",
+      "source_unchanged": true,
+      "record_sha256": "acb74f98f004e60b5dac9e4fa12c84924cc4572fc28aa35acf75d8e6f684a193",
+      "binary_sha256": "9285e163d0882f49f22339cce84f434e11c6590e6c54b27dc0f85f62ac79ba07"
+    },
+    "runtime-package309": {
+      "command": [
+        "python3",
+        "-c",
+        "import subprocess,sys; a=subprocess.run([\"target/debug/deps/araphor_package_runtime-d531032642d16c85\",\"native::tests::disabled_limits_allow_execution\",\"--exact\"]); b=subprocess.run([\"target/debug/deps/araphor_package-ee9b41fecce12d0f\",\"bundle::encoding_tests::bundle_writer_digest_matches_bytes\",\"--exact\"]); sys.exit(a.returncode or b.returncode)"
+      ],
+      "started_at": "2026-10-23T01:00:14.641854+00:00",
+      "elapsed_seconds": 0.03942603999894345,
+      "exit_code": 0,
+      "log_sha256": "9cd9d26eb2076b81af722eb5c9203822cb4e5427008f2b531a53b21835e47f5d",
+      "source_unchanged": true,
+      "record_sha256": "137a5792281783ec3cf32fd1da2f5a38cb796648f9ce4770fdcf967ae563286b"
+    },
+    "image309": {
+      "command": [
+        "target/debug/deps/araphor_data-6c4e5d902cf7ca6f",
+        "analysis::packages::tests::image::package_image_retains_closure",
+        "analysis::packages::tests::image::package_image_install_is_atomic",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-23T01:05:38.048489+00:00",
+      "elapsed_seconds": 4.613758218998555,
+      "exit_code": 0,
+      "log_sha256": "172cba707a46d7dcef66d84e3a776ad1b21f2ba64482a7e61f8dc042139871b9",
+      "source_unchanged": true,
+      "record_sha256": "2e925eda19731de76e4ef42f30044d7337fc23b4c0552f4ea8b5007a4c638f9b",
+      "binary_sha256": "b6310d0591a6e0c1329c8452d246257da43cca247f41d4e4de0c12de1a1b1d99"
+    }
+  },
+  "method_and_assertion_map": {
+    "result": "Conditional whole-test-file candidate. Keep until the two current Data selectors pass and root records their exact source/artifact proof.",
+    "scope": "One Back test file only. No production file retirement, no production reduction credit, no live edit/deletion and no Cargo/test execution by this audit.",
+    "old_file": {
+      "path": "crates/araphor-analysis_back/src/package/installed/read/tests/prepared.rs",
+      "baseline": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+      "original_sha256": "541646c9b356060f1f8cf49d8e7b9c796f5314bb817794ea789e6ad010aadf9a",
+      "current_sha256": "541646c9b356060f1f8cf49d8e7b9c796f5314bb817794ea789e6ad010aadf9a",
+      "baseline_match": true,
+      "physical_lines": 221,
+      "test_methods": 5,
+      "fixture_helpers": 1,
+      "production_methods": 0
+    },
+    "backup": {
+      "original_archive_record": {
+        "path": "recovery/araphor-analysis-20261019-24zu3vty.tar.gz",
+        "sha256": "991f6bac9cf243523a415f308515b124a14c72eeb28da3be8ca5f32dcfcda420"
+      },
+      "checkpoint_record": {
+        "archive": "recovery/araphor-retirement-checkpoint-20261022T233130Z.tar.gz",
+        "sha256": "e5843149214c10feb03985f21d11e99cd850e3a86905755ff9bf3e7f5d5dba11",
+        "source_files": 1923,
+        "remaining_back_files": 71
+      },
+      "note": "Archive hashes are copied from the existing retirement record. The old leaf was independently compared byte-for-byte with the exact Git baseline."
+    },
+    "fixture_helper": {
+      "name": "sql_bundle",
+      "old_line": 5,
+      "destination": "supplied_sql_keeps_shapes builds a Provided UInt64 declared-input model. The corrected codec test uses a Provided named table source. This helper owns no additional production contract."
+    },
+    "method_assertions": [
+      {
+        "name": "prepared_sql_oci",
+        "old_line": 20,
+        "assertions": [
+          {
+            "old_assertion": "The Provided SQL bundle validates.",
+            "current_selector": "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+            "current_source": "crates/araphor-package/src/bundle.rs:278",
+            "translation_or_limit": "Provided OCI decoding calls bundle.validate at oci.rs:203. The correction uses InputSource::Table(Named), not an invalid Provided Query source."
+          },
+          {
+            "old_assertion": "The Provided count artifact reports prepared=true.",
+            "current_selector": "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+            "current_source": "crates/araphor-package/src/bundle.rs:255"
+          },
+          {
+            "old_assertion": "OCI roundtrip preserves root.",
+            "current_selector": "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+            "current_source": "crates/araphor-package/src/bundle.rs:287"
+          },
+          {
+            "old_assertion": "OCI roundtrip preserves complete artifacts and exact SQL text.",
+            "current_selector": "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+            "current_source": "crates/araphor-package/src/bundle.rs:288",
+            "translation_or_limit": "Full artifact equality includes the SQL outputs map and input mode. SQL Provided and Resolved cases are both tested."
+          },
+          {
+            "old_assertion": "OCI roundtrip preserves digest.",
+            "current_selector": "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+            "current_source": "crates/araphor-package/src/bundle.rs:289"
+          },
+          {
+            "old_assertion": "Changing only output SQL preserves root.",
+            "current_selector": "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+            "current_source": "crates/araphor-package/src/bundle.rs:250"
+          },
+          {
+            "old_assertion": "Changing only output SQL changes the bundle digest.",
+            "current_selector": "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+            "current_source": "crates/araphor-package/src/bundle.rs:252",
+            "translation_or_limit": "The current test also requires unchanged descriptor. The original mutation targets output SQL, not an input Query string."
+          },
+          {
+            "old_assertion": "A Resolved model reports prepared=false.",
+            "current_selector": "bundle::encoding_tests::bundle_writer_digest_matches_bytes",
+            "current_source": "crates/araphor-package/src/bundle.rs:253"
+          }
+        ]
+      },
+      {
+        "name": "prepared_requires_target",
+        "old_line": 53,
+        "assertions": [
+          {
+            "old_assertion": "Unqualified Native implementation selection rejects.",
+            "current_selector": "definition::tests::native_package_call_rejections",
+            "current_source": "crates/araphor-query/src/definition/tests.rs:363",
+            "translation_or_limit": "Actual selected native call requires typed Data Package Unsupported/model target through Query transparent error handling."
+          },
+          {
+            "old_assertion": "Unqualified Native prepared=false.",
+            "current_selector": "definition::tests::native_package_call_rejections",
+            "current_source": "crates/araphor-query/src/definition/tests.rs:366"
+          },
+          {
+            "old_assertion": "Python implementation selection rejects.",
+            "current_selector": "definition::tests::native_package_call_rejections",
+            "current_source": "crates/araphor-query/src/definition/tests.rs:363",
+            "translation_or_limit": "The same actual selected-call loop covers Python, with exact typed Unsupported/model target."
+          },
+          {
+            "old_assertion": "Python prepared=false.",
+            "current_selector": "definition::tests::native_package_call_rejections",
+            "current_source": "crates/araphor-query/src/definition/tests.rs:366"
+          },
+          {
+            "old_assertion": "Duplicate supported SQL/Wasm implementation selection rejects.",
+            "current_selector": "definition::tests::native_package_call_rejections",
+            "current_source": "crates/araphor-query/src/definition/tests.rs:413",
+            "translation_or_limit": "Direct implementation requires Invalid/plugin execution type; failed Data image admission leaves metadata unchanged."
+          },
+          {
+            "old_assertion": "Duplicate supported SQL/Wasm prepared=false.",
+            "current_selector": "definition::tests::native_package_call_rejections",
+            "current_source": "crates/araphor-query/src/definition/tests.rs:410"
+          },
+          {
+            "old_assertion": "An absent export reports prepared=false.",
+            "current_selector": "definition::tests::native_package_call_rejections",
+            "current_source": "crates/araphor-query/src/definition/tests.rs:411"
+          }
+        ]
+      },
+      {
+        "name": "prepared_sql_inputs",
+        "old_line": 84,
+        "assertions": [
+          {
+            "old_assertion": "Old Install creates an active row with no result and checkpoint revision zero.",
+            "current_selector": "analysis::packages::tests::image::package_image_retains_closure",
+            "current_source": "crates/araphor-data/src/analysis/packages/tests/image.rs:96",
+            "translation_or_limit": "Approved model translation: image installation is inert. Current proof requires zero activation rows and zero package results. It does not preserve active=true or create a replacement implicit Instance."
+          },
+          {
+            "old_assertion": "Snapshot refs contain one exact root with SQL target.",
+            "current_selector": "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+            "current_source": "crates/araphor-query/src/definition/tests/execution/supplied.rs:58",
+            "translation_or_limit": "Native admitted call identity replaces old activation/snapshot refs. It requires exactly one call, exact package root/revision, export, output and full descriptor; the fixture uses an exact Sql implementation."
+          },
+          {
+            "old_assertion": "Retained code keeps exact image and descriptor after initial admission.",
+            "current_selector": "definition::tests::retained::retained_images_use_plans",
+            "current_source": "crates/araphor-query/src/definition/tests/retained.rs:30",
+            "translation_or_limit": "The current test compares exact plan and call image/package/export/output/descriptor/arguments, executes from retained code after uninstall and checks exact replay. Auxiliary descriptor coverage is in selected_descriptor_keeps_auxiliary."
+          },
+          {
+            "old_assertion": "Chunk cases [2,3]+[5], [11], no batches and one empty batch produce 10,11,0,0.",
+            "current_selector": "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+            "current_source": "crates/araphor-query/src/definition/tests/execution/supplied.rs:35"
+          },
+          {
+            "old_assertion": "Each execution produces exactly one scalar row.",
+            "current_selector": "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+            "current_source": "crates/araphor-query/src/definition/tests/execution/supplied.rs:84",
+            "translation_or_limit": "Flattened values equality [expected] requires one value in the declared single-column output."
+          },
+          {
+            "old_assertion": "Result revision, descriptor and SQL implementation remain exact.",
+            "current_selector": "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+            "current_source": "crates/araphor-query/src/definition/tests/execution/supplied.rs:61",
+            "translation_or_limit": "Exact package root includes revision; exact admitted descriptor and origin bind the Sql implementation. The new API has no InstalledEvaluation.target string."
+          },
+          {
+            "old_assertion": "Exactly one declared dataset is selected with its declared name.",
+            "current_selector": "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+            "current_source": "crates/araphor-query/src/definition/tests/execution/supplied.rs:90",
+            "translation_or_limit": "The PackageCall selects result; CallResult belongs_to binds it to that selected output. Output shape and result dataset name are explicit."
+          },
+          {
+            "old_assertion": "Execution leaves the old activation unchanged.",
+            "current_selector": "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+            "current_source": "crates/araphor-query/src/definition/tests/execution/supplied.rs:99",
+            "translation_or_limit": "Approved model translation: inert image metadata replaces implicit activation state. Every finite native call leaves Data meta unchanged; captured durable source/witness sets are empty."
+          }
+        ]
+      },
+      {
+        "name": "prepared_sql_schema",
+        "old_line": 158,
+        "assertions": [
+          {
+            "old_assertion": "Wrong Utf8 input rejects with a contract error.",
+            "current_selector": "definition::tests::execution::supplied::supplied_inputs_reject_shape",
+            "current_source": "crates/araphor-query/src/definition/tests/execution/supplied.rs:148",
+            "translation_or_limit": "Current native assertion is Failure::InvalidQuery, not the removed AnalysisContract wrapper. Target-independent exact schema/row checking is in inputs/receipt.rs:86; the test executes the current native boundary with a Wasm target."
+          },
+          {
+            "old_assertion": "Missing declared input rejects with a contract error.",
+            "current_selector": "definition::tests::execution::supplied::supplied_inputs_reject_shape",
+            "current_source": "crates/araphor-query/src/definition/tests/execution/supplied.rs:166",
+            "translation_or_limit": "PreparedDefinition::check_invocation and Inputs::check_supplied reject scope/count before execution, independent of target. The test requires InvalidQuery and no guest entry."
+          },
+          {
+            "old_assertion": "An extra undeclared input rejects with a contract error.",
+            "current_selector": "definition::tests::execution::supplied::supplied_inputs_reject_shape",
+            "current_source": "crates/araphor-query/src/definition/tests/execution/supplied.rs:166",
+            "translation_or_limit": "The same three-case loop checks missing and extra inputs, no guest entry, unchanged Data/input memory and released capacities."
+          },
+          {
+            "old_assertion": "A subsequent valid input produces one row.",
+            "current_selector": "definition::tests::execution::supplied::supplied_inputs_reject_shape",
+            "current_source": "crates/araphor-query/src/definition/tests/execution/supplied.rs:201",
+            "translation_or_limit": "Values must equal [7]; the native call must belong to the exact prepared call and retain exact supplied name/batches/revision/coverage."
+          }
+        ]
+      },
+      {
+        "name": "prepared_sql_sources",
+        "old_line": 200,
+        "assertions": [
+          {
+            "old_assertion": "A selected SQL model cannot read events outside declared inputs.",
+            "current_selector": "definition::tests::execution::sql_body_scope",
+            "current_source": "crates/araphor-query/src/definition/tests/execution.rs:1266",
+            "translation_or_limit": "The current test directly checks native table-not-found Plan errors for events and caller_rows in output/checkpoint/evidence/reason bodies. It separately proves a legal declared events input can execute."
+          },
+          {
+            "old_assertion": "Source-bypassing SQL rejection creates no active state.",
+            "current_selector": "analysis::packages::tests::image::package_image_retains_closure",
+            "current_source": "crates/araphor-data/src/analysis/packages/tests/image.rs:96",
+            "translation_or_limit": "Approved model translation: image installation creates no activation or result. Selected SQL body rejection occurs in read-only native definition preparation at definition.rs:259-480, not at the old automatic Install execution point. No instance admission follows a rejected PreparedDefinition."
+          }
+        ]
+      }
+    ],
+    "required_selectors": {
+      "araphor-package": [
+        "bundle::encoding_tests::bundle_writer_digest_matches_bytes"
+      ],
+      "araphor-query": [
+        "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary",
+        "definition::tests::execution::sql_body_scope",
+        "definition::tests::execution::supplied::supplied_inputs_reject_shape",
+        "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+        "definition::tests::native_package_call_rejections",
+        "definition::tests::retained::retained_images_use_plans"
+      ],
+      "araphor-data": [
+        "analysis::packages::tests::image::package_image_retains_closure",
+        "analysis::packages::tests::image::package_image_install_is_atomic"
+      ]
+    },
+    "observed_current_proof": [
+      {
+        "record": "/tmp/araphor-retirement-resume-20261022/package-first308.json",
+        "record_sha256": "59c897d5c8e262c76dbffa827671352d57ee63e41fc7081468fd9d149f59567f",
+        "log": "/tmp/araphor-retirement-resume-20261022/package-first308.log",
+        "log_sha256": "053e8f84c9911b632b880ef3a8524c76c13657b478b45a3fb2ad99cdcb65be30",
+        "exit_code": 0,
+        "binary_sha256": "d9778d0a20c9dd31cb2549c0afcf86b2fff91af9a6fe7162c6d1bd50fa44230e",
+        "recorded_source_unchanged": true,
+        "current_source_delta": [],
+        "source_entries_compared": 1912,
+        "required_passes_observed_in_log": [
+          "bundle::encoding_tests::bundle_writer_digest_matches_bytes"
+        ],
+        "note": "These commands were run by root. This subagent only read and verified their records, log hashes and source identity."
+      },
+      {
+        "record": "/tmp/araphor-retirement-resume-20261022/prepared-query309.json",
+        "record_sha256": "acb74f98f004e60b5dac9e4fa12c84924cc4572fc28aa35acf75d8e6f684a193",
+        "log": "/tmp/araphor-retirement-resume-20261022/prepared-query309.log",
+        "log_sha256": "032a8a7564d09a6aa68a65dd3514da39288d48f180690457e0644745b2d4a3da",
+        "exit_code": 0,
+        "binary_sha256": "9285e163d0882f49f22339cce84f434e11c6590e6c54b27dc0f85f62ac79ba07",
+        "recorded_source_unchanged": true,
+        "current_source_delta": [],
+        "source_entries_compared": 1912,
+        "required_passes_observed_in_log": [
+          "definition::tests::execution::descriptors::selected_descriptor_keeps_auxiliary",
+          "definition::tests::execution::sql_body_scope",
+          "definition::tests::execution::supplied::supplied_inputs_reject_shape",
+          "definition::tests::execution::supplied::supplied_sql_keeps_shapes",
+          "definition::tests::native_package_call_rejections",
+          "definition::tests::retained::retained_images_use_plans"
+        ],
+        "note": "These commands were run by root. This subagent only read and verified their records, log hashes and source identity."
+      }
+    ],
+    "remaining_qualification": [
+      {
+        "package": "araphor-data",
+        "selector": "analysis::packages::tests::image::package_image_retains_closure",
+        "required": "Pass on the current frozen source; record command, executable hash, full source hashes and log. No current Data pass is claimed by this audit."
+      },
+      {
+        "package": "araphor-data",
+        "selector": "analysis::packages::tests::image::package_image_install_is_atomic",
+        "required": "Pass on the current frozen source; record command, executable hash, full source hashes and log. No current Data pass is claimed by this audit."
+      }
+    ],
+    "old_proof_limits": [
+      "The earlier bundle::tests selector in the first packet is stale. The real current path is bundle::encoding_tests::bundle_writer_digest_matches_bytes.",
+      "package-first307 failed before the Provided source-mode correction and is not proof.",
+      "prepared-query307 predates changed Query/Data/Runtime source and is superseded by prepared-query309.",
+      "data-notification296 is historical evidence only; current Data dependency/retention/managed source changed."
+    ],
+    "reviewed_packets": [
+      {
+        "packet": "/tmp/araphor-retirement-resume-20261022/maps/prepared-leaf-proof/packet.json",
+        "packet_sha256": "7fab36074f7678130d7187ebc4566b9357502b4cffc15a7a621700db6c656e98",
+        "patch_sha256": "3c6cd9129c9efd07126923a606038fceca0cf4f68decb8b505127e6648f6a0da",
+        "source_match": "Query tests match the proof packet. Current bundle.rs matches the later source-mode correction; that correction supersedes the first bundle draft."
+      },
+      {
+        "packet": "/tmp/araphor-retirement-resume-20261022/maps/prepared-source-mode-correction/packet.json",
+        "packet_sha256": "8ca07f1edff5bae2bf319090e8b18b9793d3351dab80fd196ba4241b3386a5e3",
+        "patch_sha256": "984c8adce1e3700fbcb9c4aff8c02189def1142f5d502ebeb512beeeb42e3885",
+        "source_match": "Query tests match the proof packet. Current bundle.rs matches the later source-mode correction; that correction supersedes the first bundle draft."
+      }
+    ],
+    "prepared_api": "Keep PackageArtifactV1::prepared. Data activation.rs:87 is a production caller. This test-file retirement does not remove or redefine that API.",
+    "independence": "These finite Provided-shape, selected-target, exact image and native body-isolation assertions do not require a fixed-window or reactive recovery claim. Input-before-cold-compilation is not asserted by this old leaf; keep installed.rs/execution.rs and their separate failing qualification gate.",
+    "retirement_checklist": [
+      "Preserve the exact 541646... original in the existing recovery set and keep the method/assertion map.",
+      "Verify current source hashes still match the two observed passing Package/Query records and the Data proof source.",
+      "Require both exact Data selectors, with nonzero selected test counts and zero failures.",
+      "Remove only the complete prepared.rs candidate through the existing root retirement procedure. Do not infer eligibility for its production parent, sibling mixed tests or another Back leaf.",
+      "Keep retained Back source bytes unchanged. Its parent tests.rs still declares mod prepared at line 17, as it already declares other retired leaves. Do not silently edit the parent to remove this declaration.",
+      "Record test-only file/line counts and the resulting inventory. From the reported 144/208 starting state, this single file would yield 145 retired and 63 remaining. Claim zero production Rust reduction."
+    ],
+    "current_source_sha256": {
+      "crates/araphor-analysis_back/src/package/installed/read/tests/prepared.rs": "541646c9b356060f1f8cf49d8e7b9c796f5314bb817794ea789e6ad010aadf9a",
+      "crates/araphor-analysis_back/src/package/installed/read/tests.rs": "e4b3058e05abc54f55aa04ab9941c6ec7d8e6427d682a7d898d83d6074538812",
+      "crates/araphor-package/src/bundle.rs": "c5babc02a65d5eceee89e0baaa52426b636b4fbab3e15aba9b07012341094512",
+      "crates/araphor-package/src/oci.rs": "e3f024df8f7525557857d9c2dc91796e97c335051e572497ed0c6652c21b5ef7",
+      "crates/araphor-package/src/admission.rs": "fa3d230cccf91c2465fbc6d1e566a1ee204fdf9e285eb79d0ab2ae424019fc5b",
+      "crates/araphor-analysis-sdk/src/model.rs": "68bc10f0fa7202f37155be81d43b40232703ce823b66bda45d0ed1e53ac74605",
+      "crates/araphor-query/src/definition.rs": "d934d2d1015b943d95e0fa22b09adb8d8709a5d3f126eff414dc2953d0a35d5b",
+      "crates/araphor-query/src/definition/package.rs": "c5d0c48d782f1c0a27c5efa80d0c41551fd3863e580884b8cff363c30a3a8253",
+      "crates/araphor-query/src/definition/physical.rs": "f256eecd27842e389903ad8c7ec2f3f0cdb7c4971278732ab45f8b4abb216c0a",
+      "crates/araphor-query/src/definition/physical/sql.rs": "bbca1de35189cc31c6f47d93b6eb49c467c684c310d7fdbfc64647536b175858",
+      "crates/araphor-query/src/inputs/receipt.rs": "ceb3ea1cfecf0dae67f346f07508627fe09f1726309aba7d675e070709ee5e25",
+      "crates/araphor-query/src/definition/tests.rs": "fd8e6a5b14bcc0f908321e0aeb5f224cafe3630fe57e7173dcb2e7cea788044b",
+      "crates/araphor-query/src/definition/tests/execution.rs": "5965c8fe589fff2f34f5d9ac02ea553801defebaa1c4b8325b3525830f5f124c",
+      "crates/araphor-query/src/definition/tests/execution/supplied.rs": "631e2685a6ce582f7422c0e0639d6b5f5cf11d587c3da7e8aed76a1d0c6e0bcd",
+      "crates/araphor-query/src/definition/tests/execution/descriptors.rs": "d9366e67e2469d1076c8afa9efd270e666c2a8b60da8edf49464f5ca0181b5dd",
+      "crates/araphor-query/src/definition/tests/retained.rs": "d3a7143191c3e3a11ef8453110e6eff7eddd067839f4eb7c586892773933713c",
+      "crates/araphor-data/src/analysis/packages/tests/image.rs": "4b326544f7a7862ef404d3e55b1a45bb4fa3effe4b10f8e08b5087092bb09eaa",
+      "crates/araphor-data/src/analysis/packages/image.rs": "3a3a9e3b4c13cebdce59aa79e74c018cdebc6d78f86ccaf07c00ecd187f1937e",
+      "crates/araphor-data/src/analysis/packages/activation.rs": "34e20272e6a1d29334bc23329d52838bbd2bf04b29d1841c32d521082e93c1cb"
+    },
+    "live_edits": false,
+    "cargo_or_tests_run": false
+  },
+  "remaining_before": 64,
+  "retired_before": 144,
+  "retired_after": 145,
+  "remaining_after": 63,
+  "known_failures": [
+    "The wider Data309 cohort has 105 passes and a scoped dependency expectation failure in metadata_skips_prior_ipc. Both exact image checks pass separately on unchanged source.",
+    "Recovery309 has an initial pending-status test error. Host309 has an assembly admission-count failure; its exact unchanged rerun passes. Neither result qualifies recovery retirement."
+  ],
+  "remaining_baseline_comparison": {
+    "commit": "6a25ba1b34dbaa0a553b1883058938683ce7aaab",
+    "files": 64,
+    "changed": []
+  },
+  "net_reduction_target_met": false
+}
