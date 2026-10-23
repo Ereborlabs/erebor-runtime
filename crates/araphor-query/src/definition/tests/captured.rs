@@ -51,6 +51,7 @@ struct SinkState {
     partitions: AtomicUsize,
     entries: AtomicUsize,
     commits: AtomicUsize,
+    pending: usize,
     receipt: Mutex<Option<ExecutionReceipt>>,
     frontier: Mutex<Option<araphor_data::ManagedFrontier>>,
     gate: Option<WriterGate>,
@@ -165,25 +166,29 @@ impl DataSink for Sink {
         }
         *self.state.receipt.lock().unwrap() = Some(receipt.clone());
         let state = Arc::clone(&self.state);
-        receipt
-            .blocking(context, (), move |control| {
-                if let Some(gate) = &state.gate {
-                    if let Some(entered) = gate.entered.lock().unwrap().take() {
-                        let _sent = entered.send(());
-                    }
-                    gate.release
-                        .lock()
-                        .unwrap()
-                        .recv()
-                        .map_err(|source| crate::Error::Sql {
-                            source: DataFusionError::External(Box::new(source)),
+        let acknowledgement = receipt.clone();
+        let revision = receipt.snapshot().page.extraction.meta.commit_revision;
+        let completed =
+            receipt
+                .blocking(context, (), move |control| {
+                    if let Some(gate) = &state.gate {
+                        if let Some(entered) = gate.entered.lock().unwrap().take() {
+                            let _sent = entered.send(());
+                        }
+                        gate.release.lock().unwrap().recv().map_err(|source| {
+                            crate::Error::Sql {
+                                source: DataFusionError::External(Box::new(source)),
+                            }
                         })?;
-                }
-                control.check()?;
-                state.commits.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            })
-            .await?;
+                    }
+                    control.check()?;
+                    let commits = state.commits.fetch_add(1, Ordering::SeqCst);
+                    Ok(commits >= state.pending)
+                })
+                .await?;
+        if self.managed.is_some() && completed {
+            acknowledgement.acknowledge(context, revision)?;
+        }
         Ok(rows)
     }
 }

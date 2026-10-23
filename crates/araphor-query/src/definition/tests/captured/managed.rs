@@ -188,6 +188,52 @@ async fn replace_admits_each_input() -> TestResult {
     released(&fixture)
 }
 
+#[tokio::test]
+async fn replace_drains_pending_publications() -> TestResult {
+    let fixture = fixture().await?;
+    let state = Arc::new(SinkState {
+        pending: 2,
+        ..Default::default()
+    });
+    let (definition, target) = prepared(&fixture, &state).await?;
+    let before = fixture.engine.store().meta()?;
+    assert!(before.commit_revision > 0);
+    let control = AnalysisReadControl::default();
+    let mut stream = stream(&fixture, definition, target, &control)?;
+    let mut inputs = 0;
+    for step in 1..=3 {
+        let update = tokio::time::timeout(Duration::from_secs(30), stream.next())
+            .await?
+            .ok_or("pending managed update")??;
+        assert_eq!(update.operation, Operation::Replace);
+        assert_eq!(update.exhausted, step == 3);
+        assert_eq!(update.snapshot.page.extraction.meta, before);
+        assert_eq!(update.cursor.read_revision(), before.commit_revision);
+        assert_eq!(
+            update.snapshot.page.extraction.sources[0]
+                .receipt
+                .contiguous_cursor,
+            1
+        );
+        assert_eq!(state.begins.load(Ordering::SeqCst), step);
+        assert_eq!(state.admissions.load(Ordering::SeqCst), step);
+        assert_eq!(state.entries.load(Ordering::SeqCst), step);
+        assert_eq!(state.commits.load(Ordering::SeqCst), step);
+        assert!(state.input_evaluations.load(Ordering::SeqCst) > inputs);
+        inputs = state.input_evaluations.load(Ordering::SeqCst);
+        drop(update);
+    }
+    assert!(futures_util::poll!(stream.next()).is_pending());
+    assert_eq!(state.begins.load(Ordering::SeqCst), 3);
+    assert_eq!(state.admissions.load(Ordering::SeqCst), 3);
+    assert_eq!(state.entries.load(Ordering::SeqCst), 3);
+    assert_eq!(state.commits.load(Ordering::SeqCst), 3);
+    assert_eq!(fixture.engine.store().meta()?, before);
+    stream.cancel_and_join().await?;
+    drop(state.receipt.lock().unwrap().take());
+    released(&fixture)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admission_cancel_joins_worker() -> TestResult {
     for begin in [true, false] {

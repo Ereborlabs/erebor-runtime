@@ -14,6 +14,7 @@ use crate::sources::ArrowSnapshot;
 use crate::{Result, SqlSnafu};
 
 /// Read metadata at begin. Register the captured attempt before native execution.
+/// Completed publications acknowledge their commit through `ExecutionReceipt`.
 pub trait ManagedPublication: TableProvider {
     fn begin(&self, control: &AnalysisReadControl) -> Result<(Invocation, ManagedRead)>;
 

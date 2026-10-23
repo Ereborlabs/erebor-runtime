@@ -138,7 +138,7 @@ impl Runtime {
             self.ended = true;
             return Ok(None);
         }
-        if self.run.operation == Operation::Append && !self.exhausted {
+        if !self.exhausted {
             return self.evaluate(false, Vec::new()).await;
         }
         {
@@ -464,8 +464,10 @@ impl Runtime {
             .captured(self.revision, output.snapshot.next_change);
         self.snapshot = Some(Arc::clone(&output.snapshot));
         self.evaluated = now;
-        self.exhausted = self.run.operation == Operation::Replace
-            || (output.snapshot.page.exhausted && !output.limited);
+        let completed = self.run.managed.is_none() || calls.published_revision() != 0;
+        self.exhausted = completed
+            && (self.run.operation == Operation::Replace
+                || (output.snapshot.page.exhausted && !output.limited));
         let completed_windows = calls
             .completed_windows(&output.snapshot)
             .context(SqlSnafu)?;

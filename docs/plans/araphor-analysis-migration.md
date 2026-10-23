@@ -3109,3 +3109,50 @@ historical repair route. Graph failed-feed recovery still fails at cursor 258
 in `graph-feed358`. No remaining reference file retires. There are 189 retired
 files and 19 unchanged reference files. Complete retirement and the required
 overall reduction remain **Not done**.
+
+
+### Native publication continuation and Graph/package retirement
+
+Result: **Done** for native managed continuation and ten complete reference
+files. Complete retirement remains **Not done**. The
+[retirement record](../../recovery/araphor-graph-package-retirement-20261023.json)
+contains the old assertion map, passing checks, and original source hashes.
+There are now 199 retired files and nine unchanged reference files.
+
+The publication sink already reports whether its Graph or Profile cut needs
+another evaluation. A completed cut acknowledges its committed revision.
+Query now uses that existing acknowledgement to set `exhausted`. A pending
+Replace cut continues on the next subscription poll. The continuation uses the
+existing native capture, admission, physical execution, and Data transaction.
+Each physical result still creates its real cursor. Finite Run still consumes
+one step and joins. Generic SQL keeps its existing completion rule. No new
+runner, clock, polling loop, state field, or API is added.
+
+| Record | Result | Seconds |
+| --- | --- | ---: |
+| `compile360` | Six affected crates compile with all features; tests do not execute. | 204.90 |
+| `query-managed360` | All 15 managed native Query checks pass. | 19.52 |
+| `graph-feed360` | The actual Wasm Graph source failure and recovery check passes. | 195.72 |
+| `discovery-repair360` | Historical repair fails at its second subscription wait. | 239.75 |
+
+The Query regression requires two pending frames, one completed frame, then
+an idle stream on unchanged input. The Graph check preserves the failed head
+and cursor, advances a sibling, recovers the same frontier, then consumes
+cursor 258 with repaired context. The original Graph body remains readable.
+Shutdown joins both shared tasks and releases input reservations. This passing
+check closes the remaining Graph feed gate in the ten-file assertion map.
+
+The removed files contain two Graph production owners, six Graph test leaves,
+and the old package owner and supervision files. Their current owners are
+Query subscriptions, the shared Instance Host, and Data atomic publication.
+The verified [archive](../../recovery/araphor-graph-package-checkpoint-20261023T1801Z.tar.gz)
+has SHA-256 `5ce261c65ea227b9a46f699e7e9a77859f08a80dc38b674d1cc5179b3f70176d`.
+The archive preserves all nineteen pre-cut reference files and the passing
+and failing records. The nine remaining files retain their baseline bytes.
+
+Discovery historical repair remains **Not done**. The failing fixture grant
+selects no context keys. The continuation result does not qualify that case
+or its remaining reference owners. These are focused checks; the full
+workspace test suite is not run for this delivery. Complete migration and the
+required overall production reduction remain **Not done**. No whole-migration
+production total is claimed.

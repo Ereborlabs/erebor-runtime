@@ -986,3 +986,24 @@ Graph failed-feed recovery still fails at cursor 258. No further reference file
 retires: 189 are retired and 19 remain unchanged. Complete retirement and the
 whole-migration reduction remain **Not done**. Read the
 [bounded result and records](araphor-analysis-migration.md#joined-cleanup-after-known-rollback).
+
+
+### Native continuation and Graph/package retirement
+
+- **Before:** A committed managed Replace cut could request more work but
+  wait for another source notice. The final Graph feed regression still failed.
+- **Now:** Query uses the existing publication acknowledgement and `exhausted`
+  state to continue through the same native subscription. All 15 managed Query
+  checks and the actual Wasm Graph recovery check pass on source state 360.
+  Ten complete reference files retire. There are 199 retired files and nine
+  unchanged reference files.
+- **Required:** Qualify the remaining Discovery historical-repair case before
+  its complete owner and fixture files retire. Its current check still fails
+  at the second wait, with an empty context selection in the fixture grant.
+- **Reuse:** Keep Query capture and physical execution, the shared Instance
+  Host, and Data atomic publication. Finite Run retains one subscription step.
+
+Read the [bounded result](araphor-analysis-migration.md#native-publication-continuation-and-graphpackage-retirement)
+and [retirement record](../../recovery/araphor-graph-package-retirement-20261023.json).
+Complete retirement and the required overall production reduction remain
+**Not done**. No whole-migration production total is claimed.

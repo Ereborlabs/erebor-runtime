@@ -2313,3 +2313,61 @@ records the commands and evidence locations. Discovery historical repair still
 fails later with `Elapsed`; Graph failed-feed recovery still fails at cursor
 258. No reference file retires. The totals stay at 189 retired and 19 unchanged
 files. These results do not establish complete retirement or overall reduction.
+
+
+## Native managed publication continuation
+
+The source-state-360 correction keeps execution inside the existing native
+subscription stream. Read the owners in this order:
+
+[Publication::write_all](../../crates/araphor-analysis/src/instance/sink.rs) Native DataFusion sends the complete selected relation to the publication sink.
+  -> [Data::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits output, call state, the domain projection, and the receipt atomically.
+  -> [ExecutionReceipt::acknowledge](../../crates/araphor-query/src/definition/physical.rs) The sink acknowledges the committed revision when its domain cut is complete.
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) Query returns the physical result and keeps `exhausted` false while managed work remains.
+  -> [Runtime::next_event](../../crates/araphor-query/src/stream/physical/runtime.rs) The next stream poll continues without another source notice.
+  -> [Run::session](../../crates/araphor-query/src/stream/mod.rs) The next evaluation begins with fresh managed state and the existing authoritative capture.
+
+```mermaid
+sequenceDiagram
+    participant Query
+    participant Sink
+    participant Data
+    Query->>Sink: Native selected relation
+    Sink->>Data: Atomic managed publication
+    Data-->>Sink: Saved receipt
+    alt Domain cut complete
+        Sink->>Query: Acknowledge committed revision
+    else Domain work remains
+        Query->>Query: Return frame with exhausted false
+        Query->>Query: Evaluate next captured cut
+    end
+```
+
+`CallContext` owns the acknowledgement for one evaluation. The acknowledgement
+starts at zero. The sink stores the saved receipt before it acknowledges a
+completed cut. A pending cut returns its receipt without that acknowledgement.
+The existing Data claim, source, prior-state, producer, and authority checks
+remain in force. `Event.completed` still describes physical output delivery;
+it does not describe completion of all domain work.
+
+[Subscription::managed_once](../../crates/araphor-query/src/follow/managed.rs)
+consumes one frame and joins. The continuous runtime uses the same execution
+path for later frames. The correction adds no persistent continuation token,
+execution owner, clock, or API.
+
+[replace_drains_pending_publications](../../crates/araphor-query/src/definition/tests/captured/managed.rs)
+checks two pending frames, one completed frame, exact native admission and
+commit counts, unchanged Data metadata, and idle completion. All 15 checks in
+`definition::tests::captured::managed` pass.
+[failed_feed_recovers_source](../../crates/araphor-analysis/src/graph/native/tests/feed.rs)
+checks the actual shared Host with Wasm, sibling progress during failure,
+same-frontier recovery, immutable prior output, repaired context at cursor
+258, joined shutdown, and released input memory. That check also passes.
+
+The [retirement record](../../recovery/araphor-graph-package-retirement-20261023.json)
+identifies the ten retired Graph and package files and their exact prior
+assertion maps. The totals become 199 retired and nine unchanged files.
+Discovery historical repair still fails in `discovery-repair360`; its fixture
+grant selects no context keys. That case and complete retirement remain
+**Not done**. These focused results do not establish a passing full workspace
+suite or the required overall production reduction.

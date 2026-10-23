@@ -900,12 +900,13 @@ async fn failed_feed_recovers_source() -> TestResult {
     append(&query, &sibling, &records[0], 1)?;
     let began = std::time::Instant::now();
     let before = query.store().meta()?.commit_revision;
-    let (entry, observed) = std::sync::mpsc::channel();
-    query.guest_entry(entry, None)?;
+    let (entry_sender, observed) = std::sync::mpsc::channel();
+    query.guest_entry(entry_sender.clone(), None)?;
     let running = Running::start(Arc::clone(&owner), Arc::clone(&host));
     let result = async {
-        tokio::task::spawn_blocking(move || {
-            observed.recv_timeout(std::time::Duration::from_secs(90))
+        let observed = tokio::task::spawn_blocking(move || {
+            observed.recv_timeout(std::time::Duration::from_secs(90))?;
+            Ok::<_, std::sync::mpsc::RecvTimeoutError>(observed)
         })
         .await??;
         let entry = began.elapsed();
@@ -1152,12 +1153,14 @@ async fn failed_feed_recovers_source() -> TestResult {
             .lock()
             .map_err(|_| "Graph evidence facts")?
             .extend([policy(&records[0], 1)?, activation(&records[0])?]);
+        query.guest_entry(entry_sender, None)?;
         *facts
             .failed
             .lock()
             .map_err(|_| "Graph evidence repair flag")? = None;
         let repair_facts = facts.calls.load(Ordering::SeqCst);
         let repair_revision = query.store().meta()?.commit_revision;
+        let repair_began = std::time::Instant::now();
         query.store().commit_context(&AnalysisContextVersionV1 {
             key: araphor_data::AnalysisContextKeyV1 {
                 tenant_id: source.tenant_id,
@@ -1184,7 +1187,11 @@ async fn failed_feed_recovers_source() -> TestResult {
         .await
         .map_err(|error| {
             format!(
-                "Repaired Graph cursor258: {error}; facts={repair_facts}->{}; revision={repair_revision}->{:?}; source={:?}; evaluation={:?}; expiry={:?}; history={:?}",
+                "Repaired Graph cursor258: {error}; elapsed={:?}; guest_entries={}; guest_capacity={:?}; facts={repair_facts}->{}; revision={repair_revision}->{:?}; source={:?}; evaluation={:?}; expiry={:?}; history={:?}",
+                repair_began.elapsed(),
+                observed.try_iter().count(),
+                futures_util::FutureExt::now_or_never(
+                    query.wait_package_capacity("component evaluations", 1)),
                 facts.calls.load(Ordering::SeqCst),
                 query.store().meta().map(|meta| meta.commit_revision),
                 query.store().processor_health(&scope(&source)),
