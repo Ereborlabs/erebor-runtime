@@ -196,7 +196,7 @@ impl GraphPublication {
             identity: source,
         };
         let advanced = advance && snapshot.last_cursor > captured.consumed;
-        let completed = !advance || (advanced && snapshot.last_cursor >= captured.accepted);
+        let completed = !advance || (!owner.feedback && snapshot.last_cursor >= captured.accepted);
         let commit = AnalysisResultCommitV1 {
             scope,
             expected_cursor: captured.consumed,

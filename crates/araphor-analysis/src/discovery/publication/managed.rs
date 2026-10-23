@@ -207,21 +207,11 @@ impl DiscoveryOwner {
                 } else {
                     None
                 };
-                let previous = if let Some(prior) = prior {
-                    Some(PackageResultRefV1 {
-                        result_id: prior.result_id.clone(),
-                        commit_revision: prior.commit_revision,
-                    })
-                } else {
-                    head.clone()
-                };
                 row.prepare(
                     source,
-                    previous,
                     head,
                     prior,
-                    receipt,
-                    source_capture.time_utc_ns(),
+                    receipt.snapshot(),
                     completed || code_changed || repairing,
                     if code_changed { Vec::new() } else { contexts },
                 )
@@ -335,25 +325,29 @@ impl Publication {
     fn prepare(
         self,
         source: &EvidenceIntakeIdentityV1,
-        previous: Option<PackageResultRefV1>,
         head: Option<PackageResultRefV1>,
         prior: Option<&DiscoveryHistoryRowV1>,
-        receipt: &ExecutionReceipt,
-        now: u64,
+        snapshot: &araphor_query::sources::ArrowSnapshot,
         sealed: bool,
         contexts: Vec<AnalysisContextVersionV1>,
     ) -> araphor_query::Result<ProfileCommit> {
+        let now = snapshot.time_utc_ns();
+        let previous = if let Some(prior) = prior {
+            Some(PackageResultRefV1 {
+                result_id: prior.result_id.clone(),
+                commit_revision: prior.commit_revision,
+            })
+        } else {
+            head.clone()
+        };
         if self.source != *source
             || !self.processor_present
             || self.retired == Some(true)
             || self.expected_cursor < self.retained_floor
             || self.consumed_cursor < self.expected_cursor
-            || previous.as_ref().is_some_and(|previous| {
-                !receipt
-                    .snapshot()
-                    .results()
-                    .any(|reference| reference == previous)
-            })
+            || previous
+                .as_ref()
+                .is_some_and(|previous| !snapshot.results().any(|reference| reference == previous))
         {
             return Err(Code::Conflict.error("profile captured progress").into());
         }
@@ -393,7 +387,7 @@ impl Publication {
         let captured = if contexts.is_empty() {
             Vec::new()
         } else {
-            receipt.snapshot().contexts().cloned().collect()
+            snapshot.contexts().cloned().collect()
         };
         let mut refs = BTreeMap::new();
         for reference in self.context_refs.into_iter().flatten().chain(captured) {

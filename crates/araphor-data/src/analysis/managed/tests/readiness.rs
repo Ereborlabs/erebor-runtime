@@ -10,6 +10,7 @@ fn failed_frontier_keeps_progress() -> TestResult {
     let captured = fixture.capture(&store, false)?;
     let mut input = request("known-failure");
     input.frontier = Some(ManagedFrontier {
+        pending: false,
         cursor: vec![1, 2, 3],
         next_change: Some(99),
     });
@@ -63,6 +64,7 @@ fn cancelled_frontier_is_unconsumed() -> TestResult {
     let captured = fixture.capture(&store, false)?;
     let mut first = request("successful");
     first.frontier = Some(ManagedFrontier {
+        pending: false,
         cursor: vec![1],
         next_change: Some(50),
     });
@@ -76,6 +78,7 @@ fn cancelled_frontier_is_unconsumed() -> TestResult {
     let captured = fixture.capture(&store, false)?;
     let mut input = request("cancelled");
     input.frontier = Some(ManagedFrontier {
+        pending: false,
         cursor: vec![2],
         next_change: Some(75),
     });
@@ -229,6 +232,7 @@ fn failed_frontier_can_resume() -> TestResult {
         let captured = fixture.capture(&store, false)?;
         let mut input = request("pressure-or-bound");
         input.frontier = Some(ManagedFrontier {
+            pending: false,
             cursor: vec![1],
             next_change: None,
         });

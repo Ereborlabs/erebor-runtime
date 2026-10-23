@@ -44,6 +44,7 @@ impl ManagedPublication for Sink {
             snapshot.managed().map(|managed| managed.rebuild()),
             Some(self.state.rebuild.load(Ordering::SeqCst))
         );
+        assert!(!frontier.pending);
         let cursor = crate::follow::Cursor::decode(&frontier.cursor)?;
         assert_eq!(
             cursor.read_revision(),
@@ -199,10 +200,10 @@ async fn replace_drains_pending_publications() -> TestResult {
     let before = fixture.engine.store().meta()?;
     assert!(before.commit_revision > 0);
     let control = AnalysisReadControl::default();
-    let mut stream = stream(&fixture, definition, target, &control)?;
+    let mut subscription = stream(&fixture, definition.clone(), Arc::clone(&target), &control)?;
     let mut inputs = 0;
     for step in 1..=3 {
-        let update = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        let update = tokio::time::timeout(Duration::from_secs(30), subscription.next())
             .await?
             .ok_or("pending managed update")??;
         assert_eq!(update.operation, Operation::Replace);
@@ -222,15 +223,47 @@ async fn replace_drains_pending_publications() -> TestResult {
         assert!(state.input_evaluations.load(Ordering::SeqCst) > inputs);
         inputs = state.input_evaluations.load(Ordering::SeqCst);
         drop(update);
+        if step == 1 {
+            let frontier = state
+                .frontier
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("pending frontier")?;
+            assert!(frontier.pending);
+            subscription.cancel_and_join().await?;
+            subscription = Subscription::managed(
+                fixture.engine.session(
+                    AnalysisSelectionV1::tenant([1; 16]),
+                    &AnalysisReadControl::default(),
+                    0,
+                )?,
+                definition.clone(),
+                Arc::clone(&target) as Arc<dyn ManagedPublication>,
+                b"managed-test",
+                Some(frontier),
+                Arc::new(SystemClock::default()),
+            )?;
+        }
     }
-    assert!(futures_util::poll!(stream.next()).is_pending());
+    assert!(
+        !state
+            .frontier
+            .lock()
+            .unwrap()
+            .as_ref()
+            .ok_or("complete frontier")?
+            .pending
+    );
+    assert!(futures_util::poll!(subscription.next()).is_pending());
     assert_eq!(state.begins.load(Ordering::SeqCst), 3);
     assert_eq!(state.admissions.load(Ordering::SeqCst), 3);
     assert_eq!(state.entries.load(Ordering::SeqCst), 3);
     assert_eq!(state.commits.load(Ordering::SeqCst), 3);
     assert_eq!(fixture.engine.store().meta()?, before);
-    stream.cancel_and_join().await?;
+    subscription.cancel_and_join().await?;
     drop(state.receipt.lock().unwrap().take());
+    drop((definition, target));
     released(&fixture)
 }
 

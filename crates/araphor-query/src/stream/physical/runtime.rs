@@ -340,6 +340,7 @@ impl Runtime {
                         self.run.resume.as_ref().filter(|_| self.snapshot.is_none())
                     {
                         if !managed.rebuild()
+                            && !self.run.resume_pending
                             && managed.source_revision() <= cursor.read_revision()
                             && self.run.resume_expiry.is_none_or(|expiry| expiry > now)
                         {
@@ -380,11 +381,12 @@ impl Runtime {
                     );
                     cursor.set_windows(
                         &snapshot.windows,
-                        &calls.completed_windows(&snapshot).context(SqlSnafu)?,
+                        &calls.completed_windows(snapshot).context(SqlSnafu)?,
                     );
                     let frontier = araphor_data::ManagedFrontier {
                         cursor: cursor.encode()?,
                         next_change: snapshot.next_change,
+                        pending: false,
                     };
                     let publication = Arc::clone(publication);
                     let invocation = calls.invocation().clone();

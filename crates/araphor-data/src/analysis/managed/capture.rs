@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use araphor_analysis_sdk as sdk;
-use duckdb::{Connection, OptionalExt as _, params};
+use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::super::{AnalysisExtractionV1, AnalysisSelectionV1, AnalysisStore, PackageResultRefV1};

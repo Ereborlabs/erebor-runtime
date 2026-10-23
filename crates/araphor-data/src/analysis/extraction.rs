@@ -1609,7 +1609,7 @@ impl AnalysisStore {
                     output.limits.input_bytes,
                 )?;
                 output.charge(added)?;
-                self.extract_discovery_state(snapshot, &receipt, &read, &mut output, &mut capture, managed.as_ref(), control)?;
+                self.extract_discovery_state(snapshot, &receipt, &mut output, &mut capture, managed.as_ref(), control)?;
                 self.extract_graph_state(snapshot, &receipt, &read, &mut output, &mut capture, control)?;
                 output.sources.push(AnalysisSourceSnapshotV1 {
                     receipt,

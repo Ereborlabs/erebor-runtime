@@ -51,7 +51,7 @@ impl AnalysisStore {
                     (Some(receipt), None) => {
                         if receipt.instance != id || receipt.attempt != key
                             || receipt.commit_revision != completed || completed <= attempt.registered || completed > head
-                            || receipt.frontier != attempt.request.frontier
+                            || !receipt.matches_frontier(&attempt.request.frontier)
                             || receipt.selected.result_id.is_empty() || receipt.selected.commit_revision != completed
                             || receipt.results.iter().any(|(call, reference)| !spec.manifest.calls.contains_key(call)
                                 || reference.result_id.is_empty() || (reference.commit_revision != completed

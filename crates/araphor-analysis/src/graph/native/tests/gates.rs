@@ -388,12 +388,10 @@ async fn graph_coverage_258_history() -> TestResult {
         .store()
         .graph_result(fixture.source.tenant_id, &first)?
         .ok_or("original graph")?;
-    assert!(
-        retained
-            .findings
-            .iter()
-            .any(|finding| finding.state == araphor_data::FindingStateV1::Confirmed)
-    );
+    assert!(retained
+        .findings
+        .iter()
+        .any(|finding| finding.state == araphor_data::FindingStateV1::Confirmed));
     for revision in 2..=258 {
         report(&fixture, revision, &[([7; 16], revision, "HEALTHY")])?;
     }
@@ -407,12 +405,10 @@ async fn graph_coverage_258_history() -> TestResult {
         .store()
         .graph_result(fixture.source.tenant_id, &next)?
         .ok_or("latest graph")?;
-    assert!(
-        current
-            .findings
-            .iter()
-            .any(|finding| finding.state == araphor_data::FindingStateV1::Confirmed)
-    );
+    assert!(current
+        .findings
+        .iter()
+        .any(|finding| finding.state == araphor_data::FindingStateV1::Confirmed));
     assert_eq!(
         current
             .input_manifest
@@ -492,13 +488,11 @@ async fn graph_malformed_report_rejected() -> TestResult {
     );
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), calls);
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(
-        fixture
-            .query
-            .store()
-            .graph_result(fixture.source.tenant_id, "graph:corrupt-report")?
-            .is_none()
-    );
+    assert!(fixture
+        .query
+        .store()
+        .graph_result(fixture.source.tenant_id, "graph:corrupt-report")?
+        .is_none());
     assert_eq!(
         fixture
             .query
@@ -741,13 +735,11 @@ async fn graph_canonical_fields_rejected() -> TestResult {
         );
         assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 0);
         assert_eq!(fixture.query.store().meta()?, before);
-        assert!(
-            fixture
-                .query
-                .store()
-                .graph_result(fixture.source.tenant_id, "graph:changed-canonical-field")?
-                .is_none()
-        );
+        assert!(fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, "graph:changed-canonical-field")?
+            .is_none());
         drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     }
     Ok(())

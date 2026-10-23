@@ -243,6 +243,7 @@ fn metadata_skips_prior_ipc() -> TestResult {
     let captured = page.state;
     let mut input = request("metadata");
     input.frontier = Some(ManagedFrontier {
+        pending: false,
         cursor: vec![1],
         next_change: None,
     });

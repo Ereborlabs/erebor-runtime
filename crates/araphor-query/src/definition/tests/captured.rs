@@ -186,6 +186,9 @@ impl DataSink for Sink {
                     Ok(commits >= state.pending)
                 })
                 .await?;
+        if let Some(frontier) = self.state.frontier.lock().unwrap().as_mut() {
+            frontier.pending = !completed;
+        }
         if self.managed.is_some() && completed {
             acknowledgement.acknowledge(context, revision)?;
         }

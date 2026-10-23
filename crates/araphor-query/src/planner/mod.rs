@@ -177,6 +177,12 @@ impl<'a> Planner<'a> {
         SourceDemand::collect(plan, true).context(crate::SqlSnafu)
     }
 
+    pub fn reads_table(plan: &LogicalPlan, name: &str) -> Result<bool> {
+        Ok(Self::sources(plan)?
+            .iter()
+            .any(|source| source.durable() == Some(name)))
+    }
+
     pub async fn build(
         self,
         statement: Statement,

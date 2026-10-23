@@ -461,6 +461,7 @@ mod tests {
         };
         let receipt = araphor_data::ManagedReceipt {
             frontier: Some(araphor_data::ManagedFrontier {
+                pending: false,
                 cursor: vec![1, 2, 255],
                 next_change: Some(99),
             }),

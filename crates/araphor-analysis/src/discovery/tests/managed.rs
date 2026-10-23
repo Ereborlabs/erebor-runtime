@@ -126,11 +126,31 @@ impl Fixture {
         output: &str,
         register: bool,
     ) -> TestResult<Arc<crate::Instance>> {
+        self.managed_with_selection(
+            id,
+            image,
+            export,
+            output,
+            register,
+            AnalysisSelectionV1::new(self.source.tenant_id, vec![self.source.clone()]),
+        )
+        .await
+    }
+
+    async fn managed_with_selection(
+        &self,
+        id: &str,
+        image: PackageBundleV1,
+        export: &str,
+        output: &str,
+        register: bool,
+        selection: AnalysisSelectionV1,
+    ) -> TestResult<Arc<crate::Instance>> {
         let authority: Arc<dyn PackageAuthorization> = Arc::new(Authority(watch::channel(0).0));
         let grant = PackageGrantV1 {
             principal: "fixture".into(),
             revision: 1,
-            selection: AnalysisSelectionV1::new(self.source.tenant_id, vec![self.source.clone()]),
+            selection,
             expires_utc_ns: None,
             authorization_id: None,
         };
@@ -651,9 +671,29 @@ async fn code_cut_keeps_evidence() -> TestResult {
 async fn sealed_repair_keeps_head() -> TestResult {
     let mut fixture = Fixture::new(Limits::default())?;
     let facts = fixture.catalog_facts()?;
+    let mut newer = facts[1].clone();
+    newer.key.owner_revision += 1;
+    let mut selection =
+        AnalysisSelectionV1::new(fixture.source.tenant_id, vec![fixture.source.clone()]);
+    selection.contexts = araphor_data::Selection::Exact(
+        facts
+            .iter()
+            .map(|fact| fact.key.clone())
+            .chain(std::iter::once(newer.key.clone()))
+            .collect(),
+    );
     let control = AnalysisReadControl::default();
     fixture.append(1)?;
-    let original = fixture.managed("repair-original").await?;
+    let original = fixture
+        .managed_with_selection(
+            "repair-original",
+            Package::discovery_bundle()?,
+            "live",
+            "snapshot",
+            true,
+            selection.clone(),
+        )
+        .await?;
     original
         .run(Fixture::request("original")?, &control)
         .await?;
@@ -668,7 +708,9 @@ async fn sealed_repair_keeps_head() -> TestResult {
     let mut image = Package::discovery_bundle()?;
     image.root.revision = "repair-next".into();
     image.artifacts[0].descriptor.revision = "repair-next".into();
-    let next = fixture.managed_image("repair-next", image).await?;
+    let next = fixture
+        .managed_with_selection("repair-next", image, "live", "snapshot", true, selection)
+        .await?;
     next.run(Fixture::request("close-original")?, &control)
         .await?;
     let sealed = fixture.profile()?.ok_or("original sealed profile")?;
@@ -754,8 +796,6 @@ async fn sealed_repair_keeps_head() -> TestResult {
             .profile_notices(&fixture.scope(), revision, 0)?,
         pending
     );
-    let mut newer = facts[1].clone();
-    newer.key.owner_revision += 1;
     let revision = fixture.store.commit_context(&newer)?;
     let authority: Arc<dyn PackageAuthorization> = Arc::new(Authority(watch::channel(0).0));
     let host = crate::InstanceHost::new(Arc::clone(&fixture.query), authority);
@@ -771,10 +811,77 @@ async fn sealed_repair_keeps_head() -> TestResult {
         Fixture::request("witness")?.witness_expiry,
         running.admitted().lifecycle,
     )?;
-    for _ in 0..2 {
-        tokio::time::timeout(Duration::from_secs(90), stream.next())
-            .await?
-            .ok_or("historical repair subscription ended")??;
+    for step in 0..2 {
+        let receipt =
+            tokio::time::timeout(Duration::from_secs(90), stream.next())
+                .await
+                .map_err(|error| {
+                    format!(
+                    "Historical repair {step}: {error}; notices={:?}; status={:?}; history={:?}",
+                    fixture.store.profile_notices(&fixture.scope(), revision, 0),
+                    fixture.store.managed_status(
+                        &running.admitted().grant.selection,
+                        &running.admitted().spec.id,
+                        &control,
+                    ).map(|status| (status.readiness, status.instance.progress)),
+                    fixture
+                        .store
+                        .managed_history(
+                            &running.admitted().grant.selection,
+                            &running.admitted().spec.id,
+                            &control,
+                        )
+                        .map(|history| (
+                            history.len(),
+                            history.last().map(|receipt| receipt.commit_revision)
+                        )),
+                )
+                })?
+                .ok_or("historical repair subscription ended")??;
+        if step == 0 {
+            assert!(receipt
+                .frontier
+                .as_ref()
+                .is_some_and(|frontier| frontier.pending));
+            let result = receipt
+                .results
+                .values()
+                .next()
+                .ok_or("repair call receipt")?;
+            let evaluation = fixture.store.managed_evaluation(
+                running.admitted(),
+                &result.result_id,
+                &control,
+            )?;
+            for name in ["targets", "compiled_policies"] {
+                let input = evaluation
+                    .inputs
+                    .iter()
+                    .find(|input| input.data.name == name)
+                    .ok_or("repair facts input")?;
+                assert!(
+                    input.data.batches.iter().any(|batch| batch.num_rows() > 0),
+                    "{name}"
+                );
+            }
+            let work = evaluation
+                .inputs
+                .iter()
+                .find(|input| input.data.name == "discovery_state")
+                .and_then(|input| input.data.batches.first())
+                .ok_or("repair work input")?;
+            let facts = work
+                .column_by_name("required_facts")
+                .and_then(|column| column.as_any().downcast_ref::<UInt64Array>())
+                .ok_or("repair facts revision")?;
+            assert_eq!(facts.values().as_ref(), &[revision]);
+            stream.cancel_and_join(&control).await?;
+            stream = running.subscribe(
+                Arc::new(AnalysisReadControl::default()),
+                Fixture::request("witness")?.witness_expiry,
+                running.admitted().lifecycle,
+            )?;
+        }
     }
     stream.cancel_and_join(&control).await?;
     assert_eq!(

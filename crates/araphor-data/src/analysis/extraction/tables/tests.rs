@@ -605,7 +605,7 @@ fn omitted_display_is_unevaluated() -> TestResult {
 fn bulk_boolean_reservation() -> TestResult {
     use std::mem::size_of;
 
-    use sdk::arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, builder::BooleanBuilder};
+    use sdk::arrow_array::{builder::BooleanBuilder, Array, ArrayRef, BooleanArray, RecordBatch};
 
     let (mut output, control) = extraction()?;
     let schema = Arc::new(sdk::Schema::new(vec![

@@ -32,7 +32,7 @@ impl AnalysisStore {
             || receipt.selected.result_id != id
             || receipt.selected.commit_revision != revision
             || receipt.commit_revision != revision
-            || receipt.frontier != attempt.request.frontier
+            || !receipt.matches_frontier(&attempt.request.frontier)
             || attempt.terminal.is_some()
             || attempt.registered == 0
             || revision <= attempt.registered

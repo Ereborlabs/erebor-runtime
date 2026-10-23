@@ -3,6 +3,11 @@ use crate::PackageErrorCodeV1 as Code;
 
 #[test]
 fn frontier_commits_with_receipt() -> TestResult {
+    assert_frontier(true)?;
+    assert_frontier(false)
+}
+
+fn assert_frontier(completed: bool) -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
@@ -18,9 +23,22 @@ fn frontier_commits_with_receipt() -> TestResult {
     let captured = fixture.capture(&store, false)?;
     let mut input = request("frontier");
     input.frontier = Some(ManagedFrontier {
+        pending: false,
         cursor: b"native-cursor".to_vec(),
         next_change: Some(30),
     });
+    let mut invalid = input.clone();
+    invalid.frontier.as_mut().ok_or("offered frontier")?.pending = true;
+    let before = store.meta()?;
+    assert!(matches!(
+        store.register_managed_attempt(&captured, &invalid, || Ok(())),
+        Err(crate::Error::Package {
+            code: Code::Invalid,
+            field: "managed attempt request",
+            ..
+        })
+    ));
+    assert_eq!(store.meta()?, before);
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     assert!(matches!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default()),
@@ -50,18 +68,19 @@ fn frontier_commits_with_receipt() -> TestResult {
         name: "selected".into(),
         batches: outputs[0].datasets[0].batches.clone(),
     };
+    let commit = ManagedCommit {
+        completed,
+        attempt: &attempt,
+        now_utc_ns: 10,
+        returns: &returns,
+        selected: &selected,
+        selected_schema: &fixture.model.outputs[0].schema,
+    };
     let before = store.meta()?;
     assert!(matches!(
-        store.commit_managed(
-            &ManagedCommit {
-                attempt: &attempt,
-                now_utc_ns: 10,
-                returns: &returns,
-                selected: &selected,
-                selected_schema: &fixture.model.outputs[0].schema,
-            },
-            || Err(Code::Denied.error("frontier final authority"))
-        ),
+        store.commit_managed(&commit, || Err(
+            Code::Denied.error("frontier final authority")
+        )),
         Err(crate::Error::Package {
             code: Code::Denied,
             ..
@@ -71,8 +90,10 @@ fn frontier_commits_with_receipt() -> TestResult {
     assert!(store
         .managed_resume([1; 16], "counter", &AnalysisReadControl::default())
         .is_err());
-    let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
-    assert_eq!(receipt.frontier, input.frontier);
+    let receipt = store.commit_managed(&commit, || Ok(()))?;
+    let mut expected = input.frontier.clone();
+    expected.as_mut().ok_or("offered frontier")?.pending = !completed;
+    assert_eq!(receipt.frontier, expected);
     assert_eq!(receipt.results.len(), 2);
     let ManagedResume {
         instance: current,
@@ -80,10 +101,18 @@ fn frontier_commits_with_receipt() -> TestResult {
         ..
     } = store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?;
     assert_eq!(current.progress, receipt.commit_revision);
-    assert_eq!(frontier, input.frontier);
+    assert_eq!(frontier, expected);
     assert_eq!(attempt.request().time_utc_ns, 10);
     drop(store);
     let store = AnalysisStore::open(&root)?;
+    let control = AnalysisReadControl::default();
+    assert_eq!(
+        store.managed_history(&current.grant.selection, "counter", &control)?,
+        std::slice::from_ref(&receipt)
+    );
+    assert!(store
+        .managed_selected([1; 16], "counter", &input.id, &control)?
+        .is_some());
     assert_eq!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
         ManagedResume {
@@ -104,6 +133,28 @@ fn frontier_commits_with_receipt() -> TestResult {
             .receipt(),
         Some(&receipt)
     );
+    {
+        let mut writer = store.writer()?;
+        let writer = writer.get_mut()?;
+        let bytes: Vec<u8> = writer.query_row(
+            "SELECT contract FROM managed_attempts WHERE attempt_id = ?",
+            params![input.id],
+            |row| row.get(0),
+        )?;
+        let mut attempt: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let frontier = &mut attempt["receipt"]["frontier"];
+        if completed {
+            frontier["cursor"] = serde_json::to_value(b"foreign-cursor".as_slice())?;
+        } else {
+            frontier["next_change"] = serde_json::json!(31);
+        }
+        writer.execute(
+            "UPDATE managed_attempts SET contract = ? WHERE attempt_id = ?",
+            params![serde_json::to_vec(&attempt)?, input.id],
+        )?;
+    }
+    drop(store);
+    assert!(AnalysisStore::open(&root).is_err());
     Ok(())
 }
 
@@ -116,6 +167,7 @@ fn pending_frontier_blocks_restart() -> TestResult {
     let captured = fixture.capture(&store, false)?;
     let mut input = request("interrupted-frontier");
     input.frontier = Some(ManagedFrontier {
+        pending: false,
         cursor: b"native-cursor".to_vec(),
         next_change: None,
     });
@@ -166,12 +218,43 @@ fn finite_result_rejects_resume() -> TestResult {
         fixture.evaluation(&input, 10, Some(&captured))?,
         fixture.evaluation(&input, 11, Some(&captured))?,
     ];
-    fixture.publish(
-        &store,
-        &attempt,
-        &evaluations,
-        &[fixture.output(2)?, fixture.output(3)?],
-    )?;
+    let outputs = [fixture.output(2)?, fixture.output(3)?];
+    let returns = evaluations
+        .iter()
+        .zip(&outputs)
+        .enumerate()
+        .map(|(index, (evaluation, output))| ManagedReturn {
+            retained: None,
+            call: 10 + index as u64,
+            evaluation,
+            output,
+        })
+        .collect::<Vec<_>>();
+    let selected = sdk::Dataset {
+        name: "selected".into(),
+        batches: outputs[0].datasets[0].batches.clone(),
+    };
+    let before = store.meta()?;
+    assert!(matches!(
+        store.commit_managed(
+            &ManagedCommit {
+                completed: false,
+                attempt: &attempt,
+                now_utc_ns: 10,
+                returns: &returns,
+                selected: &selected,
+                selected_schema: &fixture.model.outputs[0].schema,
+            },
+            || Ok(())
+        ),
+        Err(crate::Error::Package {
+            code: Code::Invalid,
+            field: "managed pending frontier",
+            ..
+        })
+    ));
+    assert_eq!(store.meta()?, before);
+    fixture.publish(&store, &attempt, &evaluations, &outputs)?;
     assert!(matches!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default()),
         Err(crate::Error::Package {
@@ -192,6 +275,7 @@ fn frontier_rejects_corrupt_completion() -> TestResult {
     let captured = fixture.capture(&store, false)?;
     let mut input = request("corrupt-completion");
     input.frontier = Some(ManagedFrontier {
+        pending: false,
         cursor: b"native-cursor".to_vec(),
         next_change: None,
     });
@@ -227,6 +311,7 @@ fn frontier_expiry_keeps_history() -> TestResult {
         let captured = fixture.capture(&store, false)?;
         let mut input = request("timed-frontier");
         input.frontier = Some(ManagedFrontier {
+            pending: false,
             cursor: b"native-cursor".to_vec(),
             next_change,
         });

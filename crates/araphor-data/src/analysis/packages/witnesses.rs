@@ -248,28 +248,36 @@ impl AnalysisStore {
         segments: &[u64],
         contexts: &[AnalysisContextRefV1],
     ) -> Result<()> {
-        for (witness, segment) in witnesses.iter().zip(segments) {
-            transaction
-                .execute(
-                    "INSERT INTO evidence_refs VALUES (?, ?, ?, ?, ?, ?)",
-                    params![
+        if !witnesses.is_empty() && !segments.is_empty() {
+            let mut statement = transaction
+                .prepare("INSERT INTO evidence_refs VALUES (?, ?, ?, ?, ?, ?)")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "insert exact witness",
+                })?;
+            for (witness, segment) in witnesses.iter().zip(segments) {
+                statement
+                    .execute(params![
                         id,
                         witness.identity.tenant().as_slice(),
                         witness.identity.key().as_slice(),
                         witness.cursor,
                         witness.expires_utc_ns,
                         segment
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert exact witness",
-                })?;
+                    ])
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "insert exact witness",
+                    })?;
+            }
         }
-        for reference in contexts {
-            transaction
-                .execute(
-                    "INSERT INTO context_refs VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    params![
+        if !contexts.is_empty() {
+            let mut statement = transaction
+                .prepare("INSERT INTO context_refs VALUES (?, ?, ?, ?, ?, ?, ?)")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "insert exact result context",
+                })?;
+            for reference in contexts {
+                statement
+                    .execute(params![
                         id,
                         reference.key.tenant_id.as_slice(),
                         reference.key.owner_id,
@@ -277,11 +285,11 @@ impl AnalysisStore {
                         reference.key.lifetime_key.as_slice(),
                         reference.key.owner_revision,
                         reference.commit_revision
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert exact result context",
-                })?;
+                    ])
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "insert exact result context",
+                    })?;
+            }
         }
         Ok(())
     }

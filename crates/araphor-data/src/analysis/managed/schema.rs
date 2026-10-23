@@ -250,11 +250,11 @@ impl AnalysisStore {
                     .request
                     .frontier
                     .as_ref()
-                    .is_some_and(|frontier| frontier.cursor.is_empty())
+                    .is_some_and(|frontier| frontier.cursor.is_empty() || frontier.pending)
                 || attempt
                     .receipt
                     .as_ref()
-                    .is_some_and(|receipt| receipt.frontier != attempt.request.frontier)
+                    .is_some_and(|receipt| !receipt.matches_frontier(&attempt.request.frontier))
             {
                 return Self::reject_path(root, "the managed frontier receipt differs");
             }

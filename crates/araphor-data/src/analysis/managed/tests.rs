@@ -323,6 +323,7 @@ impl Fixture {
         };
         Ok(store.commit_managed(
             &ManagedCommit {
+                completed: true,
                 attempt,
                 now_utc_ns: 10,
                 returns: &returns,
@@ -756,6 +757,7 @@ fn managed_failure_is_atomic() -> TestResult {
         batches: outputs[0].datasets[0].batches.clone(),
     };
     let commit = ManagedCommit {
+        completed: true,
         now_utc_ns: 10,
         attempt: &attempt,
         returns: &returns,
@@ -1045,6 +1047,7 @@ fn managed_sql_checks_authority() -> TestResult {
         batches: vec![Fixture::batch(&schema, 1)?],
     };
     let commit = ManagedCommit {
+        completed: true,
         now_utc_ns: 10,
         attempt: &attempt,
         returns: &[],
@@ -1343,6 +1346,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
         let attempt = store.register_managed_attempt(&capture, &input, || Ok(()))?;
         let receipt = store.commit_managed(
             &ManagedCommit {
+                completed: true,
                 now_utc_ns: 10,
                 attempt: &attempt,
                 returns: &[],
@@ -1688,6 +1692,7 @@ fn managed_witness_lifetime_check() -> TestResult {
         batches: outputs[0].datasets[0].batches.clone(),
     };
     let mut commit = ManagedCommit {
+        completed: true,
         attempt: &attempt,
         now_utc_ns: 21,
         returns: &returns,

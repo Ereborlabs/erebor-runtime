@@ -2371,3 +2371,40 @@ Discovery historical repair still fails in `discovery-repair360`; its fixture
 grant selects no context keys. That case and complete retirement remain
 **Not done**. These focused results do not establish a passing full workspace
 suite or the required overall production reduction.
+
+
+## Saved native continuation and current proof
+
+The source-state results above are historical. The current source-state-367
+checkpoint covers 48 files. Read the existing
+[Instance sink](../../crates/araphor-analysis/src/instance/sink.rs),
+[Data receipt](../../crates/araphor-data/src/analysis/managed/commit.rs), then
+[Query resume](../../crates/araphor-query/src/stream/physical.rs).
+Data saves `ManagedFrontier.pending` with the output, state, progress and domain
+projection. The receipt keeps the exact offered cursor and deadline. Successful
+resume returns that receipt frontier; failed cuts keep the offered frontier.
+Query continues known pending work before waiting for a source notice. Saved
+fixed window bounds and completed-window filtering stay in the same path.
+The [shared execution boundary](../../crates/araphor-query/src/execution.rs)
+uses the existing `Parser::stack` guard for native polls.
+
+Both [Discovery managed checks](../../crates/araphor-analysis/src/discovery/tests/managed.rs)
+pass in 237.34 seconds with the default execution stack and unchanged
+observers. Historical repair preserves the current head, saved body, source
+cursor and producer through cancellation, reopen and replay. The window check
+closes its saved interval without new intake. Compilation and formatting pass.
+Strict Clippy passes for Analysis, Query and Data. Profile conversion failure
+and supplied-input-before-compilation checks pass. Query's 16 checks and Data's
+11 checks from source state 366 remain valid: all 453 owner and shared
+dependency source hashes match source state 367.
+
+Graph's current group has five individual passes and one failure. The existing
+30-second same-frontier observer expires in `failed_feed_recovers_source`.
+A debugger sample shows OCI validation through `context_retry` during
+publication; it is not a passing recovery check or proof of the sole cause.
+The [source checkpoint](../../recovery/araphor-analysis-source-checkpoint-20261023.json)
+records the exact commands, sources, binaries, passes and failure. There are
+199 retired files and nine unchanged reference files. Keep those nine files.
+Current Graph recovery, final archive custody and complete retirement remain
+**Not done**. These results do not establish a passing full workspace suite or
+overall production reduction.

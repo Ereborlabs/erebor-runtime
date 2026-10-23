@@ -1,11 +1,11 @@
 use super::*;
-use EffectPhysicalResultV1::{DeniedBeforeEffect, UnknownAfterPreEffect};
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, DiscoveryCoverageV1, EvidenceDecisionContext,
     EvidenceIntakeIdentityV1, EvidenceTemporalCoverage, GraphCoverageKeyV1,
     GraphPolicyActivationV1, GraphReadCompletionV1, GraphReadPathV1, RemoteSubjectBindingV1,
     SourceAuthorityV1,
 };
+use EffectPhysicalResultV1::{DeniedBeforeEffect, UnknownAfterPreEffect};
 
 pub(super) fn source() -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {

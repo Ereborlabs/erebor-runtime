@@ -108,21 +108,17 @@ async fn immutable_facts_precede_guests() -> TestResult {
     for (port, input) in projection.ports.iter().zip(&captured.inputs) {
         assert_eq!(input.data.name, port.name);
         assert!(!input.data.batches.is_empty());
-        assert!(
-            input
-                .data
-                .batches
-                .iter()
-                .all(|batch| batch.schema().as_ref() == &port.schema)
-        );
+        assert!(input
+            .data
+            .batches
+            .iter()
+            .all(|batch| batch.schema().as_ref() == &port.schema));
     }
-    assert!(
-        captured
-            .graph
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .is_none()
-    );
+    assert!(captured
+        .graph
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_none());
     let expected = araphor_data::FindingV1::PACKAGES
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
@@ -301,11 +297,9 @@ async fn source_keeps_credential_join() -> TestResult {
         store.graph_finding(fixture.source.tenant_id, &id, &finding.finding_id)?,
         Some(finding.clone())
     );
-    assert!(
-        store
-            .graph_finding([99; 16], &id, &finding.finding_id)?
-            .is_none()
-    );
+    assert!(store
+        .graph_finding([99; 16], &id, &finding.finding_id)?
+        .is_none());
     let current =
         store.graph_findings(fixture.source.tenant_id, None, None, usize::MAX, usize::MAX)?;
     let mut after = None;
@@ -318,21 +312,19 @@ async fn source_keeps_credential_join() -> TestResult {
                 1,
                 usize::MAX
             )?,
-            [receipt.clone()]
+            std::slice::from_ref(&receipt)
         );
         after = Some(receipt.1.finding_id);
     }
-    assert!(
-        store
-            .graph_findings(
-                fixture.source.tenant_id,
-                after.as_deref(),
-                None,
-                1,
-                usize::MAX
-            )?
-            .is_empty()
-    );
+    assert!(store
+        .graph_findings(
+            fixture.source.tenant_id,
+            after.as_deref(),
+            None,
+            1,
+            usize::MAX
+        )?
+        .is_empty());
     Ok(())
 }
 

@@ -206,10 +206,11 @@ impl SubscribeExec {
                 .session(now, &permit, Vec::new(), Vec::new(), run.resume.as_ref())
                 .await?;
             if let Some(cursor) = run.resume.as_ref().filter(|_| {
-                session
-                    .managed
-                    .as_ref()
-                    .is_some_and(|managed| !managed.rebuild)
+                !run.resume_pending
+                    && session
+                        .managed
+                        .as_ref()
+                        .is_some_and(|managed| !managed.rebuild)
                     && run.resume_expiry.is_none_or(|expiry| expiry > now)
             }) {
                 let selection = SourceSnapshot::selection(&run.selection(now)?, run.sources())?;

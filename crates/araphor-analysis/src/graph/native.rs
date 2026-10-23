@@ -50,6 +50,7 @@ pub struct GraphPublication {
     authority: Arc<dyn PackageAuthorization>,
     grant: PackageGrantV1,
     prepared: PreparedDefinition,
+    feedback: bool,
     calls: BTreeMap<u64, PackageCall>,
     projection: Arc<Projection>,
 }
@@ -109,11 +110,13 @@ impl GraphPublication {
         definition: Definition,
         facts: Arc<dyn GraphFacts>,
     ) -> Result<Self> {
+        let feedback = araphor_query::planner::Planner::reads_table(&events, "graph_manifest")?;
         Self::prepare_on(
             session,
             authority,
             grant,
             events,
+            feedback,
             DefinitionRef::Fresh(&definition),
             facts,
         )
@@ -125,6 +128,7 @@ impl GraphPublication {
         authority: Arc<dyn PackageAuthorization>,
         grant: PackageGrantV1,
         events: LogicalPlan,
+        feedback: bool,
         definition: DefinitionRef<'_>,
         facts: Arc<dyn GraphFacts>,
     ) -> Result<Self> {
@@ -348,6 +352,7 @@ impl GraphPublication {
             authority,
             grant,
             prepared,
+            feedback,
             calls,
             projection,
         })

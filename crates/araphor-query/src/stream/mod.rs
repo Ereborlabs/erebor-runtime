@@ -30,6 +30,7 @@ pub(crate) struct Run {
     pub resume: Option<crate::follow::Cursor>,
     pub binding: [u8; 32],
     pub resume_expiry: Option<u64>,
+    pub resume_pending: bool,
     pub managed: Option<(
         crate::definition::PreparedDefinition,
         Arc<dyn crate::follow::ManagedPublication>,

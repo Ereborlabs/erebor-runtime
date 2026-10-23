@@ -9,6 +9,7 @@ fn terminal_keeps_successful_state() -> TestResult {
     let fixture = Fixture::admit(&store)?;
     let mut first = request("complete");
     first.frontier = Some(ManagedFrontier {
+        pending: false,
         cursor: vec![1, 2, 3],
         next_change: Some(99),
     });

@@ -111,6 +111,7 @@ impl Subscription {
         .and_then(LogicalPlanBuilder::build)
         .context(SqlSnafu)?;
         let next_change = resume.as_ref().and_then(|frontier| frontier.next_change);
+        let pending = resume.as_ref().is_some_and(|frontier| frontier.pending);
         let cursor = resume
             .map(|frontier| super::Cursor::decode(&frontier.cursor))
             .transpose()?;
@@ -124,6 +125,7 @@ impl Subscription {
             follow,
             Some((definition, publication)),
             next_change,
+            pending,
         )
     }
 }

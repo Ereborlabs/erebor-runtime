@@ -176,6 +176,13 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
         .await
         .map_err(|error| format!("Unchanged Graph receipt: {error}"))?;
     assert!(reused.commit_revision > signal);
+    assert!(
+        !reused
+            .frontier
+            .as_ref()
+            .ok_or("Unchanged Graph frontier")?
+            .pending
+    );
     assert_eq!(reused.results, first.results);
     assert_eq!(
         entered.try_recv(),
@@ -264,6 +271,10 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
     );
     assert_eq!(fixture.query.store().meta()?, idle);
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        entered.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
     assert!(original.input_manifest.coverage.is_empty());
     let body = fixture
         .query

@@ -14,17 +14,17 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::{SessionState, TaskContext};
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::optimizer::OptimizerRule;
 use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
+use datafusion::optimizer::OptimizerRule;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream, execute_stream,
+    execute_stream, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use futures_util::future::{BoxFuture, FutureExt, Shared, WeakShared};
-use futures_util::{StreamExt, TryStreamExt, stream};
+use futures_util::{stream, StreamExt, TryStreamExt};
 
 use super::PackageCall;
 use crate::memory::Memory;

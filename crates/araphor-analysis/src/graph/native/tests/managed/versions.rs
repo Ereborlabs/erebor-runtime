@@ -74,18 +74,14 @@ async fn managed_versions_rebuild_graph() -> TestResult {
     ));
     assert_eq!(prepared.resolved(), &first);
     assert_eq!(next_prepared.resolved(), &next);
-    assert!(
-        first_owner
-            .calls
-            .values()
-            .all(|call| call.package().revision == "1")
-    );
-    assert!(
-        next_owner
-            .calls
-            .values()
-            .all(|call| call.package().revision == "2")
-    );
+    assert!(first_owner
+        .calls
+        .values()
+        .all(|call| call.package().revision == "1"));
+    assert!(next_owner
+        .calls
+        .values()
+        .all(|call| call.package().revision == "2"));
     let araphor_data::ManagedDestination::Graph { calls, .. } = &next_destination else {
         return Err("target Graph destination".into());
     };
@@ -173,13 +169,11 @@ async fn managed_versions_rebuild_graph() -> TestResult {
             .store()
             .graph_result(fixture.source.tenant_id, &original.result_id)?
             .ok_or("Initial Graph version body")?;
-        assert!(
-            original_graph
-                .packages
-                .iter()
-                .all(|package| package.package_version == 1
-                    && package.replay_contract_id == format!("{}/v1", package.package_id))
-        );
+        assert!(original_graph
+            .packages
+            .iter()
+            .all(|package| package.package_version == 1
+                && package.replay_contract_id == format!("{}/v1", package.package_id)));
         let (updated, entries) = Fixture::observe_guests(
             Arc::clone(&fixture.query),
             host.update(
@@ -214,13 +208,11 @@ async fn managed_versions_rebuild_graph() -> TestResult {
             fixture.query.store().processor_result(&scope)?,
             Some(original.clone())
         );
-        assert!(
-            updated_graph
-                .packages
-                .iter()
-                .all(|package| package.package_version == 1
-                    && package.replay_contract_id == format!("{}/v2", package.package_id))
-        );
+        assert!(updated_graph
+            .packages
+            .iter()
+            .all(|package| package.package_version == 1
+                && package.replay_contract_id == format!("{}/v2", package.package_id)));
         let (_, entries) = Fixture::observe_guests(Arc::clone(&fixture.query), async {
             super::super::feed::append(&fixture.query, &fixture.source, &fixture.records[0], 4)?;
             super::super::feed::observe(&fixture.query, || {
@@ -251,13 +243,11 @@ async fn managed_versions_rebuild_graph() -> TestResult {
             .graph_result(fixture.source.tenant_id, &current.result_id)?
             .ok_or("Updated Graph append body")?;
         assert_eq!(appended.last_cursor, 4);
-        assert!(
-            appended
-                .packages
-                .iter()
-                .all(|package| package.package_version == 1
-                    && package.replay_contract_id == format!("{}/v2", package.package_id))
-        );
+        assert!(appended
+            .packages
+            .iter()
+            .all(|package| package.package_version == 1
+                && package.replay_contract_id == format!("{}/v2", package.package_id)));
         assert!(entries >= 3);
         let history = fixture.query.store().managed_history(
             &grant.selection,
@@ -284,12 +274,10 @@ async fn managed_versions_rebuild_graph() -> TestResult {
             assert_eq!(result.context.target, "wasm");
         }
         let before = fixture.query.store().meta()?;
-        assert!(
-            running
-                .run(request("stale-version")?, &fixture.control)
-                .await
-                .is_err()
-        );
+        assert!(running
+            .run(request("stale-version")?, &fixture.control)
+            .await
+            .is_err());
         assert_eq!(fixture.query.store().meta()?, before);
         let (rolled, entries) = Fixture::observe_guests(
             Arc::clone(&fixture.query),
@@ -343,13 +331,11 @@ async fn managed_versions_rebuild_graph() -> TestResult {
             .graph_result(fixture.source.tenant_id, &current.result_id)?
             .ok_or("Rolled Graph append body")?;
         assert_eq!(graph.last_cursor, 5);
-        assert!(
-            graph
-                .packages
-                .iter()
-                .all(|package| package.package_version == 1
-                    && package.replay_contract_id == format!("{}/v1", package.package_id))
-        );
+        assert!(graph
+            .packages
+            .iter()
+            .all(|package| package.package_version == 1
+                && package.replay_contract_id == format!("{}/v1", package.package_id)));
         assert!(entries >= 3);
         assert_eq!(
             fixture
@@ -418,36 +404,32 @@ async fn expiry_needs_no_facts() -> TestResult {
     if let araphor_data::ManagedDestination::Graph { events_sql, .. } = &mut forged {
         *events_sql = "SELECT * FROM events".into();
     }
-    assert!(
-        GraphPublication::prepare_managed(
-            Arc::clone(&fixture.query),
-            fixture.authority.clone(),
-            None,
-            &grant,
-            definition.clone(),
-            forged,
-            &fixture.control,
-        )
-        .await
-        .is_err()
-    );
+    assert!(GraphPublication::prepare_managed(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        None,
+        &grant,
+        definition.clone(),
+        forged,
+        &fixture.control,
+    )
+    .await
+    .is_err());
     let mut forged = destination;
     if let araphor_data::ManagedDestination::Graph { calls, .. } = &mut forged {
         calls.insert(1);
     }
-    assert!(
-        GraphPublication::prepare_managed(
-            Arc::clone(&fixture.query),
-            fixture.authority.clone(),
-            None,
-            &grant,
-            definition,
-            forged,
-            &fixture.control,
-        )
-        .await
-        .is_err()
-    );
+    assert!(GraphPublication::prepare_managed(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        None,
+        &grant,
+        definition,
+        forged,
+        &fixture.control,
+    )
+    .await
+    .is_err());
     assert_eq!(fixture.query.store().meta()?, before);
     Ok(())
 }

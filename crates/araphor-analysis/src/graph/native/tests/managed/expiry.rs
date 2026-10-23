@@ -85,13 +85,11 @@ async fn expiry_allows_new_input() -> TestResult {
         Some(expected.clone())
     );
     let facts = fixture.facts.calls.load(Ordering::SeqCst);
-    assert!(
-        evaluation
-            .run(request("expired-only")?, &fixture.control)
-            .await?
-            .results
-            .is_empty()
-    );
+    assert!(evaluation
+        .run(request("expired-only")?, &fixture.control)
+        .await?
+        .results
+        .is_empty());
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), facts);
     assert_eq!(
         entered.try_recv(),

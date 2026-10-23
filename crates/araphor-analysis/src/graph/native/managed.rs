@@ -8,7 +8,7 @@ use araphor_data::{
 use araphor_discovery_definition::{Definition, Program, ResolvedDefinition, Source};
 use araphor_query::definition::{PackageCall, PreparedDefinition};
 use araphor_query::execution::{Engine, Session};
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit};
+use datafusion::logical_expr::{lit, Expr, LogicalPlan, LogicalPlanBuilder};
 
 use super::{DefinitionRef, GraphFacts, GraphPublication};
 use crate::{Instance, Result};
@@ -152,6 +152,7 @@ impl GraphPublication {
                 },
             })
             .await?;
+        let feedback = events.sources().contains_key("graph_manifest");
         let mut calls_package = false;
         PackageCall::any(&events.plan, &mut |_| {
             calls_package = true;
@@ -211,6 +212,7 @@ impl GraphPublication {
             authority,
             grant.clone(),
             events.plan,
+            feedback,
             DefinitionRef::Retained(&definition),
             facts,
         )

@@ -599,6 +599,7 @@ async fn native_first_clock_time() {
             resume: None,
             binding: [0; 32],
             resume_expiry: None,
+            resume_pending: false,
             managed: None,
         }));
     let logical =
@@ -716,6 +717,7 @@ async fn native_page_follow_properties() {
                 resume: None,
                 binding: [0; 32],
                 resume_expiry: None,
+                resume_pending: false,
                 managed: None,
             }));
         let logical =

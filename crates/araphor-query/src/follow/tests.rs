@@ -1307,6 +1307,7 @@ async fn native_append_execution() {
             resume: None,
             binding: [0; 32],
             resume_expiry: None,
+            resume_pending: false,
             managed: None,
         }));
     let logical = crate::planner::subscription::Subscribe::runtime(plan, true).unwrap();
@@ -1530,6 +1531,7 @@ async fn native_subscribe_execution() {
             resume: None,
             binding: [0; 32],
             resume_expiry: None,
+            resume_pending: false,
             managed: None,
         }));
     assert!(state

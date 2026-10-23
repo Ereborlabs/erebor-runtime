@@ -1,5 +1,5 @@
 use araphor_analysis_sdk as sdk;
-use duckdb::{Connection, OptionalExt as _, params};
+use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::super::AnalysisStore;
@@ -358,11 +358,11 @@ impl AnalysisStore {
                     || attempt.receipt.as_ref().is_none_or(|receipt| {
                         receipt.instance != id || receipt.attempt != attempt.request.id
                             || receipt.commit_revision != instance.progress
-                            || receipt.frontier != attempt.request.frontier
+                            || !receipt.matches_frontier(&attempt.request.frontier)
                     }) {
                     return Err(Code::Invalid.error("managed committed frontier"));
                 }
-                Some(attempt.request.frontier.ok_or_else(||
+                Some(attempt.receipt.and_then(|receipt| receipt.frontier).ok_or_else(||
                     Code::Incomplete.error("managed native frontier unavailable"))?)
             };
             control.check()?;

@@ -101,7 +101,7 @@ impl Subscription {
         follow: bool,
     ) -> Result<Self> {
         Self::open(
-            session, plan, sources, binding, resume, clock, follow, None, None,
+            session, plan, sources, binding, resume, clock, follow, None, None, false,
         )
     }
 
@@ -119,6 +119,7 @@ impl Subscription {
             Arc<dyn ManagedPublication>,
         )>,
         resume_expiry: Option<u64>,
+        resume_pending: bool,
     ) -> Result<Self> {
         let workers = araphor_package_runtime::TaskTracker::new();
         session.workers = Some(workers.clone());
@@ -191,6 +192,7 @@ impl Subscription {
             resume: resume.clone(),
             binding,
             resume_expiry,
+            resume_pending,
             managed,
         });
         let execution = Arc::clone(&run);

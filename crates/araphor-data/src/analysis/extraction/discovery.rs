@@ -8,12 +8,12 @@ impl AnalysisStore {
         &self,
         snapshot: &Connection,
         receipt: &AnalysisSourceReceiptV1,
-        read: &AnalysisTableRead<'_>,
         output: &mut AnalysisExtractionV1,
         capture: &mut tables::Capture<'_>,
         managed: Option<&crate::ManagedCapture>,
         control: &AnalysisReadControl,
     ) -> Result<()> {
+        let read = capture.read;
         let Some(projected) = read.projected("discovery_state") else {
             return Ok(());
         };

@@ -1,7 +1,7 @@
 use super::*;
 
-use araphor_data::AnalysisResultCommitV1;
 use araphor_data::analysis::CanonicalGraph;
+use araphor_data::AnalysisResultCommitV1;
 
 struct NoAuthority;
 
@@ -46,14 +46,12 @@ async fn graph_refs_use_header() -> TestResult {
     let (id, receipt) = publication.refresh("graph:storage-header".into()).await?;
     let store = fixture.query.store();
     let tenant = fixture.source.tenant_id;
-    assert!(
-        !store
-            .graph_result(tenant, &id)?
-            .ok_or("graph result")?
-            .graph
-            .subjects
-            .is_empty()
-    );
+    assert!(!store
+        .graph_result(tenant, &id)?
+        .ok_or("graph result")?
+        .graph
+        .subjects
+        .is_empty());
     let before = store.meta()?;
     store.fault_write(
         "UPDATE graph_subjects SET subject_kind = repeat('X', length(subject_kind)) WHERE result_id = ?",
@@ -289,16 +287,12 @@ async fn graph_package_commit_refs() -> TestResult {
         false,
         || fixture.authority.check(&grant, PackageActionV1::Run),
     )?;
-    assert!(
-        store
-            .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?
-            .is_empty()
-    );
-    assert!(
-        store
-            .graph_finding(tenant, &replacement.result_id, &finding.finding_id)?
-            .is_none()
-    );
+    assert!(store
+        .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?
+        .is_empty());
+    assert!(store
+        .graph_finding(tenant, &replacement.result_id, &finding.finding_id)?
+        .is_none());
     let check = |store: &AnalysisStore| -> TestResult {
         assert_eq!(
             store.read_result(tenant, original)?,

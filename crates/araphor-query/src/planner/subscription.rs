@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::fmt;
+use std::future::{poll_fn, Future as _};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -216,9 +217,9 @@ impl QueryPlanner for SubscriptionPlanner {
         plan: &LogicalPlan,
         state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(Self)])
-            .create_physical_plan(plan, state)
-            .await
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(Self)]);
+        let mut planning = std::pin::pin!(planner.create_physical_plan(plan, state));
+        poll_fn(|context| crate::parser::Parser::stack(|| planning.as_mut().poll(context))).await
     }
 }
 

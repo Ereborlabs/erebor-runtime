@@ -32,7 +32,7 @@ impl AnalysisStore {
             || request
                 .frontier
                 .as_ref()
-                .is_some_and(|frontier| frontier.cursor.is_empty())
+                .is_some_and(|frontier| frontier.cursor.is_empty() || frontier.pending)
         {
             return Err(Code::Invalid.error("managed attempt request"));
         }
@@ -196,6 +196,9 @@ impl AnalysisStore {
     ) -> Result<ManagedReceipt> {
         if input.now_utc_ns < input.attempt.request().time_utc_ns {
             return Err(Code::Invalid.error("managed publication time"));
+        }
+        if !input.completed && input.attempt.request().frontier.is_none() {
+            return Err(Code::Invalid.error("managed pending frontier"));
         }
         let supplied = &input.attempt.0;
         let spec = &input.attempt.1.spec;
@@ -592,7 +595,11 @@ impl AnalysisStore {
             crate::InputRevision::of(&(spec.tenant, &spec.id, &attempt.request.id, None::<u64>))
                 .context(crate::PackageEncodingSnafu)?;
         let receipt = ManagedReceipt {
-            frontier: attempt.request.frontier.clone(),
+            frontier: attempt.request.frontier.as_ref().map(|frontier| {
+                let mut frontier = frontier.clone();
+                frontier.pending = !input.completed;
+                frontier
+            }),
             instance: spec.id.clone(),
             attempt: attempt.request.id.clone(),
             commit_revision: revision,

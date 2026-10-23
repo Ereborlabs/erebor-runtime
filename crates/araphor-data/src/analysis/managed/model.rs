@@ -353,6 +353,8 @@ pub struct ManagedResume {
 pub struct ManagedFrontier {
     pub cursor: Vec<u8>,
     pub next_change: Option<u64>,
+    /// Resume this captured cut before waiting for a source change.
+    pub pending: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -578,6 +580,20 @@ pub struct ManagedReceipt {
     pub results: BTreeMap<u64, PackageResultRefV1>,
 }
 
+impl ManagedReceipt {
+    pub(super) fn matches_frontier(&self, offered: &Option<ManagedFrontier>) -> bool {
+        match (&self.frontier, offered) {
+            (None, None) => true,
+            (Some(saved), Some(offered)) => {
+                !offered.pending
+                    && saved.cursor == offered.cursor
+                    && saved.next_change == offered.next_change
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ManagedExit {
     Cancelled,
@@ -688,6 +704,8 @@ impl Attempt {
 
 pub struct ManagedCommit<'a> {
     pub attempt: &'a ManagedAttempt,
+    /// The native publication has no remaining work for this captured input.
+    pub completed: bool,
     pub now_utc_ns: u64,
     pub returns: &'a [ManagedReturn<'a>],
     pub selected: &'a sdk::Dataset,

@@ -281,6 +281,7 @@ fn saved_inputs_commit_atomically() -> TestResult {
     assert!(store
         .commit_managed(
             &ManagedCommit {
+                completed: true,
                 attempt: &attempt,
                 now_utc_ns: 10,
                 returns: &returns,

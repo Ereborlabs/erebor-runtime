@@ -34,7 +34,11 @@ async fn input_precedes_compilation() -> TestResult {
         },
     )?;
     let before = fixture.owner.query.store().meta()?.commit_revision;
-    let error = fixture.run(&bundle).await.unwrap_err();
+    let error = fixture
+        .run(&bundle)
+        .await
+        .err()
+        .ok_or("invalid input executed")?;
     assert!(matches!(
         error,
         crate::Error::Query { source }

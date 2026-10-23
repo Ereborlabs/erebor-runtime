@@ -32,7 +32,7 @@ mod trace;
 use builder::{table_row, Table};
 
 pub(super) struct Capture<'a> {
-    read: &'a AnalysisTableRead<'a>,
+    pub(super) read: &'a AnalysisTableRead<'a>,
     scope: &'a AnalysisSelectionV1,
     tables: BTreeMap<String, Table>,
     witnesses: Vec<AnalysisWitnessV1>,

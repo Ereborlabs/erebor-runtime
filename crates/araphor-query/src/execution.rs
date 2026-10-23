@@ -1087,7 +1087,14 @@ impl Session {
                 let control = Arc::clone(&control);
                 async move {
                     let batch = control
-                        .query_async(async { stream.try_next().await.context(SqlSnafu) })
+                        .query_async(async {
+                            std::future::poll_fn(|context| {
+                                crate::parser::Parser::stack(|| stream.poll_next_unpin(context))
+                            })
+                            .await
+                            .transpose()
+                            .context(SqlSnafu)
+                        })
                         .await
                         .map_err(|source| DataFusionError::External(Box::new(source)))?;
                     let Some(batch) = batch else {

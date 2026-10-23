@@ -401,6 +401,7 @@ impl DataSink for Publication {
                     || {
                         control.check()?;
                         let managed = ManagedCommit {
+                            completed,
                             attempt: &attempt,
                             now_utc_ns: now,
                             returns: &returns,

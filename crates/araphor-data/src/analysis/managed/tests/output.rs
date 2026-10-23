@@ -304,6 +304,7 @@ fn selected_uses_saved_schema() -> TestResult {
         batches: vec![Fixture::batch(&schema, 5)?],
     };
     let commit = ManagedCommit {
+        completed: true,
         attempt: &attempt,
         now_utc_ns: 10,
         returns: &[],
