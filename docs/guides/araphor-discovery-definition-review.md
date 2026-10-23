@@ -2408,3 +2408,20 @@ records the exact commands, sources, binaries, passes and failure. There are
 Current Graph recovery, final archive custody and complete retirement remain
 **Not done**. These results do not establish a passing full workspace suite or
 overall production reduction.
+
+
+## Exact context retries
+
+[Data context writes](../../crates/araphor-data/src/analysis/context/write.rs)
+validate the input before the exact retry check, in the same writer transaction.
+The context-local row reader keeps structural decoding and nonzero revision
+checks. An equal stored value reuses that input validation. A different stored
+value receives full package validation before Conflict.
+[Checked reads](../../crates/araphor-data/src/analysis/context/reads.rs) still
+validate the current OCI artifact bytes. No saved digest replaces that check.
+
+All 16 focused Data checks pass, including exact retries, stored corruption,
+artifact corruption and atomic publication. The Graph unchanged-source retry
+passes its original observer. The same test later fails at repaired cursor 258.
+Read the [consolidation record](../../recovery/araphor-context-retry-consolidation-20261023.json).
+Complete Graph recovery and the final nine-file removal remain **Not done**.

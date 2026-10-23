@@ -53,6 +53,7 @@ fn package_context_retains_closure() -> TestResult {
     let reference = store.intern_context(&context)?;
     let pinned = store.meta()?;
     assert_eq!(store.intern_context(&context)?, reference);
+    assert_eq!(store.commit_context(&context)?, reference.commit_revision);
     assert_eq!(store.meta()?, pinned);
     store.commit_context(&crate::AnalysisContextVersionV1 {
         key: crate::AnalysisContextKeyV1 {

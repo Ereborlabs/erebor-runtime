@@ -223,8 +223,9 @@ impl AnalysisStore {
                 }));
             }
         }
-        if let Some((stored, revision)) = Self::read_context_from(reader, &self.root, key)? {
+        if let Some((stored, revision)) = Self::read_context_row_from(reader, &self.root, key)? {
             if &stored != input {
+                Self::validate_context_packages(reader, &self.root, &stored)?;
                 return AnalysisConflictSnafu.fail();
             }
             return Ok(Some(AnalysisContextRefV1 {

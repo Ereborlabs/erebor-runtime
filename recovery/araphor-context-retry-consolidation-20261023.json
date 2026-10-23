@@ -1,0 +1,138 @@
+{
+  "result": "Done for exact transaction retry consolidation. Complete Graph feed recovery and final reference removal are Not done.",
+  "source_base": "4f0eae6a18a321331a0b2c73fc17ecc1dcddc813",
+  "reason": "context_rows fully validates input before context_retry. The exact-key retry then decodes and fully validates the identical stored value. Both checks read the same immutable package closure through the same writer transaction.",
+  "behavior": "Factor existing exact row SELECT+structural decode into context-local read_context_row_from. Keep full package validation in read_context_from. Retry omits the second package validation only on exact stored==input. Mismatches still validate the stored packages before typed Conflict.",
+  "scope": [
+    "context_rows is called by commit_context_values and progress_rows",
+    "context_retry is called only by context_rows",
+    "new row helper is called only by checked read_context_from and context_retry",
+    "all existing read_context_from callers remain checked, including context head/version/pages, extraction, schema, packages witnesses/commit, managed read/commit, progress and import history"
+  ],
+  "preserved": [
+    "Existing sensitivity/bounds/body/key and nonzero stored revision checks in decode_context_row",
+    "Input package validation before retry",
+    "Stored package corruption errors before conflict on unequal values",
+    "All public, extraction, schema and recovery read_context_from callers retain full package validation",
+    "Writer transaction, scope, authority, atomicity and notice effects",
+    "Native trust and exact OCI digest checks; no artifact-validation removal or cache"
+  ],
+  "source": {
+    "crates/araphor-data/src/analysis/context/reads.rs": {
+      "base_sha256": "81909b78ad47f3ed4c7083cf146dda8b0b9db779fb6bd62de2528c51b9b8f993",
+      "after_sha256": "787e96c22efca8efeb9765ea05d2d79cddf8420ca4a5e4d1af50fc33cae85774"
+    },
+    "crates/araphor-data/src/analysis/context/write.rs": {
+      "base_sha256": "82b357a28b5953c304d34e07e381a31bc9f0591a752389ca044185bc0084faab",
+      "after_sha256": "68ddb0e48fe6c812699c0fb0166099d83020895cf5dcd2b47130c2d306f5ed68"
+    },
+    "crates/araphor-data/src/analysis/packages/tests/context/native.rs": {
+      "base_sha256": "63ee19c051722f87889fd4ecf4403e9a62bb9b950957bd164b5d20776ddb94c4",
+      "after_sha256": "cb7402526870d69003a509ede67518cb9dfd42e7c8fa59dfbc9d3f676b7e62d5"
+    },
+    "crates/araphor-data/src/analysis/packages/tests/context/validation.rs": {
+      "base_sha256": "b6e82984713272ff3849f85bd638d22ea7ed96b7d1a5e65a2304668b58f667b3",
+      "after_sha256": "1aa94db62b70e75d7149990c06dd31eb36f6080e2e8d5bfd71fe7afee00290ed"
+    }
+  },
+  "qualification": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "araphor-analysis",
+        "-p",
+        "araphor-query",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-package-runtime",
+        "-p",
+        "mithril-control",
+        "-p",
+        "araphor-cli",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "head": "4f0eae6a18a321331a0b2c73fc17ecc1dcddc813",
+      "exit_code": 0,
+      "elapsed_seconds": 354.3943783499999,
+      "binary_sha256": null,
+      "log_sha256": "fd318167adce1aab0834e343b5ae5ee0996ac07a3f5da15b0766a6f33b37ecb3",
+      "source_unchanged": true,
+      "record": "compile368.json",
+      "record_sha256": "a4f5e2dfd095867a7d596e29e898b827e51491cb91f20e3f5a1f5ca3a9073aa6"
+    },
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "head": "4f0eae6a18a321331a0b2c73fc17ecc1dcddc813",
+      "exit_code": 0,
+      "elapsed_seconds": 4.952358160007861,
+      "binary_sha256": null,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_unchanged": true,
+      "record": "format368.json",
+      "record_sha256": "5872e39f70f639840cbc536b80cc7fb8f79a8f67bf2c38e8e6fe634197ea6376"
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_data-ef29af64b90b2937",
+        "analysis::managed::tests::frontier::",
+        "analysis::managed::tests::readiness::failed_frontier_keeps_progress",
+        "analysis::managed::tests::readiness::cancelled_frontier_is_unconsumed",
+        "analysis::managed::tests::managed_witness_lifetime_check",
+        "analysis::graph_rows::tests::atomic::graph_contexts_commit_atomically",
+        "analysis::packages::tests::evidence::packages_preserve_native_references",
+        "analysis::packages::tests::packages_failed_commit_atomicity",
+        "analysis::packages::tests::context::native::package_context_retains_closure",
+        "analysis::packages::tests::context::validation::domain_ref_corruption_rejected",
+        "analysis::packages::tests::context::native::package_context_checks_artifact",
+        "analysis::context::tests::context_batch_retries",
+        "analysis::context::tests::context_batch_conflicts",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "head": "4f0eae6a18a321331a0b2c73fc17ecc1dcddc813",
+      "exit_code": 0,
+      "elapsed_seconds": 32.27546056199935,
+      "binary_sha256": "759748d795e27a2d9ed35ae3e363a0b886f742a994aa32d118c68dcf2258f64f",
+      "log_sha256": "27da0ef9f8dc052b03cdc8972e1f3c9a98f904738d4958d1b15a1a1f1c87cb26",
+      "source_unchanged": true,
+      "record": "data-context368.json",
+      "record_sha256": "6889e0e74eecffb6b959a68c2b8e25aa3abf8e452d87edd226df46a5bb36ecb1"
+    },
+    {
+      "command": [
+        "target/debug/deps/araphor_analysis-f2e10dea0901b393",
+        "graph::native::tests::feed::failed_feed_recovers_source",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "head": "4f0eae6a18a321331a0b2c73fc17ecc1dcddc813",
+      "exit_code": 101,
+      "elapsed_seconds": 177.4333997950016,
+      "binary_sha256": "a99bc6a13a1a36b3aeab0fe22b487416763f49ac23b04fac473043ce483ad0c1",
+      "log_sha256": "a67c125d4873b97a9682623692793c5f64a61d3d7463b9743a5a299faafabaef",
+      "source_unchanged": true,
+      "record": "graph-recovery368.json",
+      "record_sha256": "df30c7cf7cfb45500cc60f13e70739c04ee5ddcb2d31345e76359733a03b42bf"
+    }
+  ],
+  "graph_result": "The unchanged-source recovery passes its original observer. The same test later fails at repaired cursor 258 after 33.907748 seconds; it is not a passing complete Graph test.",
+  "guard_changes": false,
+  "native_validation_removed": false,
+  "schema_or_version_changes": false,
+  "final_reference_files_remaining": 9,
+  "limits": "No benchmark or full-workspace result is claimed. Strict Clippy and complete current recovery qualification remain pending."
+}

@@ -127,6 +127,18 @@ fn domain_ref_corruption_rejected() -> TestResult {
                 )?;
             }
         }
+        if change == 0 {
+            let before = store.meta()?;
+            assert!(matches!(
+                store.commit_context(&input),
+                Err(crate::Error::Package {
+                    code: crate::PackageErrorCodeV1::Invalid,
+                    field: "installed context reference fields",
+                    ..
+                })
+            ));
+            assert_eq!(store.meta()?, before);
+        }
         assert!(store.context_version(&input.key).is_err());
         assert!(store
             .context_head_page([1; 16], "graph-packages-v1", None)

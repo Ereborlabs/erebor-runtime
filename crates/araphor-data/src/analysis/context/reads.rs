@@ -74,6 +74,19 @@ impl AnalysisStore {
         root: &Path,
         key: &AnalysisContextKeyV1,
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
+        Self::read_context_row_from(connection, root, key)?
+            .map(|result| {
+                Self::validate_context_packages(connection, root, &result.0)?;
+                Ok(result)
+            })
+            .transpose()
+    }
+
+    pub(super) fn read_context_row_from(
+        connection: &Connection,
+        root: &Path,
+        key: &AnalysisContextKeyV1,
+    ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
         let stored: Option<ContextRow> = connection
             .query_row(
                 "SELECT valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision
@@ -101,11 +114,7 @@ impl AnalysisStore {
                 operation: "read context version",
             })?;
         stored
-            .map(|stored| {
-                let result = Self::decode_context_row(root, key.clone(), stored)?;
-                Self::validate_context_packages(connection, root, &result.0)?;
-                Ok(result)
-            })
+            .map(|stored| Self::decode_context_row(root, key.clone(), stored))
             .transpose()
     }
 
