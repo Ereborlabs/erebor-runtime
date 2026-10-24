@@ -1,5 +1,7 @@
 # Araphor Component Redesign Proposal
 
+Current native lifecycle proof is in [Native lifecycle proof transfer](#native-lifecycle-proof-transfer).
+
 Current subscription source ownership is in [One native subscription source](#one-native-subscription-source).
 
 Current saved-input ownership is in [Native saved-input retirement](#native-saved-input-retirement).
@@ -4218,3 +4220,42 @@ Full workspace CI, a benchmark, and physical qualification are not run.
 Result for this source consolidation: **Done**. General maintained SQL and the
 complete redesign remain **Not done**. The legacy Data lifecycle is not removed
 by this change.
+
+### Native lifecycle proof transfer
+
+Native proof transfer in this record: **Done**. Production lifecycle
+consolidation: **Not done**. No legacy lifecycle implementation, table, or test
+is removed by this change. The native Data owner already exists. These tests
+check its guarantees before the duplicate owner can be removed.
+
+An existing native Data operation fails or stops
+  -> the existing Rust test calls the supported Data operation
+  -> the test checks the stored state and exact error
+  -> the test checks recovery, retry, or retained history at the same owner
+
+| Required behavior | Native proof |
+| --- | --- |
+| Unknown commit result and lifecycle notices | `recovery_reconciles_running` checks committed and rolled-back native transitions, exact recovered membership, no early notice, silent repeated recovery, and unrelated intake. The old recovery case also passes. |
+| Inert image and definition admission | One shared test assertion checks the two legacy execution tables, six native Managed tables, and `analysis_results`. It includes stopped rows. Existing image and definition tests also check lifecycle watches. |
+| Version-switch crash atomicity | `managed_commit_crashes` checks ordinary publication and prepared-version publication before and after the existing crash points. Prior checkpoints, complete new output, old history, and Arrow bytes remain consistent. |
+| Stored dependency integrity | `selected_edges_reject_corruption` checks missing edges, a wrong revision, a valid but incorrect replacement pair, and an extra valid pair. Reads and reopen reject the inconsistent selected result. |
+| Retained provenance | `retained_provenance_survives_expiry` checks a real generic result followed by native publication with 8,193 witnesses and 257 contexts. Exact references survive removal, expiry, and reopen. Physical raw data stays pinned until expiry. |
+| Large retained data and configured quotas | Native storage tests check a valid 17 MiB description and Arrow reason details above 16 MiB, final-authority rollback, retry, backup, restore, independent logical charges, and global and tenant rejection. Version preparation also preserves the old state when its configured quota rejects the write. |
+
+The [migration record](araphor-analysis-migration.md#native-lifecycle-proof-transfer)
+records the source files, split test runs, and remaining duties. The
+[review guide](../guides/araphor-discovery-definition-review.md#native-lifecycle-proof-transfer)
+gives the source reading route. These are ordinary crate-local Rust tests.
+They add no production API, polling task, execution owner, or fault hook.
+
+Current qualification: **25 distinct cases pass** across split runs. The renamed
+storage case also passes on the final library build. Strict Clippy, scoped
+Rust formatting, and whitespace checks pass. The repeated renamed case does
+not increase the distinct count.
+
+Whole-owner removal remains **Not done**. Authentic source, trace, capture
+identity, physical-read, and nested-dependency replacement proofs remain.
+The shared artifact read-control assertions and three general reader-capacity
+tests must stay at their current owners or move intact before the old test
+module is removed. Old caller-forged fields that the native API does not
+accept do not require a new mutable API.

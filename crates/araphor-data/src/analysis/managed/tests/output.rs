@@ -547,3 +547,164 @@ fn latest_output_binds_receipt() -> TestResult {
     assert_eq!(store.meta()?, before);
     Ok(())
 }
+
+#[test]
+fn selected_edges_reject_corruption() -> TestResult {
+    for fault in ["missing", "revision", "replacement", "extra"] {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("store");
+        let store = AnalysisStore::open(&root)?;
+        let fixture = Fixture::admit(&store)?;
+        let first = fixture.selected_receipt(&store, "first")?;
+        let second = fixture.selected_receipt(&store, "second")?;
+        let current = fixture.current(&store)?;
+        let control = AnalysisReadControl::default();
+        let original = &first.results[&10];
+        let replacement = &second.results[&10];
+        assert_ne!(original.result_id, replacement.result_id);
+        assert_ne!(original.commit_revision, replacement.commit_revision);
+        let ManagedOutput::Call { result: call, .. } =
+            store.managed_output(&current, &original.result_id, 10, &control)?
+        else {
+            return Err("historical call absent".into());
+        };
+        assert!(!call.current);
+        assert_eq!(call.commit_revision, original.commit_revision);
+        assert_eq!(
+            call.output,
+            sdk::wire::Output::encode_model(&fixture.output(2)?, &fixture.model)?
+        );
+        let ManagedOutput::Selected { data, .. } =
+            store.managed_output(&current, &first.selected.result_id, 10, &control)?
+        else {
+            return Err("historical selected output absent".into());
+        };
+        assert_eq!(data.batches, fixture.output(2)?.datasets[0].batches);
+        let mut expected = first.results.values().cloned().collect::<Vec<_>>();
+        expected.sort_by(|left, right| left.result_id.cmp(&right.result_id));
+        let before = store.meta()?;
+        {
+            let mut writer = store.writer()?;
+            let writer = writer.get_mut()?;
+            assert_eq!(
+                AnalysisStore::managed_edges(writer, [1; 16], &first.selected.result_id)?,
+                expected
+            );
+            match fault {
+                "missing" => {
+                    assert_eq!(
+                        writer.execute(
+                            "DELETE FROM managed_edges WHERE result_id = ? AND dependency_id = ?",
+                            params![first.selected.result_id, original.result_id],
+                        )?,
+                        1
+                    );
+                }
+                "revision" => {
+                    assert_eq!(writer.execute(
+                        "UPDATE managed_edges SET commit_revision = ? WHERE result_id = ? AND dependency_id = ?",
+                        params![replacement.commit_revision, first.selected.result_id, original.result_id],
+                    )?, 1);
+                }
+                "replacement" => {
+                    assert_eq!(writer.execute(
+                        "UPDATE managed_edges SET dependency_id = ?, commit_revision = ? WHERE result_id = ? AND dependency_id = ?",
+                        params![replacement.result_id, replacement.commit_revision, first.selected.result_id, original.result_id],
+                    )?, 1);
+                }
+                _ => {
+                    assert_eq!(
+                        writer.execute(
+                            "INSERT INTO managed_edges VALUES (?, ?, ?, ?)",
+                            params![
+                                [1u8; 16].as_slice(),
+                                first.selected.result_id,
+                                replacement.result_id,
+                                replacement.commit_revision
+                            ],
+                        )?,
+                        1
+                    );
+                }
+            }
+            let expected_count = if fault == "missing" {
+                1
+            } else if fault == "extra" {
+                3
+            } else {
+                2
+            };
+            assert_eq!(
+                AnalysisStore::managed_edges(writer, [1; 16], &first.selected.result_id)?.len(),
+                expected_count
+            );
+            if matches!(fault, "replacement" | "extra") {
+                let valid: bool = writer.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM managed_edges e JOIN analysis_results r ON e.tenant_id = r.tenant_id AND e.dependency_id = r.result_id AND e.commit_revision = r.commit_revision WHERE e.result_id = ? AND e.dependency_id = ?)",
+                    params![first.selected.result_id, replacement.result_id],
+                    |row| row.get(0),
+                )?;
+                assert!(valid);
+            }
+        }
+        for result in [
+            store.managed_output(&current, &first.selected.result_id, 10, &control),
+            store.managed_query_output(
+                &current.grant.selection,
+                &current.spec.id,
+                Some(&first.selected.result_id),
+                10,
+                &control,
+            ),
+        ] {
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::Error::Package {
+                        code: crate::PackageErrorCodeV1::Invalid,
+                        field: "managed selected edges",
+                        ..
+                    })
+                ),
+                "{fault}"
+            );
+        }
+        let ManagedOutput::Call {
+            result: retained, ..
+        } = store.managed_output(&current, &original.result_id, 10, &control)?
+        else {
+            return Err("historical call lost after edge fault".into());
+        };
+        assert_eq!(retained.output, call.output);
+        assert_eq!(retained.context, call.context);
+        assert_eq!(retained.commit_revision, call.commit_revision);
+        assert_eq!(store.meta()?, before);
+        drop(store);
+        let reopened = AnalysisStore::open(&root);
+        if fault == "revision" {
+            assert!(
+                matches!(
+                    reopened,
+                    Err(crate::Error::AnalysisState {
+                        reason,
+                        ..
+                    }) if reason == "the managed references are invalid"
+                ),
+                "{fault}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    reopened,
+                    Err(crate::Error::Package {
+                        code: crate::PackageErrorCodeV1::Invalid,
+                        field: "managed selected edges",
+                        ..
+                    })
+                ),
+                "{fault}"
+            );
+        }
+    }
+    Ok(())
+}

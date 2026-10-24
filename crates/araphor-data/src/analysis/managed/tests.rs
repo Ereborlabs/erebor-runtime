@@ -26,7 +26,9 @@ mod output;
 mod removal;
 mod renewal;
 mod replay;
+mod retention;
 mod status;
+mod storage;
 mod terminal;
 mod version;
 
@@ -1187,58 +1189,357 @@ fn managed_commit_crashes() -> TestResult {
     if let Some(root) = std::env::var_os("ARAPHOR_MANAGED_ROOT") {
         let store = AnalysisStore::open(std::path::PathBuf::from(root))?;
         let fixture = Fixture::admit(&store)?;
-        let capture = fixture.capture(&store, false)?;
+        let upgrade = std::env::var("ARAPHOR_MANAGED_UPGRADE")? == "true";
+        let capture = if upgrade {
+            let current = fixture.current(&store)?;
+            let spec = version::target(&store, &current, "Prepare the crash version.")?;
+            let target = store.prepare_managed_version(&current, &spec, || Ok(()))?;
+            version::capture(&store, &current, &target, false)?
+        } else {
+            fixture.capture(&store, false)?
+        };
         let input = request("crash");
         let attempt = store.register_managed_attempt(&capture, &input, || Ok(()))?;
         let eval = [
-            fixture.evaluation(&input, 10, None)?,
-            fixture.evaluation(&input, 11, None)?,
+            fixture.evaluation(&input, 10, Some(&capture))?,
+            fixture.evaluation(&input, 11, Some(&capture))?,
         ];
+        if upgrade {
+            for (evaluation, value) in eval.iter().zip([12, 103]) {
+                assert_eq!(
+                    evaluation
+                        .checkpoint
+                        .as_ref()
+                        .ok_or("old checkpoint absent")?
+                        .datasets[0]
+                        .batches,
+                    fixture
+                        .output(value)?
+                        .checkpoint
+                        .ok_or("expected old checkpoint absent")?
+                        .datasets[0]
+                        .batches,
+                );
+            }
+        }
         let outputs = [fixture.output(2)?, fixture.output(3)?];
         fixture.publish(&store, &attempt, &eval, &outputs)?;
         return Err("the requested managed crash did not occur".into());
     }
-    for point in ["managed.before", "managed.after"] {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("store");
-        let store = AnalysisStore::open(&root)?;
-        let fixture = Fixture::admit(&store)?;
-        drop(store);
-        let status = std::process::Command::new(std::env::current_exe()?)
-            .args([
-                "--exact",
-                "analysis::managed::tests::managed_commit_crashes",
-            ])
-            .env("ARAPHOR_MANAGED_ROOT", &root)
-            .env("ARAPHOR_CRASH_ROOT", &root)
-            .env("ARAPHOR_CRASH_POINT", point)
-            .status()?;
-        assert_eq!(status.code(), Some(73), "{point}");
-        let store = AnalysisStore::open(&root)?;
-        let pending = store
-            .managed_attempt([1; 16], "counter", "crash", &AnalysisReadControl::default())?
-            .ok_or("crash attempt absent")?;
-        if point == "managed.after" {
-            let receipt = pending.receipt().ok_or("committed receipt absent")?.clone();
-            assert_eq!(pending.receipt(), Some(&receipt));
-            assert_eq!(
-                fixture.capture(&store, false)?.instance().progress,
-                receipt.commit_revision
-            );
-        } else {
-            assert!(pending.receipt().is_none());
+    let heads = |store: &AnalysisStore| {
+        store.read_snapshot(|reader| {
+            let mut statement = reader.prepare(
+                "SELECT call_id, state_revision, result_id FROM managed_calls WHERE tenant_id = ? AND instance_id = 'counter' ORDER BY call_id",
+            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare crash call heads" })?;
+            let rows = statement.query_map(params![[1u8; 16].as_slice()], |row| {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?, row.get::<_, Option<String>>(2)?))
+            }).context(crate::AnalysisDatabaseSnafu { operation: "read crash call heads" })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(crate::AnalysisDatabaseSnafu { operation: "decode crash call heads" })?;
+            Ok(rows)
+        })
+    };
+    let arrows = |store: &AnalysisStore| {
+        store.read_snapshot(|reader| {
+            let mut statement = reader.prepare(
+                "SELECT result_id, role, slot, ipc FROM managed_arrow ORDER BY result_id, role, slot",
+            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare crash Arrow rows" })?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, u64>(2)?, row.get::<_, Vec<u8>>(3)?))
+            }).context(crate::AnalysisDatabaseSnafu { operation: "read crash Arrow rows" })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(crate::AnalysisDatabaseSnafu { operation: "decode crash Arrow rows" })?;
+            Ok(rows)
+        })
+    };
+    for upgrade in [false, true] {
+        for point in ["managed.before", "managed.after"] {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("store");
+            let store = AnalysisStore::open(&root)?;
+            let fixture = Fixture::admit(&store)?;
+            let original = if upgrade {
+                let capture = fixture.capture(&store, false)?;
+                let input = request("original");
+                let attempt = store.register_managed_attempt(&capture, &input, || Ok(()))?;
+                let eval = [
+                    fixture.evaluation(&input, 10, Some(&capture))?,
+                    fixture.evaluation(&input, 11, Some(&capture))?,
+                ];
+                Some(fixture.publish(
+                    &store,
+                    &attempt,
+                    &eval,
+                    &[fixture.output(12)?, fixture.output(103)?],
+                )?)
+            } else {
+                None
+            };
+            let prior = fixture.current(&store)?;
+            let target = if upgrade {
+                let spec = version::target(&store, &prior, "Prepare the crash version.")?;
+                Some(store.prepare_managed_version(&prior, &spec, || Ok(()))?)
+            } else {
+                None
+            };
+            assert_eq!(fixture.current(&store)?, prior);
+            let prior_heads = heads(&store)?;
+            let prior_arrows = arrows(&store)?;
+            drop(store);
+            let status = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "analysis::managed::tests::managed_commit_crashes",
+                ])
+                .env("ARAPHOR_MANAGED_ROOT", &root)
+                .env("ARAPHOR_MANAGED_UPGRADE", upgrade.to_string())
+                .env("ARAPHOR_CRASH_ROOT", &root)
+                .env("ARAPHOR_CRASH_POINT", point)
+                .status()?;
+            assert_eq!(status.code(), Some(73), "{point}, upgrade={upgrade}");
+            let store = AnalysisStore::open(&root)?;
+            let control = AnalysisReadControl::default();
+            let pending = store
+                .managed_attempt([1; 16], "counter", "crash", &control)?
+                .ok_or("crash attempt absent")?;
+            assert!(pending.terminal().is_none());
+            if let Some(target) = &target {
+                assert_eq!(pending.instance().generation, target.generation);
+                assert_eq!(pending.instance().spec, target.spec);
+                assert_eq!(
+                    store.managed_version([1; 16], "counter", target.generation, &control)?,
+                    target.spec
+                );
+            }
+            let current = fixture.current(&store)?;
             let captured = fixture.capture(&store, false)?;
-            assert!(captured.prior(10).is_none());
-            assert!(captured.prior(11).is_none());
-            assert_eq!(captured.instance().progress, 0);
-            let input = request("recovered");
-            let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
-            let eval = [
-                fixture.evaluation(&input, 10, None)?,
-                fixture.evaluation(&input, 11, None)?,
-            ];
-            let outputs = [fixture.output(2)?, fixture.output(3)?];
-            fixture.publish(&store, &attempt, &eval, &outputs)?;
+            let retained_arrows = arrows(&store)?;
+            if point == "managed.after" {
+                let receipt = pending.receipt().ok_or("committed receipt absent")?.clone();
+                assert_eq!(pending.receipt(), Some(&receipt));
+                assert_eq!(receipt.results.len(), 2);
+                assert_eq!(receipt.selected.commit_revision, receipt.commit_revision);
+                assert_eq!(current.progress, receipt.commit_revision);
+                assert_eq!(captured.instance().progress, receipt.commit_revision);
+                assert_eq!(
+                    current.generation,
+                    target
+                        .as_ref()
+                        .map_or(prior.generation, |target| target.generation)
+                );
+                assert_eq!(
+                    &current.spec,
+                    target.as_ref().map_or(&prior.spec, |target| &target.spec)
+                );
+                assert_eq!(
+                    current.lifecycle,
+                    if upgrade {
+                        receipt.commit_revision
+                    } else {
+                        prior.lifecycle
+                    }
+                );
+                let expected_heads = receipt
+                    .results
+                    .iter()
+                    .map(|(call, reference)| {
+                        (
+                            *call,
+                            reference.commit_revision,
+                            Some(reference.result_id.clone()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(heads(&store)?, expected_heads);
+                let mut expected_shapes = Vec::new();
+                for (call, value) in [(10, 2), (11, 3)] {
+                    let reference = &receipt.results[&call];
+                    assert_eq!(reference.commit_revision, receipt.commit_revision);
+                    let saved = captured.prior(call).ok_or("new checkpoint absent")?;
+                    assert_eq!(saved.result, reference.result_id);
+                    assert_eq!(saved.revision, reference.commit_revision);
+                    assert_eq!(
+                        saved
+                            .checkpoint
+                            .as_ref()
+                            .ok_or("new state absent")?
+                            .datasets[0]
+                            .batches,
+                        fixture
+                            .output(value)?
+                            .checkpoint
+                            .ok_or("expected new state absent")?
+                            .datasets[0]
+                            .batches,
+                    );
+                    let ManagedOutput::Call { result, .. } =
+                        store.managed_output(&current, &reference.result_id, 10, &control)?
+                    else {
+                        return Err("new crash call absent".into());
+                    };
+                    assert!(result.current);
+                    assert_eq!(result.commit_revision, receipt.commit_revision);
+                    assert_eq!(
+                        result.output,
+                        sdk::wire::Output::encode_model(&fixture.output(value)?, &fixture.model)?
+                    );
+                    let evaluation =
+                        store.managed_evaluation(&current, &reference.result_id, &control)?;
+                    let expected = fixture.evaluation(&request("crash"), call, None)?;
+                    assert_eq!(evaluation.context, expected.context);
+                    assert_eq!(evaluation.inputs.len(), 1);
+                    assert_eq!(evaluation.inputs[0].data.name, expected.inputs[0].data.name);
+                    assert_eq!(
+                        evaluation.inputs[0].data.batches,
+                        expected.inputs[0].data.batches
+                    );
+                    assert_eq!(evaluation.inputs[0].revision, expected.inputs[0].revision);
+                    assert_eq!(evaluation.inputs[0].coverage, expected.inputs[0].coverage);
+                    assert_eq!(evaluation.parameters, expected.parameters);
+                    if upgrade {
+                        let old = if call == 10 { 12 } else { 103 };
+                        let checkpoint = evaluation
+                            .checkpoint
+                            .as_ref()
+                            .ok_or("continued checkpoint absent")?;
+                        assert_eq!(checkpoint.version, 1);
+                        assert_eq!(checkpoint.datasets.len(), 1);
+                        assert_eq!(
+                            checkpoint.datasets[0].batches,
+                            fixture
+                                .output(old)?
+                                .checkpoint
+                                .ok_or("expected prior state absent")?
+                                .datasets[0]
+                                .batches
+                        );
+                    } else {
+                        assert!(evaluation.checkpoint.is_none());
+                    }
+                    for role in ["checkpoint", "input", "output", "parameters", "reason"] {
+                        expected_shapes.push((reference.result_id.clone(), role.to_owned(), 0_u64));
+                    }
+                }
+                expected_shapes.push((
+                    receipt.selected.result_id.clone(),
+                    "selected".into(),
+                    0_u64,
+                ));
+                expected_shapes.sort();
+                let original_ids = prior_arrows
+                    .iter()
+                    .map(|row| row.0.as_str())
+                    .collect::<BTreeSet<_>>();
+                let original_rows = retained_arrows
+                    .iter()
+                    .filter(|row| original_ids.contains(row.0.as_str()))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                assert_eq!(original_rows, prior_arrows);
+                let new_rows = retained_arrows
+                    .iter()
+                    .filter(|row| !original_ids.contains(row.0.as_str()))
+                    .collect::<Vec<_>>();
+                assert!(new_rows.iter().all(|row| !row.3.is_empty()));
+                let shapes = new_rows
+                    .iter()
+                    .map(|row| (row.0.clone(), row.1.clone(), row.2))
+                    .collect::<Vec<_>>();
+                assert_eq!(shapes, expected_shapes);
+                assert_eq!(
+                    store
+                        .managed_selected([1; 16], "counter", "crash", &control)?
+                        .ok_or("crash selected absent")?
+                        .data
+                        .batches,
+                    fixture.output(2)?.datasets[0].batches
+                );
+                let mut history = original.iter().cloned().collect::<Vec<_>>();
+                history.push(receipt);
+                assert_eq!(
+                    store.managed_history(&current.grant.selection, "counter", &control)?,
+                    history
+                );
+            } else {
+                assert!(pending.receipt().is_none());
+                assert_eq!(current, prior);
+                assert_eq!(heads(&store)?, prior_heads);
+                assert_eq!(retained_arrows, prior_arrows);
+                assert!(store
+                    .managed_selected([1; 16], "counter", "crash", &control)?
+                    .is_none());
+                assert_eq!(
+                    store.managed_history(&current.grant.selection, "counter", &control)?,
+                    original.iter().cloned().collect::<Vec<_>>()
+                );
+                for (call, value) in [(10, 12), (11, 103)] {
+                    if let Some(original) = &original {
+                        let saved = captured.prior(call).ok_or("original checkpoint absent")?;
+                        assert_eq!(saved.result, original.results[&call].result_id);
+                        assert_eq!(saved.revision, original.results[&call].commit_revision);
+                        assert_eq!(
+                            saved
+                                .checkpoint
+                                .as_ref()
+                                .ok_or("original state absent")?
+                                .datasets[0]
+                                .batches,
+                            fixture
+                                .output(value)?
+                                .checkpoint
+                                .ok_or("expected original state absent")?
+                                .datasets[0]
+                                .batches
+                        );
+                    } else {
+                        assert!(captured.prior(call).is_none());
+                    }
+                }
+            }
+            if let Some(original) = &original {
+                let retained = store
+                    .managed_attempt([1; 16], "counter", "original", &control)?
+                    .ok_or("original receipt absent")?;
+                assert_eq!(retained.receipt(), Some(original));
+                for (call, value) in [(10, 12), (11, 103)] {
+                    let ManagedOutput::Call { result, .. } = store.managed_output(
+                        &current,
+                        &original.results[&call].result_id,
+                        10,
+                        &control,
+                    )?
+                    else {
+                        return Err("original call lost".into());
+                    };
+                    assert_eq!(result.commit_revision, original.commit_revision);
+                    assert_eq!(
+                        result.output,
+                        sdk::wire::Output::encode_model(&fixture.output(value)?, &fixture.model)?
+                    );
+                    assert_eq!(result.current, point == "managed.before");
+                }
+                assert_eq!(
+                    store
+                        .managed_selected([1; 16], "counter", "original", &control)?
+                        .ok_or("original selected lost")?
+                        .data
+                        .batches,
+                    fixture.output(12)?.datasets[0].batches
+                );
+            }
+            if point == "managed.before" && !upgrade {
+                assert!(captured.prior(10).is_none());
+                assert!(captured.prior(11).is_none());
+                assert_eq!(captured.instance().progress, 0);
+                let input = request("recovered");
+                let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
+                let eval = [
+                    fixture.evaluation(&input, 10, None)?,
+                    fixture.evaluation(&input, 11, None)?,
+                ];
+                let outputs = [fixture.output(2)?, fixture.output(3)?];
+                fixture.publish(&store, &attempt, &eval, &outputs)?;
+            }
         }
     }
     Ok(())

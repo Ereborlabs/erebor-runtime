@@ -1,5 +1,7 @@
 # Araphor Analysis migration
 
+Current native lifecycle proof is in [Native lifecycle proof transfer](#native-lifecycle-proof-transfer).
+
 Current saved-input ownership is in [Native saved-input retirement](#native-saved-input-retirement).
 
 Current Query input ownership is in [Query input runner retirement](#query-input-runner-retirement).
@@ -3703,3 +3705,45 @@ ownership. The [master count](araphor-component-redesign.md#native-saved-input-r
 retains its Araphor source scope. Whole legacy Data lifecycle, recovery, and
 store removal, complete migration, and the required production reduction remain
 **Not done**. No performance result is established.
+
+## Native lifecycle proof transfer
+
+This transfer uses the existing native Managed owner. Production retirement
+is **Not done**. All legacy lifecycle source and tests remain.
+
+| Transferred duty | Current source |
+| --- | --- |
+| Unknown COMMIT or ROLLBACK result | [Native lifecycle recovery](../../crates/araphor-data/src/analysis/managed/tests/lifecycle.rs), paired with the retained old recovery test. |
+| No execution at artifact admission | [Shared test assertion](../../crates/araphor-data/src/analysis/mod.rs), [image tests](../../crates/araphor-data/src/analysis/packages/tests/image.rs), and [definition tests](../../crates/araphor-data/src/analysis/definitions/tests.rs). |
+| Ordinary and version-switch crash cuts | [Native publication crash matrix](../../crates/araphor-data/src/analysis/managed/tests.rs). |
+| Exact stored selected dependencies | [Native edge fault matrix](../../crates/araphor-data/src/analysis/managed/tests/output.rs). |
+| Generic and native retained evidence | [Cardinality, pins, expiry, and history](../../crates/araphor-data/src/analysis/managed/tests/retention.rs). |
+| Large metadata and Arrow payloads | [Native quota, rollback, retry, backup, and accounting tests](../../crates/araphor-data/src/analysis/managed/tests/storage.rs). |
+
+The proof has 25 distinct passing test cases across split runs: two paired
+recovery cases, 17 affected admission and lifecycle cases, and six native
+edge, crash, retention, and storage cases. Branches within one case do not
+increase that count. The storage case is renamed to
+`large_contract_preserves_bytes` to meet the four-word function-name rule.
+Its body is unchanged. Its final renamed verification passes. The final library build and strict
+Clippy pass. Scoped Rust formatting and whitespace checks pass. The initial
+edge test has a String-pattern compile correction. A test-local VersionRow
+alias corrects the complex return-type lint. Neither correction changes
+production code or the assertions.
+
+Evidence is in
+`/home/navid/mithril-test-hosts/managed-lifecycle-retirement-verification`.
+The directory retains all 208 original Data source files, the approved test
+patches, the composed source hashes, and the build and test logs. The original
+source archive SHA-256 is
+`a489da1b710f96b3d25fc359e3c60baad5d16cbf5bb3fffeadca05afb214a229`.
+No production state model or contract version changes in this transfer.
+
+Remaining native duties: source-change publication rollback, trace revocation
+at registration and publication, authentic store and restored-epoch identity,
+physical raw-read failure, and actual nested dependency replacement. Shared
+artifact read-control and reader-capacity assertions also remain required.
+Native capture fields are private. This transfer does not recreate the old
+caller-forged capture or completion APIs. Legacy lifecycle deletion requires
+those remaining duties and a separate source review. Full workspace CI,
+a benchmark, and physical qualification are not run for this proof transfer.

@@ -1,4 +1,5 @@
 use super::*;
+use crate::analysis::tests::assert_no_execution;
 use crate::{AnalysisReadControl, PackageBundleV1, PackageImplementationV1};
 
 fn image(revision: &str) -> crate::Result<PackageBundleV1> {
@@ -44,6 +45,7 @@ fn package_image_retains_closure() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
+    let notices = store.subscribe_activations();
     let image = image("v1")?;
     let digest = image.digest()?;
     let expected_metadata = image.metadata()?;
@@ -91,15 +93,8 @@ fn package_image_retains_closure() -> TestResult {
         store.read_snapshot(|reader| AnalysisStore::logical_usage(reader, [1; 16]))?,
         charge
     );
-    assert!(store.package_activation_page(None)?.is_empty());
-    let results: u64 = store.read_snapshot(|reader| {
-        reader
-            .query_row("SELECT count(*) FROM package_results", [], |row| row.get(0))
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "count image test results",
-            })
-    })?;
-    assert_eq!(results, 0);
+    assert_no_execution(&store)?;
+    assert!(!notices.has_changed()?);
     let retained = inspect(&store, None)?;
     assert_eq!(retained.digest()?, digest);
     assert_eq!(retained.metadata()?, expected_metadata);
@@ -122,16 +117,19 @@ fn package_image_retains_closure() -> TestResult {
     let reopened = AnalysisStore::open(&root)?;
     let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;
     for store in [&reopened, &restored] {
+        let notices = store.subscribe_activations();
         store.collect_package_admissions()?;
         let actual = inspect(store, None)?;
         assert_eq!(actual.digest()?, digest);
         assert_eq!(actual.artifacts, expected);
         assert_eq!(actual.metadata()?, expected_metadata);
-        assert!(store.package_activation_page(None)?.is_empty());
+        assert_no_execution(store)?;
         assert_eq!(
             store.install_package_image([1; 16], &image, || Ok(()))?,
             installed
         );
+        assert!(!notices.has_changed()?);
+        assert_no_execution(store)?;
     }
     Ok(())
 }
@@ -292,7 +290,7 @@ fn package_image_large_roundtrip() -> TestResult {
     expected.artifact = bundle.artifacts[0].encode()?;
     assert!(expected.artifact.len() > 32 * 1024 * 1024);
     let installed = store.install_package_image([1; 16], &bundle, || Ok(()))?;
-    assert!(store.package_activation_page(None)?.is_empty());
+    assert_no_execution(&store)?;
     let before = *store.subscribe_revision().borrow();
     assert_eq!(
         store.install_package_image([1; 16], &bundle, || Ok(()))?,
@@ -323,7 +321,7 @@ fn package_image_large_roundtrip() -> TestResult {
         "decoded artifacts differ"
     );
     assert_eq!(restored.digest()?, digest);
-    assert!(store.package_activation_page(None)?.is_empty());
+    assert_no_execution(&store)?;
     Ok(())
 }
 
@@ -596,7 +594,7 @@ fn uninstall_collects_unused_native() -> TestResult {
         receipt
     );
     assert_eq!(store.meta()?, before);
-    assert!(store.package_activation_page(None)?.is_empty());
+    assert_no_execution(&store)?;
     assert!(store
         .active_managed(&AnalysisReadControl::default())?
         .1
@@ -617,7 +615,7 @@ fn uninstall_collects_unused_native() -> TestResult {
     drop(store);
     let reopened = AnalysisStore::open(&root)?;
     assert!(reopened.package_revisions([1; 16])?.is_empty());
-    assert!(reopened.package_activation_page(None)?.is_empty());
+    assert_no_execution(&reopened)?;
     assert!(reopened
         .active_managed(&AnalysisReadControl::default())?
         .1

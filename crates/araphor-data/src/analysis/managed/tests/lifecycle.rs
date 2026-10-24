@@ -174,6 +174,89 @@ fn lifecycle_cas_is_inert() -> TestResult {
 }
 
 #[test]
+fn recovery_reconciles_running() -> TestResult {
+    for applied in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("store"))?;
+        let fixture = Fixture::admit(&store)?;
+        let running = store.set_managed_running(
+            [1; 16],
+            "counter",
+            fixture.instance.lifecycle,
+            true,
+            || Ok(()),
+        )?;
+        let previous = store.meta()?.commit_revision;
+        let mut notices = store.subscribe_activations();
+        let mut stopped = running.clone();
+        let revision;
+        {
+            let mut writer = store.writer()?;
+            let transaction = writer.get_mut()?.transaction()?;
+            revision = store.package_next(&transaction)?;
+            assert_eq!(transaction.execute(
+                "UPDATE managed_instances SET running = false, lifecycle = ? WHERE tenant_id = ? AND instance_id = ? AND lifecycle = ?",
+                params![revision, running.spec.tenant.as_slice(), running.spec.id, running.lifecycle],
+            )?, 1);
+            stopped.running = false;
+            stopped.lifecycle = revision;
+            AnalysisStore::record_revision(&transaction, revision, &["managed_instances"])?;
+            transaction.execute_batch(if applied { "COMMIT" } else { "ROLLBACK" })?;
+            assert!(matches!(
+                store.commit_metadata(transaction, "test uncertain managed commit"),
+                Err(crate::Error::AnalysisDatabase {
+                    operation: "test uncertain managed commit",
+                    ..
+                })
+            ));
+        }
+        assert!(!store.write_ready.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!notices.has_changed()?);
+        store.recover()?;
+        assert!(store.write_ready.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(notices.has_changed()?, applied);
+        assert_eq!(
+            *notices.borrow_and_update(),
+            if applied { revision } else { running.lifecycle }
+        );
+        assert_eq!(
+            store.meta()?.commit_revision,
+            if applied { revision } else { previous }
+        );
+        assert_eq!(
+            fixture.current(&store)?,
+            if applied { stopped } else { running.clone() }
+        );
+        let expected = if applied {
+            Vec::new()
+        } else {
+            vec![ManagedMember {
+                tenant: running.spec.tenant,
+                id: running.spec.id.clone(),
+                generation: running.generation,
+                lifecycle: running.lifecycle,
+            }]
+        };
+        assert_eq!(
+            store.active_managed(&AnalysisReadControl::default())?.1,
+            expected
+        );
+        store.recover()?;
+        assert!(!notices.has_changed()?);
+        let bytes = Vec::<u8>::try_from(&crate::EvidenceRecord {
+            operation: 7,
+            ..Default::default()
+        })?;
+        store.accept_validated_batch(
+            crate::analysis::tests::identity(),
+            crate::analysis::tests::batch(1, &[&bytes]),
+        )?;
+        assert!(!notices.has_changed()?);
+    }
+    Ok(())
+}
+
+#[test]
 fn lifecycle_notice_excludes_data() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;

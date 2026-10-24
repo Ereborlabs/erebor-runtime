@@ -1075,6 +1075,35 @@ pub(crate) mod tests {
     use crate::EVIDENCE_BATCH_RECORDS;
     use duckdb::Config;
 
+    pub(in crate::analysis) fn assert_no_execution(store: &AnalysisStore) -> Result<()> {
+        let counts = store.read_snapshot(|reader| {
+            reader
+                .query_row(
+                    "SELECT (SELECT count(*) FROM package_activations),
+                            (SELECT count(*) FROM package_results),
+                            (SELECT count(*) FROM managed_instances),
+                            (SELECT count(*) FROM managed_versions),
+                            (SELECT count(*) FROM managed_calls),
+                            (SELECT count(*) FROM managed_attempts),
+                            (SELECT count(*) FROM managed_edges),
+                            (SELECT count(*) FROM managed_arrow),
+                            (SELECT count(*) FROM analysis_results)",
+                    [],
+                    |row| {
+                        (0..9)
+                            .map(|index| row.get::<usize, u64>(index))
+                            .collect::<duckdb::Result<Vec<_>>>()
+                    },
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read admission effects",
+                })
+        })?;
+        assert_eq!(counts, vec![0; 9]);
+        assert!(!store.discovery_enabled());
+        Ok(())
+    }
+
     pub(crate) fn identity() -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
             tenant_id: [1; 16],
@@ -1101,7 +1130,10 @@ pub(crate) mod tests {
         }
     }
 
-    fn batch(first_cursor: u64, records: &[&[u8]]) -> ValidatedEvidenceBatchV1 {
+    pub(in crate::analysis) fn batch(
+        first_cursor: u64,
+        records: &[&[u8]],
+    ) -> ValidatedEvidenceBatchV1 {
         let mut framed_records = Vec::new();
         let mut frame_ends = Vec::new();
         for record in records {

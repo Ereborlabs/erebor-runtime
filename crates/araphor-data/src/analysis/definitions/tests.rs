@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use araphor_discovery_definition::{Definition, ImagePin, Program, Source};
 use duckdb::params;
-use snafu::ResultExt as _;
 
 use super::*;
+use crate::analysis::tests::assert_no_execution;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -67,24 +67,6 @@ fn inspect(
     store.definition(tenant, name, revision, &AnalysisReadControl::default())
 }
 
-fn assert_no_execution(store: &AnalysisStore) -> TestResult {
-    let counts = store.read_snapshot(|reader| {
-        reader
-            .query_row(
-                "SELECT (SELECT count(*) FROM package_activations),
-                        (SELECT count(*) FROM package_results)",
-                [],
-                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
-            )
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "read definition effects",
-            })
-    })?;
-    assert_eq!(counts, (0, 0));
-    assert!(!store.discovery_enabled());
-    Ok(())
-}
-
 #[test]
 fn definition_retains_captured_source() -> TestResult {
     let directory = tempfile::tempdir()?;
@@ -113,6 +95,7 @@ fn definition_retains_captured_source() -> TestResult {
     std::fs::write(&source, "SELECT 99 AS count")?;
     std::fs::remove_file(&source)?;
     let store = AnalysisStore::open(&root)?;
+    let notices = store.subscribe_activations();
     let committed = store.admit_definition([1; 16], &captured, || Ok(()))?;
     assert_eq!(committed, store.meta()?.commit_revision);
     let saved = store.meta()?;
@@ -143,14 +126,22 @@ fn definition_retains_captured_source() -> TestResult {
         Some(captured.clone())
     );
     assert_no_execution(&store)?;
+    assert!(!notices.has_changed()?);
     drop(store);
     let reopened = AnalysisStore::open(&root)?;
+    let notices = reopened.subscribe_activations();
+    assert_eq!(
+        reopened.admit_definition([1; 16], &captured, || Ok(()))?,
+        committed
+    );
+    assert!(!notices.has_changed()?);
     assert_eq!(reopened.meta()?, saved);
     assert_eq!(
         inspect(&reopened, [1; 16], "observed", Some(&revision))?,
         Some(captured)
     );
-    assert_no_execution(&reopened)
+    assert_no_execution(&reopened)?;
+    Ok(())
 }
 
 #[test]
@@ -204,7 +195,8 @@ fn definition_revisions_and_tenants() -> TestResult {
     assert_eq!(reopened.meta()?, saved);
     assert_eq!(inspect(&reopened, [1; 16], "counts", None)?, Some(second));
     assert_eq!(inspect(&reopened, [2; 16], "counts", None)?, Some(first));
-    assert_no_execution(&reopened)
+    assert_no_execution(&reopened)?;
+    Ok(())
 }
 
 #[test]
@@ -241,7 +233,8 @@ fn definition_check_is_atomic() -> TestResult {
         committed
     );
     assert_eq!(inspect(&store, [1; 16], "counts", None)?, Some(definition));
-    assert_no_execution(&store)
+    assert_no_execution(&store)?;
+    Ok(())
 }
 
 #[test]
@@ -301,7 +294,8 @@ fn definition_requires_exact_image() -> TestResult {
         inspect(&store, [1; 16], "package-counts", None)?,
         Some(resolved)
     );
-    assert_no_execution(&store)
+    assert_no_execution(&store)?;
+    Ok(())
 }
 
 #[test]

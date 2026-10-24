@@ -1,5 +1,7 @@
 # Discovery Definition Review
 
+Current native lifecycle proof is in [Native lifecycle proof transfer](#native-lifecycle-proof-transfer).
+
 Current subscription source ownership is in [One native subscription source](#one-native-subscription-source).
 
 Current saved-input ownership is in [Native saved-input retirement](#native-saved-input-retirement).
@@ -3693,3 +3695,45 @@ across two real commits and keep bare clock changes as metadata-only events.
 [Schema tests](../../crates/araphor-query/src/sources/journal.rs) require exact
 schema metadata. Malformed schemas return an error. Sources that do not support
 maintenance keep the existing snapshot route.
+
+## Native lifecycle proof transfer
+
+This record covers native Data proof. It does not claim legacy-owner removal.
+
+[recovery_reconciles_running](../../crates/araphor-data/src/analysis/managed/tests/lifecycle.rs) applies a native lifecycle transaction with an unknown commit result.
+  -> [AnalysisStore::recover](../../crates/araphor-data/src/analysis/connection.rs) restores the connections and reads durable native state.
+  -> [Lifecycle assertions](../../crates/araphor-data/src/analysis/managed/tests/lifecycle.rs) check exact membership, revision, write readiness, and notices.
+
+[managed_commit_crashes](../../crates/araphor-data/src/analysis/managed/tests.rs)
+uses the existing before/after crash points for ordinary and prepared-version
+publication. Read the active instance, per-call heads, receipt, checkpoint,
+Arrow roles, and original history assertions together. A prepared version and
+a pending attempt can exist before publication; those rows are not a partial
+active result.
+
+[Stored edge tests](../../crates/araphor-data/src/analysis/managed/tests/output.rs)
+use two published steps. A replacement dependency is a valid stored
+ID and revision from the same call. The test thus checks the selected manifest
+against the ledger, as well as ordinary missing and wrong-revision cases.
+
+[Retained provenance](../../crates/araphor-data/src/analysis/managed/tests/retention.rs)
+keeps the real generic result producer before native capture and publication.
+The shared reference and evidence helpers receive one vector with 65 repeated
+IDs. References keep their order; evidence is deduplicated. The existing
+retention owner removes the physical records after witness expiry. Removal
+of an instance does not remove its immutable historical evidence.
+
+[Storage proofs](../../crates/araphor-data/src/analysis/managed/tests/storage.rs)
+read actual stored buffers for independent logical-byte sums. The 256-byte
+row allowance is logical accounting, not physical disk usage. Authority and
+quota failures preserve heads, pending contracts, progress, receipts, and IPC.
+The native completed retry checks the exact captured contract, request, and
+authority callback before it returns the saved receipt. Output and recovery
+checks validate physical payload bindings.
+
+[Inert admission assertions](../../crates/araphor-data/src/analysis/mod.rs)
+count nine execution relations at the test boundary. The
+[image tests](../../crates/araphor-data/src/analysis/packages/tests/image.rs) and
+[definition tests](../../crates/araphor-data/src/analysis/definitions/tests.rs)
+use this assertion and retain their artifact, tenant, digest, retry, and
+recovery checks. No production inspection API is added.
