@@ -30,6 +30,8 @@ use crate::{
 };
 
 mod admission;
+#[cfg(test)]
+mod diagnostic_test;
 mod run;
 mod startup;
 mod sync;
@@ -1109,8 +1111,7 @@ impl NodeChassis {
                         .batch
                         .frames
                         .last()
-                        .is_none_or(|frame| frame.sequence <= ack.last_sequence)
-                    && ack.last_sequence <= 4096,
+                        .is_none_or(|frame| frame.sequence <= ack.last_sequence),
                 IdentityStateSnafu {
                     reason: "diagnostic acknowledgement changed its execution or sequence"
                 }

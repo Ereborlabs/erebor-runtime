@@ -3481,3 +3481,60 @@ The [remaining quota item](../plans/araphor-feature-parity-todo.md#13-configurab
 keeps the Node ACK ceiling and failed performance qualification open. Diagnostic
 worker polling and the complete production reduction goal remain open. No
 full-workspace CI or before/after speed claim follows from this change.
+
+## Diagnostic acknowledgement sequences
+
+Result: **Done** for removal of the fixed 4,096-sequence ceiling. This section
+covers the Node and TLS fixture changes after `4838ce133`. Separate managed
+input changes remain outside this deliverable.
+
+### Intended end state
+
+Node accepts a valid durable acknowledgement at any native sequence value.
+Configured capture quotas keep their existing behavior.
+
+[NodeChassis::poll_diagnostics](../../crates/mithril-node/src/node.rs) sends the retained output prefix.
+  -> [ControlPlane::exchange_trace](../../crates/mithril-control/src/service.rs) checks the enrolled session and current trust.
+  -> [TraceOwner::append_at](../../crates/araphor-observability/src/owner.rs) checks the trace identity and appends through Data.
+  -> [AnalysisStore::append_trace](../../crates/araphor-data/src/analysis/raw.rs) returns the durable receipt.
+  -> [NodeChassis::poll_diagnostics](../../crates/mithril-node/src/node.rs) checks the execution identity and sent prefix.
+  -> [NodeTraceOwner::acknowledge](../../crates/araphor-observability/src/capture.rs) requires the exact terminal before it retires the spool.
+  -> [NodeChassis::poll_diagnostics](../../crates/mithril-node/src/node.rs) advances the cursor after the acknowledgement checks succeed.
+
+```mermaid
+sequenceDiagram
+    participant N as Node
+    participant C as Control
+    participant D as Data
+    N->>C: Retained output prefix
+    C->>D: Append output
+    D-->>C: Durable receipt
+    C-->>N: Acknowledgement
+    N->>N: Validate receipt and terminal; advance cursor
+```
+
+Only the fixed comparison is removed. Execution identity, prefix order and
+terminal checks stay at their existing owners. No new quota or transport
+owner is added.
+
+The [Node regression](../../crates/mithril-node/src/node/diagnostic_test.rs),
+`node::diagnostic_test::diagnostic_ack_above_4096`, calls the private production
+method over real TLS. The old predicate rejects durable sequence 4,097 after
+cursor 4,000. The corrected case passes in 33.44 seconds. It checks the
+configured 4,096-frame limit, the unlimited 4,097-frame capture, exact output,
+terminal validation and Node and Control reopen. The two existing
+`AdmissionFixture` cases also pass.
+
+The existing [certificate fixture](../../crates/mithril-e2e/src/control_fixture/tls.rs)
+has one source copy. Node includes that source only in its tests. The existing
+[stream flush case](../../crates/mithril-e2e/src/control_tls.rs) uses the
+Kubernetes certificate constructor and verifies `mithril-control.test.svc`
+over real TLS. That case and the three existing certificate rejection cases
+pass. No Kubernetes cluster is required for these checks.
+
+All seven affected checks pass. Scoped formatting and strict ten-owner Clippy
+pass; Clippy takes 97 seconds. The build includes separate managed-input work
+in the worktree. The Data trace receipt path is unchanged. This is not a full
+committed-tree CI result. Production Rust removes one nonblank, noncomment
+line. Tests and fixture moves give no production reduction credit. Physical
+qualification is not repeated; its failed latency gate remains open.

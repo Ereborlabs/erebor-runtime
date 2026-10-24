@@ -82,7 +82,7 @@ identifies a specific remaining part of an otherwise implemented item.
 | 10. Notification execution from Query events | Done | Native subscriptions and the shared Host drive delivery, retries, ACK deadlines, restart and current permission checks. |
 | 11. Runtime configuration through Control | Done | Control passes configured Query and package runtime limits at construction and rejects reuse with different limits. Runtime quotas default to disabled. |
 | 12. Data and Wasm cancellation without periodic checks | Done | Wasm and Data lock waits use events and exact deadlines. Data sends one native interrupt at expiry and waits for an event. A native interrupt scope preserves cancellation across statement resets. |
-| 13. Configurable quotas, disabled by default | Not done | Native capture removes the forced backend settings and unsupported map-capacity metadata. The physical latency gate fails two pairs. Node still rejects diagnostic ACK sequences above 4,096; remove that ceiling and qualify the current path. |
+| 13. Configurable quotas, disabled by default | Not done | Native capture removes the forced backend settings and unsupported map-capacity metadata. Node removes the diagnostic ACK ceiling through the existing validated upload path. All seven affected checks pass. The physical latency gate fails two pairs; performance qualification remains Not done. |
 
 Result: **15 Done; 1 Not done**. The remaining item is **13**.
 The separate 6,000-line production Rust reduction target remains unmet. The
@@ -819,8 +819,10 @@ quota defaults and resource boundaries still need changes or qualification.
   records the completed admission change. The
   [native backend result](araphor-analysis-migration.md#native-backend-defaults)
   removes the forced native settings. Its latency qualification fails two
-  pairs. Node still rejects ACK sequences above 4,096. That ceiling and the
-  physical qualification remain open. Preserve identity, format, type and
+  pairs. The [Node acknowledgement result](araphor-analysis-migration.md#diagnostic-acknowledgement-sequences)
+  removes the fixed 4,096-sequence ceiling through the existing upload method.
+  All seven affected checks pass. Physical qualification remains open.
+  Preserve identity, format, type and
   arithmetic validation; do not remove domain rules as quota cleanup.
 - **Required:** Keep the package contract free of row, batch, byte, and
   checkpoint quotas. Only the time window can be set outside SQL. Keep

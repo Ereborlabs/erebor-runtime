@@ -63,7 +63,8 @@ async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
     use tokio_stream::wrappers::ReceiverStream;
     use tonic::transport::{Certificate as TonicCertificate, ClientTlsConfig, Endpoint, Identity};
     use zerocopy::IntoBytes as _;
-    let tls = MtlsFixture::new(false)?;
+    let server_name = "mithril-control.test.svc";
+    let tls = MtlsFixture::kubernetes(server_name)?;
     let parts = tls.configuration()?.into_parts()?;
     if let Some(error) = parts.data_error {
         return Err(error.into());
@@ -89,7 +90,7 @@ async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
             fs::read(&tls.files.node_certificate)?,
             fs::read(&tls.files.node_key)?,
         ))
-        .domain_name("localhost");
+        .domain_name(server_name);
     let channel = Endpoint::from_shared(format!("https://{}", server.address()))?
         .tls_config(client_tls)?
         .connect()

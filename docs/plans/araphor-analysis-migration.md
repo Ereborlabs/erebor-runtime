@@ -3566,3 +3566,26 @@ retains all ten correctness and cleanup results. Two of five latency pairs fail
 the unchanged gate. Performance qualification remains **Not done**; diagnostics
 remain disabled. TODO 13 also retains the Node ACK ceiling above sequence 4,096.
 Full migration, removal of polling and the reduction goal remain **Not done**.
+
+## Diagnostic acknowledgement sequences
+
+Result: **Done** for removal of the fixed Node acknowledgement ceiling.
+Node accepts the durable sequence 4,097 after cursor 4,000 through its existing
+production upload method. Execution identity, prefix and terminal checks stay
+unchanged. The configured 4,096-frame capture limit remains effective. No new
+configuration or execution owner is added. The
+[source route](../guides/araphor-discovery-definition-review.md#diagnostic-acknowledgement-sequences)
+identifies the owners and exact checks.
+
+Seven affected checks pass: the actual Node upload regression, two existing
+Node fixture cases, and four existing TLS cases. The TLS cases include the
+Kubernetes service DNS certificate constructor. The Node regression checks
+exact frames, durable acknowledgements, terminal rejection and both stores
+after reopen. Strict ten-owner Clippy passes in 97 seconds. Scoped formatting
+passes. The build contains separate managed-input work in the worktree; this
+record does not claim full committed-tree CI.
+
+Production Rust removes one nonblank, noncomment line. The certificate helper
+move and test code do not count as production deletion. Native performance
+qualification is not repeated. Its failed gate, diagnostic polling removal,
+the remaining migration and the 6,000-line reduction remain **Not done**.

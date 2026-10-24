@@ -41,7 +41,9 @@ uuid.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]
+araphor-observability = { path = "../araphor-observability", features = ["test-support"] }
 http-body = "1.0"
+rcgen = "0.13.2"
 tempfile = "3.23.0"
 
 [[bin]]
