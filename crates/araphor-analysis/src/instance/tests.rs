@@ -757,7 +757,9 @@ async fn later_failure_is_atomic() -> TestResult {
 #[tokio::test]
 async fn nested_calls_publish_together() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
-    fixture.install(&bundle("sql")?)?;
+    let image = bundle("sql")?;
+    let model = &image.artifacts[0].descriptor.exports[0];
+    fixture.install(&image)?;
     let instance = fixture.admit("nested", r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT value FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(10 AS BIGINT UNSIGNED) AS value))))"#).await?;
     let declarations = &instance.admitted().spec.manifest.calls;
     assert_eq!(declarations.len(), 2);
@@ -776,6 +778,86 @@ async fn nested_calls_publish_together() -> TestResult {
     for returned in receipt.results.values() {
         assert_eq!(returned.commit_revision, receipt.commit_revision);
     }
+    let control = AnalysisReadControl::default();
+    let outer = declarations
+        .iter()
+        .find(|(_, call)| !call.dependencies.is_empty())
+        .map(|(call, _)| *call)
+        .ok_or("outer call absent")?;
+    let mut originals = BTreeMap::new();
+    for (call, reference) in &receipt.results {
+        let original = fixture.query.store().managed_result(
+            instance.admitted(),
+            &reference.result_id,
+            10,
+            &control,
+        )?;
+        assert!(original.current);
+        originals.insert(*call, original);
+    }
+    let mut session = fixture
+        .query
+        .session(fixture.grant.selection.clone(), &control, 10)?;
+    session
+        .register_retained("saved", "nested", receipt.results[&outer].clone(), "data")
+        .await?;
+    let prepared = session
+        .prepare_definition(&Fixture::definition("SELECT value FROM saved"))
+        .await?;
+    let invocation = araphor_query::definition::Invocation {
+        id: "nested-pin".into(),
+        ..Default::default()
+    };
+    let finite = session
+        .execute_definition(&prepared, invocation.clone())
+        .await?;
+    assert_eq!(values(&finite.batches)?, [10]);
+    drop(finite);
+    let next = instance.run(request("nested-next"), &control).await?;
+    assert_ne!(next.attempt, receipt.attempt);
+    assert!(next.commit_revision > receipt.commit_revision);
+    assert_eq!(next.results.len(), receipt.results.len());
+    assert_eq!(fixture.selected("nested", "nested-next")?, [20]);
+    assert_eq!(fixture.progress("nested")?, next.commit_revision);
+    for (call, reference) in &receipt.results {
+        assert_ne!(next.results[call], *reference);
+        assert_eq!(next.results[call].commit_revision, next.commit_revision);
+        let retained = fixture.query.store().managed_result(
+            instance.admitted(),
+            &reference.result_id,
+            10,
+            &control,
+        )?;
+        let original = &originals[call];
+        assert!(!retained.current);
+        assert_eq!(retained.context, original.context);
+        assert_eq!(
+            sdk::wire::Output::encode_model(&retained.output, model)?,
+            sdk::wire::Output::encode_model(&original.output, model)?
+        );
+        assert_eq!(retained.commit_revision, original.commit_revision);
+    }
+    assert_eq!(fixture.selected("nested", "nested")?, [10]);
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .managed_history(&fixture.grant.selection, "nested", &control,)?,
+        [receipt, next],
+    );
+    let before = fixture.query.store().meta()?;
+    let held = fixture.query.memory().input_reserved();
+    let failure = session
+        .capture_definition(&prepared, invocation)
+        .await
+        .err()
+        .ok_or("replaced nested result captured")?;
+    assert_eq!(
+        araphor_query::Failure::from(&failure),
+        araphor_query::Failure::StorageUnavailable
+    );
+    assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(fixture.query.memory().input_reserved(), held);
     Ok(())
 }
 

@@ -1,5 +1,7 @@
 # Araphor Analysis migration
 
+Current capture boundary proof is in [Native capture boundary proof](#native-capture-boundary-proof).
+
 Current native lifecycle proof is in [Native lifecycle proof transfer](#native-lifecycle-proof-transfer).
 
 Current saved-input ownership is in [Native saved-input retirement](#native-saved-input-retirement).
@@ -3747,3 +3749,30 @@ Native capture fields are private. This transfer does not recreate the old
 caller-forged capture or completion APIs. Legacy lifecycle deletion requires
 those remaining duties and a separate source review. Full workspace CI,
 a benchmark, and physical qualification are not run for this proof transfer.
+
+## Native capture boundary proof
+
+This proof follows the lifecycle transfer at `d7228d66`. No production code
+changes. All old tests remain until their owner retires.
+
+| Duty | Native proof |
+| --- | --- |
+| Actual source replacement | [source_change_keeps_commit](../../crates/araphor-data/src/analysis/managed/tests/input/current.rs) rejects stale publication and old finite input reads; original output and the post-intake durable state remain unchanged. |
+| Trace revocation | [trace_revocation_keeps_commit](../../crates/araphor-data/src/analysis/managed/tests/input/current.rs) rejects stale registration and publication without partial state. Broad selection omits the revoked trace. [captured_trace_revocation](../../crates/araphor-query/src/definition/tests/execution/contract/inputs.rs) checks typed denial for the explicit trace selection and captured delivery. |
+| Store and restore identity | [capture_checks_store_identity](../../crates/araphor-data/src/analysis/managed/tests/guards.rs) uses real UUIDs, a copied pending attempt, and a restored epoch. Rejected publication also crosses the foreign live-claim boundary; this is not an isolated epoch-only publication test. |
+| Physical read failure | [raw_fault_keeps_commit](../../crates/araphor-data/src/analysis/managed/tests/input/current.rs) restores and syncs the actual segment before inspecting failure results. Rejected registration and publication preserve state. The same live attempt then succeeds. |
+| Nested dependency replacement | [nested_calls_publish_together](../../crates/araphor-analysis/src/instance/tests.rs) publishes a second SQL invocation and preserves old output and history. A changed input revision resets the outer checkpoint; selected output changes from 10 to 20. |
+| Reader capacity and cancellation | [Connection tests](../../crates/araphor-data/src/analysis/connection.rs) and [read-control tests](../../crates/araphor-data/src/analysis/read.rs) retain all 16 assertions and pass beside the old copies. [Artifact read tests](../../crates/araphor-data/src/analysis/packages/tests/image.rs) check normal and controlled reads, typed cancellation, and all 16 returned reader permits. |
+
+The split runs cover 13 distinct cases: 11 Data cases, one Analysis case,
+and one Query case. The Data run first passes ten cases and fails the final
+broad-trace assertion. That assertion incorrectly expects denial for broad
+enumeration. The corrected trace case passes without a production change.
+Complete SDK outputs use the existing wire encoder for equality.
+
+The final focused build and strict Clippy pass. Scoped formatting and
+whitespace checks pass. Evidence is under
+`/home/navid/mithril-test-hosts/managed-lifecycle-retirement-verification/guards`.
+Result: **Done** for these replacement proofs. Production lifecycle retirement
+remains **Not done** and requires the whole-owner source review. Full workspace
+CI, physical qualification, and benchmarks are not repeated.

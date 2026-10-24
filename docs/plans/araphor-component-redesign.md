@@ -1,5 +1,7 @@
 # Araphor Component Redesign Proposal
 
+Current capture boundary proof is in [Native capture boundary proof](#native-capture-boundary-proof).
+
 Current native lifecycle proof is in [Native lifecycle proof transfer](#native-lifecycle-proof-transfer).
 
 Current subscription source ownership is in [One native subscription source](#one-native-subscription-source).
@@ -4259,3 +4261,20 @@ The shared artifact read-control assertions and three general reader-capacity
 tests must stay at their current owners or move intact before the old test
 module is removed. Old caller-forged fields that the native API does not
 accept do not require a new mutable API.
+
+## Native capture boundary proof
+
+This record completes the remaining proof duties from
+[Native lifecycle proof transfer](#native-lifecycle-proof-transfer).
+The native source, trace, store identity, restored epoch, raw-read failure,
+nested replacement, and shared reader tests pass. No production owner retires
+in this proof change. The
+[migration result](araphor-analysis-migration.md#native-capture-boundary-proof)
+records the exact test boundary. The
+[source review](../guides/araphor-discovery-definition-review.md#native-capture-boundary-proof)
+explains each native owner.
+
+Result: **Done** for these replacement proofs. Whole legacy Data lifecycle
+retirement and the complete redesign remain **Not done**. Coherent ownership
+and preserved behavior decide the next change. Source reduction is a result
+of that consolidation. No speed result is claimed.

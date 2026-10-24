@@ -501,6 +501,102 @@ mod tests {
     }
 
     #[test]
+    fn reader_release_wakes_capacity() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("store"),
+            Default::default(),
+            crate::StorageLimitsV1 {
+                reader_admissions: Some(16),
+                ..Default::default()
+            },
+        )?;
+        let identity = identity();
+        store.accept_validated_batch(identity.clone(), batch(1))?;
+        store.meta()?;
+        let mut capacity = store.subscribe_capacity();
+        let mut permits = (0..16)
+            .map(|_| store.reserve_trace_read())
+            .collect::<crate::Result<Vec<_>>>()?;
+        assert!(matches!(
+            store.reserve_trace_read(),
+            Err(crate::Error::AnalysisBusy { .. })
+        ));
+        assert!(!capacity.has_changed()?);
+        drop(permits.pop());
+        assert_eq!(
+            store
+                .read_slots
+                .as_ref()
+                .ok_or("configured reader admissions")?
+                .available_permits(),
+            1
+        );
+        assert!(capacity.has_changed()?);
+        capacity.borrow_and_update();
+        let reader =
+            store.reader_until(&AnalysisReadControl::with_timeout(Duration::from_secs(30))?)?;
+        assert!(!capacity.has_changed()?);
+        drop(reader);
+        assert!(capacity.has_changed()?);
+        assert_eq!(
+            store
+                .read_slots
+                .as_ref()
+                .ok_or("configured reader admissions")?
+                .available_permits(),
+            1
+        );
+        drop(permits);
+        assert_eq!(
+            store
+                .read_slots
+                .as_ref()
+                .ok_or("configured reader admissions")?
+                .available_permits(),
+            16
+        );
+        capacity.borrow_and_update();
+        assert_eq!(store.read_page(&identity, 1)?.records.len(), 1);
+        assert!(capacity.has_changed()?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn capacity_checks_reader_gate() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("store"),
+            Default::default(),
+            crate::StorageLimitsV1 {
+                reader_admissions: Some(16),
+                ..Default::default()
+            },
+        )?;
+        let mut permits = (0..16)
+            .map(|_| store.reserve_trace_read())
+            .collect::<crate::Result<Vec<_>>>()?;
+        let wait = store.wait_capacity();
+        tokio::pin!(wait);
+        assert!(futures_util::poll!(&mut wait).is_pending());
+        store.capacity.send_replace(());
+        assert!(futures_util::poll!(&mut wait).is_pending());
+        drop(permits.pop());
+        tokio::time::timeout(Duration::from_secs(1), wait).await??;
+        assert_eq!(
+            store
+                .read_slots
+                .as_ref()
+                .ok_or("configured reader admissions")?
+                .available_permits(),
+            1
+        );
+        drop(permits);
+        store.wait_capacity().await?;
+        Ok(())
+    }
+
+    #[test]
     fn reader_default_admits_queue() -> TestResult {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;

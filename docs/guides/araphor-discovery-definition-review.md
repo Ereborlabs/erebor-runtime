@@ -1,5 +1,7 @@
 # Discovery Definition Review
 
+Current capture boundary proof is in [Native capture boundary proof](#native-capture-boundary-proof).
+
 Current native lifecycle proof is in [Native lifecycle proof transfer](#native-lifecycle-proof-transfer).
 
 Current subscription source ownership is in [One native subscription source](#one-native-subscription-source).
@@ -3737,3 +3739,39 @@ count nine execution relations at the test boundary. The
 [definition tests](../../crates/araphor-data/src/analysis/definitions/tests.rs)
 use this assertion and retain their artifact, tenant, digest, retry, and
 recovery checks. No production inspection API is added.
+
+## Native capture boundary proof
+
+This proof covers the native capture and publication boundaries after
+`d7228d66`. Production lifecycle ownership is unchanged.
+
+[Native source tests](../../crates/araphor-data/src/analysis/managed/tests/input/current.rs) capture real source and trace state.
+  -> For a new attempt, [register_managed_attempt](../../crates/araphor-data/src/analysis/managed/commit.rs) validates the immutable captured contract and current source state.
+  -> [commit_managed](../../crates/araphor-data/src/analysis/managed/commit.rs) checks current state and the live claim before atomic publication.
+  -> [Native assertions](../../crates/araphor-data/src/analysis/managed/tests/input/current.rs) compare heads, pending contracts, output bytes, progress, receipts, and history after rejection.
+
+The source-change case checks stale publication. The trace case checks both
+stale registration and publication. Broad trace selection omits revoked
+traces. [Explicit trace reads](../../crates/araphor-query/src/definition/tests/execution/contract/inputs.rs) retain typed denial.
+The raw-read case saves the real segment bytes, truncates that file, and
+restores and syncs the bytes before checking the returned failures.
+
+[Store identity tests](../../crates/araphor-data/src/analysis/managed/tests/guards.rs) reject foreign captures and old restored-epoch registration.
+The restore copies a real pending row. Publication against the restored owner
+also crosses the foreign live-claim boundary. Fresh source and restored work
+remain valid. Private capture fields stay private.
+
+[Nested SQL tests](../../crates/araphor-analysis/src/instance/tests.rs) use two real calls and a dependency.
+The second invocation changes the input revision. The native prior-state
+contract then resets the outer checkpoint. Selected output changes from 10
+to 20; the original result bytes, reference revision, and history remain.
+
+Reader-capacity assertions now also live beside their
+[connection owner](../../crates/araphor-data/src/analysis/connection.rs) and
+[read-control owner](../../crates/araphor-data/src/analysis/read.rs).
+All 16 original assertions remain. The old copies stay until the old module
+retires. No reader wrapper or production inspection API is added.
+
+The [migration result](../plans/araphor-analysis-migration.md#native-capture-boundary-proof)
+records the focused proof and its limits. Whole legacy lifecycle removal is
+**Not done**.

@@ -2,6 +2,45 @@ use super::*;
 use crate::analysis::tests::assert_no_execution;
 use crate::{AnalysisReadControl, PackageBundleV1, PackageImplementationV1};
 
+#[test]
+fn revision_reads_release_capacity() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open_with_limits(
+        directory.path().join("store"),
+        Default::default(),
+        crate::StorageLimitsV1 {
+            reader_admissions: Some(16),
+            ..Default::default()
+        },
+    )?;
+    store.install_package(&[package("first", "v1")?], || Ok(()))?;
+    let before = store.meta()?;
+    let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
+    let revision = store
+        .package_revision([1; 16], "first", "v1")?
+        .ok_or("installed artifact revision")?;
+    assert_eq!(
+        store.package_revision_until([1; 16], "first", "v1", &control)?,
+        Some(revision)
+    );
+    let cancelled = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
+    cancelled.cancel()?;
+    assert!(matches!(
+        store.package_revision_until([1; 16], "first", "v1", &cancelled),
+        Err(crate::Error::AnalysisReadCancelled { .. })
+    ));
+    assert_eq!(
+        store
+            .read_slots
+            .as_ref()
+            .ok_or("configured reader admissions")?
+            .available_permits(),
+        16
+    );
+    assert_eq!(store.meta()?, before);
+    Ok(())
+}
+
 fn image(revision: &str) -> crate::Result<PackageBundleV1> {
     let mut root = package("image-root", revision)?.decode_artifact()?;
     let mut dependency = package("image-dependency", "v1")?.decode_artifact()?;

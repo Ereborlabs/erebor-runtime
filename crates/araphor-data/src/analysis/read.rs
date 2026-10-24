@@ -591,6 +591,26 @@ mod tests {
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
+    #[tokio::test]
+    async fn cancellation_ignores_stage_deadline() -> TestResult {
+        let control = AnalysisReadControl::with_timeout(Duration::from_nanos(1))?;
+        let wait = control.cancelled();
+        tokio::pin!(wait);
+        assert!(futures_util::poll!(&mut wait).is_pending());
+        assert!(matches!(
+            control.check(),
+            Err(crate::Error::AnalysisReadDeadline { .. })
+        ));
+        control.cancel()?;
+        tokio::time::timeout(Duration::from_secs(1), wait).await?;
+        control.cancelled().await;
+        assert!(matches!(
+            control.check(),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        Ok(())
+    }
+
     #[test]
     fn optional_deadline_inherits() -> TestResult {
         let parent = AnalysisReadControl::with_timeout(Duration::from_secs(60))?;

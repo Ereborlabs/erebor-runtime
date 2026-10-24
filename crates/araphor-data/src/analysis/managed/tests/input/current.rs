@@ -312,3 +312,275 @@ fn retained_record_checks_identity() -> TestResult {
     saved.permits()?;
     Ok(())
 }
+
+#[derive(Debug, PartialEq)]
+struct CommitState {
+    meta: crate::AnalysisStoreMetaV1,
+    instance: ManagedInstance,
+    heads: Vec<(u64, u64, Option<String>)>,
+    attempts: Vec<(String, u64, u64, Vec<u8>)>,
+    results: Vec<(String, u64, Vec<u8>, Vec<u8>)>,
+    arrows: Vec<(String, String, u64, Vec<u8>)>,
+    references: (u64, u64, u64),
+    history: Vec<ManagedReceipt>,
+}
+
+impl Saved {
+    fn commit_state(&self) -> TestResult<CommitState> {
+        let (heads, attempts, results, arrows, references) = self.store.read_snapshot(|reader| {
+            let mut statement = reader.prepare(
+                "SELECT call_id, state_revision, result_id FROM managed_calls ORDER BY call_id",
+            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare saved call heads" })?;
+            let heads = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .context(crate::AnalysisDatabaseSnafu { operation: "read saved call heads" })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(crate::AnalysisDatabaseSnafu { operation: "decode saved call heads" })?;
+            let mut statement = reader.prepare(
+                "SELECT attempt_id, generation, completed, contract FROM managed_attempts ORDER BY attempt_id",
+            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare saved attempts" })?;
+            let attempts = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+                .context(crate::AnalysisDatabaseSnafu { operation: "read saved attempts" })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(crate::AnalysisDatabaseSnafu { operation: "decode saved attempts" })?;
+            let mut statement = reader.prepare(
+                "SELECT result_id, commit_revision, body, request_meta FROM analysis_results ORDER BY result_id",
+            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare saved result rows" })?;
+            let results = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+                .context(crate::AnalysisDatabaseSnafu { operation: "read saved result rows" })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(crate::AnalysisDatabaseSnafu { operation: "decode saved result rows" })?;
+            let mut statement = reader.prepare(
+                "SELECT result_id, role, slot, ipc FROM managed_arrow ORDER BY result_id, role, slot",
+            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare saved IPC rows" })?;
+            let arrows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+                .context(crate::AnalysisDatabaseSnafu { operation: "read saved IPC rows" })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(crate::AnalysisDatabaseSnafu { operation: "decode saved IPC rows" })?;
+            let references = reader.query_row(
+                "SELECT (SELECT count(*) FROM managed_edges), (SELECT count(*) FROM evidence_refs), (SELECT count(*) FROM context_refs)",
+                [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).context(crate::AnalysisDatabaseSnafu { operation: "read saved reference counts" })?;
+            Ok((heads, attempts, results, arrows, references))
+        })?;
+        Ok(CommitState {
+            meta: self.store.meta()?,
+            instance: self.fixture.current(&self.store)?,
+            heads,
+            attempts,
+            results,
+            arrows,
+            references,
+            history: self.store.managed_history(
+                &self.fixture.instance.grant.selection,
+                &self.fixture.instance.spec.id,
+                &AnalysisReadControl::default(),
+            )?,
+        })
+    }
+}
+
+#[test]
+fn source_change_keeps_commit() -> TestResult {
+    let saved = Saved::new()?;
+    let control = AnalysisReadControl::default();
+    let selection = &saved.fixture.instance.grant.selection;
+    let current = saved.fixture.current(&saved.store)?;
+    let reference = &saved.receipt.results[&10];
+    let original = saved
+        .store
+        .managed_result(&current, &reference.result_id, 10, &control)?;
+    assert!(original.current);
+    let selected = saved
+        .store
+        .managed_selected([1; 16], &current.spec.id, &saved.receipt.attempt, &control)?
+        .ok_or("saved selected output absent")?;
+    let captured = saved.capture()?;
+    let input = request("source-pending");
+    let attempt = saved
+        .store
+        .register_managed_attempt(&captured, &input, || Ok(()))?;
+    let evaluations = [
+        saved.fixture.evaluation(&input, 10, Some(&captured))?,
+        saved.fixture.evaluation(&input, 11, Some(&captured))?,
+    ];
+    let outputs = [saved.fixture.output(8)?, saved.fixture.output(4)?];
+    Saved::append(&saved.store, 2)?;
+    let before = saved.commit_state()?;
+    let changed = saved
+        .store
+        .managed_result(&current, &reference.result_id, 10, &control)?;
+    assert!(!changed.current);
+    assert_eq!(changed.context, original.context);
+    assert_eq!(
+        sdk::wire::Output::encode_model(&changed.output, &saved.fixture.model)?,
+        sdk::wire::Output::encode_model(&original.output, &saved.fixture.model)?
+    );
+    assert_eq!(changed.commit_revision, original.commit_revision);
+    let retained = saved
+        .store
+        .managed_selected([1; 16], &current.spec.id, &saved.receipt.attempt, &control)?
+        .ok_or("retained selected output absent")?;
+    assert_eq!(retained.data.name, selected.data.name);
+    assert_eq!(retained.data.batches, selected.data.batches);
+    assert_eq!(retained.commit_revision, selected.commit_revision);
+    assert_eq!(before.history, std::slice::from_ref(&saved.receipt));
+    for mode in [AnalysisReadModeV1::Metadata, AnalysisReadModeV1::Complete] {
+        assert!(matches!(
+            saved.read(
+                selection,
+                selection,
+                &saved.inputs,
+                mode,
+                AnalysisExtractLimits::default(),
+                &control
+            ),
+            Err(crate::Error::Package {
+                code: Code::Incomplete,
+                field: "managed input freshness",
+                ..
+            })
+        ));
+    }
+    let failure = saved
+        .fixture
+        .publish(&saved.store, &attempt, &evaluations, &outputs)
+        .err()
+        .ok_or("stale source publication succeeded")?;
+    assert!(matches!(
+        failure.downcast_ref::<crate::Error>(),
+        Some(crate::Error::AnalysisConflict { .. })
+    ));
+    assert_eq!(saved.commit_state()?, before);
+    saved.permits()?;
+    Ok(())
+}
+
+#[test]
+fn trace_revocation_keeps_commit() -> TestResult {
+    let saved = Saved::new()?;
+    let mut intent = crate::analysis::raw::tests::trace_intent()?;
+    intent.accepted_unix_ns = 1;
+    let mut trace = saved.store.accept_trace(&intent)?;
+    let captured = saved.capture()?;
+    assert_eq!(captured.contract.traces, [intent.request_id]);
+    let first = request("trace-first");
+    let attempt = saved
+        .store
+        .register_managed_attempt(&captured, &first, || Ok(()))?;
+    let evaluations = [
+        saved.fixture.evaluation(&first, 10, Some(&captured))?,
+        saved.fixture.evaluation(&first, 11, Some(&captured))?,
+    ];
+    let outputs = [saved.fixture.output(8)?, saved.fixture.output(4)?];
+    let receipt = saved
+        .fixture
+        .publish(&saved.store, &attempt, &evaluations, &outputs)?;
+    let captured = saved.capture()?;
+    assert_eq!(captured.contract.traces, [intent.request_id]);
+    let input = request("trace-pending");
+    let attempt = saved
+        .store
+        .register_managed_attempt(&captured, &input, || Ok(()))?;
+    let evaluations = [
+        saved.fixture.evaluation(&input, 10, Some(&captured))?,
+        saved.fixture.evaluation(&input, 11, Some(&captured))?,
+    ];
+    trace.cancel_requested = true;
+    trace.read_revoked = true;
+    saved.store.update_trace(&trace)?;
+    let before = saved.commit_state()?;
+    assert_eq!(before.instance.progress, receipt.commit_revision);
+    assert_eq!(before.history, [saved.receipt.clone(), receipt]);
+    let mut checked = false;
+    assert!(matches!(
+        saved
+            .store
+            .register_managed_attempt(&captured, &request("trace-new"), || {
+                checked = true;
+                Ok(())
+            }),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    assert!(!checked);
+    assert_eq!(saved.commit_state()?, before);
+    let failure = saved
+        .fixture
+        .publish(&saved.store, &attempt, &evaluations, &outputs)
+        .err()
+        .ok_or("revoked trace publication succeeded")?;
+    assert!(matches!(
+        failure.downcast_ref::<crate::Error>(),
+        Some(crate::Error::AnalysisConflict { .. })
+    ));
+    assert_eq!(saved.commit_state()?, before);
+    assert!(saved.capture()?.contract.traces.is_empty());
+    assert_eq!(saved.commit_state()?, before);
+    saved.permits()?;
+    Ok(())
+}
+
+#[test]
+fn raw_fault_keeps_commit() -> TestResult {
+    use std::os::unix::fs::FileExt as _;
+
+    let saved = Saved::new()?;
+    let captured = saved.capture()?;
+    let input = request("raw-pending");
+    let attempt = saved
+        .store
+        .register_managed_attempt(&captured, &input, || Ok(()))?;
+    let evaluations = [
+        saved.fixture.evaluation(&input, 10, Some(&captured))?,
+        saved.fixture.evaluation(&input, 11, Some(&captured))?,
+    ];
+    let outputs = [saved.fixture.output(8)?, saved.fixture.output(4)?];
+    let next = request("raw-new");
+    let before = saved.commit_state()?;
+    let path = {
+        let raw = saved.store.raw.lock().map_err(|_| "raw lock")?;
+        assert_eq!(raw.segments.len(), 1);
+        raw.segments
+            .values()
+            .next()
+            .ok_or("raw segment absent")?
+            .path
+            .clone()
+    };
+    let segment = crate::SegmentFile::reader(&path)?;
+    let length = usize::try_from(segment.length()?)?;
+    let bytes = segment.read(0, length)?;
+    let file = std::fs::OpenOptions::new().write(true).open(&path)?;
+    file.set_len(0)?;
+    let registration = saved
+        .store
+        .register_managed_attempt(&captured, &next, || Ok(()));
+    let publication = saved
+        .fixture
+        .publish(&saved.store, &attempt, &evaluations, &outputs);
+    file.write_all_at(&bytes, 0)?;
+    file.sync_all()?;
+    assert_eq!(segment.read(0, length)?, bytes);
+    assert!(matches!(
+        registration,
+        Err(crate::Error::AnalysisState { .. })
+    ));
+    let failure = publication.err().ok_or("missing raw data published")?;
+    assert!(matches!(
+        failure.downcast_ref::<crate::Error>(),
+        Some(crate::Error::AnalysisState { .. })
+    ));
+    assert_eq!(saved.commit_state()?, before);
+    let restored = saved
+        .store
+        .register_managed_attempt(&captured, &next, || Ok(()))?;
+    assert!(restored.receipt().is_none());
+    let receipt = saved
+        .fixture
+        .publish(&saved.store, &attempt, &evaluations, &outputs)?;
+    assert_eq!(
+        saved.fixture.current(&saved.store)?.progress,
+        receipt.commit_revision
+    );
+    saved.permits()?;
+    Ok(())
+}
