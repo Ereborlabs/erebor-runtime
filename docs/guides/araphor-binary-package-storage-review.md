@@ -206,7 +206,7 @@ before treating them as passed for this source.
 [InputPort](../../crates/araphor-analysis-sdk/src/model.rs) Each input declares its port and source
   -> [Package::validate](../../crates/araphor-analysis-sdk/src/descriptor.rs) the SDK checks source and mode combinations and exact local output references
   -> [PackageBundleV1::validate](../../crates/araphor-package/src/admission.rs) the image owner checks the dependency closure from output references
-  -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) the query owner resolves table and query inputs
+  -> [Inputs::execute](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) the query owner resolves table and query inputs
 
 `InputMode::Provided` accepts table sources. The caller supplies all datasets;
 output references still retain dependency edges. `Resolved` accepts table and

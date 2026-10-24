@@ -1784,8 +1784,9 @@ fn managed_witness_lifetime_check() -> TestResult {
         Arc::new(port.schema),
     )];
     let requests = AnalysisTableRequests::new();
+    let before = store.meta()?;
     for now in [19, 20, 21] {
-        let read = store.read_tables(
+        let page = store.read_tables(
             &AnalysisSelectionV1::new([1; 16], Vec::new()),
             AnalysisTableRead {
                 requests: &requests,
@@ -1800,22 +1801,29 @@ fn managed_witness_lifetime_check() -> TestResult {
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+        )?;
+        assert_eq!(page.packages.len(), 1);
+        assert_eq!(page.extraction.witnesses.len(), 1);
+        assert_eq!(page.extraction.witnesses[0].expires_utc_ns, 20);
+        let (schema, batches, coverage) = page.packages.get(&0).ok_or("retained input")?;
+        assert_eq!(schema.as_ref(), &fixture.model.outputs[0].schema);
+        assert_eq!(batches, &outputs[0].datasets[0].batches);
+        assert_eq!(
+            coverage,
+            &sdk::Coverage {
+                state: if now == 19 {
+                    sdk::CoverageState::Complete
+                } else {
+                    sdk::CoverageState::Unknown
+                },
+                limits: if now == 19 {
+                    Vec::new()
+                } else {
+                    vec!["source evidence retention expired".into()]
+                },
+            }
         );
-        if now == 19 {
-            let page = read?;
-            assert_eq!(page.packages.len(), 1);
-            assert_eq!(page.extraction.witnesses.len(), 1);
-            assert_eq!(page.extraction.witnesses[0].expires_utc_ns, 20);
-        } else {
-            assert!(matches!(
-                read,
-                Err(crate::Error::Package {
-                    code: crate::PackageErrorCodeV1::Incomplete,
-                    field: "managed input freshness",
-                    ..
-                })
-            ));
-        }
+        assert_eq!(store.meta()?, before);
     }
     assert_eq!(
         store

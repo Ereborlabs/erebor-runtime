@@ -1,5 +1,8 @@
 # Araphor Analysis migration
 
+Current Query input ownership is in [Query input runner retirement](#query-input-runner-retirement).
+That record supersedes the earlier instruction to keep Inputs::clocked and the old Query executor.
+
 Replace the reference Analysis implementation without loss of domain rules.
 Move compatible finite code to its current owner. Rewrite execution and
 lifecycle code through Query subscriptions and native DataFusion plans.
@@ -3589,3 +3592,64 @@ Production Rust removes one nonblank, noncomment line. The certificate helper
 move and test code do not count as production deletion. Native performance
 qualification is not repeated. Its failed gate, diagnostic polling removal,
 the remaining migration and the 6,000-line reduction remain **Not done**.
+
+
+## Query input runner retirement
+
+The working tree based on `6ded52863152b691c5948e890833afcf3cc09996` removes
+Query's separate input admission, execution, and watch owners. InputSet and
+InputOperation are removed. Native Session, PackageCall, PackageExec, and
+subscription owners remain. Inputs retains native plans and receipts. Scope
+retains isolated body tables. InputCapture retains admitted saved aliases and
+memory ownership. Read the [current review flow](../guides/araphor-discovery-definition-review.md#query-input-runner-retirement).
+
+Finite reads retain readable exact saved rows when only original evidence has
+expired. Existing coverage folding adds the expiry reason within the affected call. Every
+later context, dependency, authority, scope, and corruption check remains.
+Managed status and publication still require current source proof. Finite Wasm
+slot admission returns Busy; Managed execution awaits its existing permit.
+Neither route renews an expired parent deadline.
+
+Data's [package store and API](../../crates/araphor-data/src/analysis/packages/mod.rs),
+[package-input codec](../../crates/araphor-data/src/analysis/extraction/package.rs),
+and [old output tests](../../crates/araphor-data/src/analysis/packages/tests/output.rs)
+remain unchanged by the Query retirement. Their native replacement proof is a
+separate gate:
+
+| Data case | Native assertion still required before Data removal |
+| --- | --- |
+| package_output_snapshot | One saved-alias read retains its original snapshot while another native result commits; later latest selection sees the new result. |
+| package_output_current | Each stored-current corruption and restore case maps to a native assertion. Stopped finite reads keep their current native contract. |
+| package_output_historical_scope | A narrower current grant does not replace the original saved scope. Recreation keeps historical reads scoped and fences old saved aliases. Foreign scope stays denied. |
+| package_output_preflights_payload | A small byte bound rejects the retained input before corrupt payload decoding. |
+| package_output_revocation | The native read hook preserves typed cancellation, no disclosure, cleanup, and authorized retry. |
+| reference_origins_merge | Equal saved aliases and an explicit result retain the exact reference-origin union and earliest witness. |
+
+Renewal preserves selection. A changed scope uses remove/recreate.
+
+The selected proof passes across separate runs. Query passes 112 cases in
+188.95 seconds, then the corrected catalog case in 2.90 seconds. Analysis
+passes 15 retained-input and capacity cases in 40.26 seconds. Data passes
+11 guard cases in 19.64 seconds, then the corrected schema case in 0.02 seconds.
+These are 140 distinct cases. They are not one simultaneous final run. The two
+last corrections change tests only.
+
+The [catalog_content_contract](../../crates/araphor-query/src/sources/rows/tests.rs)
+now checks every typed cell, field order, and readiness value against Data's
+canonical schemas in all eight owner states. Shape, alias, admission, and
+release assertions remain. The schema-reconstruction probes did not reproduce
+the historical Rust Hash constants. No replacement opaque Query hashes are used.
+The [schema_contract](../../crates/araphor-data/src/analysis/extraction/tables/tests.rs)
+keeps its sorted-JSON schema digests. Exact native schema reconstruction
+recovers the original recipe digest. Only the recipe expectation changes to
+`1c1288af`; the other 23 schema digests remain unchanged.
+
+Strict Clippy passes for the ten affected owners in 21.77 seconds after those
+last test changes. Scoped formatting passes for 24 Rust files. Whitespace and
+the retired-runner caller search pass. Full-workspace CI and benchmarks are
+not repeated. No performance result is claimed.
+
+Result: **Done** for the Query input runner retirement and native finite expiry
+transfer. The [master count](araphor-component-redesign.md#query-input-runner-retirement)
+retains its Araphor source scope. The Data replacement gate above and the
+complete migration remain **Not done**.

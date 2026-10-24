@@ -519,14 +519,6 @@ impl SourceProvider {
         })
     }
 
-    pub(crate) fn package(slot: usize, schema: SchemaRef) -> Arc<dyn TableProvider> {
-        Arc::new(Self {
-            origin: SourceOrigin::Package(slot),
-            schema,
-            retained: None,
-        })
-    }
-
     pub(crate) fn identity() -> crate::Result<usize> {
         static PORTS: AtomicUsize = AtomicUsize::new(0);
         PORTS

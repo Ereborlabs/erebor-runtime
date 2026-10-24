@@ -6,6 +6,13 @@ use super::super::AnalysisStore;
 use super::model::*;
 use crate::{AnalysisDatabaseSnafu, AnalysisReadControl, PackageErrorCodeV1 as Code, Result};
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum SourceFreshness {
+    Current,
+    EvidenceExpired,
+    Changed,
+}
+
 impl AnalysisStore {
     pub fn admit_managed(
         &self,
@@ -863,10 +870,13 @@ impl AnalysisStore {
         now: u64,
         control: &AnalysisReadControl,
     ) -> Result<bool> {
-        self.managed_source_current(reader, spec, (id, revision), now, control, None)
+        Ok(
+            self.managed_source_freshness(reader, spec, (id, revision), now, control, None)?
+                == SourceFreshness::Current,
+        )
     }
 
-    pub(super) fn managed_source_current(
+    pub(super) fn managed_source_freshness(
         &self,
         reader: &Connection,
         spec: &ManagedSpec,
@@ -874,7 +884,7 @@ impl AnalysisStore {
         now: u64,
         control: &AnalysisReadControl,
         mut output: Option<&mut crate::AnalysisExtractionV1>,
-    ) -> Result<bool> {
+    ) -> Result<SourceFreshness> {
         let mut statement = reader.prepare("WITH RECURSIVE needed(result_id, revision) AS (
             SELECT ?::VARCHAR, ?::UBIGINT UNION
             SELECT e.dependency_id, e.commit_revision FROM managed_edges e
@@ -906,14 +916,15 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "decode managed freshness",
             })?;
+        let mut freshness = SourceFreshness::Current;
         for (id, revision, processor, instance) in rows {
             control.check()?;
             let Some(processor) = processor else {
-                return Ok(false);
+                return Ok(SourceFreshness::Changed);
             };
             let attempt = if processor == "managed-package-v1" {
                 if instance.as_deref() != Some(spec.id.as_str()) {
-                    return Ok(false);
+                    return Ok(SourceFreshness::Changed);
                 }
                 let metadata: Vec<u8> = reader.query_row("SELECT request_meta FROM analysis_results WHERE tenant_id = ? AND result_id = ?", params![spec.tenant.as_slice(), id], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "read managed freshness metadata" })?;
                 let record: Record =
@@ -933,7 +944,7 @@ impl AnalysisStore {
                 if step.instance != spec.id
                     || current.is_none_or(|instance| instance.progress != revision)
                 {
-                    return Ok(false);
+                    return Ok(SourceFreshness::Changed);
                 }
                 Self::managed_attempt_from(reader, spec.tenant, &spec.id, &step.attempt)?
                     .ok_or_else(|| Code::Missing.error("managed selected attempt"))?
@@ -942,7 +953,7 @@ impl AnalysisStore {
                     return Err(Code::Unsupported.error("legacy activation input"));
                 }
                 if self.package_source_revision(reader, spec.tenant, &id)? != revision {
-                    return Ok(false);
+                    return Ok(SourceFreshness::Changed);
                 }
                 continue;
             };
@@ -953,11 +964,11 @@ impl AnalysisStore {
                 .and_then(|frontier| frontier.next_change)
                 .is_some_and(|deadline| deadline <= now)
             {
-                return Ok(false);
+                return Ok(SourceFreshness::Changed);
             }
             let capture = attempt.capture;
             if !Self::package_sources_current(reader, &capture.sources, control)? {
-                return Ok(false);
+                return Ok(SourceFreshness::Changed);
             }
             Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, control)?;
             if let Some(output) = output.as_deref_mut() {
@@ -978,17 +989,17 @@ impl AnalysisStore {
                 .iter()
                 .any(|witness| witness.expires_utc_ns <= now)
             {
-                return Ok(false);
+                freshness = SourceFreshness::EvidenceExpired;
             }
             for reference in &capture.contexts {
                 if Self::read_context_from(reader, &self.root, &reference.key)?
                     .is_none_or(|(_, current)| current != reference.commit_revision)
                 {
-                    return Ok(false);
+                    return Ok(SourceFreshness::Changed);
                 }
             }
         }
-        Ok(true)
+        Ok(freshness)
     }
 }
 

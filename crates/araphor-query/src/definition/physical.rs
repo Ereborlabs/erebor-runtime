@@ -713,6 +713,20 @@ impl PackageExec {
                 .supplied_inputs(&mut inputs, supplied)
                 .map_err(external)?;
         }
+        let reason = "source evidence retention expired";
+        if inputs
+            .iter()
+            .any(|input| input.coverage.limits.iter().any(|limit| limit == reason))
+        {
+            let expired = sdk::Coverage {
+                state: sdk::CoverageState::Unknown,
+                limits: vec![reason.into()],
+            };
+            for input in &mut inputs {
+                input.coverage =
+                    crate::inputs::Inputs::coverage([&input.coverage, &expired].into_iter());
+            }
+        }
         let parameters = if model.parameters.fields().is_empty() {
             None
         } else {

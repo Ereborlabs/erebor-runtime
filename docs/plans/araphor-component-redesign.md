@@ -1,5 +1,8 @@
 # Araphor Component Redesign Proposal
 
+Current Query input ownership is in [Query input runner retirement](#query-input-runner-retirement).
+Earlier InputSet and InputOperation flows describe their recorded source states.
+
 Source study: **Done**. Implementation: **Not done**. The user approves
 implementation of this redesign and requires a commit for each deliverable.
 The source baseline is `537f9de3`. DataFusion and Mangroves supply the source
@@ -2063,7 +2066,7 @@ Implementation and selected host verification: **Done**.
 execute_input API, Retention mode, or separate collect and emit wrappers.
 Production callers all selected output retention. Finite output and physical
 subscriptions now use the output reservation and buffer claim directly.
-[Inputs::read](../../crates/araphor-query/src/inputs/physical.rs) remains the
+[Inputs::read](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) remains the
 production detector input owner. It calls native execute_stream and retains
 input buffers. The existing input_output_budget case now calls that owner and
 keeps every distinct value, output-denial, capacity, and alias-lifetime assertion.
@@ -2715,17 +2718,17 @@ admission, backend execution, checkpoint selection, authority, and the Data
 commit compare-and-swap checks keep their existing owners.
 
 [AdmittedExport::admit](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model.rs) admits the installed export
-  -> [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) retains native plans, original provider origins, and input dependency order
+  -> [Inputs::admit](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/mod.rs) retains native plans, original provider origins, and input dependency order
 
 [AnalysisPackageOwner::prepare_model](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/evaluation/preparation.rs) checks current authority and reads the admitted Inputs directly
-  -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) plans all physical children at one frozen time
+  -> [Inputs::execute](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) plans all physical children at one frozen time
   -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) combines the prepared source columns and time ranges in one capture
   -> [AnalysisStore::extract_mode](../../crates/araphor-data/src/analysis/extraction.rs) fixes one Data read transaction for the original source receipts
   -> [AnalysisStore::extract_packages](../../crates/araphor-data/src/analysis/extraction/package.rs) reads exact package outputs and their references in that same transaction
   -> [Dataset::normalize_batch](../../crates/araphor-analysis-sdk/src/batch.rs) applies the declared SDK schema after conversion preflight
-  -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) materializes each completed port with one dataset-global row index before dependent SQL runs
+  -> [Inputs::execute](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) materializes each completed port with one dataset-global row index before dependent SQL runs
   -> [Inputs::input](../../crates/araphor-query/src/inputs/receipt.rs) assigns per-port revisions and coverage from the original source scopes and reference origins
-  -> [InputSet](../../crates/araphor-query/src/inputs/physical.rs) returns declared input order, retained tables, and complete provenance
+  -> [InputSet](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) returns declared input order, retained tables, and complete provenance
   -> [ModelRun::prepared](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/operation.rs) supplies the retained input set to model execution
 
 SourceOrigin distinguishes durable canonical tables, materialized port slots,
@@ -2750,7 +2753,7 @@ Analysis source readers, separate package-output resolver, and post-capture
 reference reads are deleted. No SourceBatch or LocalTable bridge is added.
 Native memory claims retain the input arrays and metadata through aliases.
 
-The [input tests](../../crates/araphor-query/src/inputs/tests.rs),
+The [input tests](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/tests.rs),
 [SDK batch tests](../../crates/araphor-analysis-sdk/src/batch/tests.rs), and
 [Data output tests](../../crates/araphor-data/src/analysis/packages/tests/output.rs)
 define the finite cut, index, provenance, conversion, and same-reader checks.
@@ -4064,3 +4067,49 @@ quota result and remaining work are in the
 [migration record](araphor-analysis-migration.md#native-backend-defaults).
 General maintained-query optimization, diagnostic polling removal, and the
 complete redesign and reduction remain **Not done**.
+
+
+## Query input runner retirement
+
+The working tree based on `6ded52863152b691c5948e890833afcf3cc09996` removes
+the second Query input planner, reader, and watch runner. This record supersedes
+[Finite resolved input ownership](#finite-resolved-input-ownership),
+[Live detector input ownership](#live-detector-input-ownership), and their old
+InputSet/InputOperation routes. Historical text remains; deleted-file links
+select the pre-retirement source.
+
+[Session](../../crates/araphor-query/src/definition.rs) admits and captures native definition plans.
+  -> [PackageExec](../../crates/araphor-query/src/definition/physical.rs) consumes the native child plans and complete input receipts.
+  -> [Native subscriptions](../../crates/araphor-query/src/stream/physical/runtime.rs) retain source progress and actual SQL deadlines.
+  -> [Data publication](../../crates/araphor-data/src/analysis/managed/commit.rs) checks the captured contract and commits complete output atomically.
+
+Inputs::from_plans and receipt construction remain. Scope preserves declared
+SQL body visibility. InputCapture preserves admitted saved aliases, original
+witnesses, and buffer accounting through SourceSnapshot. Finite expired
+witness reads use existing Unknown coverage within the affected call; other
+read guards and current publication fences remain. Finite Wasm admission can
+return Busy. Managed calls await their existing permit without another reader,
+clock, or runtime.
+
+The [source review](../guides/araphor-discovery-definition-review.md#query-input-runner-retirement)
+gives the remaining owners and assertion reading order. The
+[separate Data gate](araphor-analysis-migration.md#query-input-runner-retirement)
+keeps all Data package APIs, codecs, store paths, and tests.
+The independent count covers retained Araphor production Rust source. It
+excludes test-only source, comments, and blank lines. It does not prove compiled
+reachability. This bounded change removes 1,018 lines from `6ded5286`: the
+runner retirement removes 1,055 and the native expiry repair adds 37.
+Baseline `7b7b407a` has 63,709 lines; `6ded5286` has 83,842; the working source
+has 82,824. The working source remains 19,115 lines above baseline and 25,115
+short of the required net 6,000-line reduction. Earlier numeric records retain
+their original source scopes.
+
+The count record is local evidence under
+`/home/navid/mithril-test-hosts/input-retirement-verification/source-count/final-test-corrections`.
+Its source manifest SHA-256 is
+`aac10b05df244de482e94c78c36d9dec516b1dd316e2bbdc2772c1ecdfd0c6c4`.
+The [migration result](araphor-analysis-migration.md#query-input-runner-retirement)
+records the selected split runs, final Clippy, and formatting checks.
+Result: **Done** for this Query input runner retirement and finite expiry
+transfer. The separate Data gate, complete redesign, and required production
+reduction remain **Not done**.

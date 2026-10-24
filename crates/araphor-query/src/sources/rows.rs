@@ -91,8 +91,6 @@ pub(crate) struct Captured {
     pub(crate) removals: BTreeMap<AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
     _memory: MemoryReservation,
     tables: BTreeMap<SourceOrigin, Table>,
-    package_coverage: BTreeMap<usize, araphor_analysis_sdk::Coverage>,
-    source_bytes: usize,
 }
 
 impl Captured {
@@ -300,15 +298,6 @@ impl SourceSnapshot {
             .as_ref()
             .map(|captured| Arc::clone(&captured.receipt))
             .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))
-    }
-
-    pub(crate) fn received_min(&self, range: (u64, u64)) -> Result<Option<u64>> {
-        self.captured
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?
-            .as_ref()
-            .ok_or_else(|| DataFusionError::Internal("the source snapshot is not captured".into()))?
-            .received_min(range, &self.control)
     }
 
     pub(crate) fn selection(
@@ -621,10 +610,6 @@ impl SourceSnapshot {
                 .len()
                 .checked_mul(std::mem::size_of::<usize>())
                 .and_then(|bytes| bytes.checked_add(entry_bytes))
-                .and_then(|bytes| {
-                    bytes
-                        .checked_add(std::mem::size_of::<(usize, araphor_analysis_sdk::Coverage)>())
-                })
                 .and_then(|bytes| bytes.checked_add(added))
                 .ok_or_else(overflow)?;
         }
@@ -670,7 +655,6 @@ impl SourceSnapshot {
                 (schema, indices, batches, None),
             );
         }
-        let mut package_coverage = BTreeMap::new();
         for (index, (schema, batches, coverage)) in packages {
             let (slot, source, _) = self
                 .inputs
@@ -684,9 +668,7 @@ impl SourceSnapshot {
             for batch in &batches {
                 self.memory.retain_input(batch, &reservation)?;
             }
-            source_bytes = source_bytes
-                .saturating_add(Captured::table_bytes(&schema, &batches))
-                .saturating_add(Captured::coverage_bytes(&coverage));
+            source_bytes = source_bytes.saturating_add(Captured::table_bytes(&schema, &batches));
             let input = if let araphor_data::AnalysisInputSource::Managed(reference) = source {
                 let input = sdk::Input {
                     data: sdk::Dataset {
@@ -706,7 +688,7 @@ impl SourceSnapshot {
                         ),
                         window: None,
                     },
-                    coverage: coverage.clone(),
+                    coverage,
                 };
                 source_bytes = source_bytes
                     .saturating_add(std::mem::size_of::<sdk::Input>())
@@ -722,7 +704,6 @@ impl SourceSnapshot {
                     (schema, indices, batches, input),
                 )
                 .is_some()
-                || package_coverage.insert(*slot, coverage).is_some()
             {
                 return Err(DataFusionError::Internal(
                     "the package source is bound twice".into(),
@@ -854,8 +835,6 @@ impl SourceSnapshot {
             removals,
             _memory: table_memory,
             tables,
-            package_coverage,
-            source_bytes,
         })
     }
 }

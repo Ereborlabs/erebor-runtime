@@ -231,8 +231,8 @@ Full workspace CI is not run, as instructed.
 ### Finite resolved inputs
 
 The working tree now uses Query-owned
-[Inputs](../../crates/araphor-query/src/inputs/mod.rs) and
-[InputSet](../../crates/araphor-query/src/inputs/physical.rs) for resolved model
+[Inputs](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/mod.rs) and
+[InputSet](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) for resolved model
 inputs. Native plans retain original provider origins and execute in dependency
 order. All physical input children share one SourceSnapshot and TaskContext.
 Data reads canonical sources, exact package outputs, and their reference ledger

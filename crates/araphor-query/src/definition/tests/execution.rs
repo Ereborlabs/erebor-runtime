@@ -774,7 +774,7 @@ async fn physical_sql_failure_keeps_data() -> TestResult {
 
 #[tokio::test]
 async fn physical_failure_keeps_session() -> TestResult {
-    for cause in ["execution", "contract"] {
+    for cause in ["execution", "contract", "input"] {
         let fixture = Fixture::limits(capacity_limits())?;
         let mut bundle = Fixture::bundle();
         let PackageImplementationV1::Sql { program, .. } =
@@ -784,14 +784,27 @@ async fn physical_failure_keeps_session() -> TestResult {
         };
         if cause == "execution" {
             program.outputs.insert("result".into(), "SELECT CAST(CASE WHEN value = 0 THEN 'invalid' ELSE CAST(value AS VARCHAR) END AS BIGINT UNSIGNED) AS value FROM source".into());
-        } else {
+        } else if cause == "contract" {
             program.evidence = Some("SELECT 'result' AS output_dataset, CAST(CASE WHEN value = 0 THEN 999 ELSE 0 END AS BIGINT UNSIGNED) AS output_row, 'source' AS input_dataset, __row_index AS input_row FROM source".into());
+        }
+        if cause == "input" {
+            bundle.artifacts[0].descriptor.exports[0]
+                .inputs
+                .push(sdk::Port::new("additional", Fixture::schema("value")).into());
         }
         fixture.install(&bundle)?;
         let definition = |value| {
+            let additional = if cause == "input" {
+                format!(
+                    ", additional => (SELECT CAST({} AS BIGINT UNSIGNED) AS value)",
+                    if value == 0 { "NULL" } else { "7" }
+                )
+            } else {
+                String::new()
+            };
             Fixture::sql(format!(
                 r#"SELECT * FROM "fixture"."r1".count(source => (
-                SELECT CAST({value} AS BIGINT UNSIGNED) AS value), increment => 2)"#
+                SELECT CAST({value} AS BIGINT UNSIGNED) AS value){additional}, increment => 2)"#
             ))
         };
         let bad = fixture.prepare(&definition(0)).await?;
@@ -801,10 +814,26 @@ async fn physical_failure_keeps_session() -> TestResult {
             fixture
                 .engine
                 .session(AnalysisSelectionV1::tenant([1; 16]), &control, NOW)?;
-        assert!(session
+        let error = session
             .execute_definition(&bad, invocation("failed"))
             .await
-            .is_err());
+            .err()
+            .ok_or("invalid native input returned output")?;
+        if cause == "input" {
+            let mut source: &(dyn std::error::Error + 'static) = &error;
+            loop {
+                if matches!(
+                    source.downcast_ref::<sdk::Error>(),
+                    Some(sdk::Error::Batch {
+                        source: sdk::arrow_schema::ArrowError::InvalidArgumentError(message),
+                        ..
+                    }) if message == "Column 'value' is declared as non-nullable but contains null values"
+                ) {
+                    break;
+                }
+                source = source.source().ok_or("missing native null-input error")?;
+            }
+        }
         control.check()?;
         let output = session
             .execute_definition(&good, invocation("reused"))

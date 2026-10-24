@@ -55,49 +55,9 @@ impl Captured {
                     }),
             )
     }
-
-    pub(super) fn coverage_bytes(coverage: &sdk::Coverage) -> usize {
-        size_of::<(usize, sdk::Coverage)>()
-            .saturating_add(
-                coverage
-                    .limits
-                    .capacity()
-                    .saturating_mul(size_of::<String>()),
-            )
-            .saturating_add(coverage.limits.iter().fold(0usize, |bytes, limit| {
-                bytes.saturating_add(limit.capacity())
-            }))
-    }
 }
 
 impl SourceSnapshot {
-    pub(crate) fn package_coverage(&self, slot: usize) -> Result<sdk::Coverage> {
-        self.captured
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?
-            .as_ref()
-            .and_then(|captured| captured.package_coverage.get(&slot))
-            .cloned()
-            .ok_or_else(|| {
-                DataFusionError::Execution("the package source coverage is absent".into())
-            })
-    }
-
-    pub(crate) fn port_table(&self, slot: usize) -> Result<(SchemaRef, Vec<sdk::RecordBatch>)> {
-        let captured = self
-            .captured
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
-        let captured = captured
-            .as_ref()
-            .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))?;
-        let (schema, _, batches, _) = captured
-            .tables
-            .get(&SourceOrigin::Port(slot))
-            .ok_or_else(|| DataFusionError::Execution("the materialized port is absent".into()))?;
-        Ok((Arc::clone(schema), batches.clone()))
-    }
-
     pub(crate) fn captured_input(&self, origin: &SourceOrigin) -> Result<Option<Arc<sdk::Input>>> {
         let captured = self
             .captured
@@ -129,24 +89,6 @@ impl SourceSnapshot {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    pub(crate) fn retain_ports(&self) -> Result<()> {
-        let mut captured = self
-            .captured
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
-        let captured = captured
-            .as_mut()
-            .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))?;
-        captured
-            .tables
-            .retain(|origin, _| matches!(origin, SourceOrigin::Port(_)));
-        captured.package_coverage.clear();
-        captured
-            ._memory
-            .shrink(std::mem::take(&mut captured.source_bytes));
-        Ok(())
     }
 }
 
@@ -222,18 +164,6 @@ mod tests {
             ._memory
             .size();
         assert!(charged >= 4096);
-        source.retain_ports()?;
-        assert_eq!(
-            source
-                .captured
-                .lock()
-                .map_err(|_| "source lock")?
-                .as_ref()
-                .ok_or("source capture")?
-                ._memory
-                .size(),
-            charged
-        );
         drop(source);
         drop(memory.reserve_input(capacity)?);
         Ok(())
@@ -341,18 +271,6 @@ mod tests {
             ._memory
             .size();
         assert!(charged >= input.metadata_bytes());
-        source.retain_ports()?;
-        assert_eq!(
-            source
-                .captured
-                .lock()
-                .map_err(|_| "source lock")?
-                .as_ref()
-                .ok_or("source capture")?
-                ._memory
-                .size(),
-            charged
-        );
         control.cancel()?;
         assert!(source
             .bind_port(1, schema, input.data.batches.clone(), Some(&input))

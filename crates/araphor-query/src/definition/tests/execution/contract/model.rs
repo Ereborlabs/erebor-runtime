@@ -546,10 +546,10 @@ async fn model_clock_children() -> TestResult {
         let calls = Fixture::calls(&prepared.plan)?;
         let call = &calls[0];
         let children = call.inputs();
-        assert!(!crate::inputs::Inputs::clocked(children[0])?);
+        assert_eq!(crate::follow::Window::clocks(children[0])?, 0);
         let body = children[1..]
             .iter()
-            .map(|plan| crate::inputs::Inputs::clocked(plan))
+            .map(|plan| crate::follow::Window::clocks(plan).map(|count| count > 0))
             .collect::<crate::Result<Vec<_>>>()?;
         assert_eq!(body.into_iter().any(|value| value), location.is_some());
         assert_eq!(
@@ -657,8 +657,8 @@ async fn model_input_clocks() -> TestResult {
             .find(|call| call.export() == "count")
             .ok_or("root call")?;
         let children = root.inputs();
-        assert!(!crate::inputs::Inputs::clocked(children[0])?);
-        assert_eq!(crate::inputs::Inputs::clocked(children[1])?, clocked);
+        assert_eq!(crate::follow::Window::clocks(children[0])?, 0);
+        assert_eq!(crate::follow::Window::clocks(children[1])? > 0, clocked);
         assert!(children[2..]
             .iter()
             .all(|plan| crate::follow::Window::clocks(plan).is_ok_and(|count| count == 0)));

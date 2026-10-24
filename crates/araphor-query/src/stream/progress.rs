@@ -74,12 +74,6 @@ impl Progress {
         self.elapsed = false;
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.expiry = None;
-        self.fired = None;
-        self.elapsed = false;
-    }
-
     pub(crate) fn deadline(&self) -> Option<u64> {
         self.expiry
     }

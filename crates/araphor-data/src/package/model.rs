@@ -460,7 +460,7 @@ mod tests {
         grant.expires_utc_ns = Some(u64::MAX);
         assert!(grant
             .remaining()?
-            .is_some_and(|remaining| !remaining.is_zero()));
+            .is_some_and(|remaining| remaining > Duration::from_secs(30)));
         Ok(())
     }
 

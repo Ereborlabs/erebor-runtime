@@ -213,3 +213,46 @@ async fn progress_context_keeps_deadline_consumed() {
         Wake::Source
     ));
 }
+
+struct ClosedClock;
+
+impl Clock for ClosedClock {
+    fn now_ns(&self) -> crate::Result<u64> {
+        Ok(10)
+    }
+
+    fn changes(&self) -> watch::Receiver<u64> {
+        watch::channel(0).1
+    }
+}
+
+#[tokio::test]
+async fn progress_clock_closure_fails() {
+    let fixture = Fixture::new(Limits::default());
+    let mut progress = Progress::new(&fixture.store, Arc::new(ClosedClock), None);
+    let control = AnalysisReadControl::default();
+    progress.begin().unwrap();
+    progress.captured(
+        fixture.store.meta().unwrap().commit_revision,
+        Some(10_000_000_000),
+    );
+    let error = tokio::time::timeout(
+        Duration::from_secs(1),
+        progress.next(&control, Some(10_000_000_000)),
+    )
+    .await
+    .unwrap()
+    .err()
+    .expect("closed required clock watch returned a wake");
+    assert!(matches!(
+        error,
+        crate::Error::Data {
+            source: araphor_data::Error::Package {
+                code: araphor_data::PackageErrorCodeV1::Incomplete,
+                field: "clock progress",
+                ..
+            }
+        }
+    ));
+    control.check().unwrap();
+}

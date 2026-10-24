@@ -250,6 +250,113 @@ async fn input_clocks_share_time() -> TestResult {
 }
 
 #[tokio::test]
+async fn input_output_budget() -> TestResult {
+    let text = "x".repeat(4096);
+    let mut model = sdk::Model::new(
+        "count",
+        Vec::new(),
+        vec![sdk::Port::new("result", Fixture::schema("value"))],
+    );
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs = vec![sdk::InputPort {
+        port: sdk::Port::new(
+            "payload",
+            sdk::Schema::new(vec![sdk::Field::new("payload", sdk::DataType::Utf8, false)]),
+        ),
+        source: sdk::InputSource::Query(format!("SELECT '{text}' AS payload")),
+    }];
+    let fixture = Fixture::limits(Limits {
+        input_bytes: 64 * 1024,
+        input_capacity: Some(128 * 1024),
+        output_bytes: 2048,
+        output_capacity: Some(2048),
+        ..Default::default()
+    })?;
+    fixture.install(&bundle(
+        model,
+        SqlModelV1 {
+            outputs: BTreeMap::from([(
+                "result".into(),
+                "SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) AS value FROM payload".into(),
+            )]),
+            ..Default::default()
+        },
+    ))?;
+    let prepared = fixture
+        .prepare(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
+        .await?;
+    let output = fixture
+        .execute(&prepared, invocation("input-budget"))
+        .await?;
+    assert_eq!(values(&output.batches)?, [1]);
+    assert_eq!(output.calls.len(), 1);
+    let input = &output
+        .calls
+        .values()
+        .next()
+        .ok_or("input call")?
+        .evaluation()
+        .inputs[0];
+    assert_eq!(input.data.name, "payload");
+    assert_eq!(input.data.batches.len(), 1);
+    let batch = &input.data.batches[0];
+    assert_eq!(
+        ScalarValue::try_from_array(batch.column(0), 0)?,
+        ScalarValue::Utf8(Some(text.clone()))
+    );
+    let output_capacity = fixture
+        .engine
+        .limits()
+        .output_capacity
+        .ok_or("output capacity")?;
+    assert!(batch.get_array_memory_size() > output_capacity);
+    assert!(batch.get_array_memory_size() > fixture.engine.limits().output_bytes);
+    let borrowed = Arc::clone(batch.column(0));
+    drop((output, prepared));
+    let input_capacity = fixture
+        .engine
+        .limits()
+        .input_capacity
+        .ok_or("input capacity")?;
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(input_capacity)
+        .is_err());
+    drop(fixture.engine.memory().reserve_output(output_capacity)?);
+
+    let (plan, sources) = fixture
+        .engine
+        .prepare(
+            "SELECT $1 AS payload",
+            vec![ScalarValue::Utf8(Some(text.clone()))],
+        )
+        .await?;
+    let mut client = fixture.engine.session(
+        AnalysisSelectionV1::tenant([1; 16]),
+        &AnalysisReadControl::default(),
+        NOW,
+    )?;
+    client.set_output(usize::MAX, 128)?;
+    let error = client.execute(Arc::new(plan), &sources).unwrap_err();
+    assert!(matches!(error, crate::Error::Sql { source }
+        if matches!(source.find_root(), DataFusionError::ResourcesExhausted(_))));
+    drop(client);
+    assert!(fixture
+        .engine
+        .memory()
+        .reserve_input(input_capacity)
+        .is_err());
+    assert_eq!(
+        ScalarValue::try_from_array(&borrowed, 0)?,
+        ScalarValue::Utf8(Some(text))
+    );
+    drop(borrowed);
+    capacity_released(&fixture)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn catalog_input_contract() -> TestResult {
     let schema = sdk::Schema::new(vec![sdk::Field::new(
         "ordinal",

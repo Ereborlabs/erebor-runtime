@@ -443,46 +443,9 @@ fn catalog_native_preflight() -> TestResult {
 
 #[test]
 fn catalog_content_contract() -> TestResult {
-    let expected: [[u8; 32]; 8] = [
-        [
-            162, 168, 134, 175, 182, 252, 42, 145, 30, 4, 0, 212, 48, 205, 253, 77, 218, 174, 253,
-            224, 228, 124, 162, 212, 207, 164, 116, 28, 17, 7, 250, 187,
-        ],
-        [
-            25, 202, 116, 170, 190, 238, 162, 169, 255, 140, 54, 25, 35, 114, 216, 152, 43, 46, 36,
-            122, 81, 60, 50, 62, 7, 249, 64, 209, 156, 87, 152, 142,
-        ],
-        [
-            216, 34, 194, 15, 88, 127, 181, 105, 124, 163, 245, 207, 88, 93, 35, 59, 199, 231, 156,
-            45, 99, 8, 1, 246, 155, 192, 120, 99, 111, 138, 133, 110,
-        ],
-        [
-            127, 158, 230, 137, 249, 176, 56, 198, 88, 74, 98, 30, 174, 160, 117, 127, 40, 224, 6,
-            222, 198, 188, 106, 2, 207, 35, 161, 229, 40, 16, 239, 87,
-        ],
-        [
-            25, 65, 98, 87, 92, 68, 51, 68, 104, 3, 182, 234, 8, 38, 119, 49, 69, 39, 138, 35, 103,
-            18, 253, 234, 91, 171, 58, 39, 188, 38, 33, 2,
-        ],
-        [
-            180, 76, 164, 242, 132, 167, 226, 207, 156, 237, 244, 160, 138, 166, 217, 0, 249, 60,
-            137, 76, 76, 142, 191, 55, 131, 78, 158, 130, 150, 93, 100, 246,
-        ],
-        [
-            17, 72, 126, 114, 203, 72, 118, 74, 186, 240, 174, 167, 1, 82, 219, 158, 56, 232, 4,
-            33, 3, 170, 196, 201, 67, 143, 4, 245, 28, 160, 58, 145,
-        ],
-        [
-            72, 72, 118, 183, 169, 105, 225, 226, 222, 198, 93, 179, 216, 198, 101, 133, 16, 143,
-            168, 124, 100, 11, 78, 57, 134, 96, 187, 234, 63, 220, 189, 208,
-        ],
-    ];
-    use std::hash::Hash as _;
-
     use araphor_data::AnalysisExtractLimits;
     use datafusion::common::ScalarValue;
 
-    let mut observed = Vec::new();
     for enabled in 0..8u8 {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
@@ -536,16 +499,62 @@ fn catalog_content_contract() -> TestResult {
                 .map(|schema| schema.fields().len())
                 .sum::<usize>()
         );
-        let mut hash = crate::stream::physical::Fingerprint::new();
-        schema.hash(&mut hash);
-        batch.num_rows().hash(&mut hash);
-        for row in 0..batch.num_rows() {
-            for column in batch.columns() {
-                ScalarValue::try_from_array(column, row)?.hash(&mut hash);
+        let mut row = 0;
+        for (relation, declared) in schemas {
+            let readiness = match relation.as_str() {
+                "behaviors" => {
+                    if enabled & 1 != 0 {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                }
+                "relationships"
+                | "graph_subjects"
+                | "graph_branches"
+                | "correlation_packages"
+                | "policy_observations"
+                | "graph_manifest" => {
+                    if enabled & 2 != 0 {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                }
+                "notifications" => {
+                    if enabled & 4 != 0 {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                }
+                _ => "available",
+            };
+            for (ordinal, field) in declared.fields().iter().enumerate() {
+                let metadata = field.metadata();
+                let expected = vec![
+                    ScalarValue::Utf8(Some(relation.clone())),
+                    ScalarValue::UInt32(Some(u32::try_from(ordinal)?)),
+                    ScalarValue::Utf8(Some(field.name().clone())),
+                    ScalarValue::Utf8(Some(field.data_type().to_string())),
+                    ScalarValue::Utf8(Some(metadata["araphor.units"].clone())),
+                    ScalarValue::Boolean(Some(field.is_nullable())),
+                    ScalarValue::Utf8(Some(metadata["araphor.null_meaning"].clone())),
+                    ScalarValue::Utf8(Some(metadata["araphor.join_keys"].clone())),
+                    ScalarValue::Utf8(Some(metadata["araphor.owner"].clone())),
+                    ScalarValue::Utf8(Some(readiness.into())),
+                    ScalarValue::Utf8(Some(metadata["araphor.description"].clone())),
+                ];
+                let actual = batch
+                    .columns()
+                    .iter()
+                    .map(|column| ScalarValue::try_from_array(column, row))
+                    .collect::<datafusion::common::Result<Vec<_>>>()?;
+                assert_eq!(actual, expected, "{relation}.{ordinal}, owners={enabled}");
+                row += 1;
             }
         }
-        let digest = hash.finish_digest();
-        observed.push(digest);
+        assert_eq!(row, batch.num_rows());
         let borrowed = Arc::clone(batch.column(2));
         drop(batches);
         drop(captured);
@@ -560,7 +569,6 @@ fn catalog_content_contract() -> TestResult {
         drop(borrowed);
         drop(memory.reserve_input(capacity)?);
     }
-    assert_eq!(observed, expected);
     Ok(())
 }
 
@@ -845,7 +853,6 @@ fn retirement_map_charges_once() -> TestResult {
     let table_metadata = size_of::<(super::SourceOrigin, super::Table)>()
         + size_of::<araphor_analysis_sdk::Schema>()
         + "events".len();
-    assert_eq!(captured.source_bytes, table_metadata);
     let gaps = captured
         .removals
         .get(&AnalysisStreamIdentityV1::Evidence(identity.clone()))

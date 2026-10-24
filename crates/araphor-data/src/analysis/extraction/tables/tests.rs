@@ -148,7 +148,7 @@ fn schema_contract() -> TestResult {
         ),
         (
             "trace_recipes",
-            "f06ce8f5f3397cc8a025d9dccdab07c91e23b1b6dd31a143e3bb1bc737fe32b3",
+            "1c1288af419b8ac27867e24e78144a0454fa54aef552d96a17ee0b2c4aedb1bf",
         ),
         (
             "traces",

@@ -176,6 +176,7 @@ async fn supplied_inputs_reject_shape() -> TestResult {
             observed.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
+        control.check()?;
         assert_eq!(fixture.engine.store().meta()?, before);
         assert_eq!(fixture.engine.memory().input_reserved(), held);
         drop(fixture.engine.reserve_evaluation([1; 16])?);

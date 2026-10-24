@@ -893,19 +893,19 @@ Control imports these owners directly. The dependency graph has no facade
 crate. SDK owns declarations and native/Wasm application binary interfaces.
 
 [AdmittedExport::admit](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model.rs) admits the installed export
-  -> [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) retains native plans, original provider origins, and input dependency order
+  -> [Inputs::admit](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/mod.rs) retains native plans, original provider origins, and input dependency order
 
 [AnalysisPackageOwner::prepare_model](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/evaluation/preparation.rs) checks current authority and reads the admitted Inputs directly
-  -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) plans all physical children at one frozen time
+  -> [Inputs::execute](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) plans all physical children at one frozen time
   -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) combines the prepared source columns and time ranges in one capture
   -> [AnalysisStore::read_tables](../../crates/araphor-data/src/analysis/extraction.rs) fixes one Data read transaction for the original source receipts
   -> [AnalysisStore::extract_packages](../../crates/araphor-data/src/analysis/extraction/package.rs) reads exact package outputs and their references in that same transaction
   -> [Capture::finish](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) returns requested native Arrow tables with the complete read receipt
   -> [SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) claims those arrays and binds their exact native schemas to the source origins
   -> [Dataset::normalize_batch](../../crates/araphor-analysis-sdk/src/batch.rs) applies the declared SDK schema after conversion preflight
-  -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) materializes each completed port with one dataset-global row index before dependent SQL runs
+  -> [Inputs::execute](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) materializes each completed port with one dataset-global row index before dependent SQL runs
   -> [Inputs::input](../../crates/araphor-query/src/inputs/receipt.rs) assigns per-port revisions and coverage from the original source scopes and reference origins
-  -> [InputSet](../../crates/araphor-query/src/inputs/physical.rs) returns declared input order, retained tables, and complete provenance
+  -> [InputSet](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) returns declared input order, retained tables, and complete provenance
   -> [AnalysisPackageOwner::evaluate_artifact](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/execution.rs) receives the owned evaluation and retained input set for the exact installed export
   -> [AnalysisPackageOwner::evaluate_artifact](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/execution.rs) dispatches SQL to one Engine::wait future or invokes the selected synchronous native or Wasm owner
   -> [AnalysisPackageOwner::prepare_model](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/evaluation/preparation.rs) prepares one result contract
@@ -951,10 +951,10 @@ no independent store argument. A nonempty resolved input cut holds one SQL
 evaluation permit through planning, capture, and all native child streams.
 The input permit is released before the selected backend acquires its permit.
 
-[Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) adds one
+[Inputs::execute](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) adds one
 dataset-global `__row_index` across each completed port's batches. The column
 is an ordinary visible table field. Native `SELECT *` includes the field.
-[InputSet::register](../../crates/araphor-query/src/inputs/physical.rs) gives SQL
+[InputSet::register](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) gives SQL
 ModelRun those same indexed tables. ModelRun does not build those indices
 again. [ModelRun::table](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/input.rs)
 still builds indices for host-prepared inputs, parameters, prior checkpoints,
@@ -979,7 +979,7 @@ complete upstream size measurement.
 
 [AnalysisPackageOwner::evaluate_artifact](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/execution.rs) selects the SQL implementation for the exact installed export
   -> [Engine::wait](../../crates/araphor-query/src/execution.rs) executes one owned future on the existing runtime
-  -> [InputSet::check_async](../../crates/araphor-query/src/inputs/physical.rs) checks retained trace-read authority without synchronous runtime entry
+  -> [InputSet::check_async](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) checks retained trace-read authority without synchronous runtime entry
   -> [ModelRun::new](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/operation.rs) constructs the complete Session, control, shared evaluation permit, and output reservation
   -> [ModelRun::evaluate_output](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model/execute.rs) runs outputs, checkpoint, evidence, and reason plans in their admitted order
   -> [Session::stream_local](../../crates/araphor-query/src/execution.rs) creates each native physical stream with the same evaluation permit
@@ -1018,17 +1018,17 @@ deleted. No SourceBatch or LocalTable binding owner remains.
 [Engine::blocking](../../crates/araphor-query/src/execution.rs) keeps one
 cancellation guard until the actual blocking read ends. A completed Data error
 does not cancel the caller. A timeout or dropped read cancels unfinished work.
-[InputSet::check_async](../../crates/araphor-query/src/inputs/physical.rs) checks
+[InputSet::check_async](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) checks
 current trace-read authority before and after SQL model execution. The returned
 future owns its snapshot and child control. SQL awaits that future on the
-existing runtime. [InputSet::check](../../crates/araphor-query/src/inputs/physical.rs)
+existing runtime. [InputSet::check](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs)
 keeps the synchronous bridge for native, Wasm, and other synchronous callers.
 Both routes preserve cancellation and typed read denial. The input owner checks
 indexed bytes and aggregate references before it offers an InputSet. Missing
 input errors keep their typed cause through native DataFusion error wrappers.
 Install preserves MissingInput readiness. Inspect marks the retained result stale.
 
-The [retained trace case](../../crates/araphor-query/src/inputs/tests.rs)
+The [retained trace case](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/tests.rs)
 checks both read-check entry points. The case checks cancellation before the
 async future is polled and denial after retained trace access is revoked.
 The caller control remains usable after denial. The `quiet_check_skips_runtime`
@@ -1126,24 +1126,24 @@ transport path opens no DuckDB query connection.
 ## Live detector input lifecycle
 
 [AnalysisPackageOwner::supervise](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/supervision.rs) registers current installed activations
-  -> [Inputs::watch](../../crates/araphor-query/src/inputs/live.rs) creates one InputOperation for the exact activation and grant
-  -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) checks the current activation and saved result before input capture
-  -> [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) executes the admitted native input plans at one frozen time
-  -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) offers one retained Arc<InputSet> with its evaluation time
+  -> [Inputs::watch](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) creates one InputOperation for the exact activation and grant
+  -> [InputOperation::next](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) checks the current activation and saved result before input capture
+  -> [Inputs::execute](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) executes the admitted native input plans at one frozen time
+  -> [InputOperation::next](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) offers one retained Arc<InputSet> with its evaluation time
   -> [AnalysisPackageOwner::evaluate_offer](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/supervision.rs) checks authority and invokes the selected backend
   -> [AnalysisPackageOwner::authorize_commit](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/owner.rs) checks current authority for the result transaction
   -> [AnalysisStore::commit_package](../../crates/araphor-data/src/analysis/packages/commit.rs) checks the activation, checkpoint, source revisions, and exact references in one transaction
   -> [AnalysisStore::package_completed](../../crates/araphor-data/src/analysis/packages/input.rs) verifies the actual result head and stored activation precondition
-  -> [InputOperation::complete](../../crates/araphor-query/src/inputs/live.rs) checks the offered revisions, coverage, and evaluation time before it advances the local activation
+  -> [InputOperation::complete](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) checks the offered revisions, coverage, and evaluation time before it advances the local activation
 
 [AnalysisPackageOwner::serve_activation](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/supervision.rs) receives a typed Busy failure
   -> [AnalysisPackageOwner::wait_inputs](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/supervision.rs) waits for the actual blocked resource or an input change
-  -> [InputOperation::retry](../../crates/araphor-query/src/inputs/live.rs) retains the offered input cut
+  -> [InputOperation::retry](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) retains the offered input cut
   -> [AnalysisStore::package_input_current](../../crates/araphor-data/src/analysis/packages/input.rs) checks that cut against current metadata and retained evidence
-  -> [InputOperation::next](../../crates/araphor-query/src/inputs/live.rs) offers the same Arc when the cut is valid, or captures a new cut when it is invalid
+  -> [InputOperation::next](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) offers the same Arc when the cut is valid, or captures a new cut when it is invalid
 
 [Progress::new and begin](../../crates/araphor-query/src/stream/progress.rs) register the source and clock watches before physical planning or capture
-  -> [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) or [Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) completes its native capture
+  -> [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) or [Inputs::execute](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) completes its native capture
   -> [Progress::captured](../../crates/araphor-query/src/stream/progress.rs) records the captured revision and next source deadline
   -> [Progress::next](../../crates/araphor-query/src/stream/progress.rs) waits for a source notice, an explicit clock notice, or a due deadline
   -> Runtime returns a SQL update, or InputOperation checks and offers the complete package input
@@ -1220,7 +1220,7 @@ selected preparation and Wasm lifecycle cases pass. Strict Clippy passes all
 targets in Query, Analysis, and Control. The source record is
 `/tmp/araphor-exact-package-time-verification1.json`.
 
-[Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) uses the
+[Inputs::execute](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) uses the
 shared [Window](../../crates/araphor-query/src/follow/window.rs) rules to compute
 the next supported event-window expiry. Each input port uses its own source
 range. The complete input graph supplies the earliest port or source deadline.
@@ -1285,14 +1285,14 @@ trusted connections, a newly discovered accepted revision also sends one
 registry invalidation. A no-op recovery sends none. The next input operation
 uses the actual activation and durable result head.
 
-The [Query live tests](../../crates/araphor-query/src/inputs/live/tests.rs)
+The [Query live tests](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live/tests.rs)
 cover the same-cut Busy retry, model and input clock changes, exact completion,
 quiet cancellation, durable-head restart, global notices, and expired evidence.
 The added cases check idle clock-dependent models without repeated reads,
 one-shot source expiry, later witness expiry, window expiry without a commit,
 stage renewal after an idle wait, clock notices during capture or Busy, and
 closed clock watches.
-[Input window tests](../../crates/araphor-query/src/inputs/tests.rs) check each
+[Input window tests](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/tests.rs) check each
 port's expiry and an exact nanosecond grant bound.
 [Native window tests](../../crates/araphor-query/src/follow/tests.rs) compare
 inclusive and strict selection and expiry with finite native SQL, including
@@ -1433,10 +1433,10 @@ paging, cursor, health, and cleanup assertions.
 
 [Parser::parse](../../crates/araphor-query/src/parser/mod.rs) returns one bounded native DataFusion statement
   -> [Engine::catalog](../../crates/araphor-query/src/execution.rs) registers only the supplied native providers in the standard memory catalog
-  -> [Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) retains original provider origins from native table-reference resolution
+  -> [Inputs::admit](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/mod.rs) retains original provider origins from native table-reference resolution
   -> [Planner::build](../../crates/araphor-query/src/planner/mod.rs) calls SessionState.statement_to_plan and binds parameters once
   -> [Planner::check](../../crates/araphor-query/src/planner/mod.rs) checks projection, join, and window resource rules on the native logical plan
-  -> [Inputs::read](../../crates/araphor-query/src/inputs/physical.rs) executes the retained input definition with the current authorized selection
+  -> [Inputs::read](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) executes the retained input definition with the current authorized selection
 
 [Planner::build](../../crates/araphor-query/src/planner/mod.rs) rejects an invalid statement, parameter, or plan
   -> [Query Error](../../crates/araphor-query/src/error.rs) preserves the native or Data error source
@@ -1462,7 +1462,7 @@ SQL TIMESTAMP uses nanoseconds; declared source timestamps keep their Arrow
 units. Quoted names use exact lookup. Duplicate projections need distinct
 aliases. Native CTE alias counts and HAVING resolution apply.
 
-[Inputs::admit](../../crates/araphor-query/src/inputs/mod.rs) supplies the
+[Inputs::admit](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/mod.rs) supplies the
 source catalog from canonical providers and declared Table aliases.
 [AdmittedModel::relations](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/model.rs) creates
 native MemTables for the declared indexed schemas. Output SQL sees model inputs,
@@ -1522,7 +1522,7 @@ None retains an original reference without a payload scan. Some with an empty
 column set retains a real zero-column scan and its rows.
 [SourceSnapshot::requests](../../crates/araphor-query/src/sources/mod.rs)
 adds only admitted source columns through the native physical plan walk.
-[Inputs::scopes](../../crates/araphor-query/src/inputs/receipt.rs) adds each
+[Inputs::scopes](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/receipt.rs) adds each
 child scan to that same map and retains its separate evidence selection.
 The duplicate per-port and capture request maps are deleted. Data reads the
 map keys for provenance and the projected indices for Arrow materialization.
@@ -1592,7 +1592,7 @@ A parsed-field query and a binding-filtered raw query reject that input.
 The [frame case](../../crates/araphor-query/src/sources/tests.rs) consumes a
 finite Subscription. It checks exact original bytes with an unknown protobuf
 field. Its scan budget cannot fit the older records. The
-[input case](../../crates/araphor-query/src/inputs/tests.rs) checks two ports
+[input case](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/tests.rs) checks two ports
 with disjoint cursor predicates, a binary frame, and the original receipt.
 The [page cases](../../crates/araphor-query/src/follow/tests.rs) retain empty
 page progress and unsupported residual filters. They also check that a native
@@ -1696,7 +1696,7 @@ Boolean buffer capacity for 600 rows. The
 check values, availability, projection, and zero-column rows. The
 [Query source cases](../../crates/araphor-query/src/sources/rows/tests.rs)
 check fixed content hashes for all eight availability states and borrowed
-buffer charges. The [catalog_keeps_batch_limit case](../../crates/araphor-query/src/inputs/tests.rs)
+buffer charges. The [catalog_keeps_batch_limit case](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/tests.rs)
 checks 100 exact ordinal values in one batch, unchanged input identity after
 an unrelated commit, source receipts, and final buffer release.
 
@@ -1818,7 +1818,7 @@ qualify after the subquery's source changes. The
 [subquery regressions](../../crates/araphor-query/src/follow/tests.rs) check
 both SQL and retained-plan entry points against a complete native snapshot.
 
-[Inputs::execute](../../crates/araphor-query/src/inputs/physical.rs) retains
+[Inputs::execute](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs) retains
 resolved model inputs in the native input category. All input children share
 one captured source owner and TaskContext. This production path calls native
 execute_stream and retains input buffers before returning InputSet.
@@ -2235,8 +2235,8 @@ The current source reading route is:
 - [Source tests](../../crates/araphor-query/src/sources/tests.rs): `unused_source_receipts`, `empty_filter_progress`, zero-column counts, native interval pruning, timestamp precision, and `native_stream_keeps_metadata`.
 - [Native table tests](../../crates/araphor-data/src/analysis/extraction/tables/tests.rs): whole-row admission, zero-column counts, page fanout, omitted JSON, native capacity, and projection order.
 - [Native field fixtures](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs) and [profile fixture](../../crates/araphor-data/src/analysis/progress/profile/tests/native.rs): complete native schemas, values, NULLs, source receipts, references, witnesses, and tenant scope through actual Data commits.
-- [Input definition](../../crates/araphor-query/src/inputs/mod.rs), [native execution](../../crates/araphor-query/src/inputs/physical.rs), and [receipt attribution](../../crates/araphor-query/src/inputs/receipt.rs): original provider origins, dependency order, one captured cut, shared indexed ports, and declared input order.
-- [Input tests](../../crates/araphor-query/src/inputs/tests.rs): `dependent_ports_share_indices`, `materialized_name_is_not_durable`, `port_receipts_stay_scoped`, `pruned_source_keeps_witness_scope`, `disjoint_ports_exclude_gap_witness`, `native_clocks_share_time`, and failure cleanup.
+- [Input definition](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/mod.rs), [native execution](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/physical.rs), and [receipt attribution](../../crates/araphor-query/src/inputs/receipt.rs): original provider origins, dependency order, one captured cut, shared indexed ports, and declared input order.
+- [Input tests](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/tests.rs): `dependent_ports_share_indices`, `materialized_name_is_not_durable`, `port_receipts_stay_scoped`, `pruned_source_keeps_witness_scope`, `disjoint_ports_exclude_gap_witness`, `native_clocks_share_time`, and failure cleanup.
 - [Data package extraction](../../crates/araphor-data/src/analysis/extraction/package.rs) and [package-output tests](../../crates/araphor-data/src/analysis/packages/tests/output.rs): same-reader output resolution, historical scope, payload admission, current refs, and reference-origin merging.
 - [SDK normalization tests](../../crates/araphor-analysis-sdk/src/batch/tests.rs): preallocation, exact declared metadata, sliced and masked nulls, and schema rejection.
 - [Execution tests](../../crates/araphor-query/src/execution/tests.rs): repeated native plans, local bindings, runtime entry modes, cancellation, permits, and input/output category separation.

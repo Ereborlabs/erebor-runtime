@@ -2,6 +2,7 @@ use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
+use super::read::SourceFreshness;
 use crate::analysis::PackageResultRefV1;
 use crate::{
     AnalysisDatabaseSnafu, AnalysisExtractLimits, AnalysisExtractionV1, AnalysisReadControl,
@@ -116,7 +117,8 @@ impl AnalysisStore {
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
     ) -> Result<(sdk::Dataset, sdk::Coverage)> {
-        self.check_managed_input(reader, reference, selection, now, output, control)?;
+        let expired =
+            self.check_managed_input(reader, reference, selection, now, output, control)?;
         let bytes: u64 = reader.query_row(
             "SELECT octet_length(request_meta) + octet_length(body) + coalesce((SELECT sum(octet_length(ipc)) FROM managed_arrow WHERE result_id = r.result_id), 0) FROM analysis_results r WHERE tenant_id = ? AND result_id = ? AND commit_revision = ? AND processor_id = 'managed-package-v1'",
             params![reference.tenant.as_slice(), reference.result.result_id, reference.result.commit_revision], |row| row.get(0),
@@ -175,7 +177,17 @@ impl AnalysisStore {
             .position(|data| data.name == reference.output.output)
             .ok_or_else(|| Code::Missing.error("managed input dataset"))?;
         let data = decoded.datasets.swap_remove(index);
-        let coverage = record.context.coverage.clone();
+        let coverage = if expired {
+            crate::ResultContext::coverage(&[
+                record.context.coverage.clone(),
+                sdk::Coverage {
+                    state: sdk::CoverageState::Unknown,
+                    limits: vec!["source evidence retention expired".into()],
+                },
+            ])
+        } else {
+            record.context.coverage.clone()
+        };
         drop(decoded);
         drop(packet);
         drop(record);
@@ -193,7 +205,7 @@ impl AnalysisStore {
         now: u64,
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if reference.tenant != selection.tenant_id {
             return Err(Code::Denied.error("managed input tenant"));
         }
@@ -213,7 +225,7 @@ impl AnalysisStore {
         {
             return crate::AnalysisConflictSnafu.fail();
         }
-        if !self.managed_source_current(
+        match self.managed_source_freshness(
             reader,
             &producer.spec,
             (
@@ -224,8 +236,9 @@ impl AnalysisStore {
             control,
             Some(output),
         )? {
-            return Err(Code::Incomplete.error("managed input freshness"));
+            SourceFreshness::Current => Ok(false),
+            SourceFreshness::EvidenceExpired => Ok(true),
+            SourceFreshness::Changed => Err(Code::Incomplete.error("managed input freshness")),
         }
-        Ok(())
     }
 }

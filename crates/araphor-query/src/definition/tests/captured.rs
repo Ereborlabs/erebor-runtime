@@ -207,6 +207,7 @@ async fn fixture() -> TestResult<Fixture> {
             tenant_evaluations: Some(1),
             input_bytes: INPUT,
             input_capacity: Some(INPUT),
+            output_bytes: 64 * 1024,
             output_capacity: Some(OUTPUT),
             ..Default::default()
         },

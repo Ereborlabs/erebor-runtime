@@ -2,36 +2,22 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use araphor_data::AnalysisTableRequests;
 use datafusion::catalog::TableProvider;
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::TableReference;
 use datafusion::datasource::{provider_as_source, source_as_provider};
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
+use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use snafu::ResultExt as _;
 
-use crate::execution::{Engine, Session};
 use crate::follow::Window;
-use crate::sources::{SourceOrigin, SourceProvider, SourceSnapshot};
+use crate::sources::{SourceOrigin, SourceProvider};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
-mod live;
-mod physical;
 mod receipt;
-#[cfg(test)]
-mod tests;
-
-pub use live::InputOperation;
-pub use physical::InputSet;
 
 #[derive(Debug)]
 pub struct Inputs {
     ports: Vec<sdk::Port>,
     plans: Vec<PortPlan>,
-    sources: AnalysisTableRequests,
-    packages: Vec<(usize, sdk::OutputRef)>,
-    clock: bool,
-    mode: sdk::InputMode,
 }
 
 #[derive(Debug)]
@@ -85,10 +71,6 @@ impl Inputs {
                 .map(|input| input.port.clone())
                 .collect(),
             plans,
-            sources: AnalysisTableRequests::new(),
-            packages: Vec::new(),
-            clock: false,
-            mode: model.input_mode,
         })
     }
 
@@ -149,113 +131,6 @@ impl Inputs {
         }
     }
 
-    pub fn admit(engine: &Engine, model: &sdk::Model) -> Result<Self> {
-        let mut tables = SourceSnapshot::providers();
-        for (slot, input) in model.inputs.iter().enumerate() {
-            if let sdk::InputSource::Table(table) = &input.source {
-                if matches!(table, sdk::TableRef::Named(name) if name == &input.port.name) {
-                    continue;
-                }
-                let schema = Session::indexed_schema(&input.port.schema)?;
-                tables.insert(input.port.name.clone(), SourceProvider::port(slot, schema));
-            }
-        }
-        let state = engine.catalog(tables.clone())?;
-        let mut plans = Vec::new();
-        let mut packages = Vec::new();
-        if model.input_mode == sdk::InputMode::Resolved {
-            for (slot, input) in model.inputs.iter().enumerate() {
-                let mut origins = BTreeSet::new();
-                let plan = match &input.source {
-                    sdk::InputSource::Query(sql) => {
-                        let statement = engine.limits().parser.parse(sql)?;
-                        let state = state.clone();
-                        let (plan, sources) = engine.wait(async move {
-                            crate::planner::Planner::new(&state)
-                                .build_with_sources(statement, Vec::new())
-                                .await
-                        })?;
-                        origins = sources;
-                        plan
-                    }
-                    sdk::InputSource::Table(sdk::TableRef::Named(name)) => {
-                        let provider = tables.get(name).cloned().ok_or_else(|| {
-                            InvalidSnafu {
-                                field: "input table",
-                            }
-                            .build()
-                        })?;
-                        Self::scan(name, provider, &input.port.schema)?
-                    }
-                    sdk::InputSource::Table(sdk::TableRef::Output(reference)) => {
-                        packages.push((slot, reference.clone()));
-                        let schema = Arc::new(input.port.schema.clone());
-                        let provider = SourceProvider::package(slot, schema);
-                        Self::scan(&input.port.name, provider, &input.port.schema)?
-                    }
-                };
-                origins.extend(crate::planner::Planner::sources(&plan)?);
-                let window = Window::infer(&plan)?;
-                let identity = Self::identity(&plan).filter(|origin| {
-                    matches!(origin, SourceOrigin::Port(_))
-                        && origins.len() == 1
-                        && origins.contains(origin)
-                });
-                plans.push(PortPlan {
-                    slot,
-                    window,
-                    plan: Arc::new(plan),
-                    origins,
-                    identity,
-                });
-            }
-        }
-        let mut ordered = Vec::with_capacity(plans.len());
-        let mut bound = BTreeSet::new();
-        while !plans.is_empty() {
-            let index = plans
-                .iter()
-                .position(|plan| {
-                    plan.origins.iter().all(|origin| match origin {
-                        SourceOrigin::Port(slot) => bound.contains(slot),
-                        _ => true,
-                    })
-                })
-                .ok_or_else(|| {
-                    InvalidSnafu {
-                        field: "input dependency cycle",
-                    }
-                    .build()
-                })?;
-            let plan = plans.remove(index);
-            bound.insert(plan.slot);
-            ordered.push(plan);
-        }
-        let mut clock = false;
-        let mut sources = AnalysisTableRequests::new();
-        for port in &ordered {
-            clock |= Self::clocked(&port.plan)?;
-            sources.extend(
-                port.origins
-                    .iter()
-                    .filter_map(|origin| origin.durable().map(|name| (name.to_owned(), None))),
-            );
-        }
-        clock |= sources.contains_key("notifications");
-        Ok(Self {
-            ports: model
-                .inputs
-                .iter()
-                .map(|input| input.port.clone())
-                .collect(),
-            plans: ordered,
-            sources,
-            packages,
-            clock,
-            mode: model.input_mode,
-        })
-    }
-
     pub(crate) fn scan(
         name: &str,
         provider: Arc<dyn TableProvider>,
@@ -276,27 +151,6 @@ impl Inputs {
         )
         .and_then(LogicalPlanBuilder::build)
         .context(SqlSnafu)
-    }
-
-    pub fn clocked(plan: &LogicalPlan) -> Result<bool> {
-        let mut clock = false;
-        plan.apply_with_subqueries(|plan| {
-            plan.apply_expressions(|expression| {
-                expression.apply(|expression| {
-                    if let Expr::ScalarFunction(function) = expression {
-                        clock |= function.func.signature().volatility != Volatility::Immutable;
-                    }
-                    Ok(TreeNodeRecursion::Continue)
-                })
-            })?;
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .context(SqlSnafu)?;
-        Ok(clock)
-    }
-
-    pub fn input_clock(&self) -> bool {
-        self.clock
     }
 
     pub fn allocated_bytes(&self) -> usize {
@@ -322,30 +176,6 @@ impl Inputs {
                                 }
                                 _ => 0,
                             }
-                    })
-                    .sum::<usize>(),
-            )
-            .saturating_add(
-                self.sources
-                    .iter()
-                    .map(|(name, columns)| {
-                        size_of::<(String, Option<BTreeSet<usize>>)>()
-                            + name.capacity()
-                            + columns
-                                .as_ref()
-                                .map_or(0, |columns| columns.len() * size_of::<usize>())
-                    })
-                    .sum::<usize>(),
-            )
-            .saturating_add(self.packages.capacity() * size_of::<(usize, sdk::OutputRef)>())
-            .saturating_add(
-                self.packages
-                    .iter()
-                    .map(|(_, reference)| {
-                        reference.package.capacity()
-                            + reference.revision.capacity()
-                            + reference.export.capacity()
-                            + reference.output.capacity()
                     })
                     .sum::<usize>(),
             )

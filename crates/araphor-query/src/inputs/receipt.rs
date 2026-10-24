@@ -1,13 +1,11 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1,
-    AnalysisSourceSnapshotV1, AnalysisTableRequests, CoverageInterval, CoverageReport,
+    AnalysisSourceSnapshotV1, CoverageInterval, CoverageReport,
 };
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::physical_plan::ExecutionPlan;
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
@@ -227,60 +225,8 @@ impl Inputs {
             inherited
                 .iter()
                 .chain(bound.iter().map(|input| input.as_ref())),
-            None,
             memory,
         )
-    }
-
-    pub(super) fn scopes(
-        &self,
-        original: &AnalysisSelectionV1,
-        physical: &[Arc<dyn ExecutionPlan>],
-        requests: &mut AnalysisTableRequests,
-        bounds: &mut BTreeMap<&'static str, Interval>,
-    ) -> Result<Vec<PortScope>> {
-        if physical.len() != self.plans.len() {
-            return InvalidSnafu {
-                field: "input physical plans",
-            }
-            .fail();
-        }
-        self.plans
-            .iter()
-            .zip(physical)
-            .map(|(port, physical)| {
-                let sources = port
-                    .origins
-                    .iter()
-                    .filter_map(|origin| origin.durable().map(|name| (name.to_owned(), None)))
-                    .collect();
-                let selection = SourceSnapshot::selection(original, &sources)?;
-                let ranges =
-                    SourceSnapshot::requests(requests, std::slice::from_ref(physical), None)
-                        .context(SqlSnafu)?;
-                SourceSnapshot::extend_bounds(bounds, &ranges.fields).context(SqlSnafu)?;
-                let trace = sources.contains_key("trace_output")
-                    || sources.contains_key("trace_measurements");
-                Ok(PortScope {
-                    slot: port.slot,
-                    window: None,
-                    packages: self
-                        .packages
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, (slot, _))| {
-                            port.origins.contains(&SourceOrigin::Package(*slot))
-                        })
-                        .map(|(index, _)| index)
-                        .collect(),
-                    selection: if trace {
-                        selection
-                    } else {
-                        SourceSnapshot::prune_selection(selection, &ranges)
-                    },
-                })
-            })
-            .collect()
     }
 
     pub(super) fn input<'a>(
@@ -289,7 +235,6 @@ impl Inputs {
         snapshot: &ArrowSnapshot,
         scope: &PortScope,
         inherited: impl Iterator<Item = &'a sdk::Input>,
-        package: Option<&sdk::Coverage>,
         memory: &Memory,
     ) -> Result<sdk::Input> {
         let port = self
@@ -339,7 +284,7 @@ impl Inputs {
                 AnalysisReferenceOriginV1::Profile => has("behaviors") || has("discovery_state"),
                 AnalysisReferenceOriginV1::Graph => has_graph,
                 AnalysisReferenceOriginV1::Notification => has("notifications"),
-                AnalysisReferenceOriginV1::ExplicitResult => package.is_none(),
+                AnalysisReferenceOriginV1::ExplicitResult => true,
                 AnalysisReferenceOriginV1::Package(index) => scope.packages.contains(index),
             };
         let mut contexts = Vec::new();
@@ -396,30 +341,6 @@ impl Inputs {
                 .then(left.commit_revision.cmp(&right.commit_revision))
         });
         results.dedup();
-        if let Some(coverage) = package {
-            let Some((_, reference)) = self.packages.iter().find(|(slot, _)| *slot == scope.slot)
-            else {
-                return InvalidSnafu {
-                    field: "input package coverage",
-                }
-                .fail();
-            };
-            let [result] = results.as_slice() else {
-                return InvalidSnafu {
-                    field: "input package result",
-                }
-                .fail();
-            };
-            return Ok(sdk::Input {
-                data,
-                revision: sdk::Revision {
-                    owner: format!("{}.{}", reference.package, reference.export),
-                    id: format!("{}:{}", result.result_id, result.commit_revision),
-                    window: None,
-                },
-                coverage: coverage.clone(),
-            });
-        }
         let sources = snapshot
             .page
             .extraction
@@ -610,7 +531,7 @@ impl Inputs {
         })
     }
 
-    pub(super) fn coverage<'a>(values: impl Iterator<Item = &'a sdk::Coverage>) -> sdk::Coverage {
+    pub(crate) fn coverage<'a>(values: impl Iterator<Item = &'a sdk::Coverage>) -> sdk::Coverage {
         let (mut state, mut limits) = (sdk::CoverageState::Complete, Vec::new());
         for coverage in values {
             if coverage.state == sdk::CoverageState::Unknown
@@ -810,7 +731,6 @@ mod supplied {
                 &snapshot,
                 &selected,
                 std::iter::empty(),
-                None,
                 &memory,
             )
             .err()
@@ -823,19 +743,11 @@ mod supplied {
             &snapshot,
             &selected,
             std::iter::empty(),
-            None,
             &memory,
         )?;
         drop(memory.reserve_input(capacity)?);
         let disabled = Memory::new(None, None);
-        let second = scope.input(
-            data,
-            &snapshot,
-            &selected,
-            std::iter::empty(),
-            None,
-            &disabled,
-        )?;
+        let second = scope.input(data, &snapshot, &selected, std::iter::empty(), &disabled)?;
         assert_eq!(first.revision, second.revision);
         assert_eq!(first.coverage, second.coverage);
         Ok(())

@@ -1,5 +1,8 @@
 # Discovery Definition Review
 
+Current Query input ownership is in [Query input runner retirement](#query-input-runner-retirement).
+Earlier InputSet and InputOperation routes retain their recorded source state.
+
 This guide covers Discovery definition admission, native OCI execution, and
 the shared Instance owner. The definition selects reusable code and inputs.
 Admission starts no Discovery. Focused finite and live checks pass. The final
@@ -3184,10 +3187,10 @@ deadlines use the current control and native stream owners.
   -> [Delivery::new](../../crates/araphor-query/src/follow/delivery.rs) validates the optional timeout and retains authority and request deadlines.
   -> [Delivery stream](../../crates/araphor-query/src/follow/delivery.rs) records an idle deadline after a yielded item only when the timeout is configured.
 
-[Inputs::watch](../../crates/araphor-query/src/inputs/live.rs) creates the existing live input operation.
-  -> [InputOperation::stage](../../crates/araphor-query/src/inputs/live.rs) derives the stage duration from the grant expiry, or None when no expiry exists.
+[Inputs::watch](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) creates the existing live input operation.
+  -> [InputOperation::stage](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) derives the stage duration from the grant expiry, or None when no expiry exists.
   -> [AnalysisReadControl::stage](../../crates/araphor-data/src/analysis/read.rs) creates the renewable deadline with the existing shared cancellation and interrupt state.
-  -> [InputOperation::changed](../../crates/araphor-query/src/inputs/live.rs) waits on native source progress and the existing exact deadline.
+  -> [InputOperation::changed](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) waits on native source progress and the existing exact deadline.
 
 `stage(None)` clears the previous stage deadline. `stage(Some(duration))`
 uses that new duration. This is the renewable-stage API. Parent cancellation
@@ -3209,7 +3212,7 @@ Exact focused selectors for reproduction:
 - Data `analysis::read::tests::query_input_native_cancel`.
 - Control `client_grpc::tests::client_timeout_is_optional` and `client_grpc::tests::observability_grpc_trace_timeout`.
 
-The [live-input tests](../../crates/araphor-query/src/inputs/live/tests.rs) cover no grant deadline, expiry beyond 30 seconds, stage replacement and shared cancellation.
+The [live-input tests](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live/tests.rs) cover no grant deadline, expiry beyond 30 seconds, stage replacement and shared cancellation.
 The [delivery tests](../../crates/araphor-query/src/follow/delivery/tests.rs) use paused time beyond ten seconds, reject zero and unrepresentable timeouts, and retain explicit idle, authority and capacity checks.
 The [blocking-parent check](../../crates/araphor-query/src/execution/tests.rs) proves that a stage deadline joins its worker and leaves the parent usable.
 The [Data control check](../../crates/araphor-data/src/analysis/read.rs) retains native query interruption and tests None, zero and clock-range bounds.
@@ -3538,3 +3541,72 @@ in the worktree. The Data trace receipt path is unchanged. This is not a full
 committed-tree CI result. Production Rust removes one nonblank, noncomment
 line. Tests and fixture moves give no production reduction credit. Physical
 qualification is not repeated; its failed latency gate remains open.
+
+
+## Query input runner retirement
+
+This section covers the applied Query retirement in the working tree based on
+`6ded52863152b691c5948e890833afcf3cc09996`. It supersedes the old
+Inputs::admit/read/watch routes and the InputOperation stage route in
+[Optional delivery and live input deadlines](#optional-delivery-and-live-input-deadlines).
+The finite and managed execution routes above keep their native owners.
+Result: **Done** for the Query runner retirement and finite expiry transfer.
+The [migration result](../plans/araphor-analysis-migration.md#query-input-runner-retirement)
+records the selected checks and their source limits. The
+[master record](../plans/araphor-component-redesign.md#query-input-runner-retirement)
+states the independently checked retained-source count.
+
+[Session::prepare_definition](../../crates/araphor-query/src/definition.rs) admits a native program.
+  -> [Packages](../../crates/araphor-query/src/definition/package.rs) binds package calls to native child plans.
+  -> [Inputs::from_plans](../../crates/araphor-query/src/inputs/mod.rs) retains declared ports, native plans, source origins, and windows.
+  -> [Scope](../../crates/araphor-query/src/definition/package/scope.rs) restricts each SQL body to its declared input, parameter, output, and prior-state tables.
+
+[Session::capture_definition](../../crates/araphor-query/src/definition.rs) captures the admitted execution.
+  -> [SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) retains the selected rows and original source receipt.
+  -> [Inputs::input_for](../../crates/araphor-query/src/inputs/receipt.rs) derives each input revision and coverage from its selected origins.
+  -> [PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) checks supplied inputs and applies the existing coverage fold within that call.
+  -> [PackageExec::sql](../../crates/araphor-query/src/definition/physical/sql.rs) executes native SQL children, or [PackageExec::guest](../../crates/araphor-query/src/definition/physical/guest.rs) uses the retained guest preparation.
+
+Inputs remains a native metadata and receipt owner. It has no separate
+admission, input reader, or watch loop. Scope remains because DataFusion's
+session ContextProvider is private and a package body needs an isolated table
+scope. The adapter uses the native planner and adds no runtime.
+[InputCapture](../../crates/araphor-query/src/sources/mod.rs) remains the retained
+alias binding. [Definition admission](../../crates/araphor-query/src/definition.rs)
+keeps its pins and reservations. SourceSnapshot retains the original witnesses
+and Arrow buffers. Receipt hashes and memory charges keep their existing owners.
+
+[Data freshness](../../crates/araphor-data/src/analysis/managed/read.rs) distinguishes current input, expired original evidence, and changed input.
+  -> [Finite saved-input decoding](../../crates/araphor-data/src/analysis/managed/input.rs) accepts readable exact saved rows when only the original witness time expired.
+  -> [ResultContext::coverage](../../crates/araphor-data/src/package/model.rs) adds Unknown coverage with the existing `source evidence retention expired` reason.
+  -> [PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) folds that reason through only the affected call's inputs before its memory checks.
+
+Evidence expiry does not skip later context, dependency, authority, scope, or
+corruption checks. Changed input or a typed error still rejects the read.
+Original witness times stay unchanged. Missing data or code does not become
+readable through this rule. Current status, registration, publication, and
+managed progress checks still require current input.
+
+For configured Wasm evaluation capacity, [finite execution](../../crates/araphor-package-runtime/src/wasm/execution.rs)
+uses immediate admission and returns Busy when the slot is occupied.
+[Managed execution](../../crates/araphor-query/src/definition/physical/guest.rs)
+awaits the existing permit with the captured offer and actual operation control.
+No finite wait queue or renewed temporary stage is added. Explicit parent and
+grant deadlines stay binding. Native SQL windows and source changes schedule
+work; bare NOW or elapsed time alone does not schedule another evaluation.
+
+Read the [retained expiry tests](../../crates/araphor-analysis/src/instance/tests/retained/expiry.rs)
+for original rows and witnesses, call isolation, and later context failure.
+Read the [Managed capacity tests](../../crates/araphor-analysis/src/instance/subscription/tests/capacity.rs)
+for captured offers, slot waits, cancellation, and joins. The
+[native input contract tests](../../crates/araphor-query/src/definition/tests/execution/contract/inputs.rs),
+[window tests](../../crates/araphor-query/src/definition/tests/subscription/windows.rs),
+and [native view tests](../../crates/araphor-query/src/execution/tests/views.rs)
+define the input, deadline, and catalog assertions covered by the selected
+qualification. The migration result separates the original selection from the
+two final test-only corrections.
+
+Data's package APIs, codecs, store paths, and tests remain. The
+[separate Data proof gate](../plans/araphor-analysis-migration.md#query-input-runner-retirement)
+records the assertions required before their removal. No BPF or wire contract
+changes in this retirement. The complete migration remains **Not done**.

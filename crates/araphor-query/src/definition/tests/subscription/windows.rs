@@ -122,94 +122,111 @@ fn window_check(
 
 #[tokio::test]
 async fn mixed_port_deadlines() -> TestResult {
-    let fixture = Fixture::limits(Limits {
-        input_capacity: Some(CAPACITY),
-        output_capacity: Some(CAPACITY),
-        input_bytes: 2 * 1024 * 1024,
-        output_bytes: 2 * 1024 * 1024,
-        ..Default::default()
-    })?;
-    fixture.install(&window_image(window_inputs()))?;
-    let old = NOW - 8 * SECOND;
-    let recent = NOW - SECOND;
-    fixture.timed_event(1, old)?;
-    fixture.timed_event(2, recent)?;
-    let prepared = fixture
-        .prepare(&Fixture::sql(
-            r#"SELECT * FROM "fixture"."r1".count('wide')"#,
-        ))
-        .await?;
-    let id = Fixture::calls(&prepared.plan)?[0].id();
-    let clock = Clock::new();
-    let mut stream = fixture.follow(&prepared, Arc::clone(&clock))?;
-    assert_eq!(stream.moving_resolution_ns(), Some(1000));
-    let first = next(&mut stream).await?;
-    let expiry = recent / 1000 * 1000 + 2 * SECOND + 1000;
-    assert!(expiry > NOW);
-    window_check(&first, id, NOW, &[2, 1, 2, 2], Some(expiry))?;
-    assert_eq!(first.snapshot.received_min, Some(old));
-    assert_eq!(
-        first
-            .snapshot
-            .witnesses
-            .iter()
-            .map(|witness| witness.cursor)
-            .collect::<Vec<_>>(),
-        [1, 2]
-    );
-    let retained = Arc::clone(&first.calls[&id]);
-    fixture.context(1)?;
-    let health = next(&mut stream).await?;
-    assert!(health.batches.is_none());
-    assert!(health.calls.is_empty());
-    assert_eq!(health.cursor, first.cursor);
-    assert!(health.snapshot.next_change.is_none());
-    let before = fixture.engine.store().meta()?;
-    let second = {
-        let waiting = stream.next();
-        tokio::pin!(waiting);
-        assert!(futures_util::poll!(waiting.as_mut()).is_pending());
-        clock.time.store(expiry, Ordering::SeqCst);
-        tokio::time::timeout(Duration::from_secs(30), waiting)
-            .await?
-            .ok_or("window subscription stopped")??
-    };
-    assert!(second.clock_changed);
-    let next_expiry = old / 1000 * 1000 + 10 * SECOND + 1000;
-    window_check(&second, id, expiry, &[2, 0, 2, 2], Some(next_expiry))?;
-    assert!(!Arc::ptr_eq(&retained, &second.calls[&id]));
-    assert_eq!(fixture.engine.store().meta()?, before);
-    clock.set(next_expiry);
-    let third = next(&mut stream).await?;
-    let final_expiry = recent / 1000 * 1000 + 10 * SECOND + 1000;
-    window_check(&third, id, next_expiry, &[1, 0, 2, 2], Some(final_expiry))?;
-    clock.set(final_expiry);
-    let fourth = next(&mut stream).await?;
-    window_check(&fourth, id, final_expiry, &[0, 0, 2, 2], None)?;
-    clock.set(final_expiry + SECOND);
-    let quiet = next(&mut stream).await?;
-    window_check(&quiet, id, final_expiry + SECOND, &[0, 0, 2, 2], None)?;
-    assert!(quiet.clock_changed);
-    assert!(quiet.batches.is_none());
-    assert_eq!(fixture.engine.store().meta()?, before);
-    assert!(futures_util::poll!(stream.next()).is_pending());
-    tokio::time::timeout(Duration::from_secs(30), stream.cancel_and_join()).await??;
-    assert_eq!(
-        retained.evaluation().inputs[0]
-            .data
-            .batches
-            .iter()
-            .map(sdk::RecordBatch::num_rows)
-            .sum::<usize>(),
-        2
-    );
-    drop((prepared, first, health, second, third, fourth, quiet));
-    assert!(fixture.engine.memory().input_reserved() > 0);
-    assert!(fixture.engine.memory().reserve_input(CAPACITY).is_err());
-    drop(retained);
-    assert_eq!(fixture.engine.memory().input_reserved(), 0);
-    drop(fixture.engine.memory().reserve_input(CAPACITY)?);
-    drop(fixture.engine.memory().reserve_output(CAPACITY)?);
+    for pressure in [false, true] {
+        let fixture = Fixture::limits(Limits {
+            global_evaluations: Some(1),
+            tenant_evaluations: Some(1),
+            input_capacity: Some(CAPACITY),
+            output_capacity: Some(CAPACITY),
+            input_bytes: 2 * 1024 * 1024,
+            output_bytes: 2 * 1024 * 1024,
+            ..Default::default()
+        })?;
+        fixture.install(&window_image(window_inputs()))?;
+        let old = NOW - 8 * SECOND;
+        let recent = NOW - SECOND;
+        fixture.timed_event(1, old)?;
+        fixture.timed_event(2, recent)?;
+        let prepared = fixture
+            .prepare(&Fixture::sql(
+                r#"SELECT * FROM "fixture"."r1".count('wide')"#,
+            ))
+            .await?;
+        let id = Fixture::calls(&prepared.plan)?[0].id();
+        let clock = Clock::new();
+        let mut stream = fixture.follow(&prepared, Arc::clone(&clock))?;
+        assert_eq!(stream.moving_resolution_ns(), Some(1000));
+        let first = next(&mut stream).await?;
+        let expiry = recent / 1000 * 1000 + 2 * SECOND + 1000;
+        assert!(expiry > NOW);
+        window_check(&first, id, NOW, &[2, 1, 2, 2], Some(expiry))?;
+        assert_eq!(first.snapshot.received_min, Some(old));
+        assert_eq!(
+            first
+                .snapshot
+                .witnesses
+                .iter()
+                .map(|witness| witness.cursor)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+        let retained = Arc::clone(&first.calls[&id]);
+        fixture.context(1)?;
+        let health = next(&mut stream).await?;
+        assert!(health.batches.is_none());
+        assert!(health.calls.is_empty());
+        assert_eq!(health.cursor, first.cursor);
+        assert!(health.snapshot.next_change.is_none());
+        let before = fixture.engine.store().meta()?;
+        let second = {
+            let held = pressure
+                .then(|| fixture.engine.reserve_evaluation([1; 16]))
+                .transpose()?;
+            let waiting = stream.next();
+            tokio::pin!(waiting);
+            assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+            if pressure {
+                clock.set(expiry);
+                assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+                assert_eq!(fixture.engine.store().meta()?, before);
+            } else {
+                clock.time.store(expiry, Ordering::SeqCst);
+            }
+            drop(held);
+            tokio::time::timeout(Duration::from_secs(30), waiting)
+                .await?
+                .ok_or("window subscription stopped")??
+        };
+        assert!(second.clock_changed);
+        let next_expiry = old / 1000 * 1000 + 10 * SECOND + 1000;
+        window_check(&second, id, expiry, &[2, 0, 2, 2], Some(next_expiry))?;
+        assert!(!Arc::ptr_eq(&retained, &second.calls[&id]));
+        assert_eq!(fixture.engine.store().meta()?, before);
+        clock.set(next_expiry);
+        let third = next(&mut stream).await?;
+        let final_expiry = recent / 1000 * 1000 + 10 * SECOND + 1000;
+        window_check(&third, id, next_expiry, &[1, 0, 2, 2], Some(final_expiry))?;
+        clock.set(final_expiry);
+        let fourth = next(&mut stream).await?;
+        window_check(&fourth, id, final_expiry, &[0, 0, 2, 2], None)?;
+        clock.set(final_expiry + SECOND);
+        let quiet = next(&mut stream).await?;
+        assert!(quiet.calls.is_empty());
+        assert_eq!(quiet.cursor, fourth.cursor);
+        assert_eq!(quiet.evaluated_utc_ns, fourth.evaluated_utc_ns);
+        assert_eq!(quiet.snapshot.next_change, None);
+        assert!(quiet.clock_changed);
+        assert!(quiet.batches.is_none());
+        assert_eq!(fixture.engine.store().meta()?, before);
+        assert!(futures_util::poll!(stream.next()).is_pending());
+        tokio::time::timeout(Duration::from_secs(30), stream.cancel_and_join()).await??;
+        assert_eq!(
+            retained.evaluation().inputs[0]
+                .data
+                .batches
+                .iter()
+                .map(sdk::RecordBatch::num_rows)
+                .sum::<usize>(),
+            2
+        );
+        drop((prepared, first, health, second, third, fourth, quiet));
+        assert!(fixture.engine.memory().input_reserved() > 0);
+        assert!(fixture.engine.memory().reserve_input(CAPACITY).is_err());
+        drop(retained);
+        assert_eq!(fixture.engine.memory().input_reserved(), 0);
+        drop(fixture.engine.memory().reserve_input(CAPACITY)?);
+        drop(fixture.engine.memory().reserve_output(CAPACITY)?);
+    }
     Ok(())
 }
 

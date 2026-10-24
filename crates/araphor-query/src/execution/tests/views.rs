@@ -1,4 +1,3 @@
-use araphor_analysis_sdk as sdk;
 use datafusion::catalog::memory::MemoryCatalogProvider;
 
 use super::*;
@@ -111,55 +110,56 @@ async fn native_views_capture_sources() -> TestResult {
         22
     );
 
-    let mut model = sdk::Model::new("counts", Vec::new(), Vec::new());
-    model.input_mode = sdk::InputMode::Resolved;
-    model.inputs = vec![sdk::InputPort {
-        port: sdk::Port::new(
-            "counts",
-            sdk::Schema::new(vec![
-                sdk::Field::new("records", sdk::DataType::Int64, false),
-                sdk::Field::new("reports", sdk::DataType::Int64, false),
-            ]),
-        ),
-        source: sdk::InputSource::Query("SELECT * FROM derived.counts".into()),
-    }];
-    let inputs = Arc::new(crate::inputs::Inputs::admit(&fixture.engine, &model)?);
-    let input = inputs.read(
-        Arc::clone(&fixture.engine),
-        AnalysisSelectionV1::tenant([1; 16]),
-        "native-views".into(),
-        &control(),
-        1,
-    )?;
-    let snapshot = input.snapshot.as_ref().ok_or("input capture absent")?;
-    assert!(snapshot.page.tables.is_empty());
-    let revision = snapshot.page.extraction.meta.commit_revision;
-    let revisions = input.source_revisions();
-    for name in ["events", "coverage"] {
-        assert!(
-            revisions.contains(&(name.into(), revision)),
-            "captured source revision absent: {name}; {revisions:?}"
-        );
-    }
-    assert_eq!(input.inputs.len(), 1);
-    assert_eq!(
-        input.inputs[0]
-            .data
-            .batches
-            .iter()
-            .map(RecordBatch::num_rows)
-            .sum::<usize>(),
-        1
-    );
-    for column in input.inputs[0].data.batches[0].columns() {
+    {
+        let definition = araphor_discovery_definition::Definition {
+            name: "native-views".into(),
+            description: "Capture native view input.".into(),
+            labels: Default::default(),
+            program: araphor_discovery_definition::Program::Sql {
+                source: araphor_discovery_definition::Source::Inline {
+                    inline: "SELECT * FROM derived.counts".into(),
+                },
+            },
+        };
+        let prepared = session.prepare_definition(&definition).await?;
+        let input = session
+            .execute_definition(&prepared, crate::definition::Invocation::default())
+            .await?;
+        let snapshot = &input.snapshot;
+        assert!(snapshot.page.tables.is_empty());
+        let revision = snapshot.page.extraction.meta.commit_revision;
+        let revisions = snapshot.selection.source_revisions(revision);
+        for name in ["events", "coverage"] {
+            assert!(
+                revisions.contains(&(name.into(), revision)),
+                "captured source revision absent: {name}; {revisions:?}"
+            );
+        }
+        assert!(input.calls.is_empty());
         assert_eq!(
-            column
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .ok_or("Int64 input count required")?
-                .value(0),
-            0
+            input
+                .batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            1
         );
+        assert_eq!(input.batches[0].num_columns(), 2);
+        for (index, column) in input.batches[0].columns().iter().enumerate() {
+            assert_eq!(
+                input.batches[0].schema().field(index).name(),
+                ["records", "reports"][index]
+            );
+            assert_eq!(column.null_count(), 0);
+            assert_eq!(
+                column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or("Int64 input count required")?
+                    .value(0),
+                0
+            );
+        }
     }
     Ok(())
 }
@@ -179,7 +179,7 @@ async fn native_views_keep_clocks() -> TestResult {
             Vec::new(),
         )
         .await?;
-    assert!(crate::inputs::Inputs::clocked(&plan)?);
+    assert!(crate::follow::Window::clocks(&plan)? > 0);
     assert!(sources.is_empty());
     for now in [1_000_000_000, 2_000_000_000] {
         let session =
