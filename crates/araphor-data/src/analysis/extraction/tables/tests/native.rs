@@ -894,6 +894,10 @@ fn trace_recipe_measurement_fields() -> TestResult {
         assert!(!column::<BooleanArray>(measured, "atomic_snapshot")?.value(row));
     }
     let recipes = &page.tables["trace_recipes"][0];
+    assert!(recipes
+        .schema()
+        .field_with_name("maximum_map_keys")
+        .is_err());
     for (row, recipe) in [TraceRecipeV1::SyscallErrors, TraceRecipeV1::FailedOpens]
         .into_iter()
         .enumerate()
@@ -906,10 +910,6 @@ fn trace_recipe_measurement_fields() -> TestResult {
         assert_eq!(
             column::<BinaryArray>(recipes, "measurement_keys")?.value(row),
             serde_json::to_vec(&manifest.measurement_keys)?
-        );
-        assert_eq!(
-            column::<UInt32Array>(recipes, "maximum_map_keys")?.value(row),
-            manifest.maximum_map_keys
         );
     }
     assert_eq!(page.extraction.trace_reads(), &[identity.request_id]);

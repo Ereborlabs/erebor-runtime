@@ -226,11 +226,6 @@ impl DiagnosticBackend {
             .env("LANG", "C")
             .env("DEBUGINFOD_URLS", "")
             .env("__BPFTRACE_NOTIFY_PROBES_ATTACHED", "1")
-            .env("BPFTRACE_MAX_MAP_KEYS", "4096")
-            .env("BPFTRACE_MAX_PROBES", "16")
-            .env("BPFTRACE_MAX_BPF_PROGS", "16")
-            .env("BPFTRACE_PERF_RB_PAGES", "8")
-            .env("BPFTRACE_MAX_CAT_BYTES", "1024")
             .current_dir("/");
         Self::set_child_io(&mut command);
         Self::isolate_filesystem(&mut command, mode);
@@ -519,7 +514,7 @@ impl StaticResources {
             info.info.max_entries,
         ) {
             (libbpf_rs::MapType::PercpuHash, "AT_errors", 8, 8, 4096) => 1,
-            (libbpf_rs::MapType::RingBuf, "ringbuf", 0, 0, 32768) => 2,
+            (libbpf_rs::MapType::RingBuf, "ringbuf", 0, 0, 262144) => 2,
             (libbpf_rs::MapType::Array, "ringbuf_loss_co", 4, 8, 1) => 4,
             _ => 0,
         }
@@ -1246,7 +1241,8 @@ mod tests {
         );
         for (kind, name, key, value, maximum, role) in [
             (libbpf_rs::MapType::PercpuHash, "AT_errors", 8, 8, 4096, 1),
-            (libbpf_rs::MapType::RingBuf, "ringbuf", 0, 0, 32768, 2),
+            (libbpf_rs::MapType::RingBuf, "ringbuf", 0, 0, 262144, 2),
+            (libbpf_rs::MapType::RingBuf, "ringbuf", 0, 0, 32768, 0),
             (libbpf_rs::MapType::Array, "ringbuf_loss_co", 4, 8, 1, 4),
             (libbpf_rs::MapType::Hash, "AT_errors", 8, 8, 4096, 0),
             (libbpf_rs::MapType::PercpuHash, "other", 8, 8, 4096, 0),

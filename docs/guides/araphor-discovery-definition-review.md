@@ -3448,3 +3448,36 @@ harness digests match the captured host inputs. Native BPF inventory commands
 and both executable loader checks pass. These readiness checks do not qualify
 new native policy or establish a performance result. Full-workspace CI and native-policy qualification have not run for this host
 replacement.
+
+
+## Native backend defaults
+
+Result: **Done** for forced native policy and unsupported metadata removal.
+Performance qualification: **Not done**. Read the
+[ten-leg result](../plans/araphor-observability/phase-2-owned-capture.md#native-backend-defaults-on-2026-10-24)
+for the unchanged failed latency gate and physical correctness evidence.
+
+[DiagnosticBackend::command](../../crates/erebor-interceptor/src/diagnostic.rs) starts the pinned backend with the four existing environment entries.
+  -> [Native bpftrace source](../../crates/mithril-e2e/fixtures/observability/failed-opens.bt) uses the upstream native defaults without five host-imposed limits.
+  -> [StaticResources::map_role](../../crates/erebor-interceptor/src/diagnostic.rs) checks the measured exact native ring layout of 262,144 bytes.
+
+[ResourceSnapshot::failed_opens](../../crates/mithril-e2e/src/observability.rs) independently checks the physical graph and cleanup in qualification.
+
+[PlainCapture::command](../../crates/mithril-e2e/src/observability/plain.rs) uses the same four environment values in the comparison. Both owners still clear inherited environment. No Rust option layer or default-value mirror is added. Source and backend hashes stay unchanged. The role matrix rejects the old ring size; other identity and layout checks remain.
+
+[TraceRecipeV1::manifest](../../crates/araphor-data/src/trace/recipe.rs) no longer claims a map capacity for an unspecified Node backend.
+  -> [Native recipe fields](../../crates/araphor-data/src/analysis/extraction/tables/metadata.rs) remove the unsupported `maximum_map_keys` column through the existing Arrow field declaration.
+  -> [The existing metadata check](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs) requires column absence and retains source, measurements, selection and witness checks.
+
+Thirty distinct focused checks pass: four Data, 23 Interceptor and three plain
+capture cases. One ignored subprocess helper runs through its parent case.
+The two existing lightweight upload and TLS-repair cases pass in the guest.
+Post-format Data checking and strict eight-owner Clippy pass. The final guest
+binary is byte-identical after formatting. Scoped formatting and whitespace
+checks pass. This change removes eight nonblank, noncomment production Rust
+lines. Qualification and test code are counted separately.
+
+The [remaining quota item](../plans/araphor-feature-parity-todo.md#13-configurable-quotas-disabled-by-default)
+keeps the Node ACK ceiling and failed performance qualification open. Diagnostic
+worker polling and the complete production reduction goal remain open. No
+full-workspace CI or before/after speed claim follows from this change.

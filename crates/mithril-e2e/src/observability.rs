@@ -421,7 +421,7 @@ impl ResourceSnapshot {
                 info.info.max_entries,
             ) {
                 (libbpf_rs::MapType::PercpuHash, "AT_errors", 8, 8, 4096) => 1,
-                (libbpf_rs::MapType::RingBuf, "ringbuf", 0, 0, 32768) => 2,
+                (libbpf_rs::MapType::RingBuf, "ringbuf", 0, 0, 262144) => 2,
                 (libbpf_rs::MapType::Array, "ringbuf_loss_co", 4, 8, 1) => 4,
                 _ => 0,
             };

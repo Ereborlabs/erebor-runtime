@@ -2573,3 +2573,73 @@ for commands and logs. Performance and physical qualification do not change.
 Keep diagnostics disabled in deployment until lifecycle, interference, and
 shared recovery gates pass on the qualified source and platform. Public CLI/API
 exposure requires Observability 3. The Trace CRD requires Observability 4.
+
+
+## Native backend defaults on 2026-10-24
+
+Implementation: **Done** for forced backend-limit removal. Physical correctness:
+**Done** for the ten recorded legs below. Performance qualification: **Not done**.
+Diagnostics remain disabled by default. Enablement checks are unchanged.
+
+Both native and plain capture remove the five forced BPFTRACE settings. The
+pinned backend supplies its native defaults. Both script files and source
+hashes stay unchanged. A separate bounded observation uses child fdinfo and
+the program-to-map graph. It proves the native 262,144-byte ring, clean exit,
+removal of all owned IDs and removal of the empty test cgroup. The runtime and
+independent verifier accept that exact layout. The old 32,768-byte layout is
+rejected. Other program, map, key, value, flag and identity checks stay exact.
+
+The existing `owned.sh` comparison runs once on VM
+`mithril-runtime-qualification-20261024125417`, UUID
+`b5ceac78-e8cc-402e-a609-eb05a6bdce9a`: two CPUs, 4 GiB, Ubuntu 24.04,
+kernel `6.8.0-147-generic`. It keeps five pairs, 5,000 opens per leg,
+one-millisecond spacing, 30-second collection and the 590-second boundary.
+The command exits 101 after 579.93 seconds. It does not time out.
+
+| Pair | Plain p99 (ns) | Araphor p99 (ns) | Signed delta (ns) | Signed change | Zero-increase gate |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 1 | 175,962 | 168,159 | -7,803 | -4.4345% | Pass |
+| 2 | 128,288 | 113,874 | -14,414 | -11.2357% | Pass |
+| 3 | 140,481 | 194,936 | +54,455 | +38.7632% | Fail |
+| 4 | 163,398 | 161,628 | -1,770 | -1.0832% | Pass |
+| 5 | 170,310 | 199,749 | +29,439 | +17.2855% | Fail |
+
+All ten legs retain 5,000 exact denial witnesses and unchanged decisions.
+Enforcement-event loss and unresolved effects are zero. Plain capture verifies
+cleanup and unchanged enforcement resources in all five legs. All five Araphor
+terminals record Deadline, Verified cleanup, exit zero, complete output and no
+forced kill. Diagnostic kernel loss is unknown; null is not zero. Post-run
+checks find no owned process, pin or cgroup. The latency gate alone fails.
+This comparison does not measure a change from an earlier Araphor version.
+No enabled qualification configuration is written. No repeat is run.
+
+Command in the owned guest:
+
+```sh
+sudo -n env RUST_LOG=debug MITHRIL_TRACE_MODE=compare \
+  timeout --signal=TERM --kill-after=10s 590s bash \
+  /var/tmp/araphor-tests/owned.sh \
+  /var/tmp/araphor-tests/mithril-e2e-native-tests \
+  /var/tmp/araphor-tests/fixtures.tar.gz \
+  /var/tmp/araphor-native-quota-20261024125417 1
+```
+
+The binary SHA-256 is
+`ad35aafc13a0f2693351d82350c68a7665b92bdf37460b1dc59b29407a5522e5`.
+The backend SHA-256 is
+`d2846f3400bb129b1a569aae64adf548de99ff41f247823ff8caf1fbde40ff1e`.
+The fixture archive SHA-256 is
+`632e9d9c8594b3aff1c61652861e24daa006d680d88a9f5a824f0b8316d9a58a`.
+The owned-layout receipt SHA-256 is
+`97099fcc3e2de8459a27773ab5f3ac86bcca8b1007ea0239b1b54b5379d9a664`.
+
+Local evidence is in
+`/home/navid/mithril-test-hosts/native-quota-verification`. The directory contains
+`final-source.json`, the layout receipt, the exact command result,
+`physical-compact.json`, `capture-pairs.json`, `physical-cleanup.log` and the
+compressed full log. The compressed receipt archive SHA-256 is
+`afd5209abe68da447693498894381ce6b1c60ff7ee1b43aa3d2503185c787f90`.
+These are machine-local artifacts, not repository files.
+The source route is in the
+[native-default review](../../guides/araphor-discovery-definition-review.md#native-backend-defaults).
+Full-workspace CI is not run. Production performance qualification remains open.

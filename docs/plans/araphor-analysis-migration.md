@@ -3546,3 +3546,23 @@ are net -53: task cumulative **+96**. All five forced native environment values,
 builtin source bytes/hashes, StaticResources and map metadata remain unchanged.
 Full-workspace CI, physical qualification and benchmarks were not run. Native
 policy, full migration and the 6,000-line reduction goal remain **Not done**.
+
+
+## Native backend defaults
+
+Result: **Done** for removal of five forced settings from both native capture
+owners and the unsupported global recipe map-capacity claim. Native program
+bytes and hashes stay unchanged. The exact ring checks now use the observed
+262,144-byte native layout and reject the old layout. No option owner or
+compatibility path is added. The
+[source route](../guides/araphor-discovery-definition-review.md#native-backend-defaults)
+identifies the unchanged native execution and Arrow metadata owners.
+
+Thirty focused checks and two guest lightweight checks pass. Scoped formatting,
+whitespace and strict affected-owner Clippy pass. Production Rust is net -8
+nonblank, noncomment lines, excluding qualification and test code.
+The [physical result](araphor-observability/phase-2-owned-capture.md#native-backend-defaults-on-2026-10-24)
+retains all ten correctness and cleanup results. Two of five latency pairs fail
+the unchanged gate. Performance qualification remains **Not done**; diagnostics
+remain disabled. TODO 13 also retains the Node ACK ceiling above sequence 4,096.
+Full migration, removal of polling and the reduction goal remain **Not done**.

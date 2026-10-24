@@ -17,16 +17,11 @@ const ATTACH_MARKER: &[u8] = b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n";
 const ATTACH_LIMIT: Duration = Duration::from_secs(15);
 const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 const OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
-const ENVIRONMENT: [(&str, &str); 9] = [
+const ENVIRONMENT: [(&str, &str); 4] = [
     ("PATH", "/usr/bin:/bin"),
     ("LANG", "C"),
     ("DEBUGINFOD_URLS", ""),
     ("__BPFTRACE_NOTIFY_PROBES_ATTACHED", "1"),
-    ("BPFTRACE_MAX_MAP_KEYS", "4096"),
-    ("BPFTRACE_MAX_PROBES", "16"),
-    ("BPFTRACE_MAX_BPF_PROGS", "16"),
-    ("BPFTRACE_PERF_RB_PAGES", "8"),
-    ("BPFTRACE_MAX_CAT_BYTES", "1024"),
 ];
 
 pub(crate) struct PlainCapture {

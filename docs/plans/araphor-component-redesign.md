@@ -4034,3 +4034,33 @@ count record is `/tmp/araphor-arrow-engine-count13.json`. The count excludes
 tests, documents, and blank lines. Complete redesign: **Not done**. This
 change removes runtime interpretation but does not prove a smaller complete
 architecture. No speed measurement is made.
+
+
+## Current source audit on 2026-10-24
+
+Complete redesign: **Not done**. The source audit compares `7b7b407adf347d389984553a4d212bfce37b75b5`
+with `81cbe68c1` plus the six native-policy edits. It counts retained Rust source
+in `crates/araphor-*` after test-only AST spans, comments and blank lines are
+removed. Baseline: 63,709 lines. Current: 83,842 lines. Net: **+20,133**.
+Query has 14,659 lines and Analysis has 13,656. Data removes 14,025 lines, but
+new owners more than offset that decrease. Moving code gives no net credit.
+The required net 6,000-line reduction is not established.
+
+These are retained production-source totals, not compiled-reachability proof.
+Detached source and unknown production cfg conditions remain included. The
+counter uses the existing syn parser and preserves production after early test
+items. It retains 254 baseline lines for the production package-test operation.
+Nine counter assertions pass. An independent reviewer checks the method and
+corrections. No source snapshot differences remain after the test-only format
+change is captured.
+
+The counter, result, per-owner totals and frozen source manifest are local
+artifacts under `/home/navid/mithril-test-hosts/redesign-count-20261024`.
+The manifest SHA-256 is
+`efe454d286250c49b733383d88108fcfd65d85cacdfbaee9cc37e6182ead7740`.
+These local paths are not portable repository evidence. Existing historical
+counts above retain their original scope and source state. The current native
+quota result and remaining work are in the
+[migration record](araphor-analysis-migration.md#native-backend-defaults).
+General maintained-query optimization, diagnostic polling removal, and the
+complete redesign and reduction remain **Not done**.

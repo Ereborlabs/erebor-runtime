@@ -23,7 +23,6 @@ pub struct TraceRecipeManifestV1 {
     pub cumulative: bool,
     pub atomic_snapshot: bool,
     pub maximum_probes: u16,
-    pub maximum_map_keys: u32,
     pub return_code_semantics: String,
 }
 
@@ -118,7 +117,6 @@ impl TraceRecipeV1 {
             cumulative: true,
             atomic_snapshot: false,
             maximum_probes: 2,
-            maximum_map_keys: 4096,
             return_code_semantics: "Negative kernel return codes, not final userspace failures. Codes -512, -513, -514, and -516 request a syscall restart. Syscall ID -1 is unknown and projects as null.".into(),
         })
     }

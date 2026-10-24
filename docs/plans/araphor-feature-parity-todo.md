@@ -82,11 +82,13 @@ identifies a specific remaining part of an otherwise implemented item.
 | 10. Notification execution from Query events | Done | Native subscriptions and the shared Host drive delivery, retries, ACK deadlines, restart and current permission checks. |
 | 11. Runtime configuration through Control | Done | Control passes configured Query and package runtime limits at construction and rejects reuse with different limits. Runtime quotas default to disabled. |
 | 12. Data and Wasm cancellation without periodic checks | Done | Wasm and Data lock waits use events and exact deadlines. Data sends one native interrupt at expiry and waits for an event. A native interrupt scope preserves cancellation across statement resets. |
-| 13. Configurable quotas, disabled by default | Not done | Package quotas are removed. The reviewed host-quota paths have disabled defaults and passing focused checks. Native BPFTRACE policy still has five forced limits and pinned source/resource/map metadata. A policy change requires a separately authorized host and new physical qualification. |
+| 13. Configurable quotas, disabled by default | Not done | Native capture removes the forced backend settings and unsupported map-capacity metadata. The physical latency gate fails two pairs. Node still rejects diagnostic ACK sequences above 4,096; remove that ceiling and qualify the current path. |
 
 Result: **15 Done; 1 Not done**. The remaining item is **13**.
-The separate 6,000-line production Rust reduction target still requires a
-current count and further simplification. Reference removal is complete.
+The separate 6,000-line production Rust reduction target remains unmet. The
+[current retained-source audit](araphor-component-redesign.md#current-source-audit-on-2026-10-24)
+adds 20,133 Araphor lines against the original baseline. Reference removal is
+complete.
 
 The status and `Now` text in each numbered item below describe this source.
 Earlier qualification paragraphs retain their original source and result.
@@ -814,8 +816,11 @@ quota defaults and resource boundaries still need changes or qualification.
   to no total or per-node gate. Configured positive counts use native Tokio
   semaphores. Known-node membership remains required when both gates are
   disabled. The [focused result](araphor-analysis-migration.md#optional-evidence-admission)
-  records the completed admission change. The remaining resource-boundary
-  changes and qualification remain open. Preserve identity, format, type and
+  records the completed admission change. The
+  [native backend result](araphor-analysis-migration.md#native-backend-defaults)
+  removes the forced native settings. Its latency qualification fails two
+  pairs. Node still rejects ACK sequences above 4,096. That ceiling and the
+  physical qualification remain open. Preserve identity, format, type and
   arithmetic validation; do not remove domain rules as quota cleanup.
 - **Required:** Keep the package contract free of row, batch, byte, and
   checkpoint quotas. Only the time window can be set outside SQL. Keep

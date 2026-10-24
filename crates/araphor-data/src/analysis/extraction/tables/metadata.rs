@@ -273,7 +273,6 @@ impl Capture<'_> {
             cumulative => Boolean(false):Some(manifest.cumulative),
             atomic_snapshot => Boolean(false):Some(manifest.atomic_snapshot),
             maximum_probes => UInt32(false):Some(u32::from(manifest.maximum_probes)),
-            maximum_map_keys => UInt32(false):Some(manifest.maximum_map_keys),
             return_code_semantics => Utf8(false):Some(&manifest.return_code_semantics),
             capability_status => Utf8(false):Some("requires_node_capability"),
             example => Utf8(false):Some(match recipe {TraceRecipeV1::SyscallErrors=>"SELECT syscall_id, errno, count FROM trace_measurements",TraceRecipeV1::FailedOpens=>"SELECT errno, count FROM trace_measurements"}),
