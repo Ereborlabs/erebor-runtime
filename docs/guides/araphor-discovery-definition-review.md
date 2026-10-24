@@ -3409,3 +3409,42 @@ through [Host::qualify_diagnostics](../../crates/mithril-e2e/src/platform/host.r
 and [owned.sh](../../crates/mithril-e2e/harness/observability/owned.sh) requires an
 explicitly authorized privileged host. No alternate VM was started. No BPF
 program was attached.
+
+
+## Replacement qualification host
+
+Result: **Done** for the user-authorized host replacement on 2026-10-24.
+Four stopped qualification VM definitions referred to missing disks. The
+replacement removed those four definitions and 742 inactive test storage-pool
+definitions whose directories were absent. No disk file, shared pool, default
+network or base-image cache was deleted.
+
+The existing [libvirt provider](../../crates/mithril-e2e/harness/vm/providers/libvirt.sh)
+and [cloud-init template](../../crates/mithril-e2e/harness/vm/cloud-init-v1.yaml)
+create and prepare the new guest. No provider code changed. The guest has no
+host source mount. The provider copies the captured test inputs to
+`/var/tmp/araphor-tests`.
+
+| Field | Verified value |
+| --- | --- |
+| Domain | `mithril-runtime-qualification-20261024125417` |
+| UUID | `b5ceac78-e8cc-402e-a609-eb05a6bdce9a` |
+| Address at readiness | `192.168.122.204` |
+| Resources | 2 virtual CPUs, 4 GiB memory, 20 GiB disk |
+| Kernel | `6.8.0-147-generic` |
+| Backend | bpftrace 0.20.2, SHA-256 `d2846f3400bb129b1a569aae64adf548de99ff41f247823ff8caf1fbde40ff1e` |
+| Runtime BTF SHA-256 | `8c10e7e174e89c92f1d2708f12bb5268dc381e57e867397534c4e145348622e0` |
+| Provider state | `/home/navid/mithril-test-hosts/mithril-vm-test.lasz6v07/libvirt-domain-owner` |
+| Host record | `/home/navid/mithril-test-hosts/qualification-host.json` |
+
+The VM disk and UUID ownership record are outside `target` and `/tmp`.
+`cargo clean` does not remove this guest's disk. The new private image cache
+passes the provider's published checksum check. Existing directory permissions
+remain unchanged. Use the provider `address` command after a DHCP change.
+
+SSH, passwordless sudo, BTF, BPF LSM, cgroup v2, bpffs and tracefs checks pass.
+The guest runs the copied Rust test binary. Its binary, fixture archive and
+harness digests match the captured host inputs. Native BPF inventory commands
+and both executable loader checks pass. These readiness checks do not qualify
+new native policy or establish a performance result. Full-workspace CI and native-policy qualification have not run for this host
+replacement.
