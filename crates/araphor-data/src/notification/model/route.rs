@@ -24,14 +24,14 @@ impl NotificationPolicyV1 {
             self.tenant_id != [0; 16]
                 && NotificationGrantV1::identifier(&self.route_id, 64)
                 && self.revision > 0
-                && (1..=16).contains(&self.package_ids.len())
+                && !self.package_ids.is_empty()
                 && self
                     .package_ids
                     .iter()
                     .all(|package| NotificationGrantV1::identifier(package, 64))
                 && self.package_ids.windows(2).all(|pair| pair[0] < pair[1])
                 && self.acknowledgement_ns > 0
-                && (1..=16).contains(&self.retry_limit)
+                && self.retry_limit > 0
                 && self.retry_delay_ns > 0
                 && NotificationGrantV1::identifier(&self.escalation_route_id, 64),
             "policy",

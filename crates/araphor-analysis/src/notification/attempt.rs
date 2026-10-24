@@ -85,7 +85,6 @@ impl NotificationRouter {
         state.attempts.retain(|attempt| {
             attempt.finding_revision == state.finding_revision || attempt.result.is_none()
         });
-        NotificationErrorCodeV1::Limit.require(state.attempts.len() < 48, "delivery attempts")?;
         let number = state.attempt_sequence.checked_add(1).ok_or_else(|| {
             NotificationSnafu {
                 code: NotificationErrorCodeV1::Limit,

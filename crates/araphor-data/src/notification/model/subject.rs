@@ -31,7 +31,6 @@ impl UnconfirmedNotificationConcernV1 {
             self.concern_id != [0; 16]
                 && NotificationGrantV1::identifier(&self.model_label, 128)
                 && NotificationGrantV1::identifier(&self.summary, 512)
-                && self.context.len() <= 16
                 && self.context.windows(2).all(|pair| pair[0] < pair[1])
                 && self
                     .context

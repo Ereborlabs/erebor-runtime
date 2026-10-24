@@ -3124,3 +3124,48 @@ The CLI Clippy check takes 5 minutes 35 seconds. Production Rust is net **-20**;
 builtin SQL is net **-2**. Counts exclude tests, comments and blank lines.
 Full-workspace CI, physical qualification and benchmarks were not run.
 Other TODO 13 boundaries and the overall reduction goal remain open.
+
+
+## Notification policy counts and retained attempts
+
+### Intended end state
+
+Notification policy and history retain valid entries without separate fixed
+count ceilings. Configured policy retries and current authority still apply.
+
+[NotificationRouter::configure](../../crates/araphor-analysis/src/notification/routing.rs) accepts an authorized route policy.
+  -> [NotificationPolicyV1::validate](../../crates/araphor-data/src/notification/model/route.rs) requires package identities, sorted unique IDs and a positive u16 retry count.
+  -> [NotificationRouter::deliver_obligation](../../crates/araphor-analysis/src/notification/delivery.rs) loads the current obligation and checks acknowledgement state.
+  -> [NotificationRouter::retry_ready](../../crates/araphor-analysis/src/notification/attempt.rs) applies the policy retry count and delay.
+  -> [NotificationRouter::append_attempt](../../crates/araphor-analysis/src/notification/attempt.rs) checks the sequence increment and records the attempt without the former 48-entry ceiling.
+  -> [NotificationRouter::save](../../crates/araphor-analysis/src/notification/store.rs) validates and commits the state through the existing Data context owner.
+
+[NotificationRouter::submit_concern](../../crates/araphor-analysis/src/notification/concern.rs) accepts an agent concern for an approved route.
+  -> [UnconfirmedNotificationConcernV1::validate](../../crates/araphor-data/src/notification/model/subject.rs) keeps tenant, ordering, identity and duplicate checks for all context keys.
+  -> [NotificationRouter::submit_concern](../../crates/araphor-analysis/src/notification/concern.rs) checks exact retained context versions, sensitivity and exact retry identity before save.
+
+[NotificationObligationV1::validate](../../crates/araphor-data/src/notification/model/obligation.rs) reads retained state without a separate history-count ceiling.
+  -> [NotificationRouter::deliver_state](../../crates/araphor-analysis/src/notification/delivery.rs) retains the original acknowledgement deadline and existing escalation rules.
+
+Removing the history ceiling does not disable the approved retry policy. The
+existing schedule counts attempts against that policy. Sequence arithmetic
+still rejects overflow. The obligation key, finding revision, original
+deadline, pending attempts and sink results keep their existing meaning.
+
+The two new connected selectors are in [limits tests](../../crates/araphor-analysis/src/notification/tests/limits.rs):
+
+- `notification::tests::limits::notification_retries_keep_history` retains 50 failed Finding attempts, reopens, delivers successfully and acknowledges the same obligation.
+- `notification::tests::limits::notification_contexts_are_unbounded` retains 17 real context keys and rejects foreign, absent-version and duplicate keys without a write.
+
+The separate compatibility selection ran with:
+
+```sh
+target/debug/deps/araphor_analysis-d09ee11c321a85a9 notification::tests::limits:: notification::tests::delivery:: notification::tests::access:: notification::tests::concern:: notification::tests::lifecycle:: --skip notification_retries_keep_history --skip notification_contexts_are_unbounded --nocapture --test-threads=2
+```
+
+The 17 compatibility checks pass in 229.73 seconds. Both new checks also pass:
+19 distinct passes. Strict affected-owner Clippy, scoped formatting and
+whitespace checks pass. Production Rust is net **-3** lines. Tests, comments and
+blank lines are excluded. Verification covers these focused runs and strict
+Clippy. Full-workspace CI, physical checks and benchmarks did not run.
+TODO 13 and the overall reduction goal remain open.

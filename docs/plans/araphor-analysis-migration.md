@@ -3456,3 +3456,27 @@ Strict affected-owner and separate CLI Clippy checks pass. Production Rust is
 net **-20** lines; builtin SQL is net **-2**, counted separately. Tests and
 documents are excluded. TODO 13, full migration and the 6,000-line reduction
 goal remain **Not done**. Full-workspace CI and physical checks did not run.
+
+
+## Notification policy counts and retained attempts
+
+Result: **Done** for Notification count ceilings under TODO 13. The
+[source route](../guides/araphor-discovery-definition-review.md#notification-policy-counts-and-retained-attempts)
+identifies the existing policy, delivery and retained-context owners.
+
+Policies accept more than 16 package IDs and a positive retry count through
+the existing u16 type. Concerns accept more than 16 context keys. Runtime and
+stored-obligation validation remove the duplicated 48-attempt ceiling.
+Tenant, identity, ordering, duplicate, exact-context, sensitivity, approval,
+retry-delay, acknowledgement and escalation checks remain. Attempt sequence
+arithmetic stays checked. Each attempt uses the existing save transaction.
+
+Both new connected checks pass. They retain 17 context keys and 50 failed
+Finding attempts, reopen the store, deliver successfully and acknowledge the
+same obligation without resetting its deadline. Invalid tenant, version and
+duplicate context inputs change no stored state. The 17 compatibility checks
+also pass in a separate selection that takes 229.73 seconds: 19 distinct passes.
+Strict affected-owner Clippy, scoped formatting and whitespace checks pass.
+Production Rust is net **-3** lines, excluding tests, comments and blank lines.
+TODO 13, full migration and the 6,000-line reduction goal remain **Not done**.
+Full-workspace CI, physical checks and benchmarks did not run for this change.

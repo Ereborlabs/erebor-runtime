@@ -87,7 +87,6 @@ impl NotificationObligationV1 {
                 && self.finding_revision > 0
                 && self.finding_revision <= self.revision
                 && self.first_seen_utc_ns > 0
-                && self.attempts.len() <= 48
                 && (self.attempt_sequence == 0
                     || self
                         .attempts
