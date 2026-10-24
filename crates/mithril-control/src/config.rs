@@ -17,27 +17,21 @@ use crate::{
     SystemIntakeClock, TrustGenerationV1,
 };
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EvidenceAdmissionLimits {
-    pub total_slots: usize,
-    pub slots_per_node: usize,
-}
-
-impl Default for EvidenceAdmissionLimits {
-    fn default() -> Self {
-        Self {
-            total_slots: 8,
-            slots_per_node: 2,
-        }
-    }
+    pub total_slots: Option<usize>,
+    pub slots_per_node: Option<usize>,
 }
 
 impl EvidenceAdmissionLimits {
     pub(crate) fn validate(self) -> Result<()> {
         ensure!(
-            (1..=tokio::sync::Semaphore::MAX_PERMITS).contains(&self.total_slots)
-                && (1..=tokio::sync::Semaphore::MAX_PERMITS).contains(&self.slots_per_node),
+            self.total_slots
+                .is_none_or(|slots| { (1..=tokio::sync::Semaphore::MAX_PERMITS).contains(&slots) })
+                && self.slots_per_node.is_none_or(|slots| {
+                    (1..=tokio::sync::Semaphore::MAX_PERMITS).contains(&slots)
+                }),
             InvalidConfigurationSnafu {
                 reason: "evidence admission slots must be positive and fit a semaphore",
             }
@@ -361,6 +355,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn evidence_admission_optional() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for source in [
+            serde_json::json!({}),
+            serde_json::json!({"total_slots": null, "slots_per_node": null}),
+        ] {
+            let limits: EvidenceAdmissionLimits = serde_json::from_value(source)?;
+            assert_eq!(limits.total_slots, None);
+            assert_eq!(limits.slots_per_node, None);
+            limits.validate()?;
+        }
+        for field in ["total_slots", "slots_per_node"] {
+            let mut source = serde_json::json!({});
+            source[field] = serde_json::json!(tokio::sync::Semaphore::MAX_PERMITS);
+            let limits: EvidenceAdmissionLimits = serde_json::from_value(source.clone())?;
+            limits.validate()?;
+            if field == "total_slots" {
+                assert_eq!(
+                    limits.total_slots,
+                    Some(tokio::sync::Semaphore::MAX_PERMITS)
+                );
+                assert_eq!(limits.slots_per_node, None);
+            } else {
+                assert_eq!(limits.total_slots, None);
+                assert_eq!(
+                    limits.slots_per_node,
+                    Some(tokio::sync::Semaphore::MAX_PERMITS)
+                );
+            }
+            for invalid in [0, tokio::sync::Semaphore::MAX_PERMITS + 1] {
+                source[field] = serde_json::json!(invalid);
+                let limits: EvidenceAdmissionLimits = serde_json::from_value(source.clone())?;
+                assert!(limits.validate().is_err());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn analysis_startup_is_independent() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("control.json");
@@ -385,8 +417,8 @@ mod tests {
         assert!(!config.graph_enabled);
         assert_eq!(config.data_retention.raw_max_age_ns, None);
         assert_eq!(config.data_retention.raw_max_bytes, None);
-        assert_eq!(config.evidence_admission.total_slots, 8);
-        assert_eq!(config.evidence_admission.slots_per_node, 2);
+        assert_eq!(config.evidence_admission.total_slots, None);
+        assert_eq!(config.evidence_admission.slots_per_node, None);
         let parts = config.into_parts()?;
         assert!(parts.data_error.is_none());
         assert!(parts.discovery.is_none());
@@ -421,8 +453,8 @@ mod tests {
         });
         fs::write(&path, serde_json::to_vec(&source)?)?;
         let config = ControlConfig::load(&path)?;
-        assert_eq!(config.evidence_admission.total_slots, 12);
-        assert_eq!(config.evidence_admission.slots_per_node, 3);
+        assert_eq!(config.evidence_admission.total_slots, Some(12));
+        assert_eq!(config.evidence_admission.slots_per_node, Some(3));
         drop(config.into_parts()?);
         for field in ["total_slots", "slots_per_node"] {
             let previous = source["evidence_admission"][field].clone();

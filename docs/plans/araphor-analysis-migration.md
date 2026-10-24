@@ -3347,3 +3347,26 @@ net **+4**. Moved and extended tests do not count as production reduction.
 TODO 13, complete migration and the overall 6,000-line production Rust reduction
 target remain **Not done**. Full-workspace CI, physical qualification and
 benchmarks were not run for this delivery.
+
+
+## Optional evidence admission
+
+Result: **Done** for Control evidence admission under TODO 13. TODO 13 remains
+**Not done** for its other resource boundaries.
+
+`EvidenceAdmissionLimits` has optional total and per-node counts. Both default
+to None. The existing admission owner creates a native Tokio semaphore only
+for a configured count. It keeps the allowed-node map when a gate is disabled.
+An unknown node remains denied. The owner waits for the node permit before
+the total permit. Native permit drop releases capacity after cancellation.
+Configured zero and counts above `Semaphore::MAX_PERMITS` are invalid.
+
+The four configuration and admission checks pass. They cover omitted and null
+values, native count bounds, disabled and mixed gates, known-node membership,
+FIFO waiting, cancellation, release and runtime construction. Strict Clippy,
+scoped formatting and whitespace checks pass. The
+[source route and command](../guides/araphor-discovery-definition-review.md#optional-evidence-admission)
+identify the existing owners. No resource manager, custom queue or polling
+loop is added. Production Rust adds 33 and removes 26 nonblank lines, excluding
+comments: net **+7**. Full-workspace CI, physical qualification and benchmarks
+were not run for this delivery.

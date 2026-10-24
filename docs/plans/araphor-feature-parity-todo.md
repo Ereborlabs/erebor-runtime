@@ -82,7 +82,7 @@ identifies a specific remaining part of an otherwise implemented item.
 | 10. Notification execution from Query events | Done | Native subscriptions and the shared Host drive delivery, retries, ACK deadlines, restart and current permission checks. |
 | 11. Runtime configuration through Control | Done | Control passes configured Query and package runtime limits at construction and rejects reuse with different limits. Runtime quotas default to disabled. |
 | 12. Data and Wasm cancellation without periodic checks | Done | Wasm and Data lock waits use events and exact deadlines. Data sends one native interrupt at expiry and waits for an event. A native interrupt scope preserves cancellation across statement resets. |
-| 13. Configurable quotas, disabled by default | Not done | SDK package quotas are removed and Query/runtime quotas default to disabled. Mandatory evidence-admission defaults and the remaining resource-boundary audit are still open. |
+| 13. Configurable quotas, disabled by default | Not done | SDK package quotas are removed. Query, runtime and Control evidence-admission quotas default to disabled. The remaining resource-boundary audit and changes are still open. |
 
 Result: **15 Done; 1 Not done**. The remaining item is **13**.
 The separate 6,000-line production Rust reduction target still requires a
@@ -810,10 +810,12 @@ quota defaults and resource boundaries still need changes or qualification.
   resource defaults are removed. The
   [package quota result](araphor-analysis-migration.md#package-quota-removal)
   retains the 143 passing focused checks. Control's
-  [evidence admission](../../crates/mithril-control/src/config.rs) still defaults
-  to eight total slots and two slots per node; validation requires positive
-  values and supplies no disabled setting. Complete that change and the
-  remaining resource-boundary audit. Preserve identity, format, type and
+  [evidence admission](../../crates/mithril-control/src/config.rs) now defaults
+  to no total or per-node gate. Configured positive counts use native Tokio
+  semaphores. Known-node membership remains required when both gates are
+  disabled. The [focused result](araphor-analysis-migration.md#optional-evidence-admission)
+  records the completed admission change. The remaining resource-boundary
+  changes and qualification remain open. Preserve identity, format, type and
   arithmetic validation; do not remove domain rules as quota cleanup.
 - **Required:** Keep the package contract free of row, batch, byte, and
   checkpoint quotas. Only the time window can be set outside SQL. Keep

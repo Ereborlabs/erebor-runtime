@@ -2935,3 +2935,41 @@ Production Rust adds 10 and removes six nonblank lines, excluding comments:
 net **+4**. The moved and extended tests do not count as production reduction.
 Full-workspace CI, physical qualification and benchmarks were not run for
 this delivery.
+
+
+## Optional evidence admission
+
+This result covers Control evidence admission under TODO 13.
+
+### Intended end state
+
+Omitted total and per-node quotas create no admission gate. Configured quotas
+use the existing native semaphore owner. Disabling a quota grants no Node
+authority.
+
+[EvidenceAdmissionLimits](../../crates/mithril-control/src/config.rs) validates each optional count.
+  -> [EvidenceAdmission::new](../../crates/mithril-control/src/evidence/admission.rs) retains allowed-node membership and creates only configured semaphores.
+  -> [EvidenceAdmission::acquire](../../crates/mithril-control/src/evidence/admission.rs) checks membership and waits for node capacity before total capacity.
+  -> [EvidencePermit](../../crates/mithril-control/src/evidence/admission.rs) holds native owned permits for the existing intake lifetime.
+
+[EvidenceAdmission::acquire](../../crates/mithril-control/src/evidence/admission.rs) rejects an unknown node.
+  -> [EvidencePermit](../../crates/mithril-control/src/evidence/admission.rs) drops acquired permits when the operation ends or is cancelled.
+
+`None` is disabled. `Some(0)` is invalid. The largest accepted count is the
+native `Semaphore::MAX_PERMITS`. Configured gates retain native FIFO and
+cancellation behavior. The owner creates no custom queue or polling task.
+Control retains its existing constructor-reuse check.
+
+All four focused checks pass. The configuration cases cover omitted and null
+values, zero and native count bounds, and runtime construction. Admission
+cases cover total-only, node-only and disabled gates, more than the previous
+default per-node capacity, unknown nodes, FIFO waiting and cancellation.
+
+```sh
+target/debug/deps/mithril_control-743ac2164588e878 config::tests:: evidence::admission::tests:: --nocapture --test-threads=2
+```
+
+Scoped formatting, whitespace checks and the strict affected-owner Clippy
+command in the preceding result pass. Production Rust adds 33 and removes 26
+nonblank lines, excluding comments: net **+7**. Other TODO 13 boundaries remain
+open. Full-workspace CI, physical qualification and benchmarks were not run.
