@@ -85,17 +85,15 @@ impl InputOperation {
     ) -> Result<Arc<AnalysisReadControl>> {
         let timeout = grant
             .expires_utc_ns
-            .map_or(Duration::from_secs(30), |expiry| {
-                Duration::from_nanos(expiry.saturating_sub(now)).min(Duration::from_secs(30))
-            });
-        if timeout.is_zero() {
+            .map(|expiry| Duration::from_nanos(expiry.saturating_sub(now)));
+        if timeout.is_some_and(|timeout| timeout.is_zero()) {
             return Err(PackageErrorCodeV1::Denied
                 .error("live input grant expired")
                 .into());
         }
         Ok(Arc::new(match parent {
             Some(parent) => parent.stage(timeout)?,
-            None => AnalysisReadControl::with_timeout(timeout)?,
+            None => AnalysisReadControl::default().stage(timeout)?,
         }))
     }
 

@@ -25,20 +25,11 @@ mod tests;
 
 pub type ClientStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ClientGrpcConfig {
     pub query: Limits,
-    pub output_timeout: Duration,
-}
-
-impl Default for ClientGrpcConfig {
-    fn default() -> Self {
-        Self {
-            query: Limits::default(),
-            output_timeout: Duration::from_secs(10),
-        }
-    }
+    pub output_timeout: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -52,7 +43,7 @@ pub struct ClientGrpcOwner {
 struct ClientData {
     store: Arc<AnalysisStore>,
     query: Arc<Engine>,
-    output_timeout: Duration,
+    output_timeout: Option<Duration>,
 }
 
 impl ClientGrpcOwner {
@@ -61,7 +52,9 @@ impl ClientGrpcOwner {
         auth: Arc<ClientAuth>,
         config: ClientGrpcConfig,
     ) -> crate::Result<Self> {
-        if config.output_timeout.is_zero() || config.output_timeout > Duration::from_secs(10) {
+        if config.output_timeout.is_some_and(|timeout| {
+            timeout.is_zero() || std::time::Instant::now().checked_add(timeout).is_none()
+        }) {
             return Err(crate::error::InvalidConfigurationSnafu {
                 reason: "client query limits are invalid",
             }

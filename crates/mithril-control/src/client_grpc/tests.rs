@@ -243,7 +243,7 @@ fn client_query_invalid_limits() -> TestResult {
         );
     }
     let error = Fixture::with_config(ClientGrpcConfig {
-        output_timeout: Duration::ZERO,
+        output_timeout: Some(Duration::ZERO),
         ..Default::default()
     })
     .err()
@@ -261,7 +261,7 @@ fn client_query_invalid_limits() -> TestResult {
 #[tokio::test]
 async fn observability_grpc_trace_timeout() -> TestResult {
     let fixture = Fixture::with_config(ClientGrpcConfig {
-        output_timeout: Duration::from_nanos(1),
+        output_timeout: Some(Duration::from_nanos(1)),
         ..ClientGrpcConfig::default()
     })?;
     let accepted = fixture.seed([1; 16], 6)?;
@@ -1532,5 +1532,28 @@ async fn observability_grpc_read_revocation() -> TestResult {
             .map(|error| error.code()),
         Some(tonic::Code::PermissionDenied)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn client_timeout_is_optional() -> TestResult {
+    for source in ["{}", r#"{"output_timeout":null}"#] {
+        let config: ClientGrpcConfig = serde_json::from_str(source)?;
+        assert_eq!(config.output_timeout, None);
+    }
+    let _owner = Fixture::with_config(ClientGrpcConfig {
+        output_timeout: Some(Duration::from_secs(30)),
+        ..Default::default()
+    })?;
+    let error = Fixture::with_config(ClientGrpcConfig {
+        output_timeout: Some(Duration::MAX),
+        ..Default::default()
+    })
+    .err()
+    .ok_or("invalid output timeout accepted")?;
+    assert!(matches!(
+        error.downcast_ref::<crate::Error>(),
+        Some(crate::Error::InvalidConfiguration { .. })
+    ));
     Ok(())
 }

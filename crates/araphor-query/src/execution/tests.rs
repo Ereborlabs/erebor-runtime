@@ -187,7 +187,7 @@ async fn blocking_drop_orders_cleanup(
 async fn blocking_deadline_keeps_parent(
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let parent = control();
-    let stage = Arc::new(parent.stage(Duration::from_millis(10))?);
+    let stage = Arc::new(parent.stage(Some(Duration::from_millis(10)))?);
     let worker_stage = Arc::clone(&stage);
     let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let ended = Arc::clone(&stopped);
@@ -207,7 +207,7 @@ async fn blocking_deadline_keeps_parent(
         crate::Failure::DeadlineExceeded
     );
     assert!(stopped.load(std::sync::atomic::Ordering::Acquire));
-    parent.stage(Duration::from_secs(1))?.check()?;
+    parent.stage(Some(Duration::from_secs(1)))?.check()?;
     Ok(())
 }
 

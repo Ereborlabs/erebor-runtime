@@ -180,7 +180,12 @@ impl Fixture {
         }
     }
 
-    async fn delivery(&self, timeout: Duration, follow: bool, fail: bool) -> Delivery<Encoder> {
+    async fn delivery(
+        &self,
+        timeout: Option<Duration>,
+        follow: bool,
+        fail: bool,
+    ) -> Delivery<Encoder> {
         let inner = self
             .engine
             .subscribe(
@@ -220,7 +225,7 @@ async fn next(delivery: &mut Delivery<Encoder>) -> std::result::Result<Item, Fai
 async fn phases_and_conversion_lifetime() {
     let fixture = Fixture::new();
     let mut delivery = fixture
-        .delivery(Duration::from_secs(10), false, false)
+        .delivery(Some(Duration::from_secs(10)), false, false)
         .await;
     let capacity = fixture
         .engine
@@ -298,7 +303,7 @@ async fn initial_failure_keeps_receipt(
             fail: false,
         },
         None,
-        Duration::from_secs(10),
+        Some(Duration::from_secs(10)),
         None,
     )?;
     assert_eq!(
@@ -329,7 +334,7 @@ async fn initial_failure_keeps_receipt(
     assert!(delivery.next().await.is_none());
     assert!(fixture.engine.memory().reserve_output(output).is_ok());
     let mut recovered = fixture
-        .delivery(Duration::from_secs(10), false, false)
+        .delivery(Some(Duration::from_secs(10)), false, false)
         .await;
     for item in [Item::Metadata, Item::Row, Item::Checkpoint, Item::Complete] {
         assert_eq!(next(&mut recovered).await, Ok(item));
@@ -443,7 +448,7 @@ async fn package_checkpoint_releases_capacity(
             fail: false,
         },
         None,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
         None,
     )?;
     for item in [Item::Metadata, Item::Row, Item::Checkpoint] {
@@ -481,7 +486,9 @@ async fn package_checkpoint_releases_capacity(
 #[tokio::test]
 async fn failed_conversion_releases_immediately() {
     let fixture = Fixture::new();
-    let mut delivery = fixture.delivery(Duration::from_secs(10), true, true).await;
+    let mut delivery = fixture
+        .delivery(Some(Duration::from_secs(10)), true, true)
+        .await;
     assert_eq!(next(&mut delivery).await, Err(Failure::EvaluationFailed));
     assert_eq!(delivery.frame_bytes(), 0);
     assert!(fixture
@@ -502,7 +509,7 @@ async fn failed_conversion_releases_immediately() {
 async fn idle_demand_releases_producer() {
     let fixture = Fixture::new();
     let mut delivery = fixture
-        .delivery(Duration::from_millis(10), true, false)
+        .delivery(Some(Duration::from_millis(10)), true, false)
         .await;
     assert_eq!(fixture.clock.reads.load(Ordering::SeqCst), 0);
     assert_eq!(Arc::strong_count(&fixture.clock), 2);
@@ -526,7 +533,7 @@ async fn idle_demand_releases_producer() {
 async fn native_wait_is_not_output_idle() {
     let fixture = Fixture::new();
     let mut delivery = fixture
-        .delivery(Duration::from_millis(10), true, false)
+        .delivery(Some(Duration::from_millis(10)), true, false)
         .await;
     for item in [Item::Metadata, Item::Row, Item::Checkpoint] {
         assert_eq!(next(&mut delivery).await, Ok(item));
@@ -548,7 +555,9 @@ async fn native_wait_is_not_output_idle() {
 #[tokio::test]
 async fn authority_interrupts_native_wait() {
     let fixture = Fixture::new();
-    let mut delivery = fixture.delivery(Duration::from_secs(10), true, false).await;
+    let mut delivery = fixture
+        .delivery(Some(Duration::from_secs(10)), true, false)
+        .await;
     for item in [Item::Metadata, Item::Row, Item::Checkpoint] {
         assert_eq!(next(&mut delivery).await, Ok(item));
     }
@@ -568,7 +577,9 @@ async fn authority_interrupts_native_wait() {
 #[tokio::test(flavor = "current_thread")]
 async fn authority_interrupts_read_check() {
     let fixture = Fixture::new();
-    let mut delivery = fixture.delivery(Duration::from_secs(10), true, false).await;
+    let mut delivery = fixture
+        .delivery(Some(Duration::from_secs(10)), true, false)
+        .await;
     assert_eq!(next(&mut delivery).await, Ok(Item::Metadata));
     let parked = Arc::new(tokio::sync::Notify::new());
     let checking = Arc::clone(&parked);
@@ -603,4 +614,51 @@ async fn authority_interrupts_read_check() {
         )
         .is_ok());
     assert!(delivery.next().await.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn delivery_timeout_is_optional() {
+    let fixture = Fixture::new();
+    let mut delivery = fixture.delivery(None, false, false).await;
+    assert_eq!(next(&mut delivery).await, Ok(Item::Metadata));
+    tokio::time::advance(Duration::from_secs(11)).await;
+    assert_eq!(next(&mut delivery).await, Ok(Item::Row));
+    assert_eq!(next(&mut delivery).await, Ok(Item::Checkpoint));
+}
+
+#[tokio::test]
+async fn delivery_rejects_invalid_timeout() {
+    let fixture = Fixture::new();
+    for timeout in [Duration::ZERO, Duration::MAX] {
+        let inner = fixture
+            .engine
+            .subscribe(
+                "SELECT 1 AS value",
+                Vec::new(),
+                AnalysisSelectionV1::tenant([1; 16]),
+                Arc::new(AnalysisReadControl::default()),
+                b"invalid delivery timeout",
+                None,
+                fixture.clock.clone(),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            Delivery::new(
+                inner,
+                Encoder {
+                    authority: Arc::clone(&fixture.authority),
+                    fail: false,
+                },
+                None,
+                Some(timeout),
+                None
+            ),
+            Err(Error::Invalid {
+                field: "output timeout",
+                ..
+            })
+        ));
+    }
 }

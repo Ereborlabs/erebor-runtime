@@ -356,7 +356,7 @@ async fn busy_retains_cut_stage() -> TestResult {
     let first = next(&mut operation).await?;
     assert!(Arc::ptr_eq(first.memory(), operation.memory()));
     assert!(!Arc::ptr_eq(first.memory(), fixture.engine.memory()));
-    operation.control = Arc::new(operation.control.stage(Duration::from_nanos(1))?);
+    operation.control = Arc::new(operation.control.stage(Some(Duration::from_nanos(1)))?);
     tokio::time::sleep(Duration::from_millis(1)).await;
     assert!(operation.control.check().is_err());
     operation.retry();
@@ -505,7 +505,7 @@ async fn completion_renews_stage() -> TestResult {
     let fixture = Fixture::new(false)?;
     let mut operation = fixture.watch(false)?;
     let input = next(&mut operation).await?;
-    operation.control = Arc::new(operation.control.stage(Duration::from_nanos(1))?);
+    operation.control = Arc::new(operation.control.stage(Some(Duration::from_nanos(1)))?);
     tokio::time::sleep(Duration::from_millis(1)).await;
     assert!(operation.control.check().is_err());
     let receipt = fixture.commit(
@@ -941,7 +941,7 @@ async fn idle_stage_renews_on_event() -> TestResult {
     let first = next(&mut operation).await?;
     let receipt = fixture.commit(&operation, &first, "idle-stage", operation.now())?;
     operation.complete(&receipt).await?;
-    operation.control = Arc::new(operation.control.stage(Duration::from_millis(10))?);
+    operation.control = Arc::new(operation.control.stage(Some(Duration::from_millis(10)))?);
     let control = Arc::clone(operation.control());
     let pending = operation.next();
     tokio::pin!(pending);
@@ -1045,5 +1045,43 @@ async fn clock_demand_survives_busy() -> TestResult {
     assert_eq!(count(&second), 1);
     assert_eq!(restarted.now(), NOW + 123);
     assert_eq!(second.inputs[0].revision, first.inputs[0].revision);
+    Ok(())
+}
+
+#[test]
+fn stage_uses_grant_deadline() -> TestResult {
+    let mut grant = PackageGrantV1 {
+        principal: "fixture".into(),
+        revision: 1,
+        selection: AnalysisSelectionV1::tenant([1; 16]),
+        expires_utc_ns: None,
+        authorization_id: None,
+    };
+    let unbounded = InputOperation::stage(&grant, NOW, None)?;
+    assert_eq!(unbounded.remaining()?, None);
+    grant.expires_utc_ns = Some(NOW + 75_000_000_000);
+    let bounded = InputOperation::stage(&grant, NOW, None)?;
+    assert!(bounded.remaining()?.ok_or("grant deadline absent")? > Duration::from_secs(30));
+    let parent = AnalysisReadControl::with_timeout(Duration::from_secs(1))?;
+    let child = InputOperation::stage(&grant, NOW, Some(&parent))?;
+    assert!(child.remaining()?.ok_or("grant deadline absent")? > Duration::from_secs(30));
+    grant.expires_utc_ns = None;
+    let child = InputOperation::stage(&grant, NOW, Some(&parent))?;
+    assert_eq!(child.remaining()?, None);
+    parent.cancel()?;
+    assert!(child.check().is_err());
+    assert!(InputOperation::stage(&grant, NOW, Some(&parent))?
+        .check()
+        .is_err());
+    grant.expires_utc_ns = Some(NOW);
+    assert!(matches!(
+        InputOperation::stage(&grant, NOW, None),
+        Err(crate::Error::Data {
+            source: araphor_data::Error::Package {
+                code: PackageErrorCodeV1::Denied,
+                ..
+            }
+        })
+    ));
     Ok(())
 }

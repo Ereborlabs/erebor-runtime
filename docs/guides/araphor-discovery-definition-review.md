@@ -3169,3 +3169,55 @@ whitespace checks pass. Production Rust is net **-3** lines. Tests, comments and
 blank lines are excluded. Verification covers these focused runs and strict
 Clippy. Full-workspace CI, physical checks and benchmarks did not run.
 TODO 13 and the overall reduction goal remain open.
+
+
+## Optional delivery and live input deadlines
+
+### Intended end state
+
+An omitted output-idle or input-stage quota adds no fixed deadline. Explicit
+deadlines use the current control and native stream owners.
+
+[ClientGrpcConfig](../../crates/mithril-control/src/client_grpc.rs) defaults output_timeout to None.
+  -> [ClientGrpcOwner::new](../../crates/mithril-control/src/client_grpc.rs) accepts a positive representable timeout without the former ten-second upper bound.
+  -> [ClientGrpcOwner::query](../../crates/mithril-control/src/client_grpc/query.rs) passes the configured value into existing Query delivery.
+  -> [Delivery::new](../../crates/araphor-query/src/follow/delivery.rs) validates the optional timeout and retains authority and request deadlines.
+  -> [Delivery stream](../../crates/araphor-query/src/follow/delivery.rs) records an idle deadline after a yielded item only when the timeout is configured.
+
+[Inputs::watch](../../crates/araphor-query/src/inputs/live.rs) creates the existing live input operation.
+  -> [InputOperation::stage](../../crates/araphor-query/src/inputs/live.rs) derives the stage duration from the grant expiry, or None when no expiry exists.
+  -> [AnalysisReadControl::stage](../../crates/araphor-data/src/analysis/read.rs) creates the renewable deadline with the existing shared cancellation and interrupt state.
+  -> [InputOperation::changed](../../crates/araphor-query/src/inputs/live.rs) waits on native source progress and the existing exact deadline.
+
+`stage(None)` clears the previous stage deadline. `stage(Some(duration))`
+uses that new duration. This is the renewable-stage API. Parent cancellation
+still stops the child. An expired grant fails before capture. The separate
+`within` API keeps the enclosing deadline: None preserves that deadline and
+Some selects the earlier deadline. The two APIs retain different purposes.
+
+Delivery's optional timeout measures consumer delay after an item. It does
+not measure a native producer wait after the next poll starts. Completion,
+failed conversion and authority denial keep their current capacity cleanup.
+The code adds no periodic wake. The Data monitor retains its existing native
+events and exact deadline. The added Tokio test-util feature is test configuration.
+
+Exact focused selectors for reproduction:
+
+- Query `inputs::live::tests::` selects 23 live-input checks.
+- Query `follow::delivery::tests::` selects ten delivery checks.
+- Query `execution::tests::blocking_deadline_keeps_parent`.
+- Data `analysis::read::tests::query_input_native_cancel`.
+- Control `client_grpc::tests::client_timeout_is_optional` and `client_grpc::tests::observability_grpc_trace_timeout`.
+
+The [live-input tests](../../crates/araphor-query/src/inputs/live/tests.rs) cover no grant deadline, expiry beyond 30 seconds, stage replacement and shared cancellation.
+The [delivery tests](../../crates/araphor-query/src/follow/delivery/tests.rs) use paused time beyond ten seconds, reject zero and unrepresentable timeouts, and retain explicit idle, authority and capacity checks.
+The [blocking-parent check](../../crates/araphor-query/src/execution/tests.rs) proves that a stage deadline joins its worker and leaves the parent usable.
+The [Data control check](../../crates/araphor-data/src/analysis/read.rs) retains native query interruption and tests None, zero and clock-range bounds.
+
+All 37 distinct checks pass: Query 34 in 16.16 seconds, Data one in 0.04 seconds
+and Control two in 1.11 seconds. Strict affected-owner Clippy, scoped formatting
+and whitespace checks pass. Production Rust is net **+11** lines after tests,
+comments, blank lines and cfg-only instrumentation are excluded. The existing
+unconditional unused Graph test-hook boolean is removed. Verification covers
+these focused runs and strict Clippy. Full-workspace CI, physical checks and
+benchmarks did not run. TODO 13 and the overall reduction goal remain open.

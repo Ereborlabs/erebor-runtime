@@ -32,6 +32,7 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 araphor-package-runtime = { path = "../araphor-package-runtime", features = ["test-fixtures"] }
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 crc32c.workspace = true

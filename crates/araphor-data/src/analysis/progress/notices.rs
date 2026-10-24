@@ -86,7 +86,6 @@ impl AnalysisStore {
         if !scope.valid() || result_id.is_empty() || revision == 0 {
             return self.reject("the result notice identity is invalid");
         }
-        let graph = scope.processor_id == crate::GRAPH_PROCESSOR;
         let mut writer_guard = self.writer()?;
         let transaction = writer_guard
             .get_mut()?
@@ -96,7 +95,7 @@ impl AnalysisStore {
             })?;
         self.notice_rows(&transaction, scope, result_id, revision, facts, coverage)?;
         #[cfg(any(test, feature = "test-fixtures"))]
-        if graph {
+        if scope.processor_id == crate::GRAPH_PROCESSOR {
             self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
         }
         check()?;

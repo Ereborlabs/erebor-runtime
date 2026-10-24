@@ -1,7 +1,9 @@
 use std::future::Future as _;
+#[cfg(any(test, feature = "test-fixtures"))]
+use std::sync::Mutex;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex, TryLockError, TryLockResult,
+    Arc, TryLockError, TryLockResult,
 };
 use std::time::{Duration, Instant};
 
@@ -90,8 +92,8 @@ impl AnalysisReadControl {
         }
     }
 
-    pub fn stage(&self, timeout: Duration) -> Result<Self> {
-        Ok(self.child(Some(Self::timeout_deadline(timeout)?)))
+    pub fn stage(&self, timeout: Option<Duration>) -> Result<Self> {
+        Ok(self.child(timeout.map(Self::timeout_deadline).transpose()?))
     }
 
     pub fn within(&self, timeout: impl Into<Option<Duration>>) -> Result<Self> {
@@ -1063,7 +1065,12 @@ mod tests {
             outer.within(Duration::from_secs(120))?.deadline,
             outer.deadline
         );
-        let evaluation = control.stage(Duration::from_secs(2))?;
+        let unbounded = control.stage(None)?;
+        assert_eq!(unbounded.remaining()?, None);
+        unbounded.check()?;
+        assert!(control.stage(Some(Duration::ZERO)).is_err());
+        assert!(control.stage(Some(Duration::MAX)).is_err());
+        let evaluation = control.stage(Some(Duration::from_secs(2)))?;
         evaluation.check()?;
         let (start, started) = mpsc::channel();
         std::thread::scope(|scope| -> TestResult {
@@ -1075,7 +1082,7 @@ mod tests {
             });
             let mut native_failed = false;
             let result = evaluation.query_run(&connection, || {
-                let sibling = control.stage(Duration::from_secs(2))?;
+                let sibling = control.stage(Some(Duration::from_secs(2)))?;
                 let nested = sibling.query_run(&connection, || Ok(()));
                 assert!(matches!(nested, Err(crate::Error::AnalysisBusy { .. })));
                 let _sent = start.send(());

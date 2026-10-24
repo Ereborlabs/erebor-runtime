@@ -3480,3 +3480,28 @@ Strict affected-owner Clippy, scoped formatting and whitespace checks pass.
 Production Rust is net **-3** lines, excluding tests, comments and blank lines.
 TODO 13, full migration and the 6,000-line reduction goal remain **Not done**.
 Full-workspace CI, physical checks and benchmarks did not run for this change.
+
+
+## Optional delivery and live input deadlines
+
+Result: **Done** for output-idle and renewable input-stage defaults under
+TODO 13. The [source route](../guides/araphor-discovery-definition-review.md#optional-delivery-and-live-input-deadlines)
+identifies the existing Control, Query delivery and Data control owners.
+
+Control output timeout is optional and defaults to None. A configured value
+must be positive and fit the native clock. Query Delivery applies that value
+only to consumer idle time after an item. Authority, cancellation and request
+deadlines retain their existing paths. Native upstream waiting is not idle.
+
+Live input stages use the grant deadline without the former 30-second cap.
+A renewable `stage` replaces its local deadline and shares cancellation.
+`within` still preserves the earlier enclosing deadline. An expired grant
+is denied. Existing event and exact-deadline waits continue without a new poll.
+
+All 37 distinct focused checks pass: 34 Query checks in 16.16 seconds, the
+Data native-cancellation check in 0.04 seconds, and two Control timeout checks
+in 1.11 seconds. Tokio's existing test-util feature supplies paused test time.
+Strict affected-owner Clippy, scoped formatting and whitespace checks pass.
+Production Rust is net **+11** lines after test instrumentation is excluded.
+TODO 13, full migration and the 6,000-line reduction goal remain **Not done**.
+Full-workspace CI, physical checks and benchmarks were not run.

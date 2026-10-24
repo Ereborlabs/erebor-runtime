@@ -90,7 +90,7 @@ pub struct Delivery<C: Consumer> {
     deadline: Option<Pin<Box<Sleep>>>,
     ended: bool,
     idle: Option<Instant>,
-    timeout: Duration,
+    timeout: Option<Duration>,
     conversion: MemoryReservation,
     initial: Option<MemoryReservation>,
     failure: Option<(Failure, Option<Error>)>,
@@ -105,9 +105,17 @@ impl<C: Consumer> Delivery<C> {
         inner: Subscription,
         consumer: C,
         deadline: Option<Instant>,
-        output_timeout: Duration,
+        output_timeout: Option<Duration>,
         initial: Option<MemoryReservation>,
     ) -> Result<Self> {
+        if output_timeout.is_some_and(|timeout| {
+            timeout.is_zero() || Instant::now().checked_add(timeout).is_none()
+        }) {
+            return crate::InvalidSnafu {
+                field: "output timeout",
+            }
+            .fail();
+        }
         let conversion = inner
             .session
             .memory()
@@ -499,7 +507,19 @@ impl<C: Consumer> Delivery<C> {
                 this.stop();
             }
         }
-        this.idle = Some(Instant::now() + this.timeout);
+        this.idle = match this.timeout {
+            Some(timeout) => match Instant::now().checked_add(timeout) {
+                Some(deadline) => Some(deadline),
+                None => {
+                    let error = crate::InvalidSnafu {
+                        field: "output timeout",
+                    }
+                    .build();
+                    return this.finish(consumer.code(Failure::from(&error)));
+                }
+            },
+            None => None,
+        };
         Poll::Ready(Some(Ok(item)))
     }
 }
