@@ -6,6 +6,7 @@ use super::*;
 struct Live {
     records: Recorded,
     state: NativeState,
+    expired: Vec<araphor_data::AnalysisGapV1>,
     resolved: bool,
     target_revision: u64,
 }
@@ -13,6 +14,7 @@ struct Live {
 #[derive(Deserialize)]
 struct Output {
     snapshot: NativeSnapshot,
+    consumed_cursor: u64,
     input_bytes: u64,
     facts_revision: u64,
     incomplete: bool,
@@ -41,6 +43,7 @@ impl Live {
         }
         Self {
             records,
+            expired: Vec::new(),
             state: NativeState {
                 tenant_id: [1; 16],
                 node_id: "node".into(),
@@ -50,6 +53,7 @@ impl Live {
                 source_epoch: 1,
                 cpu_id: 3,
                 contiguous_cursor: count,
+                input_unbounded: true,
                 retained_floor: 0,
                 source_coverage_revision: 0,
                 method_version: 1,
@@ -162,13 +166,36 @@ impl Live {
         ] {
             policy[name] = value;
         }
+        let coverage = self
+            .expired
+            .iter()
+            .map(|gap| {
+                let mut report = defaults(&tables["coverage"]);
+                for (name, value) in [
+                    ("tenant_id", json!(self.state.tenant_id)),
+                    ("node_id", json!(self.state.node_id)),
+                    ("node_boot_id", json!(self.state.node_boot_id)),
+                    ("label_epoch", json!(self.state.label_epoch)),
+                    ("source_id", json!(self.state.source_id)),
+                    ("source_epoch", json!(self.state.source_epoch)),
+                    ("cpu_id", json!(self.state.cpu_id)),
+                    ("kind", json!("expired")),
+                    ("first_cursor", json!(gap.first_cursor)),
+                    ("last_cursor", json!(gap.last_cursor)),
+                    ("commit_revision", json!(gap.commit_revision)),
+                ] {
+                    report[name] = value;
+                }
+                report
+            })
+            .collect::<Vec<_>>();
         for (name, rows) in [
             ("targets", if self.resolved { vec![target] } else { vec![] }),
             (
                 "compiled_policies",
                 if self.resolved { vec![policy] } else { vec![] },
             ),
-            ("coverage", Vec::<Value>::new()),
+            ("coverage", coverage),
         ] {
             Recorded::table(&fixture, name, tables[name].fields().to_vec(), &rows, split)?;
         }
@@ -214,6 +241,7 @@ impl Live {
         })?;
         let frame = frame.select(vec![
             datafusion::logical_expr::col("snapshot"),
+            datafusion::logical_expr::col("consumed_cursor"),
             datafusion::logical_expr::col("input_bytes"),
             datafusion::logical_expr::col("facts_revision"),
             datafusion::logical_expr::col("incomplete"),
@@ -237,7 +265,7 @@ impl Live {
     }
 
     fn advance(&mut self, output: &Output) {
-        self.state.consumed_cursor = Some(self.state.contiguous_cursor);
+        self.state.consumed_cursor = Some(output.consumed_cursor);
         self.state.facts_revision = Some(output.facts_revision);
         self.state.notice_facts_revision = Some(output.notice_facts_revision);
         self.state.notice_coverage_revision = Some(self.state.source_coverage_revision);
@@ -392,6 +420,95 @@ async fn live_rejects_missing_input() -> TestResult {
         .err()
         .ok_or("byte overflow accepted")?;
     assert!(error.to_string().contains("input bytes"), "{error}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_proves_expired_ranges() -> TestResult {
+    let mut live = Live::new(7);
+    live.expired = vec![
+        araphor_data::AnalysisGapV1 {
+            first_cursor: 2,
+            last_cursor: 3,
+            commit_revision: 8,
+        },
+        araphor_data::AnalysisGapV1 {
+            first_cursor: 5,
+            last_cursor: 5,
+            commit_revision: 9,
+        },
+    ];
+    live.records.records.retain(|record| {
+        !live
+            .expired
+            .iter()
+            .any(|gap| (gap.first_cursor..=gap.last_cursor).contains(&record.id.durable_cursor))
+    });
+    let output = live.query(false).await?.remove(0);
+    assert_eq!(output.consumed_cursor, 7);
+    assert_eq!(output.snapshot.accepted_records, 4);
+    assert_eq!(output.snapshot.unresolved_records, 4);
+    assert_eq!(
+        output
+            .snapshot
+            .coverage
+            .iter()
+            .map(|range| (
+                range.first_cursor,
+                range.last_cursor,
+                range.expected_records
+            ))
+            .collect::<Vec<_>>(),
+        vec![(1, 1, 1), (4, 4, 1), (6, 7, 2)]
+    );
+    assert!(output.incomplete);
+    assert_eq!(output.gaps.as_deref(), Some(live.expired.as_slice()));
+    assert_eq!(
+        output.input_bytes,
+        live.records
+            .records
+            .iter()
+            .map(|record| record.bytes.len() as u64)
+            .sum::<u64>()
+    );
+    output.snapshot.clone().into_snapshot()?;
+    assert_eq!(live.query(true).await?[0].snapshot, output.snapshot);
+    live.advance(&output);
+    assert!(live.query(false).await?.is_empty());
+    live.resolved = true;
+    let repaired = live.query(false).await?.remove(0);
+    assert_eq!(repaired.snapshot.accepted_records, 4);
+    assert_eq!(repaired.snapshot.included_records, 4);
+    assert_eq!(repaired.input_bytes, output.input_bytes);
+    assert_eq!(repaired.gaps, output.gaps);
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_empty_expiry_scope() -> TestResult {
+    let gap = araphor_data::AnalysisGapV1 {
+        first_cursor: 1,
+        last_cursor: 3,
+        commit_revision: 4,
+    };
+    let mut live = Live::new(3);
+    live.expired = vec![gap];
+    live.records.records.clear();
+    live.state.input_unbounded = false;
+    let bounded = live.query(false).await?.remove(0);
+    assert_eq!(bounded.consumed_cursor, 0);
+    assert_eq!(bounded.snapshot.accepted_records, 0);
+    assert!(!bounded.incomplete);
+    assert!(bounded.gaps.as_ref().is_none_or(Vec::is_empty));
+    live.state.input_unbounded = true;
+    let resumed = live.query(false).await?.remove(0);
+    assert_eq!(resumed.consumed_cursor, 3);
+    assert_eq!(resumed.snapshot.accepted_records, 0);
+    assert!(resumed.incomplete);
+    assert_eq!(resumed.gaps.as_deref(), Some([gap].as_slice()));
+    resumed.snapshot.clone().into_snapshot()?;
+    live.advance(&resumed);
+    assert!(live.query(false).await?.is_empty());
     Ok(())
 }
 

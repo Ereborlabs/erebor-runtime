@@ -152,6 +152,9 @@ const INPUTS: &[(&str, &[&str])] = &[
             "source_epoch",
             "cpu_id",
             "kind",
+            "first_cursor",
+            "last_cursor",
+            "commit_revision",
             "coverage_revision",
             "interval_id",
             "interval_source_epoch",
@@ -188,6 +191,7 @@ const INPUTS: &[(&str, &[&str])] = &[
             "source_epoch",
             "cpu_id",
             "contiguous_cursor",
+            "input_unbounded",
             "retained_floor",
             "source_coverage_revision",
             "processor_present",
@@ -240,7 +244,18 @@ static LIVE_STATE_SQL: LazyLock<String> = LazyLock::new(|| {
             if *column == "contiguous_cursor" {
                 "GREATEST(COALESCE(consumed_cursor, CAST(0 AS BIGINT UNSIGNED)), \
                 COALESCE(resume_floor, CAST(0 AS BIGINT UNSIGNED)), \
-                COALESCE((SELECT MAX(source_cursor) FROM events), \
+                COALESCE((SELECT MAX(source_cursor) FROM events), CAST(0 AS BIGINT UNSIGNED)), \
+                COALESCE(CASE WHEN input_unbounded THEN \
+                        (SELECT MAX(last_cursor) FROM coverage AS expiry \
+                         WHERE expiry.kind = 'expired' \
+                            AND expiry.tenant_id = discovery_state.tenant_id \
+                            AND expiry.node_id = discovery_state.node_id \
+                            AND expiry.node_boot_id = discovery_state.node_boot_id \
+                            AND expiry.label_epoch = discovery_state.label_epoch \
+                            AND expiry.source_id = discovery_state.source_id \
+                            AND expiry.source_epoch = discovery_state.source_epoch \
+                            AND expiry.cpu_id = discovery_state.cpu_id) \
+                        ELSE CAST(0 AS BIGINT UNSIGNED) END, \
                     CAST(0 AS BIGINT UNSIGNED))) AS contiguous_cursor"
                     .to_owned()
             } else {
@@ -403,7 +418,8 @@ pub(crate) static LIVE_SQL: LazyLock<String> = LazyLock::new(|| {
             CASE WHEN publication.repair THEN TRUE ELSE state.sealed END AS sealed,
             CASE WHEN changed THEN publication.input_bytes ELSE state.input_bytes END AS input_bytes,
             CASE WHEN changed THEN publication.incomplete ELSE state.incomplete END AS incomplete,
-            CASE WHEN changed THEN publication.gaps ELSE state.gaps END AS gaps,
+            CASE WHEN changed THEN publication.gaps ELSE arrow_cast(state.gaps,
+                'List(Struct("first_cursor": UInt64, "last_cursor": UInt64, "commit_revision": UInt64))') END AS gaps,
             state.context_refs,
             CASE WHEN changed THEN publication.snapshot ELSE state.snapshot END AS snapshot,
             publication.repair, NOT changed AS notice_only,

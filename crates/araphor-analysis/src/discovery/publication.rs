@@ -22,7 +22,6 @@ pub(super) struct Publication {
     consumed_cursor: u64,
     processor_present: bool,
     retired: Option<bool>,
-    retained_floor: u64,
     coverage_revision: u64,
     interval_id: Option<String>,
     profile_revision: Option<u64>,

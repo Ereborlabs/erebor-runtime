@@ -4,6 +4,8 @@ use araphor_data::{AnalysisReadControl, ManagedDestination, ManagedRequest};
 
 use super::*;
 
+mod retention;
+
 #[tokio::test]
 async fn profile_conversion_failure_finishes() -> TestResult {
     let fixture = Fixture::new(Limits::default())?;

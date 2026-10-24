@@ -32,7 +32,6 @@ struct ProfileState {
     #[serde(with = "serde_bytes")]
     source_id: [u8; 16],
     source_epoch: u64,
-    retained_floor: u64,
     coverage_revision: Option<u64>,
     processor_present: bool,
     consumed_cursor: Option<u64>,
@@ -304,7 +303,6 @@ impl Publication {
             consumed_cursor: cursor,
             processor_present: state.processor_present,
             retired: state.retired,
-            retained_floor: state.retained_floor,
             coverage_revision: state
                 .coverage_revision
                 .ok_or_else(|| Code::Invalid.error("prior profile coverage"))?,
@@ -343,7 +341,6 @@ impl Publication {
         if self.source != *source
             || !self.processor_present
             || self.retired == Some(true)
-            || self.expected_cursor < self.retained_floor
             || self.consumed_cursor < self.expected_cursor
             || previous
                 .as_ref()

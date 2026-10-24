@@ -4,6 +4,18 @@ __live_state AS (
         COALESCE(resume_floor, CAST(0 AS BIGINT UNSIGNED))) AS frontier
     FROM state RIGHT JOIN (SELECT COUNT(*) AS state_rows FROM state) AS count ON TRUE
 ),
+__live_expired AS (
+    SELECT named_struct('first_cursor', GREATEST(report.first_cursor,
+            state.frontier + CAST(1 AS BIGINT UNSIGNED)),
+        'last_cursor', LEAST(report.last_cursor, state.contiguous_cursor),
+        'commit_revision', report.commit_revision) AS gap
+    FROM reports AS report CROSS JOIN __live_state AS state
+    WHERE report.kind = 'expired' AND report.tenant_id = state.tenant_id
+        AND report.node_id = state.node_id AND report.node_boot_id = state.node_boot_id
+        AND report.label_epoch = state.label_epoch AND report.source_id = state.source_id
+        AND report.source_epoch = state.source_epoch AND report.cpu_id = state.cpu_id
+        AND report.first_cursor <= state.contiguous_cursor AND report.last_cursor > state.frontier
+),
 __live_prior AS (
     SELECT snapshot['schema_version'] AS schema_version,
         snapshot['tenant_id'] AS tenant_id,
@@ -247,9 +259,15 @@ __live_facts AS (
 __live_new_gaps AS (
     SELECT COALESCE(array_agg(gap ORDER BY gap['first_cursor'], gap['last_cursor'],
         gap['commit_revision']), []) AS gaps
-    FROM (SELECT UNNEST(gaps) AS gap, COALESCE(consumed_cursor, 0) AS cursor
-        FROM __live_state) AS captured
-    WHERE gap['last_cursor'] > cursor
+    FROM (
+        SELECT arrow_cast(gap,
+            'Struct("first_cursor": UInt64, "last_cursor": UInt64, "commit_revision": UInt64)') AS gap
+        FROM (SELECT UNNEST(gaps) AS gap,
+            COALESCE(consumed_cursor, 0) AS cursor, COALESCE(sealed, FALSE) AS was_sealed
+            FROM __live_state) AS captured
+        WHERE NOT was_sealed OR gap['last_cursor'] > cursor
+        UNION SELECT gap FROM __live_expired
+    ) AS captured
 ),
 __live_bytes AS (
     SELECT COALESCE(SUM(CAST(octet_length(encode(framed_record, 'hex')) / 2 AS DECIMAL(38, 0))), 0)
@@ -272,32 +290,35 @@ __live_output AS (
             ELSE CAST(NULL AS BIGINT UNSIGNED) END AS input_bytes,
         ((CASE WHEN COALESCE(state.sealed, FALSE) THEN FALSE
             ELSE COALESCE(state.incomplete, FALSE) END)
-            OR COALESCE(array_length(CASE WHEN COALESCE(state.sealed, FALSE)
-                THEN new_gaps.gaps ELSE state.gaps END), 0) > 0) AS incomplete,
-        CASE WHEN COALESCE(state.sealed, FALSE) THEN new_gaps.gaps
-            ELSE state.gaps END AS gaps, state.context_refs,
+            OR array_length(new_gaps.gaps) > 0) AS incomplete,
+        CASE WHEN state.gaps IS NULL AND NOT COALESCE(state.sealed, FALSE)
+            AND array_length(new_gaps.gaps) = 0 THEN NULL
+            ELSE new_gaps.gaps END AS gaps, state.context_refs,
         named_struct('schema_version', merged.schema_version, 'tenant_id', merged.tenant_id, 'source_revision', merged.source_revision, 'proof_kind', merged.proof_kind, 'accepted_records', merged.accepted_records, 'included_records', merged.included_records, 'unresolved_records', merged.unresolved_records, 'excluded_records', merged.excluded_records, 'atoms', merged.atoms, 'coverage', merged.coverage, 'unresolved', merged.unresolved, 'excluded', merged.excluded, 'lifecycle', merged.lifecycle) AS snapshot,
         state.snapshot AS previous_snapshot, state.coverage_revision AS previous_coverage_revision,
         state.facts_revision AS previous_facts_revision, bytes.input_bytes AS checked_bytes,
         state.frontier, state.contiguous_cursor, state.source_coverage_revision,
         COALESCE(state.resume_floor > COALESCE(state.consumed_cursor, 0), FALSE) AS pending_resume,
         (SELECT COUNT(*) FROM state) AS state_count,
-        (SELECT COUNT(DISTINCT source_cursor) FROM __live_append) AS append_count
+        (SELECT COUNT(DISTINCT source_cursor) FROM __live_append) AS append_count,
+        (SELECT COALESCE(SUM(CAST(gap['last_cursor'] AS DECIMAL(20, 0))
+            - CAST(gap['first_cursor'] AS DECIMAL(20, 0)) + 1), 0)
+            FROM __live_expired) AS expired_count
     FROM __live_merged AS merged CROSS JOIN __live_state AS state
     CROSS JOIN __live_facts AS facts CROSS JOIN __live_bytes AS bytes
     CROSS JOIN __live_new_gaps AS new_gaps
 )
 SELECT * EXCLUDE (previous_snapshot, previous_coverage_revision, previous_facts_revision, checked_bytes, frontier,
-    contiguous_cursor, source_coverage_revision, pending_resume, state_count, append_count)
+    contiguous_cursor, source_coverage_revision, pending_resume, state_count, append_count, expired_count)
 FROM __live_output
 WHERE COALESCE(CAST('Discovery live input: ' || CASE
     WHEN state_count <> 1 THEN 'state count'
     WHEN checked_bytes > 18446744073709551615 THEN 'input bytes'
-    WHEN processor_present AND retained_floor <= frontier AND (contiguous_cursor < frontier
-        OR CAST(append_count AS DECIMAL(20, 0))
+    WHEN processor_present AND (contiguous_cursor < frontier
+        OR CAST(append_count AS DECIMAL(20, 0)) + expired_count
             <> CAST(contiguous_cursor AS DECIMAL(20, 0)) - CAST(frontier AS DECIMAL(20, 0)))
         THEN 'input frontier' ELSE NULL END AS BOOLEAN), TRUE)
-    AND (NOT COALESCE(sealed, FALSE) OR append_count > 0 OR pending_resume
+    AND (NOT COALESCE(sealed, FALSE) OR append_count > 0 OR expired_count > 0 OR pending_resume
         OR NOT processor_present OR retained_floor > frontier)
     AND (NOT processor_present OR retained_floor > frontier OR pending_resume
         OR previous_snapshot IS NULL OR (snapshot IS DISTINCT FROM previous_snapshot)

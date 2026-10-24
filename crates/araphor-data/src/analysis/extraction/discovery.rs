@@ -58,6 +58,7 @@ impl AnalysisStore {
                     node_boot_id: identity.node_boot_id, label_epoch: identity.label_epoch,
                     source_id: identity.source_id, source_epoch: identity.source_epoch,
                     cpu_id: receipt.cpu_id, contiguous_cursor: receipt.contiguous_cursor,
+                    input_unbounded: capture.input_unbounded(),
                     retained_floor: receipt.retained_floor, source_coverage_revision: receipt.coverage_revision,
                     method_version: u64::from(crate::DISCOVERY_SCHEMA_VERSION),
                     processor_present: class.is_some(), processor_class: class,

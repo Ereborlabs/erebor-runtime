@@ -53,7 +53,11 @@ identifies the source and verification. Item 3 includes the history correction
 in `8b8a119b7` and the metadata changes based on that commit, with 55 passing
 focused checks. Its
 [completion record](araphor-analysis-migration.md#graph-history-and-sdk-input-metadata)
-identifies the owners and proof. The other rows retain the status audit.
+identifies the owners and proof. Item 8 is complete in the changes based on
+`a2f6cf800`, with 58 passing focused checks. Its
+[completion record](araphor-analysis-migration.md#discovery-continuation-across-expired-input)
+identifies the capture, native SQL and Data transaction owners. The other rows
+retain the status audit.
 `Done` means that the stated behavior has a current implementation and mapped
 focused checks. It does not claim a new full-workspace CI result. `Not done`
 identifies a specific remaining part of an otherwise implemented item.
@@ -70,14 +74,14 @@ identifies a specific remaining part of an otherwise implemented item.
 | 5. Exact versions for each profile | Done | Retained profiles bind exact input, context, definition and package versions. A code change closes the old interval. |
 | 6. Finite execution, refresh, reads and replay | Done | Current Analysis and Instance operations provide finite work, repair, authorized reads and replay from retained inputs. Missing frozen inputs or code return an explicit unavailable result. |
 | 7. Context, groups and baseline comparison | Not done | Native context, grouping and baseline operations are implemented. The Control recorded-preview consumer remains detached from the current Analysis owner. |
-| 8. Discovery after an expired data range | Not done | Prefix resume and gap metadata exist. An interior expired range still causes an input-frontier error. Query and Data must select the next retained range and record the exact skipped range with the progress guard. |
+| 8. Discovery after an expired data range | Done | Native SQL processes captured retained records and exact expiry proofs. Data commits proven gaps, profile and progress together. Prefix, interior, multiple and expired-tail cases pass; unexplained holes and out-of-cut expiry cannot advance progress. |
 | 9. Graph and detector execution from Query events | Done | Native source subscriptions use the shared Host for detector execution, graph publication, expiry and recovery. Control starts this path independently of Discovery. |
 | 10. Notification execution from Query events | Done | Native subscriptions and the shared Host drive delivery, retries, ACK deadlines, restart and current permission checks. |
 | 11. Runtime configuration through Control | Done | Control passes configured Query and package runtime limits at construction and rejects reuse with different limits. Runtime quotas default to disabled. |
 | 12. Data and Wasm cancellation without periodic checks | Done | Wasm and Data lock waits use events and exact deadlines. Data sends one native interrupt at expiry and waits for an event. A native interrupt scope preserves cancellation across statement resets. |
 | 13. Configurable quotas, disabled by default | Not done | SDK package quotas are removed and Query/runtime quotas default to disabled. Mandatory evidence-admission defaults and the remaining resource-boundary audit are still open. |
 
-Result: **13 Done; 3 Not done**. The remaining items are **7, 8 and 13**.
+Result: **14 Done; 2 Not done**. The remaining items are **7 and 13**.
 The separate 6,000-line production Rust reduction target still requires a
 current count and further simplification. Reference removal is complete.
 
@@ -678,25 +682,29 @@ recorded-preview consumer remains disconnected.
 
 ### 8. Discovery after an expired data range
 
-**Status: Not done.** Prefix resume and supplied gap metadata work. Automatic
-continuation across an interior expired range is missing.
+**Status: Done.**
 
 - **Before:** Optional Discovery could record an expired range and continue
   with later retained records.
-- **Now:** Data retains the guarded optional-resume transaction. Current
-  Analysis and Query production code do not call it. In the
-  [recorded live tests](../../crates/araphor-analysis/src/package/tests/sql/recorded/live.rs),
-  `live_rejects_missing_input` removes cursor 2 from cursors 1-3 and expects
-  an input-frontier error. `live_keeps_resume_gaps` supplies the resume floor
-  and gap itself. Derive the next retained range from Query capture and record
-  each exact gap under Data's expected-position guard. Preserve cumulative
-  counts, completeness and stale-resume rejection.
+- **Now:** Query captures selected rows, prior state and expiry metadata once.
+  Native SQL matches and clips each expiry proof and processes all selected
+  retained ranges in one evaluation. Data checks the expected position,
+  current head, exact expiry tuples and retained-record count. Its existing
+  transaction commits the profile, processor gaps and progress together.
+  Cumulative counts, bytes, coverage, saved gaps and sealed intervals remain
+  correct. A captured scope field permits expiry-only tail progress only for
+  an unbounded input. Bounded cuts can account for expiry within the selected
+  endpoint; rows beyond that endpoint remain unconsumed. An unexplained hole
+  or retained row omitted within the claimed advance still fails. Stale
+  captures and required processors cannot use this skip path. The
+  [focused result](araphor-analysis-migration.md#discovery-continuation-across-expired-input)
+  records 58 passing checks, including real retention and restart.
 - **Required:** Process each retained range and record each exact missing
   range. Preserve cumulative counts and completeness. Reject a stale resume.
 - **Reuse:** Data's [optional processor resume transaction](../../crates/araphor-data/src/analysis/progress.rs)
-  and captured coverage records. Select the next range in native SQL.
-  Put the expected-position check inside Data's transaction. Do not reuse the
-  old source sweep or add a second reader.
+  and profile publication share the processor-gap insertion. The new path
+  uses captured coverage, native SQL and the existing guarded profile
+  transaction. It adds no source sweep, second reader or polling loop.
 
 ### 9. Graph and detector execution from Query events
 

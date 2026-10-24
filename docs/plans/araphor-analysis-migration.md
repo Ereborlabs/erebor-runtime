@@ -3275,3 +3275,45 @@ TODO 3 therefore adds **163** production lines. Tests, documents, blank lines
 and copied code do not count toward production reduction. The remaining
 parity items are **7, 8 and 13**. Complete migration and the 6,000-line
 production Rust reduction target remain **Not done**.
+
+
+## Discovery continuation across expired input
+
+Result: **Done** for TODO 8. This delivery covers changes based on
+`a2f6cf800`. The
+[source route and focused commands](../guides/araphor-discovery-definition-review.md#discovery-continuation-across-expired-input)
+identify each owner and its proof.
+
+Query captures selected rows, saved state and expiry metadata in its existing
+subscription read. Native DataFusion SQL matches the complete source and CPU
+identity, clips expiry ranges to the selected interval and checks the cursor
+advance. One evaluation processes all selected retained ranges. A captured
+`input_unbounded` field permits an expiry-only endpoint only for a full time,
+cursor and physical event-range scope. A bounded cut or empty window cannot
+advance from expiry outside that cut. Unexplained holes and excluded retained
+records still fail.
+
+The existing Data transaction checks the expected position, current head,
+exact expiry tuples and retained-record count. It publishes profile, gaps,
+progress and managed receipt atomically. Automatic gaps keep the source expiry
+revision; the later publication has its own revision. The standalone resume
+API keeps its existing revision behavior. The two paths share gap insertion.
+Required processors cannot skip. A failed final guard rolls back all changes.
+No source reader, runner, clock, polling loop or contract version is added.
+Native Arrow casts align SQL gap branches; the existing SDK normalization
+still enforces the unchanged strict gap schema.
+
+All 58 distinct focused checks pass: 39 Data and 19 Analysis checks. They cover
+real prefix, interior, multiple and tail expiry; open and sealed profiles;
+counts, coverage and bytes; exact gap tuples; bootstrap, reopen and later
+subscription input; bounded cursor and time cuts; stale progress; wrong
+proof; required processors; and atomic rollback. Existing saved-gap, repair,
+missing-input and profile-version checks also pass. Scoped formatting and
+strict Clippy pass for the affected owners and test targets. Full-workspace
+CI, other platforms and benchmarks do not run for this bounded delivery.
+
+This change adds 137 and removes 33 nonblank production Rust lines, excluding
+comments: net **+104**. Builtin SQL adds 33 and removes 12 such lines: net
+**+21**, counted separately. Tests and documents do not count toward production
+Rust reduction. The remaining parity items are **7 and 13**. Complete migration
+and the overall 6,000-line production Rust reduction target remain **Not done**.

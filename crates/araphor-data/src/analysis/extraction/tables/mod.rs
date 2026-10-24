@@ -70,6 +70,15 @@ impl<'a> Capture<'a> {
         self.read.now
     }
 
+    pub(super) fn input_unbounded(&self) -> bool {
+        self.scope.time_range() == Some((0, u64::MAX))
+            && self.scope.cursor_range() == Some((0, u64::MAX))
+            && self
+                .read
+                .event_ranges
+                .is_none_or(|ranges| ranges == [(0, u64::MAX)])
+    }
+
     pub(super) fn graph_headers(&self) -> bool {
         self.read.requests.contains_key("graph_manifest")
     }

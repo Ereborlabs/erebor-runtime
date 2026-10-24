@@ -16,6 +16,7 @@ impl Capture<'_> {
             "source_epoch",
             "cpu_id",
             "contiguous_cursor",
+            "input_unbounded",
             "retained_floor",
             "source_coverage_revision",
             "method_version",

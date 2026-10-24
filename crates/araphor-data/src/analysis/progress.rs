@@ -525,22 +525,12 @@ impl AnalysisStore {
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
-        transaction
-            .execute(
-                "INSERT INTO processor_gaps VALUES (?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    scope.processor_id,
-                    scope.method_version,
-                    scope.identity.tenant_id.as_slice(),
-                    key.as_slice(),
-                    first,
-                    last_cursor,
-                    revision,
-                ],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "record optional missing range",
-            })?;
+        let gap = AnalysisGapV1 {
+            first_cursor: first,
+            last_cursor,
+            commit_revision: revision,
+        };
+        Self::insert_processor_gaps(&transaction, scope, std::slice::from_ref(&gap))?;
         transaction
             .execute(
                 "UPDATE processor_progress SET resume_floor = ?
@@ -571,11 +561,36 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("resume.after");
         self.revision.send_replace(revision);
-        Ok(Some(AnalysisGapV1 {
-            first_cursor: first,
-            last_cursor,
-            commit_revision: revision,
-        }))
+        Ok(Some(gap))
+    }
+
+    fn insert_processor_gaps(
+        transaction: &duckdb::Transaction<'_>,
+        scope: &ProcessorScopeV1,
+        gaps: &[AnalysisGapV1],
+    ) -> Result<()> {
+        let key = scope.identity.key();
+        let mut statement = transaction
+            .prepare("INSERT INTO processor_gaps VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare optional missing ranges",
+            })?;
+        for gap in gaps {
+            statement
+                .execute(params![
+                    scope.processor_id,
+                    scope.method_version,
+                    scope.identity.tenant_id.as_slice(),
+                    key.as_slice(),
+                    gap.first_cursor,
+                    gap.last_cursor,
+                    gap.commit_revision,
+                ])
+                .context(AnalysisDatabaseSnafu {
+                    operation: "record optional missing range",
+                })?;
+        }
+        Ok(())
     }
 
     pub fn commit_result(&self, input: &AnalysisResultCommitV1) -> Result<AnalysisResultReceiptV1> {
@@ -1087,9 +1102,9 @@ impl AnalysisStore {
                 return AnalysisConflictSnafu.fail();
             }
         }
-        let progress: Option<(u64, u64, bool, String, Option<u64>)> = transaction
+        let progress: Option<(u64, u64, bool, String, Option<u64>, String)> = transaction
             .query_row(
-                "SELECT p.consumed_cursor, p.resume_floor, p.retired, p.result_id, r.commit_revision
+                "SELECT p.consumed_cursor, p.resume_floor, p.retired, p.result_id, r.commit_revision, p.class
                  FROM processor_progress p LEFT JOIN analysis_results r
                    ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id AND r.processor_id = p.processor_id
                  WHERE p.processor_id = ? AND p.method_version = ? AND p.tenant_id = ? AND p.stream_key = ?",
@@ -1099,7 +1114,7 @@ impl AnalysisStore {
                     input.scope.identity.tenant_id.as_slice(),
                     key.as_slice(),
                 ],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .optional()
             .context(AnalysisDatabaseSnafu {
@@ -1107,7 +1122,7 @@ impl AnalysisStore {
             })?;
         if !progress
             .as_ref()
-            .is_some_and(|(consumed, resumed, retired, result, revision)| {
+            .is_some_and(|(consumed, resumed, retired, result, revision, _)| {
                 !retired
                     && (*consumed).max(*resumed) == input.expected_cursor
                     && (!replacing || result == &input.result_id)
@@ -1142,7 +1157,65 @@ impl AnalysisStore {
                 input.consumed_cursor,
                 revision,
             );
-        if available != expected {
+        let gaps = profile.filter(|_| advance).map_or(&[][..], |profile| {
+            &profile.gaps[profile
+                .gaps
+                .partition_point(|gap| gap.last_cursor <= input.expected_cursor)..]
+        });
+        let mut missing = 0u64;
+        if !gaps.is_empty() {
+            if input.scope.processor_id != crate::DISCOVERY_PROCESSOR
+                || progress.as_ref().is_none_or(|(_, _, _, _, _, class)| {
+                    class != ProcessorClassV1::Optional.as_str()
+                })
+            {
+                return self.reject("only optional Discovery can consume expired input");
+            }
+            let mut statement = transaction
+                .prepare(
+                    "SELECT EXISTS(SELECT 1 FROM expired_ranges
+                     WHERE stream_key = ? AND tenant_id = ? AND commit_revision = ?
+                        AND GREATEST(first_cursor, ?) = ? AND LEAST(last_cursor, ?) = ?)",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare captured expiry proof",
+                })?;
+            let first = input
+                .expected_cursor
+                .checked_add(1)
+                .ok_or_else(|| self.state_error("the discovery gap cursor is exhausted"))?;
+            for gap in gaps {
+                if gap.first_cursor < first || gap.last_cursor > input.consumed_cursor {
+                    return self.reject("the discovery gap exceeds its captured progress");
+                }
+                let proven: bool = statement
+                    .query_row(
+                        params![
+                            key.as_slice(),
+                            input.scope.identity.tenant_id.as_slice(),
+                            gap.commit_revision,
+                            first,
+                            gap.first_cursor,
+                            input.consumed_cursor,
+                            gap.last_cursor,
+                        ],
+                        |row| row.get(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "check captured expiry proof",
+                    })?;
+                if !proven {
+                    return self.reject("the discovery gap differs from its captured expiry");
+                }
+                missing = gap
+                    .last_cursor
+                    .checked_sub(gap.first_cursor)
+                    .and_then(|count| count.checked_add(1))
+                    .and_then(|count| missing.checked_add(count))
+                    .ok_or_else(|| self.state_error("the discovery gap count is exhausted"))?;
+            }
+        }
+        if available.checked_add(missing) != Some(expected) {
             return self.reject("the processor result skips unavailable raw input");
         }
         let mut checked_context = 0;
@@ -1298,10 +1371,14 @@ impl AnalysisStore {
             &references,
         )?;
         if advance {
+            if !gaps.is_empty() {
+                Self::insert_processor_gaps(transaction, &input.scope, gaps)?;
+            }
             transaction
             .execute(
                 "UPDATE processor_progress SET consumed_cursor = ?, coverage_revision = ?,
-                 context_revision = ?, required_floor = ?, result_id = ?
+                 context_revision = ?, required_floor = ?, result_id = ?,
+                 resume_floor = GREATEST(resume_floor, ?)
                  WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
                 params![
                     input.consumed_cursor,
@@ -1309,6 +1386,7 @@ impl AnalysisStore {
                     context_revision,
                     input.consumed_cursor,
                     input.result_id,
+                    gaps.last().map_or(0, |gap| gap.last_cursor),
                     input.scope.processor_id,
                     input.scope.method_version,
                     input.scope.identity.tenant_id.as_slice(),
@@ -1328,6 +1406,9 @@ impl AnalysisStore {
         }
         if advance {
             relations.push("processor_progress");
+        }
+        if !gaps.is_empty() {
+            relations.push("processor_gaps");
         }
         if !input.witnesses.is_empty() {
             relations.push("evidence_refs");

@@ -84,6 +84,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(limits: Limits) -> TestResult<Self> {
+        Self::retention(limits, Default::default())
+    }
+
+    fn retention(limits: Limits, retention: araphor_data::RetentionLimitsV1) -> TestResult<Self> {
         let manifest = DiscoveryInputManifestV1::try_from(
             include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
         )?;
@@ -100,7 +104,11 @@ impl Fixture {
             .stream
             .clone();
         let directory = tempfile::tempdir()?;
-        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let store = Arc::new(AnalysisStore::open_with_limits(
+            directory.path().join("data"),
+            retention,
+            Default::default(),
+        )?);
         store.install_package_image(source.tenant_id, &Package::discovery_bundle()?, || Ok(()))?;
         let mut query = Engine::new(
             Arc::clone(&store),

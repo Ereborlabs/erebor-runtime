@@ -11,6 +11,42 @@ mod native;
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[test]
+fn input_scope_is_unbounded() {
+    use std::ops::Bound;
+
+    let requests = crate::AnalysisTableRequests::new();
+    let full = [(0, u64::MAX)];
+    let bounded = [(1, 10)];
+    let split = [(0, 10), (11, u64::MAX)];
+    for (time, cursor, ranges, expected) in [
+        (Bound::Unbounded, Bound::Unbounded, None, true),
+        (Bound::Unbounded, Bound::Unbounded, Some(&full[..]), true),
+        (Bound::Included(1), Bound::Unbounded, None, false),
+        (Bound::Unbounded, Bound::Included(1), None, false),
+        (Bound::Unbounded, Bound::Unbounded, Some(&[][..]), false),
+        (
+            Bound::Unbounded,
+            Bound::Unbounded,
+            Some(&bounded[..]),
+            false,
+        ),
+        (Bound::Unbounded, Bound::Unbounded, Some(&split[..]), false),
+    ] {
+        let mut scope = AnalysisSelectionV1::new([1; 16], vec![crate::analysis::tests::identity()]);
+        scope.received_from = time;
+        scope.cursor_from = cursor;
+        let read = AnalysisTableRead {
+            requests: &requests,
+            event_ranges: ranges,
+            inputs: None,
+            mode: AnalysisReadModeV1::Complete,
+            now: 0,
+        };
+        assert_eq!(Capture::new(&read, &scope).input_unbounded(), expected);
+    }
+}
+
+#[test]
 fn schema_contract() -> TestResult {
     use sha2::{Digest, Sha256};
 
@@ -52,7 +88,7 @@ fn schema_contract() -> TestResult {
         ),
         (
             "discovery_state",
-            "05062c00c4f93ab4cf9b6af7e975ade6a2438d6af6ebe2611fc30099a69efe6b",
+            "ff9e92451db50005a081bdcf5ef0e79c99814a49c716ddfaf17842cc13efe1f0",
         ),
         (
             "events",

@@ -2697,3 +2697,157 @@ adds **163** such lines. Tests and documents are excluded. The overall
 6,000-line reduction target remains open. Qualification covers this Linux
 host and the installed Wasm component. Full-workspace CI, other platforms and
 benchmarks do not run for this delivery.
+
+
+## Discovery continuation across expired input
+
+This review covers the working-tree changes based on `a2f6cf800`.
+Result: **Done** for TODO 8. All 58 focused checks pass.
+
+A permitted Discovery instance processes retained records and records each proven
+expired range. One native package evaluation covers all selected retained ranges.
+Data publishes the profile, gaps and progress in the existing managed transaction.
+
+### Review flow
+
+[Instance::subscribe](../../crates/araphor-analysis/src/instance/subscription.rs) the managed instance opens its native Query subscription
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) Query captures the selected Arrow inputs and source metadata
+  -> [Capture::input_unbounded](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) Data records the time, cursor and physical event-range scope
+  -> [LIVE_STATE_SQL](../../crates/araphor-analysis/src/package/builtin.rs) native SQL selects the endpoint for that captured scope
+  -> [Discovery live SQL](../../crates/araphor-analysis-builtins/src/discovery/sql/live.sql) native SQL matches expiry proofs, checks the full cursor interval and derives one profile
+  -> [PackageExec::collect](../../crates/araphor-query/src/definition/physical.rs) Query normalizes each native batch to the declared SDK schema
+  -> [DiscoveryOwner::convert_profile](../../crates/araphor-analysis/src/discovery/publication/managed.rs) Analysis converts the actual returned profile and captured state
+  -> [AnalysisStore::progress_rows](../../crates/araphor-data/src/analysis/progress.rs) Data checks the expected position, current head and exact expiry proof
+  -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the profile, processor gaps, progress and managed result atomically
+
+```mermaid
+sequenceDiagram
+    participant Query
+    participant Analysis
+    participant Data
+    Query->>Data: Capture selected rows, state and expiry metadata
+    Data-->>Query: Arrow inputs and capture scope fact
+    Query->>Query: Execute the native input and model plans
+    Query->>Analysis: Return typed profile and execution receipt
+    Analysis->>Data: Publish from the captured expected position
+    Data->>Data: Check head, expiry tuples and retained record count
+    Data-->>Analysis: Commit one managed publication
+```
+
+### Scope and proof rules
+
+`input_unbounded` is a captured scope fact. Data sets this field only when the
+time and cursor ranges cover the full domain and the physical event ranges are
+absent or exactly `[(0, u64::MAX)]`. Empty, bounded and split event ranges do not
+qualify. The field grants no permission and starts no execution.
+
+The endpoint includes the captured frontier and the maximum selected event
+cursor. Only an unbounded capture can also include the maximum matching expiry
+endpoint. This rule permits an expired tail after an already processed record.
+A bounded cursor cut or empty time window cannot advance from expiry metadata
+outside that cut.
+
+Live SQL matches `kind = expired`, the full source identity and CPU ID. It clips
+each proof to `(frontier, endpoint]`. Distinct appended records plus proven
+expired cursors must cover that interval exactly. A retained row excluded by an
+SQL filter is not an expiry proof. Missing or unknown coverage grants no skip.
+An unexplained hole still fails the input frontier check.
+
+The profile keeps cumulative counts, input bytes and prior gaps for an open
+interval. A new interval after a sealed profile starts fresh counts. An
+expiry-only interval can contain zero records and still report `incomplete`.
+Retained records keep their coverage; expired records do not become accepted
+records or fabricated Arrow rows.
+
+Native SQL produces UInt64 `first_cursor`, `last_cursor` and `commit_revision`
+fields. DataFusion `named_struct` marks these children nullable. Native
+`arrow_cast` expressions widen the prior gaps before `UNION` and the saved
+gap list before the final `CASE`. They do not narrow native SQL nullability.
+The existing [Dataset::normalize_batch](../../crates/araphor-analysis-sdk/src/batch.rs)
+enforces the declared strict schema at admission and physical collection.
+The SDK schema and validation rules are unchanged. No separate gap decoder,
+coercer or result format is added.
+
+Data accepts new expiry gaps only for optional Discovery. The existing expected
+position and current-head checks reject a stale capture. Data matches every gap
+against its retained expiry row, source key and expiry revision. The checked
+retained-record count plus proven gaps must equal the claimed cursor advance.
+The profile validator also rejects invalid or overlapping gap ranges.
+
+[progress_rows](../../crates/araphor-data/src/analysis/progress.rs) inserts the
+proven gaps and advances the processor in the profile transaction.
+[commit_managed_profile](../../crates/araphor-data/src/analysis/progress/profile.rs)
+uses the existing managed publication transaction and final control check.
+Instance publication retains its separate authorization checks.
+A failed guard leaves no partial profile, gap or progress change. Each gap keeps
+its actual expiry commit revision. The later profile and managed publication
+have their own commit revision. The two revisions are not interchangeable.
+The standalone optional-resume API keeps its existing revision behavior and
+shares the processor-gap insertion with this path.
+
+### Focused proof
+
+The four [connected retention checks](../../crates/araphor-analysis/src/discovery/tests/managed/retention.rs)
+pass. They cover real prefix, interior and multiple gaps; exact gap tuples;
+counts, coverage and bytes; bootstrap, reopen and later subscription updates;
+open and sealed expired tails; and bounded cursor and time cuts. Public backup
+seals the small raw segments. The normal retention owner removes those segments.
+The checks use the existing managed Instance and Query subscription APIs.
+
+The [Data gap checks](../../crates/araphor-data/src/analysis/progress/profile/tests/gaps.rs)
+cover atomic rollback, expiry revision identity, stale progress, wrong proof,
+required-processor rejection and clipped ranges. All 39 distinct focused Data checks
+and 19 focused Analysis checks pass. The existing
+[missing-input and supplied-gap checks](../../crates/araphor-analysis/src/package/tests/sql/recorded/live.rs)
+retain the distinction between an unexplained hole and a proven expiry.
+The 14 compatibility cases pass. No production source changes follow these
+passing checks.
+
+Build both affected test binaries with the existing dependency lock and debug
+settings:
+
+```sh
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=1 CARGO_PROFILE_TEST_DEBUG=1 \
+  cargo test --locked --offline -p araphor-data -p araphor-analysis --lib --no-run --message-format=short
+```
+
+The final Analysis binary passes the following 19 distinct checks. The
+connected retention group has four cases, the exact SQL case has one, and the
+last selection has 14. They take 327.60, 83.71 and 700.43 seconds, respectively.
+Each group passes after the final SQL correction.
+
+```sh
+target/debug/deps/araphor_analysis-3d191244da43d744 discovery::tests::managed::retention:: --nocapture --test-threads=2
+target/debug/deps/araphor_analysis-3d191244da43d744 package::tests::sql::recorded::live::live_proves_expired_ranges --exact --nocapture
+target/debug/deps/araphor_analysis-3d191244da43d744 discovery::tests::managed:: package::tests::sql::recorded::live:: --skip discovery::tests::managed::retention:: --skip live_proves_expired_ranges --nocapture --test-threads=2
+```
+
+The Data proof covers 21 extraction-table checks, 13 profile checks and five
+existing progress checks. The initial extraction/profile selection passes 33
+cases and rejects the old discovery-state schema hash. After the expected
+hash is updated, `schema_contract` passes. The final binary also passes that
+case and the renamed `input_scope_is_unbounded` case. Other Data production
+source is unchanged between these checks. These are 39 distinct passes;
+they are not a new 39-case combined run.
+
+```sh
+target/debug/deps/araphor_data-5d0b7652ddd1723a analysis::progress::tests:: --test-threads=2
+target/debug/deps/araphor_data-5d0b7652ddd1723a input_scope_is_unbounded schema_contract --test-threads=2
+```
+
+The initial Data binary uses the filters
+`analysis::extraction::tables::tests:: analysis::progress::profile::tests::`.
+The final build above includes all Data test targets. Scoped Rust formatting
+passes with edition 2021 and `skip_children=true`. Strict Clippy passes for
+all affected owners and their test targets:
+
+```sh
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=1 CARGO_PROFILE_TEST_DEBUG=1 \
+  cargo clippy --locked --offline -p araphor-analysis-builtins -p araphor-data -p araphor-analysis --lib --tests --message-format=short -- -D warnings
+```
+
+Production Rust adds 137 and removes 33 nonblank lines, excluding comments:
+net **+104**. Builtin SQL adds 33 and removes 12: net **+21**, counted
+separately. Tests and documents are excluded. The overall 6,000-line production
+Rust reduction target remains open. Qualification covers this Linux host.
+Full-workspace CI, other platforms and benchmarks do not run for this delivery.
