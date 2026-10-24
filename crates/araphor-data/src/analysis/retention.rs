@@ -1034,13 +1034,8 @@ mod tests {
 
     #[test]
     fn query_follow_retention_validation() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        const FRAMES: [u8; crate::MAX_EVIDENCE_BATCH_RECORDS] =
-            [b'a'; crate::MAX_EVIDENCE_BATCH_RECORDS];
+        const FRAMES: [u8; 4_097] = [b'a'; 4_097];
         for (index, mutation) in [
-            format!(
-                "UPDATE replay_floors SET ordinal = {}",
-                crate::MAX_EVIDENCE_BATCH_RECORDS
-            ),
             "UPDATE replay_floors SET commit_revision = 0".to_owned(),
             "UPDATE replay_floors SET commit_revision = (SELECT commit_revision FROM store_meta)"
                 .to_owned(),
@@ -1053,16 +1048,32 @@ mod tests {
         {
             let directory = tempfile::tempdir()?;
             let root = directory.path().join("analysis");
-            let store = AnalysisStore::open_retention(&root)?;
+            let mut store = AnalysisStore::open_retention(&root)?;
             let source = identity(1);
             store.accept_validated_batch(source.clone(), batch(1, &FRAMES))?;
             let expected = StorePositionV1 {
                 commit_revision: store.meta()?.commit_revision,
-                ordinal: crate::MAX_EVIDENCE_BATCH_RECORDS as u32 - 1,
+                ordinal: 4_096,
             };
             EvidenceRetentionOwner::new(&store).retain(&source, u64::MAX)?;
             assert_eq!(store.replay_floor(source.tenant_id)?, Some(expected));
             store.read_snapshot(|snapshot| AnalysisStore::validate_state(snapshot, &root))?;
+            if index == 0 {
+                assert!(store
+                    .writer()?
+                    .get()?
+                    .execute_batch("UPDATE replay_floors SET ordinal = 4294967296")
+                    .is_err());
+                assert_eq!(store.replay_floor(source.tenant_id)?, Some(expected));
+                let backup = root.join("backups/native-floor");
+                store.backup(&backup)?;
+                let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;
+                assert_eq!(restored.replay_floor(source.tenant_id)?, Some(expected));
+                drop(restored);
+                drop(store);
+                store = AnalysisStore::open_retention(&root)?;
+                assert_eq!(store.replay_floor(source.tenant_id)?, Some(expected));
+            }
             store.writer()?.get()?.execute_batch(&mutation)?;
             assert!(
                 matches!(

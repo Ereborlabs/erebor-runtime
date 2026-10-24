@@ -16,7 +16,7 @@ use crate::{
     node_coverage_server::NodeCoverageServer, node_decommission_server::NodeDecommissionServer,
     node_evidence_server::NodeEvidenceServer, node_policy_server::NodePolicyServer,
     node_registry_server::NodeRegistryServer, node_trust_server::NodeTrustServer, ControlPlane,
-    Result, MAX_EVIDENCE_GRPC_MESSAGE_BYTES, MAX_POLICY_GRPC_MESSAGE_BYTES,
+    Result, MAX_POLICY_GRPC_MESSAGE_BYTES,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -46,7 +46,7 @@ pub async fn serve(
         .identity(Identity::from_pem(certificate, private_key))
         .client_ca_root(Certificate::from_pem(node_ca));
     let maintenance = control.clone();
-    // Policy transfer has a separate message limit because one bundle can be larger than evidence batches.
+    // Policy transfer keeps its configured message limit.
     let server = Server::builder()
         .tcp_keepalive(Some(Duration::from_secs(30)))
         .http2_keepalive_interval(Some(Duration::from_secs(15)))
@@ -57,18 +57,18 @@ pub async fn serve(
         .add_service(NodeTrustServer::new(control.clone()))
         .add_service(
             crate::node_diagnostics_server::NodeDiagnosticsServer::new(control.clone())
-                .max_decoding_message_size(crate::MAX_TRACE_GRPC_MESSAGE_BYTES)
-                .max_encoding_message_size(crate::MAX_TRACE_GRPC_MESSAGE_BYTES),
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX),
         )
         .add_service(
             NodeEvidenceServer::new(control.clone())
-                .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
-                .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX),
         )
         .add_service(
             NodeCoverageServer::new(control.clone())
-                .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
-                .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX),
         )
         .add_service(
             NodePolicyServer::new(control.clone())

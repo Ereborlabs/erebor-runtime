@@ -199,6 +199,7 @@ impl NodeState {
                 node_boot_id.to_be_bytes(),
                 diagnostics.clone(),
                 erebor_interceptor::KernelStateReader::new(&config.interceptor.pin_root),
+                evidence.maximum_retained_bytes.unwrap_or(0),
             ) {
                 Ok(owner) => Some(Arc::new(std::sync::Mutex::new(owner))),
                 Err(error) => {
@@ -574,9 +575,10 @@ impl Evidence {
                 .map(crate::NodePolicyGenerationOwner::discovery_context),
         );
         let queue_capacity = evidence.maximum_reader_queue_records;
-        let batch_capacity = evidence.maximum_batch_records.min(queue_capacity);
-        let (ingress, worker) =
-            observations.bounded_ingestion_queue(queue_capacity, batch_capacity)?;
+        let batch_capacity = queue_capacity.map_or(evidence.maximum_batch_records, |capacity| {
+            evidence.maximum_batch_records.min(capacity)
+        });
+        let (ingress, worker) = observations.ingestion_queue(queue_capacity, batch_capacity)?;
         let reader = host
             .effect_observation_reader(move |bytes| {
                 ingress.record_bytes(bytes);

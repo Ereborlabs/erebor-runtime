@@ -4,11 +4,6 @@ use snafu::ensure;
 
 use crate::{Result, TraceInvalidSnafu};
 
-pub const MAX_TRACE_SOURCE_BYTES: usize = 64 * 1024;
-pub const MAX_TRACE_FRAME_BYTES: usize = 1024 * 1024;
-pub const MAX_TRACE_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
-pub const MAX_TRACE_TARGETS: usize = 16;
-
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TraceIdentityV1 {
@@ -58,7 +53,7 @@ impl TraceSourceV1 {
         ensure!(
             self.sha256 == <[u8; 32]>::from(Sha256::digest(&self.bytes)),
             TraceInvalidSnafu {
-                reason: "trace source is empty, invalid, too large, or changed",
+                reason: "trace source is empty, invalid, or changed",
             }
         );
         Ok(())
@@ -66,12 +61,9 @@ impl TraceSourceV1 {
 
     fn validate_bytes(bytes: &[u8]) -> Result<()> {
         ensure!(
-            !bytes.is_empty()
-                && bytes.len() <= MAX_TRACE_SOURCE_BYTES
-                && !bytes.contains(&0)
-                && std::str::from_utf8(bytes).is_ok(),
+            !bytes.is_empty() && !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok(),
             TraceInvalidSnafu {
-                reason: "trace source is empty, invalid, too large, or changed",
+                reason: "trace source is empty, invalid, or changed",
             }
         );
         Ok(())
@@ -99,8 +91,8 @@ impl TraceFrameV1 {
         ensure!(
             self.execution_id != [0; 16]
                 && self.sequence != 0
-                && !self.bytes.is_empty()
-                && self.bytes.len() <= MAX_TRACE_FRAME_BYTES,
+                && self.sequence.checked_add(1).is_some()
+                && !self.bytes.is_empty(),
             TraceInvalidSnafu {
                 reason: "trace output identity, sequence, or frame size is invalid",
             }
@@ -149,9 +141,8 @@ impl TraceTerminalV1 {
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.execution_id != [0; 16]
-                && self.last_sequence <= 4096
+                && self.last_sequence.checked_add(1).is_some()
                 && self.output_bytes >= self.last_sequence
-                && self.output_bytes <= MAX_TRACE_OUTPUT_BYTES
                 && !(self.forced_kill && !self.output_incomplete),
             TraceInvalidSnafu {
                 reason: "trace terminal identity, output size, or loss state is invalid",
@@ -172,32 +163,22 @@ pub struct TraceBatchV1 {
 impl TraceBatchV1 {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.execution_id != [0; 16]
-                && self.frames.len() <= 200
-                && (!self.frames.is_empty() || self.terminal.is_some()),
+            self.execution_id != [0; 16] && (!self.frames.is_empty() || self.terminal.is_some()),
             TraceInvalidSnafu {
-                reason: "trace batch is empty or too large",
+                reason: "trace batch is empty",
             }
         );
-        let mut bytes = 0;
         for (index, frame) in self.frames.iter().enumerate() {
             frame.validate()?;
-            bytes += frame.bytes.len();
             ensure!(
                 frame.execution_id == self.execution_id
-                    && frame.sequence <= 4096
-                    && (index == 0 || self.frames[index - 1].sequence + 1 == frame.sequence),
+                    && (index == 0
+                        || self.frames[index - 1].sequence.checked_add(1) == Some(frame.sequence)),
                 TraceInvalidSnafu {
                     reason: "trace batch identity or sequence changed",
                 }
             );
         }
-        ensure!(
-            bytes <= 1024 * 1024,
-            TraceInvalidSnafu {
-                reason: "trace batch exceeds 1 MiB",
-            }
-        );
         if let Some(terminal) = &self.terminal {
             terminal.validate()?;
             ensure!(
@@ -243,7 +224,7 @@ mod tests {
         source.bytes.push(b' ');
         assert!(source.validate().is_err());
         assert!(TraceSourceV1::new(Vec::new()).is_err());
-        assert!(TraceSourceV1::new(vec![b'x'; MAX_TRACE_SOURCE_BYTES + 1]).is_err());
+        assert!(TraceSourceV1::new(vec![b'x'; 64 * 1024 + 1]).is_ok());
         assert!(TraceSourceV1::new(vec![0xff]).is_err());
         assert!(TraceSourceV1::new(vec![0]).is_err());
         Ok(())
@@ -334,7 +315,7 @@ mod tests {
             execution_id: [1; 16],
             sequence: 1,
             kind: TraceFrameKindV1::Data,
-            bytes: vec![7; MAX_TRACE_FRAME_BYTES],
+            bytes: vec![7; 1024 * 1024 + 1],
         };
         let mut batch = TraceBatchV1 {
             execution_id: frame.execution_id,
@@ -347,7 +328,7 @@ mod tests {
             bytes: vec![7],
             ..frame.clone()
         });
-        assert!(batch.validate().is_err());
+        batch.validate()?;
         batch.frames[0].bytes = vec![7];
         batch.validate()?;
         batch.frames[1].sequence = 3;
@@ -362,10 +343,31 @@ mod tests {
                 ..frame.clone()
             })
             .collect();
-        assert!(batch.validate().is_err());
+        batch.validate()?;
         batch.frames.truncate(200);
         batch.validate()?;
+        batch.frames = vec![TraceFrameV1 {
+            sequence: u64::MAX,
+            bytes: vec![7],
+            ..frame.clone()
+        }];
+        assert!(batch.validate().is_err());
+        batch.frames[0].sequence = u64::MAX - 1;
+        batch.terminal = Some(TraceTerminalV1 {
+            execution_id: frame.execution_id,
+            reason: TraceTerminalReasonV1::Completed,
+            last_sequence: u64::MAX - 1,
+            output_bytes: u64::MAX - 1,
+            output_incomplete: false,
+            kernel_lost_events: None,
+            ready_at_unix_ns: None,
+            exit_code: Some(0),
+            forced_kill: false,
+            cleanup: TraceCleanupV1::Verified,
+        });
+        batch.validate()?;
         batch.frames.clear();
+        batch.terminal = None;
         assert!(batch.validate().is_err());
         Ok(())
     }

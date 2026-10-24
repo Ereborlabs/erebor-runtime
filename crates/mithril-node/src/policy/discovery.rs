@@ -2,13 +2,10 @@ use std::collections::btree_map::Entry;
 
 use mithril_control::{
     DiscoveryDigestV1, EvidenceDecisionCatalogV1, EvidenceExactFileObject, EvidenceFileObjectV1,
-    ObservationEnvelopeV1, MAX_EVIDENCE_DECISION_CONTEXT_BYTES,
+    ObservationEnvelopeV1,
 };
-use prost::Message as _;
 
 use super::*;
-
-pub const MAX_NODE_DISCOVERY_CONTEXT_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ContextKey {
@@ -129,9 +126,9 @@ mod tests {
             .catalog_json = serde_json::to_vec(&damaged)?;
         assert!(changed.validate().is_err());
 
-        let retained = catalog.retained_bytes;
+        let retained = catalog.entries.len();
         catalog.insert(key.clone(), bytes.clone());
-        assert_eq!(catalog.retained_bytes, retained);
+        assert_eq!(catalog.entries.len(), retained);
         catalog.insert(key.clone(), damaged.seal()?);
         catalog.attach(&mut changed);
         assert_eq!(
@@ -191,57 +188,57 @@ mod tests {
             "NO_EXACT_MATCH"
         );
 
-        let mut limits = NodeDiscoveryContextCatalog::default();
-        limits.insert(key.clone(), vec![0; MAX_EVIDENCE_DECISION_CONTEXT_BYTES]);
-        limits.attach(&mut changed);
+        let mut large_catalog = NodeDiscoveryContextCatalog::default();
+        let mut large_bytes = bytes.clone();
+        large_bytes.extend(std::iter::repeat_n(b' ', 17 * 1_024 * 1_024));
+        large_catalog.insert(key.clone(), large_bytes.clone());
+        let mut large = observation.clone();
+        large_catalog.attach(&mut large);
+        large.validate()?;
         assert_eq!(
-            changed
+            large
                 .decision_context
                 .as_ref()
                 .ok_or("context")?
-                .catalog_state,
-            "CONTEXT_LIMIT"
+                .catalog_json,
+            large_bytes
         );
-        changed.validate()?;
-        limits = NodeDiscoveryContextCatalog::default();
-        limits.insert(
-            key.clone(),
-            vec![0; MAX_EVIDENCE_DECISION_CONTEXT_BYTES + 1],
-        );
-        limits.attach(&mut changed);
         assert_eq!(
-            changed
-                .decision_context
-                .as_ref()
-                .ok_or("context")?
-                .catalog_state,
-            "CONTEXT_LIMIT"
+            EvidenceDecisionCatalogV1::from_context(
+                large.decision_context.as_ref().ok_or("context")?
+            )?,
+            Some(sealed)
         );
-        changed.validate()?;
-
-        limits = NodeDiscoveryContextCatalog::default();
-        limits.insert(key.clone(), bytes.clone());
-        let entry_bytes = limits.retained_bytes;
-        limits.retained_bytes = MAX_NODE_DISCOVERY_CONTEXT_BYTES - entry_bytes;
-        let mut next = key.clone();
-        next.entry_rule += 100;
-        limits.insert(next.clone(), bytes.clone());
-        assert_eq!(limits.retained_bytes, MAX_NODE_DISCOVERY_CONTEXT_BYTES);
-        assert!(limits.unavailable.is_none());
-        next.entry_rule += 1;
-        limits.insert(next, bytes);
-        assert_eq!(limits.unavailable, Some("CATALOG_LIMIT"));
-        assert!(limits.entries.is_empty());
-        limits.attach(&mut changed);
-        assert_eq!(
-            changed
-                .decision_context
-                .as_ref()
-                .ok_or("context")?
-                .catalog_state,
-            "CATALOG_LIMIT"
-        );
-        changed.validate()?;
+        let directory = tempfile::tempdir()?;
+        let mut wal =
+            crate::EvidenceWal::open(directory.path(), crate::EvidenceWalLimits::default())?;
+        wal.append(&large)?;
+        wal.append(&observation)?;
+        let first = wal.next_batch().ok_or("large first batch absent")?;
+        assert_eq!((first.first_cursor, first.last_cursor), (1, 1));
+        let wire: mithril_control::EvidenceBatch = first.clone().into();
+        assert!(wire.framed_records.len() > 17 * 1_024 * 1_024);
+        assert_eq!(first.decode_records()?, vec![large.to_wire_record()?]);
+        drop(wal);
+        let reduced = crate::EvidenceWalLimits {
+            maximum_record_bytes: Some(1),
+            maximum_retained_bytes: Some(1),
+            maximum_retained_records: Some(1),
+            ..crate::EvidenceWalLimits::default()
+        };
+        let mut reopened = crate::EvidenceWal::open(directory.path(), reduced)?;
+        assert_eq!(reopened.next_batch(), Some(first));
+        assert!(reopened.append(&observation).is_err());
+        reopened.acknowledge(crate::EvidenceAckV1 {
+            contiguous_cursor: 1,
+        })?;
+        let next = reopened.next_batch().ok_or("following batch absent")?;
+        assert_eq!((next.first_cursor, next.last_cursor), (2, 2));
+        assert_eq!(next.decode_records()?, vec![observation.to_wire_record()?]);
+        reopened.acknowledge(crate::EvidenceAckV1 {
+            contiguous_cursor: 2,
+        })?;
+        assert_eq!(reopened.pending_records(), 0);
         Ok(())
     }
 }
@@ -249,7 +246,6 @@ mod tests {
 #[derive(Default)]
 pub struct NodeDiscoveryContextCatalog {
     entries: BTreeMap<ContextKey, std::result::Result<Vec<u8>, &'static str>>,
-    retained_bytes: usize,
     unavailable: Option<&'static str>,
 }
 
@@ -286,17 +282,13 @@ impl NodeDiscoveryContextCatalog {
             Some(Ok(bytes)) => {
                 context.catalog_json.clone_from(bytes);
                 context.catalog_state = "AVAILABLE".to_owned();
-                if context.encoded_len() > MAX_EVIDENCE_DECISION_CONTEXT_BYTES {
-                    context.catalog_json.clear();
-                    context.catalog_state = "CONTEXT_LIMIT".to_owned();
-                }
             }
             Some(Err(reason)) => context.catalog_state = (*reason).to_owned(),
             None => {}
         }
     }
 
-    /// Add a verified candidate and measured exact objects to the bounded lookup.
+    /// Add a verified candidate and measured exact objects to the lookup.
     pub fn add_verified_binding(
         &mut self,
         artifact: &ProfileCandidateArtifactV1,
@@ -312,7 +304,6 @@ impl NodeDiscoveryContextCatalog {
             .is_err()
         {
             self.entries.clear();
-            self.retained_bytes = 0;
             self.unavailable = Some("MISSING_CATALOG");
         }
     }
@@ -449,11 +440,7 @@ impl NodeDiscoveryContextCatalog {
         if self.unavailable.is_some() {
             return;
         }
-        let value = if bytes.len() > MAX_EVIDENCE_DECISION_CONTEXT_BYTES {
-            Err("CONTEXT_LIMIT")
-        } else {
-            Ok(bytes)
-        };
+        let value = Ok(bytes);
         match self.entries.entry(key) {
             Entry::Occupied(mut entry) => {
                 if entry.get().is_ok() && entry.get() != &value {
@@ -461,18 +448,6 @@ impl NodeDiscoveryContextCatalog {
                 }
             }
             Entry::Vacant(entry) => {
-                // Include key, value, and a conservative B-tree allocation allowance.
-                let retained = value.as_ref().map_or(0, |bytes| bytes.capacity())
-                    + size_of::<ContextKey>()
-                    + size_of_val(&value)
-                    + 256;
-                if self.retained_bytes.saturating_add(retained) > MAX_NODE_DISCOVERY_CONTEXT_BYTES {
-                    self.entries.clear();
-                    self.retained_bytes = 0;
-                    self.unavailable = Some("CATALOG_LIMIT");
-                    return;
-                }
-                self.retained_bytes += retained;
                 entry.insert(value);
             }
         }

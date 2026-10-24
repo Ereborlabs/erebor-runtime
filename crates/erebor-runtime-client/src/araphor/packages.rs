@@ -6,9 +6,7 @@ impl AraphorClient {
         operation: wire::PackageOperationRequest,
     ) -> AraphorResult<wire::PackageOperationReply> {
         let request = self.request(operation)?;
-        AraphorClientServiceClient::new(self.channel.clone())
-            .max_decoding_message_size(usize::MAX)
-            .max_encoding_message_size(usize::MAX)
+        self.service()
             .package_operation(request)
             .await
             .map(tonic::Response::into_inner)

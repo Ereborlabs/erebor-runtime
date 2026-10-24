@@ -1350,7 +1350,7 @@ impl EffectTestRunner {
             1_024,
             output_directory.join("evidence-wal-v2"),
             EvidenceWalLimits {
-                maximum_retained_records: 128,
+                maximum_retained_records: Some(128),
                 ..EvidenceWalLimits::default()
             },
             ObservationCanonicalizer::new(

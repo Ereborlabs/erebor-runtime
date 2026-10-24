@@ -6,6 +6,8 @@ use mithril_node::{CoverageStateV1, EvidenceWalLimits, NodeControlMessage, Trust
 use tokio::time::{timeout, Duration};
 use zerocopy::IntoBytes as _;
 
+use prost::Message as _;
+
 use super::registration;
 use crate::control_fixture::MtlsFixture;
 use crate::platform::TestResult;
@@ -92,6 +94,50 @@ async fn coverage_upload_keeps_truth() -> TestResult<()> {
         };
         assert_eq!(persisted, report);
     }
+
+    let current = snapshot
+        .current_intervals()
+        .into_iter()
+        .next()
+        .ok_or("current interval absent")?;
+    let mut large = snapshot.clone();
+    large.revision += 1;
+    large.history = (1..=100_001_u128)
+        .map(|id| {
+            let mut interval = current.clone();
+            interval.interval_id = id.to_be_bytes().into();
+            interval.state = CoverageStateV1::Gapped;
+            interval.gap_reasons = vec![mithril_node::CoverageGapReasonV1::ControlDelay];
+            interval
+        })
+        .collect();
+    let expected = connection.send_coverage_report(&large, &current).await?;
+    let message = connection.next_message().await?;
+    let NodeControlMessage::CoverageAck(actual) = message else {
+        return Err("large coverage ACK absent".into());
+    };
+    assert_eq!(actual, expected);
+    let persisted = intake
+        .latest_coverage_report(&fixture.identity(current.source_id.to_be_bytes()))?
+        .ok_or("large coverage report absent")?;
+    assert_eq!(persisted.intervals.len(), 100_002);
+    assert!(persisted.encoded_len() > 4 * 1_024 * 1_024);
+    assert_eq!(
+        persisted
+            .intervals
+            .iter()
+            .filter(|interval| interval.current)
+            .count(),
+        1
+    );
+    assert_eq!(
+        persisted
+            .intervals
+            .iter()
+            .filter(|interval| interval.state == "GAPPED")
+            .count(),
+        100_001
+    );
 
     drop(connection);
     server.shutdown().await?;

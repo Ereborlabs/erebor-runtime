@@ -8,10 +8,9 @@ use snafu::{ensure, ResultExt as _};
 use super::{AnalysisReadControl, AnalysisStore};
 use crate::{
     AnalysisConflictSnafu, AnalysisDatabaseSnafu, JsonSnafu, Result, TraceIdentityV1,
-    TraceInvalidSnafu, TraceSourceV1, MAX_TRACE_TARGETS,
+    TraceInvalidSnafu, TraceSourceV1,
 };
 
-const MAX_AUTHORITY_BYTES: usize = 1024 * 1024;
 const TRACE_PAGE_ROWS: usize = 16;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -29,7 +28,7 @@ pub struct TraceIntentV1 {
     pub request_id: [u8; 16],
     pub source: TraceSourceV1,
     pub bindings: Vec<TraceBindingV1>,
-    /// Control owns this bounded record. It does not contain source bytes.
+    /// Control owns this record. It does not contain source bytes.
     pub authority: Vec<u8>,
     pub accepted_unix_ns: u64,
     pub deadline_unix_ns: u64,
@@ -43,12 +42,14 @@ impl TraceIntentV1 {
             self.tenant_id != [0; 16]
                 && self.request_id != [0; 16]
                 && !self.bindings.is_empty()
-                && self.bindings.len() <= MAX_TRACE_TARGETS
+                && self
+                    .bindings
+                    .len()
+                    .checked_sub(1)
+                    .is_some_and(|index| u16::try_from(index).is_ok())
                 && !self.authority.is_empty()
-                && self.authority.len() <= MAX_AUTHORITY_BYTES
                 && self.accepted_unix_ns > 0
-                && self.deadline_unix_ns > self.accepted_unix_ns
-                && self.deadline_unix_ns - self.accepted_unix_ns <= 315_000_000_000,
+                && self.deadline_unix_ns > self.accepted_unix_ns,
             TraceInvalidSnafu {
                 reason: "trace intent identity, lifetime, or size is invalid",
             }
@@ -211,9 +212,10 @@ impl AnalysisStore {
             .map(|json| super::raw::TraceRecord::terminal(json.as_bytes(), &self.root))
             .transpose()?;
         if stored != *identity
-            || sequence > 4096
-            || bytes > crate::MAX_TRACE_OUTPUT_BYTES
-            || floor > sequence + u64::from(terminal.is_some())
+            || sequence.checked_add(1).is_none()
+            || sequence
+                .checked_add(u64::from(terminal.is_some()))
+                .is_none_or(|cursor| floor > cursor)
             || terminal.as_ref().is_some_and(|value| {
                 value.execution_id != identity.execution_id
                     || value.last_sequence != sequence

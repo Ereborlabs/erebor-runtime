@@ -44,9 +44,6 @@ impl TraceRecipeV1 {
             return None;
         }
         let entries = output.data.get("@errors")?;
-        if entries.len() > 4096 {
-            return None;
-        }
         entries
             .iter()
             .enumerate()
@@ -80,7 +77,7 @@ impl TraceRecipeV1 {
                 Some(TraceMeasurementV1 {
                     execution_id: frame.execution_id,
                     sequence: frame.sequence,
-                    ordinal: ordinal as u16,
+                    ordinal: u16::try_from(ordinal).ok()?,
                     syscall_id,
                     errno,
                     count: *count,
@@ -92,23 +89,26 @@ impl TraceRecipeV1 {
             .collect()
     }
 
+    pub(crate) fn source_bytes(self) -> &'static [u8] {
+        match self {
+            Self::SyscallErrors => {
+                include_bytes!("../../../mithril-e2e/fixtures/observability/syscall-errors.bt")
+            }
+            Self::FailedOpens => {
+                include_bytes!("../../../mithril-e2e/fixtures/observability/failed-opens.bt")
+            }
+        }
+    }
+
     pub fn manifest(self) -> Result<TraceRecipeManifestV1> {
-        let (source, hook, keys): (&[u8], &str, &[&str]) = match self {
-            Self::SyscallErrors => (
-                include_bytes!("../../../mithril-e2e/fixtures/observability/syscall-errors.bt"),
-                "tracepoint:raw_syscalls:sys_exit",
-                &["syscall_id", "errno"],
-            ),
-            Self::FailedOpens => (
-                include_bytes!("../../../mithril-e2e/fixtures/observability/failed-opens.bt"),
-                "tracepoint:syscalls:sys_exit_openat",
-                &["errno"],
-            ),
+        let (hook, keys): (&str, &[&str]) = match self {
+            Self::SyscallErrors => ("tracepoint:raw_syscalls:sys_exit", &["syscall_id", "errno"]),
+            Self::FailedOpens => ("tracepoint:syscalls:sys_exit_openat", &["errno"]),
         };
         Ok(TraceRecipeManifestV1 {
             recipe: self,
             version: 1,
-            source: TraceSourceV1::new(source.to_vec())?,
+            source: TraceSourceV1::new(self.source_bytes().to_vec())?,
             parameter: "node-owned cgroup-v2 ID in $1".into(),
             attribution: "current task at syscall exit; one frozen container lifetime".into(),
             sensitivity: "workload syscall IDs and negative return codes".into(),
@@ -159,6 +159,31 @@ mod tests {
         assert!(measurements
             .iter()
             .any(|row| row.syscall_id.is_none() && row.errno == -4 && row.count == 2));
+    }
+
+    #[test]
+    fn observability_projection_ordinals() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut entries = (0..=u16::MAX as u32)
+            .map(|index| (format!("{index},-1"), 1_u64))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut frame = TraceFrameV1 {
+            execution_id: [1; 16],
+            sequence: 1,
+            kind: TraceFrameKindV1::Data,
+            bytes: serde_json::to_vec(
+                &serde_json::json!({"type":"map","data":{"@errors":entries}}),
+            )?,
+        };
+        let rows = TraceRecipeV1::SyscallErrors
+            .measurements(&frame)
+            .ok_or("measurements absent")?;
+        assert_eq!(rows.len(), u16::MAX as usize + 1);
+        assert_eq!(rows.last().ok_or("last measurement")?.ordinal, u16::MAX);
+        entries.insert("65536,-1".into(), 1);
+        frame.bytes =
+            serde_json::to_vec(&serde_json::json!({"type":"map","data":{"@errors":entries}}))?;
+        assert!(TraceRecipeV1::SyscallErrors.measurements(&frame).is_none());
+        Ok(())
     }
 
     #[test]

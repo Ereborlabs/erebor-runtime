@@ -174,6 +174,42 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
         assert_eq!(data.package_activation_page(None)?, activations);
         assert_eq!(data.discovery_enabled(), discovery);
     }
+    let body = "a".repeat(5 * 1_024 * 1_024);
+    let mut stream = client
+        .query(erebor_runtime_ipc::araphor::QueryRequest {
+            sql: format!("SELECT '{body}' AS body"),
+            ..Default::default()
+        })
+        .await?;
+    let mut rows = 0;
+    let mut complete = false;
+    while let Some(frame) = stream.message().await? {
+        use erebor_runtime_ipc::araphor::{query_frame, query_value};
+        match frame.payload {
+            Some(query_frame::Payload::Rows(data)) => {
+                assert!(!data.limited);
+                for row in data.rows {
+                    assert_eq!(row.values.len(), 1);
+                    assert_eq!(
+                        row.values[0].kind,
+                        Some(query_value::Kind::Text(body.clone()))
+                    );
+                    rows += 1;
+                }
+            }
+            Some(query_frame::Payload::Error(error)) => {
+                return Err(format!("large query: {error:?}").into())
+            }
+            Some(query_frame::Payload::Terminal(terminal)) => {
+                assert_eq!(terminal.reason, "Completed");
+                complete = true;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(rows, 1);
+    assert!(complete);
+    drop(stream);
     drop(client);
     server.shutdown().await?;
     drop(data);

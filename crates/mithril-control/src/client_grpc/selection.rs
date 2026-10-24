@@ -142,11 +142,6 @@ impl ClientGrpcOwner {
                 continue;
             }
             facts.push(fact);
-            if facts.len() > crate::MAX_TRACE_TARGETS {
-                return Err(Status::resource_exhausted(
-                    "The selected target cohort is too large.",
-                ));
-            }
         }
         if facts.is_empty() {
             return Err(Status::not_found(

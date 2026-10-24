@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{DiscoveryDigestV1, Result, TraceAcceptedV1, TraceErrorCodeV1};
 
-pub const MAX_TRACE_GRPC_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TraceResolveV1 {

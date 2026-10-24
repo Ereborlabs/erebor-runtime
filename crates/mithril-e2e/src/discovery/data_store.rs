@@ -67,7 +67,7 @@ impl DataStoreQualification {
         observations: &EffectObservationStore,
         group: u64,
     ) -> Result<Vec<mithril_node::EvidenceBatchV1>> {
-        let (ingress, worker) = observations.bounded_ingestion_queue(4096, 1024)?;
+        let (ingress, worker) = observations.ingestion_queue(Some(4096), 1024)?;
         for cursor in group * 4096 + 1..=(group + 1) * 4096 {
             ingress.record_bytes(Self::event(cursor).as_bytes());
         }
@@ -1367,9 +1367,8 @@ mod tests {
 
     #[tokio::test]
     async fn data_context_bounds() -> Result<()> {
-        use mithril_control::{
-            MAX_EVIDENCE_BATCH_PAYLOAD_BYTES, MAX_EVIDENCE_DECISION_CONTEXT_BYTES,
-        };
+        use mithril_control::EVIDENCE_BATCH_BYTES;
+        const CONTEXT_BYTES: usize = 16 * 1_024;
         use mithril_node::{EvidenceWal, TemporalCoverageV1};
         use prost::Message as _;
         use sha2::{Digest as _, Sha256};
@@ -1417,14 +1416,14 @@ mod tests {
                 .ok_or("decision context absent")?;
             let expected = mithril_control::EvidenceDecisionCatalogV1::from_context(context)?
                 .ok_or("verified catalog absent")?;
-            let padding = MAX_EVIDENCE_DECISION_CONTEXT_BYTES
+            let padding = CONTEXT_BYTES
                 .checked_sub(context.encoded_len())
                 .ok_or("catalog exceeds context limit")?;
             // JSON whitespace changes encoded size, not catalog content.
             context
                 .catalog_json
                 .resize(context.catalog_json.len() + padding, b' ');
-            assert_eq!(context.encoded_len(), MAX_EVIDENCE_DECISION_CONTEXT_BYTES);
+            assert_eq!(context.encoded_len(), CONTEXT_BYTES);
             assert_eq!(
                 mithril_control::EvidenceDecisionCatalogV1::from_context(context)?,
                 Some(expected)
@@ -1439,21 +1438,18 @@ mod tests {
             .as_mut()
             .ok_or("decision context absent")?;
         context.original_kernel_sequence = 257;
-        context.catalog_json.push(b' ');
-        assert_eq!(
-            context.encoded_len(),
-            MAX_EVIDENCE_DECISION_CONTEXT_BYTES + 1
-        );
-        assert!(wal.append(&oversized).is_err());
-        assert_eq!(wal.pending_records(), 256);
+        context.catalog_json.resize(17 * 1_024 * 1_024, b' ');
+        assert!(context.encoded_len() > 17 * 1_024 * 1_024);
+        assert_eq!(wal.append(&oversized)?, 257);
+        assert_eq!(wal.pending_records(), 257);
         drop(wal);
         let mut wal = EvidenceWal::open(&wal_root, limits)?;
-        assert_eq!(wal.pending_records(), 256);
+        assert_eq!(wal.pending_records(), 257);
         let first = wal.next_batch().ok_or("first batch absent")?;
         assert!(first.record_count() < 256);
         let wire: mithril_control::EvidenceBatch = first.into();
-        assert!(wire.encoded_len() <= MAX_EVIDENCE_BATCH_PAYLOAD_BYTES);
-        assert!(wire.encoded_len() > MAX_EVIDENCE_BATCH_PAYLOAD_BYTES - 32 * 1024);
+        assert!(wire.encoded_len() <= EVIDENCE_BATCH_BYTES);
+        assert!(wire.encoded_len() > EVIDENCE_BATCH_BYTES - 32 * 1024);
         let identity = EvidenceIntakeIdentityV1 {
             tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
             node_id: "node-a".into(),
@@ -1477,7 +1473,10 @@ mod tests {
         while let Some(batch) = wal.next_batch() {
             let end = batch.last_cursor;
             let wire: mithril_control::EvidenceBatch = batch.clone().into();
-            assert!(wire.encoded_len() <= MAX_EVIDENCE_BATCH_PAYLOAD_BYTES);
+            if wire.encoded_len() > EVIDENCE_BATCH_BYTES {
+                assert_eq!((batch.first_cursor, batch.last_cursor), (257, 257));
+                assert!(wire.encoded_len() > 17 * 1_024 * 1_024);
+            }
             expected.update(&wire.framed_records);
             connection.send_evidence_batch(batch).await?;
             let ack = DataStoreQualification::ack(&mut connection).await?;
@@ -1491,7 +1490,7 @@ mod tests {
             wal.acknowledge(ack)?;
             batches += 1;
         }
-        assert_eq!(batches, 2);
+        assert_eq!(batches, 3);
         assert_eq!(wal.pending_records(), 0);
         let receipt = data.source_receipt(&identity)?;
         drop(connection);
@@ -1513,7 +1512,7 @@ mod tests {
                 None => break,
             }
         }
-        assert_eq!(count, 256);
+        assert_eq!(count, 257);
         assert_eq!(actual.finalize(), expected.finalize());
         Ok(())
     }

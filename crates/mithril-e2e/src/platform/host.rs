@@ -52,13 +52,7 @@ impl Host {
         use std::io::Read as _;
 
         let mut bytes = Vec::new();
-        File::open(spool.join("output.jsonl"))?
-            .take(5 * 1024 * 1024)
-            .read_to_end(&mut bytes)?;
-        assert!(
-            bytes.contains(&0),
-            "the fixture output exceeds its read bound"
-        );
+        File::open(spool.join("output.jsonl"))?.read_to_end(&mut bytes)?;
         bytes
             .split_inclusive(|byte| *byte == b'\n')
             .take_while(|line| line.first() != Some(&0) && line.last() == Some(&b'\n'))
@@ -197,6 +191,8 @@ impl Host {
             collection_seconds: 30,
         };
         env.shared.partition_diagnostics(true)?;
+        let mut grant = grant;
+        grant.valid_until_unix_ns = now()? + 45_000_000_000;
         control.accept_trace(request.clone(), grant)?;
         let data = control.analysis_store().ok_or("missing analysis store")?;
         let owner = TraceOwner::new(data.clone());
@@ -405,11 +401,19 @@ impl Host {
             assert_eq!(frame.sequence, index as u64 + 1);
         }
         assert_eq!(terminal.last_sequence, frames.len() as u64);
-        assert!(terminal.output_bytes <= mithril_control::MAX_TRACE_OUTPUT_BYTES);
-        assert!(frames.len() <= 4096);
+        assert_eq!(
+            terminal.output_bytes,
+            frames
+                .iter()
+                .map(|frame| frame.bytes.len() as u64)
+                .sum::<u64>()
+        );
+        let encoded_bytes = frames.iter().try_fold(0_u64, |total, frame| {
+            Ok::<_, Box<dyn std::error::Error>>(total + serde_json::to_vec(frame)?.len() as u64 + 1)
+        })?;
         assert_eq!(
             fs::metadata(spool.join("output.jsonl"))?.len(),
-            68 * 1024 * 1024
+            encoded_bytes
         );
         assert!(!spool.join("ack.json").exists());
         let stopped = env.snapshot()?;
@@ -977,7 +981,11 @@ impl Host {
                         }
                     }
                 });
-                control.accept_trace(request, grant.clone())?;
+                let mut execution = grant.clone();
+                if case == "partition" {
+                    execution.valid_until_unix_ns = now()? + 45_000_000_000;
+                }
+                control.accept_trace(request, execution)?;
                 let (_, accepted) = owner.read(tenant, request_id, &access, now()?)?;
                 let id = accepted.execution_id(0)?;
                 let spool = env.shared.diagnostic_spool(id);
@@ -2172,7 +2180,7 @@ impl Host {
 fn observability_retained_denials() -> TestResult<()> {
     use araphor_data::{
         AnalysisStore, EvidenceDecisionContext, EvidenceIntakeIdentityV1, EvidenceRecord,
-        EvidenceTemporalCoverage, ValidatedEvidenceBatchV1, MAX_EVIDENCE_BATCH_RECORDS,
+        EvidenceTemporalCoverage, ValidatedEvidenceBatchV1, EVIDENCE_BATCH_RECORDS,
     };
     use erebor_interceptor_abi::{
         EffectObservationReasonV1, KernelEffectFamilyV1, KernelEffectOperationV1, TaskCoordinateV1,
@@ -2271,8 +2279,8 @@ fn observability_retained_denials() -> TestResult<()> {
         Ok(bytes)
     };
     let total = Host::CAPTURE_COUNT as u64 + 1;
-    for first in (1..=total).step_by(MAX_EVIDENCE_BATCH_RECORDS) {
-        let last = total.min(first + MAX_EVIDENCE_BATCH_RECORDS as u64 - 1);
+    for first in (1..=total).step_by(EVIDENCE_BATCH_RECORDS) {
+        let last = total.min(first + EVIDENCE_BATCH_RECORDS as u64 - 1);
         let mut bytes = Vec::new();
         let mut ends = Vec::new();
         for cursor in first..=last {

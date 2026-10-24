@@ -3221,3 +3221,191 @@ comments, blank lines and cfg-only instrumentation are excluded. The existing
 unconditional unused Graph test-hook boolean is removed. Verification covers
 these focused runs and strict Clippy. Full-workspace CI, physical checks and
 benchmarks did not run. TODO 13 and the overall reduction goal remain open.
+
+
+## Evidence transport and diagnostic operational quotas
+
+Result: **Done** for this bounded evidence transport and diagnostic quota
+replacement. All 128 distinct focused checks pass. The eight-library build
+and strict affected-owner Clippy pass. TODO 13 remains **Not done** at the
+native host qualification gate. Physical qualification has not run.
+
+### Intended end state
+
+Valid evidence and diagnostic output pass through the current durable owners.
+Optional operator quotas govern admission. Native format, current authority and
+exact acknowledgement rules remain required.
+
+### Evidence from capture to acknowledgement
+
+[EvidenceConfig](../../crates/mithril-node/src/config.rs) has optional record, retained-byte, retained-count and reader-queue quotas.
+  -> [EffectObservationStore::ingestion_queue](../../crates/mithril-node/src/observation.rs) selects native channel for None or sync_channel for a positive capacity.
+  -> [EffectObservationIngress::record_bytes](../../crates/mithril-node/src/observation.rs) preserves pending and loss counters; a full configured queue retains the durable coverage-gap path.
+  -> [EvidenceWal](../../crates/mithril-node/src/observation/wal.rs) uses the shared [EvidenceRecord encoder](../../crates/araphor-data/src/evidence.rs), validates source coordinates and writes the exact CRC frame.
+  -> [NodeControlConnector](../../crates/mithril-node/src/control.rs) sends retained batches through the existing authenticated stream.
+  -> [ControlPlane evidence stream](../../crates/mithril-control/src/service.rs) flushes on the byte target, tail or existing deadline.
+  -> [EvidenceIntakeOwner::receive_group](../../crates/mithril-control/src/evidence.rs) validates each batch and commits through the existing [Data raw journal](../../crates/araphor-data/src/analysis/raw.rs) before ACK.
+  -> [EvidenceWal::acknowledge](../../crates/mithril-node/src/observation/wal.rs) removes only the acknowledged retained prefix.
+
+```mermaid
+sequenceDiagram
+    participant N as Node and WAL
+    participant C as Control intake
+    participant D as Data journal
+    N->>C: Retained EvidenceStreamRequest
+    C->>D: accept_validated_batch
+    D->>D: Append and sync one native raw commit
+    D-->>C: Durable acceptance result
+    C->>D: Read contiguous receipt cursor
+    D-->>C: Contiguous cursor
+    C-->>N: EvidenceAck
+    N->>N: acknowledge retained prefix
+```
+
+The diagram shows a new contiguous group. A durable pending range receives
+no ACK until its earlier gap closes. The stream can flush at its byte target,
+tail or existing deadline. New frames in the accepted group use one native raw
+commit. Exact retries reuse the existing durable receipt.
+
+The shared encoder writes Prost bytes into the final framed buffer after
+checking the u32 payload length and usize total. The Node WAL delegates to that
+encoder. The correction removes the separate payload allocation and keeps the
+same prefix, CRC and frame bytes.
+
+The record quota applies to each new record. Block can deny admission at the
+configured retained-byte or retained-count bound. Retain bypasses those two
+admission gates; its finite values do not bound future unacknowledged growth. Recovery validates format and identity without
+applying new admission quotas to retained bytes. The 16 MiB segment size and sender byte
+sizes are targets. A valid larger first item can form one segment or batch.
+[SegmentFile](../../crates/araphor-data/src/analysis/segment_file.rs) checks the actual file extent and uses fallible native allocation before reading.
+[Raw commit compaction](../../crates/araphor-data/src/analysis/raw.rs) checks the next native u32 offset before copying a selected frame.
+[Backup](../../crates/araphor-data/src/analysis/backup.rs) keeps exact segment identity, digest and configured storage checks.
+
+An EvidenceConfig with only its required identities uses disabled quota defaults:
+
+```json
+{
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "source_id": "00000000-0000-0000-0000-000000000002"
+}
+```
+
+Omission or null disables each optional evidence quota. Some(0) is invalid.
+The positive batch-record and control-delay fields retain scheduling defaults.
+Paired [Node clients](../../crates/mithril-node/src/control.rs), [Control servers](../../crates/mithril-control/src/server.rs) and [Araphor client](../../crates/erebor-runtime-client/src/araphor.rs) select Tonic native message sizes. Native u32 framing still applies. NodePolicy and generic Runtime transport settings are unchanged.
+
+### Diagnostic acceptance, storage and output
+
+[ClientGrpcOwner::submit](../../crates/mithril-control/src/client_grpc/trace.rs) retains one pinned resolution future while it waits for replies or current-authority changes.
+  -> [ControlPlane::resolve_trace_targets](../../crates/mithril-control/src/service.rs) uses the remaining authority deadline; the existing map entry has one matching cleanup guard.
+  -> [TraceOwner::accept](../../crates/araphor-observability/src/owner.rs) retains the actual grant expiry in the accepted intent; an exact retry cannot extend that stored lease.
+  -> [NodeTraceOwner](../../crates/araphor-observability/src/capture.rs) checks current target lifetime, optional admission quotas and source size before a durable intent.
+  -> [DiagnosticBackend](../../crates/erebor-interceptor/src/diagnostic.rs) applies its optional source, frame, output, frame-count, queue and preparation settings.
+  -> [TraceSpool::allocate](../../crates/araphor-observability/src/capture.rs) returns before locking or statvfs when the existing extent covers the write; new allocation preserves the evidence floor plus optional extra reserve.
+  -> [TraceSpool::append](../../crates/araphor-observability/src/capture.rs) synchronizes the exact prefix before publication; configured spool exhaustion is OutputLimit and an allocation or write failure is StorageFailure.
+  -> [Data trace receipts](../../crates/araphor-data/src/analysis/trace.rs) retain native sequence, terminal, identity and exact replay checks through reopen.
+
+[Node::poll_diagnostics](../../crates/mithril-node/src/node.rs) sends retained output after local spool sync.
+  -> [ControlPlane::exchange_trace](../../crates/mithril-control/src/service.rs) checks the enrolled session and current trust.
+  -> [TraceOwner::append_at](../../crates/araphor-observability/src/owner.rs) checks the authenticated target and execution identity.
+  -> [AnalysisStore::append_trace](../../crates/araphor-data/src/analysis/raw.rs) commits the trace batch and returns its output receipt.
+
+Configured output-byte or frame-count exhaustion maps to OutputLimit. The final
+worker drain also applies the encoded-spool quota. An allocation, reserve,
+write or sync failure maps to StorageFailure. A failed append does not advance
+the committed prefix. Cancellation and draining still join the child. The
+terminal uses the last accepted sequence and byte count.
+
+In an existing qualified diagnostic configuration, `backend: {}` and omitted
+active, retained and spool_bytes fields add no host quota. Each supplied quota
+uses its value. Zero active or retained capacity denies new admission. A zero
+backend queue uses native synchronous-channel rendezvous semantics. A zero
+preparation timeout expires immediately. Zero extra reserve adds no bytes.
+
+`Evidence.maximum_retained_bytes = Some(bytes)` protects that full finite
+allowance even with Retain. None contributes zero to this calculation. The
+owner adds `diagnostics.storage_reserve_bytes.unwrap_or(0)` with checked
+arithmetic. An unbounded WAL does not receive an infinite filesystem reserve.
+Diagnostics still require Evidence. Terminal allocation stays available when
+output allocation fails. [Recovery](../../crates/araphor-observability/src/capture.rs)
+reads the complete validated output prefix and synchronizes that file before
+it writes the NodeRestarted terminal. Recovery starts no child. A complete
+recovered frame is not proof that the same frame was synchronized before the crash.
+
+[Trace watch](../../crates/mithril-control/src/client_grpc/trace.rs) keeps the native Query subscription over trace_output, its frozen Arrow metadata and existing DataFusion projection. Delivery retains current authority, output memory accounting, positions and terminal identity. Node spool and Data page sizes are continuation targets; a larger first frame can advance alone. Data frames cannot use u64::MAX because terminal cursor arithmetic needs the next position.
+
+### Focused proof and remaining native gate
+
+All 128 distinct focused cases pass. The table names source reading routes and
+representative exact selectors; the table does not enumerate every case.
+
+| Owner | Distinct passes | Focused source selectors |
+| --- | ---: | --- |
+| Data | 36; final run 59.29 s | [Receipt validation](../../crates/araphor-data/src/analysis/raw.rs): `analysis::raw::tests::observability_receipt_cursor`; [large segment backup](../../crates/araphor-data/src/analysis/backup.rs): `analysis::backup::tests::large_segment_backup_restores`. |
+| Node | 22; final run 1.37 s | [WAL/context](../../crates/mithril-node/src/policy/discovery.rs): `policy::discovery::tests::discovery_catalog_exact_coordinates`; [queues](../../crates/mithril-node/src/observation.rs): `observation::tests::default_reader_queue_keeps_arrivals` and `observation::tests::reader_queue_overflow_is_a_durable_coverage_gap`. |
+| Control evidence | 8; final run 4.92 s | [Intake](../../crates/mithril-control/src/evidence.rs): `evidence::tests::intake_bounds_group_records` and `evidence::tests::coverage_large_report_reopens`. |
+| Control diagnostics | 3; 2.95 s | [Session and pending RPC](../../crates/mithril-control/src/service.rs): `service::tests::observability_recovery_session_dispatch_ack_and_revocation`; [client retry](../../crates/mithril-control/src/client_grpc/tests.rs): `client_grpc::tests::observability_grpc_trace_retry`. |
+| Interceptor | 23; 16.56 s | [Native supervision](../../crates/erebor-interceptor/src/diagnostic.rs): `diagnostic::tests::observability_backend_`. |
+| Observability | 15; 10.41 s | [Spool](../../crates/araphor-observability/src/capture.rs): `capture::tests::observability_spool_allocation_failure` and `capture::tests::observability_recovery_uploads_only_the_synced_prefix`; [signed retry](../../crates/araphor-observability/src/owner.rs): `owner::tests::observability_renewed_retry`. |
+| CLI | 7; 0.02 s | [Arguments](../../crates/araphor-cli/src/cli/araphor/args.rs): `cli::araphor::args::tests::`, from the library harness. |
+| Lightweight E2E | 14 distinct | [Context/WAL/TLS/ACK/reopen](../../crates/mithril-e2e/src/discovery/data_store.rs): `discovery::data_store::tests::data_context_bounds`; [coverage](../../crates/mithril-e2e/src/control_tls/coverage.rs): `control_tls::coverage::coverage_upload_keeps_truth`; [retained WAL](../../crates/mithril-e2e/src/control_tls/retained.rs): `control_tls::retained::retained_wal_survives_restart`; [owned output](../../crates/mithril-e2e/src/observability.rs): `observability::tests::observability_owned_upload`. |
+
+The final four changed E2E cases pass in 36.16 seconds. They include a context
+above 17 MiB through real WAL, TLS, ACK and reopen. The coverage report exceeds
+4 MiB with 100,001 historical intervals and one current interval. The 14-case total deduplicates those reruns.
+The two lint-affected Observability tests also pass again and add no new cases.
+
+The coverage fixture checks the original history prefix plus intervals closed
+by restart. The upload fixture records grant issuance and passes actual current
+time to admission. It checks issuance <= acceptance <= admission < expiry and
+the exact five-second lease from issuance. These corrections retain restart,
+expiry, storage-fault and exact receipt assertions.
+
+The Interceptor ignored child helper runs through its parent case. An
+Observability ignored child helper also runs through its parent. The privileged
+tmpfs case remains unrun. Ignored physical cases and benchmarks are not counted.
+
+The final fixed eight-library no-run build passes in 3 minutes 08 seconds.
+Strict Clippy passes in 1 minute 39 seconds with no warning. Reproduce these
+checks with the same eight owners. Then use their produced library harnesses
+with the source selectors above. These commands are for reproduction:
+
+```sh
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=1 CARGO_PROFILE_TEST_DEBUG=1 \
+  cargo test --locked --offline \
+  -p araphor-data -p erebor-interceptor -p araphor-observability \
+  -p mithril-node -p mithril-control -p mithril-e2e \
+  -p erebor-runtime-client -p araphor-cli --lib --no-run
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=1 CARGO_PROFILE_TEST_DEBUG=1 \
+  cargo clippy --locked --offline \
+  -p araphor-data -p erebor-interceptor -p araphor-observability \
+  -p mithril-node -p mithril-control -p mithril-e2e \
+  -p erebor-runtime-client -p araphor-cli --lib --tests -- -D warnings
+```
+
+Production Rust adds 952 and removes 803 nonblank, noncomment lines: net +149.
+The count excludes test files, E2E fixtures and complete cfg-only support spans.
+It keeps production after early test constants and modules. The first seven
+changes are net -53; the task cumulative result is net +96.
+
+The five forced BPFTRACE values, both builtin source bytes and hashes,
+StaticResources role checks and maximum_map_keys metadata remain unchanged.
+Read [DiagnosticBackend::command and StaticResources](../../crates/erebor-interceptor/src/diagnostic.rs),
+[builtin source pins](../../crates/araphor-data/src/trace/recipe.rs) and the
+[metadata projection](../../crates/araphor-data/src/analysis/extraction/tables/metadata.rs).
+Removing that native policy requires separately authorized host qualification.
+Local fixtures cannot qualify changed native source bytes. Native diagnostic
+worker polling is unchanged; this work adds no new polling loop.
+
+TODO 13, full migration and the 6,000-line reduction goal remain **Not done**.
+Full-workspace CI, physical qualification and benchmarks were not run. No
+production speed or native-host qualification claim follows from these checks.
+
+Read-only readiness checks on 2026-10-24 found the recorded VM
+`mithril-runtime-qualification-20261002163710` absent from the local inventory.
+The current host did not permit `sudo -n true`. The next
+[existing qualification](../plans/araphor-observability/phase-2-owned-capture.md)
+through [Host::qualify_diagnostics](../../crates/mithril-e2e/src/platform/host.rs)
+and [owned.sh](../../crates/mithril-e2e/harness/observability/owned.sh) requires an
+explicitly authorized privileged host. No alternate VM was started. No BPF
+program was attached.

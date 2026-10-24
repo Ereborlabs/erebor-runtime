@@ -12,10 +12,7 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{AnalysisDatabaseSnafu, AnalysisStateSnafu, IoSnafu, JsonSnafu};
-use crate::{
-    EvidenceIntakeIdentityV1, Result, MAX_EVIDENCE_BATCH_RECORDS,
-    MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
-};
+use crate::{EvidenceIntakeIdentityV1, Result};
 
 mod backup;
 mod capacity;
@@ -76,7 +73,7 @@ pub use read::AnalysisReadControl;
 pub use retention::RetentionResultV1;
 pub use retention::{EvidenceRetentionOwner, RetentionLimitsV1, RetentionStepV1};
 pub use retirement::ProcessorRetirementV1;
-pub use segment_file::{SegmentFile, MAX_EVIDENCE_SEGMENT_BYTES};
+pub use segment_file::{SegmentFile, EVIDENCE_SEGMENT_BYTES};
 pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceReadPermit, TraceStateV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
@@ -747,7 +744,7 @@ impl AnalysisStore {
         let Some(report) = stored else {
             return self.reject("the source coverage receipt has no retained report");
         };
-        if report.is_empty() || report.len() > MAX_EVIDENCE_GRPC_MESSAGE_BYTES {
+        if report.is_empty() {
             return self.reject("the retained coverage report size is invalid");
         }
         Ok(Some(report))
@@ -768,11 +765,7 @@ impl AnalysisStore {
     pub fn accept_validated_coverage(&self, input: ValidatedCoverageV1) -> Result<u64> {
         self.require_retention()?;
         let identity = &input.identity;
-        if !identity.valid()
-            || input.revision == 0
-            || input.encoded_report.is_empty()
-            || input.encoded_report.len() > MAX_EVIDENCE_GRPC_MESSAGE_BYTES
-        {
+        if !identity.valid() || input.revision == 0 || input.encoded_report.is_empty() {
             return self.reject("the validated coverage identity or bounds are invalid");
         }
         let bytes = &input.encoded_report;
@@ -906,8 +899,6 @@ impl AnalysisStore {
         if !identity.valid()
             || batch.first_cursor == 0
             || batch.frame_ends.is_empty()
-            || batch.frame_ends.len() > MAX_EVIDENCE_BATCH_RECORDS
-            || batch.framed_records.len() > MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
             || batch.frame_ends.last().copied() != Some(batch.framed_records.len())
             || batch
                 .frame_ends
@@ -1082,7 +1073,7 @@ impl AnalysisStore {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::MAX_PENDING_EVIDENCE_RECORDS;
+    use crate::EVIDENCE_BATCH_RECORDS;
     use duckdb::Config;
 
     pub(crate) fn identity() -> EvidenceIntakeIdentityV1 {
@@ -1388,7 +1379,7 @@ pub(crate) mod tests {
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
         let identity = identity();
-        let maximum = MAX_EVIDENCE_BATCH_RECORDS;
+        let maximum = EVIDENCE_BATCH_RECORDS + 1;
         store.accept_validated_batch(identity.clone(), batch(maximum as u64, &[b"frame"]))?;
         let before = store.meta()?;
         let mut changes = store.subscribe_revision();
@@ -1625,52 +1616,55 @@ pub(crate) mod tests {
         let mut max_batch = ValidatedEvidenceBatchV1 {
             cpu_id: 0,
             first_cursor: 1,
-            last_cursor: MAX_EVIDENCE_BATCH_RECORDS as u64,
+            last_cursor: EVIDENCE_BATCH_RECORDS as u64,
             intake_utc_ns: 1_000_000_000,
-            framed_records: vec![1; MAX_EVIDENCE_BATCH_RECORDS].into(),
-            frame_ends: (1..=MAX_EVIDENCE_BATCH_RECORDS).collect(),
+            framed_records: vec![1; EVIDENCE_BATCH_RECORDS].into(),
+            frame_ends: (1..=EVIDENCE_BATCH_RECORDS).collect(),
         };
         store.validate_batch(&source, &max_batch)?;
         max_batch.last_cursor += 1;
-        max_batch.framed_records = vec![1; MAX_EVIDENCE_BATCH_RECORDS + 1].into();
-        max_batch.frame_ends.push(MAX_EVIDENCE_BATCH_RECORDS + 1);
-        assert!(store.validate_batch(&source, &max_batch).is_err());
+        max_batch.framed_records = vec![1; EVIDENCE_BATCH_RECORDS + 1].into();
+        max_batch.frame_ends.push(EVIDENCE_BATCH_RECORDS + 1);
+        store.validate_batch(&source, &max_batch)?;
         source.node_id.push('n');
         assert!(store
             .validate_batch(&source, &batch(1, &[b"first"]))
             .is_err());
         source.node_id.pop();
 
+        let pending = EVIDENCE_BATCH_RECORDS as u64 + 2;
         assert_eq!(
-            store.accept_validated_batch(
-                source.clone(),
-                batch(MAX_PENDING_EVIDENCE_RECORDS, &[b"gap"])
-            )?,
+            store.accept_validated_batch(source.clone(), batch(pending, &[b"gap"]))?,
             EvidenceStoreOutcomeV1::Pending
         );
         let revision = store.meta()?.commit_revision;
-        assert!(store
-            .accept_validated_batch(
+        let root = store.root.clone();
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.meta()?.commit_revision, revision);
+        assert_eq!(
+            store.accept_validated_batch(
                 source.clone(),
-                batch(MAX_PENDING_EVIDENCE_RECORDS + 1, &[b"too-far"])
-            )
-            .is_err());
-        assert_eq!(store.meta()?.commit_revision, revision);
-
-        store.accept_validated_coverage(coverage(
-            &source,
-            1,
-            &vec![1; MAX_EVIDENCE_GRPC_MESSAGE_BYTES],
-        ))?;
-        let revision = store.meta()?.commit_revision;
-        assert!(store
-            .accept_validated_coverage(coverage(
-                &source,
-                2,
-                &vec![1; MAX_EVIDENCE_GRPC_MESSAGE_BYTES + 1],
-            ))
-            .is_err());
-        assert_eq!(store.meta()?.commit_revision, revision);
+                batch(1, &vec![b"frame".as_slice(); pending as usize - 1])
+            )?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        assert_eq!(
+            store
+                .source_receipt(&source)?
+                .ok_or("receipt absent")?
+                .contiguous_cursor,
+            pending
+        );
+        let report = vec![1; 4 * 1_024 * 1_024 + 1];
+        store.accept_validated_coverage(coverage(&source, 1, &report))?;
+        assert_eq!(
+            store
+                .source_status(&source)?
+                .ok_or("source absent")?
+                .latest_coverage_report,
+            Some(report)
+        );
         Ok(())
     }
 

@@ -19,9 +19,9 @@ fn direct_intake_commits_group() -> TestResult<()> {
     let template = tls.effect_batch(RECORDS as usize)?;
     assert_eq!(template.record_count() as u64, RECORDS);
     let bytes = EvidenceBatch::from(template.clone()).encoded_len() as u64;
-    assert!(bytes <= mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES as u64);
-    let count = (mithril_control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64 / bytes)
-        .min(mithril_control::MAX_EVIDENCE_BATCH_RECORDS as u64 / RECORDS)
+    assert!(bytes <= mithril_control::EVIDENCE_BATCH_BYTES as u64);
+    let count = (mithril_control::EVIDENCE_COMMIT_BYTES as u64 / bytes)
+        .min(mithril_control::DEFAULT_EVIDENCE_BATCH_RECORDS as u64 / RECORDS)
         .max(1);
     let identity = AuthenticatedEvidenceNodeV1 {
         tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),

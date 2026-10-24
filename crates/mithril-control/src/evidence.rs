@@ -16,17 +16,14 @@ mod model;
 
 pub(crate) use admission::{EvidenceAdmission, EvidencePermit};
 
+pub use araphor_data::EvidenceIntakeIdentityV1;
 pub(crate) use araphor_data::EvidenceStoreOutcomeV1;
-pub use araphor_data::{
-    EvidenceIntakeIdentityV1, MAX_EVIDENCE_BATCH_RECORDS, MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES,
-    MAX_EVIDENCE_GRPC_MESSAGE_BYTES, MAX_EVIDENCE_RECORD_BYTES,
-};
+pub use araphor_data::EVIDENCE_BATCH_RECORDS as DEFAULT_EVIDENCE_BATCH_RECORDS;
 pub use model::*;
 
-pub const DEFAULT_EVIDENCE_BATCH_RECORDS: usize = MAX_EVIDENCE_BATCH_RECORDS;
-pub const MAX_EVIDENCE_BATCH_PAYLOAD_BYTES: usize = 3 * 1_024 * 1_024;
-pub use araphor_data::MAX_EVIDENCE_SEGMENT_BYTES;
-const MAX_COVERAGE_INTERVALS: usize = 8_192;
+pub const EVIDENCE_BATCH_BYTES: usize = 3 * 1_024 * 1_024;
+pub const EVIDENCE_COMMIT_BYTES: usize = 4 * 1_024 * 1_024;
+pub use araphor_data::EVIDENCE_SEGMENT_BYTES;
 
 #[derive(Clone)]
 /// Owns source validation and acknowledges committed evidence.
@@ -390,18 +387,20 @@ impl EvidenceIntakeOwner {
                 || group_last_cursor
                     .and_then(|cursor| cursor.checked_add(1))
                     .is_some_and(|next| next != input.first_cursor)
-                || framed_records
-                    .len()
-                    .saturating_add(input.framed_records.len())
-                    > MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
-                || frame_ends.len().saturating_add(input.frame_ends.len())
-                    > MAX_EVIDENCE_BATCH_RECORDS
             {
                 return Err(Status::invalid_argument(
                     "an evidence commit group crossed its stream, cursor, or segment bound",
                 ));
             }
             let byte_offset = framed_records.len();
+            if byte_offset
+                .checked_add(input.framed_records.len())
+                .is_none()
+            {
+                return Err(Status::invalid_argument(
+                    "the evidence commit byte range overflowed",
+                ));
+            }
             framed_records.extend_from_slice(&input.framed_records);
             frame_ends.extend(input.frame_ends.into_iter().map(|end| end + byte_offset));
             group_first_cursor.get_or_insert(input.first_cursor);
@@ -469,7 +468,6 @@ impl EvidenceIntakeOwner {
             .try_into()
             .map_err(|_| Status::invalid_argument("evidence source identity is not Id128"))?;
         if batch.framed_records.is_empty()
-            || batch.encoded_len() > MAX_EVIDENCE_BATCH_PAYLOAD_BYTES
             || node_boot_id == [0; 16]
             || source_id == [0; 16]
             || batch.source_epoch == 0
@@ -512,11 +510,6 @@ impl EvidenceIntakeOwner {
             .map_err(|_| Status::invalid_argument("evidence record is invalid"))?;
             frame_ends.push(frame_end);
             offset = frame_end;
-        }
-        if frame_ends.len() > MAX_EVIDENCE_BATCH_RECORDS {
-            return Err(Status::invalid_argument(
-                "evidence batch exceeds the record bound",
-            ));
         }
         let last_cursor = batch
             .first_cursor
@@ -647,7 +640,6 @@ impl EvidenceIntakeOwner {
             || report.source_id.iter().all(|byte| *byte == 0)
             || report.revision == 0
             || report.intervals.is_empty()
-            || report.intervals.len() > MAX_COVERAGE_INTERVALS
         {
             return Err(Status::invalid_argument(
                 "coverage report epoch, revision, or interval bounds are invalid",
@@ -936,7 +928,7 @@ mod tests {
                         .inode += 1
                 }
                 "identity" => context.binding_id = vec![0; 16],
-                _ => context.binding_id = vec![1; crate::MAX_EVIDENCE_DECISION_CONTEXT_BYTES + 1],
+                _ => context.binding_id = vec![1; 16 * 1_024 + 1],
             }
             assert!(
                 intake
@@ -1122,9 +1114,12 @@ mod tests {
             data.clone(),
             Arc::new(super::SystemIntakeClock),
         )?;
-        let maximum = super::MAX_EVIDENCE_RECORD_BYTES;
+        let maximum = 128 * 1_024;
         let mut retained = Vec::new();
-        for (index, size) in [maximum - 1, maximum, maximum + 1].into_iter().enumerate() {
+        for (index, size) in [maximum - 1, maximum, 17 * 1_024 * 1_024]
+            .into_iter()
+            .enumerate()
+        {
             let cursor = index as u64 + 1;
             let record = observation(cursor).to_wire_record()?;
             let mut payload = record.encode_to_vec();
@@ -1141,38 +1136,21 @@ mod tests {
             let mut input = batch(cursor, 1)?;
             input.framed_records = framed.clone().into();
             let prior = data.meta()?;
-            if size > maximum {
-                let error = intake
-                    .receive(&authenticated(), input)
-                    .err()
-                    .ok_or("oversized record was accepted")?;
-                assert_eq!(error.code(), tonic::Code::InvalidArgument);
-                assert_eq!(
-                    error.message(),
-                    "evidence record frame is outside its size bound"
-                );
-                assert_eq!(data.meta()?, prior);
-                assert_eq!(intake.contiguous_cursor(&identity())?, cursor - 1);
-            } else {
-                assert_eq!(
-                    intake
-                        .receive(&authenticated(), input.clone())?
-                        .contiguous_cursor,
-                    cursor
-                );
-                let committed = data.meta()?;
-                assert_eq!(committed.commit_revision, prior.commit_revision + 1);
-                assert_eq!(
-                    intake.receive(&authenticated(), input)?.contiguous_cursor,
-                    cursor
-                );
-                assert_eq!(data.meta()?, committed);
-                retained.push(framed);
-            }
+            assert_eq!(
+                intake
+                    .receive(&authenticated(), input.clone())?
+                    .contiguous_cursor,
+                cursor
+            );
+            let committed = data.meta()?;
+            assert_eq!(committed.commit_revision, prior.commit_revision + 1);
+            assert_eq!(
+                intake.receive(&authenticated(), input)?.contiguous_cursor,
+                cursor
+            );
+            assert_eq!(data.meta()?, committed);
+            retained.push(framed);
         }
-        let next = batch(3, 1)?;
-        retained.push(next.framed_records.to_vec());
-        assert_eq!(intake.receive(&authenticated(), next)?.contiguous_cursor, 3);
         assert!(!control.root().join("evidence/segments-v2").exists());
         let committed = data.meta()?;
         drop(intake);
@@ -1182,9 +1160,18 @@ mod tests {
             EvidenceIntakeOwner::new(control, data.clone(), Arc::new(super::SystemIntakeClock))?;
         assert_eq!(data.meta()?, committed);
         assert_eq!(intake.contiguous_cursor(&identity())?, 3);
-        let page = data.read_page(&identity(), 1)?;
-        assert_eq!(page.records.len(), retained.len());
-        for (record, expected) in page.records.iter().zip(retained) {
+        let mut cursor = 1;
+        let mut records = Vec::new();
+        loop {
+            let page = data.read_page(&identity(), cursor)?;
+            records.extend(page.records);
+            let Some(next) = page.next_cursor else {
+                break;
+            };
+            cursor = next;
+        }
+        assert_eq!(records.len(), retained.len());
+        for (record, expected) in records.iter().zip(retained) {
             assert_eq!(record.framed_record.as_slice(), expected.as_slice());
         }
         Ok(())
@@ -1199,24 +1186,18 @@ mod tests {
         )?);
         let intake =
             EvidenceIntakeOwner::new(control, data.clone(), Arc::new(super::SystemIntakeClock))?;
-        let maximum = super::MAX_EVIDENCE_BATCH_RECORDS as u64;
-        let first = batch(1, maximum / 2)?;
-        let second = batch(maximum / 2 + 1, maximum / 2)?;
-        let error = intake
-            .receive_group(vec![
-                (authenticated(), first.clone()),
-                (authenticated(), second.clone()),
-                (authenticated(), batch(maximum + 1, 1)?),
-            ])
-            .err()
-            .ok_or("oversized group was accepted")?;
-        assert_eq!(error.code(), tonic::Code::InvalidArgument);
-        assert_eq!(intake.contiguous_cursor(&identity())?, 0);
-        assert_eq!(data.meta()?.commit_revision, 0);
-        let ack =
-            intake.receive_group(vec![(authenticated(), first), (authenticated(), second)])?;
-        assert_eq!(ack.contiguous_cursor, maximum);
-        assert_eq!(data.meta()?.commit_revision, 1);
+        let maximum = super::DEFAULT_EVIDENCE_BATCH_RECORDS as u64;
+        let inputs = vec![
+            (authenticated(), batch(1, maximum / 2)?),
+            (authenticated(), batch(maximum / 2 + 1, maximum / 2)?),
+            (authenticated(), batch(maximum + 1, 1)?),
+        ];
+        let ack = intake.receive_group(inputs.clone())?;
+        assert_eq!(ack.contiguous_cursor, maximum + 1);
+        let committed = data.meta()?;
+        assert_eq!(committed.commit_revision, 1);
+        assert_eq!(intake.receive_group(inputs)?.contiguous_cursor, maximum + 1);
+        assert_eq!(data.meta()?, committed);
         Ok(())
     }
 
@@ -1364,6 +1345,34 @@ mod tests {
             .latest_coverage_report(&coverage_identity())?
             .ok_or("coverage report did not survive restart")?;
         assert_eq!(recovered, gapped);
+        Ok(())
+    }
+
+    #[test]
+    fn coverage_large_report_reopens() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        let mut report = coverage_report(1, "GAPPED");
+        let template = report.intervals[0].clone();
+        report.intervals = (1..=100_001_u128)
+            .map(|id| {
+                let mut interval = template.clone();
+                interval.interval_id = id.to_be_bytes().to_vec();
+                interval.current = id == 100_001;
+                interval
+            })
+            .collect();
+        assert!(report.encoded_len() > 4 * 1_024 * 1_024);
+        intake.receive_coverage(&authenticated(), &report)?;
+        let before = intake.analysis_store().meta()?;
+        intake.receive_coverage(&authenticated(), &report)?;
+        assert_eq!(intake.analysis_store().meta()?, before);
+        drop(intake);
+        let reopened = EvidenceIntakeOwner::open(directory.path())?;
+        assert_eq!(
+            reopened.latest_coverage_report(&coverage_identity())?,
+            Some(report)
+        );
         Ok(())
     }
 

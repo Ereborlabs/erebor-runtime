@@ -5,9 +5,8 @@ use std::{
     time::Duration,
 };
 
-use erebor_runtime_ipc::{
-    araphor::{self as wire, araphor_client_service_client::AraphorClientServiceClient},
-    transport::MAX_GRPC_MESSAGE_BYTES,
+use erebor_runtime_ipc::araphor::{
+    self as wire, araphor_client_service_client::AraphorClientServiceClient,
 };
 use serde::Deserialize;
 use tonic::{
@@ -207,8 +206,8 @@ impl AraphorClient {
 
     fn service(&self) -> AraphorClientServiceClient<Channel> {
         AraphorClientServiceClient::new(self.channel.clone())
-            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
-            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_decoding_message_size(usize::MAX)
+            .max_encoding_message_size(usize::MAX)
     }
 
     fn request<T>(&self, message: T) -> AraphorResult<Request<T>> {

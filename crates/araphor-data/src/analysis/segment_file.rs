@@ -6,7 +6,7 @@ use snafu::ResultExt as _;
 
 use crate::{AnalysisStateSnafu, IoSnafu, Result};
 
-pub const MAX_EVIDENCE_SEGMENT_BYTES: usize = 16 * 1024 * 1024;
+pub const EVIDENCE_SEGMENT_BYTES: usize = 16 * 1024 * 1024;
 const IDENTITY_FIXED_BYTES: usize = 70;
 
 /// Bounded segment I/O. The caller owns the directory lease and commit catalog.
@@ -25,15 +25,29 @@ impl SegmentFile {
         let json = serde_json::to_vec(identity).context(crate::JsonSnafu {
             path: Path::new("<diagnostic-identity>"),
         })?;
-        if json.len() > 4096 {
-            return Self::invalid(
-                Path::new("<diagnostic-identity>"),
-                "the diagnostic header is too large",
-            );
-        }
-        let mut bytes = Vec::with_capacity(json.len() + 16);
+        let length = u32::try_from(json.len()).map_err(|_| {
+            AnalysisStateSnafu {
+                path: Path::new("<diagnostic-identity>"),
+                reason: "the diagnostic header exceeds its native width",
+            }
+            .build()
+        })?;
+        let capacity = json.len().checked_add(16).ok_or_else(|| {
+            AnalysisStateSnafu {
+                path: Path::new("<diagnostic-identity>"),
+                reason: "the diagnostic header size overflowed",
+            }
+            .build()
+        })?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(std::io::Error::other)
+            .context(IoSnafu {
+                path: Path::new("<diagnostic-identity>"),
+            })?;
         bytes.extend_from_slice(b"ATRACE1\0");
-        bytes.extend_from_slice(&(json.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&length.to_be_bytes());
         bytes.extend_from_slice(&json);
         bytes.extend_from_slice(&crc32c::crc32c(&bytes).to_be_bytes());
         Ok(bytes)
@@ -51,11 +65,27 @@ impl SegmentFile {
         if kind != "diagnostic" || bytes.len() < 16 || &bytes[..8] != b"ATRACE1\0" {
             return Self::invalid(path, "the diagnostic segment header is invalid");
         }
-        let size = u32::from_be_bytes(bytes[8..12].try_into().unwrap_or_default()) as usize;
-        if size > 4096 || bytes.len() < size + 16 {
+        let size = usize::try_from(u32::from_be_bytes(
+            bytes[8..12].try_into().unwrap_or_default(),
+        ))
+        .map_err(|_| {
+            AnalysisStateSnafu {
+                path,
+                reason: "the diagnostic header exceeds its native width",
+            }
+            .build()
+        })?;
+        let total = size.checked_add(16).ok_or_else(|| {
+            AnalysisStateSnafu {
+                path,
+                reason: "the diagnostic segment header size overflowed",
+            }
+            .build()
+        })?;
+        if bytes.len() < total {
             return Self::invalid(path, "the diagnostic segment header is incomplete");
         }
-        let end = size + 12;
+        let end = total - 4;
         let checksum = u32::from_be_bytes(bytes[end..end + 4].try_into().unwrap_or_default());
         if crc32c::crc32c(&bytes[..end]) != checksum {
             return Self::invalid(path, "the diagnostic segment header checksum is invalid");
@@ -72,7 +102,7 @@ impl SegmentFile {
         if serde_json::to_vec(&identity).context(crate::JsonSnafu { path })? != bytes[12..end] {
             return Self::invalid(path, "the diagnostic segment header is not canonical");
         }
-        Ok((identity.into(), end + 4))
+        Ok((identity.into(), total))
     }
 
     pub fn encode_identity(identity: &crate::EvidenceIntakeIdentityV1) -> Result<Vec<u8>> {
@@ -161,7 +191,7 @@ impl SegmentFile {
     }
 
     pub fn create(path: &Path, header: &[u8]) -> Result<Self> {
-        if header.is_empty() || header.len() > MAX_EVIDENCE_SEGMENT_BYTES {
+        if header.is_empty() {
             return Self::invalid(path, "the segment header is outside its size bound");
         }
         let file = OpenOptions::new()
@@ -212,10 +242,7 @@ impl SegmentFile {
             .open(path)
             .context(IoSnafu { path })?;
         let metadata = file.metadata().context(IoSnafu { path })?;
-        if !metadata.is_file()
-            || metadata.permissions().mode() & 0o077 != 0
-            || metadata.len() > MAX_EVIDENCE_SEGMENT_BYTES as u64
-        {
+        if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
             return Self::invalid(path, "the segment is not a private bounded file");
         }
         Ok(Self {
@@ -226,7 +253,7 @@ impl SegmentFile {
 
     pub fn append(&self, expected_end: u64, bytes: &[u8]) -> Result<u64> {
         let end = expected_end.checked_add(bytes.len() as u64);
-        if bytes.is_empty() || end.is_none_or(|end| end > MAX_EVIDENCE_SEGMENT_BYTES as u64) {
+        if bytes.is_empty() || end.is_none() {
             return Self::invalid(&self.path, "the segment append exceeds its size bound");
         }
         let length = self
@@ -247,13 +274,19 @@ impl SegmentFile {
     }
 
     pub fn read(&self, offset: u64, length: usize) -> Result<Vec<u8>> {
+        let available = self.length()?;
         if offset
             .checked_add(length as u64)
-            .is_none_or(|end| end > MAX_EVIDENCE_SEGMENT_BYTES as u64)
+            .is_none_or(|end| end > available)
         {
             return Self::invalid(&self.path, "the segment read exceeds its size bound");
         }
-        let mut bytes = vec![0; length];
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(std::io::Error::other)
+            .context(IoSnafu { path: &self.path })?;
+        bytes.resize(length, 0);
         self.file
             .read_exact_at(&mut bytes, offset)
             .context(IoSnafu { path: &self.path })?;
@@ -333,7 +366,7 @@ mod tests {
         assert_eq!(file.read(6, 5)?, b"frame");
         assert!(file.read(6, 6).is_err());
         assert!(file.read(u64::MAX, 1).is_err());
-        assert!(file.read(0, MAX_EVIDENCE_SEGMENT_BYTES + 1).is_err());
+        assert!(file.read(0, EVIDENCE_SEGMENT_BYTES + 1).is_err());
         assert!(file.append(6, b"second").is_err());
         assert_eq!(std::fs::read(&path)?, b"headerframe");
         drop(file);
@@ -346,16 +379,21 @@ mod tests {
         let root = tempfile::tempdir()?;
         let path = root.path().join("1.seg");
         let file = SegmentFile::create(&path, b"h")?;
-        file.file.set_len(MAX_EVIDENCE_SEGMENT_BYTES as u64 - 1)?;
+        file.file.set_len(EVIDENCE_SEGMENT_BYTES as u64 - 1)?;
         assert_eq!(
-            file.append(MAX_EVIDENCE_SEGMENT_BYTES as u64 - 1, b"x")?,
-            MAX_EVIDENCE_SEGMENT_BYTES as u64
+            file.append(EVIDENCE_SEGMENT_BYTES as u64 - 1, b"x")?,
+            EVIDENCE_SEGMENT_BYTES as u64
         );
-        assert!(file
-            .append(MAX_EVIDENCE_SEGMENT_BYTES as u64, b"x")
-            .is_err());
+        assert_eq!(
+            file.append(EVIDENCE_SEGMENT_BYTES as u64, b"x")?,
+            EVIDENCE_SEGMENT_BYTES as u64 + 1
+        );
+        assert_eq!(file.read(EVIDENCE_SEGMENT_BYTES as u64, 1)?, b"x");
+        drop(file);
+        let file = SegmentFile::open(&path)?;
+        assert_eq!(file.length()?, EVIDENCE_SEGMENT_BYTES as u64 + 1);
         assert!(file.append(u64::MAX, b"x").is_err());
-        assert!(file.append(MAX_EVIDENCE_SEGMENT_BYTES as u64, b"").is_err());
+        assert!(file.append(EVIDENCE_SEGMENT_BYTES as u64, b"").is_err());
         Ok(())
     }
 

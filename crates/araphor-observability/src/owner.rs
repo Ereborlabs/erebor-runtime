@@ -101,7 +101,13 @@ impl TraceOwner {
                     if target.fact.node_id != node || target.node_boot_id != boot {
                         continue;
                     }
-                    let index = index as u16;
+                    let index = u16::try_from(index).map_err(|_| {
+                        crate::error::ObservabilitySnafu {
+                            code: TraceErrorCodeV1::Invalid,
+                            reason: "trace target index exceeds its native representation",
+                        }
+                        .build()
+                    })?;
                     let identity = accepted.binding(index)?.identity;
                     if self
                         .store
@@ -111,7 +117,7 @@ impl TraceOwner {
                         continue;
                     }
                     if state.cancel_requested || now >= accepted.deadline_unix_ns {
-                        if retained.contains(&identity.execution_id) && cancel.len() < 16 {
+                        if retained.contains(&identity.execution_id) {
                             cancel.push(identity.execution_id);
                         }
                     } else if pending.is_none() && !retained.contains(&identity.execution_id) {
@@ -160,15 +166,7 @@ impl TraceOwner {
             return Ok(state);
         }
         let recipe = request.recipe()?;
-        let deadline = now
-            .checked_add((u64::from(request.collection_seconds) + 15) * 1_000_000_000)
-            .ok_or_else(|| {
-                ObservabilitySnafu {
-                    code: TraceErrorCodeV1::Invalid,
-                    reason: "trace deadline overflowed",
-                }
-                .build()
-            })?;
+        let deadline = access.valid_until_unix_ns;
         let accepted = TraceAcceptedV1 {
             request,
             access,
@@ -311,7 +309,6 @@ impl TraceOwner {
         after: u64,
     ) -> Result<Vec<TraceBatchV1>> {
         let started = Instant::now();
-        TraceErrorCodeV1::Invalid.require(after <= 4096, "trace cursor exceeds the frame bound")?;
         let (_, accepted) = self.read(tenant, request, access, now)?;
         let identity = accepted.binding(target_index)?.identity;
         let page = self
@@ -370,8 +367,6 @@ impl TraceAcceptedV1 {
             recipe == self.recipe
                 && self.accepted_unix_ns > 0
                 && self.deadline_unix_ns > self.accepted_unix_ns
-                && self.deadline_unix_ns - self.accepted_unix_ns
-                    == (u64::from(self.request.collection_seconds) + 15) * 1_000_000_000
                 && self.deadline_unix_ns <= self.access.valid_until_unix_ns,
             "trace accepted bounds changed",
         )?;
@@ -432,7 +427,15 @@ impl TryFrom<&TraceAcceptedV1> for TraceIntentV1 {
         let authority =
             rmp_serde::to_vec_named(&stored).context(crate::error::TraceEncodingSnafu)?;
         let bindings = (0..accepted.request.targets.len())
-            .map(|index| accepted.binding(index as u16))
+            .map(|index| {
+                accepted.binding(u16::try_from(index).map_err(|_| {
+                    crate::error::ObservabilitySnafu {
+                        code: TraceErrorCodeV1::Invalid,
+                        reason: "trace target index exceeds its native representation",
+                    }
+                    .build()
+                })?)
+            })
             .collect::<Result<Vec<_>>>()?;
         let intent = Self {
             tenant_id: accepted.request.tenant_id,
@@ -480,7 +483,14 @@ impl TryFrom<TraceIntentV1> for TraceAcceptedV1 {
         )?;
         for (index, binding) in intent.bindings.iter().enumerate() {
             TraceErrorCodeV1::Integrity.require(
-                accepted.binding(index as u16)? == *binding,
+                accepted.binding(u16::try_from(index).map_err(|_| {
+                    crate::error::ObservabilitySnafu {
+                        code: TraceErrorCodeV1::Invalid,
+                        reason: "trace target index exceeds its native representation",
+                    }
+                    .build()
+                })?)?
+                    == *binding,
                 "trace intent changed its frozen execution binding",
             )?;
         }
@@ -550,6 +560,26 @@ mod tests {
     use super::*;
     use crate::{TraceFrameKindV1, TraceFrameV1, TraceSourceV1, TraceTerminalV1};
     use std::collections::BTreeSet;
+
+    #[test]
+    fn observability_target_ordinals() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut request = request()?;
+        request.collection_seconds = 301;
+        let template = request.targets[0].clone();
+        request.targets = (0..=u16::MAX as u32)
+            .map(|index| {
+                let mut target = template.clone();
+                target.binding_id[..4].copy_from_slice(&(index + 1).to_be_bytes());
+                target.fact.container_id = index.to_string();
+                target.fact_digest = DiscoveryDigestV1::of(&target.fact)?;
+                Ok(target)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        request.validate()?;
+        request.targets.push(template);
+        assert!(request.validate().is_err());
+        Ok(())
+    }
 
     #[test]
     fn observability_intake_clock() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -836,7 +866,7 @@ mod tests {
         );
         assert!(owner
             .output([1; 16], [6; 16], 0, &access(), 3, 4097)
-            .is_err());
+            .is_ok());
         let mut revoked = access();
         revoked.revoked = true;
         assert!(owner.read([1; 16], [6; 16], &revoked, 3).is_err());
@@ -976,10 +1006,17 @@ mod tests {
         let request = request()?;
         let state = owner.accept(request.clone(), access(), 1)?;
         let accepted = owner.read([1; 16], [6; 16], &access(), 2)?.1;
+        assert_eq!(accepted.deadline_unix_ns, access().valid_until_unix_ns);
+        assert!(
+            accepted.deadline_unix_ns
+                > accepted.accepted_unix_ns
+                    + (u64::from(accepted.request.collection_seconds) + 15) * 1_000_000_000
+        );
         let mut renewed = access();
         renewed.valid_until_unix_ns += 10_000_000_000;
         assert_eq!(state, owner.accept(request.clone(), renewed.clone(), 3)?);
         assert_eq!(accepted, owner.read([1; 16], [6; 16], &renewed, 4)?.1);
+        assert!(accepted.deadline_unix_ns < renewed.valid_until_unix_ns);
         let mut other = renewed.clone();
         other.principal = "another-investigator".into();
         assert!(matches!(

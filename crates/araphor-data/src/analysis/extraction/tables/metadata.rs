@@ -8,7 +8,7 @@ impl Capture<'_> {
         receipt: &crate::AnalysisSourceReceiptV1,
         budget: &mut ReadBudget<'_>,
     ) -> Result<CoverageReport> {
-        if bytes.is_empty() || bytes.len() > crate::MAX_EVIDENCE_GRPC_MESSAGE_BYTES {
+        if bytes.is_empty() {
             return Err(invalid("the coverage report size is invalid"));
         }
         budget.charge(bytes.len().checked_mul(128).ok_or_else(overflow)?)?;
@@ -123,7 +123,7 @@ impl Capture<'_> {
         }
         if self.read.projected("trace_recipes").is_some() {
             for recipe in [TraceRecipeV1::SyscallErrors, TraceRecipeV1::FailedOpens] {
-                budget.charge(crate::MAX_TRACE_SOURCE_BYTES + 8192)?;
+                budget.charge(recipe.source_bytes().len() + 8192)?;
                 let manifest = recipe.manifest()?;
                 self.recipe_row(recipe, &manifest, &mut budget)?;
             }

@@ -1052,17 +1052,6 @@ impl NodeChassis {
             .await_control_rpc(connection.exchange_diagnostics(&exchange))
             .await?;
         *resolved = None;
-        if reply.cancel.len() > 16
-            || reply
-                .resolve
-                .as_ref()
-                .is_some_and(|request| request.facts.len() > 16)
-        {
-            return IdentityStateSnafu {
-                reason: "diagnostic response exceeds its bounds",
-            }
-            .fail();
-        }
         if let Some(request) = reply.resolve {
             let mut participants = Vec::new();
             for fact in request.facts {

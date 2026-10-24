@@ -8,8 +8,8 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use erebor_interceptor::diagnostic::{
-    DiagnosticBackend, DiagnosticFrame, DiagnosticMode, DiagnosticResult, DiagnosticStop,
-    PREPARATION_LIMIT,
+    DiagnosticBackend, DiagnosticConfig, DiagnosticFrame, DiagnosticMode, DiagnosticResult,
+    DiagnosticStop,
 };
 use erebor_interceptor::{KernelHostConfig, KernelHostOwner};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,8 @@ mod query;
 
 #[cfg(test)]
 pub(crate) use plain::PlainCapture;
+
+const PREPARATION_LIMIT: Duration = Duration::from_secs(10);
 
 type ProofResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -539,6 +541,17 @@ pub struct ObservabilityQualification {
 }
 
 impl ObservabilityQualification {
+    fn backend_config() -> DiagnosticConfig {
+        DiagnosticConfig {
+            source_bytes: Some(64 * 1024),
+            frame_bytes: Some(1024 * 1024),
+            output_bytes: Some(16 * 1024 * 1024),
+            output_frames: Some(4096),
+            queued_frames: Some(256),
+            preparation_timeout: Some(PREPARATION_LIMIT),
+        }
+    }
+
     pub fn new(output: PathBuf) -> Self {
         Self { output }
     }
@@ -1041,13 +1054,18 @@ impl ObservabilityQualification {
                     command
                 };
                 let mut node = NodeTraceOwner::open_fixture(
-                    &root, request.tenant_id, "node-a".into(), [7; 16], command.clone(),
+                    &root, request.tenant_id, "node-a".into(), [7; 16], command.clone(), Self::backend_config(),
                 )?;
                 let connector = tls.connector(server.as_ref().ok_or("Control is absent")?, "node-a", [7; 16]);
                 let mut connection = connector.connect(registration.clone(), true, &mut cache).await?;
                 connection.report_readiness(true, true).await?;
                 let now = u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())?;
+                let issued = now;
                 grant.valid_until_unix_ns = now + 120_000_000_000;
+                let access = grant.clone();
+                if local_expiry {
+                    grant.valid_until_unix_ns = now + 5_000_000_000;
+                }
                 if fault_source {
                     request.source = TraceSourceV1::new(if name == "map-exhaustion" {
                         b"BEGIN { $i = 0; while ($i < 8192) { @full[$i] = 1; $i++; } } interval:s:2 { exit(); }".to_vec()
@@ -1055,7 +1073,6 @@ impl ObservabilityQualification {
                         b"interval:hz:10000 { printf(\"bounded diagnostic output\\n\"); }".to_vec()
                     })?;
                 }
-                let access = grant.clone();
                 control.accept_trace(request.clone(), grant.clone())?;
                 let dispatch = connection.exchange_diagnostics(&TraceExchangeV1::default()).await?
                     .dispatch.ok_or("missing Node capture dispatch")?;
@@ -1073,11 +1090,7 @@ impl ObservabilityQualification {
                     drop(connection.take());
                     server.take().ok_or("Control is absent")?.shutdown().await?;
                 }
-                let supplied_now = if local_expiry {
-                    dispatch.accepted.deadline_unix_ns - 5_000_000_000
-                } else {
-                    u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())?
-                };
+                let supplied_now = u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())?;
                 let id = node.admit(dispatch.clone(), Some(lease), &dispatch_key, supplied_now)?;
                 if node.admit(dispatch.clone(), None, &dispatch_key, supplied_now)? != id {
                     return Err("duplicate dispatch changed execution identity".into());
@@ -1408,7 +1421,7 @@ impl ObservabilityQualification {
                 }
                 drop(node);
                 let mut node = NodeTraceOwner::open_fixture(
-                    &root, request.tenant_id, "node-a".into(), [7; 16], command,
+                    &root, request.tenant_id, "node-a".into(), [7; 16], command, Self::backend_config(),
                 )?;
                 let now = u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())?;
                 let duplicate_now = if local_expiry { dispatch.accepted.deadline_unix_ns } else { now };
@@ -1703,6 +1716,7 @@ impl ObservabilityQualification {
                     "control_reopen": name == "query-failure",
                     "control_stopped": name == "partition-expiry" || zero_progress,
                     "partition_before_admission": name == "partition-expiry",
+                    "grant_issued_unix_ns": issued,
                     "supplied_now": supplied_now,
                     "signed_deadline": dispatch.accepted.deadline_unix_ns,
                     "collection_seconds": request.collection_seconds,
@@ -1768,7 +1782,7 @@ impl ObservabilityQualification {
         let held = fs::File::open(cgroup)?;
         let cgroup_id = held.metadata()?.ino();
         let baseline = ResourceSnapshot::read()?;
-        let backend = DiagnosticBackend::new(executable, digest)?;
+        let backend = DiagnosticBackend::new(executable, digest, Self::backend_config())?;
         let mut results = Vec::new();
         for recipe in [TraceRecipeV1::SyscallErrors, TraceRecipeV1::FailedOpens] {
             for pod in ["foreign", "target"] {
@@ -1913,7 +1927,7 @@ impl ObservabilityQualification {
         executable: PathBuf,
         digest: [u8; 32],
     ) -> ProofResult<()> {
-        let backend = DiagnosticBackend::new(executable.clone(), digest)?;
+        let backend = DiagnosticBackend::new(executable.clone(), digest, Self::backend_config())?;
         let baseline = ResourceSnapshot::read()?;
         Self::missing_btf()?;
         if ResourceSnapshot::read()? != baseline {
@@ -2152,7 +2166,7 @@ impl ObservabilityQualification {
 
     pub fn parent_fixture(&self, executable: PathBuf, digest: [u8; 32]) -> ProofResult<()> {
         fs::create_dir(&self.output)?;
-        let capture = DiagnosticBackend::new(executable, digest)?.start(
+        let capture = DiagnosticBackend::new(executable, digest, Self::backend_config())?.start(
             include_bytes!("../fixtures/observability/quiet.bt"),
             1,
             DiagnosticMode::Capture,
@@ -2391,15 +2405,20 @@ mod tests {
         for case in &cases[2..5] {
             assert_eq!(case["expired_dispatch_rejected"], true);
             assert_eq!(case["collection_seconds"], 30);
-            assert_eq!(
-                case["signed_deadline"]
-                    .as_u64()
-                    .ok_or("missing signed deadline")?
-                    - case["supplied_now"]
-                        .as_u64()
-                        .ok_or("missing supplied time")?,
-                5_000_000_000
-            );
+            let issued = case["grant_issued_unix_ns"]
+                .as_u64()
+                .ok_or("missing grant issuance")?;
+            let accepted = case["accepted"]["accepted_unix_ns"]
+                .as_u64()
+                .ok_or("missing acceptance time")?;
+            let admitted = case["supplied_now"]
+                .as_u64()
+                .ok_or("missing supplied time")?;
+            let deadline = case["signed_deadline"]
+                .as_u64()
+                .ok_or("missing signed deadline")?;
+            assert!(issued <= accepted && accepted <= admitted && admitted < deadline);
+            assert_eq!(deadline - issued, 5_000_000_000);
         }
         let fault = &cases[3]["storage_fault"];
         assert_eq!(fault["stage"], "AfterSync");
@@ -2547,15 +2566,20 @@ mod tests {
         assert_eq!(native["terminal_reopen"], true);
         assert_eq!(native["control_stopped"], true);
         assert_eq!(native["expired_dispatch_rejected"], true);
-        assert_eq!(
-            native["signed_deadline"]
-                .as_u64()
-                .ok_or("missing native deadline")?
-                - native["supplied_now"]
-                    .as_u64()
-                    .ok_or("missing native admission time")?,
-            5_000_000_000
-        );
+        let issued = native["grant_issued_unix_ns"]
+            .as_u64()
+            .ok_or("missing native grant issuance")?;
+        let accepted = native["accepted"]["accepted_unix_ns"]
+            .as_u64()
+            .ok_or("missing native acceptance time")?;
+        let admitted = native["supplied_now"]
+            .as_u64()
+            .ok_or("missing native admission time")?;
+        let deadline = native["signed_deadline"]
+            .as_u64()
+            .ok_or("missing native deadline")?;
+        assert!(issued <= accepted && accepted <= admitted && admitted < deadline);
+        assert_eq!(deadline - issued, 5_000_000_000);
         assert_eq!(native["accepted"]["access"]["principal"], "qualification");
         assert!(!native["accepted"]["recipe"].is_null());
         assert_eq!(native["acknowledgement"], native["replay_ack"]);

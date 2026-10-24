@@ -482,7 +482,6 @@ impl AnalysisStore {
             || manifest.segments.iter().any(|segment| {
                 segment.segment_id == 0
                     || segment.bytes < 70
-                    || segment.bytes > super::MAX_EVIDENCE_SEGMENT_BYTES as u64
                     || !segment.file_name.ends_with(".seg")
             })
         {
@@ -1354,6 +1353,38 @@ mod tests {
         output.write_all(b"corrupt")?;
         assert!(AnalysisStore::restore(&backup, &directory.path().join("corrupt")).is_err());
         assert!(!directory.path().join("corrupt").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn large_segment_backup_restores() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("original");
+        let store = AnalysisStore::open(&root)?;
+        let payload = vec![7; 17 * 1_024 * 1_024];
+        let mut input = batch(1);
+        input.framed_records = payload.clone().into();
+        input.frame_ends = vec![payload.len()];
+        store.accept_validated_batch(identity(), input)?;
+        store.accept_validated_batch(identity(), batch(2))?;
+        let positions = store.read_page(&identity(), 1)?;
+        assert_eq!(positions.records.len(), 1);
+        assert_eq!(positions.records[0].framed_record, payload);
+        assert_eq!(positions.next_cursor, Some(2));
+        let tail = store.read_page(&identity(), 2)?;
+        assert_eq!(tail.records.len(), 1);
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.read_page(&identity(), 1)?, positions);
+        let backup = root.join("backups/large");
+        let manifest = store.backup(&backup)?;
+        assert_eq!(manifest.segments.len(), 2);
+        assert!(manifest.segments[0].bytes > super::super::EVIDENCE_SEGMENT_BYTES as u64);
+        let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;
+        let restored_page = restored.read_page(&identity(), 1)?;
+        assert_eq!(restored_page.records, positions.records);
+        assert_eq!(restored_page.next_cursor, positions.next_cursor);
+        assert_eq!(restored.read_page(&identity(), 2)?.records, tail.records);
         Ok(())
     }
 

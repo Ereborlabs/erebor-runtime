@@ -67,17 +67,27 @@ impl ClientGrpcOwner {
         } else {
             input.collection_seconds
         };
-        if !(1..=300).contains(&seconds) {
-            return Err(Status::invalid_argument(
-                "Trace duration must be 1..300 seconds.",
-            ));
-        }
+        let seconds = u16::try_from(seconds).map_err(|_| {
+            Status::invalid_argument("Trace duration exceeds its native representation.")
+        })?;
         let grant = access.trace_access().map_err(Self::auth_failure)?;
         let (targets, unresolved) = match self.load_trace(trace, &access).await {
             Ok((_, accepted)) => (accepted.request.targets, accepted.request.unresolved),
             Err(error) if error.code() == tonic::Code::NotFound => {
                 let facts = self.facts(&selection, access.tenant_id())?;
-                let participants = self.control.resolve_trace_targets(facts, &grant).await?;
+                let mut changes = access.changes();
+                access.check().map_err(Self::auth_failure)?;
+                let resolution = self.control.resolve_trace_targets(facts, &grant);
+                tokio::pin!(resolution);
+                let participants = loop {
+                    tokio::select! {
+                        result = &mut resolution => break result?,
+                        changed = changes.changed() => {
+                            changed.map_err(|_| Status::unavailable("Client authorization watch closed."))?;
+                            access.check().map_err(Self::auth_failure)?;
+                        }
+                    }
+                };
                 access.check().map_err(Self::auth_failure)?;
                 let (resolved, unresolved): (Vec<_>, Vec<_>) = participants
                     .into_iter()
@@ -101,7 +111,7 @@ impl ClientGrpcOwner {
             source,
             targets,
             unresolved,
-            collection_seconds: seconds as u16,
+            collection_seconds: seconds,
             selection: Some(crate::TraceSelectionV1 {
                 target: selection.target,
                 cluster: selection.cluster,
@@ -215,14 +225,7 @@ impl ClientGrpcOwner {
                 .finding_reference
                 .clone()
                 .unwrap_or_default(),
-            limits: Some(proto::TraceLimits {
-                source_bytes: crate::MAX_TRACE_SOURCE_BYTES as u32,
-                frame_bytes: crate::MAX_TRACE_FRAME_BYTES as u32,
-                output_bytes: crate::MAX_TRACE_OUTPUT_BYTES as u32,
-                frame_count: 4096,
-                target_count: crate::MAX_TRACE_TARGETS as u32,
-                collection_seconds: 300,
-            }),
+            limits: None,
         }
     }
 
@@ -242,7 +245,11 @@ impl ClientGrpcOwner {
                 .enumerate()
                 .map(|(index, _)| {
                     accepted
-                        .binding(index as u16)
+                        .binding(u16::try_from(index).map_err(|_| {
+                            Status::invalid_argument(
+                                "Trace target index exceeds its native representation.",
+                            )
+                        })?)
                         .map(|binding| binding.identity)
                         .map_err(Self::failure)
                 })
@@ -257,7 +264,13 @@ impl ClientGrpcOwner {
                 .iter()
                 .enumerate()
                 .map(|(index, _)| {
-                    let binding = frozen.binding(index as u16).map_err(Self::failure)?;
+                    let binding = frozen
+                        .binding(u16::try_from(index).map_err(|_| {
+                            Status::invalid_argument(
+                                "Trace target index exceeds its native representation.",
+                            )
+                        })?)
+                        .map_err(Self::failure)?;
                     store
                         .trace_receipt(&binding.identity)
                         .map_err(Self::failure)

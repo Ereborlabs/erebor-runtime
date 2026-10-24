@@ -403,17 +403,6 @@ impl RawJournal {
             if floor != expected {
                 return Err(self.invalid("the retained raw floor is invalid"));
             }
-            for entry in self
-                .entries
-                .values()
-                .filter(|entry| entry.identity.key() == key)
-            {
-                if entry.commit.spans.iter().any(|span| {
-                    span.last > accepted.saturating_add(crate::MAX_PENDING_EVIDENCE_RECORDS)
-                }) {
-                    return Err(self.invalid("the raw pending range exceeds its bound"));
-                }
-            }
         }
         let mut statement = writer
             .prepare("SELECT stream_key, first_cursor, last_cursor FROM expired_ranges")
@@ -652,7 +641,7 @@ impl RawJournal {
                     .iter()
                     .map(|span| (span.last - span.first + 1) as usize)
                     .sum();
-                if *records != 0 && *records + count > crate::MAX_EVIDENCE_BATCH_RECORDS {
+                if *records != 0 && *records + count > crate::EVIDENCE_BATCH_RECORDS {
                     return None;
                 }
                 *records += count;

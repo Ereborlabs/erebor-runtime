@@ -28,7 +28,6 @@ pub use evidence::{
     EvidenceDigestV1, EvidenceExactFileObject, EvidenceFileObjectV1, EvidenceIdV1,
     EvidenceModelError, EvidenceModelResult, EvidenceRecord, EvidenceRecords,
     EvidenceTemporalCoverage, KernelEffectEvidenceV1, ObservationEnvelopeV1, StaticDecisionKeyV1,
-    MAX_EVIDENCE_DECISION_CONTEXT_BYTES, MAX_EVIDENCE_RECORD_BYTES,
 };
 pub use graph::*;
 pub use notification::*;
@@ -36,8 +35,7 @@ pub use package::*;
 pub use trace::{
     TraceBatchV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,
     TraceMeasurementV1, TraceRecipeManifestV1, TraceRecipeV1, TraceSourceV1, TraceTerminalReasonV1,
-    TraceTerminalV1, MAX_TRACE_FRAME_BYTES, MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES,
-    MAX_TRACE_TARGETS,
+    TraceTerminalV1,
 };
 pub use workload::{
     ContainerKindV1, KubernetesWorkloadIdentityV1, TargetContextV1, WorkloadTargetFactV1,
@@ -60,13 +58,10 @@ pub use analysis::{
     StorageUsageV1, StorePositionV1, TraceBindingV1, TraceIntentPageV1, TraceIntentV1,
     TraceOutputPageV1, TraceOutputReceiptV1, TraceStateV1, ValidatedCoverageV1,
     ValidatedEvidenceBatchV1, WitnessUsageV1, ANALYSIS_DUCKDB_BINDING_VERSION,
-    ANALYSIS_SQLPARSER_VERSION, MAX_EVIDENCE_SEGMENT_BYTES,
+    ANALYSIS_SQLPARSER_VERSION, EVIDENCE_SEGMENT_BYTES,
 };
 
-pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 4_096;
-pub const MAX_EVIDENCE_GRPC_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
-pub const MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES: usize = 4 * 1_024 * 1_024;
-pub const MAX_PENDING_EVIDENCE_RECORDS: u64 = 4_096;
+pub const EVIDENCE_BATCH_RECORDS: usize = 4_096;
 pub use araphor_analysis_builtins::discovery::{
     node_id_is_valid, EvidenceIntakeIdentityV1, MAX_NODE_ID_BYTES,
 };

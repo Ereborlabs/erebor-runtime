@@ -27,11 +27,11 @@ async fn backlog_beats_previous_budget() -> TestResult<()> {
     let template = tls.effect_batch(RECORDS as usize)?;
     assert_eq!(template.record_count() as u64, RECORDS);
     let bytes = control::EvidenceBatch::from(template.clone()).encoded_len() as u64;
-    assert!(bytes <= control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES as u64);
+    assert!(bytes <= control::EVIDENCE_BATCH_BYTES as u64);
     let count = (512 * 1_024 * 1_024_u64).div_ceil(bytes);
     let total = count * bytes;
-    let limit = (control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64 / bytes)
-        .min(control::MAX_EVIDENCE_BATCH_RECORDS as u64 / RECORDS)
+    let limit = (control::EVIDENCE_COMMIT_BYTES as u64 / bytes)
+        .min(control::DEFAULT_EVIDENCE_BATCH_RECORDS as u64 / RECORDS)
         .max(1);
     for path in [None, Some(tls.path().join("grpc-received.bin"))] {
         let (elapsed, rate) = GrpcTransfer::new(path.clone())

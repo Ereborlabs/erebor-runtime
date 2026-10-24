@@ -13,7 +13,6 @@ use crate::{
 };
 
 const OBSERVATION_ID_DOMAIN: &[u8] = b"MITHRIL-KERNEL-OBSERVATION-V2\0";
-pub const MAX_EVIDENCE_DECISION_CONTEXT_BYTES: usize = 16 * 1024;
 
 pub type EvidenceDigestV1 = [u8; 32];
 pub type EvidenceIdV1 = erebor_interceptor_abi::Id128V1;
@@ -89,12 +88,6 @@ impl EvidenceDecisionCatalogV1 {
     }
 
     pub fn from_context(context: &EvidenceDecisionContext) -> EvidenceModelResult<Option<Self>> {
-        if context.encoded_len() > MAX_EVIDENCE_DECISION_CONTEXT_BYTES {
-            return InvalidSnafu {
-                reason: "decision context exceeds its size limit",
-            }
-            .fail();
-        }
         if context.catalog_json.is_empty() {
             if !matches!(
                 context.catalog_state.as_str(),
@@ -166,13 +159,12 @@ impl ObservationEnvelopeV1 {
         };
         if context.schema_version != 1
             || context.original_kernel_sequence == 0
-            || context.encoded_len() > MAX_EVIDENCE_DECISION_CONTEXT_BYTES
             || context.profile_generation_ref_id
                 != self.profile_generation_ref_id.unwrap_or_default()
             || context.composite_atom_id != self.effect.policy_rule_id.unwrap_or_default()
         {
             return InvalidSnafu {
-                reason: "decision context version, size, sequence, or base coordinates differ",
+                reason: "decision context version, sequence, or base coordinates differ",
             }
             .fail();
         }

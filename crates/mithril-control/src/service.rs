@@ -140,6 +140,26 @@ enum PendingAdministrativeResponse {
 
 const ADMINISTRATIVE_NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+struct TraceResolutionGuard {
+    state: Arc<Mutex<ControlState>>,
+    node: String,
+    resolve_id: [u8; 16],
+}
+
+impl Drop for TraceResolutionGuard {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            if state
+                .trace_resolutions
+                .get(&self.node)
+                .is_some_and(|(request, _)| request.resolve_id == self.resolve_id)
+            {
+                state.trace_resolutions.remove(&self.node);
+            }
+        }
+    }
+}
+
 mod packages;
 
 #[derive(Clone)]
@@ -156,7 +176,6 @@ pub struct ControlPlane {
     trace_signer: Option<Arc<(String, u64, ed25519_dalek::SigningKey)>>,
     notifications: Option<Arc<crate::ControlNotificationOwner>>,
     authority: Option<Arc<crate::AuthorityLeaseOwner>>,
-    trace_admission: Arc<tokio::sync::Semaphore>,
     evidence_admission: Arc<crate::evidence::EvidenceAdmission>,
     #[cfg(feature = "test-fixtures")]
     evidence_commit_hook: Option<fn()>,
@@ -327,7 +346,6 @@ impl ControlPlane {
             trace_signer: None,
             notifications: None,
             authority: None,
-            trace_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             #[cfg(feature = "test-fixtures")]
             evidence_commit_hook: None,
         }
@@ -394,7 +412,6 @@ impl ControlPlane {
             trace_signer: None,
             notifications: None,
             authority: None,
-            trace_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             #[cfg(feature = "test-fixtures")]
             evidence_commit_hook: None,
         })
@@ -1638,21 +1655,19 @@ impl NodeEvidence for ControlPlane {
                             tokio::time::Instant::now() + std::time::Duration::from_millis(50),
                         );
                     }
-                    framed_bytes = framed_bytes.saturating_add(batch.framed_records.len());
-                    if framed_bytes > crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
-                        || group.len() >= crate::MAX_EVIDENCE_BATCH_RECORDS
-                    {
+                    let Some(bytes) = framed_bytes.checked_add(batch.framed_records.len()) else {
                         drop(permit.take());
                         let _result = output
                             .send(Err(Status::invalid_argument(
-                                "an evidence commit group exceeds one segment",
+                                "the evidence commit byte range overflowed",
                             )))
                             .await;
                         return;
-                    }
+                    };
+                    framed_bytes = bytes;
                     let commit_group_tail = batch.commit_group_tail;
                     group.push(request);
-                    if !commit_group_tail {
+                    if !commit_group_tail && framed_bytes < crate::EVIDENCE_COMMIT_BYTES {
                         continue;
                     }
                 } else if group.is_empty() {
@@ -1913,9 +1928,9 @@ impl ControlPlane {
         access
             .validate(access.tenant_id, utc_now_ns()? as u64)
             .map_err(trace_status)?;
-        if facts.is_empty() || facts.len() > 16 {
+        if facts.is_empty() {
             return Err(Status::invalid_argument(
-                "diagnostic resolution requires 1..16 targets and current access",
+                "diagnostic resolution requires targets and current access",
             ));
         }
         let inventory = self.workload_inventory();
@@ -1941,6 +1956,16 @@ impl ControlPlane {
             }
         }
         for (node, facts) in groups {
+            let now = utc_now_ns()? as u64;
+            access
+                .validate(access.tenant_id, now)
+                .map_err(trace_status)?;
+            let remaining = std::time::Duration::from_nanos(access.valid_until_unix_ns - now);
+            let deadline = tokio::time::Instant::now()
+                .checked_add(remaining)
+                .ok_or_else(|| {
+                    Status::invalid_argument("diagnostic authority deadline overflowed")
+                })?;
             let request = crate::TraceResolveV1 {
                 resolve_id: *uuid::Uuid::new_v4().as_bytes(),
                 facts,
@@ -1951,9 +1976,7 @@ impl ControlPlane {
                 state
                     .trace_resolutions
                     .retain(|_, (_, sender)| !sender.is_closed());
-                if state.trace_resolutions.len() >= 16
-                    || state.trace_resolutions.contains_key(&node)
-                {
+                if state.trace_resolutions.contains_key(&node) {
                     return Err(Status::resource_exhausted(
                         "diagnostic target resolution is busy",
                     ));
@@ -1962,20 +1985,17 @@ impl ControlPlane {
                     .trace_resolutions
                     .insert(node.clone(), (request.clone(), send));
             }
-            let result = tokio::time::timeout(std::time::Duration::from_secs(5), receive).await;
-            {
-                let mut state = self.lock_state()?;
-                if state
-                    .trace_resolutions
-                    .get(&node)
-                    .is_some_and(|(pending, _)| pending.resolve_id == request.resolve_id)
-                {
-                    state.trace_resolutions.remove(&node);
-                }
-            }
+            let guard = TraceResolutionGuard {
+                state: self.state.clone(),
+                node: node.clone(),
+                resolve_id: request.resolve_id,
+            };
+            let result = tokio::time::timeout_at(deadline, receive).await;
+            drop(guard);
             match result {
                 Ok(Ok(result)) => participants.extend(result.participants),
-                _ => {
+                Err(_) => return Err(Status::deadline_exceeded("diagnostic authority expired")),
+                Ok(Err(_)) => {
                     for fact in request.facts {
                         participants.push(crate::TraceParticipantV1 {
                             fact_digest: crate::DiscoveryDigestV1::of(&fact)
@@ -1998,9 +2018,6 @@ impl ControlPlane {
     ) -> Result<crate::TraceExchangeReplyV1, Status> {
         self.require_session(node, context)?;
         self.require_current_trust(node, context)?;
-        if exchange.retained.len() > 128 {
-            return Err(Status::invalid_argument("too many retained diagnostics"));
-        }
         let owner = self.trace_owner()?;
         let tenant = self.evidence_tenant(node)?;
         let boot: [u8; 16] = context
@@ -2177,36 +2194,19 @@ impl crate::node_diagnostics_server::NodeDiagnostics for ControlPlane {
         request: Request<crate::NodeDiagnosticRequest>,
     ) -> Result<Response<crate::NodeDiagnosticReply>, Status> {
         let node = self.authenticated_node(&request)?;
-        let admission = self
-            .trace_admission
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| Status::resource_exhausted("diagnostic exchange is busy"))?;
         let request = request.into_inner();
-        if request.payload_json.len() > crate::MAX_TRACE_GRPC_MESSAGE_BYTES - 4096 {
-            return Err(Status::resource_exhausted(
-                "diagnostic request exceeds its bound",
-            ));
-        }
         let context = request
             .session
             .ok_or_else(|| Status::invalid_argument("node session is required"))?;
         let exchange: crate::TraceExchangeV1 = serde_json::from_slice(&request.payload_json)
             .map_err(|_| Status::invalid_argument("diagnostic request schema is invalid"))?;
         let control = self.clone();
-        let reply = tokio::task::spawn_blocking(move || {
-            let _admission = admission;
-            control.exchange_trace(&node, &context, exchange)
-        })
-        .await
-        .map_err(|_| Status::internal("diagnostic exchange worker failed"))??;
+        let reply =
+            tokio::task::spawn_blocking(move || control.exchange_trace(&node, &context, exchange))
+                .await
+                .map_err(|_| Status::internal("diagnostic exchange worker failed"))??;
         let payload_json = serde_json::to_vec(&reply)
             .map_err(|_| Status::internal("diagnostic reply cannot be encoded"))?;
-        if payload_json.len() > crate::MAX_TRACE_GRPC_MESSAGE_BYTES - 4096 {
-            return Err(Status::resource_exhausted(
-                "diagnostic reply exceeds its bound",
-            ));
-        }
         Ok(Response::new(crate::NodeDiagnosticReply { payload_json }))
     }
 }
@@ -3140,6 +3140,162 @@ mod tests {
             .get_mut("node-a")
             .ok_or("missing session")?
             .workload_targets = vec![request.targets[0].fact.clone()];
+        {
+            let facts = vec![request.targets[0].fact.clone()];
+            let mut pending = Box::pin(control.resolve_trace_targets(facts.clone(), &trace_access));
+            assert!(futures_util::poll!(pending.as_mut()).is_pending());
+            assert_eq!(control.lock_state()?.trace_resolutions.len(), 1);
+            drop(pending);
+            assert!(control.lock_state()?.trace_resolutions.is_empty());
+            let mut first = Box::pin(control.resolve_trace_targets(facts.clone(), &trace_access));
+            assert!(futures_util::poll!(first.as_mut()).is_pending());
+            let resolve = control
+                .exchange_trace("node-a", &context, TraceExchangeV1::default())?
+                .resolve
+                .ok_or("resolution")?;
+            control.exchange_trace(
+                "node-a",
+                &context,
+                TraceExchangeV1 {
+                    resolved: Some(crate::TraceResolvedV1 {
+                        resolve_id: resolve.resolve_id,
+                        participants: vec![crate::TraceParticipantV1 {
+                            fact_digest: request.targets[0].fact_digest.clone(),
+                            state: crate::TraceParticipantStateV1::Resolved,
+                            target: Some(request.targets[0].clone()),
+                        }],
+                    }),
+                    ..Default::default()
+                },
+            )?;
+            let mut second = Box::pin(control.resolve_trace_targets(facts, &trace_access));
+            assert!(futures_util::poll!(second.as_mut()).is_pending());
+            drop(first);
+            assert_eq!(control.lock_state()?.trace_resolutions.len(), 1);
+            drop(second);
+            assert!(control.lock_state()?.trace_resolutions.is_empty());
+        }
+        {
+            use erebor_runtime_ipc::araphor as proto;
+            use proto::araphor_client_service_server::AraphorClientService as _;
+            use std::{future::Future as _, task::Poll, time::Duration};
+
+            let provider = crate::client_auth::tests::owner()?;
+            let grant = || crate::InvestigateGrant {
+                subject: "alice".into(),
+                tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+            };
+            let auth = std::sync::Arc::new(crate::ClientAuth::new(
+                crate::ClientAuthConfig {
+                    origin: "https://control.example".into(),
+                    oidc: crate::OidcConfig {
+                        issuer_url: "https://issuer.example".into(),
+                        client_id: "browser-client".into(),
+                        client_secret_path: None,
+                        ca_path: None,
+                    },
+                    service: None,
+                    investigators: vec![grant()],
+                    package_managers: Vec::new(),
+                    package_trust: Vec::new(),
+                    session_seconds: 2,
+                },
+                provider.oidc(),
+            )?);
+            let client =
+                crate::ClientGrpcOwner::new(control.clone(), auth.clone(), Default::default())?;
+            for expired in [false, true] {
+                auth.replace_grants(vec![grant()])?;
+                let session = crate::client_auth::tests::session(&auth)?;
+                let mut input = tonic::Request::new(proto::SubmitTraceRequest {
+                    idempotency_key: vec![70; 16],
+                    selection: Some(proto::InputSelection {
+                        target: "pod-uid/pod".into(),
+                        cluster: "cluster".into(),
+                        container: "worker".into(),
+                        node_ids: Vec::new(),
+                    }),
+                    source: Some(proto::submit_trace_request::Source::Script(
+                        request.source.bytes.clone(),
+                    )),
+                    collection_seconds: 1,
+                    finding_reference: String::new(),
+                });
+                let metadata = input.metadata_mut();
+                metadata.insert(
+                    "x-araphor-tenant",
+                    uuid::Uuid::from_bytes([1; 16]).to_string().parse()?,
+                );
+                metadata.insert("origin", "https://control.example".parse()?);
+                metadata.insert(
+                    "cookie",
+                    format!("araphor-session={}", session.token).parse()?,
+                );
+                metadata.insert("x-araphor-csrf", session.csrf.parse()?);
+                let mut submit = Box::pin(client.submit_trace(input));
+                let resolve_id = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    futures_util::future::poll_fn(
+                        |cx| -> Poll<std::result::Result<[u8; 16], Box<dyn std::error::Error>>> {
+                            if let Poll::Ready(result) = submit.as_mut().poll(cx) {
+                                return Poll::Ready(Err(format!(
+                                    "submit ended before resolution: {result:?}"
+                                )
+                                .into()));
+                            }
+                            let state = match control.lock_state() {
+                                Ok(state) => state,
+                                Err(error) => return Poll::Ready(Err(error.into())),
+                            };
+                            match state.trace_resolutions.get("node-a") {
+                                Some((request, _)) => Poll::Ready(Ok(request.resolve_id)),
+                                None => Poll::Pending,
+                            }
+                        },
+                    ),
+                )
+                .await??;
+                if !expired {
+                    auth.replace_grants(vec![
+                        grant(),
+                        crate::InvestigateGrant {
+                            subject: "bob".into(),
+                            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+                        },
+                    ])?;
+                    assert!(futures_util::poll!(submit.as_mut()).is_pending());
+                    assert_eq!(
+                        control
+                            .lock_state()?
+                            .trace_resolutions
+                            .get("node-a")
+                            .ok_or("pending resolution absent")?
+                            .0
+                            .resolve_id,
+                        resolve_id
+                    );
+                    auth.replace_grants(Vec::new())?;
+                }
+                let error = tokio::time::timeout(Duration::from_secs(5), submit)
+                    .await?
+                    .err()
+                    .ok_or("pending submission was accepted")?;
+                assert_eq!(
+                    error.code(),
+                    if expired {
+                        tonic::Code::DeadlineExceeded
+                    } else {
+                        tonic::Code::PermissionDenied
+                    }
+                );
+                assert!(control.lock_state()?.trace_resolutions.is_empty());
+                assert!(control
+                    .analysis_store()
+                    .ok_or("analysis store absent")?
+                    .trace_intent([1; 16], [70; 16])?
+                    .is_none());
+            }
+        }
         control.accept_trace(request.clone(), trace_access)?;
         let reply = control.exchange_trace("node-a", &context, TraceExchangeV1::default())?;
         let dispatch = reply.dispatch.ok_or("missing dispatch")?;

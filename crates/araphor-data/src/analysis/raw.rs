@@ -178,9 +178,6 @@ impl TraceRecord {
     }
 
     pub(super) fn terminal(bytes: &[u8], root: &Path) -> Result<crate::TraceTerminalV1> {
-        if bytes.len() > 4096 {
-            return AnalysisStore::reject_path(root, "the trace terminal exceeds its reserve");
-        }
         let terminal: crate::TraceTerminalV1 = serde_json::from_slice(bytes).map_err(|_| {
             crate::AnalysisStateSnafu {
                 path: root,
@@ -219,7 +216,7 @@ impl RawBatch {
                 batch
                     .terminal
                     .as_ref()
-                    .map(|terminal| terminal.last_sequence + 1)
+                    .and_then(|terminal| terminal.last_sequence.checked_add(1))
             })
             .ok_or_else(|| {
                 crate::TraceInvalidSnafu {
@@ -264,12 +261,6 @@ impl RawBatch {
             }
             let json = serde_json::to_vec(terminal).context(crate::JsonSnafu { path: root })?;
             terminal_bytes = json.len();
-            if json.len() > 4096 {
-                return crate::TraceInvalidSnafu {
-                    reason: "the trace terminal exceeds its reserve",
-                }
-                .fail();
-            }
             TraceRecord {
                 payload: Some(TracePayload::Terminal(json)),
             }
@@ -285,7 +276,12 @@ impl RawBatch {
         Ok(Self {
             kind: RawKind::Diagnostic(RawTraceMeta::default()),
             first_cursor: first,
-            last_cursor: first + ends.len() as u64 - 1,
+            last_cursor: first.checked_add(ends.len() as u64 - 1).ok_or_else(|| {
+                crate::TraceInvalidSnafu {
+                    reason: "the trace batch cursor overflowed",
+                }
+                .build()
+            })?,
             intake_utc_ns: intake,
             framed_records: bytes.into(),
             frame_ends: ends,
@@ -402,17 +398,17 @@ impl AnalysisStore {
             self.run_commit_hook(super::AnalysisCommitStage::AfterTraceFreeze)?;
         }
         let mut records = Vec::with_capacity(count);
-        let mut encoded_bytes = 0;
+        let mut encoded_bytes = 0_usize;
         'pages: for range in frozen {
             control.check()?;
             for record in range.read(&self.root)? {
-                if encoded_bytes + record.framed_record.len() > max_bytes {
-                    if records.is_empty() {
-                        return self.reject("one evidence frame exceeds the read page bound");
-                    }
+                let next_bytes = encoded_bytes
+                    .checked_add(record.framed_record.len())
+                    .ok_or_else(|| self.state_error("the evidence read page size overflowed"))?;
+                if !records.is_empty() && next_bytes > max_bytes {
                     break 'pages;
                 }
-                encoded_bytes += record.framed_record.len();
+                encoded_bytes = next_bytes;
                 records.push(record);
             }
         }
@@ -501,7 +497,7 @@ impl AnalysisStore {
             first_cursor,
             control,
             201,
-            crate::MAX_TRACE_FRAME_BYTES + 201 * 8 + 4096,
+            1024 * 1024 + 201 * 8 + 4096,
         )?;
         let mut output = TraceOutputPageV1 {
             frames: Vec::new(),
@@ -511,7 +507,7 @@ impl AnalysisStore {
             next_cursor: page.next_cursor,
             read_revision: page.read_revision,
         };
-        let mut bytes = 0;
+        let mut bytes = 0_usize;
         for record in page.records {
             control.check()?;
             let payload = TraceRecord::read(&record.framed_record, &self.root)?;
@@ -525,11 +521,18 @@ impl AnalysisStore {
                     continue;
                 }
             };
-            if output.frames.len() == 200 || bytes + data.len() > crate::MAX_TRACE_FRAME_BYTES {
+            if output.frames.len() == 200
+                || (!output.frames.is_empty()
+                    && bytes
+                        .checked_add(data.len())
+                        .is_none_or(|bytes| bytes > 1024 * 1024))
+            {
                 output.next_cursor = Some(record.cursor);
                 break;
             }
-            bytes += data.len();
+            bytes = bytes
+                .checked_add(data.len())
+                .ok_or_else(|| self.state_error("the trace page byte count overflowed"))?;
             output.positions.push(record.position);
             output.frames.push(crate::TraceFrameV1 {
                 execution_id: identity.execution_id,
@@ -709,7 +712,7 @@ impl AnalysisStore {
         let (id, added, created) = (append.id, append.added(), append.header.is_some());
         let terminal_only = matches!(&commit.kind, Some(RawKind::Diagnostic(progress))
             if progress.terminal && commit.spans.len() == 1
-                && commit.spans[0].first == progress.last_sequence + 1);
+                && progress.last_sequence.checked_add(1) == Some(commit.spans[0].first));
         let mut charge = added;
         if logical || terminal_only {
             let json = identity.json(&self.root)?;
@@ -1199,7 +1202,7 @@ impl RawJournal {
             if progress.terminal {
                 return crate::AnalysisConflictSnafu.fail();
             }
-            if cursor != progress.last_sequence + 1 {
+            if progress.last_sequence.checked_add(1) != Some(cursor) {
                 return crate::TraceInvalidSnafu {
                     reason: "the diagnostic output skips a sequence",
                 }
@@ -1209,14 +1212,22 @@ impl RawJournal {
                 TracePayload::Metadata(bytes)
                 | TracePayload::Data(bytes)
                 | TracePayload::Diagnostic(bytes) => {
-                    if bytes.is_empty() || bytes.len() > crate::MAX_TRACE_FRAME_BYTES {
+                    if bytes.is_empty() || cursor.checked_add(1).is_none() {
                         return crate::TraceInvalidSnafu {
                             reason: "the diagnostic frame size is invalid",
                         }
                         .fail();
                     }
                     progress.last_sequence = cursor;
-                    progress.output_bytes += bytes.len() as u64;
+                    progress.output_bytes = progress
+                        .output_bytes
+                        .checked_add(bytes.len() as u64)
+                        .ok_or_else(|| {
+                        crate::TraceInvalidSnafu {
+                            reason: "the diagnostic output byte count overflowed",
+                        }
+                        .build()
+                    })?;
                 }
                 TracePayload::Terminal(bytes) => {
                     let terminal = TraceRecord::terminal(&bytes, &self.root)?;
@@ -1231,14 +1242,6 @@ impl RawJournal {
                     }
                     progress.terminal = true;
                 }
-            }
-            if progress.last_sequence > 4096
-                || progress.output_bytes > crate::MAX_TRACE_OUTPUT_BYTES
-            {
-                return crate::TraceInvalidSnafu {
-                    reason: "the diagnostic execution exceeds its output bound",
-                }
-                .fail();
             }
         }
         commit.kind = Some(RawKind::Diagnostic(progress));
@@ -1278,22 +1281,26 @@ impl RawJournal {
                         | TracePayload::Data(bytes)
                         | TracePayload::Diagnostic(bytes) => {
                             if bytes.is_empty()
-                                || bytes.len() > crate::MAX_TRACE_FRAME_BYTES
+                                || cursor.checked_add(1).is_none()
                                 || cursor > progress.last_sequence
                             {
                                 return Err(
                                     self.invalid("the recovered diagnostic frame is invalid")
                                 );
                             }
-                            added += bytes.len() as u64;
-                            frames += 1;
+                            added = added.checked_add(bytes.len() as u64).ok_or_else(|| {
+                                self.invalid("the recovered diagnostic byte count overflowed")
+                            })?;
+                            frames = frames.checked_add(1).ok_or_else(|| {
+                                self.invalid("the recovered diagnostic frame count overflowed")
+                            })?;
                         }
                         TracePayload::Terminal(bytes) => {
                             let value = TraceRecord::terminal(&bytes, &self.root)?;
                             if value.execution_id != identity.execution_id
                                 || value.last_sequence != progress.last_sequence
                                 || value.output_bytes != progress.output_bytes
-                                || cursor != value.last_sequence + 1
+                                || value.last_sequence.checked_add(1) != Some(cursor)
                             {
                                 return Err(
                                     self.invalid("the recovered diagnostic terminal conflicts")
@@ -1303,12 +1310,13 @@ impl RawJournal {
                         }
                     }
                 }
-                if progress.last_sequence > 4096
-                    || progress.output_bytes > crate::MAX_TRACE_OUTPUT_BYTES
-                    || progress.output_bytes < added
+                if progress.output_bytes < added
                     || progress.output_bytes < progress.last_sequence
                     || progress.terminal != terminal.is_some()
-                    || last != progress.last_sequence + u64::from(progress.terminal)
+                    || progress
+                        .last_sequence
+                        .checked_add(u64::from(progress.terminal))
+                        != Some(last)
                 {
                     return Err(self.invalid("the recovered diagnostic progress is invalid"));
                 }
@@ -1321,11 +1329,15 @@ impl RawJournal {
                     });
                 let first = commit.spans[0].first;
                 let prior_cursor = saved.map_or(0, TraceOutputReceiptV1::cursor);
-                if first == prior_cursor + 1
-                    && (saved.map_or(0, |receipt| receipt.last_sequence) + frames
-                        != progress.last_sequence
-                        || saved.map_or(0, |receipt| receipt.output_bytes) + added
-                            != progress.output_bytes)
+                if prior_cursor.checked_add(1) == Some(first)
+                    && (saved
+                        .map_or(0, |receipt| receipt.last_sequence)
+                        .checked_add(frames)
+                        != Some(progress.last_sequence)
+                        || saved
+                            .map_or(0, |receipt| receipt.output_bytes)
+                            .checked_add(added)
+                            != Some(progress.output_bytes))
                 {
                     return Err(
                         self.invalid("the diagnostic cumulative counters differ from output")
@@ -1703,11 +1715,6 @@ impl RawJournal {
             }
             .fail();
         }
-        if batch.first_cursor > contiguous.saturating_add(1)
-            && batch.last_cursor > contiguous.saturating_add(crate::MAX_PENDING_EVIDENCE_RECORDS)
-        {
-            return Err(self.invalid("out-of-order evidence exceeds the pending window"));
-        }
         let overlap = self
             .ranges
             .range((key.clone(), 0)..=(key.clone(), batch.last_cursor))
@@ -1724,7 +1731,15 @@ impl RawJournal {
                     first: batch.first_cursor,
                     last: batch.last_cursor,
                     start: 0,
-                    ends: batch.frame_ends.iter().map(|end| *end as u32).collect(),
+                    ends: batch
+                        .frame_ends
+                        .iter()
+                        .map(|end| {
+                            u32::try_from(*end).map_err(|_| {
+                                self.invalid("the raw frame offset is not representable")
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
                     ordinal: 0,
                 }],
                 body: batch.framed_records.clone(),
@@ -1778,7 +1793,7 @@ impl RawJournal {
         };
         let mut body = Vec::new();
         let mut start = 0;
-        let mut ordinal = 0;
+        let mut ordinal = 0_u32;
         for (index, &end) in batch.frame_ends.iter().enumerate() {
             let cursor = batch.first_cursor + index as u64;
             if !retained[index] {
@@ -1793,19 +1808,33 @@ impl RawJournal {
                     commit.spans.push(RawSpan {
                         first: cursor,
                         last: cursor,
-                        start: body.len() as u32,
+                        start: u32::try_from(body.len()).map_err(|_| {
+                            self.invalid("the raw body offset is not representable")
+                        })?,
                         ends: Vec::new(),
                         ordinal,
                     });
                 }
-                body.extend_from_slice(&batch.framed_records[start..end]);
+                let frame = &batch.framed_records[start..end];
+                let body_end = body
+                    .len()
+                    .checked_add(frame.len())
+                    .and_then(|end| u32::try_from(end).ok())
+                    .ok_or_else(|| self.invalid("the raw body offset is not representable"))?;
+                body.extend_from_slice(frame);
                 let span = commit
                     .spans
                     .last_mut()
                     .ok_or_else(|| self.invalid("the pending raw span is absent"))?;
                 span.last = cursor;
-                span.ends.push(body.len() as u32 - span.start);
-                ordinal += 1;
+                span.ends.push(
+                    body_end
+                        .checked_sub(span.start)
+                        .ok_or_else(|| self.invalid("the raw frame end precedes its start"))?,
+                );
+                ordinal = ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| self.invalid("the raw ordinal is exhausted"))?;
             }
             start = end;
         }
@@ -2013,16 +2042,20 @@ impl RawCommit {
                     }
                     .build()
                 })?;
-            ordinal += span.ends.len();
+            ordinal = ordinal.checked_add(span.ends.len()).ok_or_else(|| {
+                crate::AnalysisStateSnafu {
+                    path: root,
+                    reason: "the raw ordinal is exhausted",
+                }
+                .build()
+            })?;
             prior = span.last;
         }
         if self.kind.is_none()
             || self.revision == 0
             || self.intake == 0
             || ordinal == 0
-            || ordinal > crate::MAX_EVIDENCE_BATCH_RECORDS
             || self.body.len() != end as usize
-            || self.body.len() > crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
         {
             return AnalysisStore::reject_path(root, "the raw commit bounds are invalid");
         }
@@ -2349,12 +2382,12 @@ pub(super) mod tests {
             execution_id: identity.execution_id,
             sequence: 1,
             kind: crate::TraceFrameKindV1::Data,
-            bytes: vec![7; crate::MAX_TRACE_FRAME_BYTES],
+            bytes: vec![7; 1024 * 1024],
         };
         let batch = crate::TraceBatchV1 {
             execution_id: identity.execution_id,
             frames: vec![frame.clone()],
-            terminal: Some(trace_terminal(1, crate::MAX_TRACE_FRAME_BYTES as u64)),
+            terminal: Some(trace_terminal(1, (1024 * 1024) as u64)),
         };
         store.append_trace(identity, &batch, 200)?;
         let page = store.read_trace(identity, 1, &super::super::AnalysisReadControl::default())?;
@@ -2626,6 +2659,65 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn observability_receipt_cursor() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::{EvidenceRetentionOwner, RetentionLimitsV1};
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let store = AnalysisStore::open_with_limits(
+            &root,
+            RetentionLimitsV1 {
+                raw_max_age_ns: Some(1),
+                ..Default::default()
+            },
+            Default::default(),
+        )?;
+        let intent = trace_intent()?;
+        let identity = &intent.bindings[0].identity;
+        store.accept_trace(&intent)?;
+        store.append_trace(
+            identity,
+            &crate::TraceBatchV1 {
+                execution_id: identity.execution_id,
+                frames: vec![crate::TraceFrameV1 {
+                    execution_id: identity.execution_id,
+                    sequence: 1,
+                    kind: crate::TraceFrameKindV1::Data,
+                    bytes: vec![7],
+                }],
+                terminal: None,
+            },
+            100,
+        )?;
+        let removed = EvidenceRetentionOwner::new(&store).retain_trace(identity, 102)?;
+        assert_eq!((removed.removed_records, removed.retained_floor), (1, 1));
+        {
+            let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
+            let source = RawIdentity::Diagnostic(identity.clone());
+            assert!(!raw.entries.values().any(|entry| entry.identity == source));
+        }
+        {
+            let mut writer = store.writer()?;
+            let connection = writer.get_mut()?;
+            let receipt = store.read_trace_receipt(connection, identity)?;
+            assert_eq!((receipt.last_sequence, receipt.output_bytes), (1, 1));
+            assert!(receipt.terminal.is_none());
+            connection.execute("UPDATE trace_receipts SET last_sequence = ?, output_bytes = ? WHERE stream_key = ?",
+                duckdb::params![u64::MAX, u64::MAX, RawIdentity::Diagnostic(identity.clone()).key()])?;
+            assert!(matches!(
+                store.read_trace_receipt(connection, identity),
+                Err(crate::Error::AnalysisState { .. })
+            ));
+        }
+        drop(store);
+        assert!(matches!(
+            AnalysisStore::open(&root),
+            Err(crate::Error::AnalysisState { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn observability_rotation_totals() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use crate::{AnalysisReadControl, EvidenceRetentionOwner, RetentionLimitsV1};
 
@@ -2645,7 +2737,7 @@ pub(super) mod tests {
                 execution_id: identity.execution_id,
                 sequence: 1,
                 kind: crate::TraceFrameKindV1::Data,
-                bytes: vec![7; crate::MAX_TRACE_FRAME_BYTES],
+                bytes: vec![7; 1024 * 1024 + 1],
             }],
             terminal: None,
         };
@@ -2653,15 +2745,12 @@ pub(super) mod tests {
             batch.frames[0].sequence = sequence;
             let receipt = store.append_trace(identity, &batch, 100 + sequence)?;
             assert_eq!(receipt.last_sequence, sequence);
-            assert_eq!(
-                receipt.output_bytes,
-                sequence * crate::MAX_TRACE_FRAME_BYTES as u64
-            );
+            assert_eq!(receipt.output_bytes, sequence * (1024 * 1024 + 1) as u64);
         }
         let terminal = crate::TraceBatchV1 {
             execution_id: identity.execution_id,
             frames: vec![],
-            terminal: Some(trace_terminal(16, 16 * crate::MAX_TRACE_FRAME_BYTES as u64)),
+            terminal: Some(trace_terminal(16, 16 * (1024 * 1024 + 1) as u64)),
         };
         let receipt = store.append_trace(identity, &terminal, 117)?;
         let first = store.read_trace(identity, 1, &AnalysisReadControl::default())?;

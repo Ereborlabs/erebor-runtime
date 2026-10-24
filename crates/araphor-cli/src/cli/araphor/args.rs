@@ -225,9 +225,9 @@ impl AraphorCommand {
                 };
                 let seconds = args.duration.map_or(30, |span| span.0.as_secs());
                 ensure!(
-                    (1..=300).contains(&seconds),
+                    seconds > 0 && u16::try_from(seconds).is_ok(),
                     InvalidSnafu {
-                        field: "trace duration must be 1 to 300 seconds"
+                        field: "trace duration must fit a positive native u16 interval"
                     }
                 );
                 let trace_id = Uuid::new_v4().as_bytes().to_vec();

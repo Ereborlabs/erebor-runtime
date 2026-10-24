@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::mem;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -92,8 +92,13 @@ pub struct EffectObservationHealth {
 }
 
 pub struct EffectObservationIngress {
-    sender: SyncSender<Box<[u8]>>,
+    sender: ObservationSender,
     observations: EffectObservationStore,
+}
+
+enum ObservationSender {
+    Unbounded(Sender<Box<[u8]>>),
+    Bounded(SyncSender<Box<[u8]>>),
 }
 
 pub struct EffectObservationWorker {
@@ -108,7 +113,14 @@ impl EffectObservationIngress {
             .inner
             .reader_queue_pending_records
             .fetch_add(1, Ordering::Relaxed);
-        match self.sender.try_send(bytes.to_vec().into_boxed_slice()) {
+        let bytes = bytes.to_vec().into_boxed_slice();
+        let sent = match &self.sender {
+            ObservationSender::Unbounded(sender) => sender
+                .send(bytes)
+                .map_err(|error| TrySendError::Disconnected(error.0)),
+            ObservationSender::Bounded(sender) => sender.try_send(bytes),
+        };
+        match sent {
             Ok(()) => {}
             Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
                 self.observations
@@ -127,8 +139,7 @@ impl EffectObservationIngress {
 impl EffectObservationWorker {
     pub fn run(self) {
         while let Ok(first) = self.receiver.recv() {
-            let mut batch = Vec::with_capacity(self.batch_capacity);
-            batch.push(first);
+            let mut batch = vec![first];
             while batch.len() < self.batch_capacity {
                 let Ok(bytes) = self.receiver.try_recv() else {
                     break;
@@ -366,19 +377,31 @@ impl EffectObservationStore {
         }
     }
 
-    pub fn bounded_ingestion_queue(
+    pub fn ingestion_queue(
         &self,
-        capacity: usize,
+        capacity: Option<usize>,
         batch_capacity: usize,
     ) -> crate::Result<(EffectObservationIngress, EffectObservationWorker)> {
-        if capacity == 0 || batch_capacity == 0 || batch_capacity > capacity {
+        if capacity == Some(0)
+            || batch_capacity == 0
+            || capacity.is_some_and(|capacity| batch_capacity > capacity)
+        {
             return Err(crate::Error::EvidenceState {
                 reason: "effect observation reader queue and batch capacities are invalid"
                     .to_owned(),
                 location: snafu::Location::new(file!(), line!(), column!()),
             });
         }
-        let (sender, receiver) = mpsc::sync_channel(capacity);
+        let (sender, receiver) = match capacity {
+            Some(capacity) => {
+                let (sender, receiver) = mpsc::sync_channel(capacity);
+                (ObservationSender::Bounded(sender), receiver)
+            }
+            None => {
+                let (sender, receiver) = mpsc::channel();
+                (ObservationSender::Unbounded(sender), receiver)
+            }
+        };
         Ok((
             EffectObservationIngress {
                 sender,
@@ -1265,9 +1288,42 @@ mod tests {
     }
 
     #[test]
+    fn default_reader_queue_keeps_arrivals() -> crate::Result<()> {
+        let store = EffectObservationStore::new(2);
+        assert!(store.ingestion_queue(Some(0), 1).is_err());
+        assert!(store.ingestion_queue(None, 0).is_err());
+        let (ingress, worker) = store.ingestion_queue(None, usize::MAX)?;
+        for source_sequence in 1..=4_097 {
+            ingress.record_bytes(
+                EffectObservationV1 {
+                    source_sequence,
+                    ..EffectObservationV1::default()
+                }
+                .as_bytes(),
+            );
+        }
+        assert_eq!(store.reader_queue_pending_records(), 4_097);
+        assert_eq!(store.health(None).reader_queue_dropped_events, 0);
+        drop(ingress);
+        worker.run();
+        assert_eq!(store.reader_queue_pending_records(), 0);
+        assert_eq!(store.health(None).reader_queue_dropped_events, 0);
+        assert_eq!(
+            store.recent().last().map(|event| event.source_sequence),
+            Some(4_097)
+        );
+        let (disconnected, worker) = store.ingestion_queue(None, 1)?;
+        drop(worker);
+        disconnected.record_bytes(&[]);
+        assert_eq!(store.reader_queue_pending_records(), 0);
+        assert_eq!(store.health(None).reader_queue_dropped_events, 1);
+        Ok(())
+    }
+
+    #[test]
     fn bounded_reader_queue_drops_only_after_capacity() -> crate::Result<()> {
         let store = EffectObservationStore::new(2);
-        let (ingress, worker) = store.bounded_ingestion_queue(1, 1)?;
+        let (ingress, worker) = store.ingestion_queue(Some(1), 1)?;
         ingress.record_bytes(
             EffectObservationV1 {
                 source_sequence: 1,
@@ -1311,7 +1367,7 @@ mod tests {
             )?,
         )?;
         store.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
-        let (ingress, worker) = store.bounded_ingestion_queue(1, 1)?;
+        let (ingress, worker) = store.ingestion_queue(Some(1), 1)?;
         for source_sequence in [1, 2] {
             ingress.record_bytes(
                 EffectObservationV1 {
@@ -1422,7 +1478,7 @@ mod tests {
             4,
             directory.path().join("wal"),
             EvidenceWalLimits {
-                maximum_retained_records: 1,
+                maximum_retained_records: Some(1),
                 maximum_batch_records: 1,
                 ..EvidenceWalLimits::default()
             },
@@ -1511,7 +1567,7 @@ mod tests {
             4,
             directory.path().join("wal"),
             EvidenceWalLimits {
-                maximum_retained_records: 3,
+                maximum_retained_records: Some(3),
                 maximum_batch_records: 1,
                 capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
                 ..EvidenceWalLimits::default()

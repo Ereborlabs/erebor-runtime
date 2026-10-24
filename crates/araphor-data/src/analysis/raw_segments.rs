@@ -8,10 +8,9 @@ use prost::Message as _;
 use snafu::ResultExt as _;
 
 use super::raw::{RawCommit, RawEntry, RawIdentity, RawJournal, RawKind, RawLocation, RawMeta};
-use super::{AnalysisStore, SegmentFile, StorageUsageV1, MAX_EVIDENCE_SEGMENT_BYTES};
+use super::{AnalysisStore, SegmentFile, StorageUsageV1, EVIDENCE_SEGMENT_BYTES};
 use crate::{AnalysisStateSnafu, IoSnafu, Result};
 
-const RAW_COMMIT_LIMIT: usize = crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES + 65536;
 pub(super) type DirectoryStamp = (u64, u64, i64, i64, i64, i64);
 
 pub(super) struct RawSegment {
@@ -37,7 +36,7 @@ impl RawAppend {
 
 impl RawCommit {
     pub(super) fn from_frame(bytes: &[u8], path: &Path) -> Result<Self> {
-        if bytes.len() < 8 || bytes.len() > RAW_COMMIT_LIMIT + 8 {
+        if bytes.len() < 8 {
             return AnalysisStore::reject_path(path, "the raw commit frame size is invalid");
         }
         let length = u32::from_be_bytes(bytes[..4].try_into().unwrap_or_default()) as usize;
@@ -174,10 +173,10 @@ impl RawJournal {
         commit.validate(&self.root)?;
         let length = u32::try_from(commit.encoded_len())
             .map_err(|_| self.invalid("the raw commit is too large"))?;
-        if length as usize > RAW_COMMIT_LIMIT {
-            return Err(self.invalid("the raw commit is too large"));
-        }
-        let mut frame = Vec::with_capacity(length as usize + 8);
+        let capacity = (length as usize)
+            .checked_add(8)
+            .ok_or_else(|| self.invalid("the raw commit size is not representable"))?;
+        let mut frame = Vec::with_capacity(capacity);
         frame.extend_from_slice(&length.to_be_bytes());
         commit
             .encode(&mut frame)
@@ -194,7 +193,7 @@ impl RawJournal {
                 segment
                     .end
                     .checked_add(frame.len() as u64)
-                    .is_some_and(|end| end <= MAX_EVIDENCE_SEGMENT_BYTES as u64)
+                    .is_some_and(|end| end <= EVIDENCE_SEGMENT_BYTES as u64)
                     && !(terminal
                         && self
                             .budget
@@ -215,13 +214,10 @@ impl RawJournal {
             .checked_add(1)
             .ok_or_else(|| self.invalid("the evidence segment sequence is exhausted"))?;
         let header = SegmentFile::encode_raw(identity)?;
-        if header
+        header
             .len()
             .checked_add(frame.len())
-            .is_none_or(|bytes| bytes > MAX_EVIDENCE_SEGMENT_BYTES)
-        {
-            return Err(self.invalid("one evidence append exceeds 16 MiB"));
-        }
+            .ok_or_else(|| self.invalid("the raw segment size is not representable"))?;
         Ok(RawAppend {
             id: self.next_segment,
             offset: header.len() as u64,
@@ -407,7 +403,11 @@ impl RawJournal {
             if sealed.is_some_and(|end| end != length) {
                 return Err(journal.invalid("the sealed segment length differs from its name"));
             }
-            let bytes = file.read(0, length as usize)?;
+            let bytes = file.read(
+                0,
+                usize::try_from(length)
+                    .map_err(|_| journal.invalid("the segment size is not representable"))?,
+            )?;
             let (identity, mut offset) = SegmentFile::decode_raw(kind, &bytes, &path)?;
             if !identity.valid() {
                 return Err(journal.invalid("the raw source identity is invalid"));
@@ -418,12 +418,13 @@ impl RawJournal {
                     break;
                 };
                 let length = u32::from_be_bytes(length.try_into().unwrap_or_default()) as usize;
-                if length == 0 || length > RAW_COMMIT_LIMIT {
+                if length == 0 {
                     return Err(journal
                         .invalid("the evidence segment contains a record outside its size bound"));
                 }
                 let Some(end) = offset
-                    .checked_add(length + 8)
+                    .checked_add(length)
+                    .and_then(|end| end.checked_add(8))
                     .filter(|end| *end <= bytes.len())
                 else {
                     break;

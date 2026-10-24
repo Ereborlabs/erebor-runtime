@@ -22,8 +22,8 @@ fn packages_preserve_native_references() -> TestResult {
         source_id: [3; 16],
         source_epoch: 1,
     };
-    for first in (1..=8193_u64).step_by(crate::MAX_EVIDENCE_BATCH_RECORDS) {
-        let last = (first + crate::MAX_EVIDENCE_BATCH_RECORDS as u64 - 1).min(8193);
+    for first in (1..=8193_u64).step_by(crate::EVIDENCE_BATCH_RECORDS) {
+        let last = (first + crate::EVIDENCE_BATCH_RECORDS as u64 - 1).min(8193);
         let count = (last - first + 1) as usize;
         store.accept_validated_batch(
             identity.clone(),

@@ -5,7 +5,6 @@ use crate::{error::InvalidConfigurationSnafu, DiscoveryDigestV1, Result, Workloa
 pub use araphor_data::{
     TraceBatchV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,
     TraceMeasurementV1, TraceSourceV1, TraceTerminalReasonV1, TraceTerminalV1,
-    MAX_TRACE_FRAME_BYTES, MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES, MAX_TRACE_TARGETS,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -25,16 +24,6 @@ pub struct TraceTargetV1 {
 
 impl TraceTargetV1 {
     pub fn validate(&self) -> Result<()> {
-        let bytes = serde_json::to_vec(&self.fact).map_err(|_| {
-            InvalidConfigurationSnafu {
-                reason: "trace workload facts cannot be encoded",
-            }
-            .build()
-        })?;
-        TraceRequestV1::require(
-            bytes.len() <= 32 * 1024,
-            "trace workload facts exceed 32 KiB",
-        )?;
         TraceRequestV1::require(
             self.node_boot_id != [0; 16]
                 && self.binding_id != [0; 16]
@@ -89,7 +78,6 @@ pub struct TraceRequestV1 {
 
 impl TraceRequestV1 {
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
-        Self::require(bytes.len() <= 1024 * 1024, "trace request exceeds 1 MiB")?;
         let value: Self = serde_json::from_slice(bytes).map_err(|_| {
             InvalidConfigurationSnafu {
                 reason: "trace request schema is invalid",
@@ -121,9 +109,13 @@ impl TraceRequestV1 {
         Self::require(
             self.tenant_id != [0; 16]
                 && self.request_id != [0; 16]
-                && (1..=300).contains(&self.collection_seconds)
+                && self.collection_seconds > 0
                 && !self.targets.is_empty()
-                && self.targets.len() + self.unresolved.len() <= MAX_TRACE_TARGETS,
+                && self
+                    .targets
+                    .len()
+                    .checked_sub(1)
+                    .is_some_and(|index| u16::try_from(index).is_ok()),
             "trace request identity, duration, or target count is invalid",
         )?;
         self.source.validate()?;

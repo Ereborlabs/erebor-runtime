@@ -600,7 +600,7 @@ mod tests {
         let mut cursor = 1;
         let mut previous = None;
         let mut previous_bytes = 0;
-        for count in [1, 3, crate::MAX_EVIDENCE_BATCH_RECORDS] {
+        for count in [1, 3, crate::EVIDENCE_BATCH_RECORDS] {
             let mut frames = Vec::new();
             let mut frame_ends = Vec::new();
             for index in 0..count {

@@ -21,7 +21,7 @@ async fn evidence_replays_once() -> TestResult<()> {
     let control = fixture.control_from_intake(intake.clone(), 1)?;
     let server = fixture.start(control.clone()).await?;
     let wal = fixture.wal(EvidenceWalLimits {
-        maximum_retained_records: 10,
+        maximum_retained_records: Some(10),
         maximum_batch_records: 10,
         ..EvidenceWalLimits::default()
     })?;

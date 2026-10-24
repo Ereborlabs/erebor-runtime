@@ -866,12 +866,12 @@ impl Shared {
             evidence: Some(EvidenceConfig {
                 tenant_id: TENANT_ID.to_owned(),
                 source_id: "66666666-6666-4666-8666-666666666666".to_owned(),
-                maximum_record_bytes: 128 * 1_024,
-                maximum_retained_bytes: 256 * 1_024 * 1_024,
-                maximum_retained_records: 100_000,
+                maximum_record_bytes: Some(128 * 1_024),
+                maximum_retained_bytes: Some(256 * 1_024 * 1_024),
+                maximum_retained_records: Some(100_000),
                 maximum_batch_records: 256,
                 maximum_control_delay_ms: 30_000,
-                maximum_reader_queue_records: 262_144,
+                maximum_reader_queue_records: Some(262_144),
                 capacity_policy: EvidenceWalCapacityPolicyV1::Block,
             }),
             runtime_observation: Some(RuntimeObservationConfig {
@@ -1736,7 +1736,18 @@ impl Shared {
         };
         Ok(NodeTraceConfigV1 {
             executable,
-            storage_reserve_bytes: 272 * 1024 * 1024,
+            storage_reserve_bytes: Some(16 * 1024 * 1024),
+            backend: erebor_interceptor::diagnostic::DiagnosticConfig {
+                source_bytes: Some(64 * 1024),
+                frame_bytes: Some(1024 * 1024),
+                output_bytes: Some(16 * 1024 * 1024),
+                output_frames: Some(4096),
+                queued_frames: Some(256),
+                preparation_timeout: Some(Duration::from_secs(10)),
+            },
+            active: Some(2),
+            retained: Some(128),
+            spool_bytes: Some(68 * 1024 * 1024),
             qualification,
         })
     }

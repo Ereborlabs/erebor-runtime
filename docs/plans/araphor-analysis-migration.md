@@ -3505,3 +3505,44 @@ Strict affected-owner Clippy, scoped formatting and whitespace checks pass.
 Production Rust is net **+11** lines after test instrumentation is excluded.
 TODO 13, full migration and the 6,000-line reduction goal remain **Not done**.
 Full-workspace CI, physical checks and benchmarks were not run.
+
+
+## Evidence transport and diagnostic operational quotas
+
+Result: **Done** for this bounded quota replacement and its 128 distinct
+focused runtime checks. TODO 13 remains **Not done** at the native host
+qualification gate. The [source route and checks](../guides/araphor-discovery-definition-review.md#evidence-transport-and-diagnostic-operational-quotas)
+identify the current owners and reproduction selectors.
+
+Evidence keeps the native frame, WAL, Control intake and Data journal without
+fixed record, context, commit, pending-range or coverage-count ceilings. An
+optional positive record quota applies on admission. Block enforces configured
+retained-byte and retained-count gates; Retain bypasses those two gates.
+Lowered quotas do not make valid retained data corrupt. New frames share one
+native raw commit. Exact retries reuse the durable receipt. Large first items
+pass batching and segment targets. Native widths, CRC, current authority,
+contiguous ACK, atomic commit and recovery checks remain.
+
+Diagnostic source, output, queue, preparation and local admission quotas default
+to None. Allocation protects `Evidence.maximum_retained_bytes.unwrap_or(0)`,
+including Retain, plus the optional extra reserve. Recovery validates the
+complete output prefix, syncs that file, then writes its NodeRestarted terminal.
+This does not prove which complete frames were synced before a crash. Signed
+grant expiry, target lifetime, cancellation, joined child and exact terminal
+identity remain required. Prost encodes directly into the shared final frame
+buffer; an already allocated spool extent needs no allocation lock or statvfs.
+
+All 128 focused cases pass: Data 36, Node 22, Control 11, Interceptor 23,
+Observability 15, CLI seven and lightweight E2E 14. The final Data selection
+takes 59.29 seconds. The four final changed E2E cases take 36.16 seconds and
+include actual large-context WAL/TLS/ACK/reopen and large coverage transport.
+The eight-library build passes in 3 minutes 08 seconds. Strict affected-owner
+Clippy passes in 1 minute 39 seconds without warnings. The source guide states
+which ignored child helpers run through parents and which physical case is unrun.
+
+Production Rust adds 952 and removes 803 nonblank, noncomment lines: net **+149**.
+Tests, E2E fixtures and cfg-only support are excluded. The first seven changes
+are net -53: task cumulative **+96**. All five forced native environment values,
+builtin source bytes/hashes, StaticResources and map metadata remain unchanged.
+Full-workspace CI, physical qualification and benchmarks were not run. Native
+policy, full migration and the 6,000-line reduction goal remain **Not done**.

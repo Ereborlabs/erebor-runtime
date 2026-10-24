@@ -1135,7 +1135,7 @@ async fn observability_grpc_trace_retry() -> TestResult {
         accepted.request.targets[0].binding_id
     );
     assert_eq!(detail.requested, request.selection);
-    assert!(detail.limits.is_some());
+    assert!(detail.limits.is_none());
     let mut changed = request.clone();
     changed.source = Some(proto::submit_trace_request::Source::Recipe(
         "failed-opens@1".into(),

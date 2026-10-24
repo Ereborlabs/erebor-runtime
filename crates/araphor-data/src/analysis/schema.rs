@@ -32,19 +32,18 @@ impl AnalysisStore {
                     UNION ALL SELECT stream_key, tenant_id, identity_json, NULL, 'diagnostic' FROM trace_receipts) s USING (stream_key)
                 WHERE e.segment_id = 0 OR e.segment_id >= (SELECT next_segment_id FROM store_meta)
                 OR e.state NOT IN ('Live', 'Deleting') OR e.stream_kind <> s.kind
-                OR e.committed_end < 70 OR e.committed_end > 16777216
+                OR e.committed_end < 70
                 OR e.first_cursor = 0 OR e.last_cursor < e.first_cursor OR e.last_intake_utc_ns = 0
                 OR s.stream_key IS NULL OR e.tenant_id <> s.tenant_id
                 OR e.cpu_id IS DISTINCT FROM s.cpu_id OR e.identity_json <> s.identity_json"),
             ("invalid coverage source or size", "SELECT 1 FROM coverage c LEFT JOIN source_receipts s USING (stream_key)
                 WHERE s.stream_key IS NULL OR c.tenant_id <> s.tenant_id OR c.revision = 0
-                OR c.revision > s.coverage_revision OR octet_length(c.report) = 0
-                OR octet_length(c.report) > 4194304"),
+                OR c.revision > s.coverage_revision OR octet_length(c.report) = 0"),
             ("invalid coverage receipt", "SELECT 1 FROM source_receipts s WHERE s.coverage_revision <>
                 COALESCE((SELECT MAX(c.revision) FROM coverage c WHERE c.stream_key = s.stream_key), 0)"),
             ("invalid expiry range", "SELECT 1 FROM expired_ranges x LEFT JOIN (
                 SELECT stream_key, tenant_id, contiguous_cursor FROM source_receipts UNION ALL
-                SELECT stream_key, tenant_id, last_sequence + CASE WHEN terminal IS NULL THEN 0 ELSE 1 END FROM trace_receipts
+                SELECT stream_key, tenant_id, CAST(last_sequence AS HUGEINT) + CASE WHEN terminal IS NULL THEN 0 ELSE 1 END FROM trace_receipts
                 ) s USING (stream_key)
                 WHERE s.stream_key IS NULL OR x.tenant_id <> s.tenant_id OR x.first_cursor = 0 OR x.segment_id = 0
                 OR x.segment_id >= (SELECT next_segment_id FROM store_meta)
@@ -160,9 +159,8 @@ impl AnalysisStore {
         }
         let invalid: bool = writer.query_row(
             "SELECT EXISTS (SELECT 1 FROM relation_revisions WHERE last_changed_revision = 0 OR last_changed_revision > ?)
-                OR EXISTS (SELECT 1 FROM store_meta WHERE next_segment_id = 0)
-                OR EXISTS (SELECT 1 FROM replay_floors WHERE ordinal >= ?)",
-            params![meta.commit_revision, crate::MAX_EVIDENCE_BATCH_RECORDS as u64], |row| row.get(0),
+                OR EXISTS (SELECT 1 FROM store_meta WHERE next_segment_id = 0)",
+            params![meta.commit_revision], |row| row.get(0),
         ).context(AnalysisDatabaseSnafu { operation: "validate revision and pending bounds" })?;
         if invalid {
             return Self::reject_path(root, "the stored revision or pending bound is invalid");
@@ -389,9 +387,8 @@ impl AnalysisStore {
         let invalid: bool = writer.query_row(
             "SELECT EXISTS (
              SELECT 1 FROM trace_receipts WHERE octet_length(stream_key) <> 33 OR octet_length(tenant_id) <> 16
-             OR octet_length(encode(identity_json)) > 4096 OR octet_length(encode(terminal)) > 4096
-             OR last_sequence > 4096 OR output_bytes > 16777216 OR output_bytes < last_sequence
-             OR retained_floor > last_sequence + CASE WHEN terminal IS NULL THEN 0 ELSE 1 END
+             OR output_bytes < last_sequence
+             OR retained_floor > CAST(last_sequence AS HUGEINT) + CASE WHEN terminal IS NULL THEN 0 ELSE 1 END
              OR commit_revision > (SELECT commit_revision FROM store_meta)
              OR ((last_sequence > 0 OR terminal IS NOT NULL) AND commit_revision = 0))", [], |row| row.get(0)
         ).context(AnalysisDatabaseSnafu { operation: "validate diagnostic receipt bounds" })?;
@@ -448,6 +445,12 @@ impl AnalysisStore {
             let bytes: u64 = row.get(4).context(AnalysisDatabaseSnafu {
                 operation: "read diagnostic output bytes",
             })?;
+            if last.checked_add(1).is_none() {
+                return Self::reject_path(
+                    root,
+                    "the diagnostic sequence exceeds its native representation",
+                );
+            }
             let terminal: Option<String> = row.get(5).context(AnalysisDatabaseSnafu {
                 operation: "read diagnostic lifecycle",
             })?;

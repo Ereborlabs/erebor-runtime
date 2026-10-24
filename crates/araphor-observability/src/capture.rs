@@ -13,7 +13,9 @@ use std::{
 };
 
 use erebor_interceptor::{
-    diagnostic::{DiagnosticBackend, DiagnosticCapture, DiagnosticMode, DiagnosticStop},
+    diagnostic::{
+        DiagnosticBackend, DiagnosticCapture, DiagnosticConfig, DiagnosticMode, DiagnosticStop,
+    },
     KernelStateReader,
 };
 use serde::{Deserialize, Serialize};
@@ -25,15 +27,22 @@ use crate::{
     TraceTargetLeaseV1, TraceTerminalReasonV1, TraceTerminalV1,
 };
 
-const SPOOL_BYTES: u64 = 68 * 1024 * 1024;
 const TERMINAL_BYTES: u64 = 4096;
-const MAX_ENCODED_FRAME: u64 = 5 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeTraceConfigV1 {
     pub executable: PathBuf,
-    pub storage_reserve_bytes: u64,
+    #[serde(default)]
+    pub storage_reserve_bytes: Option<u64>,
+    #[serde(default)]
+    pub backend: DiagnosticConfig,
+    #[serde(default)]
+    pub active: Option<usize>,
+    #[serde(default)]
+    pub retained: Option<usize>,
+    #[serde(default)]
+    pub spool_bytes: Option<u64>,
     pub qualification: TraceQualificationV1,
 }
 
@@ -63,18 +72,17 @@ impl NodeTraceConfigV1 {
     pub fn validate(&self) -> Result<()> {
         let proof = &self.qualification;
         ensure!(self.executable.is_absolute() && proof.executable_sha256 != [0; 32]
-            && self.storage_reserve_bytes >= 256 * 1024 * 1024
             && proof.evidence_sha256 != [0; 32]
             && !proof.kernel_release.is_empty() && proof.architecture == std::env::consts::ARCH
             && proof.logical_cpus > 0 && proof.maximum_overhead_basis_points > 0
-            && (5..=100).contains(&proof.pairs.len())
+            && proof.pairs.len() >= 5
             && proof.pairs.iter().all(|pair| pair.physical_decisions_equal
                 && pair.trace_off_lost_events == 0 && pair.trace_on_lost_events == 0
                 && pair.trace_off_p99_ns > 0 && pair.trace_on_p99_ns > 0
                 && u128::from(pair.trace_on_p99_ns) * 10_000
                     <= u128::from(pair.trace_off_p99_ns) * (10_000 + u128::from(proof.maximum_overhead_basis_points))),
             crate::error::InvalidConfigurationSnafu {
-                reason: "diagnostics require five passed paired runs, a pinned backend, an overhead limit, and an independent storage reserve"
+                reason: "diagnostics require five passed paired runs, a pinned backend, an overhead limit, and a valid resource configuration"
             });
         Ok(())
     }
@@ -90,10 +98,26 @@ struct ActiveTrace {
 enum TraceBackend {
     Pinned(Arc<DiagnosticBackend>),
     #[cfg(feature = "test-support")]
-    Fixture(Arc<dyn Fn() -> std::process::Command + Send + Sync>),
+    Fixture(
+        Arc<dyn Fn() -> std::process::Command + Send + Sync>,
+        DiagnosticConfig,
+    ),
 }
 
 impl TraceBackend {
+    fn check_source(&self, source: &[u8]) -> Result<()> {
+        match self {
+            Self::Pinned(backend) => backend.check_source(source).context(InterceptorSnafu),
+            #[cfg(feature = "test-support")]
+            Self::Fixture(_, config) => crate::TraceErrorCodeV1::Capacity.require(
+                config
+                    .source_bytes
+                    .is_none_or(|limit| source.len() <= limit),
+                "diagnostic source exceeds its configured quota",
+            ),
+        }
+    }
+
     fn start(
         &self,
         source: &[u8],
@@ -105,9 +129,12 @@ impl TraceBackend {
                 backend.start(source, cgroup, DiagnosticMode::Capture, duration)
             }
             #[cfg(feature = "test-support")]
-            Self::Fixture(command) => {
-                DiagnosticBackend::start_fixture(command(), DiagnosticMode::Capture, duration)
-            }
+            Self::Fixture(command, config) => DiagnosticBackend::start_fixture(
+                command(),
+                DiagnosticMode::Capture,
+                duration,
+                *config,
+            ),
         }
     }
 }
@@ -119,6 +146,10 @@ pub struct NodeTraceOwner {
     node_boot_id: [u8; 16],
     _lease: File,
     storage_reserve_bytes: u64,
+    allocation: Arc<Mutex<()>>,
+    active_limit: Option<usize>,
+    retained_limit: Option<usize>,
+    spool_bytes: Option<u64>,
     backend: TraceBackend,
     reader: KernelStateReader,
     retained: BTreeMap<[u8; 16], RetainedTrace>,
@@ -151,6 +182,10 @@ struct TraceSpool {
     output_bytes: u64,
     offset: u64,
     committed: Arc<AtomicU64>,
+    allocated: u64,
+    storage_reserve_bytes: u64,
+    allocation: Arc<Mutex<()>>,
+    spool_bytes: Option<u64>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -168,6 +203,7 @@ impl NodeTraceOwner {
         node_boot_id: [u8; 16],
         config: NodeTraceConfigV1,
         reader: KernelStateReader,
+        protected_wal_bytes: u64,
     ) -> Result<Self> {
         config.validate()?;
         let kernel_path = Path::new("/proc/sys/kernel/osrelease");
@@ -181,18 +217,33 @@ impl NodeTraceOwner {
                     "diagnostic qualification does not match the current kernel or CPU allocation"
             }
         );
-        let backend =
-            DiagnosticBackend::new(config.executable, config.qualification.executable_sha256)
-                .context(InterceptorSnafu)?;
-        Self::open_state(
+        let backend = DiagnosticBackend::new(
+            config.executable,
+            config.qualification.executable_sha256,
+            config.backend,
+        )
+        .context(InterceptorSnafu)?;
+        let reserve = protected_wal_bytes
+            .checked_add(config.storage_reserve_bytes.unwrap_or(0))
+            .ok_or_else(|| {
+                crate::error::InvalidConfigurationSnafu {
+                    reason: "diagnostic storage reserve overflowed",
+                }
+                .build()
+            })?;
+        let mut owner = Self::open_state(
             state_directory,
             tenant_id,
             node_id,
             node_boot_id,
-            config.storage_reserve_bytes,
+            reserve,
             TraceBackend::Pinned(Arc::new(backend)),
             reader,
-        )
+        )?;
+        owner.active_limit = config.active;
+        owner.retained_limit = config.retained;
+        owner.spool_bytes = config.spool_bytes;
+        Ok(owner)
     }
 
     #[cfg(feature = "test-support")]
@@ -202,14 +253,15 @@ impl NodeTraceOwner {
         node_id: String,
         node_boot_id: [u8; 16],
         command: impl Fn() -> std::process::Command + Send + Sync + 'static,
+        config: DiagnosticConfig,
     ) -> Result<Self> {
         Self::open_state(
             state_directory,
             tenant_id,
             node_id,
             node_boot_id,
-            256 * 1024 * 1024,
-            TraceBackend::Fixture(Arc::new(command)),
+            0,
+            TraceBackend::Fixture(Arc::new(command), config),
             KernelStateReader::new(state_directory),
         )
     }
@@ -227,10 +279,9 @@ impl NodeTraceOwner {
             state_directory.is_absolute()
                 && tenant_id != [0; 16]
                 && !node_id.is_empty()
-                && node_boot_id != [0; 16]
-                && storage_reserve_bytes >= 256 * 1024 * 1024,
+                && node_boot_id != [0; 16],
             crate::error::InvalidConfigurationSnafu {
-                reason: "diagnostics require pinned execution and at least 256 MiB storage reserve"
+                reason: "diagnostics require a private path and current node identity"
             }
         );
         let root = state_directory.join("diagnostics");
@@ -256,6 +307,10 @@ impl NodeTraceOwner {
             node_boot_id,
             _lease: lease,
             storage_reserve_bytes,
+            allocation: Arc::new(Mutex::new(())),
+            active_limit: None,
+            retained_limit: None,
+            spool_bytes: None,
             backend,
             reader,
             retained: BTreeMap::new(),
@@ -297,17 +352,21 @@ impl NodeTraceOwner {
         for (id, _) in self.retained() {
             if self.running(id).is_none() && self.terminal(id)?.is_none() {
                 let mut last_sequence = 0;
-                let mut output_bytes = 0;
+                let mut output_bytes = 0_u64;
                 loop {
                     let frames = self.frames(id, last_sequence)?;
                     if frames.is_empty() {
                         break;
                     }
                     last_sequence = frames.last().map_or(last_sequence, |frame| frame.sequence);
-                    output_bytes += frames
-                        .iter()
-                        .map(|frame| frame.bytes.len() as u64)
-                        .sum::<u64>();
+                    output_bytes = frames.iter().try_fold(output_bytes, |total, frame| {
+                        total.checked_add(frame.bytes.len() as u64).ok_or_else(|| {
+                            IdentityStateSnafu {
+                                reason: "diagnostic recovered byte count overflowed",
+                            }
+                            .build()
+                        })
+                    })?;
                 }
                 // Recovery never starts another child for a durable intent.
                 let terminal = TraceTerminalV1 {
@@ -322,7 +381,14 @@ impl NodeTraceOwner {
                     forced_kill: false,
                     cleanup: TraceCleanupV1::Unknown,
                 };
-                let mut spool = TraceSpool::existing(self.path(id))?;
+                let mut spool = TraceSpool::existing(
+                    self.path(id),
+                    self.storage_reserve_bytes,
+                    self.allocation.clone(),
+                )?;
+                spool.output.sync_all().context(IoSnafu {
+                    path: spool.root.join("output.jsonl"),
+                })?;
                 spool.complete(&terminal)?;
             }
             if self.running(id).is_none() {
@@ -371,14 +437,13 @@ impl NodeTraceOwner {
                 .and_then(|name| hex::decode(name).ok())
                 .and_then(|bytes| <[u8; 16]>::try_from(bytes).ok());
             ensure!(
-                records.len() < 128
-                    && id.is_some()
+                id.is_some()
                     && entry
                         .file_type()
                         .context(IoSnafu { path: entry.path() })?
                         .is_dir(),
                 IdentityStateSnafu {
-                    reason: "diagnostic spool has unknown or excess entries"
+                    reason: "diagnostic spool has unknown entries"
                 }
             );
             let id = id.ok_or_else(|| {
@@ -388,7 +453,7 @@ impl NodeTraceOwner {
                 .build()
             })?;
             let path = entry.path().join("intent.json");
-            let dispatch: TraceDispatchV1 = TraceSpool::json(&path, 5 * 1024 * 1024)?;
+            let dispatch: TraceDispatchV1 = TraceSpool::json(&path)?;
             ensure!(
                 dispatch.accepted.request.tenant_id == self.tenant_id
                     && dispatch.accepted.execution_id(dispatch.target_index)? == id,
@@ -455,7 +520,7 @@ impl NodeTraceOwner {
         }
         let floor_path = self.root.join("retired-before.json");
         if floor_path.exists() {
-            let floor: u64 = TraceSpool::json(&floor_path, 32)?;
+            let floor: u64 = TraceSpool::json(&floor_path)?;
             ensure!(
                 accepted.deadline_unix_ns > floor,
                 AuthorizationSnafu {
@@ -463,32 +528,23 @@ impl NodeTraceOwner {
                 }
             );
         }
-        let occupied = self
-            .retained
-            .keys()
-            .filter(|id| !self.path(**id).join("ack.json").exists())
-            .count();
-        ensure!(
-            occupied < 2 && self.retained.len() < 128 && self.active().count() < 2,
-            IdentityStateSnafu {
-                reason: "the two diagnostic slots are occupied"
-            }
-        );
-        let filesystem = rustix::fs::statvfs(&self.root)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu { path: &self.root })?;
-        let available = filesystem.f_bavail.saturating_mul(filesystem.f_frsize);
-        ensure!(
-            available
-                >= self
-                    .storage_reserve_bytes
-                    .saturating_add(SPOOL_BYTES + TERMINAL_BYTES + 5 * 1024 * 1024),
-            IdentityStateSnafu {
-                reason: "diagnostic allocation would consume the evidence reserve"
-            }
-        );
+        self.backend.check_source(&accepted.request.source.bytes)?;
+        crate::TraceErrorCodeV1::Capacity.require(
+            self.retained_limit
+                .is_none_or(|limit| self.retained.len() < limit)
+                && self
+                    .active_limit
+                    .is_none_or(|limit| self.active().count() < limit),
+            "diagnostic admission exceeds its configured quota",
+        )?;
         self.recovery_pending = true;
-        let mut spool = match TraceSpool::create(self.path(id), &dispatch) {
+        let mut spool = match TraceSpool::create(
+            self.path(id),
+            &dispatch,
+            self.storage_reserve_bytes,
+            self.allocation.clone(),
+            self.spool_bytes,
+        ) {
             Ok(spool) => spool,
             Err(error) => {
                 let pending = self.root.join(format!("pending-{}", hex::encode(id)));
@@ -577,12 +633,11 @@ impl NodeTraceOwner {
             if through <= after {
                 return Ok(Vec::new());
             }
-            through
+            Some(through)
         } else {
-            self.terminal(id)?
-                .map_or(4096, |terminal| terminal.last_sequence)
+            self.terminal(id)?.map(|terminal| terminal.last_sequence)
         };
-        if through <= after {
+        if through.is_some_and(|through| through <= after) {
             return Ok(Vec::new());
         }
         let Some(trace) = self.retained.get(&id) else {
@@ -595,7 +650,7 @@ impl NodeTraceOwner {
             .build()
         })?;
         let mut cursor = *saved;
-        if after < cursor.sequence || through < cursor.sequence {
+        if after < cursor.sequence || through.is_some_and(|through| through < cursor.sequence) {
             cursor = SpoolCursor::default();
         }
         let frames = TraceSpool::frames(&self.path(id), after, through, &mut cursor)?;
@@ -659,7 +714,7 @@ impl NodeTraceOwner {
         );
         let path = self.path(id).join("ack.json");
         if path.exists() {
-            let prior: TraceTerminalV1 = TraceSpool::json(&path, TERMINAL_BYTES)?;
+            let prior: TraceTerminalV1 = TraceSpool::json(&path)?;
             ensure!(
                 prior == *terminal,
                 IdentityStateSnafu {
@@ -668,7 +723,7 @@ impl NodeTraceOwner {
             );
         } else {
             let bytes = serde_json::to_vec(terminal).context(JsonSnafu { path: &path })?;
-            TraceSpool::replace(&path, &bytes)?;
+            TraceSpool::replace(&path, &bytes, self.storage_reserve_bytes, &self.allocation)?;
         }
         let output = self.path(id).join("output.jsonl");
         let file = TraceSpool::open_file(&output, true)?;
@@ -697,8 +752,7 @@ impl NodeTraceOwner {
                 && deadline <= now
                 && self.path(id).join("ack.json").exists()
             {
-                let ack: TraceTerminalV1 =
-                    TraceSpool::json(&self.path(id).join("ack.json"), TERMINAL_BYTES)?;
+                let ack: TraceTerminalV1 = TraceSpool::json(&self.path(id).join("ack.json"))?;
                 ensure!(
                     self.terminal(id)?.as_ref() == Some(&ack),
                     IdentityStateSnafu {
@@ -707,12 +761,17 @@ impl NodeTraceOwner {
                 );
                 let floor_path = self.root.join("retired-before.json");
                 let prior: u64 = if floor_path.exists() {
-                    TraceSpool::json(&floor_path, 32)?
+                    TraceSpool::json(&floor_path)?
                 } else {
                     0
                 };
                 if prior < deadline {
-                    TraceSpool::replace(&floor_path, deadline.to_string().as_bytes())?;
+                    TraceSpool::replace(
+                        &floor_path,
+                        deadline.to_string().as_bytes(),
+                        self.storage_reserve_bytes,
+                        &self.allocation,
+                    )?;
                 }
                 TraceSpool::remove(&self.path(id))?;
                 self.retained.remove(&id);
@@ -767,7 +826,13 @@ impl NodeTraceOwner {
                     capture.cancel();
                 }
                 for frame in capture.frames().try_iter() {
-                    if reason == Some(TraceTerminalReasonV1::StorageFailure) {
+                    if matches!(
+                        reason,
+                        Some(
+                            TraceTerminalReasonV1::StorageFailure
+                                | TraceTerminalReasonV1::OutputLimit
+                        )
+                    ) {
                         continue;
                     }
                     let frame = TraceFrameV1 {
@@ -780,9 +845,16 @@ impl NodeTraceOwner {
                         },
                         bytes: frame.bytes,
                     };
-                    if spool.append(&frame).is_err() {
-                        reason = Some(TraceTerminalReasonV1::StorageFailure);
-                        capture.cancel();
+                    match spool.append(&frame) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            reason = Some(TraceTerminalReasonV1::OutputLimit);
+                            capture.cancel();
+                        }
+                        Err(_) => {
+                            reason = Some(TraceTerminalReasonV1::StorageFailure);
+                            capture.cancel();
+                        }
                     }
                 }
                 if capture.is_finished() {
@@ -798,8 +870,19 @@ impl NodeTraceOwner {
                             },
                             bytes: frame.bytes,
                         };
-                        if spool.append(&frame).is_err() {
-                            reason = Some(TraceTerminalReasonV1::StorageFailure);
+                        if matches!(
+                            reason,
+                            Some(
+                                TraceTerminalReasonV1::StorageFailure
+                                    | TraceTerminalReasonV1::OutputLimit
+                            )
+                        ) {
+                            continue;
+                        }
+                        match spool.append(&frame) {
+                            Ok(true) => {}
+                            Ok(false) => reason = Some(TraceTerminalReasonV1::OutputLimit),
+                            Err(_) => reason = Some(TraceTerminalReasonV1::StorageFailure),
                         }
                     }
                     break;
@@ -837,7 +920,7 @@ impl NodeTraceOwner {
             },
             Err(_) => TraceTerminalV1 {
                 execution_id: id,
-                reason: TraceTerminalReasonV1::BackendFailed,
+                reason: reason.unwrap_or(TraceTerminalReasonV1::BackendFailed),
                 last_sequence: spool.sequence,
                 output_bytes: spool.output_bytes,
                 output_incomplete: true,
@@ -868,7 +951,7 @@ impl Drop for NodeTraceOwner {
 }
 
 impl TraceSpool {
-    fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
+    fn replace(path: &Path, bytes: &[u8], reserve: u64, allocation: &Mutex<()>) -> Result<()> {
         let pending = path.with_extension("pending");
         let mut file = OpenOptions::new()
             .write(true)
@@ -878,6 +961,7 @@ impl TraceSpool {
             .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
             .open(&pending)
             .context(IoSnafu { path })?;
+        Self::allocate(&file, &pending, 0, bytes.len() as u64, reserve, allocation)?;
         file.write_all(bytes)
             .and_then(|()| file.sync_all())
             .context(IoSnafu { path })?;
@@ -947,46 +1031,49 @@ impl TraceSpool {
         Ok(file)
     }
 
-    fn create(root: PathBuf, dispatch: &TraceDispatchV1) -> Result<Self> {
+    fn create(
+        root: PathBuf,
+        dispatch: &TraceDispatchV1,
+        reserve: u64,
+        allocation: Arc<Mutex<()>>,
+        spool_bytes: Option<u64>,
+    ) -> Result<Self> {
         let final_root = root;
         let root = final_root.with_file_name(format!(
             "pending-{}",
             hex::encode(dispatch.accepted.execution_id(dispatch.target_index)?)
         ));
         Self::directory(&root)?;
-        let mut files = Vec::new();
-        for (name, bytes) in [
-            ("output.jsonl", SPOOL_BYTES),
-            ("terminal.pending", TERMINAL_BYTES),
-        ] {
+        let open = |name: &str| -> Result<File> {
             let path = root.join(name);
-            let file = OpenOptions::new()
+            OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
                 .open(&path)
-                .context(IoSnafu { path: &path })?;
-            rustix::fs::fallocate(&file, rustix::fs::FallocateFlags::empty(), 0, bytes)
-                .map_err(std::io::Error::from)
-                .context(IoSnafu { path: &path })?;
-            file.sync_all().context(IoSnafu { path: &path })?;
-            files.push(file);
-        }
+                .context(IoSnafu { path })
+        };
+        let output = open("output.jsonl")?;
+        let terminal = open("terminal.pending")?;
+        Self::allocate(
+            &terminal,
+            &root.join("terminal.pending"),
+            0,
+            TERMINAL_BYTES,
+            reserve,
+            &allocation,
+        )?;
+        terminal.sync_all().context(IoSnafu {
+            path: root.join("terminal.pending"),
+        })?;
+        output.sync_all().context(IoSnafu {
+            path: root.join("output.jsonl"),
+        })?;
         let path = root.join("intent.json");
         let bytes = serde_json::to_vec(dispatch).context(JsonSnafu { path: &path })?;
-        ensure!(
-            bytes.len() <= 5 * 1024 * 1024,
-            IdentityStateSnafu {
-                reason: "diagnostic intent exceeds its bound"
-            }
-        );
-        let mut intent = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-            .context(IoSnafu { path: &path })?;
+        let mut intent = open("intent.json")?;
+        Self::allocate(&intent, &path, 0, bytes.len() as u64, reserve, &allocation)?;
         intent
             .write_all(&bytes)
             .and_then(|()| intent.sync_all())
@@ -995,23 +1082,11 @@ impl TraceSpool {
             .and_then(|file| file.sync_all())
             .context(IoSnafu { path: &root })?;
         fs::rename(&root, &final_root).context(IoSnafu { path: &root })?;
-        if let Some(parent) = root.parent() {
+        if let Some(parent) = final_root.parent() {
             File::open(parent)
                 .and_then(|file| file.sync_all())
                 .context(IoSnafu { path: parent })?;
         }
-        let terminal = files.pop().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "diagnostic terminal allocation is absent",
-            }
-            .build()
-        })?;
-        let output = files.pop().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "diagnostic output allocation is absent",
-            }
-            .build()
-        })?;
         Ok(Self {
             root: final_root,
             output,
@@ -1020,10 +1095,76 @@ impl TraceSpool {
             output_bytes: 0,
             offset: 0,
             committed: Arc::new(AtomicU64::new(0)),
+            allocated: 0,
+            storage_reserve_bytes: reserve,
+            allocation,
+            spool_bytes,
         })
     }
 
-    fn existing(root: PathBuf) -> Result<Self> {
+    fn allocate(
+        file: &File,
+        path: &Path,
+        allocated: u64,
+        required: u64,
+        reserve: u64,
+        allocation: &Mutex<()>,
+    ) -> Result<u64> {
+        if required <= allocated {
+            return Ok(allocated);
+        }
+        let _guard = allocation.lock().map_err(|_| {
+            IdentityStateSnafu {
+                reason: "diagnostic allocation lock failed",
+            }
+            .build()
+        })?;
+        let filesystem = rustix::fs::fstatvfs(file)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu { path })?;
+        let block = filesystem.f_frsize;
+        let end = block
+            .checked_sub(1)
+            .and_then(|rounding| required.checked_add(rounding))
+            .map(|bytes| bytes / block)
+            .and_then(|blocks| blocks.checked_mul(block))
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "diagnostic allocation size overflowed",
+                }
+                .build()
+            })?;
+        let added = end - allocated;
+        let needed = reserve.checked_add(added).ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "diagnostic storage reserve overflowed",
+            }
+            .build()
+        })?;
+        let available = filesystem.f_bavail.checked_mul(block).ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "diagnostic filesystem size overflowed",
+            }
+            .build()
+        })?;
+        ensure!(
+            available >= needed,
+            IdentityStateSnafu {
+                reason: "diagnostic allocation would consume the evidence reserve",
+            }
+        );
+        rustix::fs::fallocate(
+            file,
+            rustix::fs::FallocateFlags::KEEP_SIZE,
+            allocated,
+            added,
+        )
+        .map_err(std::io::Error::from)
+        .context(IoSnafu { path })?;
+        Ok(end)
+    }
+
+    fn existing(root: PathBuf, reserve: u64, allocation: Arc<Mutex<()>>) -> Result<Self> {
         Ok(Self {
             output: Self::open_file(&root.join("output.jsonl"), true)?,
             terminal: Self::open_file(&root.join("terminal.pending"), true)?,
@@ -1032,53 +1173,68 @@ impl TraceSpool {
             output_bytes: 0,
             offset: 0,
             committed: Arc::new(AtomicU64::new(0)),
+            allocated: 0,
+            storage_reserve_bytes: reserve,
+            allocation,
+            spool_bytes: None,
         })
     }
 
-    fn json<T: serde::de::DeserializeOwned>(path: &Path, limit: u64) -> Result<T> {
+    fn json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
         let mut bytes = Vec::new();
         Self::open_file(path, false)?
-            .take(limit + 1)
             .read_to_end(&mut bytes)
             .context(IoSnafu { path })?;
-        ensure!(
-            bytes.len() as u64 <= limit,
-            IdentityStateSnafu {
-                reason: "diagnostic record exceeds its bound"
-            }
-        );
         serde_json::from_slice(&bytes).context(JsonSnafu { path })
     }
 
-    fn append(&mut self, frame: &TraceFrameV1) -> Result<()> {
+    fn append(&mut self, frame: &TraceFrameV1) -> Result<bool> {
         frame.validate()?;
         ensure!(
-            frame.sequence == self.sequence + 1
-                && frame.sequence <= 4096
-                && self.output_bytes + frame.bytes.len() as u64 <= crate::MAX_TRACE_OUTPUT_BYTES,
+            self.sequence.checked_add(1) == Some(frame.sequence),
             IdentityStateSnafu {
-                reason: "diagnostic output sequence or quota changed"
+                reason: "diagnostic output sequence changed",
             }
         );
+        let output_bytes = self
+            .output_bytes
+            .checked_add(frame.bytes.len() as u64)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "diagnostic output byte count overflowed",
+                }
+                .build()
+            })?;
         let path = self.root.join("output.jsonl");
         let mut bytes = serde_json::to_vec(frame).context(JsonSnafu { path: &path })?;
         bytes.push(b'\n');
-        ensure!(
-            self.offset + bytes.len() as u64 <= SPOOL_BYTES,
+        let end = self.offset.checked_add(bytes.len() as u64).ok_or_else(|| {
             IdentityStateSnafu {
-                reason: "diagnostic spool is full"
+                reason: "diagnostic spool offset overflowed",
             }
-        );
+            .build()
+        })?;
+        if self.spool_bytes.is_some_and(|limit| end > limit) {
+            return Ok(false);
+        }
+        self.allocated = Self::allocate(
+            &self.output,
+            &path,
+            self.allocated,
+            end,
+            self.storage_reserve_bytes,
+            &self.allocation,
+        )?;
         self.output
             .seek(SeekFrom::Start(self.offset))
             .and_then(|_| self.output.write_all(&bytes))
             .and_then(|()| self.output.sync_data())
             .context(IoSnafu { path: &path })?;
-        self.offset += bytes.len() as u64;
+        self.offset = end;
         self.sequence = frame.sequence;
-        self.output_bytes += frame.bytes.len() as u64;
+        self.output_bytes = output_bytes;
         self.committed.store(frame.sequence, Ordering::Release);
-        Ok(())
+        Ok(true)
     }
 
     fn complete(&mut self, terminal: &TraceTerminalV1) -> Result<()> {
@@ -1106,7 +1262,7 @@ impl TraceSpool {
     fn frames(
         root: &Path,
         after: u64,
-        through: u64,
+        through: Option<u64>,
         cursor: &mut SpoolCursor,
     ) -> Result<Vec<TraceFrameV1>> {
         let path = root.join("output.jsonl");
@@ -1122,8 +1278,8 @@ impl TraceSpool {
             .seek(SeekFrom::Start(cursor.offset))
             .context(IoSnafu { path: &path })?;
         let mut frames = Vec::new();
-        let mut bytes = 0;
-        while cursor.sequence < through && frames.len() < 200 {
+        let mut bytes = 0_usize;
+        while through.is_none_or(|through| cursor.sequence < through) && frames.len() < 200 {
             if reader
                 .fill_buf()
                 .context(IoSnafu { path: &path })?
@@ -1135,7 +1291,6 @@ impl TraceSpool {
             let mut line = Vec::new();
             reader
                 .by_ref()
-                .take(MAX_ENCODED_FRAME)
                 .read_until(b'\n', &mut line)
                 .context(IoSnafu { path: &path })?;
             if line.last() != Some(&b'\n') {
@@ -1145,19 +1300,31 @@ impl TraceSpool {
                 serde_json::from_slice(&line).context(JsonSnafu { path: &path })?;
             frame.validate()?;
             ensure!(
-                frame.sequence == cursor.sequence + 1
-                    && frame.sequence <= 4096
+                cursor.sequence.checked_add(1) == Some(frame.sequence)
                     && root.file_name().and_then(|name| name.to_str())
                         == Some(hex::encode(frame.execution_id).as_str()),
                 IdentityStateSnafu {
                     reason: "diagnostic spool sequence changed"
                 }
             );
-            if frame.sequence > after && bytes + frame.bytes.len() > 1024 * 1024 {
+            if frame.sequence > after
+                && !frames.is_empty()
+                && bytes
+                    .checked_add(frame.bytes.len())
+                    .is_none_or(|bytes| bytes > 1024 * 1024)
+            {
                 break;
             }
             cursor.sequence = frame.sequence;
-            cursor.offset += line.len() as u64;
+            cursor.offset = cursor
+                .offset
+                .checked_add(line.len() as u64)
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "diagnostic read offset overflowed",
+                    }
+                    .build()
+                })?;
             if frame.sequence <= after {
                 continue;
             }
@@ -1186,6 +1353,7 @@ mod tests {
             [2; 16],
             config(),
             KernelStateReader::new(root),
+            0,
         )
     }
 
@@ -1252,7 +1420,11 @@ mod tests {
     fn config() -> NodeTraceConfigV1 {
         NodeTraceConfigV1 {
             executable: "/not-executed".into(),
-            storage_reserve_bytes: 256 * 1024 * 1024,
+            storage_reserve_bytes: Some(256 * 1024 * 1024),
+            backend: DiagnosticConfig::default(),
+            active: None,
+            retained: None,
+            spool_bytes: None,
             qualification: TraceQualificationV1 {
                 evidence_sha256: [9; 32],
                 executable_sha256: [1; 32],
@@ -1275,6 +1447,264 @@ mod tests {
                 ],
             },
         }
+    }
+
+    #[test]
+    fn observability_optional_retention() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]);
+        let mut value = serde_json::to_value(config())?;
+        for field in [
+            "storage_reserve_bytes",
+            "backend",
+            "active",
+            "retained",
+            "spool_bytes",
+        ] {
+            value
+                .as_object_mut()
+                .ok_or("configuration object")?
+                .remove(field);
+        }
+        let config: NodeTraceConfigV1 = serde_json::from_value(value)?;
+        assert!(config.storage_reserve_bytes.is_none());
+        assert!(
+            config.active.is_none() && config.retained.is_none() && config.spool_bytes.is_none()
+        );
+        let mut owner = NodeTraceOwner::open(
+            directory.path(),
+            [1; 16],
+            "node-a".into(),
+            [2; 16],
+            config.clone(),
+            KernelStateReader::new(directory.path()),
+            0,
+        )?;
+        for index in 1_u16..=129 {
+            let mut dispatch = dispatch()?;
+            dispatch.accepted.request.request_id[..2].copy_from_slice(&index.to_be_bytes());
+            let dispatch = TraceDispatchV1::sign(dispatch.accepted, 0, "key".into(), 1, &key)?;
+            let id = owner.admit(dispatch, None, &key.verifying_key(), 2)?;
+            assert_eq!(
+                owner.terminal(id)?.ok_or("terminal absent")?.reason,
+                TraceTerminalReasonV1::TargetChanged
+            );
+        }
+        assert_eq!(owner.retained().len(), 129);
+        drop(owner);
+        let mut config = config;
+        config.active = Some(0);
+        config.retained = Some(0);
+        config.spool_bytes = Some(0);
+        let owner = NodeTraceOwner::open(
+            directory.path(),
+            [1; 16],
+            "node-a".into(),
+            [2; 16],
+            config,
+            KernelStateReader::new(directory.path()),
+            0,
+        )?;
+        assert_eq!(owner.retained().len(), 129);
+        for (id, _) in owner.retained() {
+            assert_eq!(
+                owner.terminal(id)?.ok_or("terminal absent")?.reason,
+                TraceTerminalReasonV1::TargetChanged
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn observability_terminal_reserve() -> TestResult {
+        for reason in [
+            TraceTerminalReasonV1::Completed,
+            TraceTerminalReasonV1::Cancelled,
+            TraceTerminalReasonV1::Deadline,
+            TraceTerminalReasonV1::PreparationFailed,
+            TraceTerminalReasonV1::TargetChanged,
+            TraceTerminalReasonV1::OutputLimit,
+            TraceTerminalReasonV1::ConsumerSlow,
+            TraceTerminalReasonV1::NodeRestarted,
+            TraceTerminalReasonV1::StorageFailure,
+            TraceTerminalReasonV1::BackendFailed,
+        ] {
+            for cleanup in [
+                TraceCleanupV1::Verified,
+                TraceCleanupV1::Failed,
+                TraceCleanupV1::Unknown,
+            ] {
+                let terminal = TraceTerminalV1 {
+                    execution_id: [255; 16],
+                    reason,
+                    last_sequence: u64::MAX - 1,
+                    output_bytes: u64::MAX,
+                    output_incomplete: false,
+                    kernel_lost_events: Some(u64::MAX),
+                    ready_at_unix_ns: Some(u64::MAX),
+                    exit_code: Some(i32::MIN),
+                    forced_kill: false,
+                    cleanup,
+                };
+                terminal.validate()?;
+                assert!((serde_json::to_vec(&terminal)?.len() as u64) < TERMINAL_BYTES);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::panic, reason = "The test must poison the held mutex.")]
+    fn observability_spool_allocation_failure() -> TestResult {
+        use std::os::unix::fs::MetadataExt as _;
+        let directory = tempfile::tempdir()?;
+        let owner = open(directory.path())?;
+        let dispatch = dispatch()?;
+        let id = dispatch.accepted.execution_id(0)?;
+        let mut spool =
+            TraceSpool::create(owner.path(id), &dispatch, 0, owner.allocation.clone(), None)?;
+        assert!(Arc::ptr_eq(&spool.allocation, &owner.allocation));
+        let frame = TraceFrameV1 {
+            execution_id: id,
+            sequence: 1,
+            kind: TraceFrameKindV1::Data,
+            bytes: b"first".to_vec(),
+        };
+        assert!(spool.append(&frame)?);
+        let block = rustix::fs::fstatvfs(&spool.output)?.f_frsize;
+        assert_eq!(spool.allocated % block, 0);
+        let allocated = spool.allocated;
+        let blocks = spool.output.metadata()?.blocks();
+        let prefix = fs::read(spool.root.join("output.jsonl"))?;
+        let gate = owner.allocation.clone();
+        assert!(
+            std::thread::spawn(move || -> std::result::Result<(), &'static str> {
+                let _held = gate.lock().map_err(|_| "allocation fixture lock")?;
+                panic!("poison the allocation fixture lock");
+            })
+            .join()
+            .is_err()
+        );
+        assert_eq!(
+            TraceSpool::allocate(
+                &spool.output,
+                &spool.root.join("output.jsonl"),
+                allocated,
+                spool.offset,
+                u64::MAX,
+                &spool.allocation
+            )?,
+            allocated
+        );
+        assert_eq!(spool.output.metadata()?.blocks(), blocks);
+        let next = TraceFrameV1 {
+            sequence: 2,
+            bytes: vec![7; block as usize],
+            ..frame
+        };
+        assert!(spool.append(&next).is_err());
+        assert_eq!(spool.sequence, 1);
+        assert_eq!(spool.output_bytes, 5);
+        assert_eq!(spool.committed.load(Ordering::Acquire), 1);
+        assert_eq!(spool.allocated, allocated);
+        assert_eq!(fs::read(spool.root.join("output.jsonl"))?, prefix);
+        assert_eq!(spool.output.metadata()?.blocks(), blocks);
+        let terminal = TraceTerminalV1 {
+            execution_id: id,
+            reason: TraceTerminalReasonV1::StorageFailure,
+            last_sequence: 1,
+            output_bytes: 5,
+            output_incomplete: true,
+            kernel_lost_events: None,
+            ready_at_unix_ns: None,
+            exit_code: None,
+            forced_kill: false,
+            cleanup: TraceCleanupV1::Unknown,
+        };
+        spool.complete(&terminal)?;
+        assert_eq!(owner.terminal(id)?, Some(terminal));
+        Ok(())
+    }
+
+    #[test]
+    fn observability_spool_optional_limits() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("diagnostics");
+        TraceSpool::directory(&root)?;
+        let dispatch = dispatch()?;
+        let id = dispatch.accepted.execution_id(0)?;
+        let mut spool = TraceSpool::create(
+            root.join(hex::encode(id)),
+            &dispatch,
+            0,
+            Arc::new(Mutex::new(())),
+            Some(68 * 1024 * 1024),
+        )?;
+        let frame = TraceFrameV1 {
+            execution_id: id,
+            sequence: 1,
+            kind: TraceFrameKindV1::Data,
+            bytes: vec![255; 17 * 1024 * 1024],
+        };
+        assert!(!spool.append(&frame)?);
+        assert_eq!(spool.sequence, 0);
+        assert_eq!(spool.committed.load(Ordering::Acquire), 0);
+        assert_eq!(spool.output.metadata()?.len(), 0);
+        spool.spool_bytes = None;
+        assert!(spool.append(&frame)?);
+        assert!(spool.offset > 68 * 1024 * 1024);
+        let block = rustix::fs::fstatvfs(&spool.output)?.f_frsize;
+        assert!(spool.allocated >= spool.offset && spool.allocated - spool.offset < block);
+        let terminal = TraceTerminalV1 {
+            execution_id: id,
+            reason: TraceTerminalReasonV1::Completed,
+            last_sequence: 1,
+            output_bytes: frame.bytes.len() as u64,
+            output_incomplete: false,
+            kernel_lost_events: None,
+            ready_at_unix_ns: None,
+            exit_code: Some(0),
+            forced_kill: false,
+            cleanup: TraceCleanupV1::Unknown,
+        };
+        spool.complete(&terminal)?;
+        drop(spool);
+        let mut lower = config();
+        lower.storage_reserve_bytes = None;
+        lower.active = Some(0);
+        lower.retained = Some(0);
+        lower.spool_bytes = Some(0);
+        let mut owner = NodeTraceOwner::open(
+            directory.path(),
+            [1; 16],
+            "node-a".into(),
+            [2; 16],
+            lower,
+            KernelStateReader::new(directory.path()),
+            0,
+        )?;
+        assert_eq!(owner.frames(id, 0)?, vec![frame]);
+        assert_eq!(
+            owner.next_batch(id, 1)?.and_then(|batch| batch.terminal),
+            Some(terminal)
+        );
+        let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]);
+        assert_eq!(
+            owner.admit(dispatch.clone(), None, &key.verifying_key(), 2)?,
+            id
+        );
+        let mut next = dispatch.accepted;
+        next.request.request_id = [7; 16];
+        let next = TraceDispatchV1::sign(next, 0, "key".into(), 1, &key)?;
+        assert!(matches!(
+            owner.admit(next, None, &key.verifying_key(), 2),
+            Err(crate::Error::Observability {
+                code: crate::TraceErrorCodeV1::Capacity,
+                ..
+            })
+        ));
+        assert!(owner.active().next().is_none());
+        Ok(())
     }
 
     #[test]
@@ -1371,7 +1801,13 @@ mod tests {
         TraceSpool::directory(&root)?;
         let dispatch = dispatch()?;
         let id = dispatch.accepted.execution_id(0)?;
-        let mut spool = TraceSpool::create(root.join(hex::encode(id)), &dispatch)?;
+        let mut spool = TraceSpool::create(
+            root.join(hex::encode(id)),
+            &dispatch,
+            0,
+            Arc::new(Mutex::new(())),
+            None,
+        )?;
         for sequence in 1..=401 {
             spool.append(&TraceFrameV1 {
                 execution_id: id,
@@ -1380,9 +1816,16 @@ mod tests {
                 bytes: vec![1; 17],
             })?;
         }
-        // A torn last frame is not committed output.
+        let frame = TraceFrameV1 {
+            execution_id: id,
+            sequence: 402,
+            kind: TraceFrameKindV1::Data,
+            bytes: vec![1; 17],
+        };
+        spool.output.write_all(&serde_json::to_vec(&frame)?)?;
+        spool.output.write_all(b"\n")?;
+        // Recovery synchronizes the complete prefix before it publishes a terminal.
         spool.output.write_all(b"{\"execution_id\":")?;
-        spool.output.sync_data()?;
         spool.terminal.write_all(b"{\"execution_id\":[1,")?;
         spool.terminal.sync_data()?;
         drop(spool);
@@ -1394,18 +1837,19 @@ mod tests {
             [2; 16],
             config(),
             reader.clone(),
+            0,
         )?;
         let terminal = owner.terminal(id)?.ok_or("missing terminal")?;
         assert_eq!(
             (terminal.last_sequence, terminal.output_bytes),
-            (401, 401 * 17)
+            (402, 402 * 17)
         );
         assert_eq!(terminal.reason, TraceTerminalReasonV1::NodeRestarted);
         assert_eq!(terminal.cleanup, TraceCleanupV1::Unknown);
         assert!(terminal.output_incomplete);
         assert_eq!(owner.frames(id, 0)?.len(), 200);
         assert_eq!(owner.frames(id, 200)?.len(), 200);
-        assert_eq!(owner.frames(id, 400)?.len(), 1);
+        assert_eq!(owner.frames(id, 400)?.len(), 2);
         assert!(owner.active().next().is_none());
         assert!(!owner.recovery_pending);
         let terminal_path = owner.path(id).join("terminal.json");
@@ -1432,7 +1876,8 @@ mod tests {
             "node-a".into(),
             [2; 16],
             config(),
-            reader.clone()
+            reader.clone(),
+            0,
         )
         .is_err());
         let mut changed = terminal.clone();
@@ -1456,6 +1901,7 @@ mod tests {
             [2; 16],
             config(),
             reader,
+            0,
         )?;
         assert_eq!(owner.terminal(id)?, Some(terminal));
         owner.expire_acknowledged(16_000_000_001)?;
@@ -1472,7 +1918,13 @@ mod tests {
         let id = dispatch.accepted.execution_id(0)?;
         let root = directory.path().join("diagnostics");
         TraceSpool::directory(&root)?;
-        let mut spool = TraceSpool::create(root.join(hex::encode(id)), &dispatch)?;
+        let mut spool = TraceSpool::create(
+            root.join(hex::encode(id)),
+            &dispatch,
+            0,
+            Arc::new(Mutex::new(())),
+            None,
+        )?;
         for sequence in 1..=3 {
             spool.append(&TraceFrameV1 {
                 execution_id: id,
@@ -1517,7 +1969,13 @@ mod tests {
             let fault = owner.path(id).join("terminal.json");
             let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
             let failed = if worker_failure {
-                let mut spool = TraceSpool::create(owner.path(id), &dispatch)?;
+                let mut spool = TraceSpool::create(
+                    owner.path(id),
+                    &dispatch,
+                    0,
+                    owner.allocation.clone(),
+                    None,
+                )?;
                 spool.append(&TraceFrameV1 {
                     execution_id: id,
                     sequence: 1,
@@ -1599,7 +2057,8 @@ mod tests {
         let mut owner = open(directory.path())?;
         let dispatch = dispatch()?;
         let id = dispatch.accepted.execution_id(0)?;
-        let mut spool = TraceSpool::create(owner.path(id), &dispatch)?;
+        let mut spool =
+            TraceSpool::create(owner.path(id), &dispatch, 0, owner.allocation.clone(), None)?;
         let frame = TraceFrameV1 {
             execution_id: id,
             sequence: 1,
@@ -1709,7 +2168,7 @@ mod tests {
     fn observability_recovery_preserves_evidence_reserve_before_intent() -> TestResult {
         let directory = tempfile::tempdir()?;
         let mut config = config();
-        config.storage_reserve_bytes = u64::MAX;
+        config.storage_reserve_bytes = Some(u64::MAX);
         let mut owner = NodeTraceOwner::open(
             directory.path(),
             [1; 16],
@@ -1717,6 +2176,7 @@ mod tests {
             [2; 16],
             config,
             KernelStateReader::new(directory.path()),
+            0,
         )?;
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
         assert!(owner.admit(dispatch()?, None, &key, 2).is_err());

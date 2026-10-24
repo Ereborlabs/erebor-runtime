@@ -232,6 +232,7 @@ impl ClientFixture {
                 "node-a".into(),
                 [7; 16],
                 backend,
+                ObservabilityQualification::backend_config(),
             )?,
             connection,
             trust,
@@ -358,7 +359,7 @@ impl ClientFixture {
         let mut wal = EvidenceWal::open(
             root.join("event-wal"),
             EvidenceWalLimits {
-                maximum_retained_records: 1,
+                maximum_retained_records: Some(1),
                 maximum_batch_records: 1,
                 ..EvidenceWalLimits::default()
             },

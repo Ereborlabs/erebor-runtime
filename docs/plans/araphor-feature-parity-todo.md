@@ -82,7 +82,7 @@ identifies a specific remaining part of an otherwise implemented item.
 | 10. Notification execution from Query events | Done | Native subscriptions and the shared Host drive delivery, retries, ACK deadlines, restart and current permission checks. |
 | 11. Runtime configuration through Control | Done | Control passes configured Query and package runtime limits at construction and rejects reuse with different limits. Runtime quotas default to disabled. |
 | 12. Data and Wasm cancellation without periodic checks | Done | Wasm and Data lock waits use events and exact deadlines. Data sends one native interrupt at expiry and waits for an event. A native interrupt scope preserves cancellation across statement resets. |
-| 13. Configurable quotas, disabled by default | Not done | SDK package quotas are removed. Query, runtime and Control evidence-admission quotas default to disabled. The remaining resource-boundary audit and changes are still open. |
+| 13. Configurable quotas, disabled by default | Not done | Package quotas are removed. The reviewed host-quota paths have disabled defaults and passing focused checks. Native BPFTRACE policy still has five forced limits and pinned source/resource/map metadata. A policy change requires a separately authorized host and new physical qualification. |
 
 Result: **15 Done; 1 Not done**. The remaining item is **13**.
 The separate 6,000-line production Rust reduction target still requires a

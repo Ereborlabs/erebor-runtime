@@ -15,7 +15,7 @@ use crate::Result;
 const ACK_FILE: &str = "acknowledged.bin";
 const ACK_BYTES: usize = 12;
 const SEGMENT_HEADER_BYTES: usize = 64;
-const SEGMENT_MAX_BYTES: u64 = 16 * 1_024 * 1_024;
+const SEGMENT_BYTES: u64 = 16 * 1_024 * 1_024;
 const RECORD_OVERHEAD_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -28,21 +28,23 @@ pub enum EvidenceWalCapacityPolicyV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EvidenceWalLimits {
-    pub maximum_record_bytes: u64,
-    pub maximum_retained_bytes: u64,
-    pub maximum_retained_records: usize,
+    pub maximum_record_bytes: Option<u64>,
+    pub maximum_retained_bytes: Option<u64>,
+    pub maximum_retained_records: Option<usize>,
     pub maximum_batch_records: usize,
     pub capacity_policy: EvidenceWalCapacityPolicyV1,
 }
 
 impl EvidenceWalLimits {
     pub fn validate(self) -> Result<()> {
-        if self.maximum_record_bytes == 0
-            || self.maximum_record_bytes > mithril_control::MAX_EVIDENCE_RECORD_BYTES as u64
-            || self.maximum_retained_bytes < self.maximum_record_bytes
-            || self.maximum_retained_records == 0
+        if self.maximum_record_bytes == Some(0)
+            || self.maximum_retained_bytes == Some(0)
+            || self.maximum_retained_records == Some(0)
+            || self
+                .maximum_record_bytes
+                .zip(self.maximum_retained_bytes)
+                .is_some_and(|(record, retained)| retained < record)
             || self.maximum_batch_records == 0
-            || self.maximum_batch_records > mithril_control::MAX_EVIDENCE_BATCH_RECORDS
         {
             return EvidenceStateSnafu {
                 reason: "evidence WAL bounds are zero or inconsistent".to_owned(),
@@ -56,9 +58,9 @@ impl EvidenceWalLimits {
 impl Default for EvidenceWalLimits {
     fn default() -> Self {
         Self {
-            maximum_record_bytes: mithril_control::MAX_EVIDENCE_RECORD_BYTES as u64,
-            maximum_retained_bytes: 256 * 1_024 * 1_024,
-            maximum_retained_records: 100_000,
+            maximum_record_bytes: None,
+            maximum_retained_bytes: None,
+            maximum_retained_records: None,
             maximum_batch_records: mithril_control::DEFAULT_EVIDENCE_BATCH_RECORDS,
             capacity_policy: EvidenceWalCapacityPolicyV1::Block,
         }
@@ -285,19 +287,12 @@ impl EvidenceWalCodecV1 {
     }
 
     fn encode_record(record: &mithril_control::EvidenceRecord) -> Result<Vec<u8>> {
-        let payload = record.encode_to_vec();
-        let length = u32::try_from(payload.len()).map_err(|_| {
+        Vec::try_from(record).map_err(|_| {
             EvidenceStateSnafu {
                 reason: "evidence WAL record size is not representable".to_owned(),
             }
             .build()
-        })?;
-        let mut frame = Vec::with_capacity(payload.len().saturating_add(RECORD_OVERHEAD_BYTES));
-        frame.extend_from_slice(&length.to_be_bytes());
-        frame.extend_from_slice(&payload);
-        let checksum = crc32c::crc32c(&frame);
-        frame.extend_from_slice(&checksum.to_be_bytes());
-        Ok(frame)
+        })
     }
 
     fn decode_record_payload(frame: &[u8], cursor: u64) -> Result<mithril_control::EvidenceRecord> {
@@ -435,15 +430,8 @@ impl EvidenceWalSegment {
         path: PathBuf,
         first_cursor: u64,
         sealed_last_cursor: Option<u64>,
-        limits: EvidenceWalLimits,
     ) -> Result<(Self, EvidenceWalStreamIdentityV1, Vec<EvidenceRecordV1>)> {
         let mut bytes = fs::read(&path).context(IoSnafu { path: &path })?;
-        if bytes.len() as u64 > SEGMENT_MAX_BYTES {
-            return EvidenceStateSnafu {
-                reason: format!("evidence WAL segment `{}` exceeds 16 MiB", path.display()),
-            }
-            .fail();
-        }
         let name = format!("evidence WAL segment `{}`", path.display());
         let identity = EvidenceWalCodecV1::decode_segment_header(&bytes, &name)?;
         let active = sealed_last_cursor.is_none();
@@ -466,9 +454,9 @@ impl EvidenceWalSegment {
             let payload_bytes =
                 u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap_or_default())
                     as usize;
-            if payload_bytes == 0 || payload_bytes as u64 > limits.maximum_record_bytes {
+            if payload_bytes == 0 {
                 return EvidenceStateSnafu {
-                    reason: format!("{name} contains a record outside its size bound"),
+                    reason: format!("{name} contains an empty record"),
                 }
                 .fail();
             }
@@ -706,7 +694,7 @@ impl EvidenceWalOwner {
             in_flight: None,
             last_acknowledged_stream: None,
         };
-        owner.validate_retention()?;
+        owner.retention()?;
         Ok(owner)
     }
 
@@ -762,19 +750,17 @@ impl EvidenceWalOwner {
             )
         })?;
         if self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block {
-            wal.limits.maximum_retained_records = wal.retained_records
-                + self
-                    .limits
-                    .maximum_retained_records
-                    .saturating_sub(retained_records);
-            wal.limits.maximum_retained_bytes = wal.retained_bytes
-                + self
-                    .limits
-                    .maximum_retained_bytes
-                    .saturating_sub(retained_bytes);
+            wal.limits.maximum_retained_records = self
+                .limits
+                .maximum_retained_records
+                .map(|maximum| wal.retained_records + maximum.saturating_sub(retained_records));
+            wal.limits.maximum_retained_bytes = self
+                .limits
+                .maximum_retained_bytes
+                .map(|maximum| wal.retained_bytes + maximum.saturating_sub(retained_bytes));
         } else {
-            wal.limits.maximum_retained_records = usize::MAX;
-            wal.limits.maximum_retained_bytes = u64::MAX;
+            wal.limits.maximum_retained_records = None;
+            wal.limits.maximum_retained_bytes = None;
         }
         let result = wal.append_classified_with_sync(observation, sync);
         wal.limits = self.limits;
@@ -916,20 +902,6 @@ impl EvidenceWalOwner {
             total.saturating_add(wal.pending_records())
         })
     }
-
-    fn validate_retention(&self) -> Result<()> {
-        let (retained_records, retained_bytes) = self.retention()?;
-        if self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block
-            && (retained_records > self.limits.maximum_retained_records
-                || retained_bytes > self.limits.maximum_retained_bytes)
-        {
-            return EvidenceStateSnafu {
-                reason: "evidence WAL streams exceed their shared retention bounds".to_owned(),
-            }
-            .fail();
-        }
-        Ok(())
-    }
 }
 
 impl EvidenceWal {
@@ -943,7 +915,7 @@ impl EvidenceWal {
         let mut stream_identity = None;
         for (path, first_cursor, last_cursor) in paths {
             let (segment, identity, records) =
-                EvidenceWalSegment::read(path, first_cursor, last_cursor, limits)?;
+                EvidenceWalSegment::read(path, first_cursor, last_cursor)?;
             if stream_identity.is_some_and(|current| current != identity) {
                 return EvidenceStateSnafu {
                     reason: "evidence WAL segments cross a stream identity boundary".to_owned(),
@@ -1036,15 +1008,6 @@ impl EvidenceWal {
                 .build()
             })
         })?;
-        if limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block
-            && (retained_records > limits.maximum_retained_records
-                || retained_bytes > limits.maximum_retained_bytes)
-        {
-            return EvidenceStateSnafu {
-                reason: "evidence WAL exceeds its configured retention bounds".to_owned(),
-            }
-            .fail();
-        }
         Ok(Self {
             root,
             limits,
@@ -1180,7 +1143,11 @@ impl EvidenceWal {
         let record = EvidenceRecordV1::new(cursor, observation)?;
         let payload_bytes = record.frame.len().saturating_sub(RECORD_OVERHEAD_BYTES) as u64;
         let active_fits = self.segments.last().is_some_and(|segment| {
-            segment.active && segment.bytes + record.frame.len() as u64 <= SEGMENT_MAX_BYTES
+            segment.active
+                && segment
+                    .bytes
+                    .checked_add(record.frame.len() as u64)
+                    .is_some_and(|bytes| bytes <= SEGMENT_BYTES)
         });
         let added_bytes = record.frame.len() as u64
             + if active_fits {
@@ -1197,8 +1164,10 @@ impl EvidenceWal {
                 }
                 .build()
             })?;
-        if payload_bytes > self.limits.maximum_record_bytes
-            || record.frame.len() as u64 + SEGMENT_HEADER_BYTES as u64 > SEGMENT_MAX_BYTES
+        if self
+            .limits
+            .maximum_record_bytes
+            .is_some_and(|maximum| payload_bytes > maximum)
         {
             return Err(EvidenceWalAppendFailure {
                 error: Box::new(
@@ -1211,8 +1180,14 @@ impl EvidenceWal {
             });
         }
         if self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block
-            && (self.retained_records == self.limits.maximum_retained_records
-                || retained_bytes > self.limits.maximum_retained_bytes)
+            && (self
+                .limits
+                .maximum_retained_records
+                .is_some_and(|maximum| self.retained_records >= maximum)
+                || self
+                    .limits
+                    .maximum_retained_bytes
+                    .is_some_and(|maximum| retained_bytes > maximum))
         {
             return Err(EvidenceWalAppendFailure {
                 error: Box::new(
@@ -1313,9 +1288,9 @@ impl EvidenceWal {
             let batch_bytes = batch.framed_records.len();
             if !batches.is_empty()
                 && (framed_bytes.saturating_add(batch_bytes)
-                    > mithril_control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
+                    > mithril_control::EVIDENCE_COMMIT_BYTES
                     || record_offset.saturating_add(batch.record_count())
-                        > mithril_control::MAX_EVIDENCE_BATCH_RECORDS)
+                        > mithril_control::DEFAULT_EVIDENCE_BATCH_RECORDS)
             {
                 break;
             }
@@ -1334,8 +1309,6 @@ impl EvidenceWal {
                 .contiguous_cursor
                 .checked_add(record_offset as u64 + 1)?
             || self.limits.maximum_batch_records == 0
-            || first.frame.len()
-                > mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES.saturating_sub(128)
         {
             return None;
         }
@@ -1344,8 +1317,7 @@ impl EvidenceWal {
 
     fn batch_from(&self, record_offset: usize) -> Option<EvidenceBatchV1> {
         let (first_cursor, stream_identity) = self.batch_start(record_offset)?;
-        let maximum_frame_bytes =
-            mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES.saturating_sub(128);
+        let maximum_frame_bytes = mithril_control::EVIDENCE_BATCH_BYTES.saturating_sub(128);
         let mut framed_records = Vec::new();
         let mut last_cursor = None;
         for record in self
@@ -1354,7 +1326,9 @@ impl EvidenceWal {
             .skip(record_offset)
             .take(self.limits.maximum_batch_records)
         {
-            if framed_records.len().saturating_add(record.frame.len()) > maximum_frame_bytes {
+            if !framed_records.is_empty()
+                && framed_records.len().saturating_add(record.frame.len()) > maximum_frame_bytes
+            {
                 break;
             }
             framed_records.extend_from_slice(&record.frame);
@@ -1368,7 +1342,7 @@ impl EvidenceWal {
         };
         debug_assert!({
             let wire: mithril_control::EvidenceBatch = batch.clone().into();
-            wire.encoded_len() <= mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES
+            batch.record_count() == 1 || wire.encoded_len() <= mithril_control::EVIDENCE_BATCH_BYTES
         });
         Some(batch)
     }
@@ -1524,9 +1498,9 @@ mod tests {
 
     fn limits() -> EvidenceWalLimits {
         EvidenceWalLimits {
-            maximum_record_bytes: 64 * 1_024,
-            maximum_retained_bytes: 256 * 1_024,
-            maximum_retained_records: 4,
+            maximum_record_bytes: Some(64 * 1_024),
+            maximum_retained_bytes: Some(256 * 1_024),
+            maximum_retained_records: Some(4),
             maximum_batch_records: 2,
             capacity_policy: EvidenceWalCapacityPolicyV1::Block,
         }
@@ -1631,7 +1605,7 @@ mod tests {
         wal.append(&observation(2)?)?;
         let records = wal.records.clone();
         let identity = wal.stream_identity;
-        let maximum_bytes = mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES.saturating_sub(128);
+        let maximum_bytes = mithril_control::EVIDENCE_BATCH_BYTES.saturating_sub(128);
         for (name, cursor, ack, present, record_limit, frame_bytes, offset, expected) in [
             ("ready", 1, 0, true, 2, None, 0, Some(1)),
             ("offset", 1, 0, true, 2, None, 1, Some(2)),
@@ -1640,7 +1614,16 @@ mod tests {
             ("overflow", 1, u64::MAX, true, 2, None, 0, None),
             ("identity", 1, 0, false, 2, None, 0, None),
             ("limit", 1, 0, true, 0, None, 0, None),
-            ("oversize", 1, 0, true, 2, Some(maximum_bytes + 1), 0, None),
+            (
+                "oversize",
+                1,
+                0,
+                true,
+                2,
+                Some(maximum_bytes + 1),
+                0,
+                Some(1),
+            ),
             ("boundary", 1, 0, true, 2, Some(maximum_bytes), 0, Some(1)),
         ] {
             wal.records.clone_from(&records);
@@ -1712,7 +1695,7 @@ mod tests {
         let mut owner = EvidenceWalOwner::open(
             directory.path(),
             EvidenceWalLimits {
-                maximum_retained_records: 5,
+                maximum_retained_records: Some(5),
                 ..limits()
             },
         )?;
@@ -1798,12 +1781,12 @@ mod tests {
     #[test]
     fn wal_bounds_group_records() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let maximum = mithril_control::MAX_EVIDENCE_BATCH_RECORDS;
+        let maximum = mithril_control::DEFAULT_EVIDENCE_BATCH_RECORDS;
         let mut owner = EvidenceWalOwner::open(
             directory.path(),
             EvidenceWalLimits {
-                maximum_retained_records: maximum + 1,
-                maximum_retained_bytes: 16 * 1_024 * 1_024,
+                maximum_retained_records: Some(maximum + 1),
+                maximum_retained_bytes: Some(16 * 1_024 * 1_024),
                 maximum_batch_records: maximum / 2,
                 ..limits()
             },
@@ -1941,7 +1924,7 @@ mod tests {
 
         let directory = tempfile::tempdir()?;
         let compact_limits = EvidenceWalLimits {
-            maximum_retained_records: RECORDS as usize,
+            maximum_retained_records: Some(RECORDS as usize),
             maximum_batch_records: RECORDS as usize,
             ..limits()
         };
@@ -1961,7 +1944,7 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let retain_limits = EvidenceWalLimits {
-            maximum_retained_records: 2,
+            maximum_retained_records: Some(2),
             maximum_batch_records: 1,
             capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
             ..limits()
@@ -1996,7 +1979,7 @@ mod tests {
         let mut wal = EvidenceWal::open(
             directory.path(),
             EvidenceWalLimits {
-                maximum_retained_records: 1,
+                maximum_retained_records: Some(1),
                 maximum_batch_records: 1,
                 ..limits()
             },
@@ -2012,7 +1995,7 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let retain_limits = EvidenceWalLimits {
-            maximum_retained_records: 2,
+            maximum_retained_records: Some(2),
             maximum_batch_records: 1,
             capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
             ..limits()

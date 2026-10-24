@@ -17,7 +17,6 @@ use crate::Result;
 use super::persistence::atomic_write;
 
 const COVERAGE_SCHEMA_VERSION: u32 = 2;
-const MAX_COVERAGE_HISTORY: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -218,12 +217,7 @@ impl CoverageHealthOwner {
                     );
                     prior.history.push(interval);
                 }
-                if prior.history.len() > MAX_COVERAGE_HISTORY {
-                    return EvidenceStateSnafu {
-                        reason: "coverage history capacity is exhausted".to_owned(),
-                    }
-                    .fail();
-                }
+
                 CoverageSnapshotV1 {
                     schema_version: COVERAGE_SCHEMA_VERSION,
                     source_epoch,
@@ -336,7 +330,7 @@ impl CoverageHealthOwner {
                     source.current.closing_counters = Some(counters);
                     completed
                 };
-                append_history(inner, completed)?;
+                inner.snapshot.history.extend(completed);
             }
             Ok(())
         })
@@ -457,7 +451,7 @@ impl CoverageHealthOwner {
                 }
             }
             for interval in completed {
-                append_history(inner, Some(interval))?;
+                inner.snapshot.history.push(interval);
             }
             Ok(())
         })
@@ -510,12 +504,6 @@ impl CoverageHealthOwner {
             .values()
             .filter(|source| source.current.state == CoverageStateV1::Gapped)
             .count();
-        if inner.snapshot.history.len().saturating_add(recovering) > MAX_COVERAGE_HISTORY {
-            return EvidenceStateSnafu {
-                reason: "coverage history capacity is exhausted".to_owned(),
-            }
-            .fail();
-        }
 
         inner.commit(|inner| {
             let mut completed = Vec::with_capacity(recovering);
@@ -614,12 +602,6 @@ impl CoverageHealthOwner {
             .values()
             .filter(|source| source.current.state == CoverageStateV1::Gapped)
             .count();
-        if inner.snapshot.history.len().saturating_add(recovering) > MAX_COVERAGE_HISTORY {
-            return EvidenceStateSnafu {
-                reason: "coverage history capacity is exhausted".to_owned(),
-            }
-            .fail();
-        }
 
         inner.commit(|inner| {
             let mut completed = Vec::with_capacity(recovering);
@@ -722,7 +704,7 @@ fn observe_one(
         };
         (completed, interval_id, coverage)
     };
-    append_history(inner, completed)?;
+    inner.snapshot.history.extend(completed);
     Ok(Some((interval_id, coverage)))
 }
 
@@ -850,19 +832,6 @@ fn rotate_interval(
     completed
 }
 
-fn append_history(inner: &mut CoverageInner, interval: Option<CoverageIntervalV1>) -> Result<()> {
-    if let Some(interval) = interval {
-        if inner.snapshot.history.len() == MAX_COVERAGE_HISTORY {
-            return EvidenceStateSnafu {
-                reason: "coverage history capacity is exhausted".to_owned(),
-            }
-            .fail();
-        }
-        inner.snapshot.history.push(interval);
-    }
-    Ok(())
-}
-
 fn interval(
     source_id: EvidenceIdV1,
     source_epoch: u64,
@@ -905,12 +874,7 @@ fn bump_and_persist(inner: &mut CoverageInner) -> Result<()> {
         }
         .build()
     })?;
-    if inner.snapshot.history.len() > MAX_COVERAGE_HISTORY {
-        return EvidenceStateSnafu {
-            reason: "coverage history capacity is exhausted".to_owned(),
-        }
-        .fail();
-    }
+
     persist_snapshot(&inner.path, &inner.snapshot)
 }
 
@@ -918,7 +882,6 @@ fn validate_snapshot(snapshot: &CoverageSnapshotV1) -> Result<()> {
     let mut interval_ids = std::collections::BTreeSet::new();
     if snapshot.schema_version != COVERAGE_SCHEMA_VERSION
         || snapshot.source_epoch == 0
-        || snapshot.history.len() > MAX_COVERAGE_HISTORY
         || snapshot.history.iter().any(|interval| {
             interval.source_epoch > snapshot.source_epoch
                 || !interval_ids.insert(interval.interval_id)
@@ -1019,6 +982,46 @@ mod tests {
                 ..CoverageCountersV1::default()
             },
         }
+    }
+
+    #[test]
+    fn history_continues_after_restart() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("coverage.json");
+        let owner = open_owner(&path, 1)?;
+        let samples = (0..4_097)
+            .map(|cpu_id| EffectObservationCpuHealth {
+                cpu_id,
+                counters: CoverageCountersV1::default(),
+            })
+            .collect::<Vec<_>>();
+        owner.sample_health(&samples)?;
+        let before = owner.snapshot();
+        assert_eq!(before.current_intervals().len(), 4_097);
+        assert_eq!(before.history.len(), 4_097);
+        drop(owner);
+        let next = open_owner(&path, 2)?;
+        let restarted = next.snapshot();
+        assert_eq!(
+            restarted.history.len(),
+            before.history.len() + before.current_intervals().len()
+        );
+        assert_eq!(&restarted.history[..before.history.len()], &before.history);
+        next.observe(2, 1)?;
+        next.sample_health(&[health(1, 0)])?;
+        next.mark_all_gapped(CoverageGapReasonV1::ControlDelay)?;
+        next.recover_after_probe(&[health(1, 0)])?;
+        let snapshot = next.snapshot();
+        assert_eq!(snapshot.history.len(), restarted.history.len() + 3);
+        assert!(snapshot
+            .history
+            .last()
+            .ok_or("gap absent")?
+            .gap_reasons
+            .contains(&CoverageGapReasonV1::ControlDelay));
+        drop(next);
+        assert_eq!(open_owner(&path, 2)?.snapshot().history, snapshot.history);
+        Ok(())
     }
 
     #[test]

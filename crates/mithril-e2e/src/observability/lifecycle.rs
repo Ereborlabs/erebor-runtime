@@ -1,5 +1,5 @@
 use super::*;
-use erebor_interceptor::diagnostic::{DiagnosticCapture, DiagnosticStop, MAX_OUTPUT_BYTES};
+use erebor_interceptor::diagnostic::{DiagnosticCapture, DiagnosticStop};
 use serde_json::json;
 
 const ATTACHED: &[u8] = b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n";
@@ -79,7 +79,9 @@ impl ObservabilityQualification {
                 || result.cleanup_verified.is_some()
                 || !result.program_ids.is_empty()
                 || !result.map_ids.is_empty()
-                || result.retained_bytes > MAX_OUTPUT_BYTES
+                || Self::backend_config()
+                    .output_bytes
+                    .is_some_and(|limit| result.retained_bytes > limit)
                 || frames
                     .iter()
                     .enumerate()
@@ -131,7 +133,12 @@ impl ObservabilityQualification {
     ) -> ProofResult<DiagnosticCapture> {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", &format!("cat >/dev/null; {script}")]);
-        Ok(DiagnosticBackend::start_fixture(command, mode, collection)?)
+        Ok(DiagnosticBackend::start_fixture(
+            command,
+            mode,
+            collection,
+            Self::backend_config(),
+        )?)
     }
 
     pub fn lifecycle_child(&self) -> ProofResult<()> {
@@ -601,6 +608,7 @@ impl ObservabilityQualification {
                 ]).arg(&pid_path);
                 command
             },
+            Self::backend_config(),
         )?;
         Ok((node, lease))
     }

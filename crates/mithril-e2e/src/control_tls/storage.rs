@@ -17,7 +17,7 @@ async fn storage_failure_keeps_evidence() -> TestResult<()> {
     let path = fixture.path().join("control-evidence");
     let wait = Duration::from_secs(2);
     let wal = fixture.wal(EvidenceWalLimits {
-        maximum_retained_records: 10,
+        maximum_retained_records: Some(10),
         maximum_batch_records: 10,
         ..EvidenceWalLimits::default()
     })?;

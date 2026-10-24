@@ -381,7 +381,7 @@ impl MtlsFixture {
         use zerocopy::IntoBytes as _;
 
         let wal = self.wal(EvidenceWalLimits {
-            maximum_retained_records: count,
+            maximum_retained_records: Some(count),
             maximum_batch_records: count,
             ..EvidenceWalLimits::default()
         })?;

@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 pub use araphor_data::{
     EvidenceDecisionCatalogV1, EvidenceDigestV1, EvidenceFileObjectV1, EvidenceIdV1,
     EvidenceModelError, EvidenceModelResult, KernelEffectEvidenceV1, ObservationEnvelopeV1,
-    MAX_EVIDENCE_DECISION_CONTEXT_BYTES,
 };
 
 // Finding packages use these keys to select evidence. Kernel records use typed fields on the wire.

@@ -15,8 +15,6 @@ use crate::{Error, EvidenceDecodeSnafu, EvidenceFrameSnafu, Result};
 
 include!(concat!(env!("OUT_DIR"), "/erebor.mithril.control.v1.rs"));
 
-pub const MAX_EVIDENCE_RECORD_BYTES: usize = 128 * 1_024;
-
 impl EvidenceRecord {
     /// Decode one bounded frame and return its consumed byte count.
     pub fn decode_prefix(mut input: impl Buf + AsRef<[u8]>) -> Result<(Self, usize)> {
@@ -29,14 +27,20 @@ impl EvidenceRecord {
             .build()
         })?;
         let payload_bytes = u32::from_be_bytes(*length) as usize;
-        if payload_bytes == 0 || payload_bytes > MAX_EVIDENCE_RECORD_BYTES {
+        if payload_bytes == 0 {
             return EvidenceFrameSnafu {
                 reason: "evidence record frame is outside its size bound",
                 input_bytes: bytes.len(),
             }
             .fail();
         }
-        let frame_bytes = payload_bytes + 8;
+        let frame_bytes = payload_bytes.checked_add(8).ok_or_else(|| {
+            EvidenceFrameSnafu {
+                reason: "evidence record frame length is not representable",
+                input_bytes: bytes.len(),
+            }
+            .build()
+        })?;
         let frame = bytes.get(..frame_bytes).ok_or_else(|| {
             EvidenceFrameSnafu {
                 reason: "evidence record frame payload is incomplete",
@@ -81,16 +85,36 @@ impl TryFrom<&EvidenceRecord> for Vec<u8> {
 
     fn try_from(record: &EvidenceRecord) -> Result<Self> {
         let length = record.encoded_len();
-        if length == 0 || length > MAX_EVIDENCE_RECORD_BYTES {
+        if length == 0 {
             return EvidenceFrameSnafu {
                 reason: "evidence record frame is outside its size bound",
                 input_bytes: length,
             }
             .fail();
         }
-        let mut frame = Vec::with_capacity(length + 8);
-        frame.extend_from_slice(&(length as u32).to_be_bytes());
-        frame.extend(record.encode_to_vec());
+        let payload = u32::try_from(length).map_err(|_| {
+            EvidenceFrameSnafu {
+                reason: "evidence record frame length is not representable",
+                input_bytes: length,
+            }
+            .build()
+        })?;
+        let capacity = length.checked_add(8).ok_or_else(|| {
+            EvidenceFrameSnafu {
+                reason: "evidence record frame length is not representable",
+                input_bytes: length,
+            }
+            .build()
+        })?;
+        let mut frame = Vec::with_capacity(capacity);
+        frame.extend_from_slice(&payload.to_be_bytes());
+        record.encode(&mut frame).map_err(|_| {
+            EvidenceFrameSnafu {
+                reason: "evidence record frame encoding failed",
+                input_bytes: length,
+            }
+            .build()
+        })?;
         frame.extend_from_slice(&crc32c::crc32c(&frame).to_be_bytes());
         Ok(frame)
     }
@@ -166,11 +190,7 @@ mod tests {
             task_cookie: 7,
             ..Default::default()
         };
-        for size in [
-            MAX_EVIDENCE_RECORD_BYTES - 1,
-            MAX_EVIDENCE_RECORD_BYTES,
-            MAX_EVIDENCE_RECORD_BYTES + 1,
-        ] {
+        for size in [128 * 1_024 - 1, 128 * 1_024, 17 * 1_024 * 1_024] {
             let mut payload = record.encode_to_vec();
             let mut padding = vec![0; size - payload.len()];
             let overhead = prost::encoding::bytes::encoded_len(100, &padding) - padding.len();
@@ -178,17 +198,7 @@ mod tests {
             prost::encoding::bytes::encode(100, &padding, &mut payload);
             assert_eq!(payload.len(), size);
             let bytes = frame(&payload);
-            if size > MAX_EVIDENCE_RECORD_BYTES {
-                assert!(matches!(
-                    EvidenceRecord::try_from(bytes.as_slice()),
-                    Err(Error::EvidenceFrame {
-                        reason: "evidence record frame is outside its size bound",
-                        ..
-                    })
-                ));
-            } else {
-                assert_eq!(EvidenceRecord::try_from(bytes.as_slice())?, record);
-            }
+            assert_eq!(EvidenceRecord::try_from(bytes.as_slice())?, record);
         }
         Ok(())
     }

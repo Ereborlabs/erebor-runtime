@@ -26,8 +26,7 @@ pub use araphor_observability::{
     TraceFrameV1, TraceIdentityV1, TraceMeasurementV1, TraceOwner, TraceParticipantStateV1,
     TraceParticipantV1, TraceRecipeManifestV1, TraceRecipeV1, TraceRequestV1, TraceResolveV1,
     TraceResolvedV1, TraceSelectionV1, TraceSourceV1, TraceTargetV1, TraceTerminalReasonV1,
-    TraceTerminalV1, TraceUploadV1, MAX_TRACE_FRAME_BYTES, MAX_TRACE_GRPC_MESSAGE_BYTES,
-    MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES, MAX_TRACE_TARGETS,
+    TraceTerminalV1, TraceUploadV1,
 };
 pub use authority::*;
 pub use client_auth::{

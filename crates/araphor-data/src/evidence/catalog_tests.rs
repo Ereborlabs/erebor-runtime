@@ -122,7 +122,16 @@ impl CatalogFixture {
 
 #[test]
 fn catalog_wire_keys() -> TestResult {
-    let fixture = CatalogFixture::new()?;
+    let mut fixture = CatalogFixture::new()?;
+    fixture
+        .record
+        .decision_context
+        .as_mut()
+        .ok_or("context")?
+        .catalog_json
+        .extend(std::iter::repeat_n(b' ', 17 * 1_024 * 1_024));
+    let frame = Vec::<u8>::try_from(&fixture.record)?;
+    assert_eq!(EvidenceRecord::try_from(frame.as_slice())?, fixture.record);
     fixture.check()?;
     let context = fixture.record.decision_context.as_ref().ok_or("context")?;
     assert_eq!(

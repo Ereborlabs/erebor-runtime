@@ -59,18 +59,18 @@ pub struct RuntimeAdmissionConfig {
 pub struct EvidenceConfig {
     pub tenant_id: String,
     pub source_id: String,
-    #[serde(default = "default_evidence_record_bytes")]
-    pub maximum_record_bytes: u64,
-    #[serde(default = "default_evidence_retained_bytes")]
-    pub maximum_retained_bytes: u64,
-    #[serde(default = "default_evidence_retained_records")]
-    pub maximum_retained_records: usize,
+    #[serde(default)]
+    pub maximum_record_bytes: Option<u64>,
+    #[serde(default)]
+    pub maximum_retained_bytes: Option<u64>,
+    #[serde(default)]
+    pub maximum_retained_records: Option<usize>,
     #[serde(default = "default_evidence_batch_records")]
     pub maximum_batch_records: usize,
     #[serde(default = "default_evidence_control_delay_ms")]
     pub maximum_control_delay_ms: u64,
-    #[serde(default = "default_evidence_reader_queue_records")]
-    pub maximum_reader_queue_records: usize,
+    #[serde(default)]
+    pub maximum_reader_queue_records: Option<usize>,
     #[serde(default)]
     pub capacity_policy: crate::EvidenceWalCapacityPolicyV1,
 }
@@ -323,16 +323,20 @@ impl NodeConfig {
     pub fn validate(&self) -> Result<()> {
         if let Some(diagnostics) = &self.diagnostics {
             diagnostics.validate()?;
-            ensure!(
-                self.evidence
-                    .as_ref()
-                    .is_some_and(|evidence| diagnostics.storage_reserve_bytes
-                        >= evidence
-                            .maximum_retained_bytes
-                            .saturating_add(16 * 1024 * 1024)),
+            let evidence = self.evidence.as_ref().ok_or_else(|| {
                 InvalidConfigurationSnafu {
-                    reason:
-                        "diagnostics must reserve the evidence WAL limit and 16 MiB for metadata"
+                    reason: "diagnostics require evidence storage",
+                }
+                .build()
+            })?;
+            ensure!(
+                evidence
+                    .maximum_retained_bytes
+                    .unwrap_or(0)
+                    .checked_add(diagnostics.storage_reserve_bytes.unwrap_or(0))
+                    .is_some(),
+                InvalidConfigurationSnafu {
+                    reason: "the evidence and diagnostic storage reserve sum is not representable",
                 }
             );
         }
@@ -357,10 +361,10 @@ impl NodeConfig {
                     && canonical_uuid(&evidence.source_id)
                     && limits.validate().is_ok()
                     && evidence.maximum_control_delay_ms > 0
-                    && (1..=1_000_000).contains(&evidence.maximum_reader_queue_records),
+                    && evidence.maximum_reader_queue_records != Some(0),
                 InvalidConfigurationSnafu {
                     reason:
-                        "evidence requires canonical identities, consistent WAL bounds, and a reader queue capacity from 1 to 1000000 records",
+                        "evidence requires canonical identities, consistent WAL bounds, and a positive optional reader queue capacity",
                 }
             );
         }
@@ -683,28 +687,12 @@ const fn default_authorization_clock_skew_ns() -> i64 {
     300_000_000_000
 }
 
-const fn default_evidence_record_bytes() -> u64 {
-    mithril_control::MAX_EVIDENCE_RECORD_BYTES as u64
-}
-
-const fn default_evidence_retained_bytes() -> u64 {
-    256 * 1_024 * 1_024
-}
-
-const fn default_evidence_retained_records() -> usize {
-    10_000
-}
-
 const fn default_evidence_batch_records() -> usize {
     mithril_control::DEFAULT_EVIDENCE_BATCH_RECORDS
 }
 
 const fn default_evidence_control_delay_ms() -> u64 {
     30_000
-}
-
-const fn default_evidence_reader_queue_records() -> usize {
-    262_144
 }
 
 fn canonical_uuid(value: &str) -> bool {
@@ -744,7 +732,10 @@ mod tests {
             block.capacity_policy,
             crate::EvidenceWalCapacityPolicyV1::Block
         );
-        assert_eq!(block.maximum_reader_queue_records, 262_144);
+        assert_eq!(block.maximum_reader_queue_records, None);
+        assert_eq!(block.maximum_record_bytes, None);
+        assert_eq!(block.maximum_retained_bytes, None);
+        assert_eq!(block.maximum_retained_records, None);
 
         let mut retain = base;
         retain["capacity_policy"] = serde_json::json!("RETAIN");
@@ -754,7 +745,7 @@ mod tests {
             retain.capacity_policy,
             crate::EvidenceWalCapacityPolicyV1::Retain
         );
-        assert_eq!(retain.maximum_reader_queue_records, 4_096);
+        assert_eq!(retain.maximum_reader_queue_records, Some(4_096));
         Ok(())
     }
 
@@ -782,12 +773,12 @@ mod tests {
             evidence: Some(EvidenceConfig {
                 tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
                 source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
-                maximum_record_bytes: 128 * 1_024,
-                maximum_retained_bytes: 16 * 1_024 * 1_024,
-                maximum_retained_records: 10_000,
+                maximum_record_bytes: Some(128 * 1_024),
+                maximum_retained_bytes: Some(16 * 1_024 * 1_024),
+                maximum_retained_records: Some(10_000),
                 maximum_batch_records: 256,
                 maximum_control_delay_ms: 30_000,
-                maximum_reader_queue_records: 262_144,
+                maximum_reader_queue_records: Some(262_144),
                 capacity_policy: crate::EvidenceWalCapacityPolicyV1::Block,
             }),
             runtime_observation: None,
@@ -836,10 +827,14 @@ mod tests {
         node.evidence
             .as_mut()
             .ok_or("the fixture evidence configuration is absent")?
-            .maximum_retained_bytes = 256 * MIB;
+            .maximum_retained_bytes = Some(256 * MIB);
         node.diagnostics = Some(NodeTraceConfigV1 {
             executable: PathBuf::from("/usr/bin/bpftrace"),
-            storage_reserve_bytes: 256 * MIB,
+            backend: Default::default(),
+            active: None,
+            retained: None,
+            spool_bytes: None,
+            storage_reserve_bytes: None,
             qualification: TraceQualificationV1 {
                 evidence_sha256: [2; 32],
                 executable_sha256: [1; 32],
@@ -859,22 +854,36 @@ mod tests {
                 ],
             },
         });
-        assert!(matches!(
-            node.validate(),
-            Err(crate::Error::InvalidConfiguration { reason, .. })
-                if reason == "diagnostics must reserve the evidence WAL limit and 16 MiB for metadata"
-        ));
-        let diagnostics = node
-            .diagnostics
-            .as_mut()
-            .ok_or("the fixture diagnostics configuration is absent")?;
-        diagnostics.storage_reserve_bytes = 272 * MIB - 1;
-        assert!(node.validate().is_err());
+        node.validate()?;
+        let evidence = node.evidence.as_mut().ok_or("fixture evidence absent")?;
+        evidence.capacity_policy = crate::EvidenceWalCapacityPolicyV1::Retain;
         node.diagnostics
             .as_mut()
-            .ok_or("the fixture diagnostics configuration is absent")?
-            .storage_reserve_bytes = 272 * MIB;
+            .ok_or("fixture diagnostics absent")?
+            .storage_reserve_bytes = Some(64 * MIB);
         node.validate()?;
+        node.evidence
+            .as_mut()
+            .ok_or("fixture evidence absent")?
+            .maximum_retained_bytes = Some(u64::MAX);
+        assert!(
+            matches!(node.validate(), Err(crate::Error::InvalidConfiguration { reason, .. })
+            if reason == "the evidence and diagnostic storage reserve sum is not representable")
+        );
+        node.evidence
+            .as_mut()
+            .ok_or("fixture evidence absent")?
+            .maximum_retained_bytes = None;
+        node.diagnostics
+            .as_mut()
+            .ok_or("fixture diagnostics absent")?
+            .storage_reserve_bytes = None;
+        node.validate()?;
+        node.evidence = None;
+        assert!(
+            matches!(node.validate(), Err(crate::Error::InvalidConfiguration { reason, .. })
+            if reason == "diagnostics require evidence storage")
+        );
         Ok(())
     }
 
@@ -1030,15 +1039,24 @@ mod tests {
 
         let mut record_config = config();
         if let Some(evidence) = &mut record_config.evidence {
-            evidence.maximum_record_bytes = mithril_control::MAX_EVIDENCE_RECORD_BYTES as u64 + 1;
+            evidence.maximum_record_bytes = None;
+            evidence.maximum_retained_bytes = None;
+            evidence.maximum_retained_records = None;
+            evidence.maximum_batch_records = 4_097;
         }
-        assert!(record_config.validate().is_err());
-
-        let mut batch_config = config();
-        if let Some(evidence) = &mut batch_config.evidence {
-            evidence.maximum_batch_records = 4_096;
+        assert!(record_config.validate().is_ok());
+        for field in 0..4 {
+            let mut bounded = record_config.clone();
+            if let Some(evidence) = bounded.evidence.as_mut() {
+                match field {
+                    0 => evidence.maximum_record_bytes = Some(0),
+                    1 => evidence.maximum_retained_bytes = Some(0),
+                    2 => evidence.maximum_retained_records = Some(0),
+                    _ => evidence.maximum_reader_queue_records = Some(0),
+                }
+            }
+            assert!(bounded.validate().is_err());
         }
-        assert!(batch_config.validate().is_ok());
     }
 
     #[test]

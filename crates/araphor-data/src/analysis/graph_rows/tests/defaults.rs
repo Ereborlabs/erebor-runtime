@@ -358,9 +358,9 @@ fn native_witness_defaults() -> TestResult {
         original.framed_record.as_slice(),
     ))?;
     let original = record.decode()?;
-    for first in (2..=8_193_u64).step_by(crate::MAX_EVIDENCE_BATCH_RECORDS) {
+    for first in (2..=8_193_u64).step_by(crate::EVIDENCE_BATCH_RECORDS) {
         let last = first
-            .saturating_add(crate::MAX_EVIDENCE_BATCH_RECORDS as u64 - 1)
+            .saturating_add(crate::EVIDENCE_BATCH_RECORDS as u64 - 1)
             .min(8_193);
         let mut framed = Vec::new();
         let mut ends = Vec::new();

@@ -15,7 +15,7 @@ use mithril_control::{
     NodeRegistrationRequest, NodeSessionContext, PolicyAcknowledgementAccepted,
     PolicyAcknowledgementRequest, PolicyActivationAcknowledgement, PolicyChunkRequest,
     PolicyInventory, PolicyInventoryRequest, ResolveAdministrativeExec, TrustGenerationAck,
-    TrustGenerationAckRequest, MAX_EVIDENCE_GRPC_MESSAGE_BYTES, MAX_POLICY_GRPC_MESSAGE_BYTES,
+    TrustGenerationAckRequest, MAX_POLICY_GRPC_MESSAGE_BYTES,
 };
 use snafu::ResultExt as _;
 use tokio::sync::{mpsc, oneshot};
@@ -247,8 +247,8 @@ impl NodeControlConnector {
 
         let (evidence_output, evidence_receiver) = mpsc::channel(EVIDENCE_PIPELINE_BATCHES);
         let mut evidence = NodeEvidenceClient::new(channel.clone())
-            .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
-            .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES);
+            .max_decoding_message_size(usize::MAX)
+            .max_encoding_message_size(usize::MAX);
         let evidence_input = evidence
             .open(Request::new(ReceiverStream::new(evidence_receiver)))
             .await
@@ -267,13 +267,13 @@ impl NodeControlConnector {
             evidence_input,
             evidence,
             coverage: NodeCoverageClient::new(channel.clone())
-                .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
-                .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX),
             diagnostics: mithril_control::node_diagnostics_client::NodeDiagnosticsClient::new(
                 channel.clone(),
             )
-            .max_decoding_message_size(mithril_control::MAX_TRACE_GRPC_MESSAGE_BYTES)
-            .max_encoding_message_size(mithril_control::MAX_TRACE_GRPC_MESSAGE_BYTES),
+            .max_decoding_message_size(usize::MAX)
+            .max_encoding_message_size(usize::MAX),
             policy: NodePolicyClient::new(channel)
                 .max_decoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES),

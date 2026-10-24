@@ -1,9 +1,8 @@
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::FileExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -20,11 +19,16 @@ use snafu::{IntoError as _, ResultExt as _};
 use crate::error::{InvalidConfigurationSnafu, IoSnafu};
 use crate::Result;
 
-pub const MAX_SOURCE_BYTES: usize = 64 * 1024;
-pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
-pub const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
-pub const MAX_OUTPUT_FRAMES: u64 = 4096;
-pub const PREPARATION_LIMIT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const MAX_SOURCE_BYTES: usize = 64 * 1024;
+#[cfg(test)]
+const MAX_FRAME_BYTES: usize = 1024 * 1024;
+#[cfg(test)]
+const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(test)]
+const MAX_OUTPUT_FRAMES: u64 = 4096;
+#[cfg(test)]
+const PREPARATION_LIMIT: Duration = Duration::from_secs(10);
 pub const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -68,9 +72,35 @@ pub struct DiagnosticResult {
     pub peak_rss_kib: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiagnosticConfig {
+    pub source_bytes: Option<usize>,
+    pub frame_bytes: Option<usize>,
+    pub output_bytes: Option<usize>,
+    pub output_frames: Option<u64>,
+    pub queued_frames: Option<usize>,
+    pub preparation_timeout: Option<Duration>,
+}
+
+enum DiagnosticSender {
+    Unbounded(mpsc::Sender<DiagnosticFrame>),
+    Bounded(mpsc::SyncSender<DiagnosticFrame>),
+}
+
+impl DiagnosticSender {
+    fn send(&self, frame: DiagnosticFrame) -> bool {
+        match self {
+            Self::Unbounded(sender) => sender.send(frame).is_ok(),
+            Self::Bounded(sender) => sender.try_send(frame).is_ok(),
+        }
+    }
+}
+
 pub struct DiagnosticBackend {
     executable: PathBuf,
     sha256: [u8; 32],
+    config: DiagnosticConfig,
 }
 
 pub struct DiagnosticCapture {
@@ -86,7 +116,7 @@ struct DiagnosticSignals {
 }
 
 impl DiagnosticBackend {
-    pub fn new(executable: PathBuf, sha256: [u8; 32]) -> Result<Self> {
+    pub fn new(executable: PathBuf, sha256: [u8; 32], config: DiagnosticConfig) -> Result<Self> {
         if !executable.is_absolute() || sha256 == [0; 32] {
             return InvalidConfigurationSnafu {
                 path: executable,
@@ -94,7 +124,28 @@ impl DiagnosticBackend {
             }
             .fail();
         }
-        Ok(Self { executable, sha256 })
+        Ok(Self {
+            executable,
+            sha256,
+            config,
+        })
+    }
+
+    pub fn check_source(&self, source: &[u8]) -> Result<()> {
+        if source.is_empty()
+            || source.contains(&0)
+            || self
+                .config
+                .source_bytes
+                .is_some_and(|limit| source.len() > limit)
+        {
+            return InvalidConfigurationSnafu {
+                path: &self.executable,
+                reason: "diagnostic source is invalid or exceeds its configured quota",
+            }
+            .fail();
+        }
+        Ok(())
     }
 
     pub fn start(
@@ -104,16 +155,11 @@ impl DiagnosticBackend {
         mode: DiagnosticMode,
         collection: Duration,
     ) -> Result<DiagnosticCapture> {
-        if source.is_empty()
-            || source.len() > MAX_SOURCE_BYTES
-            || source.contains(&0)
-            || collection.is_zero()
-            || collection > Duration::from_secs(300)
-            || cgroup_id == 0
-        {
+        self.check_source(source)?;
+        if collection.is_zero() || cgroup_id == 0 {
             return InvalidConfigurationSnafu {
                 path: &self.executable,
-                reason: "diagnostic source, cgroup parameter, or duration is invalid",
+                reason: "diagnostic cgroup parameter or duration is invalid",
             }
             .fail();
         }
@@ -136,11 +182,16 @@ impl DiagnosticBackend {
         let resources = StaticResources::select(self.sha256, source, mode);
         let source = source.to_vec();
         let path = self.executable.clone();
-        DiagnosticCapture::spawn(&self.executable, move |signals, send| {
-            let command = Self::command(&executable, cgroup_id, mode);
-            SupervisedChild::spawn(command, &path, resources)?
-                .run(&path, source, mode, collection, signals, send)
-        })
+        let config = self.config;
+        DiagnosticCapture::spawn(
+            &self.executable,
+            config.queued_frames,
+            move |signals, send| {
+                let command = Self::command(&executable, cgroup_id, mode);
+                SupervisedChild::spawn(command, &path, resources, config)?
+                    .run(&path, source, mode, collection, signals, send)
+            },
+        )
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -149,12 +200,13 @@ impl DiagnosticBackend {
         mut command: Command,
         mode: DiagnosticMode,
         collection: Duration,
+        config: DiagnosticConfig,
     ) -> Result<DiagnosticCapture> {
         let path = PathBuf::from(command.get_program());
         let run_path = path.clone();
         Self::set_child_io(&mut command);
-        DiagnosticCapture::spawn(&path, move |signals, send| {
-            SupervisedChild::spawn(command, &run_path, None)?.run(
+        DiagnosticCapture::spawn(&path, config.queued_frames, move |signals, send| {
+            SupervisedChild::spawn(command, &run_path, None, config)?.run(
                 &run_path,
                 b"fixture".to_vec(),
                 mode,
@@ -300,16 +352,20 @@ impl DiagnosticBackend {
 impl DiagnosticCapture {
     fn spawn(
         path: &Path,
-        run: impl FnOnce(
-                Arc<DiagnosticSignals>,
-                mpsc::SyncSender<DiagnosticFrame>,
-            ) -> Result<DiagnosticResult>
+        queued_frames: Option<usize>,
+        run: impl FnOnce(Arc<DiagnosticSignals>, DiagnosticSender) -> Result<DiagnosticResult>
             + Send
             + 'static,
     ) -> Result<Self> {
         let signals = Arc::new(DiagnosticSignals::default());
         let cancel = Arc::clone(&signals);
-        let (send, frames) = mpsc::sync_channel(256);
+        let (send, frames) = if let Some(capacity) = queued_frames {
+            let (send, frames) = mpsc::sync_channel(capacity);
+            (DiagnosticSender::Bounded(send), frames)
+        } else {
+            let (send, frames) = mpsc::channel();
+            (DiagnosticSender::Unbounded(send), frames)
+        };
         let worker = thread::Builder::new()
             .name("araphor-diagnostic".into())
             .spawn(move || run(cancel, send))
@@ -510,6 +566,7 @@ struct SupervisedChild {
     fdinfo: BTreeMap<u32, File>,
     start: Instant,
     resources: Option<StaticResources>,
+    config: DiagnosticConfig,
 }
 
 impl SupervisedChild {
@@ -517,6 +574,7 @@ impl SupervisedChild {
         mut command: Command,
         path: &Path,
         resources: Option<StaticResources>,
+        config: DiagnosticConfig,
     ) -> Result<Self> {
         let start = Instant::now();
         let child = command.spawn().context(IoSnafu {
@@ -529,6 +587,7 @@ impl SupervisedChild {
             fdinfo: BTreeMap::new(),
             start,
             resources,
+            config,
         })
     }
 
@@ -539,9 +598,10 @@ impl SupervisedChild {
         mode: DiagnosticMode,
         collection: Duration,
         signals: Arc<DiagnosticSignals>,
-        send: mpsc::SyncSender<DiagnosticFrame>,
+        send: DiagnosticSender,
     ) -> Result<DiagnosticResult> {
         let start = self.start;
+        let config = self.config;
         let owner = &mut self;
         signals
             .process_id
@@ -584,7 +644,18 @@ impl SupervisedChild {
             cleanup_verified: None,
             peak_rss_kib: None,
         };
-        let mut deadline = start + PREPARATION_LIMIT;
+        let mut deadline = config
+            .preparation_timeout
+            .map(|timeout| {
+                start.checked_add(timeout).ok_or_else(|| {
+                    InvalidConfigurationSnafu {
+                        path,
+                        reason: "diagnostic preparation deadline overflowed",
+                    }
+                    .build()
+                })
+            })
+            .transpose()?;
         let mut closing = None;
         let mut input_offset = 0;
         let mut input = Some(input);
@@ -592,7 +663,6 @@ impl SupervisedChild {
         let mut eof = [false, false];
         let mut status = None;
         let mut resource_text = String::with_capacity(16 * 1024);
-        let mut resource_bytes = [0; 16 * 1024];
         let mut frozen = false;
         loop {
             if closing.is_some() {
@@ -602,18 +672,13 @@ impl SupervisedChild {
                 let mut current = result
                     .attach_notification_ms
                     .and_then(|_| owner.resources.take());
-                owner.record_resources(
-                    &mut result,
-                    &mut resource_text,
-                    &mut resource_bytes,
-                    current.as_mut(),
-                );
+                owner.record_resources(&mut result, &mut resource_text, current.as_mut());
                 if let Some(current) = current {
                     frozen = closing.is_none()
                         && status.is_none()
                         && result.stop == DiagnosticStop::Exited
                         && !signals.cancelled.load(Ordering::Acquire)
-                        && Instant::now() < deadline
+                        && deadline.is_none_or(|deadline| Instant::now() < deadline)
                         && current.verify();
                     if frozen {
                         owner.fdinfo.clear();
@@ -659,11 +724,24 @@ impl SupervisedChild {
                                     result.attach_notification_ms = Some(
                                         start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                                     );
-                                    deadline = Instant::now() + collection;
+                                    deadline =
+                                        Some(Instant::now().checked_add(collection).ok_or_else(
+                                            || {
+                                                InvalidConfigurationSnafu {
+                                                    path,
+                                                    reason:
+                                                        "diagnostic collection deadline overflowed",
+                                                }
+                                                .build()
+                                            },
+                                        )?);
                                 }
-                                Self::emit(line, index == 1, &send, &mut result);
+                                Self::emit(line, index == 1, &send, &mut result, &config);
                             }
-                            if buffers[index].len() > MAX_FRAME_BYTES {
+                            if config
+                                .frame_bytes
+                                .is_some_and(|limit| buffers[index].len() > limit)
+                            {
                                 buffers[index].clear();
                                 result.stop = DiagnosticStop::OutputLimit;
                                 result.output_incomplete = true;
@@ -695,12 +773,7 @@ impl SupervisedChild {
             }
             if status.is_some() && eof.iter().all(|value| *value) {
                 if frozen {
-                    owner.record_resources(
-                        &mut result,
-                        &mut resource_text,
-                        &mut resource_bytes,
-                        None,
-                    );
+                    owner.record_resources(&mut result, &mut resource_text, None);
                 }
                 break;
             }
@@ -708,7 +781,7 @@ impl SupervisedChild {
                 if result.stop == DiagnosticStop::Exited {
                     if signals.cancelled.load(Ordering::Acquire) {
                         result.stop = DiagnosticStop::Cancelled;
-                    } else if Instant::now() >= deadline {
+                    } else if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                         result.stop = if mode == DiagnosticMode::Capture
                             && result.attach_notification_ms.is_none()
                         {
@@ -733,7 +806,7 @@ impl SupervisedChild {
         }
         for (index, tail) in buffers.into_iter().enumerate() {
             if !tail.is_empty() {
-                Self::emit(tail, index == 1, &send, &mut result);
+                Self::emit(tail, index == 1, &send, &mut result, &config);
             }
         }
         owner.signal(Signal::KILL)?;
@@ -770,7 +843,6 @@ impl SupervisedChild {
         &mut self,
         result: &mut DiagnosticResult,
         text: &mut String,
-        bytes: &mut [u8; 16 * 1024],
         mut current: Option<&mut StaticResources>,
     ) {
         let Ok(mut entries) = fs::read_dir(format!("/proc/{}/fdinfo", self.child.id())) else {
@@ -780,10 +852,9 @@ impl SupervisedChild {
             }
             return;
         };
-        let mut fds = [0_u32; 256];
-        let mut count = 0;
+        let mut fds = Vec::new();
         let mut incomplete = false;
-        for entry in entries.by_ref().take(fds.len()) {
+        for entry in entries.by_ref() {
             let Ok(entry) = entry else {
                 incomplete = true;
                 continue;
@@ -793,16 +864,11 @@ impl SupervisedChild {
                 .to_str()
                 .and_then(|name| name.parse().ok())
             {
-                fds[count] = fd;
-                count += 1;
+                fds.push(fd);
             } else {
                 incomplete = true;
             }
         }
-        if current.is_some() && entries.next().is_some() {
-            incomplete = true;
-        }
-        let fds = &mut fds[..count];
         fds.sort_unstable();
         self.fdinfo.retain(|fd, _| fds.binary_search(fd).is_ok());
         let mut previous = None;
@@ -823,7 +889,7 @@ impl SupervisedChild {
                     entry.insert(file)
                 }
             };
-            let count = match Self::read_resource(file, text, bytes) {
+            let count = match Self::read_resource(file, text) {
                 Ok(count) => count,
                 Err(_) => {
                     self.fdinfo.remove(&fd);
@@ -851,36 +917,20 @@ impl SupervisedChild {
                     result.map_ids.insert(id);
                 }
             }
-            if count == 16 * 1024 {
-                self.fdinfo.remove(&fd);
-                incomplete = true;
-            }
         }
         if let Some(current) = current {
             current.incomplete |= incomplete;
         }
     }
 
-    fn read_resource(
-        reader: &impl FileExt,
-        text: &mut String,
-        bytes: &mut [u8; 16 * 1024],
-    ) -> std::io::Result<usize> {
+    fn read_resource(reader: &mut (impl Read + Seek), text: &mut String) -> std::io::Result<usize> {
         text.clear();
-        let mut count = 0;
-        let limit = bytes.len();
-        while count < limit {
-            match reader.read_at(&mut bytes[count..limit], count as u64) {
-                Ok(0) => break,
-                Ok(read) => count += read,
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error),
-            }
+        reader.rewind()?;
+        let result = reader.read_to_string(text);
+        if result.is_err() {
+            text.clear();
         }
-        let current = std::str::from_utf8(&bytes[..count])
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        text.push_str(current);
-        Ok(count)
+        result
     }
 
     #[allow(unsafe_code)]
@@ -917,34 +967,41 @@ impl SupervisedChild {
     fn emit(
         bytes: Vec<u8>,
         stderr: bool,
-        send: &mpsc::SyncSender<DiagnosticFrame>,
+        send: &DiagnosticSender,
         result: &mut DiagnosticResult,
+        config: &DiagnosticConfig,
     ) {
         if result.output_incomplete {
             return;
         }
-        if bytes.len() > MAX_FRAME_BYTES
-            || result.retained_bytes + bytes.len() > MAX_OUTPUT_BYTES
-            || result.emitted_frames >= MAX_OUTPUT_FRAMES
+        let (Some(next), Some(retained)) = (
+            result.emitted_frames.checked_add(1),
+            result.retained_bytes.checked_add(bytes.len()),
+        ) else {
+            result.stop = DiagnosticStop::OutputLimit;
+            result.output_incomplete = true;
+            return;
+        };
+        if config.frame_bytes.is_some_and(|limit| bytes.len() > limit)
+            || config.output_bytes.is_some_and(|limit| retained > limit)
+            || config
+                .output_frames
+                .is_some_and(|limit| result.emitted_frames >= limit)
         {
             result.stop = DiagnosticStop::OutputLimit;
             result.output_incomplete = true;
             return;
         }
-        let count = bytes.len();
-        if send
-            .try_send(DiagnosticFrame {
-                sequence: result.emitted_frames + 1,
-                stderr,
-                bytes,
-            })
-            .is_err()
-        {
+        if send.send(DiagnosticFrame {
+            sequence: next,
+            stderr,
+            bytes,
+        }) {
+            result.retained_bytes = retained;
+            result.emitted_frames = next;
+        } else {
             result.stop = DiagnosticStop::ConsumerSlow;
             result.output_incomplete = true;
-        } else {
-            result.retained_bytes += count;
-            result.emitted_frames += 1;
         }
     }
 
@@ -985,18 +1042,66 @@ impl Drop for SupervisedChild {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Seek;
+
+    fn limits() -> DiagnosticConfig {
+        DiagnosticConfig {
+            source_bytes: Some(MAX_SOURCE_BYTES),
+            frame_bytes: Some(MAX_FRAME_BYTES),
+            output_bytes: Some(MAX_OUTPUT_BYTES),
+            output_frames: Some(MAX_OUTPUT_FRAMES),
+            queued_frames: Some(256),
+            preparation_timeout: Some(PREPARATION_LIMIT),
+        }
+    }
 
     fn capture(script: &str) -> Result<DiagnosticCapture> {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", script]);
-        DiagnosticBackend::start_fixture(command, DiagnosticMode::Compile, Duration::from_secs(1))
+        DiagnosticBackend::start_fixture(
+            command,
+            DiagnosticMode::Compile,
+            Duration::from_secs(1),
+            limits(),
+        )
     }
 
     fn observe(script: &str, collection: Duration) -> Result<DiagnosticCapture> {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", script]);
-        DiagnosticBackend::start_fixture(command, DiagnosticMode::Capture, collection)
+        DiagnosticBackend::start_fixture(command, DiagnosticMode::Capture, collection, limits())
+    }
+
+    #[test]
+    fn observability_backend_optional_limits() -> Result<()> {
+        let config = DiagnosticConfig::default();
+        let backend = DiagnosticBackend::new(PathBuf::from("/bin/false"), [1; 32], config)?;
+        backend.check_source(&vec![b'x'; MAX_SOURCE_BYTES + 1])?;
+        let capture = capture("cat >/dev/null")?;
+        let mut result = capture.finish()?;
+        let (sender, frames) = mpsc::channel();
+        let sender = DiagnosticSender::Unbounded(sender);
+        SupervisedChild::emit(
+            vec![1; MAX_OUTPUT_BYTES + 1],
+            false,
+            &sender,
+            &mut result,
+            &config,
+        );
+        assert_eq!(
+            frames.try_recv().map(|frame| frame.bytes.len()),
+            Ok(MAX_OUTPUT_BYTES + 1)
+        );
+        for _ in 0..MAX_OUTPUT_FRAMES {
+            SupervisedChild::emit(vec![1], false, &sender, &mut result, &config);
+        }
+        assert_eq!(result.emitted_frames, MAX_OUTPUT_FRAMES + 1);
+        assert_eq!(frames.try_iter().count() as u64, MAX_OUTPUT_FRAMES);
+        assert!(!result.output_incomplete);
+        result.emitted_frames = u64::MAX;
+        SupervisedChild::emit(vec![1], false, &sender, &mut result, &config);
+        assert_eq!(result.stop, DiagnosticStop::OutputLimit);
+        assert_eq!(result.emitted_frames, u64::MAX);
+        Ok(())
     }
 
     #[test]
@@ -1173,98 +1278,87 @@ mod tests {
         let mut resource = File::open(&native)?;
         let expected = fs::read_to_string(&native)?;
         let mut text = String::with_capacity(16 * 1024);
-        let mut bytes = [0; 16 * 1024];
         text.push_str("prog_id:\t111\nmap_id:\t222\n");
         let capacity = text.capacity();
         let allocation = text.as_ptr();
-        SupervisedChild::read_resource(&resource, &mut text, &mut bytes)?;
+        SupervisedChild::read_resource(&mut resource, &mut text)?;
         assert_eq!(text, expected);
         assert_eq!(text.capacity(), capacity);
         assert_eq!(text.as_ptr(), allocation);
         held.read_exact(&mut [0; 1])?;
         resource.seek(std::io::SeekFrom::Start(9))?;
-        SupervisedChild::read_resource(&resource, &mut text, &mut bytes)?;
+        SupervisedChild::read_resource(&mut resource, &mut text)?;
         assert_eq!(text, fs::read_to_string(&native)?);
         assert_ne!(text, expected);
         assert_eq!(text.as_ptr(), allocation);
-        assert_eq!(resource.stream_position()?, 9);
-        assert!(SupervisedChild::read_resource(
-            &File::open(directory.path())?,
-            &mut text,
-            &mut bytes
-        )
-        .is_err());
+        assert_eq!(resource.stream_position()?, text.len() as u64);
+        assert!(
+            SupervisedChild::read_resource(&mut File::open(directory.path())?, &mut text).is_err()
+        );
         assert!(text.is_empty());
         fs::write(&path, [0xff])?;
-        assert!(
-            SupervisedChild::read_resource(&File::open(&path)?, &mut text, &mut bytes).is_err()
-        );
+        assert!(SupervisedChild::read_resource(&mut File::open(&path)?, &mut text).is_err());
         fs::write(&path, b"map_id:\t23\n")?;
-        SupervisedChild::read_resource(&File::open(&path)?, &mut text, &mut bytes)?;
+        SupervisedChild::read_resource(&mut File::open(&path)?, &mut text)?;
         assert_eq!(text, "map_id:\t23\n");
         assert_eq!(text.as_ptr(), allocation);
         let mut bounded = vec![b' '; 16 * 1024];
         bounded.extend_from_slice(b"\nprog_id:\t99\n");
         fs::write(&path, bounded)?;
         assert_eq!(
-            SupervisedChild::read_resource(&File::open(&path)?, &mut text, &mut bytes)?,
-            16 * 1024
+            SupervisedChild::read_resource(&mut File::open(&path)?, &mut text)?,
+            16 * 1024 + b"\nprog_id:\t99\n".len()
         );
-        assert_eq!(text.len(), 16 * 1024);
-        assert!(!text.contains("prog_id:"));
+        assert!(text.len() > 16 * 1024);
+        assert!(text.contains("prog_id:\t99"));
         Ok(())
     }
 
     #[test]
     fn observability_backend_resource_reads() -> std::io::Result<()> {
         struct ShortRead {
-            calls: std::cell::Cell<usize>,
+            source: std::io::Cursor<&'static [u8]>,
+            calls: usize,
             fail: bool,
         }
-
-        impl FileExt for ShortRead {
-            fn read_at(&self, bytes: &mut [u8], offset: u64) -> std::io::Result<usize> {
-                let call = self.calls.get();
-                self.calls.set(call + 1);
-                if call == 0 {
+        impl Read for ShortRead {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                self.calls += 1;
+                if self.calls == 1 {
                     return Err(std::io::ErrorKind::Interrupted.into());
                 }
-                if self.fail && offset > 0 {
+                if self.fail && self.source.position() > 0 {
                     return Err(std::io::ErrorKind::PermissionDenied.into());
                 }
-                let source = b"pos:\t1\nprog_id:\t23\nmap_id:\t45\n";
-                let start = usize::try_from(offset).map_err(|error| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
-                })?;
-                let count = (source.len() - start).min(bytes.len()).min(3);
-                bytes[..count].copy_from_slice(&source[start..start + count]);
-                Ok(count)
-            }
-
-            fn write_at(&self, _bytes: &[u8], _offset: u64) -> std::io::Result<usize> {
-                Err(std::io::ErrorKind::Unsupported.into())
+                let count = bytes.len().min(3);
+                self.source.read(&mut bytes[..count])
             }
         }
-
+        impl Seek for ShortRead {
+            fn seek(&mut self, from: std::io::SeekFrom) -> std::io::Result<u64> {
+                self.source.seek(from)
+            }
+        }
         let mut text = String::from("prog_id:\t111\nmap_id:\t222\n");
-        let mut bytes = [0; 16 * 1024];
-        let reader = ShortRead {
-            calls: std::cell::Cell::new(0),
-            fail: false,
-        };
-        SupervisedChild::read_resource(&reader, &mut text, &mut bytes)?;
-        assert_eq!(text, "pos:\t1\nprog_id:\t23\nmap_id:\t45\n");
-        assert!(reader.calls.get() > 3);
-        let reader = ShortRead {
-            calls: std::cell::Cell::new(0),
-            fail: true,
-        };
-        assert!(matches!(
-            SupervisedChild::read_resource(&reader, &mut text, &mut bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
-        ));
-        assert!(text.is_empty());
-        assert_eq!(reader.calls.get(), 3);
+        for fail in [false, true] {
+            let mut reader = ShortRead {
+                source: std::io::Cursor::new(b"pos:\t1\nprog_id:\t23\nmap_id:\t45\n"),
+                calls: 0,
+                fail,
+            };
+            let result = SupervisedChild::read_resource(&mut reader, &mut text);
+            if fail {
+                assert!(
+                    matches!(result, Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied)
+                );
+                assert!(text.is_empty());
+                assert_eq!(reader.calls, 3);
+            } else {
+                result?;
+                assert_eq!(text, "pos:\t1\nprog_id:\t23\nmap_id:\t45\n");
+                assert!(reader.calls > 3);
+            }
+        }
         Ok(())
     }
 
@@ -1334,6 +1428,7 @@ read -r gate"#,
             fdinfo: BTreeMap::new(),
             start: Instant::now(),
             resources: None,
+            config: limits(),
         };
         let mut input = owner.child.stdin.take().ok_or("input pipe absent")?;
         let mut output = BufReader::new(owner.child.stdout.take().ok_or("output pipe absent")?);
@@ -1356,60 +1451,59 @@ read -r gate"#,
             peak_rss_kib: None,
         };
         let mut text = String::with_capacity(16 * 1024);
-        let mut bytes = [0; 16 * 1024];
         result.program_ids.extend([111, 222]);
         result.map_ids.extend([333, 444, 555]);
         let mut current = StaticResources::default();
-        owner.record_resources(&mut result, &mut text, &mut bytes, Some(&mut current));
-        assert!(current.incomplete);
+        owner.record_resources(&mut result, &mut text, Some(&mut current));
+        assert!(!current.incomplete);
         assert!(current.programs.is_empty() && current.maps.is_empty());
         assert_eq!(result.program_ids, BTreeSet::from([111, 222]));
         assert_eq!(result.map_ids, BTreeSet::from([333, 444, 555]));
         assert!(!current.verify());
         result.program_ids.clear();
         result.map_ids.clear();
-        assert_eq!(owner.fdinfo.len(), 256);
+        assert!(owner.fdinfo.len() >= 300);
         let held = owner.fdinfo.get(&3).ok_or("fdinfo absent")?.as_raw_fd();
         let path = PathBuf::from(format!("/proc/{}/fdinfo/3", owner.child.id()));
-        let native = File::open(&path)?;
-        SupervisedChild::read_resource(&native, &mut text, &mut bytes)?;
+        let mut native = File::open(&path)?;
+        SupervisedChild::read_resource(&mut native, &mut text)?;
         let initial = text.clone();
         for expected in ["moved\n", "reused\n"] {
             input.write_all(b"next\n")?;
             phase.clear();
             output.read_line(&mut phase)?;
             assert_eq!(phase, expected);
-            owner.record_resources(&mut result, &mut text, &mut bytes, None);
-            assert!(owner.fdinfo.len() <= 256);
+            owner.record_resources(&mut result, &mut text, None);
+            assert!(owner.fdinfo.len() >= 300 || expected == "reused\n");
             let resource = owner.fdinfo.get_mut(&3).ok_or("fdinfo absent")?;
             assert_eq!(resource.as_raw_fd(), held);
-            SupervisedChild::read_resource(resource, &mut text, &mut bytes)?;
+            SupervisedChild::read_resource(resource, &mut text)?;
             assert_eq!(text, fs::read_to_string(&path)?);
             assert_ne!(text, initial);
         }
         assert!(owner.fdinfo.len() < 256);
         owner.fdinfo.insert(3, File::open(directory.path())?);
         let mut current = StaticResources::default();
-        owner.record_resources(&mut result, &mut text, &mut bytes, Some(&mut current));
+        owner.record_resources(&mut result, &mut text, Some(&mut current));
         assert!(current.incomplete);
         assert!(!owner.fdinfo.contains_key(&3));
-        owner.record_resources(&mut result, &mut text, &mut bytes, None);
+        owner.record_resources(&mut result, &mut text, None);
         assert!(owner.fdinfo.contains_key(&3));
         let bounded = directory.path().join("bounded");
         fs::write(&bounded, vec![b' '; 16 * 1024])?;
         owner.fdinfo.insert(3, File::open(&bounded)?);
         let mut current = StaticResources::default();
-        owner.record_resources(&mut result, &mut text, &mut bytes, Some(&mut current));
+        owner.record_resources(&mut result, &mut text, Some(&mut current));
         assert!(current.incomplete);
-        assert!(!owner.fdinfo.contains_key(&3));
+        assert!(owner.fdinfo.contains_key(&3));
         input.write_all(b"next\n")?;
         phase.clear();
         output.read_line(&mut phase)?;
         assert_eq!(phase, "closed\n");
-        owner.record_resources(&mut result, &mut text, &mut bytes, None);
+        owner.record_resources(&mut result, &mut text, None);
         assert!(!owner.fdinfo.contains_key(&3));
         text.push_str("prog_id:\t111\nmap_id:\t222\n");
-        assert!(SupervisedChild::read_resource(&native, &mut text, &mut bytes).is_err());
+        assert!(SupervisedChild::read_resource(&mut native, &mut text).is_err());
         assert!(text.is_empty());
         assert!(result.program_ids.is_empty());
         assert!(result.map_ids.is_empty());
@@ -1553,12 +1647,13 @@ read -r gate"#,
         let capture = capture("cat >/dev/null")?;
         let mut result = capture.finish()?;
         let (send, frames) = mpsc::sync_channel(1);
+        let send = DiagnosticSender::Bounded(send);
         for sequence in 1..=MAX_OUTPUT_FRAMES {
-            SupervisedChild::emit(vec![b'x'], false, &send, &mut result);
+            SupervisedChild::emit(vec![b'x'], false, &send, &mut result, &limits());
             assert_eq!(frames.try_recv().map(|frame| frame.sequence), Ok(sequence));
         }
         assert!(!result.output_incomplete);
-        SupervisedChild::emit(vec![b'x'], false, &send, &mut result);
+        SupervisedChild::emit(vec![b'x'], false, &send, &mut result, &limits());
         assert!(frames.try_recv().is_err());
         assert_eq!(result.emitted_frames, MAX_OUTPUT_FRAMES);
         assert_eq!(result.stop, DiagnosticStop::OutputLimit);
@@ -1607,7 +1702,7 @@ read -r gate"#,
 
     #[test]
     fn observability_backend_digest_and_source_validation() -> Result<()> {
-        let backend = DiagnosticBackend::new(PathBuf::from("/bin/false"), [1; 32])?;
+        let backend = DiagnosticBackend::new(PathBuf::from("/bin/false"), [1; 32], limits())?;
         assert!(backend
             .start(
                 b"BEGIN {}",
@@ -1621,7 +1716,7 @@ read -r gate"#,
             path: Path::new("/bin/false"),
         })?)
         .into();
-        let backend = DiagnosticBackend::new(PathBuf::from("/bin/false"), hash)?;
+        let backend = DiagnosticBackend::new(PathBuf::from("/bin/false"), hash, limits())?;
         assert!(backend
             .start(&[], 1, DiagnosticMode::Compile, Duration::from_secs(1))
             .is_err());
@@ -1648,7 +1743,7 @@ read -r gate"#,
             path: Path::new("/bin/false"),
         })?)
         .into();
-        let backend = DiagnosticBackend::new(PathBuf::from("/bin/false"), hash)?;
+        let backend = DiagnosticBackend::new(PathBuf::from("/bin/false"), hash, limits())?;
         let source = vec![b' '; MAX_SOURCE_BYTES];
         let oversize = vec![b' '; MAX_SOURCE_BYTES + 1];
         for (bytes, cgroup, seconds) in [
@@ -1657,7 +1752,6 @@ read -r gate"#,
             (oversize.as_slice(), 1, 1),
             (source.as_slice(), 0, 1),
             (source.as_slice(), 1, 0),
-            (source.as_slice(), 1, 301),
         ] {
             assert!(backend
                 .start(
@@ -1673,7 +1767,7 @@ read -r gate"#,
                 &source,
                 1,
                 DiagnosticMode::Capture,
-                Duration::from_secs(300),
+                Duration::from_secs(301),
             )
             .is_ok());
         Ok(())

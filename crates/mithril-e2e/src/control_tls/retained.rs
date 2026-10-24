@@ -19,7 +19,7 @@ async fn retained_wal_survives_restart() -> TestResult<()> {
     let control = fixture.control_from_intake(intake.clone(), 1)?;
     let server = fixture.start(control.clone()).await?;
     let limits = EvidenceWalLimits {
-        maximum_retained_records: 3,
+        maximum_retained_records: Some(3),
         maximum_batch_records: 4_096,
         capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
         ..EvidenceWalLimits::default()
