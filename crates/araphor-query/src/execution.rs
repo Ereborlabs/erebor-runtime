@@ -1338,23 +1338,20 @@ impl Session {
                 *clock = calls.window_clock(*source).context(SqlSnafu)?;
             }
         }
-        let retained = self.inputs.as_ref().is_some_and(|inputs| {
-            inputs.bindings.iter().any(|(_, source, _)| {
-                matches!(source, araphor_data::AnalysisInputSource::Managed(_))
-            })
-        });
+        let retained = self
+            .inputs
+            .as_ref()
+            .is_some_and(|inputs| !inputs.retained.is_empty());
         if retained && (self.managed.is_some() || run.as_ref().is_some_and(|run| run.follow)) {
             return Err(araphor_data::PackageErrorCodeV1::Unsupported
                 .error("retained source publication")
                 .into());
         }
         if bounds.packages.iter().any(|slot| {
-            !self.inputs.as_ref().is_some_and(|inputs| {
-                inputs
-                    .bindings
-                    .iter()
-                    .any(|(admitted, _, _)| admitted == slot)
-            })
+            !self
+                .inputs
+                .as_ref()
+                .is_some_and(|inputs| inputs.retained.iter().any(|source| source.slot == *slot))
         }) {
             return Err(araphor_data::PackageErrorCodeV1::Invalid
                 .error("retained source admission")

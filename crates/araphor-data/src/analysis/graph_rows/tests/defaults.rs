@@ -505,7 +505,6 @@ fn provenance_read(
                 event_ranges: None,
                 inputs: inherit.then_some(AnalysisInputTables {
                     authorized: &selection,
-                    scope: "provenance",
                     outputs: &[],
                 }),
                 mode: AnalysisReadModeV1::Metadata,

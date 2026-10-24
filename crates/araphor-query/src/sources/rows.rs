@@ -494,39 +494,27 @@ impl SourceSnapshot {
                 Self::data_error(error)
             }
         };
-        let mut selection = Self::prune_selection(
+        let selection = Self::prune_selection(
             Self::selection(&self.selection, requests).map_err(Self::data_error)?,
             bounds,
         );
-        if self
-            .inputs
-            .as_ref()
-            .is_some_and(|inputs| !inputs.include_results)
-        {
-            selection.results.clear();
-        }
         let outputs = self.inputs.as_ref().map(|inputs| {
             inputs
-                .bindings
+                .retained
                 .iter()
-                .map(|(_, reference, schema)| (reference.clone(), Arc::clone(schema)))
+                .map(|source| (Arc::clone(&source.reference), Arc::clone(&source.schema)))
                 .collect::<Vec<_>>()
         });
-        let inputs = self
-            .inputs
-            .as_ref()
-            .zip(outputs.as_ref())
-            .map(|(inputs, outputs)| AnalysisInputTables {
-                authorized: &self.selection,
-                scope: &inputs.scope,
-                outputs,
-            });
+        let inputs = outputs.as_ref().map(|outputs| AnalysisInputTables {
+            authorized: &self.selection,
+            outputs,
+        });
         let read = AnalysisTableRead {
             requests,
             event_ranges: bounds
                 .events
                 .as_deref()
-                .or_else(|| self.inputs.as_ref().map(|inputs| inputs.ranges.as_slice())),
+                .or_else(|| self.inputs.as_ref().map(|_| &[][..])),
             inputs,
             mode: match mode {
                 ReadMode::Snapshot => AnalysisReadModeV1::Complete,
@@ -591,16 +579,17 @@ impl SourceSnapshot {
                 .ok_or_else(overflow)?;
         }
         for (index, (schema, batches, _)) in &page.packages {
-            let (_, _, expected) = self
+            let source = self
                 .inputs
                 .as_ref()
-                .and_then(|inputs| inputs.bindings.get(*index))
+                .and_then(|inputs| inputs.retained.get(*index))
                 .ok_or_else(|| {
                     DataFusionError::Internal(
                         "the captured package has no native input binding".into(),
                     )
                 })?;
-            if schema != expected || batches.iter().any(|batch| batch.schema_ref() != schema) {
+            if schema != &source.schema || batches.iter().any(|batch| batch.schema_ref() != schema)
+            {
                 return Err(DataFusionError::Execution(
                     "the captured package differs from its declared native schema".into(),
                 ));
@@ -656,10 +645,10 @@ impl SourceSnapshot {
             );
         }
         for (index, (schema, batches, coverage)) in packages {
-            let (slot, source, _) = self
+            let source = self
                 .inputs
                 .as_ref()
-                .and_then(|inputs| inputs.bindings.get(index))
+                .and_then(|inputs| inputs.retained.get(index))
                 .ok_or_else(|| {
                     DataFusionError::Internal(
                         "the captured package has no native input binding".into(),
@@ -669,39 +658,35 @@ impl SourceSnapshot {
                 self.memory.retain_input(batch, &reservation)?;
             }
             source_bytes = source_bytes.saturating_add(Captured::table_bytes(&schema, &batches));
-            let input = if let araphor_data::AnalysisInputSource::Managed(reference) = source {
-                let input = sdk::Input {
-                    data: sdk::Dataset {
-                        name: reference.output().output.clone(),
-                        batches: batches.clone(),
-                    },
-                    revision: sdk::Revision {
-                        owner: format!(
-                            "{}.{}",
-                            reference.output().package,
-                            reference.output().export
-                        ),
-                        id: format!(
-                            "{}:{}",
-                            reference.result().result_id,
-                            reference.result().commit_revision
-                        ),
-                        window: None,
-                    },
-                    coverage,
-                };
-                source_bytes = source_bytes
-                    .saturating_add(std::mem::size_of::<sdk::Input>())
-                    .saturating_add(input.metadata_bytes());
-                Some(Arc::new(input))
-            } else {
-                None
+            let reference = &source.reference;
+            let input = sdk::Input {
+                data: sdk::Dataset {
+                    name: reference.output().output.clone(),
+                    batches: batches.clone(),
+                },
+                revision: sdk::Revision {
+                    owner: format!(
+                        "{}.{}",
+                        reference.output().package,
+                        reference.output().export
+                    ),
+                    id: format!(
+                        "{}:{}",
+                        reference.result().result_id,
+                        reference.result().commit_revision
+                    ),
+                    window: None,
+                },
+                coverage,
             };
+            source_bytes = source_bytes
+                .saturating_add(std::mem::size_of::<sdk::Input>())
+                .saturating_add(input.metadata_bytes());
             let indices = (0..schema.fields().len()).collect();
             if tables
                 .insert(
-                    SourceOrigin::Package(*slot),
-                    (schema, indices, batches, input),
+                    SourceOrigin::Package(source.slot),
+                    (schema, indices, batches, Some(Arc::new(input))),
                 )
                 .is_some()
             {
@@ -719,19 +704,7 @@ impl SourceSnapshot {
         let retained = self
             .inputs
             .as_ref()
-            .is_some_and(|inputs| inputs.retained.is_some());
-        if self
-            .inputs
-            .as_ref()
-            .is_some_and(|inputs| inputs.retained.is_none())
-        {
-            for witness in &mut witnesses {
-                if witness.expires_utc_ns == 0 {
-                    witness.expires_utc_ns =
-                        self.now.saturating_add(7 * 24 * 60 * 60 * 1_000_000_000);
-                }
-            }
-        }
+            .is_some_and(|inputs| !inputs.retained.is_empty());
         witnesses.sort_by(|left, right| {
             left.identity
                 .cmp(&right.identity)

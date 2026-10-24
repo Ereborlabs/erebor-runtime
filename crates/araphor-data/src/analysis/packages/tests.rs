@@ -10,7 +10,6 @@ mod evidence;
 mod image;
 mod input;
 mod lifecycle;
-mod output;
 mod representation;
 
 fn package(id: &str, revision: &str) -> crate::Result<PackageRevisionV1> {

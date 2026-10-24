@@ -63,12 +63,8 @@ impl SourceOrigin {
 }
 
 pub(crate) struct InputCapture {
-    pub(crate) scope: String,
-    pub(crate) bindings: Vec<(usize, araphor_data::AnalysisInputSource, SchemaRef)>,
-    pub(crate) ranges: Vec<(u64, u64)>,
-    pub(crate) include_results: bool,
-    pub(crate) retained: Option<Arc<[Arc<RetainedSource>]>>,
-    pub(crate) _memory: Option<datafusion::execution::memory_pool::MemoryReservation>,
+    pub(crate) retained: Arc<[Arc<RetainedSource>]>,
+    pub(crate) _memory: datafusion::execution::memory_pool::MemoryReservation,
 }
 
 #[derive(Clone, Copy)]
@@ -356,7 +352,7 @@ impl SourceSnapshot {
         if let Some(ranges) = bounds
             .events
             .as_deref()
-            .or_else(|| self.inputs.as_ref().map(|inputs| inputs.ranges.as_slice()))
+            .or_else(|| self.inputs.as_ref().map(|_| &[][..]))
         {
             let window = ranges
                 .iter()

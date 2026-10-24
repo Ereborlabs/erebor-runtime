@@ -1779,10 +1779,7 @@ fn managed_witness_lifetime_check() -> TestResult {
         AnalysisExtractLimits::default(),
         &AnalysisReadControl::default(),
     )?;
-    let inputs = [(
-        crate::AnalysisInputSource::Managed(Arc::new(pin)),
-        Arc::new(port.schema),
-    )];
+    let inputs = [(Arc::new(pin), Arc::new(port.schema))];
     let requests = AnalysisTableRequests::new();
     let before = store.meta()?;
     for now in [19, 20, 21] {
@@ -1793,7 +1790,6 @@ fn managed_witness_lifetime_check() -> TestResult {
                 event_ranges: None,
                 inputs: Some(crate::AnalysisInputTables {
                     authorized: &grant.selection,
-                    scope: "",
                     outputs: &inputs,
                 }),
                 mode: AnalysisReadModeV1::Complete,

@@ -1,5 +1,7 @@
 # Araphor Component Redesign Proposal
 
+Current saved-input ownership is in [Native saved-input retirement](#native-saved-input-retirement).
+
 Current Query input ownership is in [Query input runner retirement](#query-input-runner-retirement).
 Earlier InputSet and InputOperation flows describe their recorded source states.
 
@@ -2755,7 +2757,7 @@ Native memory claims retain the input arrays and metadata through aliases.
 
 The [input tests](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/tests.rs),
 [SDK batch tests](../../crates/araphor-analysis-sdk/src/batch/tests.rs), and
-[Data output tests](../../crates/araphor-data/src/analysis/packages/tests/output.rs)
+[Data output tests](https://github.com/Ereborlabs/erebor-runtime/blob/6edd86f9c2864261abb72d5b108688008b9123b7/crates/araphor-data/src/analysis/packages/tests/output.rs)
 define the finite cut, index, provenance, conversion, and same-reader checks.
 An earlier Query run passes 124 cases in 12.57 seconds. That run precedes the
 final metadata and read-control changes. The final affected checks are below.
@@ -4113,3 +4115,41 @@ records the selected split runs, final Clippy, and formatting checks.
 Result: **Done** for this Query input runner retirement and finite expiry
 transfer. The separate Data gate, complete redesign, and required production
 reduction remain **Not done**.
+
+
+## Native saved-input retirement
+
+The applied working tree after `6edd86f9c2864261abb72d5b108688008b9123b7`
+replaces the old Package saved-input alternative with the existing exact
+ManagedInputRef path. The SDK wire-dataset decoder and obsolete context and
+scope values are removed. Query keeps one retained-source slice and native
+reservation instead of a second binding vector and constant capture fields.
+
+[SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) derives direct saved-reference bindings with the original authorized selection.
+  -> [AnalysisStore::extract_packages](../../crates/araphor-data/src/analysis/extraction/package.rs) checks native saved inputs within the existing Data snapshot.
+  -> [Native capture](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) retains Arrow batches and equal aliases.
+  -> [Query receipts](../../crates/araphor-query/src/inputs/receipt.rs) keep exact origins and revisions.
+
+The [review flow](../guides/araphor-discovery-definition-review.md#native-saved-input-retirement)
+records the source-slot mapping, empty-range fallback, witness rules, leases,
+and memory owners. The [native test map](araphor-analysis-migration.md#native-saved-input-retirement)
+replaces the earlier saved-input duty gate. All legacy activation, commit,
+status, read/history, recovery, schema, and provenance owners remain.
+
+The independent count covers retained Araphor production Rust source. It
+excludes test-only source, comments, and blank lines. It does not prove compiled
+reachability. This change removes 314 lines from `6edd86f9c`: Data removes 258
+and Query removes 56. The retained total changes from 82,824 to 82,510.
+The original baseline has 63,709 lines. Current source remains 18,801 above
+baseline and 24,801 short of the required net 6,000-line reduction.
+
+The count is local evidence under
+`/home/navid/mithril-test-hosts/managed-input-retirement-verification/source-count/final-test-correction`.
+Its source manifest SHA-256 is
+`6113ec362254315d3bc048a3dd22492cf164a888daa8983c1d481b05ea28a235`.
+The [migration result](araphor-analysis-migration.md#native-saved-input-retirement)
+records the selected split runs, final Clippy, and formatting checks.
+Result: **Done** for this saved-input decoder retirement and canonical capture
+ownership. Earlier counts keep their original source scopes. Whole legacy
+Data lifecycle, recovery, and store removal, complete redesign, and the required
+net production reduction remain **Not done**. No speed result is claimed.

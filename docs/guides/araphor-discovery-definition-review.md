@@ -1,5 +1,7 @@
 # Discovery Definition Review
 
+Current saved-input ownership is in [Native saved-input retirement](#native-saved-input-retirement).
+
 Current Query input ownership is in [Query input runner retirement](#query-input-runner-retirement).
 Earlier InputSet and InputOperation routes retain their recorded source state.
 
@@ -3610,3 +3612,51 @@ Data's package APIs, codecs, store paths, and tests remain. The
 [separate Data proof gate](../plans/araphor-analysis-migration.md#query-input-runner-retirement)
 records the assertions required before their removal. No BPF or wire contract
 changes in this retirement. The complete migration remains **Not done**.
+
+
+## Native saved-input retirement
+
+This section covers the applied source change after
+`6edd86f9c2864261abb72d5b108688008b9123b7`. Result: **Done** for this
+saved-input decoder retirement and canonical capture ownership. The
+[migration result](../plans/araphor-analysis-migration.md#native-saved-input-retirement)
+records the selected split runs. The
+[master count](../plans/araphor-component-redesign.md#native-saved-input-retirement)
+records the independently checked retained-source total.
+It supersedes the saved-input codec gate in the earlier Query retirement
+record. Other legacy package operations keep their existing owners.
+
+[AnalysisStore::managed_input](../../crates/araphor-data/src/analysis/managed/input.rs) resolves an exact saved call result and its declared output.
+  -> [SourceProvider::retained](../../crates/araphor-query/src/sources/mod.rs) retains the opaque reference, native schema, and metadata reservation.
+  -> [Definition admission](../../crates/araphor-query/src/definition.rs) keeps one canonical RetainedSource Arc slice and its native memory reservation.
+  -> [SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) derives direct reference/schema pairs and keeps the original AnalysisInputTables.authorized selection.
+  -> [AnalysisStore::extract_packages](../../crates/araphor-data/src/analysis/extraction/package.rs) checks metadata or reads the native managed output within the same Data snapshot.
+  -> [Capture::package_batches and package_alias](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) retain native Arrow batches and share equal saved aliases.
+  -> [Inputs::input_for](../../crates/araphor-query/src/inputs/receipt.rs) builds the input receipt from the original captured rows and origins.
+
+AnalysisInputTables now accepts Arc<ManagedInputRef> directly. The old
+AnalysisInputSource::Package alternative and SDK wire-dataset decoder
+Capture::package are removed. InstalledContext, ClockDependency, and the
+obsolete input scope field are removed with that route. Metadata keeps
+current-binding and source-state checks. Admission and full hydration also
+validate retained-record identity. Stopped finite results remain readable
+under the existing binding and scope checks.
+
+InputCapture retains one source slice and one native MemoryReservation.
+The duplicate binding vector and fixed empty or true fields are removed.
+A Query source slot is separate from a Data output index.
+[package_indices](../../crates/araphor-query/src/sources/rows/package.rs)
+keeps that mapping. The explicit empty event-range fallback, raw zero witness
+timestamp, original witness expiry order, Data read leases, and Arrow charges
+retain their current behavior. Scope and the native receipt owner remain.
+
+Read the [native test map](../plans/araphor-analysis-migration.md#native-saved-input-retirement)
+for snapshot isolation, storage guards, historical scope, preflight,
+cancellation, and origin unions. Read
+[retained_revisions_ignore_slots](../../crates/araphor-analysis/src/instance/tests/retained/revisions.rs)
+for stable input identity after registration order changes. The migration
+result states the exact final checks and the later test-only correction.
+
+This change removes only the old saved-input extraction route. Legacy
+activation, commit, status, read/history, recovery, schema, and provenance
+operations remain. Their APIs and persisted data are not retired here.

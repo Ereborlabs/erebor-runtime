@@ -1,16 +1,11 @@
-use araphor_analysis_sdk as sdk;
-use duckdb::{params, Connection, OptionalExt as _};
+use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
 use super::{
-    AnalysisExtractionV1, AnalysisInputSource, AnalysisInputTables, AnalysisReadControl,
-    AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisStore,
+    AnalysisExtractionV1, AnalysisInputTables, AnalysisReadControl, AnalysisReferenceOriginV1,
+    AnalysisReferenceV1, AnalysisStore,
 };
-use crate::analysis::{PackageCommitV1, PackageKeyV1};
-use crate::{
-    AnalysisDatabaseSnafu, InstalledContext, PackageEncodingSnafu, PackageErrorCodeV1 as Code,
-    Result, ResultContext,
-};
+use crate::{AnalysisDatabaseSnafu, PackageErrorCodeV1 as Code, Result};
 
 impl AnalysisStore {
     pub(super) fn extract_packages(
@@ -24,15 +19,9 @@ impl AnalysisStore {
     ) -> Result<()> {
         let AnalysisInputTables {
             authorized: selection,
-            scope,
             outputs,
-            ..
         } = packages;
-        let legacy = outputs
-            .iter()
-            .filter(|(source, _)| matches!(source, AnalysisInputSource::Package(_)))
-            .count();
-        if !selection.valid() || (legacy != 0 && (scope.is_empty() || scope.len() > 256)) {
+        if !selection.valid() {
             return Err(Code::Invalid.error("dependency selection"));
         }
         for (source, _) in outputs {
@@ -47,202 +36,38 @@ impl AnalysisStore {
                 return Err(Code::Invalid.error("dependency revision"));
             }
         }
-        for (index, (source, schema)) in outputs.iter().enumerate() {
+        for (index, (reference, schema)) in outputs.iter().enumerate() {
             control.check()?;
-            if let AnalysisInputSource::Managed(reference) = source {
-                if metadata {
-                    self.check_managed_input(
-                        reader,
-                        reference,
-                        selection,
-                        capture.now(),
-                        output,
-                        control,
-                    )?;
-                } else if let Some(previous) = outputs[..index]
-                    .iter()
-                    .position(|(previous, expected)| previous == source && expected == schema)
-                {
-                    capture.package_alias(index, previous, &mut output.sink(control))?;
-                } else {
-                    let (data, coverage) = self.captured_managed_input(
-                        reader,
-                        reference,
-                        selection,
-                        capture.now(),
-                        output,
-                        control,
-                    )?;
-                    capture.package_batches(index, data, &coverage, &mut output.sink(control))?;
-                }
-                output.reference_result(
-                    &reference.result().result_id,
-                    reference.result().commit_revision,
-                    AnalysisReferenceOriginV1::Package(index),
-                )?;
-                continue;
-            }
-            let reference = source.output();
-            let same = |other: &sdk::OutputRef| {
-                other.package == reference.package
-                    && other.revision == reference.revision
-                    && other.export == reference.export
-            };
-            if outputs[..index]
-                .iter()
-                .any(|(source, _)| matches!(source, AnalysisInputSource::Package(reference) if same(reference)))
-            {
-                continue;
-            }
-            let key = PackageKeyV1 {
-                tenant_id: selection.tenant_id,
-                scope_id: scope.into(),
-                package_id: reference.package.clone(),
-                export: reference.export.clone(),
-            };
-            let activation_bytes: Option<u64> = reader
-                .query_row(
-                    "SELECT octet_length(metadata) FROM package_activations
-                     WHERE tenant_id = ? AND scope_id = ? AND package_id = ? AND export_name = ?",
-                    params![
-                        key.tenant_id.as_slice(),
-                        key.scope_id,
-                        key.package_id,
-                        key.export
-                    ],
-                    |row| row.get(0),
-                )
-                .optional()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "bound dependency activation",
-                })?;
-            let activation_bytes =
-                activation_bytes.ok_or_else(|| Code::Incomplete.error("dependency activation"))?;
-            output.charge(usize::try_from(activation_bytes).unwrap_or(usize::MAX))?;
-            let active = Self::activation_from(reader, &key)?
-                .filter(|active| active.active && active.revision == reference.revision)
-                .ok_or_else(|| Code::Incomplete.error("dependency activation"))?;
-            let id = active
-                .result_id
-                .as_ref()
-                .ok_or_else(|| Code::Incomplete.error("dependency result"))?;
-            let header: Option<(u64, String, u64)> = reader
-                .query_row(
-                    "SELECT x.commit_revision, r.window_id,
-                    octet_length(r.commit_meta) + octet_length(x.body)
-                    + CASE WHEN ? THEN 0 ELSE octet_length(x.request_meta)
-                        + octet_length(r.datasets) + octet_length(r.checkpoint) END
-                 FROM package_results r JOIN analysis_results x USING (result_id)
-                 JOIN package_heads h ON h.tenant_id = r.tenant_id AND h.scope_id = r.scope_id
-                    AND h.package_id = r.package_id AND h.export_name = r.export_name
-                    AND h.window_id = r.window_id AND h.result_id = r.result_id
-                 WHERE r.tenant_id = ? AND r.result_id = ? AND r.scope_id = ? AND r.package_id = ?
-                    AND r.export_name = ? AND r.revision = ? AND NOT r.stale
-                    AND x.tenant_id = r.tenant_id AND x.processor_id = 'analysis-package'
-                    AND x.commit_revision = ?",
-                    params![
-                        metadata,
-                        key.tenant_id.as_slice(),
-                        id,
-                        key.scope_id,
-                        key.package_id,
-                        key.export,
-                        reference.revision,
-                        active.checkpoint_revision
-                    ],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .optional()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "bound current dependency result",
-                })?;
-            let (revision, window, bytes) =
-                header.ok_or_else(|| Code::Incomplete.error("dependency freshness"))?;
-            output.charge(usize::try_from(bytes).unwrap_or(usize::MAX))?;
             if metadata {
-                let (manifest, body): (Vec<u8>, Vec<u8>) = reader.query_row(
-                    "SELECT r.commit_meta, x.body FROM package_results r
-                     JOIN analysis_results x USING (result_id) WHERE r.tenant_id = ? AND r.result_id = ?",
-                    params![key.tenant_id.as_slice(), id], |row| Ok((row.get(0)?, row.get(1)?)),
-                ).context(AnalysisDatabaseSnafu {
-                    operation: "read dependency metadata",
-                })?;
-                let commit: PackageCommitV1 =
-                    serde_json::from_slice(&manifest).context(PackageEncodingSnafu)?;
-                if commit.result_id != *id
-                    || commit.activation.key != key
-                    || commit.activation.revision != reference.revision
-                    || commit.window_id != window
-                {
-                    return self.reject("the retained dependency contract differs");
-                }
-                let installed: InstalledContext =
-                    serde_json::from_slice(&commit.activation.metadata)
-                        .context(PackageEncodingSnafu)?;
-                installed.grant.permitted_by(selection)?;
-                let _: ResultContext =
-                    serde_json::from_slice(&body).context(PackageEncodingSnafu)?;
-                for (index, _) in outputs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (source, _))| matches!(source, AnalysisInputSource::Package(reference) if same(reference)))
-                {
-                    output.reference_result(
-                        id,
-                        revision,
-                        AnalysisReferenceOriginV1::Package(index),
-                    )?;
-                }
-                continue;
-            }
-            let result = Self::package_result_from(reader, key.tenant_id, id, &self.root)?
-                .filter(|result| {
-                    !result.stale
-                        && result.commit_revision == revision
-                        && result.commit.activation.key == key
-                        && result.commit.activation.revision == reference.revision
-                })
-                .ok_or_else(|| Code::Incomplete.error("dependency freshness"))?;
-            let installed: InstalledContext =
-                serde_json::from_slice(&result.commit.activation.metadata)
-                    .context(PackageEncodingSnafu)?;
-            installed.grant.permitted_by(selection)?;
-            let context: ResultContext =
-                serde_json::from_slice(&result.commit.metadata).context(PackageEncodingSnafu)?;
-            let packet: sdk::wire::Output =
-                serde_json::from_slice(&result.commit.datasets).context(PackageEncodingSnafu)?;
-            for (index, _) in outputs
-                .iter()
-                .enumerate()
-                .filter(|(_, (source, _))| matches!(source, AnalysisInputSource::Package(reference) if same(reference)))
-            {
-                output.reference_result(id, revision, AnalysisReferenceOriginV1::Package(index))?;
-            }
-            for (index, (source, _)) in outputs.iter().enumerate() {
-                let AnalysisInputSource::Package(reference) = source else {
-                    continue;
-                };
-                if !same(reference) {
-                    continue;
-                }
-                control.check()?;
-                let mut matches = packet
-                    .datasets
-                    .iter()
-                    .filter(|dataset| dataset.name == reference.output);
-                let dataset = matches
-                    .next()
-                    .ok_or_else(|| Code::Invalid.error("dependency dataset"))?;
-                if matches.next().is_some() {
-                    return Err(Code::Invalid.error("duplicate dependency dataset"));
-                }
-                capture.package(
-                    index,
-                    Some(dataset),
-                    &context.coverage,
-                    &mut output.sink(control),
+                self.check_managed_input(
+                    reader,
+                    reference,
+                    selection,
+                    capture.now(),
+                    output,
+                    control,
                 )?;
+            } else if let Some(previous) = outputs[..index]
+                .iter()
+                .position(|(previous, expected)| previous == reference && expected == schema)
+            {
+                capture.package_alias(index, previous, &mut output.sink(control))?;
+            } else {
+                let (data, coverage) = self.captured_managed_input(
+                    reader,
+                    reference,
+                    selection,
+                    capture.now(),
+                    output,
+                    control,
+                )?;
+                capture.package_batches(index, data, &coverage, &mut output.sink(control))?;
             }
+            output.reference_result(
+                &reference.result().result_id,
+                reference.result().commit_revision,
+                AnalysisReferenceOriginV1::Package(index),
+            )?;
         }
         control.check()
     }

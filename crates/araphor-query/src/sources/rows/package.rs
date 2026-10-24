@@ -81,10 +81,10 @@ impl SourceSnapshot {
             .as_ref()
             .map(|inputs| {
                 inputs
-                    .bindings
+                    .retained
                     .iter()
                     .enumerate()
-                    .filter(|(_, (slot, _, _))| origins.contains(&SourceOrigin::Package(*slot)))
+                    .filter(|(_, source)| origins.contains(&SourceOrigin::Package(source.slot)))
                     .map(|(index, _)| index)
                     .collect()
             })

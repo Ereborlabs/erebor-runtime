@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use sdk::arrow_array::{ArrayRef, RecordBatch};
-use snafu::ResultExt as _;
 
 use super::{AnalysisTableRead, ReadBudget};
 use crate::{
@@ -177,58 +176,6 @@ impl<'a> Capture<'a> {
         budget.grow(ranges)?;
         ranges.push(gap);
         Ok(())
-    }
-
-    pub(super) fn package(
-        &mut self,
-        index: usize,
-        dataset: Option<&sdk::wire::Dataset>,
-        coverage: &sdk::Coverage,
-        budget: &mut ReadBudget<'_>,
-    ) -> Result<()> {
-        let inputs = self
-            .read
-            .inputs
-            .ok_or_else(|| invalid("the package source has no input scope"))?;
-        let (reference, schema) = inputs
-            .outputs
-            .get(index)
-            .ok_or_else(|| invalid("the package source index is absent"))?;
-        let Some(dataset) = dataset else {
-            return Ok(());
-        };
-        if self.packages.contains_key(&index) {
-            return Err(invalid("the package source is bound twice"));
-        }
-        let shared = inputs
-            .outputs
-            .iter()
-            .enumerate()
-            .filter(|(_, (previous, expected))| previous == reference && expected == schema)
-            .find_map(|(index, _)| self.packages.get(&index));
-        let batches = match shared {
-            Some((_, batches, _)) => {
-                budget.charge(batch_metadata(batches))?;
-                batches.clone()
-            }
-            None => {
-                let before = budget.output.input_bytes;
-                budget.charge(
-                    sdk::wire::Dataset::decoding_bytes(&dataset.arrow_ipc)
-                        .context(crate::AnalysisContractSnafu)?,
-                )?;
-                let data = dataset
-                    .decode(schema)
-                    .context(crate::AnalysisContractSnafu)?;
-                budget.output.input_bytes = before;
-                for batch in &data.batches {
-                    budget.charge(batch.get_array_memory_size())?;
-                }
-                budget.charge(batch_metadata(&data.batches))?;
-                data.batches
-            }
-        };
-        self.insert_package(index, Arc::clone(schema), batches, coverage, budget)
     }
 
     pub(super) fn package_batches(

@@ -513,26 +513,10 @@ impl AnalysisTableRead<'_> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AnalysisInputSource {
-    Package(araphor_analysis_sdk::OutputRef),
-    Managed(Arc<super::ManagedInputRef>),
-}
-
-impl AnalysisInputSource {
-    pub fn output(&self) -> &araphor_analysis_sdk::OutputRef {
-        match self {
-            Self::Package(reference) => reference,
-            Self::Managed(reference) => reference.output(),
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct AnalysisInputTables<'a> {
     pub authorized: &'a AnalysisSelectionV1,
-    pub scope: &'a str,
-    pub outputs: &'a [(AnalysisInputSource, SchemaRef)],
+    pub outputs: &'a [(Arc<super::ManagedInputRef>, SchemaRef)],
 }
 
 pub(super) struct ReadBudget<'a> {

@@ -1,5 +1,7 @@
 # Araphor Analysis migration
 
+Current saved-input ownership is in [Native saved-input retirement](#native-saved-input-retirement).
+
 Current Query input ownership is in [Query input runner retirement](#query-input-runner-retirement).
 That record supersedes the earlier instruction to keep Inputs::clocked and the old Query executor.
 
@@ -3612,7 +3614,7 @@ Neither route renews an expired parent deadline.
 
 Data's [package store and API](../../crates/araphor-data/src/analysis/packages/mod.rs),
 [package-input codec](../../crates/araphor-data/src/analysis/extraction/package.rs),
-and [old output tests](../../crates/araphor-data/src/analysis/packages/tests/output.rs)
+and [old output tests](https://github.com/Ereborlabs/erebor-runtime/blob/6edd86f9c2864261abb72d5b108688008b9123b7/crates/araphor-data/src/analysis/packages/tests/output.rs)
 remain unchanged by the Query retirement. Their native replacement proof is a
 separate gate:
 
@@ -3653,3 +3655,51 @@ Result: **Done** for the Query input runner retirement and native finite expiry
 transfer. The [master count](araphor-component-redesign.md#query-input-runner-retirement)
 retains its Araphor source scope. The Data replacement gate above and the
 complete migration remain **Not done**.
+
+
+## Native saved-input retirement
+
+The working tree after `6edd86f9c2864261abb72d5b108688008b9123b7` removes the
+old Package saved-input branch, SDK wire-dataset conversion, and its obsolete
+context types. Query retains one canonical source slice. The earlier Data
+saved-input gate has the native assertion owners below. Historical paragraphs
+and the earlier Query result keep their recorded source state.
+
+| Saved-input duty | Current native assertion owner |
+| --- | --- |
+| One read snapshot during concurrent native publication | [retained_snapshot](../../crates/araphor-data/src/analysis/managed/tests/input/reads.rs) keeps original raw rows, saved rows, references, witnesses, and metadata; a later explicit current reference reads the next result. |
+| Current storage and retained-record binding | [current_reads_check_storage](../../crates/araphor-data/src/analysis/managed/tests/input/current.rs) checks Metadata and Complete binding/source guards and stopped finite reads. [retained_record_checks_identity](../../crates/araphor-data/src/analysis/managed/tests/input/current.rs) checks admission and full hydration identity. |
+| Saved historical scope | [history_keeps_saved_scope](../../crates/araphor-data/src/analysis/managed/tests/input/scope.rs) checks narrow-scope rejection, foreign-tenant non-disclosure, original broad history, remove/recreate generation fences, reopen, and old alias rejection. |
+| Header and payload preflight | [retained_payload_bound](../../crates/araphor-data/src/analysis/managed/tests/input/reads.rs) checks the byte limit before corrupt IPC decode; [retained_header_skips_ipc](../../crates/araphor-data/src/analysis/managed/tests/input.rs) keeps metadata reads separate from payload decode. |
+| Read cancellation and retry | [retained_cancellation](../../crates/araphor-data/src/analysis/managed/tests/input/reads.rs) checks the actual read hook, typed cancellation, valid parent, released reader permits, and a valid new child. |
+| Exact inherited reference origins | [retained_origins_merge_refs](../../crates/araphor-data/src/analysis/managed/tests/input/origins.rs) checks equal aliases, explicit result/context origins, exact revisions, and the earliest inherited witness. |
+
+Renewal preserves selection. A changed scope uses remove/recreate. The native
+read keeps the original authorized selection even when physical capture has a
+narrower event or table selection. Query source slots and Data origin indices
+remain separate.
+
+The [current review flow](../guides/araphor-discovery-definition-review.md#native-saved-input-retirement)
+shows the remaining source and memory owners. Only the old saved-input path
+and its output-test module retire. Legacy activation, commit, status,
+read/history, recovery, schema, and provenance APIs remain. This is not whole
+Data retirement.
+
+The final production-source selection passes 26 distinct cases across three
+runs: 11 Data cases in 31.12 seconds, 13 Analysis retained-input cases in
+20.98 seconds, and two Query metadata cases in 0.78 seconds. A later test-only
+correction propagates errors from the snapshot fixture hook. Its operations
+and assertions stay unchanged. Only retained_snapshot runs again after that
+correction; the case passes in 1.58 seconds. These are 26 distinct cases, not
+one simultaneous final rerun or an additional distinct snapshot case.
+
+The final test build passes in 49.14 seconds. Strict Clippy passes for the ten
+affected owners in 78 seconds after the last test edit. Scoped formatting
+passes for 19 Rust files. Whitespace and the removed-source-symbol search
+pass. Full-workspace CI and benchmarks are not repeated.
+
+Result: **Done** for the saved-input decoder retirement and canonical capture
+ownership. The [master count](araphor-component-redesign.md#native-saved-input-retirement)
+retains its Araphor source scope. Whole legacy Data lifecycle, recovery, and
+store removal, complete migration, and the required production reduction remain
+**Not done**. No performance result is established.

@@ -77,24 +77,6 @@ impl PackageGrantV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ClockDependency {
-    None,
-    Inputs,
-    Model,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct InstalledContext {
-    pub grant: PackageGrantV1,
-    pub root: super::PackageRefV1,
-    pub parameters: Option<serde_json::Value>,
-    pub readiness: PackageReadinessV1,
-    pub status_checkpoint: u64,
-    pub prepared: bool,
-    pub clock: ClockDependency,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ResultContext {
     #[serde(default = "ResultContext::sql_target")]

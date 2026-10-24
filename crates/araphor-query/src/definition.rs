@@ -407,21 +407,11 @@ impl Engine {
         let source_bytes = count
             .checked_mul(std::mem::size_of::<Arc<crate::sources::RetainedSource>>())
             .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
-        let input_bytes = count
-            .checked_mul(std::mem::size_of::<(
-                usize,
-                araphor_data::AnalysisInputSource,
-                datafusion::arrow::datatypes::SchemaRef,
-            )>())
-            .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
         let bytes = source_bytes
-            .checked_add(input_bytes)
-            .and_then(|bytes| {
-                bytes.checked_add(if count == 0 {
-                    0
-                } else {
-                    std::mem::size_of::<crate::sources::InputCapture>()
-                })
+            .checked_add(if count == 0 {
+                0
+            } else {
+                std::mem::size_of::<crate::sources::InputCapture>()
             })
             .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
         let transient = source_bytes
@@ -439,23 +429,11 @@ impl Engine {
             }
         }
         let retained_sources: Arc<[Arc<crate::sources::RetainedSource>]> = bindings.into();
-        let mut bindings = Vec::with_capacity(count);
-        for source in retained_sources.iter() {
-            bindings.push((
-                source.slot,
-                araphor_data::AnalysisInputSource::Managed(Arc::clone(&source.reference)),
-                Arc::clone(&source.schema),
-            ));
-        }
         bindings_memory.try_resize(bytes).context(SqlSnafu)?;
-        let inputs = (!bindings.is_empty()).then(|| {
+        let inputs = (!retained_sources.is_empty()).then(|| {
             Arc::new(crate::sources::InputCapture {
-                scope: String::new(),
-                bindings,
-                ranges: Vec::new(),
-                include_results: true,
-                retained: Some(retained_sources),
-                _memory: Some(bindings_memory),
+                retained: retained_sources,
+                _memory: bindings_memory,
             })
         });
         let sources = origins
