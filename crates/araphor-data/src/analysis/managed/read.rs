@@ -949,9 +949,6 @@ impl AnalysisStore {
                 Self::managed_attempt_from(reader, spec.tenant, &spec.id, &step.attempt)?
                     .ok_or_else(|| Code::Missing.error("managed selected attempt"))?
             } else {
-                if processor == "analysis-package" {
-                    return Err(Code::Unsupported.error("legacy activation input"));
-                }
                 if self.package_source_revision(reader, spec.tenant, &id)? != revision {
                     return Ok(SourceFreshness::Changed);
                 }

@@ -909,7 +909,7 @@ crate. SDK owns declarations and native/Wasm application binary interfaces.
   -> [AnalysisPackageOwner::evaluate_artifact](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/execution.rs) receives the owned evaluation and retained input set for the exact installed export
   -> [AnalysisPackageOwner::evaluate_artifact](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/execution.rs) dispatches SQL to one Engine::wait future or invokes the selected synchronous native or Wasm owner
   -> [AnalysisPackageOwner::prepare_model](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/evaluation/preparation.rs) prepares one result contract
-  -> [AnalysisStore::commit_package](../../crates/araphor-data/src/analysis/packages/commit.rs) checks the authorized durable transaction
+  -> [AnalysisStore::commit_package](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) checks the authorized durable transaction
 
 ```mermaid
 sequenceDiagram
@@ -1132,14 +1132,14 @@ transport path opens no DuckDB query connection.
   -> [InputOperation::next](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) offers one retained Arc<InputSet> with its evaluation time
   -> [AnalysisPackageOwner::evaluate_offer](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/supervision.rs) checks authority and invokes the selected backend
   -> [AnalysisPackageOwner::authorize_commit](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/owner.rs) checks current authority for the result transaction
-  -> [AnalysisStore::commit_package](../../crates/araphor-data/src/analysis/packages/commit.rs) checks the activation, checkpoint, source revisions, and exact references in one transaction
-  -> [AnalysisStore::package_completed](../../crates/araphor-data/src/analysis/packages/input.rs) verifies the actual result head and stored activation precondition
+  -> [AnalysisStore::commit_package](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) checks the activation, checkpoint, source revisions, and exact references in one transaction
+  -> [AnalysisStore::package_completed](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/input.rs) verifies the actual result head and stored activation precondition
   -> [InputOperation::complete](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) checks the offered revisions, coverage, and evaluation time before it advances the local activation
 
 [AnalysisPackageOwner::serve_activation](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/supervision.rs) receives a typed Busy failure
   -> [AnalysisPackageOwner::wait_inputs](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/supervision.rs) waits for the actual blocked resource or an input change
   -> [InputOperation::retry](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) retains the offered input cut
-  -> [AnalysisStore::package_input_current](../../crates/araphor-data/src/analysis/packages/input.rs) checks that cut against current metadata and retained evidence
+  -> [AnalysisStore::package_input_current](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/input.rs) checks that cut against current metadata and retained evidence
   -> [InputOperation::next](https://github.com/Ereborlabs/erebor-runtime/blob/6ded52863152b691c5948e890833afcf3cc09996/crates/araphor-query/src/inputs/live.rs) offers the same Arc when the cut is valid, or captures a new cut when it is invalid
 
 [Progress::new and begin](../../crates/araphor-query/src/stream/progress.rs) register the source and clock watches before physical planning or capture
@@ -1242,7 +1242,7 @@ A fresh capture with expired evidence keeps Unknown coverage and excludes that
 evidence from commit witnesses. A witness that expires after capture invalidates
 a pending cut before retry.
 
-[AnalysisStore::package_input_current](../../crates/araphor-data/src/analysis/packages/input.rs)
+[AnalysisStore::package_input_current](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/input.rs)
 uses one controlled metadata transaction. The check retains the existing
 global relation-revision rule, including notices from an unselected tenant.
 It checks store identity, schema, recovery epoch, current activation, exact
@@ -1302,7 +1302,7 @@ change, all 22 live-input cases pass again. Ten Analysis cases and three E2E
 contracts pass. Strict Clippy and formatting pass. The
 [component record](../plans/araphor-component-redesign.md#shared-source-progress-and-exact-window-deadlines)
 gives the commands, source hashes, initial failures, and qualification limits.
-The [Data metadata tests](../../crates/araphor-data/src/analysis/packages/tests/input.rs)
+The [Data metadata tests](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/tests/input.rs)
 cover exact references, forged completion, controlled registration, reader
 capacity, activation notices, and uncertain-commit recovery.
 

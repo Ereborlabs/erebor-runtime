@@ -80,7 +80,6 @@ impl TraversalFixture {
             );
             assert_eq!(store.meta()?, before);
             assert_eq!(*store.subscribe_revision().borrow(), revision);
-            assert!(store.package_activation_page(None)?.is_empty());
             assert!(store
                 .active_managed(&AnalysisReadControl::default())?
                 .1

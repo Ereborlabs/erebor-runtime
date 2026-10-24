@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
-use super::{PackageCommitV1, PackageRevisionRefV1};
+use super::PackageRevisionRefV1;
 use crate::{AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
@@ -117,89 +117,6 @@ impl AnalysisStore {
                 .is_none()
             {
                 return Self::reject_path(root, "the retained package image is invalid");
-            }
-        }
-        let mut statement = reader
-            .prepare("SELECT r.result_id, r.tenant_id, r.commit_meta FROM package_results r")
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare retained package results",
-            })?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                ))
-            })
-            .context(AnalysisDatabaseSnafu {
-                operation: "read retained package results",
-            })?;
-        for row in rows {
-            let (id, tenant, contract) = row.context(AnalysisDatabaseSnafu {
-                operation: "decode retained package result",
-            })?;
-            let contract: PackageCommitV1 =
-                serde_json::from_slice(&contract).context(JsonSnafu { path: root })?;
-            if contract.result_id != id || contract.activation.key.tenant_id.as_slice() != tenant {
-                return Self::reject_path(root, "the retained package result contract differs");
-            }
-            let result =
-                Self::package_result_from(reader, contract.activation.key.tenant_id, &id, root)?
-                    .ok_or_else(|| {
-                        crate::AnalysisStateSnafu {
-                            path: root,
-                            reason: "the retained package result is absent",
-                        }
-                        .build()
-                    })?;
-            if contract
-                .source_revisions
-                .windows(2)
-                .any(|pair| pair[0].0 >= pair[1].0)
-                || contract.source_revisions.iter().any(|(name, captured)| {
-                    name.is_empty() || name.len() > 128 || *captured >= result.commit_revision
-                })
-            {
-                return Self::reject_path(root, "the retained package result key differs");
-            }
-            let count: u64 = reader
-                .query_row(
-                    "SELECT count(*) FROM package_dependencies WHERE result_id = ?",
-                    params![id],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "count retained package references",
-                })?;
-            if count != contract.dependencies.len() as u64
-                || contract
-                    .dependencies
-                    .iter()
-                    .map(|dependency| &dependency.result_id)
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len()
-                    != contract.dependencies.len()
-            {
-                return Self::reject_path(root, "the retained package references differ");
-            }
-            for dependency in contract.dependencies {
-                let present: bool = reader
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM package_dependencies
-                    WHERE result_id = ? AND dependency_id = ? AND commit_revision = ?)",
-                        params![id, dependency.result_id, dependency.commit_revision],
-                        |row| row.get(0),
-                    )
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "validate retained package result reference",
-                    })?;
-                if !present {
-                    return Self::reject_path(
-                        root,
-                        "the retained package result reference is absent",
-                    );
-                }
             }
         }
         Ok(())

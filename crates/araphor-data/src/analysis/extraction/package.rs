@@ -104,10 +104,9 @@ impl AnalysisStore {
             )?;
             let length: u64 = reader
                 .query_row(
-                    "SELECT octet_length(CASE WHEN x.processor_id = 'analysis-package'
-                    THEN p.commit_meta ELSE x.request_meta END)
+                    "SELECT octet_length(x.request_meta)
                     + CASE WHEN x.processor_id = 'discovery' THEN octet_length(x.body) ELSE 0 END
-                 FROM analysis_results x LEFT JOIN package_results p USING (result_id)
+                 FROM analysis_results x
                  WHERE x.tenant_id = ? AND x.result_id = ? AND x.commit_revision = ?",
                     params![
                         tenant.as_slice(),
@@ -127,9 +126,8 @@ impl AnalysisStore {
             }
             let (processor, manifest): (String, Vec<u8>) = reader
                 .query_row(
-                    "SELECT x.processor_id, CASE WHEN x.processor_id = 'analysis-package'
-                    THEN p.commit_meta ELSE x.request_meta END
-                 FROM analysis_results x LEFT JOIN package_results p USING (result_id)
+                    "SELECT x.processor_id, x.request_meta
+                 FROM analysis_results x
                  WHERE x.tenant_id = ? AND x.result_id = ? AND x.commit_revision = ?",
                     params![
                         tenant.as_slice(),

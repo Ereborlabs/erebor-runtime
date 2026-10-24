@@ -28,7 +28,7 @@ An input correction replaces prior output. Missing input cannot prove a negative
   -> [ModelOperation::inputs](../../../../../crates/araphor-data/src/query/model/operation.rs) the query owner returns complete bounded authorized inputs and closes readers
   -> [QueryOwner::evaluate_model](../../../../../crates/araphor-data/src/query/model.rs) the selected evaluator computes outside the store transaction
   -> [Package::validate_output](../../../../../crates/araphor-analysis-sdk/src/validation.rs) the host validates typed outputs and evidence references
-  -> [AnalysisStore::commit_package](../../../../../crates/araphor-data/src/analysis/packages/commit.rs) AnalysisStore commits each model result, checkpoint, progress, references, and quota together
+  -> [AnalysisStore::commit_package](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) AnalysisStore commits each model result, checkpoint, progress, references, and quota together
   -> [QueryOwner::output_table](../../../../../crates/araphor-data/src/query/model/source/table.rs) dependent models select those exact committed result revisions
 
 Implemented outside this phase: current discovery and graph owners retain domain
@@ -38,20 +38,20 @@ explicit unsupported status. Installed compiled domain dispatch belongs to
 [Wasm Execution](phase-7-5-4-wasm-execution.md).
 
 [AnalysisPackageOwner::refresh_package](../../../../../crates/araphor-data/src/package/freshness.rs) Evidence arrives late or a source window is replaced
-  -> [AnalysisStore](../../../../../crates/araphor-data/src/analysis/packages/status.rs) the package owner marks affected dependent results stale
+  -> [AnalysisStore](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/status.rs) the package owner marks affected dependent results stale
   -> [ModelRun](../../../../../crates/araphor-data/src/package/evaluation/preparation.rs) stateful evaluation replays from a valid checkpoint or rebuilds from retained inputs
-  -> [AnalysisStore::package_commit_rows](../../../../../crates/araphor-data/src/analysis/packages/commit.rs) a replacement result removes prior contributions for that window
+  -> [AnalysisStore::package_commit_rows](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) a replacement result removes prior contributions for that window
   -> [ModelOperation::inputs](../../../../../crates/araphor-data/src/query/model/operation.rs) missing retained input produces incomplete coverage
 
 [AnalysisPackageOwner::install](../../../../../crates/araphor-data/src/package/lifecycle.rs) Operator upgrades or rolls back a package
   -> [activation preparation](../../../../../crates/araphor-data/src/package/lifecycle/activation.rs) the package owner checks dependencies, grants, parameters, and scope
   -> [ModelRun](../../../../../crates/araphor-data/src/package/evaluation/preparation.rs) the evaluator prepares a bounded retained-input rebuild
-  -> [AnalysisStore::activate_package](../../../../../crates/araphor-data/src/analysis/packages/activation.rs) AnalysisStore switches the active revision only with a valid prepared state
+  -> [AnalysisStore::activate_package](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/activation.rs) AnalysisStore switches the active revision only with a valid prepared state
   -> [upgrade regression](../../../../../crates/araphor-data/src/package/lifecycle/tests.rs) failed preparation preserves the previous active revision and its checkpoint
 
 [AnalysisPackageOwner::reconcile](../../../../../crates/araphor-data/src/package/supervision.rs) Grant is revoked or an operator removes the package
   -> [PackageTask](../../../../../crates/araphor-data/src/package/owner.rs) the package owner stops new runs and cancels work under that grant
-  -> [AnalysisStore::commit_package](../../../../../crates/araphor-data/src/analysis/packages/commit.rs) AnalysisStore rejects commits under the invalid activation lifetime
+  -> [AnalysisStore::commit_package](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) AnalysisStore rejects commits under the invalid activation lifetime
   -> [reference retention](../../../../../crates/araphor-data/src/analysis/packages/witnesses.rs) retention keeps historical results and required evidence references
   -> [AnalysisPackageOwner::remove](../../../../../crates/araphor-data/src/package/removal.rs) the package owner releases artifacts after their last installation, history, or dependency reference
 

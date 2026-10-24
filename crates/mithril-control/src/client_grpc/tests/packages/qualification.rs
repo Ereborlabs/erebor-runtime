@@ -126,7 +126,7 @@ async fn image_rpc_selects_artifact() -> TestResult {
     let data = fixture.service.data()?.store.clone();
     let before = data.meta()?;
     let notices = data.subscribe_revision();
-    let activations = data.package_activation_page(None)?;
+    let lifecycle = data.subscribe_activations();
     let active = data.active_managed(&AnalysisReadControl::default())?;
     assert!(data
         .package_image(
@@ -206,7 +206,7 @@ async fn image_rpc_selects_artifact() -> TestResult {
     );
     assert_eq!(data.meta()?, before);
     assert!(!notices.has_changed()?);
-    assert_eq!(data.package_activation_page(None)?, activations);
+    assert!(!lifecycle.has_changed()?);
     assert_eq!(
         data.active_managed(&AnalysisReadControl::default())?,
         active
@@ -254,7 +254,8 @@ async fn image_rpc_tests_fixtures() -> TestResult {
             .collect::<araphor_data::Result<Vec<_>>>()?,
     )?;
     let data = fixture.service.data()?.store.clone();
-    let activations = data.package_activation_page(None)?;
+    let members = data.active_managed(&AnalysisReadControl::default())?.1;
+    let lifecycle = data.subscribe_activations();
     fixture
         .package(
             PackageRequestV1::InstallImage {
@@ -263,7 +264,11 @@ async fn image_rpc_tests_fixtures() -> TestResult {
             true,
         )
         .await?;
-    assert_eq!(data.package_activation_page(None)?, activations);
+    assert_eq!(
+        data.active_managed(&AnalysisReadControl::default())?.1,
+        members
+    );
+    assert!(!lifecycle.has_changed()?);
     fixture
         .package(
             PackageRequestV1::InstallImage {
@@ -371,7 +376,11 @@ async fn image_rpc_tests_fixtures() -> TestResult {
     );
     assert_eq!(data.meta()?, before);
     assert!(!notices.has_changed()?);
-    assert_eq!(data.package_activation_page(None)?, activations);
+    assert_eq!(
+        data.active_managed(&AnalysisReadControl::default())?.1,
+        members
+    );
+    assert!(!lifecycle.has_changed()?);
     assert!(data
         .active_managed(&AnalysisReadControl::default())?
         .1

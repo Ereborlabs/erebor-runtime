@@ -353,7 +353,8 @@ async fn physical_sql_return_retains_contract() -> TestResult {
     assert!(fixture
         .engine
         .store()
-        .package_activation_page(None)?
+        .active_managed(&araphor_data::AnalysisReadControl::default())?
+        .1
         .is_empty());
     drop(output);
     drop(prepared);
@@ -455,7 +456,8 @@ async fn accumulation(target: &str) -> TestResult {
             assert!(fixture
                 .engine
                 .store()
-                .package_activation_page(None)?
+                .active_managed(&araphor_data::AnalysisReadControl::default())?
+                .1
                 .is_empty());
         }
     }
@@ -764,7 +766,8 @@ async fn physical_sql_failure_keeps_data() -> TestResult {
         assert!(fixture
             .engine
             .store()
-            .package_activation_page(None)?
+            .active_managed(&araphor_data::AnalysisReadControl::default())?
+            .1
             .is_empty());
         drop(prepared);
         capacity_released(&fixture)?;
@@ -876,7 +879,8 @@ async fn guest_failures(target: &str) -> TestResult {
         assert!(fixture
             .engine
             .store()
-            .package_activation_page(None)?
+            .active_managed(&araphor_data::AnalysisReadControl::default())?
+            .1
             .is_empty());
         drop(prepared);
         capacity_released(&fixture)?;
@@ -925,7 +929,8 @@ async fn physical_call_cancellation_joins() -> TestResult {
     assert!(fixture
         .engine
         .store()
-        .package_activation_page(None)?
+        .active_managed(&araphor_data::AnalysisReadControl::default())?
+        .1
         .is_empty());
     capacity_released(&fixture)?;
     Ok(())
@@ -1612,7 +1617,8 @@ async fn native_caps_keep_targets() -> TestResult {
     assert!(fixture
         .engine
         .store()
-        .package_activation_page(None)?
+        .active_managed(&araphor_data::AnalysisReadControl::default())?
+        .1
         .is_empty());
     capacity_released(&fixture)?;
     Ok(())

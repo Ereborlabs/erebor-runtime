@@ -1,4 +1,4 @@
-use duckdb::params;
+use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
 use super::{
@@ -8,6 +8,30 @@ use super::{
 use crate::{AnalysisDatabaseSnafu, Result, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION};
 
 impl AnalysisStore {
+    pub(in crate::analysis) fn package_sources_current(
+        reader: &Connection,
+        sources: &[(String, u64)],
+        control: &AnalysisReadControl,
+    ) -> Result<bool> {
+        for (relation, captured) in sources {
+            control.check()?;
+            let changed: u64 = reader
+                .query_row(
+                    "SELECT COALESCE(MAX(last_changed_revision), 0)::UBIGINT
+                 FROM relation_revisions WHERE relation_name = ?",
+                    params![relation],
+                    |row| row.get(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read package source notice",
+                })?;
+            if changed > *captured {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub fn profile_notices(
         &self,
         scope: &ProcessorScopeV1,

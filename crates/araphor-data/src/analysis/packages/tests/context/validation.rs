@@ -1,9 +1,12 @@
 use super::super::*;
 
-fn context(active: &PackageActivationV1) -> crate::Result<crate::AnalysisContextVersionV1> {
+fn context(
+    package: &PackageRevisionV1,
+    installed: u64,
+) -> crate::Result<crate::AnalysisContextVersionV1> {
     Ok(crate::AnalysisContextVersionV1 {
         key: crate::AnalysisContextKeyV1 {
-            tenant_id: active.key.tenant_id,
+            tenant_id: package.tenant_id,
             owner_id: "graph-packages-v1".into(),
             entity_key: b"result".to_vec(),
             lifetime_key: b"source".to_vec(),
@@ -13,10 +16,10 @@ fn context(active: &PackageActivationV1) -> crate::Result<crate::AnalysisContext
         valid_until_utc_ns: None,
         sensitivity: crate::ContextSensitivityV1::Tenant,
         body: serde_json::to_vec(&serde_json::json!({"installed_packages": [{
-            "package_id": active.key.package_id, "revision": active.revision,
-            "export": active.key.export, "generation": active.generation,
+            "package_id": package.package_id, "revision": package.revision,
+            "export": "model", "generation": installed,
             "parameters": null,
-            "root": {"package_id": active.key.package_id, "revision": active.revision}
+            "root": {"package_id": package.package_id, "revision": package.revision}
         }]}))
         .context(crate::PackageEncodingSnafu)?,
     })
@@ -26,8 +29,9 @@ fn context(active: &PackageActivationV1) -> crate::Result<crate::AnalysisContext
 fn domain_refs_require_retention() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let active = start(&store, "first")?;
-    let input = context(&active)?;
+    let retained = package("first", "v1")?;
+    store.install_package(std::slice::from_ref(&retained), || Ok(()))?;
+    let input = context(&retained, store.meta()?.commit_revision)?;
     let original: serde_json::Value = serde_json::from_slice(&input.body)?;
     let before = store.meta()?.commit_revision;
     for change in 0..12 {
@@ -72,7 +76,7 @@ fn domain_refs_require_retention() -> TestResult {
         assert_eq!(store.meta()?.commit_revision, before);
     }
     store.commit_context(&input)?;
-    store.remove_package(&active.key, active.generation, || Ok(()))?;
+    store.collect_package(retained.tenant_id, &retained.package_id, &retained.revision)?;
     assert_eq!(store.context_version(&input.key)?, Some(input));
     Ok(())
 }
@@ -82,9 +86,19 @@ fn legacy_discovery_context_reopens() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let mut input = context(&activation("first", "v1"))?;
-    input.key.owner_id = "discovery-source-v1".into();
-    input.body = br#"{"kind":"SOURCE_HEALTH","unknown":true}"#.to_vec();
+    let input = crate::AnalysisContextVersionV1 {
+        key: crate::AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "discovery-source-v1".into(),
+            entity_key: b"result".to_vec(),
+            lifetime_key: b"source".to_vec(),
+            owner_revision: 1,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: crate::ContextSensitivityV1::Tenant,
+        body: br#"{"kind":"SOURCE_HEALTH","unknown":true}"#.to_vec(),
+    };
     store.commit_context(&input)?;
     drop(store);
     let store = AnalysisStore::open(&root)?;
@@ -98,8 +112,9 @@ fn domain_ref_corruption_rejected() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
-        let active = start(&store, "first")?;
-        let input = context(&active)?;
+        let retained = package("first", "v1")?;
+        store.install_package(std::slice::from_ref(&retained), || Ok(()))?;
+        let input = context(&retained, store.meta()?.commit_revision)?;
         store.commit_context(&input)?;
         {
             let mut writer = store.writer()?;
@@ -154,9 +169,12 @@ fn domain_refs_require_closure() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let active = start(&store, "first")?;
-    let other = start(&store, "other")?;
-    let mut input = context(&active)?;
+    let retained = package("first", "v1")?;
+    store.install_package(std::slice::from_ref(&retained), || Ok(()))?;
+    let installed = store.meta()?.commit_revision;
+    let other = package("other", "v1")?;
+    store.install_package(std::slice::from_ref(&other), || Ok(()))?;
+    let mut input = context(&retained, installed)?;
     let mut body: serde_json::Value = serde_json::from_slice(&input.body)?;
     body["installed_packages"][0]["root"]["package_id"] = serde_json::json!("other");
     input.body = serde_json::to_vec(&body)?;
@@ -190,8 +208,8 @@ fn domain_refs_require_closure() -> TestResult {
     body["installed_packages"][0]["root"]["package_id"] = serde_json::json!("dependent");
     input.body = serde_json::to_vec(&body)?;
     store.commit_context(&input)?;
-    store.remove_package(&active.key, active.generation, || Ok(()))?;
-    store.remove_package(&other.key, other.generation, || Ok(()))?;
+    store.collect_package(retained.tenant_id, &retained.package_id, &retained.revision)?;
+    store.collect_package(other.tenant_id, &other.package_id, &other.revision)?;
     store.collect_package_admissions()?;
     assert!(store
         .package_revision([1; 16], "dependent", "v1")?

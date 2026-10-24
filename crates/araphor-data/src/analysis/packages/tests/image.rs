@@ -661,3 +661,42 @@ fn uninstall_collects_unused_native() -> TestResult {
         .is_empty());
     Ok(())
 }
+
+#[test]
+fn packages_release_unused_dependencies() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let dependency = package("dependency", "v1")?;
+    let mut consumer = package("consumer", "v1")?;
+    let mut artifact = consumer.decode_artifact()?;
+    artifact.descriptor.exports[0]
+        .inputs
+        .push(araphor_analysis_sdk::InputPort {
+            port: araphor_analysis_sdk::Port::new("input", araphor_analysis_sdk::Schema::empty()),
+            source: araphor_analysis_sdk::InputSource::Table(
+                araphor_analysis_sdk::TableRef::Output(araphor_analysis_sdk::OutputRef {
+                    package: "dependency".into(),
+                    revision: "v1".into(),
+                    export: "model".into(),
+                    output: "rows".into(),
+                }),
+            ),
+        });
+    consumer.descriptor = serde_json::to_vec(&artifact.descriptor)?;
+    consumer.artifact = artifact.encode()?;
+    consumer.dependencies.push(PackageRevisionRefV1 {
+        package_id: "dependency".into(),
+        revision: "v1".into(),
+    });
+    store.install_package(&[consumer, dependency], || Ok(()))?;
+    store.collect_package([1; 16], "dependency", "v1")?;
+    assert!(store
+        .package_revision([1; 16], "dependency", "v1")?
+        .is_some());
+    store.collect_package([1; 16], "consumer", "v1")?;
+    assert!(store.package_revisions([1; 16])?.is_empty());
+    drop(store);
+    AnalysisStore::open(root)?;
+    Ok(())
+}

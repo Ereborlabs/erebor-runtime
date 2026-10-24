@@ -110,7 +110,8 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
             tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
         }])?;
     let store = &fixture.service.data()?.store;
-    let activations = store.package_activation_page(None)?;
+    let members = store.active_managed(&Default::default())?.1;
+    let lifecycle = store.subscribe_activations();
     for definition in [
         sql,
         definition(
@@ -269,7 +270,8 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
     assert_eq!(admitted.definition, call);
     assert_eq!(admitted.images[0].image, image.root);
     assert_eq!(admitted.images[0].digest, image.digest()?);
-    assert_eq!(store.package_activation_page(None)?, activations);
+    assert_eq!(store.active_managed(&Default::default())?.1, members);
+    assert!(!lifecycle.has_changed()?);
     let mut second = image.clone();
     second.root.package_id = "api.second".into();
     second.artifacts[0].descriptor.id = "api.second".into();
@@ -395,7 +397,8 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
         Some(tonic::Code::PermissionDenied)
     );
     assert_eq!(store.meta()?, before);
-    assert_eq!(store.package_activation_page(None)?, activations);
+    assert_eq!(store.active_managed(&Default::default())?.1, members);
+    assert!(!lifecycle.has_changed()?);
     fixture.service.auth.replace_package_managers(Vec::new())?;
     assert!(matches!(
         fixture
@@ -543,7 +546,8 @@ async fn image_rpc_install_is_not_execution() -> TestResult {
             bundle_digest: bundle.digest()?,
         }])?;
     let data = &fixture.service.data()?.store;
-    let activations = data.package_activation_page(None)?;
+    let members = data.active_managed(&Default::default())?.1;
+    let lifecycle = data.subscribe_activations();
     let selected = fixture.request(
         proto::PackageOperationRequest {
             definition: operation.encode()?,
@@ -580,7 +584,8 @@ async fn image_rpc_install_is_not_execution() -> TestResult {
         serde_json::to_value(PackageResponseV1::Image(installed.clone()))?,
         serde_json::json!({"image": bundle.metadata()?}),
     );
-    assert_eq!(data.package_activation_page(None)?, activations);
+    assert_eq!(data.active_managed(&Default::default())?.1, members);
+    assert!(!lifecycle.has_changed()?);
     let revision = *data.subscribe_revision().borrow();
     fixture.package(operation, true).await?;
     assert_eq!(*data.subscribe_revision().borrow(), revision);
@@ -598,6 +603,7 @@ async fn image_rpc_install_is_not_execution() -> TestResult {
         return Err("inspected image variant".into());
     };
     assert_eq!(inspected, installed);
-    assert_eq!(data.package_activation_page(None)?, activations);
+    assert_eq!(data.active_managed(&Default::default())?.1, members);
+    assert!(!lifecycle.has_changed()?);
     Ok(())
 }

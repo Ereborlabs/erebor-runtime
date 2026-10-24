@@ -111,9 +111,8 @@ impl AnalysisStore {
         self.read_snapshot(|reader| {
             let mut statement = reader
                 .prepare(
-                    "SELECT x.processor_id, CASE WHEN x.processor_id = 'analysis-package'
-                    THEN p.commit_meta ELSE x.request_meta END
-                 FROM analysis_results x LEFT JOIN package_results p USING (result_id)
+                    "SELECT x.processor_id, x.request_meta
+                 FROM analysis_results x
                  WHERE x.tenant_id = ? AND x.result_id IN (SELECT unnest(CAST(? AS VARCHAR[])))",
                 )
                 .context(AnalysisDatabaseSnafu {
@@ -158,12 +157,6 @@ impl AnalysisStore {
     ) -> Result<PackageEvidence> {
         if matches!(processor, "managed-package-v1" | "managed-definition-v1") {
             Self::managed_evidence(processor, metadata)
-        } else if processor == "analysis-package" {
-            let contract: super::PackageCommitV1 =
-                serde_json::from_slice(metadata).context(JsonSnafu {
-                    path: "<package-evidence>",
-                })?;
-            Ok((contract.witnesses, contract.context_refs))
         } else {
             crate::AnalysisResultCommitV1::request_refs(metadata).context(JsonSnafu {
                 path: "<native-evidence>",

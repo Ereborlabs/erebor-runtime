@@ -165,12 +165,6 @@ impl AnalysisStore {
                 WHERE d.tenant_id = p.tenant_id
                     AND (j.value->'image'->>'package_id') = p.package_id
                     AND (j.value->'image'->>'revision') = p.revision)
-            AND NOT EXISTS (SELECT 1 FROM package_activations a WHERE a.tenant_id = p.tenant_id
-                AND a.installed AND ((a.package_id = p.package_id AND a.revision = p.revision)
-                    OR (json_extract_string(TRY_CAST(decode(a.metadata) AS JSON), '$.root.package_id') = p.package_id
-                        AND json_extract_string(TRY_CAST(decode(a.metadata) AS JSON), '$.root.revision') = p.revision)))
-            AND NOT EXISTS (SELECT 1 FROM package_results r WHERE r.tenant_id = p.tenant_id
-                AND r.package_id = p.package_id AND r.revision = p.revision)
             AND NOT EXISTS (SELECT 1 FROM context_versions c
                 WHERE c.tenant_id = p.tenant_id AND c.owner_id = 'native-package-v1'
                     AND json_extract_string(TRY_CAST(CASE WHEN c.owner_id = 'native-package-v1'

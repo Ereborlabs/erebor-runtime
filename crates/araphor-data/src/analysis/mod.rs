@@ -1079,9 +1079,7 @@ pub(crate) mod tests {
         let counts = store.read_snapshot(|reader| {
             reader
                 .query_row(
-                    "SELECT (SELECT count(*) FROM package_activations),
-                            (SELECT count(*) FROM package_results),
-                            (SELECT count(*) FROM managed_instances),
+                    "SELECT (SELECT count(*) FROM managed_instances),
                             (SELECT count(*) FROM managed_versions),
                             (SELECT count(*) FROM managed_calls),
                             (SELECT count(*) FROM managed_attempts),
@@ -1090,7 +1088,7 @@ pub(crate) mod tests {
                             (SELECT count(*) FROM analysis_results)",
                     [],
                     |row| {
-                        (0..9)
+                        (0..7)
                             .map(|index| row.get::<usize, u64>(index))
                             .collect::<duckdb::Result<Vec<_>>>()
                     },
@@ -1099,7 +1097,7 @@ pub(crate) mod tests {
                     operation: "read admission effects",
                 })
         })?;
-        assert_eq!(counts, vec![0; 9]);
+        assert_eq!(counts, vec![0; 7]);
         assert!(!store.discovery_enabled());
         Ok(())
     }

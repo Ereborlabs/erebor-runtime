@@ -24,7 +24,8 @@ async fn image_install_roundtrip() -> Result<()> {
         .control
         .analysis_store()
         .ok_or("image store absent")?;
-    let before = data.package_activation_page(None)?;
+    let before = data.active_managed(&Default::default())?.1;
+    let lifecycle = data.subscribe_activations();
     let layout = root.join("image");
     bundle.write_layout(&layout)?;
     let local = PackageBundleV1::read(&layout)?;
@@ -49,7 +50,8 @@ async fn image_install_roundtrip() -> Result<()> {
         serde_json::to_value(PackageResponseV1::from_bytes(&reply.result)?)?,
         serde_json::json!({"image": installed}),
     );
-    assert_eq!(data.package_activation_page(None)?, before);
+    assert_eq!(data.active_managed(&Default::default())?.1, before);
+    assert!(!lifecycle.has_changed()?);
     let revision = *data.subscribe_revision().borrow();
     fixture
         .operation(PackageRequestV1::InstallImage {
@@ -76,11 +78,7 @@ async fn image_install_roundtrip() -> Result<()> {
         .control
         .analysis_store()
         .ok_or("reopened image store absent")?;
-    assert_eq!(data.package_activation_page(None)?.len(), before.len());
-    assert!(data
-        .package_activation_page(None)?
-        .iter()
-        .all(|activation| activation.key.package_id != bundle.root.package_id));
+    assert_eq!(data.active_managed(&Default::default())?.1, before);
     let retained = data
         .package_image(
             [1; 16],

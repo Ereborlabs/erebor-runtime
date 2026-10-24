@@ -1,5 +1,7 @@
 # Araphor Component Redesign Proposal
 
+Current Data execution ownership is in [One Data execution owner](#one-data-execution-owner).
+
 Current capture boundary proof is in [Native capture boundary proof](#native-capture-boundary-proof).
 
 Current native lifecycle proof is in [Native lifecycle proof transfer](#native-lifecycle-proof-transfer).
@@ -4278,3 +4280,28 @@ Result: **Done** for these replacement proofs. Whole legacy Data lifecycle
 retirement and the complete redesign remain **Not done**. Coherent ownership
 and preserved behavior decide the next change. Source reduction is a result
 of that consolidation. No speed result is claimed.
+
+## One Data execution owner
+
+The native Managed owner replaces the old package activation, commit, status,
+and current-result owners. Data retains one execution state model. Query
+subscriptions still supply work through native physical execution. This cut
+adds no scheduler or evaluator.
+
+The four old execution tables, their charge rules, result codec, recovery
+loop, eager stale propagation, and five source modules retire together.
+Artifact installation, exact image and definition pins, shared evidence,
+source-current checks, context retention, and dependency closure remain.
+Native generation, lifecycle, progress, pending attempts, receipts, Arrow
+output, history, and recovery keep their existing owners.
+
+The [migration result](araphor-analysis-migration.md#one-data-execution-owner)
+records the test transfer. The
+[review flow](../guides/araphor-discovery-definition-review.md#one-data-execution-owner)
+shows the retained owners. Coherent ownership is the result under review.
+Source reduction follows from removal of the duplicate model.
+
+Result: **Done** for retirement of the duplicate Data execution owner.
+The focused proof has 172 distinct passing cases. The final affected-owner
+build and strict Clippy pass.
+The complete redesign remains **Not done**.

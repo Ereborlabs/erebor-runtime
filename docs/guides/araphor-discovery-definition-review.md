@@ -1,5 +1,7 @@
 # Discovery Definition Review
 
+Current Data execution ownership is in [One Data execution owner](#one-data-execution-owner).
+
 Current capture boundary proof is in [Native capture boundary proof](#native-capture-boundary-proof).
 
 Current native lifecycle proof is in [Native lifecycle proof transfer](#native-lifecycle-proof-transfer).
@@ -3032,17 +3034,17 @@ The existing storage owner enforces configured quotas. Collection retains every
 live pin and releases unused artifacts in one atomic sweep.
 
 [Package admission](../../crates/araphor-data/src/analysis/packages/revisions.rs) validates typed revisions without a fixed closure ceiling.
-  -> [Package commit](../../crates/araphor-data/src/analysis/packages/commit.rs) retains contract and checkpoint data with the existing final guard and storage charges.
-  -> [Completed input](../../crates/araphor-data/src/analysis/packages/input.rs) fetches contract, body and window through one fully fenced query.
-  -> [Package recovery](../../crates/araphor-data/src/analysis/packages/recovery.rs) checks stored contracts without the removed admission ceilings.
+  -> [Package commit](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) retains contract and checkpoint data with the existing final guard and storage charges.
+  -> [Completed input](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/input.rs) fetches contract, body and window through one fully fenced query.
+  -> [Package recovery](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/recovery.rs) checks stored contracts without the removed admission ceilings.
 
 [AnalysisStore::collect_package_admissions](../../crates/araphor-data/src/analysis/packages/collection.rs) validates all stored dependency records once.
   -> [release_package_rows](../../crates/araphor-data/src/analysis/packages/collection.rs) deletes one complete unreferenced layer with native SQL.
   -> [Image cleanup](../../crates/araphor-data/src/analysis/packages/collection.rs) deletes only the exact returned uninstalled image keys.
   -> [Collection commit](../../crates/araphor-data/src/analysis/packages/collection.rs) checks affected tenant charges and publishes one revision notice.
 
-[Package commit](../../crates/araphor-data/src/analysis/packages/commit.rs) fails its final guard or a configured storage quota.
-  -> [Data transaction](../../crates/araphor-data/src/analysis/packages/commit.rs) commits no partial result or checkpoint.
+[Package commit](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) fails its final guard or a configured storage quota.
+  -> [Data transaction](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) commits no partial result or checkpoint.
 
 The old global collector pages artifact keys and repeats the full retention
 query per artifact. The current collector uses the same predicates for a whole
@@ -3775,3 +3777,39 @@ retires. No reader wrapper or production inspection API is added.
 The [migration result](../plans/araphor-analysis-migration.md#native-capture-boundary-proof)
 records the focused proof and its limits. Whole legacy lifecycle removal is
 **Not done**.
+
+## One Data execution owner
+
+This review follows the native boundary proof at `4e6b4af6`. The old Data
+package lifecycle retires as one model. Shared artifact and evidence behavior
+remain. Query and the native Managed owner retain execution responsibility.
+
+[Image installation](../../crates/araphor-data/src/analysis/packages/image.rs) retains code and an exact dependency closure.
+  -> [Definition admission](../../crates/araphor-data/src/analysis/definitions.rs) retains the admitted program and exact image pins without execution.
+
+[Instance subscriptions](../../crates/araphor-analysis/src/instance/subscription.rs) consume work from the Query stream.
+  -> [Native Data reads](../../crates/araphor-data/src/analysis/extraction.rs) capture source inputs and [prior state](../../crates/araphor-data/src/analysis/managed/capture.rs) in one snapshot.
+  -> For a new attempt, [subscription admission](../../crates/araphor-analysis/src/instance/subscription.rs) authorizes work and [register_managed_attempt](../../crates/araphor-data/src/analysis/managed/commit.rs) registers immutable work.
+  -> [Native package physical execution](../../crates/araphor-query/src/definition/physical.rs) evaluates the captured Arrow inputs.
+  -> [The Instance sink](../../crates/araphor-analysis/src/instance/sink.rs) checks authority and selects the existing destination commit.
+  -> [Native Data publication](../../crates/araphor-data/src/analysis/managed/commit.rs) commits output, checkpoints, heads, progress, and the receipt atomically.
+
+[Data recovery](../../crates/araphor-data/src/analysis/connection.rs) restores the durable store.
+  -> [Artifact validation](../../crates/araphor-data/src/analysis/packages/recovery.rs) checks descriptors, dependency closure, and exact image digests.
+  -> [Native execution validation](../../crates/araphor-data/src/analysis/managed/schema.rs) checks retained native state and output.
+  -> [Lifecycle recovery](../../crates/araphor-data/src/analysis/connection.rs) emits the existing notice only when the recovered revision changes.
+
+[Revision reads](../../crates/araphor-data/src/analysis/packages/revisions.rs)
+and [source-current checks](../../crates/araphor-data/src/analysis/dependencies.rs)
+keep their implementations. The old execution reader is removed.
+[Evidence reads](../../crates/araphor-data/src/analysis/packages/witnesses.rs)
+read the existing native or generic request metadata directly. The old
+package result join and codec are removed.
+
+[Collection](../../crates/araphor-data/src/analysis/packages/collection.rs)
+keeps installed-image, definition, context, and dependency roots.
+[Shared context tests](../../crates/araphor-data/src/analysis/packages/tests/context.rs)
+retain tenant, closure, corruption, reopen, and restore assertions through
+direct artifact setup. The
+[migration result](../plans/araphor-analysis-migration.md#one-data-execution-owner)
+records the proof and current completion status.

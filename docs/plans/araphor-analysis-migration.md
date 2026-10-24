@@ -1,5 +1,7 @@
 # Araphor Analysis migration
 
+Current Data execution ownership is in [One Data execution owner](#one-data-execution-owner).
+
 Current capture boundary proof is in [Native capture boundary proof](#native-capture-boundary-proof).
 
 Current native lifecycle proof is in [Native lifecycle proof transfer](#native-lifecycle-proof-transfer).
@@ -3776,3 +3778,56 @@ whitespace checks pass. Evidence is under
 Result: **Done** for these replacement proofs. Production lifecycle retirement
 remains **Not done** and requires the whole-owner source review. Full workspace
 CI, physical qualification, and benchmarks are not repeated.
+
+## One Data execution owner
+
+This cut follows `4e6b4af6`. It retires the old Data package lifecycle after
+the native proof transfers. Native Managed remains the execution state owner.
+Image installation and definition admission still start no Discovery.
+
+| Removed owner or contract | Remaining owner |
+| --- | --- |
+| Package activation, mutable status, current heads, and eager stale flags | [Native lifecycle](../../crates/araphor-data/src/analysis/managed/lifecycle.rs), [status](../../crates/araphor-data/src/analysis/managed/status.rs), and [currentness](../../crates/araphor-data/src/analysis/managed/read.rs) |
+| Old package commit and retry codec | [Immutable native attempts and atomic publication](../../crates/araphor-data/src/analysis/managed/commit.rs) |
+| Four old execution tables, charge rules, and recovery validation | [Native schema](../../crates/araphor-data/src/analysis/managed/schema.rs) and [recovery](../../crates/araphor-data/src/analysis/managed/schema.rs) |
+| Mixed artifact and execution reads | [Retained revision owner](../../crates/araphor-data/src/analysis/packages/revisions.rs) |
+| Old result metadata joins and evidence decoder | [Shared native and generic evidence](../../crates/araphor-data/src/analysis/packages/witnesses.rs) and [saved-input extraction](../../crates/araphor-data/src/analysis/extraction/package.rs) |
+
+Shared methods move without a behavior change. Collection removes only the
+two obsolete execution pin predicates. Installed images, definitions, native
+package contexts, domain contexts, and retained dependency closure still pin
+artifacts. Schema version 34 remains unchanged under the development contract.
+No store conversion or old-format read path is added.
+
+The old test map accounts for all 60 package selectors.
+The exact map is `test-map.md` in the evidence directory below. Its SHA-256 is
+`e4842e06fd4dc27637aa5b4e9bace72cff95e8290d989940da1851aa78c474b6`. Native tests retain
+execution, authority, atomicity, source, provenance, quota, and recovery duties.
+Shared artifact and context assertions remain. Direct artifact installation
+replaces the old activation fixture. Historical context bindings use a real
+nonzero installation revision; they do not create a Managed lifecycle.
+The reader tests keep their 16 assertions at the connection and read owners.
+The admission assertion counts all six Managed relations and analysis_results,
+including stopped rows. External callers check native running membership and
+retain their lifecycle, revision, payload, authority, and execution assertions.
+
+Result: **Done** for retirement of the duplicate Data execution owner.
+The focused proof has 172 distinct passing cases across split runs: 136 Data,
+nine Query, 15 Analysis, four Control, two E2E, and six explicit native cases.
+The Data selection contains all 98 Managed cases, all 26 retained package
+cases, five definition cases, four dependency cases, and three reader cases.
+Two Analysis native-target cases are first ignored by the ordinary run and
+then pass under the explicit native selection. They count once. Native tests
+use the retained source-built artifacts with their recorded SHA-256 values.
+
+The affected-owner library build passes in 211.83 seconds. Strict Clippy
+passes in 187.26 seconds. Scoped Rust formatting, whitespace, retired-symbol
+searches, and documentation-link checks pass. The deliberate corrupt-IPC case
+prints a caught Arrow dependency panic and passes its rejection assertions.
+There is no qualification failure or production correction after this cut.
+The complete redesign remains **Not done**.
+Evidence is under
+`/home/navid/mithril-test-hosts/data-lifecycle-owner-retirement-verification`.
+The original 217-file source archive has SHA-256
+`6b89963038dbf41e3330e0d7cce9909908f5cfca0df7ed3333fcfe96ab47197c`.
+Full workspace CI, a new benchmark, and physical qualification are not run.

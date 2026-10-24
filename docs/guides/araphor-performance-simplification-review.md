@@ -55,7 +55,7 @@ storage. Arrow contracts do not depend on DuckDB.
   -> [GraphAndFindingOwner::refresh_source](https://github.com/Ereborlabs/erebor-runtime/blob/aa390d9f647c304ef212396433824a6b9c560982/crates/araphor-data/src/graph/live.rs) the owner selects affected work
   -> [GraphAndFindingOwner::derive_candidate](https://github.com/Ereborlabs/erebor-runtime/blob/aa390d9f647c304ef212396433824a6b9c560982/crates/araphor-data/src/graph/derive.rs) the owner prepares required inputs once
   -> [InstalledAnalysis::evaluate](https://github.com/Ereborlabs/erebor-runtime/blob/aa390d9f647c304ef212396433824a6b9c560982/crates/araphor-data/src/package/installed.rs) the existing execution owner computes the result
-  -> [AnalysisStore::commit_package](../../crates/araphor-data/src/analysis/packages/commit.rs) the existing store validates and commits the result
+  -> [AnalysisStore::commit_package](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) the existing store validates and commits the result
   -> [commit](../../crates/mithril-control/src/store.rs) the owner publishes the committed change
 
 [AuthorityWatch](https://github.com/Ereborlabs/erebor-runtime/blob/aa390d9f647c304ef212396433824a6b9c560982/crates/araphor-data/src/package/installed/control.rs) An operation fails, expires, or loses authority
@@ -75,7 +75,7 @@ one bounded `InstalledBundle` and one orphan check. Each export reads its
 current activation. Startup and an authority change require bundle admission.
 An incomplete or cancelled pass does not advance the checked authority epoch.
 
-[package_current](../../crates/araphor-data/src/analysis/packages/read.rs) reads
+[package_current](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/read.rs) reads
 result metadata before Arrow inputs. The check includes the current head,
 activation, source revisions, dependencies, contexts, and witness expiry.
 [serve](https://github.com/Ereborlabs/erebor-runtime/blob/aa390d9f647c304ef212396433824a6b9c560982/crates/araphor-data/src/package/owner.rs) retains one checked store
@@ -137,13 +137,13 @@ the affected source and functional checks. The
 [current result](../plans/araphor-component-redesign.md#qualification-and-acceptance)
 records the exact qualification and its platform limits.
 
-[PackageCommitV1](../../crates/araphor-data/src/analysis/packages/model.rs)
+[PackageCommitV1](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/model.rs)
 owns the commit contract and its payloads. The stored result retains this
 contract. It has no second metadata DTO or dependency JSON column. The
-[result reader](../../crates/araphor-data/src/analysis/packages/read.rs)
+[result reader](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/read.rs)
 checks native tenant, installation, window, and revision indexes against the
 contract. Dependency references keep their native index and exact revision
-checks. [Representation tests](../../crates/araphor-data/src/analysis/packages/tests/representation.rs)
+checks. [Representation tests](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/tests/representation.rs)
 cover canonical bytes, complete retry identity, corruption, backup, and charges.
 
 ## Shared analysis values

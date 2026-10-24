@@ -80,7 +80,8 @@ async fn image_rejects_artifact_cycles() -> TestResult {
     assert!(fixture
         .engine
         .store()
-        .package_activation_page(None)?
+        .active_managed(&araphor_data::AnalysisReadControl::default())?
+        .1
         .is_empty());
     capacity_released(&fixture)?;
     Ok(())
@@ -97,7 +98,8 @@ async fn image_preserves_internal_calls() -> TestResult {
     assert!(fixture
         .engine
         .store()
-        .package_activation_page(None)?
+        .active_managed(&araphor_data::AnalysisReadControl::default())?
+        .1
         .is_empty());
     let before = fixture.engine.store().meta()?;
     let prepared = fixture

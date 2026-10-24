@@ -14,7 +14,12 @@ impl Fixture {
 
     fn released(&self, before: &AnalysisStoreMetaV1) -> TestResult {
         assert_eq!(self.query.store().meta()?, *before);
-        assert!(self.query.store().package_activation_page(None)?.is_empty());
+        assert!(self
+            .query
+            .store()
+            .active_managed(&araphor_data::AnalysisReadControl::default())?
+            .1
+            .is_empty());
         assert_eq!(self.query.memory().input_reserved(), 0);
         let permit = self.query.reserve_evaluation(Self::input()?.tenant_id)?;
         assert!(self

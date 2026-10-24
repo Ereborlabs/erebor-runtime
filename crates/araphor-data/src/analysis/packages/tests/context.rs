@@ -9,7 +9,9 @@ fn packages_retain_domain_references() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
-        let active = start(&store, "first")?;
+        let retained = package("first", "v1")?;
+        store.install_package(std::slice::from_ref(&retained), || Ok(()))?;
+        let installed = store.meta()?.commit_revision;
         let key = crate::AnalysisContextKeyV1 {
             tenant_id: [1; 16],
             owner_id: owner.into(),
@@ -24,7 +26,7 @@ fn packages_retain_domain_references() -> TestResult {
             sensitivity: crate::ContextSensitivityV1::Tenant,
             body: serde_json::to_vec(&serde_json::json!({"installed_packages": [{
                 "package_id": "first", "revision": "v1", "export": "model",
-                "generation": active.generation, "parameters": null,
+                "generation": installed, "parameters": null,
                 "root": {"package_id": "first", "revision": "v1"}
             }]}))?,
         })?;
@@ -41,7 +43,7 @@ fn packages_retain_domain_references() -> TestResult {
             sensitivity: crate::ContextSensitivityV1::Tenant,
             body: vec![0xff],
         })?;
-        store.remove_package(&active.key, active.generation, || Ok(()))?;
+        store.collect_package(retained.tenant_id, &retained.package_id, &retained.revision)?;
         store.collect_package_admissions()?;
         assert!(store.package_revision([1; 16], "first", "v1")?.is_some());
         let backup = root.join("backups/domain-reference");
@@ -61,10 +63,12 @@ fn packages_retain_domain_references() -> TestResult {
 fn domain_references_are_tenant_scoped() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let active = start(&store, "first")?;
+    let retained = package("first", "v1")?;
+    store.install_package(std::slice::from_ref(&retained), || Ok(()))?;
     let mut other = package("first", "v1")?;
     other.tenant_id = [2; 16];
     store.install_package(&[other], || Ok(()))?;
+    let installed = store.meta()?.commit_revision;
     store.commit_context(&crate::AnalysisContextVersionV1 {
         key: crate::AnalysisContextKeyV1 {
             tenant_id: [2; 16],
@@ -78,11 +82,11 @@ fn domain_references_are_tenant_scoped() -> TestResult {
         sensitivity: crate::ContextSensitivityV1::Tenant,
         body: serde_json::to_vec(&serde_json::json!({"installed_packages": [{
             "package_id": "first", "revision": "v1", "export": "model",
-            "generation": active.generation, "parameters": null,
+            "generation": installed, "parameters": null,
             "root": {"package_id": "first", "revision": "v1"}
         }]}))?,
     })?;
-    store.remove_package(&active.key, active.generation, || Ok(()))?;
+    store.collect_package(retained.tenant_id, &retained.package_id, &retained.revision)?;
     assert!(store.package_revision([1; 16], "first", "v1")?.is_none());
     assert!(store.package_revision([2; 16], "first", "v1")?.is_some());
     Ok(())

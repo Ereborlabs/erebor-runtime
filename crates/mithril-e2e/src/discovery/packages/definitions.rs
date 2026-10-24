@@ -37,7 +37,8 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
         .control
         .analysis_store()
         .ok_or("definition store absent")?;
-    let activations = data.package_activation_page(None)?;
+    let members = data.active_managed(&Default::default())?.1;
+    let lifecycle = data.subscribe_activations();
     let discovery = data.discovery_enabled();
     let sql = "SELECT count(*) AS count FROM events\n";
     let prql = "from events\naggregate {count = count this}\n";
@@ -132,7 +133,8 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
         serde_json::to_value(PackageResponseV1::from_bytes(&reply.result)?)?,
         serde_json::json!({"image": installed}),
     );
-    assert_eq!(data.package_activation_page(None)?, activations);
+    assert_eq!(data.active_managed(&Default::default())?.1, members);
+    assert!(!lifecycle.has_changed()?);
     assert_eq!(data.discovery_enabled(), discovery);
     for (definition, images) in definitions {
         let expected = definition.clone();
@@ -171,7 +173,8 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
         };
         assert_eq!(inspected.digest()?, revision);
         assert_eq!(inspected, admitted);
-        assert_eq!(data.package_activation_page(None)?, activations);
+        assert_eq!(data.active_managed(&Default::default())?.1, members);
+        assert!(!lifecycle.has_changed()?);
         assert_eq!(data.discovery_enabled(), discovery);
     }
     let body = "a".repeat(5 * 1_024 * 1_024);

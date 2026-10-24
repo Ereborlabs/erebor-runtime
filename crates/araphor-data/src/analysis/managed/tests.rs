@@ -533,9 +533,9 @@ fn managed_calls_commit_atomically() -> TestResult {
             .datasets[0]
             .batches
     );
-    let (headers, payloads, activation): (u64, u64, u64) = store.read_snapshot(|reader| reader.query_row(
-        "SELECT (SELECT count(*) FROM analysis_results WHERE processor_id LIKE 'managed-%' AND decode(body) LIKE '%\"arrow_ipc\":[]%'), (SELECT count(*) FROM managed_arrow), (SELECT count(*) FROM package_activations)", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).context(crate::AnalysisDatabaseSnafu { operation: "read managed BLOB qualification" }))?;
-    assert_eq!((headers, payloads, activation), (3, 11, 0));
+    let (headers, payloads, attempts): (u64, u64, u64) = store.read_snapshot(|reader| reader.query_row(
+        "SELECT (SELECT count(*) FROM analysis_results WHERE processor_id LIKE 'managed-%' AND decode(body) LIKE '%\"arrow_ipc\":[]%'), (SELECT count(*) FROM managed_arrow), (SELECT count(*) FROM managed_attempts)", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).context(crate::AnalysisDatabaseSnafu { operation: "read managed BLOB qualification" }))?;
+    assert_eq!((headers, payloads, attempts), (3, 11, 1));
     let roles = store.read_snapshot(|reader| {
         let mut statement = reader
             .prepare(
