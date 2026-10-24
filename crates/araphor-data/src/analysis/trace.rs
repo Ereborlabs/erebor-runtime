@@ -103,7 +103,7 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         permit: TraceReadPermit,
     ) -> Result<()> {
-        if tenant == [0; 16] || requests.len() > 1024 || requests.contains(&[0; 16]) {
+        if tenant == [0; 16] || requests.contains(&[0; 16]) {
             return crate::AnalysisReadDeniedSnafu.fail();
         }
         let mut reader = self.reader_wait(Some(control), permit.0)?;
@@ -271,16 +271,6 @@ impl AnalysisStore {
             return Ok(state);
         }
         self.require_capacity(false)?;
-        let (total, scoped): (u64, u64) = transaction.query_row(
-            "SELECT COUNT(*)::UBIGINT, COUNT(*) FILTER (WHERE tenant_id = ?)::UBIGINT FROM traces",
-            params![intent.tenant_id.as_slice()], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "count retained trace requests" })?;
-        if total >= 1024 || scoped >= 256 {
-            return crate::StorageCapacitySnafu {
-                resource: "retained trace requests",
-            }
-            .fail();
-        }
         let revision = Self::read_meta_from(&transaction, &self.root)?
             .commit_revision
             .checked_add(1)
@@ -915,6 +905,146 @@ mod tests {
             assert!(store.raw_pending.load(Ordering::Acquire));
             assert!(!store.raw_dirty.load(Ordering::Acquire));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn trace_selection_default_unbounded() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::{
+            AnalysisExtractLimits, AnalysisReadModeV1, AnalysisSelectionV1, AnalysisTableRead,
+            Selection,
+        };
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let store = AnalysisStore::open(&root)?;
+        let mut input = intent(1)?;
+        let mut requests = Vec::new();
+        let mut last = None;
+        for number in 1_u128..=1025 {
+            let request = number.to_be_bytes();
+            input.request_id = request;
+            input.bindings[0].identity.request_id = request;
+            input.bindings[0].identity.execution_id = request;
+            if number == 1025 {
+                input.bindings[0].identity.node_id = "node-last".into();
+                input.bindings[0].binding_id = [10; 16];
+            }
+            last = Some(store.accept_trace(&input)?);
+            requests.push(request);
+        }
+        let committed = store.meta()?.commit_revision;
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        let before = store.meta()?;
+        assert_eq!(before.commit_revision, committed);
+        let control = AnalysisReadControl::default();
+        store.check_trace_reads([1; 16], &requests, &control, store.reserve_trace_read()?)?;
+        let column = AnalysisStore::table_schemas()["traces"].index_of("request_id")?;
+        let columns =
+            std::collections::BTreeMap::from([("traces".into(), Some(BTreeSet::from([column])))]);
+        let read = |selection: &AnalysisSelectionV1, limits: AnalysisExtractLimits| {
+            store.read_tables(
+                selection,
+                AnalysisTableRead {
+                    requests: &columns,
+                    event_ranges: None,
+                    inputs: None,
+                    mode: AnalysisReadModeV1::Metadata,
+                    now: 100,
+                },
+                limits,
+                &control,
+            )
+        };
+        let mut all = AnalysisSelectionV1::new([1; 16], Vec::new());
+        all.traces = Selection::All;
+        let page = read(&all, AnalysisExtractLimits::default())?;
+        assert_eq!(page.extraction.trace_reads(), requests.as_slice());
+        assert_eq!(
+            page.tables
+                .get("traces")
+                .ok_or("trace table absent")?
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum::<usize>(),
+            1025
+        );
+        assert_eq!(page.extraction.trace_reads().last(), requests.last());
+        assert!(all.traces.is_all());
+        for binding in [false, true] {
+            let mut selected = all.clone();
+            if binding {
+                selected.binding_ids.push([10; 16]);
+            } else {
+                selected.nodes.push("node-last".into());
+            }
+            let original = selected.clone();
+            let page = read(&selected, AnalysisExtractLimits::default())?;
+            assert_eq!(page.extraction.trace_reads(), &requests[1024..]);
+            let keys = if binding { 2 } else { 1 };
+            let page = read(
+                &selected,
+                AnalysisExtractLimits {
+                    keys: Some(keys),
+                    ..Default::default()
+                },
+            )?;
+            assert_eq!(page.extraction.trace_reads(), &requests[1024..]);
+            assert!(matches!(
+                read(
+                    &selected,
+                    AnalysisExtractLimits {
+                        keys: Some(keys - 1),
+                        ..Default::default()
+                    },
+                ),
+                Err(crate::Error::AnalysisInputTooLarge {
+                    resource: "selected input keys",
+                    ..
+                })
+            ));
+            assert_eq!(selected, original);
+            assert_eq!(store.meta()?, before);
+        }
+        assert!(matches!(
+            read(
+                &all,
+                AnalysisExtractLimits {
+                    keys: Some(1024),
+                    ..Default::default()
+                },
+            ),
+            Err(crate::Error::AnalysisInputTooLarge { .. })
+        ));
+        for tenant in [[0; 16], [2; 16]] {
+            assert!(matches!(
+                store.check_trace_reads(tenant, &requests, &control, store.reserve_trace_read()?),
+                Err(crate::Error::AnalysisReadDenied { .. })
+            ));
+        }
+        for request in [[0; 16], 1026_u128.to_be_bytes()] {
+            assert!(matches!(
+                store.check_trace_reads([1; 16], &[request], &control, store.reserve_trace_read()?),
+                Err(crate::Error::AnalysisReadDenied { .. })
+            ));
+        }
+        let cancelled = AnalysisReadControl::default();
+        cancelled.cancel()?;
+        assert!(matches!(
+            store.check_trace_reads([1; 16], &requests, &cancelled, store.reserve_trace_read()?),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert_eq!(store.meta()?, before);
+        store.update_trace(&TraceStateV1 {
+            cancel_requested: true,
+            read_revoked: true,
+            ..last.ok_or("last trace absent")?
+        })?;
+        assert!(matches!(
+            store.check_trace_reads([1; 16], &requests, &control, store.reserve_trace_read()?),
+            Err(crate::Error::AnalysisReadDenied { .. })
+        ));
         Ok(())
     }
 }

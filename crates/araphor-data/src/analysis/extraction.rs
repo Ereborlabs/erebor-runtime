@@ -1224,7 +1224,7 @@ impl AnalysisStore {
         }
         if selection.traces.is_all() {
             let mut statement = snapshot.prepare(
-                "SELECT request_id FROM traces WHERE tenant_id = ? AND NOT read_revoked ORDER BY request_id LIMIT 257",
+                "SELECT request_id FROM traces WHERE tenant_id = ? AND NOT read_revoked ORDER BY request_id",
             ).context(AnalysisDatabaseSnafu { operation: "prepare tenant trace keys" })?;
             let rows = statement
                 .query_map(params![selection.tenant_id.as_slice()], |row| {

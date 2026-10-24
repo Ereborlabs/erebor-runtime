@@ -2973,3 +2973,40 @@ Scoped formatting, whitespace checks and the strict affected-owner Clippy
 command in the preceding result pass. Production Rust adds 33 and removes 26
 nonblank lines, excluding comments: net **+7**. Other TODO 13 boundaries remain
 open. Full-workspace CI, physical qualification and benchmarks were not run.
+
+
+## Trace selection without hidden count quotas
+
+### Intended end state
+
+Data admits and reads every permitted trace when no quota is configured.
+Configured storage and extraction quotas retain their existing owners.
+
+[AnalysisStore::accept_trace](../../crates/araphor-data/src/analysis/trace.rs) uses existing storage admission without fixed request-count gates.
+  -> [Trace receipt recovery](../../crates/araphor-data/src/analysis/schema.rs) accepts valid receipts without a total-count ceiling.
+  -> [Trace selection](../../crates/araphor-data/src/analysis/extraction.rs) reads tenant requests without the former SQL limit of 257.
+  -> [Trace selection](../../crates/araphor-data/src/analysis/extraction.rs) applies node and binding filters before adding trace IDs to the configured key quota.
+
+[AnalysisStore::check_trace_reads](../../crates/araphor-data/src/analysis/trace.rs) checks each requested identity with current revocation state.
+  -> [AnalysisReadControl](../../crates/araphor-data/src/analysis/read.rs) stops cancelled work.
+
+The connected test uses 1,025 public admissions and a real store reopen. It
+projects the request ID column explicitly. `requests["traces"] = None` retains
+a dependency without materializing that table. `Some(empty set)` is a different
+native projection that supports row-count queries. The existing key quota
+counts the resolved selection, including explicit binding IDs and selected
+trace IDs. The test checks a permitted match after the former selection
+boundary. A rejected key quota changes no stored state. Tenant, nil, missing, cancellation and revocation
+checks remain effective. The existing optional diagnostic-source test retains
+finite global and tenant quota proof.
+
+```sh
+target/debug/deps/araphor_data-4ab55c29d8526b42 analysis::trace::tests::trace_selection_default_unbounded --exact --nocapture
+target/debug/deps/araphor_data-4ab55c29d8526b42 analysis::trace::tests::diagnostic_sources_are_optional --exact --nocapture
+```
+
+Both distinct checks pass. The final connected case takes 89.69 seconds.
+Strict affected-owner Clippy, scoped formatting and whitespace checks pass.
+Production Rust adds three and removes 13 nonblank lines, excluding comments:
+net **-10**. Other TODO 13 boundaries remain open. Full-workspace CI, physical
+qualification and benchmarks were not run.

@@ -3370,3 +3370,28 @@ identify the existing owners. No resource manager, custom queue or polling
 loop is added. Production Rust adds 33 and removes 26 nonblank lines, excluding
 comments: net **+7**. Full-workspace CI, physical qualification and benchmarks
 were not run for this delivery.
+
+
+## Trace selection without hidden count quotas
+
+Result: **Done** for retained trace counts and selection under TODO 13.
+Other TODO 13 boundaries remain **Not done**.
+
+Data removes the fixed trace-request admission, current-read and recovery
+counts. The existing storage owner retains optional global and tenant
+`diagnostic_sources` quotas. Tenant, identity, revocation and per-receipt
+recovery checks remain. Selection reads every permitted request before node
+and binding filters. The configured key quota counts the resolved selection,
+including explicit binding IDs and selected trace IDs. Trace IDs are added
+only after these filters. A request-row limit cannot replace this quota.
+
+Two focused checks pass. The connected case accepts 1,025 requests through
+public Data APIs, reopens the store and projects all 1,025 Arrow rows. It checks
+a late node and binding match, configured key rejection, foreign and missing
+identities, cancellation and revocation. The existing diagnostic-source case
+retains configured storage-quota and reopen checks. The final connected run
+takes 89.69 seconds. Strict Clippy, scoped formatting and whitespace checks
+pass. The [source route](../guides/araphor-discovery-definition-review.md#trace-selection-without-hidden-count-quotas)
+records the exact selection. Production Rust adds three and removes 13
+nonblank lines, excluding comments: net **-10**. Full-workspace CI, physical
+qualification and benchmarks were not run.

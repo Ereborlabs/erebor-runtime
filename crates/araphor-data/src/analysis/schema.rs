@@ -387,7 +387,7 @@ impl AnalysisStore {
 
     fn validate_trace_receipts(writer: &Connection, root: &Path) -> Result<()> {
         let invalid: bool = writer.query_row(
-            "SELECT (SELECT COUNT(*) FROM trace_receipts) > 1024 OR EXISTS (
+            "SELECT EXISTS (
              SELECT 1 FROM trace_receipts WHERE octet_length(stream_key) <> 33 OR octet_length(tenant_id) <> 16
              OR octet_length(encode(identity_json)) > 4096 OR octet_length(encode(terminal)) > 4096
              OR last_sequence > 4096 OR output_bytes > 16777216 OR output_bytes < last_sequence
