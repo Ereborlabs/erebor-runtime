@@ -227,7 +227,6 @@ __discovery_merge_snapshot AS (
                 WHEN lifecycle_case IS NULL OR lifecycle_case NOT IN ('STARTUP', 'STEADY_WORK', 'PROBES',
                     'RESTART', 'ROLLOUT', 'SHUTDOWN', 'RECOVERY', 'SCHEDULED_WORK', 'APPROVED_MAINTENANCE')
                     THEN 'lifecycle case'
-                WHEN array_length(lifecycle_records) > 64 THEN 'lifecycle records'
                 ELSE lifecycle_error END ELSE NULL END),
             CASE WHEN (MIN(accepted_total) > CAST('18446744073709551615' AS DECIMAL(38, 0))
                     OR MIN(included_total) > CAST('18446744073709551615' AS DECIMAL(38, 0)))

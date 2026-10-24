@@ -197,8 +197,7 @@ __live_lifecycle_ids AS (
     SELECT "case", UNNEST(records) AS record_id FROM __live_input_lifecycle WHERE state = 'RECORDED'
 ),
 __live_lifecycle_records AS (
-    SELECT "case", array_agg(record_id ORDER BY record_id) AS records,
-        CASE WHEN COUNT(*) > 64 THEN 'lifecycle records' ELSE NULL END AS relational_error
+    SELECT "case", array_agg(record_id ORDER BY record_id) AS records
     FROM (SELECT DISTINCT "case", record_id FROM __live_lifecycle_ids) AS ids GROUP BY "case"
 ),
 __live_lifecycle AS (
@@ -207,7 +206,7 @@ __live_lifecycle AS (
         'records', COALESCE(records.records, []), 'reason', states.reason)
         ORDER BY cases.case_rank) FILTER (WHERE cases.case_rank IS NOT NULL) AS lifecycle,
         MIN(CASE WHEN cases.case_rank IS NULL THEN 'lifecycle case'
-            ELSE COALESCE(states.relational_error, records.relational_error) END) AS relational_error
+            ELSE states.relational_error END) AS relational_error
     FROM (VALUES (0, 'STARTUP'), (1, 'STEADY_WORK'), (2, 'PROBES'), (3, 'RESTART'),
         (4, 'ROLLOUT'), (5, 'SHUTDOWN'), (6, 'RECOVERY'), (7, 'SCHEDULED_WORK'),
         (8, 'APPROVED_MAINTENANCE')) AS cases(case_rank, lifecycle_case)

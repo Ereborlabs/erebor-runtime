@@ -182,6 +182,46 @@ async fn merge_matches_builtin() -> TestResult {
 }
 
 #[tokio::test]
+async fn merge_lifecycle_unbounded() -> TestResult {
+    let mut left = subset(1, 33);
+    let mut right = subset(34, 65);
+    for fixture in [&mut left, &mut right] {
+        fixture.lifecycle = vec![Lifecycle {
+            case: Case::Startup,
+            state: State::Recorded {
+                records: fixture
+                    .records
+                    .iter()
+                    .rev()
+                    .map(|record| record.id.clone())
+                    .collect(),
+            },
+        }];
+    }
+    let left = native_row(left.oracle()?)?;
+    let right = native_row(right.oracle()?)?;
+    let merged = query(Some(&left), &right).await?;
+    assert_eq!(merged, oracle(&left, &right)?);
+    let snapshot = merged.into_snapshot()?;
+    assert_eq!(
+        (snapshot.accepted_records, snapshot.included_records),
+        (65, 65)
+    );
+    let State::Recorded { records } = &snapshot.lifecycle[0].state else {
+        return Err("recorded lifecycle absent".into());
+    };
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.durable_cursor)
+            .collect::<Vec<_>>(),
+        (1..=65).collect::<Vec<_>>()
+    );
+    assert_eq!(snapshot.atoms[0].evidence_sample.len(), 8);
+    Ok(())
+}
+
+#[tokio::test]
 async fn merge_keeps_witness_order() -> TestResult {
     let mut left = subset(1, 12);
     let mut right = subset(13, 24);

@@ -3070,3 +3070,57 @@ and whitespace checks pass. Production Rust adds 177 and removes 219 nonblank
 lines, excluding comments: net **-42**. Tests, copied code and documents do not
 count as production reduction. Other TODO 13 boundaries remain open.
 Full-workspace CI, physical qualification and benchmarks were not run.
+
+
+## Native source and Discovery cardinality
+
+### Intended end state
+
+Valid source text, selectors and Discovery records use the existing native
+owners without separate count or byte ceilings at these entry points.
+
+[SourceInput::read](../../crates/araphor-cli/src/cli/araphor/args.rs) reads one complete file, standard input or inline source.
+  -> [AraphorCommand::prepare](../../crates/araphor-cli/src/cli/araphor/args.rs) keeps exclusive inputs, UTF-8, nonempty text, NUL and standard-input conflict checks.
+  -> [ClientGrpcOwner::selection_shape](../../crates/mithril-control/src/client_grpc/selection.rs) checks control characters, valid Node IDs and uniqueness.
+  -> [ClientGrpcOwner::select](../../crates/mithril-control/src/client_grpc/selection.rs) resolves the existing locator against current tenant inventory.
+
+[Discovery::evaluate](../../crates/araphor-analysis-builtins/src/discovery/mod.rs) uses the existing guest derivation.
+  -> [Atoms::record](../../crates/araphor-analysis-builtins/src/discovery/atoms.rs) retains distinct atoms and increments the checked included count.
+  -> [Discovery lifecycle merge](../../crates/araphor-analysis-builtins/src/discovery/ranges.rs) keeps sorted unique record IDs and rejects state conflicts.
+
+[Discovery live SQL](../../crates/araphor-analysis-builtins/src/discovery/sql/live.sql) aggregates all selected lifecycle record IDs with native DataFusion.
+  -> [Lifecycle state checks](../../crates/araphor-analysis-builtins/src/discovery/sql/live.sql) retain their relational error.
+  -> [Snapshot merge SQL](../../crates/araphor-analysis-builtins/src/discovery/sql/merge_snapshot.sql) keeps conflict and arithmetic checks without the former 64-record error.
+
+The CLI has no separate 16 KiB SQL, 1 MiB traversal JSON or 64 KiB trace-source
+ceiling. The selector routes have no 64/1024-node or full-string length ceiling.
+Locator component grammar and Node identity rules still apply. A long Pod
+locator uses valid DNS labels; a long single DNS label is still invalid.
+
+The guest accepts 50,001 distinct atoms and 65 lifecycle record IDs. Native SQL
+live and merge checks each process 65 IDs. The live case registers the typed
+lifecycle input before native planning, so the case reaches the removed SQL
+guard. Its invalid-state control still fails. Representative sample size eight
+is a result-summary rule and remains unchanged.
+
+Exact focused selectors for reproduction:
+
+- CLI `cli::araphor::args::tests::` selects seven argument checks.
+- Control `client_grpc::selection::tests::observability_grpc_locator`.
+- Builtins `discovery::tests::guest_derivation_unbounded`.
+- Analysis `package::tests::sql::recorded::live::live_lifecycle_unbounded` and `package::tests::sql::recorded::merge::merge_lifecycle_unbounded`.
+- Analysis `merge_rejects_conflicts` and `merge_checks_counter_overflow`.
+
+The three builtin invariants ran with:
+
+```sh
+target/debug/deps/araphor_analysis_builtins-7d0b03c751ea1918 sdk_derivation_fixture sdk_conflicting_record record_pages_keep_proof --nocapture --test-threads=2
+```
+
+All 16 distinct checks pass. The guest case takes 19.08 seconds, builtin
+invariants take 0.10 seconds and merge conflict/overflow takes 7.34 seconds.
+Strict Clippy passes for the five affected owners and the separate CLI target.
+The CLI Clippy check takes 5 minutes 35 seconds. Production Rust is net **-20**;
+builtin SQL is net **-2**. Counts exclude tests, comments and blank lines.
+Full-workspace CI, physical qualification and benchmarks were not run.
+Other TODO 13 boundaries and the overall reduction goal remain open.

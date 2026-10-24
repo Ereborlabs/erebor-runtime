@@ -169,8 +169,7 @@ impl Atoms {
         if atom.evidence_sample.len() < 8 {
             atom.evidence_sample.push(record.id.clone());
         }
-        Discovery::add(&mut self.counts.included, 1)?;
-        Discovery::require(self.values.len() <= 50_000, "atom count")
+        Discovery::add(&mut self.counts.included, 1)
     }
 
     fn unresolved(

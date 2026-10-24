@@ -186,6 +186,96 @@ fn sdk_derivation_fixture() -> TestResult {
 }
 
 #[test]
+fn guest_derivation_unbounded() -> TestResult {
+    let mut fixture = fixture()?;
+    let count = 50_001_u64;
+    let key = atom_key();
+    let mut records = Vec::new();
+    let mut contexts = Vec::new();
+    for cursor in 1..=count {
+        let id = DiscoveryRecordIdV1 {
+            stream: key.stream.clone(),
+            cpu_id: 3,
+            durable_cursor: cursor,
+        };
+        let mut atom = key.clone();
+        atom.process_instance_id = u128::from(cursor).to_be_bytes();
+        records.push(Record {
+            id: id.clone(),
+            bytes: cursor.to_be_bytes().to_vec().into(),
+            temporal: 1,
+            effect: key.effect.clone(),
+            generation: Some(key.generation),
+            original_sequence: Some(cursor),
+            source: None,
+        });
+        contexts.push(Context {
+            record_id: id,
+            atom_key: Some(atom),
+        });
+    }
+    let lifecycle = [(0, 64), (32, 65)].map(|(first, last)| Lifecycle {
+        case: DiscoveryLifecycleCaseV1::Startup,
+        state: DiscoveryLifecycleStateV1::Recorded {
+            records: records[first..last]
+                .iter()
+                .map(|record| record.id.clone())
+                .collect(),
+        },
+    });
+    fixture.evaluation.inputs[0].data = Record::encode(&records)?;
+    fixture.evaluation.inputs[1].data =
+        Rows::encode(&Discovery::port::<Context>("contexts"), &contexts)?;
+    fixture.evaluation.inputs[3].data =
+        Rows::encode(&Discovery::port::<Lifecycle>("lifecycle"), &lifecycle)?;
+    let port = Discovery::port::<Coverage>("coverage");
+    let mut ranges: Vec<Coverage> = Rows::decode(&port, &fixture.evaluation.inputs[5].data)?;
+    ranges[0].last_cursor = count;
+    ranges[0].expected_records = count;
+    fixture.evaluation.inputs[5].data = Rows::encode(&port, &ranges)?;
+    drop(records);
+    drop(contexts);
+    let report = Discovery::package().test(&fixture, Discovery::evaluate)?;
+    assert_eq!(report.package_id, "discovery");
+    assert_eq!(report.context, fixture.evaluation.context);
+    assert_eq!(
+        output::<Counts>(&report.output, "counts")?,
+        vec![Counts {
+            accepted: count,
+            included: count,
+            ..Default::default()
+        }]
+    );
+    let atoms = output::<Atom>(&report.output, "atoms")?;
+    assert_eq!(atoms.len(), count as usize);
+    assert!(atoms.windows(2).all(|pair| pair[0].key < pair[1].key));
+    assert!(atoms.iter().all(|atom| {
+        atom.count == 1
+            && atom.first_cursor == atom.last_cursor
+            && atom.key.process_instance_id == u128::from(atom.first_cursor).to_be_bytes()
+            && atom.key.physical_result == DiscoveryPhysicalResultV1::Prevented
+            && atom.evidence_sample.len() == 1
+            && atom.evidence_sample[0].stream == key.stream
+            && atom.evidence_sample[0].cpu_id == 3
+            && atom.evidence_sample[0].durable_cursor == atom.first_cursor
+    }));
+    assert_eq!(output::<Coverage>(&report.output, "coverage")?, ranges);
+    let lifecycle = output::<Lifecycle>(&report.output, "lifecycle")?;
+    assert_eq!(lifecycle.len(), DiscoveryLifecycleCaseV1::ALL.len());
+    let DiscoveryLifecycleStateV1::Recorded { records } = &lifecycle[0].state else {
+        return Err("recorded lifecycle absent".into());
+    };
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.durable_cursor)
+            .collect::<Vec<_>>(),
+        (1..=65).collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+#[test]
 fn sdk_conflicting_record() -> TestResult {
     let mut fixture = fixture()?;
     let input = fixture

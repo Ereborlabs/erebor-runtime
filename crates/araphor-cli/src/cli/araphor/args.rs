@@ -162,8 +162,7 @@ impl AraphorCommand {
                         field: "SQL and graph input cannot both use stdin"
                     },
                 );
-                let bytes =
-                    SourceInput::read(args.file.as_deref(), args.sql.as_deref(), 16 * 1024)?;
+                let bytes = SourceInput::read(args.file.as_deref(), args.sql.as_deref())?;
                 let sql = String::from_utf8(bytes)
                     .map_err(|_| InvalidSnafu { field: "SQL UTF-8" }.build())?;
                 Ok(Prepared::Sql {
@@ -178,7 +177,7 @@ impl AraphorCommand {
                             .graph
                             .as_deref()
                             .map(|path| {
-                                SourceInput::read(Some(path), None, 1024 * 1024)
+                                SourceInput::read(Some(path), None)
                                     .map(|definition_json| wire::GraphTraversal { definition_json })
                             })
                             .transpose()?,
@@ -207,10 +206,10 @@ impl AraphorCommand {
                 );
                 let source = match (&args.file, &args.expression, &args.recipe) {
                     (Some(path), None, None) => wire::submit_trace_request::Source::Script(
-                        SourceInput::read(Some(path), None, 64 * 1024)?,
+                        SourceInput::read(Some(path), None)?,
                     ),
                     (None, Some(source), None) => wire::submit_trace_request::Source::Script(
-                        SourceInput::read(None, Some(source), 64 * 1024)?,
+                        SourceInput::read(None, Some(source))?,
                     ),
                     (None, None, Some(recipe))
                         if !recipe.trim().is_empty() && recipe.len() <= 128 =>
@@ -346,18 +345,12 @@ impl TryFrom<&SelectionArgs> for wire::InputSelection {
             .chain(selection.nodes.iter())
         {
             ensure!(
-                !value.trim().is_empty() && value.len() <= 1024 && !value.contains('\0'),
+                !value.trim().is_empty() && !value.contains('\0'),
                 InvalidSnafu {
-                    field: "selection is empty or exceeds its bound"
+                    field: "selection is empty or contains NUL"
                 },
             );
         }
-        ensure!(
-            selection.nodes.len() <= 64,
-            InvalidSnafu {
-                field: "too many node selectors"
-            }
-        );
         Ok(Self {
             target: selection.target.clone().unwrap_or_default(),
             cluster: selection.cluster.clone().unwrap_or_default(),
@@ -370,24 +363,15 @@ impl TryFrom<&SelectionArgs> for wire::InputSelection {
 struct SourceInput;
 
 impl SourceInput {
-    fn read(path: Option<&Path>, inline: Option<&str>, limit: usize) -> Result<Vec<u8>> {
+    fn read(path: Option<&Path>, inline: Option<&str>) -> Result<Vec<u8>> {
         let bytes = match (path, inline) {
-            (None, Some(value)) => {
-                ensure!(
-                    value.len() <= limit,
-                    InvalidSnafu {
-                        field: "source byte limit"
-                    }
-                );
-                value.as_bytes().to_vec()
-            }
+            (None, Some(value)) => value.as_bytes().to_vec(),
             (Some(path), None) => {
                 let mut bytes = Vec::new();
                 if path == Path::new("-") {
-                    io::stdin().take(limit as u64 + 1).read_to_end(&mut bytes)
+                    io::stdin().read_to_end(&mut bytes)
                 } else {
-                    File::open(path)
-                        .and_then(|file| file.take(limit as u64 + 1).read_to_end(&mut bytes))
+                    File::open(path).and_then(|mut file| file.read_to_end(&mut bytes))
                 }
                 .context(InputSnafu)?;
                 bytes
@@ -400,12 +384,11 @@ impl SourceInput {
             }
         };
         ensure!(
-            bytes.len() <= limit
-                && !bytes.contains(&0)
+            !bytes.contains(&0)
                 && std::str::from_utf8(&bytes).is_ok()
                 && !bytes.iter().all(u8::is_ascii_whitespace),
             InvalidSnafu {
-                field: "source is empty, invalid UTF-8, contains NUL, or exceeds its bound"
+                field: "source is empty, invalid UTF-8, or contains NUL"
             },
         );
         Ok(bytes)
@@ -518,23 +501,31 @@ mod tests {
                 node_ids: vec!["node-a".into(), "node-b".into()],
             })
         );
-        let oversized = "x".repeat(1025);
         for flag in ["--target", "--cluster", "--container", "--node"] {
-            for invalid in ["", " ", "\0", oversized.as_str()] {
+            for invalid in ["", " ", "\0"] {
                 let args = Cli::try_parse_from(["araphor", "sql", "SELECT 1", flag, invalid])
                     .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
                 assert!(prepare(args).is_err());
             }
         }
-        let mut selection = SelectionArgs {
-            target: None,
+        let name = [
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61),
+        ]
+        .join(".");
+        let target = format!("pod/{}/{name}", "n".repeat(63));
+        assert!(target.len() > 256);
+        let selection = SelectionArgs {
+            target: Some(target.clone()),
             cluster: None,
             container: None,
-            nodes: vec!["node-a".into(); 64],
+            nodes: (0..1025).map(|node| format!("node-{node}")).collect(),
         };
-        assert!(wire::InputSelection::try_from(&selection).is_ok());
-        selection.nodes.push("node-b".into());
-        assert!(wire::InputSelection::try_from(&selection).is_err());
+        let request = wire::InputSelection::try_from(&selection)?;
+        assert_eq!(request.node_ids, selection.nodes);
+        assert_eq!(request.target, target);
         Ok(())
     }
 
@@ -645,8 +636,8 @@ mod tests {
                 b"BEGIN { exit(); }".to_vec()
             ))
         );
-        assert!(SourceInput::read(None, Some("\0"), 1).is_err());
-        assert!(SourceInput::read(None, Some("  "), 2).is_err());
+        assert!(SourceInput::read(None, Some("\0")).is_err());
+        assert!(SourceInput::read(None, Some("  ")).is_err());
         Ok(())
     }
 
@@ -684,7 +675,9 @@ mod tests {
             request.selection.map(|selection| selection.node_ids),
             Some(vec!["node-a".into()])
         );
-        std::fs::write(file.path(), vec![b'x'; 1024 * 1024 + 1])?;
+        let definition = format!("{definition}{}", " ".repeat(1024 * 1024));
+        let _: serde_json::Value = serde_json::from_str(&definition)?;
+        std::fs::write(file.path(), &definition)?;
         let args = Cli::try_parse_from([
             "araphor",
             "sql",
@@ -693,7 +686,18 @@ mod tests {
             path,
         ])
         .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
-        assert!(prepare(args).is_err());
+        let Prepared::Sql { request } = prepare(args)? else {
+            return Err("SQL request absent".into());
+        };
+        assert_eq!(
+            request
+                .graph_traversal
+                .ok_or("graph input absent")?
+                .definition_json,
+            definition.as_bytes()
+        );
+        std::fs::write(file.path(), [0xff_u8])?;
+        assert!(SourceInput::read(Some(file.path()), None).is_err());
         assert!(Cli::try_parse_from([
             "araphor",
             "sql",
@@ -706,6 +710,30 @@ mod tests {
         let args = Cli::try_parse_from(["araphor", "sql", "--file", "-", "--graph", "-"])
             .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
         assert!(prepare(args).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn sql_source_unbounded() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let sql = format!("SELECT 1 /* {} */", "x".repeat(16 * 1024));
+        let args = Cli::try_parse_from(["araphor", "sql", sql.as_str()])?;
+        let Prepared::Sql { request } = prepare(args)? else {
+            return Err("SQL request absent".into());
+        };
+        assert_eq!(request.sql, sql);
+        let file = crate::cli::test_support::TempJsonFile::write(&sql)?;
+        let args = Cli::try_parse_from([
+            "araphor",
+            "sql",
+            "--file",
+            file.path().to_str().ok_or("SQL path")?,
+        ])?;
+        let Prepared::Sql { request } = prepare(args)? else {
+            return Err("SQL request absent".into());
+        };
+        assert_eq!(request.sql, sql);
+        assert!(SourceInput::read(Some(file.path()), Some(&sql)).is_err());
+        assert!(SourceInput::read(None, None).is_err());
         Ok(())
     }
 }

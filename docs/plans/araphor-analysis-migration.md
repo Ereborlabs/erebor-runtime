@@ -3430,3 +3430,29 @@ identify the owners. Strict Clippy, scoped formatting and whitespace checks
 pass. Production Rust adds 177 and removes 219 nonblank lines, excluding
 comments: net **-42**. Full-workspace CI, physical qualification and benchmarks
 were not run.
+
+
+## Native source and Discovery cardinality
+
+Result: **Done** for CLI source size, selector count and Discovery cardinality
+ceilings under TODO 13. The [source route](../guides/araphor-discovery-definition-review.md#native-source-and-discovery-cardinality)
+identifies the unchanged parsing and computation owners.
+
+`SourceInput` reads the complete file, standard input or inline value. It keeps
+exclusive inputs, valid UTF-8, nonempty text and NUL rejection. CLI and Control
+remove their duplicate selector length and node-count ceilings. Control keeps
+locator grammar, valid unique Node IDs, current inventory and tenant checks.
+
+Builtin Discovery removes the 50,000-atom and 64-lifecycle-record ceilings.
+Native DataFusion live and merge SQL remove only the lifecycle count error.
+Lifecycle state, identity, conflict, deduplication and checked counter rules
+remain. Representative samples still contain at most eight records.
+
+All 16 distinct focused checks pass: seven CLI, one Control locator, one guest
+cardinality, three builtin invariants, two native SQL cardinality and two merge
+conflict/overflow checks. The guest case takes 19.08 seconds; the three builtin
+invariants take 0.10 seconds; merge conflict/overflow takes 7.34 seconds.
+Strict affected-owner and separate CLI Clippy checks pass. Production Rust is
+net **-20** lines; builtin SQL is net **-2**, counted separately. Tests and
+documents are excluded. TODO 13, full migration and the 6,000-line reduction
+goal remain **Not done**. Full-workspace CI and physical checks did not run.

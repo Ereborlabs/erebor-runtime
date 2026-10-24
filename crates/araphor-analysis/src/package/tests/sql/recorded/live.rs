@@ -303,6 +303,109 @@ fn defaults(schema: &Schema) -> Value {
 }
 
 #[tokio::test]
+async fn live_lifecycle_unbounded() -> TestResult {
+    let mut live = Live::new(65);
+    live.records.lifecycle = [(0, 64), (32, 65)]
+        .into_iter()
+        .map(|(first, last)| Lifecycle {
+            case: Case::Startup,
+            state: State::Recorded {
+                records: live.records.records[first..last]
+                    .iter()
+                    .map(|record| record.id.clone())
+                    .collect(),
+            },
+        })
+        .collect();
+    let fixture = live.fixture(false)?;
+    let inputs = live.records.fixture(false)?;
+    for (name, source) in [
+        ("state", "discovery_state"),
+        ("reports", "coverage"),
+        ("policies", "compiled_policies"),
+        ("__live_input_records", "events"),
+    ] {
+        let frame = native_frame(&fixture.context, &format!("SELECT * FROM {source}")).await?;
+        fixture.context.register_table(name, frame.into_view())?;
+    }
+    for (name, source) in [
+        ("metadata", "input_metadata"),
+        ("__live_input_exclusions", "input_exclusions"),
+        ("__live_input_lifecycle", "input_lifecycle"),
+    ] {
+        let frame = native_frame(&inputs.context, &format!("SELECT * FROM {source}")).await?;
+        fixture.context.register_table(name, frame.into_view())?;
+    }
+    let program = Discovery::live_program(
+        &crate::package::builtin::query(builtin::sql::CONTEXT_BINDINGS_SQL)?.to_string(),
+        &crate::package::builtin::query(builtin::sql::COVERAGE_RANGES_SQL)?.to_string(),
+    );
+    let projection = NativeSnapshot::schema()
+        .fields()
+        .iter()
+        .map(|field| format!("snapshot['{}'] AS \"{}\"", field.name(), field.name()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("SELECT {projection} FROM ({program}) AS live");
+    let frame = native_frame(&fixture.context, &sql).await?;
+    frame.logical_plan().apply_with_subqueries(|plan| {
+        assert!(!matches!(plan, LogicalPlan::Extension(_)));
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    let schema = Arc::new(frame.schema().as_arrow().clone());
+    let batches = frame.collect().await?;
+    let mut snapshots: Vec<NativeSnapshot> =
+        serde_arrow::from_record_batch(&concat_batches(&schema, &batches)?)?;
+    assert_eq!(snapshots.len(), 1);
+    let snapshot = snapshots.remove(0);
+    assert_eq!(
+        (snapshot.accepted_records, snapshot.unresolved_records),
+        (65, 65)
+    );
+    let snapshot = snapshot.into_snapshot()?;
+    let State::Recorded { records } = &snapshot.lifecycle[0].state else {
+        return Err("recorded lifecycle absent".into());
+    };
+    assert_eq!(
+        records,
+        &live
+            .records
+            .records
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>()
+    );
+    let lifecycle = inputs
+        .context
+        .table_provider("input_lifecycle")
+        .await?
+        .schema();
+    let mut invalid: Vec<_> = live
+        .records
+        .lifecycle
+        .iter()
+        .map(FlatLifecycle::from)
+        .collect();
+    invalid[0].state = "INVALID".into();
+    fixture.context.deregister_table("__live_input_lifecycle")?;
+    Recorded::table(
+        &fixture,
+        "__live_input_lifecycle",
+        lifecycle.fields().to_vec(),
+        &invalid,
+        false,
+    )?;
+    let error = native_frame(&fixture.context, &sql)
+        .await?
+        .collect()
+        .await
+        .err()
+        .ok_or("invalid lifecycle state accepted")?;
+    assert!(error.to_string().contains("lifecycle state"), "{error:?}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn live_cold_append_settles() -> TestResult {
     let mut live = Live::new(2);
     let mut rows = live.query(false).await?;

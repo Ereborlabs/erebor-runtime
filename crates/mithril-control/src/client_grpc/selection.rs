@@ -166,15 +166,14 @@ impl ClientGrpcOwner {
 
     pub(super) fn selection_shape(input: &proto::InputSelection) -> Result<(), Status> {
         for value in [&input.target, &input.cluster, &input.container] {
-            if value.len() > 256 || value.chars().any(char::is_control) {
+            if value.chars().any(char::is_control) {
                 return Err(Status::invalid_argument("The input selection is invalid."));
             }
         }
-        if input.node_ids.len() > 1024
-            || input
-                .node_ids
-                .iter()
-                .any(|node| !araphor_data::node_id_is_valid(node))
+        if input
+            .node_ids
+            .iter()
+            .any(|node| !araphor_data::node_id_is_valid(node))
             || input
                 .node_ids
                 .iter()
@@ -205,6 +204,30 @@ mod tests {
         ] {
             assert!(Locator::try_from(value).is_ok(), "{value}");
         }
+        let name = [
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61),
+        ]
+        .join(".");
+        let target = format!("pod/{}/{name}", "n".repeat(63));
+        assert!(target.len() > 256);
+        assert!(Locator::try_from(target.as_str()).is_ok());
+        let mut input = proto::InputSelection {
+            target,
+            node_ids: (0..1025).map(|node| format!("node-{node}")).collect(),
+            ..Default::default()
+        };
+        assert!(ClientGrpcOwner::selection_shape(&input).is_ok());
+        input.node_ids.push(input.node_ids[0].clone());
+        assert!(ClientGrpcOwner::selection_shape(&input).is_err());
+        input.node_ids.pop();
+        input.node_ids[0] = "node\n".into();
+        assert!(ClientGrpcOwner::selection_shape(&input).is_err());
+        input.node_ids.clear();
+        input.target.push('\n');
+        assert!(ClientGrpcOwner::selection_shape(&input).is_err());
         for value in [
             "",
             "pod/api",

@@ -69,7 +69,6 @@ impl Discovery {
                     records.extend(incoming);
                     records.sort();
                     records.dedup();
-                    Self::require(records.len() <= 64, "lifecycle records")?;
                 }
                 (state, incoming) => Self::same(*state == incoming, "lifecycle state")?,
             }
