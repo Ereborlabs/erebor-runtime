@@ -41,7 +41,7 @@ mod schema;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use journal::{Changes, JournalExec};
+pub(crate) use journal::Changes;
 pub use rows::ArrowSnapshot;
 pub(crate) use rows::Captured;
 
@@ -696,6 +696,18 @@ impl SourceData {
             .data_source()
             .as_any()
             .downcast_ref::<Self>()
+    }
+
+    pub(crate) fn supports_changes(&self) -> Result<bool> {
+        if self.origin.durable() != Some("events") || self.fetch.is_some() {
+            return Ok(false);
+        }
+        if SourceSnapshot::schemas()["events"].project(&self.indices)? != *self.schema {
+            return Err(DataFusionError::Execution(
+                "maintained source schema changed".into(),
+            ));
+        }
+        Ok(true)
     }
 }
 

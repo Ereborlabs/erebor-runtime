@@ -25,7 +25,7 @@ use snafu::ResultExt as _;
 
 use super::progress::Progress;
 use super::{Output, OutputStream, Run};
-use crate::sources::{JournalExec, SourceData, SourceSnapshot};
+use crate::sources::{SourceData, SourceSnapshot};
 use crate::{Result, SqlSnafu};
 
 mod kernel;
@@ -44,8 +44,8 @@ pub(crate) struct SubscribeExec {
 
 #[derive(Debug)]
 enum Mode {
-    Count {
-        journal: Option<Arc<dyn ExecutionPlan>>,
+    Replace {
+        maintainable: bool,
         compiled: Option<Arc<Compiled>>,
     },
     Page,
@@ -65,21 +65,11 @@ type Initial = (
 );
 
 impl SubscribeExec {
-    pub(crate) fn new(
-        input: Arc<dyn ExecutionPlan>,
-        journal: Option<Arc<dyn ExecutionPlan>>,
-    ) -> NativeResult<Self> {
-        if journal
-            .as_ref()
-            .is_some_and(|source| !source.as_any().is::<JournalExec>())
-        {
-            return Err(DataFusionError::Internal(
-                "Subscribe source is not a committed journal".into(),
-            ));
-        }
-        let compiled = match journal.as_ref() {
-            Some(source) => Self::compile(&input, source)?,
-            None => None,
+    pub(crate) fn new(input: Arc<dyn ExecutionPlan>, maintainable: bool) -> NativeResult<Self> {
+        let compiled = if maintainable {
+            Self::compile(&input)?
+        } else {
+            None
         };
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(input.schema()),
@@ -91,8 +81,8 @@ impl SubscribeExec {
         ));
         Ok(Self {
             input,
-            mode: Mode::Count {
-                journal,
+            mode: Mode::Replace {
+                maintainable,
                 compiled: compiled.map(Arc::new),
             },
             properties,
@@ -120,10 +110,7 @@ impl SubscribeExec {
         })
     }
 
-    fn compile(
-        input: &Arc<dyn ExecutionPlan>,
-        journal: &Arc<dyn ExecutionPlan>,
-    ) -> NativeResult<Option<Compiled>> {
+    fn compile(input: &Arc<dyn ExecutionPlan>) -> NativeResult<Option<Compiled>> {
         let mut node = Arc::clone(input);
         let aggregate = loop {
             if node.as_any().is::<AggregateExec>() {
@@ -154,8 +141,8 @@ impl SubscribeExec {
         }
         node = Arc::clone(definition.input());
         loop {
-            if SourceData::from_plan(node.as_ref()).is_some() {
-                if node.fetch().is_some() {
+            if let Some(source) = SourceData::from_plan(node.as_ref()) {
+                if !source.supports_changes()? {
                     return Ok(None);
                 }
                 break;
@@ -171,11 +158,6 @@ impl SubscribeExec {
                 return Ok(None);
             };
             node = Arc::clone(child);
-        }
-        if journal.schema() != node.schema() {
-            return Err(DataFusionError::Execution(
-                "maintained source scan changed".into(),
-            ));
         }
         Ok(Some(Compiled {
             aggregate,
@@ -291,7 +273,7 @@ impl SubscribeExec {
     pub(super) fn maintained(&self) -> bool {
         matches!(
             &self.mode,
-            Mode::Count {
+            Mode::Replace {
                 compiled: Some(_),
                 ..
             }
@@ -352,11 +334,7 @@ impl ExecutionPlan for SubscribeExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        let mut children = vec![&self.input];
-        if let Mode::Count { journal, .. } = &self.mode {
-            children.extend(journal.iter());
-        }
-        children
+        vec![&self.input]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -376,8 +354,8 @@ impl ExecutionPlan for SubscribeExec {
             ));
         }
         let input = children.remove(0);
-        match self.mode {
-            Mode::Count { .. } => Ok(Arc::new(Self::new(input, children.into_iter().next())?)),
+        match &self.mode {
+            Mode::Replace { maintainable, .. } => Ok(Arc::new(Self::new(input, *maintainable)?)),
             Mode::Page => Ok(Arc::new(Self::page(input, self.schema())?)),
         }
     }

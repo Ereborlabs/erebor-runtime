@@ -1554,54 +1554,54 @@ async fn native_subscribe_execution() {
         };
 
         let children = physical.children();
-        assert_eq!(children.len(), 2);
+        assert_eq!(children.len(), 1);
         assert_eq!(children[0].properties().boundedness, Boundedness::Bounded);
         let mut scans = 0;
-        let mut scan_schema = None;
+        let mut source = None;
         children[0]
             .apply(|node| {
                 if crate::sources::SourceData::from_plan(node.as_ref()).is_some() {
                     scans += 1;
-                    scan_schema = Some(node.schema());
+                    source = Some(Arc::clone(node));
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
             .unwrap();
         assert_eq!(scans, 1);
-        assert!(children[1].as_any().is::<crate::sources::JournalExec>());
-        assert_eq!(children[1].schema(), scan_schema.unwrap());
+        let source = source.unwrap();
+        assert!(crate::sources::SourceData::from_plan(source.as_ref())
+            .unwrap()
+            .supports_changes()
+            .unwrap());
         assert_eq!(
-            children[1].properties().boundedness,
+            physical.properties().boundedness,
             Boundedness::Unbounded {
                 requires_infinite_memory: false,
             }
         );
         assert_eq!(
-            children[1].properties().emission_type,
+            physical.properties().emission_type,
             EmissionType::Incremental
         );
         assert_eq!(
-            children[1].properties().scheduling_type,
+            source.properties().scheduling_type,
             SchedulingType::Cooperative
         );
-        match children[1].execute(0, state.task_ctx()) {
-            Err(DataFusionError::NotImplemented(_)) => {}
-            Err(error) => panic!("journal returned {error:?}"),
-            Ok(_) => panic!("signed changes became unsigned rows"),
-        }
-        let journal = Arc::clone(children[1]);
+        assert!(matches!(
+            physical.required_input_distribution().as_slice(),
+            [datafusion::physical_plan::Distribution::SinglePartition]
+        ));
         let context = state.task_ctx();
         let engine = Arc::clone(&fixture.engine);
         let identity = fixture.source.clone();
         let (ready, captured) = tokio::sync::oneshot::channel();
         let (advance, committed) = tokio::sync::oneshot::channel();
         let worker = tokio::spawn(async move {
-            let mut input = journal
-                .as_any()
-                .downcast_ref::<crate::sources::JournalExec>()
-                .unwrap()
-                .open(context)
-                .unwrap();
+            let mut input = crate::sources::Changes::new(
+                crate::sources::SourceData::from_plan(source.as_ref()).unwrap(),
+                context,
+            )
+            .unwrap();
             let permit = Arc::new(engine.reserve_evaluation(identity.tenant_id).unwrap());
             let first = input.capture(permit, 2_000_000_000).await.unwrap();
             assert!(first.before.is_empty());
@@ -1798,6 +1798,121 @@ async fn native_subscribe_execution() {
             .unwrap(),
     );
     assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn replacement_reads_source_bounds() {
+    use datafusion::common::tree_node::Transformed;
+    use datafusion::logical_expr::{col, lit};
+
+    let fixture = Fixture::new(Limits::default());
+    fixture.commit(&fixture.source, 1, 3, 1_000_000_000);
+    let control = Arc::new(AnalysisReadControl::default());
+    let (plan, sources) = fixture
+        .engine
+        .prepare(
+            "SELECT COUNT(*) FROM events WHERE source_cursor >= 1",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let session = fixture
+        .engine
+        .session(fixture.selection(), &control, 2_000_000_000)
+        .unwrap();
+    let mut state = session.state().unwrap();
+    state
+        .config_mut()
+        .set_extension(Arc::new(crate::stream::Run {
+            session: Arc::new(session.clone()),
+            sources,
+            plan: Arc::new(plan.clone()),
+            clock: TestClock::new(2_000_000_000),
+            follow: true,
+            operation: Operation::Replace,
+            window: None,
+            resume: None,
+            binding: [0; 32],
+            resume_expiry: None,
+            resume_pending: false,
+            managed: None,
+        }));
+    let logical = crate::planner::subscription::Subscribe::runtime(plan, false).unwrap();
+    let physical = session.physical(&logical, &state).await.unwrap();
+    let child = Arc::clone(physical.children()[0]);
+    let mut source = None;
+    child
+        .apply(|node| {
+            if crate::sources::SourceData::from_plan(node.as_ref()).is_some() {
+                assert!(source.is_none());
+                source = Some(Arc::clone(node));
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .unwrap();
+    let source = source.unwrap();
+    let canonical = &SourceSnapshot::schemas()["events"];
+    let columns = source
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| canonical.index_of(field.name()).unwrap())
+        .collect();
+    let filtered = SourceSnapshot::providers()["events"]
+        .scan(
+            &state,
+            Some(&columns),
+            &[col("source_cursor").gt_eq(lit(2u64))],
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(filtered.schema(), source.schema());
+    let child = child
+        .transform_up(|node| {
+            Ok(if Arc::ptr_eq(&node, &source) {
+                Transformed::yes(Arc::clone(&filtered))
+            } else {
+                Transformed::no(node)
+            })
+        })
+        .unwrap()
+        .data;
+    let replaced = physical.with_new_children(vec![child]).unwrap();
+    let subscription = replaced
+        .as_any()
+        .downcast_ref::<crate::stream::physical::SubscribeExec>()
+        .unwrap();
+    let mut stream = subscription
+        .execute_committed(0, state.task_ctx(), None)
+        .unwrap();
+    for (count, cursors) in [(2, vec![2, 3]), (3, vec![2, 3, 4])] {
+        let event = stream.next().await.unwrap().unwrap();
+        let batches = event.output.batches.as_ref().unwrap();
+        assert_eq!(
+            ScalarValue::try_from_array(batches[0].column(0), 0).unwrap(),
+            ScalarValue::Int64(Some(count))
+        );
+        assert_eq!(
+            event
+                .output
+                .snapshot
+                .witnesses
+                .iter()
+                .map(|witness| witness.cursor)
+                .collect::<Vec<_>>(),
+            cursors
+        );
+        assert_eq!(
+            event.revision,
+            fixture.store.meta().unwrap().commit_revision
+        );
+        drop(event);
+        if count == 2 {
+            fixture.commit(&fixture.source, 4, 1, 1_500_000_000);
+        }
+    }
+    control.cancel().unwrap();
 }
 
 #[tokio::test]

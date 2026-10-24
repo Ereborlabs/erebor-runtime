@@ -11,7 +11,7 @@ use super::{kernel::Kernel, Compiled, Mode, SubscribeExec};
 use crate::definition::CapturedExecution;
 use crate::execution::{PendingRead, PhysicalStream, Read, Session};
 use crate::follow::Operation;
-use crate::sources::{ArrowSnapshot, Changes, JournalExec};
+use crate::sources::{ArrowSnapshot, Changes, SourceData};
 use crate::stream::progress::{Progress, Wake};
 use crate::stream::{Event, Output, Run, StreamError};
 use crate::{Result, SqlSnafu};
@@ -56,19 +56,17 @@ impl Runtime {
         progress: Progress,
     ) -> Result<Self> {
         let maintained = match &physical.mode {
-            Mode::Count {
-                journal: Some(journal),
+            Mode::Replace {
                 compiled: Some(compiled),
+                ..
             } if run.follow
                 && run.window.is_none()
                 && run.sources().len() == 1
                 && run.sources().contains_key("events") =>
             {
-                let journal = journal
-                    .as_any()
-                    .downcast_ref::<JournalExec>()
-                    .ok_or_else(Self::state_error)?
-                    .open(Arc::clone(&context))?;
+                let source = SourceData::from_plan(compiled.source.as_ref())
+                    .ok_or_else(Self::state_error)?;
+                let journal = Changes::new(source, Arc::clone(&context))?;
                 let aggregate = compiled
                     .aggregate
                     .as_any()

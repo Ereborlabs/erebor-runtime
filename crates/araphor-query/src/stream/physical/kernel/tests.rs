@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 use super::super::SubscribeExec;
 use super::*;
 use crate::execution::{Engine, Limits};
-use crate::sources::{JournalExec, SourceData, SourceSnapshot};
+use crate::sources::{SourceData, SourceSnapshot};
 use crate::stream::Change;
 
 type Input = Pin<Box<dyn Stream<Item = Result<Change>> + Send>>;
@@ -197,18 +197,18 @@ impl Fixture {
             .await
             .unwrap();
         let plan = state.create_physical_plan(&plan).await.unwrap();
-        let mut journal = None;
+        let mut source = None;
         plan.apply(|node| {
-            if let Some(source) = SourceData::from_plan(node.as_ref()) {
-                assert!(journal.is_none());
-                assert_eq!(source.origin.durable(), Some("events"));
-                journal =
-                    Some(Arc::new(JournalExec::new(source).unwrap()) as Arc<dyn ExecutionPlan>);
+            if let Some(data) = SourceData::from_plan(node.as_ref()) {
+                assert!(source.is_none());
+                assert_eq!(data.origin.durable(), Some("events"));
+                assert!(data.supports_changes().unwrap());
+                source = Some(Arc::clone(node));
             }
             Ok(TreeNodeRecursion::Continue)
         })
         .unwrap();
-        (plan, journal.unwrap())
+        (plan, source.unwrap())
     }
 
     fn batch(&self, values: Vec<Option<i32>>, flags: Vec<Option<bool>>) -> RecordBatch {
@@ -486,8 +486,9 @@ async fn replacement_counts_both_signs() {
 #[tokio::test]
 async fn unsupported_aggregates_are_explicit() {
     let fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
-    let (single, journal) = fixture.canonical("SELECT COUNT(*) FROM events").await;
-    let compiled = SubscribeExec::compile(&single, &journal).unwrap().unwrap();
+    let (single, source) = fixture.canonical("SELECT COUNT(*) FROM events").await;
+    let compiled = SubscribeExec::compile(&single).unwrap().unwrap();
+    assert!(Arc::ptr_eq(&compiled.source, &source));
     assert_eq!(
         compiled
             .aggregate
@@ -502,7 +503,7 @@ async fn unsupported_aggregates_are_explicit() {
         "SELECT COUNT(DISTINCT kernel_sequence) FROM events",
         "SELECT operation_argument, COUNT(*) FROM events GROUP BY operation_argument",
     ] {
-        let (plan, journal) = fixture.canonical(sql).await;
+        let (plan, _) = fixture.canonical(sql).await;
         if sql.contains("DISTINCT") {
             let mut distinct = false;
             plan.apply(|node| {
@@ -516,15 +517,16 @@ async fn unsupported_aggregates_are_explicit() {
             .unwrap();
             assert!(distinct);
         }
-        assert!(SubscribeExec::compile(&plan, &journal).unwrap().is_none());
+        assert!(SubscribeExec::compile(&plan).unwrap().is_none());
     }
 }
 
 #[tokio::test]
 async fn native_partial_mode_is_explicit() {
     let fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
-    let (single, journal) = fixture.canonical("SELECT COUNT(*) FROM events").await;
-    let compiled = SubscribeExec::compile(&single, &journal).unwrap().unwrap();
+    let (single, source) = fixture.canonical("SELECT COUNT(*) FROM events").await;
+    let compiled = SubscribeExec::compile(&single).unwrap().unwrap();
+    assert!(Arc::ptr_eq(&compiled.source, &source));
     let native = compiled
         .aggregate
         .as_any()
@@ -542,9 +544,56 @@ async fn native_partial_mode_is_explicit() {
     .unwrap();
     assert_eq!(partial.mode(), &AggregateMode::Partial);
     let partial = Arc::new(partial) as Arc<dyn ExecutionPlan>;
-    assert!(SubscribeExec::compile(&partial, &journal)
-        .unwrap()
-        .is_none());
+    assert!(SubscribeExec::compile(&partial).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn replacement_keeps_eligibility() {
+    let fixture = Fixture::new("SELECT COUNT(*) FROM input").await;
+    let (plan, source) = fixture.canonical("SELECT COUNT(*) FROM events").await;
+    for eligible in [false, true] {
+        let subscription = Arc::new(SubscribeExec::new(Arc::clone(&plan), eligible).unwrap());
+        assert_eq!(subscription.maintained(), eligible);
+        let replacement = subscription
+            .with_new_children(vec![Arc::clone(&plan)])
+            .unwrap();
+        assert_eq!(
+            replacement
+                .as_any()
+                .downcast_ref::<SubscribeExec>()
+                .unwrap()
+                .maintained(),
+            eligible
+        );
+        let fetched = source.with_fetch(Some(1)).unwrap();
+        let child = Arc::clone(&plan)
+            .transform_up(|node| {
+                Ok(if Arc::ptr_eq(&node, &source) {
+                    datafusion::common::tree_node::Transformed::yes(Arc::clone(&fetched))
+                } else {
+                    datafusion::common::tree_node::Transformed::no(node)
+                })
+            })
+            .unwrap()
+            .data;
+        let replacement = replacement.with_new_children(vec![child]).unwrap();
+        assert!(!replacement
+            .as_any()
+            .downcast_ref::<SubscribeExec>()
+            .unwrap()
+            .maintained());
+        let restored = replacement
+            .with_new_children(vec![Arc::clone(&plan)])
+            .unwrap();
+        assert_eq!(
+            restored
+                .as_any()
+                .downcast_ref::<SubscribeExec>()
+                .unwrap()
+                .maintained(),
+            eligible
+        );
+    }
 }
 
 #[tokio::test]

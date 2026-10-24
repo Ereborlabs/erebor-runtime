@@ -1,5 +1,7 @@
 # Discovery Definition Review
 
+Current subscription source ownership is in [One native subscription source](#one-native-subscription-source).
+
 Current saved-input ownership is in [Native saved-input retirement](#native-saved-input-retirement).
 
 Current Query input ownership is in [Query input runner retirement](#query-input-runner-retirement).
@@ -3660,3 +3662,34 @@ result states the exact final checks and the later test-only correction.
 This change removes only the old saved-input extraction route. Legacy
 activation, commit, status, read/history, recovery, schema, and provenance
 operations remain. Their APIs and persisted data are not retired here.
+
+## One native subscription source
+
+[SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) opens the admitted subscription.
+  -> [Subscribe::runtime](../../crates/araphor-query/src/planner/subscription.rs) records maintenance eligibility before native constant folding.
+  -> [Session::physical](../../crates/araphor-query/src/execution.rs) uses native analysis, optimization, and physical planning.
+  -> [SubscribeExec](../../crates/araphor-query/src/stream/physical.rs) compiles the actual SQL child and recompiles each native replacement child.
+  -> [SourceData::supports_changes](../../crates/araphor-query/src/sources/mod.rs) checks the actual origin, fetch, and complete projected schema.
+  -> [Runtime::new](../../crates/araphor-query/src/stream/physical/runtime.rs) creates capture from the actual source and task context for eligible COUNT plans.
+  -> [Changes::capture](../../crates/araphor-query/src/sources/journal.rs) returns before and after Arrow batches with witnesses and a complete frontier.
+
+JournalExec is removed. SubscribeExec retains one native SQL child. Changes
+keeps retained batches, keys, a frontier, and a memory reservation. The returned
+ArrowSnapshot carries witnesses and the captured receipt. Native
+RecordBatchStream yields RecordBatch items. It has no typed before/after-change
+item with a commit receipt. Changes supplies that item inside the physical
+execution owner. Both native Arrow execution and
+committed output execution use the same Runtime. The existing native COUNT
+accumulators and general snapshot execution remain. Only eligible global
+nondistinct COUNT over one events source uses Changes.
+
+[Native subscription tests](../../crates/araphor-query/src/follow/tests.rs)
+check real source replacement, exact counts and witnesses, cooperative capture,
+permits, frontiers, cancellation, and native Arrow execution.
+[Eligibility tests](../../crates/araphor-query/src/stream/physical/kernel/tests.rs)
+check fetch disablement and restoration of the original eligibility.
+[Clock tests](../../crates/araphor-query/src/follow/tests/clock.rs) check NOW
+across two real commits and keep bare clock changes as metadata-only events.
+[Schema tests](../../crates/araphor-query/src/sources/journal.rs) require exact
+schema metadata. Malformed schemas return an error. Sources that do not support
+maintenance keep the existing snapshot route.

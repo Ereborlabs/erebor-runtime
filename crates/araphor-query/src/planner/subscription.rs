@@ -16,13 +16,14 @@ use datafusion::logical_expr::{
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 
-use crate::sources::{JournalExec, SourceData, SourceProvider, SourceSnapshot};
+use crate::sources::{SourceProvider, SourceSnapshot};
 use crate::stream::physical::SubscribeExec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Subscribe {
     input: LogicalPlan,
     append: bool,
+    maintainable: bool,
     schema: DFSchemaRef,
 }
 
@@ -79,6 +80,7 @@ impl Subscribe {
 
     pub(crate) fn runtime(mut input: LogicalPlan, append: bool) -> Result<LogicalPlan> {
         let schema = Arc::clone(input.schema());
+        let maintainable = !append && Self::maintainable(&input).is_ok();
         if append {
             let LogicalPlan::Projection(projection) = input else {
                 return Err(DataFusionError::Internal(
@@ -107,6 +109,7 @@ impl Subscribe {
             node: Arc::new(Self {
                 input,
                 append,
+                maintainable,
                 schema,
             }),
         }))
@@ -202,6 +205,7 @@ impl UserDefinedLogicalNodeCore for Subscribe {
         Ok(Self {
             input: inputs.remove(0),
             append: self.append,
+            maintainable: self.maintainable,
             schema: Arc::clone(&self.schema),
         })
     }
@@ -264,27 +268,9 @@ impl ExtensionPlanner for SubscriptionPlanner {
                 Arc::clone(subscription.schema.inner()),
             )?)));
         }
-        let mut scans = 0;
-        let mut journal = None;
-        if Subscribe::maintainable(&subscription.input).is_ok() {
-            input.apply(|node| {
-                if let Some(source) = SourceData::from_plan(node.as_ref()) {
-                    scans += 1;
-                    match JournalExec::new(source) {
-                        Ok(source) => journal = Some(Arc::new(source) as Arc<dyn ExecutionPlan>),
-                        Err(DataFusionError::NotImplemented(_)) => {}
-                        Err(error) => return Err(error),
-                    }
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })?;
-        }
-        if scans != 1 {
-            journal = None;
-        }
         Ok(Some(Arc::new(SubscribeExec::new(
             Arc::clone(input),
-            journal,
+            subscription.maintainable,
         )?)))
     }
 }
@@ -292,6 +278,7 @@ impl ExtensionPlanner for SubscriptionPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::SourceData;
     use datafusion::datasource::provider_as_source;
     use datafusion::execution::context::SessionContext;
     use datafusion::functions_aggregate::count::count_all;
@@ -307,7 +294,9 @@ mod tests {
         ] {
             let physical = provider.scan(&state, None, &[], None).await?;
             assert_eq!(
-                JournalExec::new(SourceData::from_plan(physical.as_ref()).unwrap()).is_ok(),
+                SourceData::from_plan(physical.as_ref())
+                    .unwrap()
+                    .supports_changes()?,
                 durable
             );
             let scan =

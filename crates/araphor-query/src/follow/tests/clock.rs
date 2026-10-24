@@ -1,6 +1,41 @@
 use super::*;
 
 #[tokio::test]
+async fn count_clock_waits_source() {
+    let fixture = Fixture::new(Limits::default());
+    fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
+    let clock = TestClock::new(2_000_000_000);
+    let mut stream = fixture.subscribe(
+        "SELECT COUNT(*) AS total, NOW() AS observed FROM events",
+        clock.clone(),
+        None,
+        true,
+    );
+    let first = next(&mut stream).await;
+    assert_eq!(values(&first, 0), [ScalarValue::Int64(Some(1))]);
+    assert_eq!(
+        values(&first, 1),
+        [ScalarValue::TimestampNanosecond(Some(2_000_000_000), None)]
+    );
+    assert_eq!(first.snapshot.next_change, None);
+    assert!(futures_util::poll!(stream.next()).is_pending());
+    clock.set(3_000_000_000);
+    let metadata = next(&mut stream).await;
+    assert!(metadata.batches.is_none());
+    assert_eq!(metadata.evaluated_utc_ns, 2_000_000_000);
+    assert!(futures_util::poll!(stream.next()).is_pending());
+    fixture.commit(&fixture.source, 2, 1, 2_500_000_000);
+    let changed = next(&mut stream).await;
+    assert_eq!(values(&changed, 0), [ScalarValue::Int64(Some(2))]);
+    assert_eq!(changed.evaluated_utc_ns, 3_000_000_000);
+    assert_eq!(
+        values(&changed, 1),
+        [ScalarValue::TimestampNanosecond(Some(3_000_000_000), None)]
+    );
+    stream.cancel_and_join().await.unwrap();
+}
+
+#[tokio::test]
 async fn native_clock_waits_source() {
     let fixture = Fixture::new(Limits::default());
     fixture.commit(&fixture.source, 1, 1, 1_000_000_000);

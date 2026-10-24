@@ -1,9 +1,16 @@
 # Araphor Component Redesign Proposal
 
+Current subscription source ownership is in [One native subscription source](#one-native-subscription-source).
+
 Current saved-input ownership is in [Native saved-input retirement](#native-saved-input-retirement).
 
 Current Query input ownership is in [Query input runner retirement](#query-input-runner-retirement).
 Earlier InputSet and InputOperation flows describe their recorded source states.
+
+Current priority: coherent design and simple ownership. Production source
+reduction is a result of simplification, not a quota for each change. Use
+native DataFusion and existing crate behavior. Preserve required behavior,
+authority, evidence, recovery, and atomic publication.
 
 Source study: **Done**. Implementation: **Not done**. The user approves
 implementation of this redesign and requires a commit for each deliverable.
@@ -4153,3 +4160,61 @@ Result: **Done** for this saved-input decoder retirement and canonical capture
 ownership. Earlier counts keep their original source scopes. Whole legacy
 Data lifecycle, recovery, and store removal, complete redesign, and the required
 net production reduction remain **Not done**. No speed result is claimed.
+
+### One native subscription source
+
+Current priority is coherent design and simple ownership. This record replaces
+the subscription source ownership in [Native journal source ownership](#native-journal-source-ownership).
+The earlier record keeps its original qualification.
+
+A subscription starts
+  -> Subscribe::runtime records the original plan's maintenance eligibility before native optimization
+  -> native DataFusion optimizes and plans the real SQL child
+  -> SubscribeExec compiles the actual SQL child and recompiles each replacement child
+  -> Runtime creates Changes from that child's SourceData and actual TaskContext for eligible COUNT plans
+  -> Changes captures before and after Arrow batches with one complete commit frontier
+  -> the existing physical kernel uses native COUNT accumulators to produce the output
+
+SubscribeExec keeps one real SQL child. JournalExec and its copied scan
+metadata are removed. Changes keeps retained batches, keys, a frontier,
+and a memory reservation. Its returned ArrowSnapshot carries witnesses
+and the captured receipt. Cooperative capture remains. Native Arrow execution and the
+committed output stream use the same Runtime. Native optimization, single
+partition distribution, authority checks, permits, and publication remain.
+Only eligible global nondistinct COUNT over one events source uses Changes.
+Other plans keep the existing native snapshot route. No source registry,
+second executor, polling loop, or plan cache is added.
+
+A plan with nonimmutable expressions stays ineligible for maintenance after
+native constant folding. A two-commit regression first failed on unchanged production: COUNT
+advanced to two and evaluation timestamp advanced to three seconds, but NOW retained
+two seconds. Nonimmutable plans now keep the existing native snapshot route.
+Clock changes without a SQL deadline still produce metadata only.
+
+Qualification from the working tree after `11d0c9d6c`:
+
+- Query follow, stream, source, and subscription-planner checks: **145 passed**.
+- Selected Analysis package and instance checks: **15 passed**. The two native
+  cases are marked ignored and require source-built artifacts.
+- The same two native cases then pass with `--ignored`, the configured native
+  environment, and source-built runtime and Discovery libraries. The exact
+  selectors are `instance::tests::native_subscription_one_step`
+  and `package::tests::subscriptions::native_subscription_uses_package`.
+  The native target is `x86_64-unknown-linux-gnu`.
+- The five focused regression and native-execution checks also pass. These
+  cases are already in the 145 Query cases. The distinct total is **162**.
+- Locked offline library compilation and strict Clippy pass for the existing
+  ten-package feature graph. Scoped Rust formatting and whitespace checks pass.
+  The first compile reports a test-only Distribution equality error. The test
+  uses exact pattern matching after that correction; production does not change.
+
+The evidence directory is
+`/home/navid/mithril-test-hosts/native-source-consolidation-verification`.
+It retains the original source archive, failing timestamp case, corrected
+build, exact selectors, logs, native library hashes, and source manifests.
+The capture, read, and apply implementation is byte-identical to `11d0c9d6c`.
+Full workspace CI, a benchmark, and physical qualification are not run.
+
+Result for this source consolidation: **Done**. General maintained SQL and the
+complete redesign remain **Not done**. The legacy Data lifecycle is not removed
+by this change.

@@ -1,6 +1,4 @@
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -10,147 +8,15 @@ use araphor_data::{
 };
 use datafusion::arrow::array::{ArrayRef, BooleanArray, RecordBatch, UInt32Array, UInt64Array};
 use datafusion::arrow::compute::filter_record_batch;
-use datafusion::common::{DataFusionError, Result as NativeResult};
+use datafusion::common::DataFusionError;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
-use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, SchedulingType};
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream,
-};
 use snafu::ResultExt as _;
 
 use super::{Captured, ReadMode, ScanBounds, SourceData, SourceOrigin, SourceSnapshot};
 use crate::execution::{Engine, Permit, Session};
 use crate::stream::{Change, Run};
 use crate::{InvalidSnafu, Result, SqlSnafu};
-
-#[derive(Debug)]
-pub(crate) struct JournalExec {
-    columns: Vec<usize>,
-    positions: [usize; 2],
-    requests: Arc<AnalysisTableRequests>,
-    bounds: ScanBounds,
-    properties: Arc<PlanProperties>,
-}
-
-impl JournalExec {
-    pub(crate) fn new(source: &SourceData) -> NativeResult<Self> {
-        if source.origin.durable() != Some("events") || source.fetch.is_some() {
-            return Err(DataFusionError::NotImplemented(
-                "committed native evidence scan".into(),
-            ));
-        }
-        let schema = Arc::clone(&source.schema);
-        let canonical = &SourceSnapshot::schemas()["events"];
-        let columns = source.indices.clone();
-        if canonical.project(&columns)? != *schema {
-            return Err(DataFusionError::Execution(
-                "maintained source schema changed".into(),
-            ));
-        }
-        let positions = [
-            canonical.index_of("commit_revision")?,
-            canonical.index_of("ordinal")?,
-        ];
-        let mut requested = columns.iter().copied().collect::<BTreeSet<_>>();
-        requested.extend(positions);
-        let requests = Arc::new(BTreeMap::from([("events".to_owned(), Some(requested))]));
-        let properties = Arc::new(
-            PlanProperties::new(
-                EquivalenceProperties::new(schema),
-                Partitioning::UnknownPartitioning(1),
-                EmissionType::Incremental,
-                // The store bounds live raw records. Retirements remove cached rows.
-                Boundedness::Unbounded {
-                    requires_infinite_memory: false,
-                },
-            )
-            .with_scheduling_type(SchedulingType::Cooperative),
-        );
-        Ok(Self {
-            columns,
-            positions,
-            requests,
-            bounds: ScanBounds {
-                fields: source.bounds.clone(),
-                ..Default::default()
-            },
-            properties,
-        })
-    }
-
-    pub(crate) fn open(&self, context: Arc<TaskContext>) -> Result<Changes> {
-        let run = context
-            .session_config()
-            .get_extension::<Run>()
-            .ok_or_else(|| DataFusionError::Execution("source run is absent".into()))
-            .context(SqlSnafu)?;
-        run.session.control().check()?;
-        if run.sources.len() != 1 || !run.sources.contains_key("events") {
-            return Err(DataFusionError::NotImplemented(
-                "maintained original evidence inventory".into(),
-            ))
-            .context(SqlSnafu);
-        }
-        Ok(Changes {
-            memory: run.session.memory().reserve_input(0).context(SqlSnafu)?,
-            run,
-            columns: self.columns.clone(),
-            positions: self.positions,
-            requests: Arc::clone(&self.requests),
-            bounds: self.bounds.clone(),
-            retained: Vec::new(),
-            frontier: None,
-            meta: None,
-        })
-    }
-}
-
-impl DisplayAs for JournalExec {
-    fn fmt_as(&self, _format: DisplayFormatType, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("JournalExec: source=events")
-    }
-}
-
-impl ExecutionPlan for JournalExec {
-    fn name(&self) -> &str {
-        "JournalExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &Arc<PlanProperties> {
-        &self.properties
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        Vec::new()
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> NativeResult<Arc<dyn ExecutionPlan>> {
-        if !children.is_empty() {
-            return Err(DataFusionError::Internal("Journal has no child".into()));
-        }
-        Ok(self)
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> NativeResult<SendableRecordBatchStream> {
-        Err(DataFusionError::NotImplemented(
-            "signed source changes require committed execution".into(),
-        ))
-    }
-}
 
 pub(crate) struct Changes {
     run: Arc<Run>,
@@ -176,6 +42,53 @@ struct Key {
 }
 
 impl Changes {
+    pub(crate) fn new(source: &SourceData, context: Arc<TaskContext>) -> Result<Self> {
+        if !source.supports_changes().context(SqlSnafu)? {
+            return Err(DataFusionError::NotImplemented(
+                "committed native evidence scan".into(),
+            ))
+            .context(SqlSnafu);
+        }
+        let run = context
+            .session_config()
+            .get_extension::<Run>()
+            .ok_or_else(|| DataFusionError::Execution("source run is absent".into()))
+            .context(SqlSnafu)?;
+        run.session.control().check()?;
+        if run.sources.len() != 1 || !run.sources.contains_key("events") {
+            return Err(DataFusionError::NotImplemented(
+                "maintained original evidence inventory".into(),
+            ))
+            .context(SqlSnafu);
+        }
+        let canonical = &SourceSnapshot::schemas()["events"];
+        let positions = [
+            canonical
+                .index_of("commit_revision")
+                .map_err(DataFusionError::from)
+                .context(SqlSnafu)?,
+            canonical
+                .index_of("ordinal")
+                .map_err(DataFusionError::from)
+                .context(SqlSnafu)?,
+        ];
+        let mut requested = source.indices.iter().copied().collect::<BTreeSet<_>>();
+        requested.extend(positions);
+        Ok(Self {
+            memory: run.session.memory().reserve_input(0).context(SqlSnafu)?,
+            run,
+            columns: source.indices.clone(),
+            positions,
+            requests: Arc::new(BTreeMap::from([("events".to_owned(), Some(requested))])),
+            bounds: ScanBounds {
+                fields: source.bounds.clone(),
+                ..Default::default()
+            },
+            retained: Vec::new(),
+            frontier: None,
+            meta: None,
+        })
+    }
     pub(crate) async fn capture(&mut self, permit: Arc<Permit>, now: u64) -> Result<Change> {
         tokio::task::coop::cooperative(self.read(permit, now)).await
     }
@@ -557,6 +470,27 @@ impl Changes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changes_require_exact_schema() {
+        let canonical = &SourceSnapshot::schemas()["events"];
+        let mut source = SourceData {
+            origin: SourceOrigin::Durable("events".into()),
+            schema: Arc::clone(canonical),
+            indices: (0..canonical.fields().len()).collect(),
+            bounds: BTreeMap::new(),
+            fetch: None,
+        };
+        assert!(source.supports_changes().unwrap());
+        let mut metadata = canonical.metadata().clone();
+        metadata.insert("source".into(), "changed".into());
+        source.schema = Arc::new(datafusion::arrow::datatypes::Schema::new_with_metadata(
+            canonical.fields().clone(),
+            metadata,
+        ));
+        assert!(matches!(source.supports_changes(),
+            Err(DataFusionError::Execution(reason)) if reason == "maintained source schema changed"));
+    }
 
     #[test]
     fn retirement_keeps_new_rows() {
