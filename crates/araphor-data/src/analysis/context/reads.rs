@@ -76,7 +76,7 @@ impl AnalysisStore {
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
         Self::read_context_row_from(connection, root, key)?
             .map(|result| {
-                Self::validate_context_packages(connection, root, &result.0)?;
+                Self::validate_stored_context_packages(connection, &result.0)?;
                 Ok(result)
             })
             .transpose()

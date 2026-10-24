@@ -874,15 +874,6 @@ impl AnalysisStore {
                 return self.reject("the graph manifest differs from its result commit");
             }
             expected_keys.extend(graph.input_manifest.context.iter());
-            let package_key =
-                crate::GraphSnapshotV1::package_key(&graph.scope.identity, &input.result_id);
-            if let Some(reference) = input
-                .context_refs
-                .iter()
-                .find(|reference| reference.key == package_key)
-            {
-                expected_keys.insert(&reference.key);
-            }
             for context in contexts {
                 if crate::PackageBundleRef::provenance(context)?.is_some() {
                     expected_keys.insert(&context.key);

@@ -132,7 +132,7 @@ impl AnalysisStore {
             let imported = (key.owner_id == "discovery-context-v1")
                 .then(|| crate::DiscoveryContextRevisionV1::try_from(input))
                 .transpose()?;
-            Self::validate_context_packages(writer, &self.root, input)?;
+            Self::validate_context_packages(writer, input)?;
             if let Some(reference) = self.context_retry(writer, input, intern)? {
                 references.push(reference);
                 continue;
@@ -225,7 +225,7 @@ impl AnalysisStore {
         }
         if let Some((stored, revision)) = Self::read_context_row_from(reader, &self.root, key)? {
             if &stored != input {
-                Self::validate_context_packages(reader, &self.root, &stored)?;
+                Self::validate_stored_context_packages(reader, &stored)?;
                 return AnalysisConflictSnafu.fail();
             }
             return Ok(Some(AnalysisContextRefV1 {

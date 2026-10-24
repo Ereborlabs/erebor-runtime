@@ -130,23 +130,29 @@ impl DiscoveryOwner {
                     crate::Error::Data { source }
                     | crate::Error::Query {
                         source: araphor_query::Error::Data { source },
-                    } => match source {
-                        araphor_data::Error::Package {
-                            code: Code::Missing,
-                            field,
-                            ..
-                        } => match *field {
-                            "managed input payload"
-                            | "managed evaluation payload"
-                            | "managed prior payload" => "FROZEN_INPUT_UNAVAILABLE",
-                            "managed SDK descriptor"
-                            | "definition image"
-                            | "retained definition image"
-                            | "installed image artifact" => "FROZEN_PACKAGES_UNAVAILABLE",
+                    } => {
+                        let source = match source {
+                            araphor_data::Error::StoredArtifact { source, .. } => source.as_ref(),
+                            source => source,
+                        };
+                        match source {
+                            araphor_data::Error::Package {
+                                code: Code::Missing,
+                                field,
+                                ..
+                            } => match *field {
+                                "managed input payload"
+                                | "managed evaluation payload"
+                                | "managed prior payload" => "FROZEN_INPUT_UNAVAILABLE",
+                                "managed SDK descriptor"
+                                | "definition image"
+                                | "retained definition image"
+                                | "installed image artifact" => "FROZEN_PACKAGES_UNAVAILABLE",
+                                _ => return Err(error),
+                            },
                             _ => return Err(error),
-                        },
-                        _ => return Err(error),
-                    },
+                        }
+                    }
                     _ => return Err(error),
                 };
                 return Self::unavailable(authority.as_ref(), grant, profile, reason, control);

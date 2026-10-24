@@ -233,6 +233,33 @@ impl AnalysisStore {
         digest: &str,
         control: &AnalysisReadControl,
     ) -> Result<PackageBundleV1> {
+        let artifacts = Self::package_artifacts_from(reader, tenant, &root, control)
+            .map_err(crate::Error::stored_artifact)?;
+        let bundle = PackageBundleV1 {
+            schema_version: 1,
+            root,
+            artifacts,
+        };
+        if bundle
+            .checked_layout(digest)
+            .map_err(crate::Error::from)
+            .map_err(crate::Error::stored_artifact)?
+            .is_none()
+        {
+            return Err(Code::Invalid
+                .error("retained image digest")
+                .stored_artifact());
+        }
+        control.check()?;
+        Ok(bundle)
+    }
+
+    pub(in crate::analysis) fn package_artifacts_from(
+        reader: &Connection,
+        tenant: [u8; 16],
+        root: &PackageRefV1,
+        control: &AnalysisReadControl,
+    ) -> Result<Vec<crate::PackageArtifactV1>> {
         let mut pending = vec![root.clone()];
         let mut seen = BTreeSet::new();
         let mut artifacts = Vec::new();
@@ -244,7 +271,11 @@ impl AnalysisStore {
             let retained =
                 Self::package_from(reader, tenant, &reference.package_id, &reference.revision)?
                     .ok_or_else(|| Code::Missing.error("installed image artifact"))?;
-            artifacts.push(retained.decode_artifact()?);
+            artifacts.push(
+                retained
+                    .decode_artifact()
+                    .map_err(crate::Error::stored_artifact)?,
+            );
             pending.extend(
                 retained
                     .dependencies
@@ -256,16 +287,7 @@ impl AnalysisStore {
             );
         }
         artifacts.sort_by_key(crate::PackageArtifactV1::reference);
-        let bundle = PackageBundleV1 {
-            schema_version: 1,
-            root,
-            artifacts,
-        };
-        bundle.validate()?;
-        if bundle.digest()? != digest {
-            return Err(Code::Invalid.error("retained image digest"));
-        }
         control.check()?;
-        Ok(bundle)
+        Ok(artifacts)
     }
 }

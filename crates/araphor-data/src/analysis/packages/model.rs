@@ -21,14 +21,7 @@ impl PackageRevisionV1 {
         artifact: &crate::PackageArtifactV1,
         tenant_id: [u8; 16],
     ) -> crate::Result<Self> {
-        let dependencies = artifact
-            .descriptor
-            .exports
-            .iter()
-            .flat_map(|model| model.dependencies().map(|(_, dependency)| dependency))
-            .filter(|dependency| dependency.package != artifact.descriptor.id)
-            .map(|dependency| (dependency.package.clone(), dependency.revision.clone()))
-            .collect::<std::collections::BTreeSet<_>>();
+        let dependencies = Self::dependency_keys(&artifact.descriptor);
         Ok(Self {
             tenant_id,
             package_id: artifact.descriptor.id.clone(),
@@ -38,8 +31,8 @@ impl PackageRevisionV1 {
             dependencies: dependencies
                 .into_iter()
                 .map(|(package_id, revision)| PackageRevisionRefV1 {
-                    package_id,
-                    revision,
+                    package_id: package_id.into(),
+                    revision: revision.into(),
                 })
                 .collect(),
         })
@@ -72,7 +65,31 @@ impl PackageRevisionV1 {
         if artifact.descriptor != descriptor {
             return Err(crate::PackageErrorCodeV1::Invalid.error("retained package descriptor"));
         }
+        if descriptor.id != self.package_id || descriptor.revision != self.revision {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("retained package key"));
+        }
+        let declared = Self::dependency_keys(&descriptor);
+        let retained = self
+            .dependencies
+            .iter()
+            .map(|dependency| (dependency.package_id.as_str(), dependency.revision.as_str()))
+            .collect::<std::collections::BTreeSet<_>>();
+        if declared != retained || retained.len() != self.dependencies.len() {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("retained package dependencies"));
+        }
         Ok(artifact)
+    }
+
+    fn dependency_keys(
+        descriptor: &araphor_analysis_sdk::Package,
+    ) -> std::collections::BTreeSet<(&str, &str)> {
+        descriptor
+            .exports
+            .iter()
+            .flat_map(|model| model.dependencies().map(|(_, dependency)| dependency))
+            .filter(|dependency| dependency.package != descriptor.id)
+            .map(|dependency| (dependency.package.as_str(), dependency.revision.as_str()))
+            .collect()
     }
 }
 

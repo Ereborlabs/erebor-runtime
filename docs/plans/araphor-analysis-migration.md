@@ -1,5 +1,7 @@
 # Araphor Analysis migration
 
+Current package provenance is in [One package provenance contract](#one-package-provenance-contract).
+
 Current Data execution ownership is in [One Data execution owner](#one-data-execution-owner).
 
 Current capture boundary proof is in [Native capture boundary proof](#native-capture-boundary-proof).
@@ -3831,3 +3833,58 @@ Evidence is under
 The original 217-file source archive has SHA-256
 `6b89963038dbf41e3330e0d7cce9909908f5cfca0df7ed3333fcfe96ab47197c`.
 Full workspace CI, a new benchmark, and physical qualification are not run.
+
+## One package provenance contract
+
+This change follows `dc46e193d`. It removes the obsolete InstalledRefV1
+provenance path. Current native Graph and Discovery publication already use
+exact native package contexts. Generation, call parameters, and saved state
+retain their native Managed owners.
+
+| Retired behavior or duplicate owner | Required current proof |
+| --- | --- |
+| Installed-list generation, duplicate entries, and required nested parameter body | The old body protocol retires with its parser. Native context bodies do not gain these fields. |
+| Typed parameter values and invalid arguments | Query `model_scalar_boundaries` and `registered_scalar_parameter_admission`; the real Data parameter decoder and its existing tests remain. |
+| Original parameter retention and corruption | Data `saved_evaluation_keeps_inputs` and the missing-parameters-role branch of `managed_recovery_checks_outputs`. |
+| Separate descriptor-only context closure | Native context and image validation use one full-artifact traversal and the existing canonical bundle validator. |
+| Stored row projections | Shared decoding checks key/revision identity, descriptor against OCI content, and exact declared dependency keys without duplicates. Valid dependency order remains unrestricted. |
+| Native provenance and retention | Native context tests retain all 1,025 artifacts, 1,024 dependencies, 1,025 exports, exact high-index export context, authority rollback, tenant isolation, collection, and durable reads. |
+| Mutable context trust boundaries | All three stored faults reject exact reads, head pages, and reopen. Body corruption also rejects the duplicate write without a metadata change. A newly supplied native context with an absent artifact returns Missing/NotFound and rolls back the complete context batch with no revision or notice. |
+| Generic Discovery context data | The SOURCE_HEALTH body roundtrip stays at the generic context test owner. |
+
+The previous InstalledRefV1 retention decision is superseded for that old
+model only. Native digest, root, package, export, output, scope, fact, and
+publication checks remain. Schema version 34 remains unchanged. No old-store
+conversion or new protocol is added.
+
+Canonical decoding keeps its structured errors for caller-supplied values.
+Stored semantic validation failures use StoredArtifact with IllegalState and
+NonRetryable. The original typed cause remains available. Control, capacity,
+database, and SDK I/O errors retain their categories. Discovery replay keeps
+the existing frozen-packages-unavailable marker for its known missing-code
+case. This is a storage trust boundary, not a new validation registry.
+
+Qualification: **62 distinct cases pass** across the recorded runs:
+48 Data cases, eight Analysis publication and Graph cases, four Analysis
+frozen replay cases, and two Query parameter cases. The final locked offline
+library build and strict Clippy pass for the existing ten-package feature
+graph. Scoped Rust formatting and whitespace checks pass.
+
+The four replay cases and two Query parameter cases pass before removal of
+one unused Data re-export. Their implementation and shared behavior remain
+byte-identical. The final build and Clippy cover that import removal. This
+record does not claim one simultaneous final-tree test run.
+
+The first Analysis selection passes six cases. Two native Graph cases fail
+because the selected directory lacks the three detector libraries. The
+existing native build refreshes those source-built fixtures. A new evidence
+directory retains their target and hashes. Only the two failed cases run
+again; both pass. No source changes for that repair. The failure log remains.
+
+Result: **Done** for this provenance consolidation. The complete redesign
+and general maintained SQL remain **Not done**.
+Evidence is under
+`/home/navid/mithril-test-hosts/native-provenance-consolidation-verification`.
+The original 199-file archive has SHA-256
+`64b09ff2cdeb36ef72cc18fc7c30ef05435cd6febda5e20dc8473d1f66a9f3a9`.
+Full workspace CI, physical qualification, and benchmarks are not repeated.

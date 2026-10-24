@@ -19,9 +19,6 @@ impl GraphReplayInputV1 {
         }
         let mut facts = BTreeMap::new();
         for fact in &self.facts {
-            if fact.key.owner_id == "graph-packages-v1" {
-                continue;
-            }
             if facts
                 .insert(fact.key.clone(), fact.clone())
                 .is_some_and(|previous| previous != *fact)

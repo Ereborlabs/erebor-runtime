@@ -1,5 +1,7 @@
 # Discovery Definition Review
 
+Current package provenance is in [One package provenance contract](#one-package-provenance-contract).
+
 Current Data execution ownership is in [One Data execution owner](#one-data-execution-owner).
 
 Current capture boundary proof is in [Native capture boundary proof](#native-capture-boundary-proof).
@@ -3038,10 +3040,10 @@ live pin and releases unused artifacts in one atomic sweep.
   -> [Completed input](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/input.rs) fetches contract, body and window through one fully fenced query.
   -> [Package recovery](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/recovery.rs) checks stored contracts without the removed admission ceilings.
 
-[AnalysisStore::collect_package_admissions](../../crates/araphor-data/src/analysis/packages/collection.rs) validates all stored dependency records once.
-  -> [release_package_rows](../../crates/araphor-data/src/analysis/packages/collection.rs) deletes one complete unreferenced layer with native SQL.
-  -> [Image cleanup](../../crates/araphor-data/src/analysis/packages/collection.rs) deletes only the exact returned uninstalled image keys.
-  -> [Collection commit](../../crates/araphor-data/src/analysis/packages/collection.rs) checks affected tenant charges and publishes one revision notice.
+[AnalysisStore::collect_package_admissions](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/collection.rs) validates all stored dependency records once.
+  -> [release_package_rows](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/collection.rs) deletes one complete unreferenced layer with native SQL.
+  -> [Image cleanup](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/collection.rs) deletes only the exact returned uninstalled image keys.
+  -> [Collection commit](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/collection.rs) checks affected tenant charges and publishes one revision notice.
 
 [Package commit](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) fails its final guard or a configured storage quota.
   -> [Data transaction](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) commits no partial result or checkpoint.
@@ -3813,3 +3815,38 @@ retain tenant, closure, corruption, reopen, and restore assertions through
 direct artifact setup. The
 [migration result](../plans/araphor-analysis-migration.md#one-data-execution-owner)
 records the proof and current completion status.
+
+## One package provenance contract
+
+This flow covers retained package content after `dc46e193d`. The old
+InstalledRefV1 body and its separate descriptor closure retire. Native
+execution and current authority keep their existing owners.
+
+[Image reads](../../crates/araphor-data/src/analysis/packages/image.rs) select an exact retained root and expected digest.
+  -> [The shared artifact traversal](../../crates/araphor-data/src/analysis/packages/image.rs) loads that root and its retained dependencies.
+  -> [PackageRevisionV1::decode_artifact](../../crates/araphor-data/src/analysis/packages/model.rs) checks stored identity, descriptor, OCI content, and exact dependency keys.
+  -> [PackageBundleV1::checked_layout](../../crates/araphor-package/src/admission.rs) checks the canonical bundle and expected digest.
+
+[Native context validation](../../crates/araphor-data/src/analysis/context/provenance.rs) reads a current native provenance body.
+  -> [The shared artifact traversal](../../crates/araphor-data/src/analysis/packages/image.rs) loads the closure without requiring an installed-image row.
+  -> [NativePackageContext::validate](../../crates/araphor-data/src/package/provenance.rs) checks the canonical digest and exact package, export, and output.
+
+[Recovery](../../crates/araphor-data/src/analysis/packages/recovery.rs) reuses the same retained-row guard.
+  -> [Stored package checks](../../crates/araphor-data/src/analysis/packages/recovery.rs) retain missing-dependency and image pin checks.
+  -> [Context recovery and reads](../../crates/araphor-data/src/analysis/context/reads.rs) still validate retained native context content.
+
+[StoredArtifact](../../crates/araphor-data/src/error.rs) distinguishes invalid retained content from bad caller content.
+  -> [Stored context reads](../../crates/araphor-data/src/analysis/context/reads.rs) preserve the typed cause under IllegalState and NonRetryable.
+  -> [New context admission](../../crates/araphor-data/src/analysis/context/write.rs) keeps canonical Missing/NotFound for an absent supplied root.
+  -> [Discovery replay](../../crates/araphor-analysis/src/discovery/replay.rs) reads one StoredArtifact cause for its existing known-Missing decision.
+
+[Collection](../../crates/araphor-data/src/analysis/packages/collection.rs)
+keeps installed images, definition pins, native package-context roots, and
+recursive dependency roots. It stops interpreting the retired installed-list
+body. Generic context storage and Graph fact validation remain.
+
+[Native context tests](../../crates/araphor-data/src/analysis/packages/tests/context.rs)
+check current provenance and retained code. The
+[migration result](../plans/araphor-analysis-migration.md#one-package-provenance-contract)
+records the exact test transfer and current completion status. No BPF or
+backend ABI changes in this consolidation.

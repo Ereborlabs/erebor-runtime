@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
-use super::PackageRevisionRefV1;
+use super::PackageRevisionV1;
 use crate::{AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
@@ -31,37 +31,35 @@ impl AnalysisStore {
                 row.context(AnalysisDatabaseSnafu {
                     operation: "decode retained package contract",
                 })?;
-            let package: araphor_analysis_sdk::Package =
-                serde_json::from_slice(&descriptor).context(JsonSnafu { path: root })?;
-            if package.id != id || package.revision != revision || package.validate().is_err() {
-                return Self::reject_path(root, "the retained package descriptor is invalid");
-            }
-            let retained = crate::PackageArtifactV1::from_bytes(&artifact)?;
-            if retained.descriptor != package {
-                return Self::reject_path(root, "the retained package artifact descriptor differs");
-            }
-            let dependencies: Vec<PackageRevisionRefV1> =
-                serde_json::from_str(&dependencies).context(JsonSnafu { path: root })?;
-            let declared: std::collections::BTreeSet<_> = package
-                .exports
-                .iter()
-                .flat_map(|model| model.dependencies().map(|(_, dependency)| dependency))
-                .filter(|dependency| dependency.package != package.id)
-                .map(|dependency| (dependency.package.as_str(), dependency.revision.as_str()))
-                .collect();
-            let retained: std::collections::BTreeSet<_> = dependencies
-                .iter()
-                .map(|dependency| (dependency.package_id.as_str(), dependency.revision.as_str()))
-                .collect();
-            if declared != retained || retained.len() != dependencies.len() {
-                return Self::reject_path(root, "the retained package dependency closure differs");
-            }
-            for dependency in dependencies {
+            let tenant: [u8; 16] = tenant.try_into().map_err(|_| {
+                crate::AnalysisStateSnafu {
+                    path: root,
+                    reason: "the retained package tenant is invalid",
+                }
+                .build()
+            })?;
+            let retained = PackageRevisionV1 {
+                tenant_id: tenant,
+                package_id: id,
+                revision,
+                descriptor,
+                artifact,
+                dependencies: serde_json::from_str(&dependencies)
+                    .context(JsonSnafu { path: root })?,
+            };
+            retained
+                .decode_artifact()
+                .map_err(crate::Error::stored_artifact)?;
+            for dependency in retained.dependencies {
                 let present: bool = reader
                     .query_row(
                         "SELECT EXISTS(SELECT 1 FROM package_revisions
                     WHERE tenant_id = ? AND package_id = ? AND revision = ?)",
-                        params![tenant, dependency.package_id, dependency.revision],
+                        params![
+                            tenant.as_slice(),
+                            dependency.package_id,
+                            dependency.revision
+                        ],
                         |row| row.get(0),
                     )
                     .context(AnalysisDatabaseSnafu {

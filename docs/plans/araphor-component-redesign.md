@@ -1,5 +1,7 @@
 # Araphor Component Redesign Proposal
 
+Current package provenance is in [One package provenance contract](#one-package-provenance-contract).
+
 Current Data execution ownership is in [One Data execution owner](#one-data-execution-owner).
 
 Current capture boundary proof is in [Native capture boundary proof](#native-capture-boundary-proof).
@@ -4305,3 +4307,31 @@ Result: **Done** for retirement of the duplicate Data execution owner.
 The focused proof has 172 distinct passing cases. The final affected-owner
 build and strict Clippy pass.
 The complete redesign remains **Not done**.
+
+## One package provenance contract
+
+The current native Graph and Discovery writers create `native-package-v1`
+contexts. Native Managed evaluations retain typed parameters, original inputs,
+request context, checkpoints, and selected results. The old InstalledRefV1
+generation and nested-parameter body has no current writer.
+
+This change retires that complete old provenance model, its descriptor-only
+closure walker, its collection predicate, and its special Graph key handling.
+It supersedes only the InstalledRefV1 retention instructions in
+[Dependency cycles to remove](#dependency-cycles-to-remove). The shared typed
+parameter decoder remains in Data. Generic Discovery context bodies remain
+ordinary context data.
+
+Images and native contexts use one retained artifact traversal. The existing
+PackageBundleV1 checked-layout operation remains the canonical bundle check.
+PackageRevisionV1 owns agreement between stored keys, descriptor, OCI artifact,
+and declared dependency keys. Each write, read, page, and recovery boundary
+still validates current store data. No cache, schema change, or extra package
+representation is added.
+
+Result: **Done** for this provenance consolidation. The focused proof has
+62 distinct passing cases across the recorded runs. The final affected-owner
+build and strict Clippy pass. The
+[migration result](araphor-analysis-migration.md#one-package-provenance-contract)
+records the exact source and fixture boundaries.
+The complete redesign and general maintained SQL remain **Not done**.

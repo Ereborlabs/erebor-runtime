@@ -399,13 +399,33 @@ fn context_batch_packages() -> TestResult {
     let store = AnalysisStore::open(directory.path().join("analysis"))?;
     let first = context_value(1, 1);
     let mut invalid = context_value(2, 1);
-    invalid.key.owner_id = "graph-packages-v1".into();
-    invalid.body = serde_json::to_vec(&serde_json::json!({"installed_packages": [{
-        "package_id": "absent", "revision": "1", "export": "run", "generation": 1,
-        "parameters": null, "root": {"package_id": "absent", "revision": "1"}
-    }]}))?;
+    invalid.key.owner_id = "native-package-v1".into();
+    invalid.valid_from_utc_ns = None;
+    let digest = format!("sha256:{}", "0".repeat(64));
+    invalid.body = serde_json::to_vec(&serde_json::json!({
+        "root": {"package_id": "absent", "revision": "1"},
+        "digest": digest,
+        "package": {"package_id": "absent", "revision": "1"},
+        "export": "run", "output": "rows"
+    }))?;
+    invalid.key.entity_key = crate::Qualification::digest(&invalid.body).into_bytes();
+    invalid.key.lifetime_key = digest.into_bytes();
     let changes = store.subscribe_revision();
-    assert!(store.commit_contexts(&[first.clone(), invalid]).is_err());
+    let failure = store
+        .commit_contexts(&[first.clone(), invalid])
+        .err()
+        .ok_or("missing native context artifact accepted")?;
+    assert!(matches!(
+        failure,
+        crate::Error::Package {
+            code: crate::PackageErrorCodeV1::Missing,
+            ..
+        }
+    ));
+    assert_eq!(
+        erebor_runtime_error::ErrorExt::status_code(&failure),
+        erebor_runtime_error::StatusCode::NotFound
+    );
     assert!(store.context_version(&first.key)?.is_none());
     assert_eq!(store.meta()?.commit_revision, 0);
     assert!(!changes.has_changed()?);
@@ -559,5 +579,30 @@ fn context_body_quota() -> TestResult {
     ));
     assert_eq!(store.context_version(&exact.key)?, Some(exact));
     assert_eq!(store.meta()?.commit_revision, 2);
+    Ok(())
+}
+
+#[test]
+fn discovery_context_keeps_body() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let input = crate::AnalysisContextVersionV1 {
+        key: crate::AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "discovery-source-v1".into(),
+            entity_key: b"result".to_vec(),
+            lifetime_key: b"source".to_vec(),
+            owner_revision: 1,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: crate::ContextSensitivityV1::Tenant,
+        body: br#"{"kind":"SOURCE_HEALTH","unknown":true}"#.to_vec(),
+    };
+    store.commit_context(&input)?;
+    drop(store);
+    let store = AnalysisStore::open(&root)?;
+    assert_eq!(store.context_version(&input.key)?, Some(input));
     Ok(())
 }

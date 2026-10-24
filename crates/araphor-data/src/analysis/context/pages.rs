@@ -61,7 +61,7 @@ impl AnalysisStore {
                     operation: "decode context head page",
                 })?;
                 let (version, _) = Self::decode_context_row(&self.root, key, stored)?;
-                Self::validate_context_packages(reader, &self.root, &version)?;
+                Self::validate_stored_context_packages(reader, &version)?;
                 versions.push(version);
             }
             Ok(versions)

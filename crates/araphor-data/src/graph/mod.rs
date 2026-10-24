@@ -24,17 +24,4 @@ impl GraphSnapshotV1 {
                     .any(|limit| limit == "RETAINED_INPUT_EXPIRED")
             })
     }
-
-    pub fn package_key(
-        source: &crate::EvidenceIntakeIdentityV1,
-        result_id: &str,
-    ) -> crate::AnalysisContextKeyV1 {
-        crate::AnalysisContextKeyV1 {
-            tenant_id: source.tenant_id,
-            owner_id: "graph-packages-v1".into(),
-            entity_key: result_id.as_bytes().to_vec(),
-            lifetime_key: source.key(),
-            owner_revision: GRAPH_SCHEMA_VERSION as u64,
-        }
-    }
 }

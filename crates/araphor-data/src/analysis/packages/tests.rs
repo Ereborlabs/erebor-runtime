@@ -134,3 +134,209 @@ fn oci_descriptor_mismatch() -> TestResult {
     assert!(AnalysisStore::open(&root).is_err());
     Ok(())
 }
+
+#[test]
+fn retained_rows_check_contract() -> TestResult {
+    use erebor_runtime_error::{ErrorExt as _, RetryHint, StatusCode};
+
+    let mut artifact = package("row-root", "v1")?.decode_artifact()?;
+    let dependencies = [
+        package("row-first", "v1")?.decode_artifact()?,
+        package("row-second", "v1")?.decode_artifact()?,
+    ];
+    for dependency in &dependencies {
+        artifact.descriptor.exports[0]
+            .inputs
+            .push(araphor_analysis_sdk::InputPort {
+                port: araphor_analysis_sdk::Port::new(
+                    dependency.descriptor.id.clone(),
+                    araphor_analysis_sdk::Schema::empty(),
+                ),
+                source: araphor_analysis_sdk::InputSource::Table(
+                    araphor_analysis_sdk::TableRef::Output(araphor_analysis_sdk::OutputRef {
+                        package: dependency.descriptor.id.clone(),
+                        revision: dependency.descriptor.revision.clone(),
+                        export: "model".into(),
+                        output: "rows".into(),
+                    }),
+                ),
+            });
+    }
+    let bundle = crate::PackageBundleV1 {
+        schema_version: 1,
+        root: artifact.reference(),
+        artifacts: std::iter::once(artifact).chain(dependencies).collect(),
+    };
+    let original = PackageRevisionV1::from_bundle(&bundle, [1; 16])?
+        .into_iter()
+        .find(|row| row.package_id == bundle.root.package_id)
+        .ok_or("root revision absent")?;
+    assert_eq!(original.dependencies.len(), 2);
+    assert_eq!(original.decode_artifact()?, bundle.artifacts[0]);
+    for fault in [
+        "id",
+        "revision",
+        "descriptor",
+        "descriptor-json",
+        "oci",
+        "oci-header",
+        "missing",
+        "extra",
+        "duplicate",
+        "reversed",
+    ] {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("store");
+        let store = AnalysisStore::open(&root)?;
+        store.install_package_image([1; 16], &bundle, || Ok(()))?;
+        let before = store.meta()?;
+        let mut changed = original.clone();
+        match fault {
+            "id" | "revision" => {
+                let mut artifact = bundle.artifacts[0].clone();
+                if fault == "id" {
+                    artifact.descriptor.id = "row-other".into();
+                } else {
+                    artifact.descriptor.revision = "v2".into();
+                }
+                changed.descriptor = artifact.descriptor_bytes()?;
+                changed.artifact = artifact.encode()?;
+            }
+            "descriptor" => {
+                let mut descriptor = bundle.artifacts[0].descriptor.clone();
+                descriptor.exports[0].name = "changed".into();
+                changed.descriptor = serde_json::to_vec(&descriptor)?;
+            }
+            "descriptor-json" => changed.descriptor = b"{".to_vec(),
+            "oci" => *changed.artifact.last_mut().ok_or("OCI bytes absent")? = 1,
+            "oci-header" => changed.artifact = b"broken".to_vec(),
+            "missing" => {
+                changed.dependencies.pop();
+            }
+            "extra" => changed.dependencies.push(PackageRevisionRefV1 {
+                package_id: "row-stray".into(),
+                revision: "v1".into(),
+            }),
+            "duplicate" => changed.dependencies.push(changed.dependencies[0].clone()),
+            _ => changed.dependencies.reverse(),
+        }
+        let rejected = |error: &crate::Error| match fault {
+            "id" | "revision" => matches!(
+                error,
+                crate::Error::Package {
+                    code: crate::PackageErrorCodeV1::Invalid,
+                    field: "retained package key",
+                    ..
+                }
+            ),
+            "descriptor" => matches!(
+                error,
+                crate::Error::Package {
+                    code: crate::PackageErrorCodeV1::Invalid,
+                    field: "retained package descriptor",
+                    ..
+                }
+            ),
+            "descriptor-json" => {
+                matches!(error, crate::Error::PackageEncoding { .. })
+                    && std::error::Error::source(error).is_some()
+            }
+            "oci" => {
+                matches!(error, crate::Error::AnalysisContract { source, .. }
+                    if matches!(source, araphor_analysis_sdk::Error::Contract { code: araphor_analysis_sdk::ErrorCode::Invalid, field, .. }
+                        if field == "OCI archive trailer"))
+                    && std::error::Error::source(error).is_some()
+            }
+            "oci-header" => {
+                matches!(error, crate::Error::AnalysisContract { source, .. }
+                    if matches!(source, araphor_analysis_sdk::Error::Io { path, source, .. }
+                        if path == std::path::Path::new("<OCI archive>")
+                            && source.kind() == std::io::ErrorKind::Other
+                            && source.to_string() == "failed to read entire block"))
+                    && std::error::Error::source(error).is_some()
+            }
+            _ => matches!(
+                error,
+                crate::Error::Package {
+                    code: crate::PackageErrorCodeV1::Invalid,
+                    field: "retained package dependencies",
+                    ..
+                }
+            ),
+        };
+        let retained = |error: &crate::Error| {
+            if fault == "oci-header" {
+                error.status_code() == StatusCode::Internal
+                    && error.retry_hint() == RetryHint::NonRetryable
+                    && rejected(error)
+            } else {
+                error.status_code() == StatusCode::IllegalState
+                    && error.retry_hint() == RetryHint::NonRetryable
+                    && matches!(error, crate::Error::StoredArtifact { source, .. } if rejected(source))
+            }
+        };
+        if fault == "reversed" {
+            assert_eq!(changed.decode_artifact()?, bundle.artifacts[0]);
+        } else {
+            let error = changed
+                .decode_artifact()
+                .err()
+                .ok_or("invalid row decoded")?;
+            assert_eq!(
+                error.status_code(),
+                if fault == "oci-header" {
+                    StatusCode::Internal
+                } else {
+                    StatusCode::InvalidArguments
+                }
+            );
+            assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
+            assert!(rejected(&error), "{fault}: {error:?}");
+        }
+        {
+            let mut writer = store.writer()?;
+            assert_eq!(writer.get_mut()?.execute(
+                "UPDATE package_revisions SET descriptor = ?, artifact = ?, dependencies = ? WHERE tenant_id = ? AND package_id = ? AND revision = ?",
+                duckdb::params![changed.descriptor, changed.artifact, serde_json::to_string(&changed.dependencies)?, changed.tenant_id.as_slice(), changed.package_id, changed.revision],
+            )?, 1);
+        }
+        let result = store.package_image(
+            [1; 16],
+            &bundle.root.package_id,
+            Some(&bundle.root.revision),
+            &crate::AnalysisReadControl::default(),
+        );
+        if fault == "reversed" {
+            let image = result?.ok_or("valid reordered image absent")?;
+            assert_eq!(image.artifact(&bundle.root)?, &bundle.artifacts[0]);
+            assert_eq!(image.artifacts.len(), bundle.artifacts.len());
+            assert_eq!(image.digest()?, bundle.digest()?);
+        } else {
+            let error = result.err().ok_or("invalid stored row read")?;
+            assert!(retained(&error), "{fault}: {error:?}");
+        }
+        assert_eq!(store.meta()?, before);
+        drop(store);
+        let reopened = AnalysisStore::open(&root);
+        if fault == "reversed" {
+            let store = reopened?;
+            assert_eq!(
+                store.package_revision([1; 16], &changed.package_id, &changed.revision)?,
+                Some(changed)
+            );
+            let image = store
+                .package_image(
+                    [1; 16],
+                    &bundle.root.package_id,
+                    Some(&bundle.root.revision),
+                    &crate::AnalysisReadControl::default(),
+                )?
+                .ok_or("reopened image absent")?;
+            assert_eq!(image.digest()?, bundle.digest()?);
+        } else {
+            let error = reopened.err().ok_or("invalid stored row reopened")?;
+            assert!(retained(&error), "{fault}: {error:?}");
+        }
+    }
+    Ok(())
+}

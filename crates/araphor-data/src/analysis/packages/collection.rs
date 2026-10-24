@@ -171,14 +171,6 @@ impl AnalysisStore {
                         THEN decode(c.body) ELSE NULL END AS JSON), '$.root.package_id') = p.package_id
                     AND json_extract_string(TRY_CAST(CASE WHEN c.owner_id = 'native-package-v1'
                         THEN decode(c.body) ELSE NULL END AS JSON), '$.root.revision') = p.revision)
-            AND NOT EXISTS (SELECT 1 FROM context_versions c,
-                json_each(TRY_CAST(CASE WHEN c.owner_id IN ('discovery-source-v1', 'graph-packages-v1')
-                    THEN decode(c.body) ELSE NULL END AS JSON), '$.installed_packages') j
-                WHERE c.tenant_id = p.tenant_id
-                    AND c.owner_id IN ('discovery-source-v1', 'graph-packages-v1')
-                    AND (((j.value->>'package_id') = p.package_id AND (j.value->>'revision') = p.revision)
-                        OR ((j.value->'root'->>'package_id') = p.package_id
-                            AND (j.value->'root'->>'revision') = p.revision)))
             AND NOT EXISTS (SELECT 1 FROM package_revisions d, json_each(d.dependencies) j
                 WHERE d.tenant_id = p.tenant_id AND (j.value->>'package_id') = p.package_id
                     AND (j.value->>'revision') = p.revision)

@@ -376,7 +376,7 @@ The shared context selector remains a host operation.
 [GraphDerivation](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/derive/adapter/mod.rs)
 selects installed graph exports by their declared schemas.
 It does not restrict package IDs to the current HF detectors.
-[GraphReplayInputV1::normalized and manifest](../../../../../crates/araphor-data/src/graph/input.rs)
+[GraphReplayInputV1::normalized and manifest](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/input.rs)
 share input preparation between derivation and refresh. Normalization keeps the
 existing full record and context conflict checks. It orders and removes duplicate
 coverage ranges, keys, and gaps. It excludes the reserved package sidecar from
@@ -437,7 +437,7 @@ An authority change cancels an active call.
 
 Saved discovery and graph context retains exact exports, revisions, roots,
 activation generations, and configured parameters.
-[Context validation](../../../../../crates/araphor-data/src/analysis/context/provenance.rs)
+[Context validation](https://github.com/Ereborlabs/erebor-runtime/blob/dc46e193d84a4375d9237016bfd3845565166a08/crates/araphor-data/src/analysis/context/provenance.rs)
 checks tenant scope and retained dependency closure during writes, reads, reopen,
 and restore. The previous discovery format can omit package references.
 New graph context requires valid references.
@@ -467,7 +467,7 @@ only to a normal refresh. The selected input must validate, and its normalized
 manifest must match the retained result. The saved coverage revision must equal
 the current source coverage revision. All compatible installed references must
 match, including exports, roots, revisions, generations, and parameters.
-[window_context](../../../../../crates/araphor-data/src/graph/input.rs)
+[window_context](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/input.rs)
 checks complete immutable context values before this decision. A change to raw
 body bytes, validity times, or sensitivity under the same key fails this check.
 [acknowledge_window](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/commit.rs)
@@ -630,7 +630,7 @@ Review the committed Rust cases beside
 [package lifecycle](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/wasm/lifecycle.rs),
 [dependency replacement](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/wasm/flow.rs),
 [domain history](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/graph/tests/installed.rs),
-and [context recovery](../../../../../crates/araphor-data/src/analysis/packages/tests/context/validation.rs).
+and [context recovery](https://github.com/Ereborlabs/erebor-runtime/blob/dc46e193d84a4375d9237016bfd3845565166a08/crates/araphor-data/src/analysis/packages/tests/context/validation.rs).
 The production [SDK detector case](../../../../../crates/mithril-e2e/src/discovery/packages/wasm.rs)
 installs over TLS, reopens a new owner with an empty cache, replays, retries,
 and revokes trust.

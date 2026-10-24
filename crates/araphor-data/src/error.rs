@@ -47,6 +47,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Stored artifact is invalid"))]
+    StoredArtifact {
+        source: Box<Error>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Notification {code:?} rejects {field}"), visibility(pub))]
     Notification {
         code: crate::NotificationErrorCodeV1,
@@ -241,6 +247,38 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl Error {
+    pub(crate) fn stored_artifact(self) -> Self {
+        let invalid = match &self {
+            Self::Package { code, .. } => matches!(
+                code,
+                crate::PackageErrorCodeV1::Invalid
+                    | crate::PackageErrorCodeV1::Missing
+                    | crate::PackageErrorCodeV1::Unsupported
+                    | crate::PackageErrorCodeV1::Limit
+            ),
+            Self::PackageEncoding { .. } | Self::PackageArrow { .. } => true,
+            Self::AnalysisContract { source, .. }
+                if !matches!(source, araphor_analysis_sdk::Error::Io { .. }) =>
+            {
+                matches!(
+                    source.status_code(),
+                    StatusCode::InvalidArguments | StatusCode::Unsupported | StatusCode::Internal
+                )
+            }
+            _ => false,
+        };
+        if invalid {
+            Self::StoredArtifact {
+                source: Box::new(self),
+                location: snafu::location!(),
+            }
+        } else {
+            self
+        }
+    }
+}
+
 impl From<araphor_package::Error> for Error {
     fn from(source: araphor_package::Error) -> Self {
         match source {
@@ -333,6 +371,7 @@ impl ErrorExt for Error {
             Self::EvidenceFrame { .. }
             | Self::EvidenceDecode { .. }
             | Self::AnalysisState { .. }
+            | Self::StoredArtifact { .. }
             | Self::Json { .. } => StatusCode::IllegalState,
             Self::AnalysisDatabase { .. }
             | Self::Io { .. }
@@ -423,6 +462,155 @@ mod package_tests {
         assert_eq!(error.retry_hint(), retry);
         assert!(matches!(error, Error::Io { ref path, ref source, .. }
             if path == std::path::Path::new("image.oci") && source.kind() == std::io::ErrorKind::Interrupted));
+        Ok(())
+    }
+
+    #[test]
+    fn stored_errors_keep_boundaries() -> TestResult {
+        use crate::PackageErrorCodeV1 as Code;
+        use araphor_analysis_sdk::{Error as Contract, ErrorCode};
+
+        let mut semantic = [Code::Invalid, Code::Limit, Code::Missing, Code::Unsupported]
+            .into_iter()
+            .map(|code| code.error("stored row"))
+            .collect::<Vec<_>>();
+        for code in [
+            ErrorCode::Invalid,
+            ErrorCode::Incompatible,
+            ErrorCode::Failed,
+        ] {
+            semantic.push(Error::AnalysisContract {
+                source: Contract::contract(code, "stored descriptor"),
+                location: snafu::location!(),
+            });
+        }
+        semantic.push(Error::PackageEncoding {
+            source: serde_json::from_str::<bool>("invalid")
+                .err()
+                .ok_or("JSON accepted")?,
+            location: snafu::location!(),
+        });
+        semantic.push(Error::PackageArrow {
+            source: duckdb::arrow::error::ArrowError::ParseError("stored batch".into()),
+            location: snafu::location!(),
+        });
+        semantic.push(Error::AnalysisContract {
+            source: Contract::Encoding {
+                source: serde_json::from_str::<bool>("invalid")
+                    .err()
+                    .ok_or("JSON accepted")?,
+                location: snafu::location!(),
+            },
+            location: snafu::location!(),
+        });
+        for error in semantic {
+            let kind = std::mem::discriminant(&error);
+            let message = error.to_string();
+            let error = error.stored_artifact().stored_artifact();
+            assert_eq!(error.status_code(), StatusCode::IllegalState);
+            assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
+            assert_eq!(error.to_string(), "Stored artifact is invalid");
+            let Error::StoredArtifact { source, .. } = &error else {
+                return Err("stored semantic error unclassified".into());
+            };
+            assert_eq!(std::mem::discriminant(source.as_ref()), kind);
+            assert_eq!(source.to_string(), message);
+            assert_eq!(
+                std::error::Error::source(&error).map(ToString::to_string),
+                Some(message)
+            );
+        }
+
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("absent");
+        let database = duckdb::Connection::open_in_memory()?
+            .execute("SELECT * FROM absent_artifact", [])
+            .err()
+            .ok_or("invalid SQL accepted")?;
+        for error in [
+            AnalysisReadCancelledSnafu.build(),
+            AnalysisReadDeadlineSnafu.build(),
+            AnalysisReadDeniedSnafu.build(),
+            AnalysisConflictSnafu.build(),
+            AnalysisBusySnafu {
+                resource: "readers",
+            }
+            .build(),
+            StorageCapacitySnafu { resource: "bytes" }.build(),
+            ProtectedInputCapacitySnafu { resource: "memory" }.build(),
+            RetentionUnavailableSnafu.build(),
+            Code::Denied.error("stored scope"),
+            Code::Conflict.error("stored pin"),
+            Code::Incomplete.error("stored input"),
+            Error::AnalysisDatabase {
+                operation: "read stored row",
+                source: database,
+                location: snafu::location!(),
+            },
+            Error::Io {
+                path: path.clone(),
+                source: std::fs::File::open(&path)
+                    .err()
+                    .ok_or("absent file opened")?,
+                location: snafu::location!(),
+            },
+            Error::AnalysisContract {
+                source: Contract::Io {
+                    path: path.clone(),
+                    source: std::fs::File::open(&path)
+                        .err()
+                        .ok_or("absent file opened")?,
+                    location: snafu::location!(),
+                },
+                location: snafu::location!(),
+            },
+            Error::AnalysisContract {
+                source: Contract::Io {
+                    path: path.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "read interrupted",
+                    ),
+                    location: snafu::location!(),
+                },
+                location: snafu::location!(),
+            },
+            Error::AnalysisContract {
+                source: Contract::contract(ErrorCode::Unauthorized, "stored scope"),
+                location: snafu::location!(),
+            },
+            Error::AnalysisContract {
+                source: Contract::contract(ErrorCode::Incomplete, "stored input"),
+                location: snafu::location!(),
+            },
+            Error::Json {
+                path: path.clone(),
+                source: serde_json::from_str::<bool>("invalid")
+                    .err()
+                    .ok_or("JSON accepted")?,
+                location: snafu::location!(),
+            },
+            AnalysisStateSnafu {
+                path: &path,
+                reason: "invalid stored row",
+            }
+            .build(),
+        ] {
+            let kind = std::mem::discriminant(&error);
+            let message = error.to_string();
+            let status = error.status_code();
+            let retry = error.retry_hint();
+            let source = std::error::Error::source(&error).map(ToString::to_string);
+            let error = error.stored_artifact();
+            assert_eq!(std::mem::discriminant(&error), kind);
+            assert_eq!(error.to_string(), message);
+            assert_eq!(error.status_code(), status);
+            assert_eq!(error.retry_hint(), retry);
+            assert_eq!(
+                std::error::Error::source(&error).map(ToString::to_string),
+                source
+            );
+        }
         Ok(())
     }
 }
