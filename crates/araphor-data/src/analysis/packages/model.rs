@@ -2,10 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AnalysisContextRefV1, AnalysisWitnessV1};
 
-pub const MAX_PACKAGE_METADATA_BYTES: usize = 1024 * 1024;
-
-pub const MAX_PACKAGE_ROWS: usize = 1024;
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PackageKeyV1 {
     pub tenant_id: [u8; 16],

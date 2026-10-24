@@ -156,9 +156,9 @@ impl AnalysisStore {
             if after != expected {
                 return Ok(None);
             }
-            let row: Option<u64> = reader
+            let row: Option<(Vec<u8>, Vec<u8>, String)> = reader
                 .query_row(
-                    "SELECT octet_length(r.commit_meta)::UBIGINT
+                    "SELECT r.commit_meta, x.body, r.window_id
                  FROM package_results r JOIN analysis_results x USING (result_id)
                  JOIN package_heads h USING (result_id)
                  WHERE r.tenant_id = ? AND r.scope_id = ? AND r.package_id = ?
@@ -176,29 +176,15 @@ impl AnalysisStore {
                         receipt.result_id,
                         receipt.commit_revision
                     ],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()
                 .context(AnalysisDatabaseSnafu {
-                    operation: "bound completed package metadata",
-                })?;
-            let Some(contract_bytes) = row else {
-                return Ok(None);
-            };
-            if contract_bytes > Self::RESULT_READ_BYTES {
-                return self.reject("the completed package metadata exceeds its byte limit");
-            }
-            let (contract, body, window): (Vec<u8>, Vec<u8>, String) = reader
-                .query_row(
-                    "SELECT r.commit_meta, x.body, r.window_id
-                 FROM package_results r JOIN analysis_results x USING (result_id)
-                 WHERE r.tenant_id = ? AND r.result_id = ?",
-                    params![before.key.tenant_id.as_slice(), receipt.result_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .context(AnalysisDatabaseSnafu {
                     operation: "read completed package metadata",
                 })?;
+            let Some((contract, body, window)) = row else {
+                return Ok(None);
+            };
             let contract: PackageCommitV1 =
                 serde_json::from_slice(&contract).context(JsonSnafu {
                     path: "<package-commit>",

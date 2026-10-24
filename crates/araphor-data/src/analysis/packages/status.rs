@@ -63,9 +63,6 @@ impl AnalysisStore {
         metadata: &[u8],
         check: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        if metadata.len() > super::MAX_PACKAGE_METADATA_BYTES {
-            return self.reject("the package status exceeds its byte limit");
-        }
         let mut guard = self.writer()?;
         let transaction = guard
             .get_mut()?
@@ -111,7 +108,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "write package status",
             })?;
-        Self::check_package_scope(&transaction, key)?;
         self.check_logical(&transaction, key.tenant_id, false)?;
         let revision = self.package_next(&transaction)?;
         Self::record_revision(
@@ -135,10 +131,7 @@ impl AnalysisStore {
         grant_id: &str,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<PackageActivationV1> {
-        if metadata.len() > super::MAX_PACKAGE_METADATA_BYTES
-            || grant_id.is_empty()
-            || grant_id.len() > 256
-        {
+        if grant_id.is_empty() || grant_id.len() > 256 {
             return self.reject("the renewed package authority is invalid");
         }
         let mut guard = self.writer()?;

@@ -19,6 +19,111 @@ fn packages_commit_contract_bytes() -> TestResult {
 }
 
 #[test]
+fn packages_large_contract_roundtrip() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    store.install_package(&[package("large", "v1")?], || Ok(()))?;
+    let mut candidate = activation("large", "v1");
+    candidate.metadata = serde_json::to_vec(&serde_json::json!({
+        "padding": "x".repeat(17 * 1024 * 1024)
+    }))?;
+    for tenant_limit in [false, true] {
+        let limited = AnalysisStore::open_with_limits(
+            directory.path().join(format!("limited-{tenant_limit}")),
+            Default::default(),
+            crate::StorageLimitsV1 {
+                logical_max_bytes: (!tenant_limit).then_some(1024 * 1024),
+                tenant_max_bytes: tenant_limit.then_some(1024 * 1024),
+                ..Default::default()
+            },
+        )?;
+        limited.install_package(&[package("large", "v1")?], || Ok(()))?;
+        let before = limited.meta()?;
+        assert!(matches!(
+            limited.activate_package(&candidate, None, None, || Ok(())),
+            Err(crate::Error::StorageCapacity { .. })
+        ));
+        assert_eq!(limited.meta()?, before);
+        assert!(limited.package_activation(&candidate.key)?.is_none());
+    }
+    let active = store.activate_package(&candidate, None, None, || Ok(()))?;
+    store.update_package_metadata(&active.key, active.generation, &active.metadata, || Ok(()))?;
+    let active = store.renew_package(&active, &active.metadata, "renewed", || Ok(()))?;
+    let mut input = commit(active.clone(), "large-result");
+    input.datasets = vec![1; 16 * 1024 * 1024 + 1];
+    assert!(AnalysisStore::package_contract(&input)?.len() > 64 * 1024 * 1024);
+    let before = store.meta()?;
+    assert!(store
+        .commit_package(&input, || crate::AnalysisReadDeniedSnafu.fail())
+        .is_err());
+    assert_eq!(store.meta()?, before);
+    assert!(store.package_result([1; 16], &input.result_id)?.is_none());
+    assert_eq!(store.package_activation(&active.key)?, Some(active.clone()));
+    let receipt = store.commit_package(&input, || Ok(()))?;
+    let committed = store.meta()?;
+    let after = store.package_activation(&active.key)?.ok_or("activation")?;
+    let ids = vec![input.result_id.clone(); 65];
+    assert_eq!(
+        store.package_result_refs([1; 16], &ids)?,
+        vec![receipt.clone(); ids.len()]
+    );
+    assert_eq!(
+        store.package_evidence([1; 16], &ids)?,
+        (Vec::new(), Vec::new())
+    );
+    assert!(store.package_result_refs([2; 16], &ids).is_err());
+    assert_eq!(
+        store.package_evidence([2; 16], &ids)?,
+        (Vec::new(), Vec::new())
+    );
+    assert_eq!(store.package_results(&active.key)?.len(), 1);
+    assert_eq!(store.commit_package(&input, || Ok(()))?, receipt);
+    assert_eq!(store.meta()?, committed);
+    let backup = root.join("backups/large-package");
+    store.backup(&backup)?;
+    drop(store);
+    let reopened = AnalysisStore::open(&root)?;
+    let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;
+    for store in [&reopened, &restored] {
+        assert_eq!(
+            store
+                .package_result([1; 16], &input.result_id)?
+                .ok_or("result")?
+                .commit,
+            input
+        );
+        assert_eq!(
+            store.package_completed(&active, &receipt, &crate::AnalysisReadControl::default())?,
+            Some((after.clone(), input.metadata.clone()))
+        );
+        assert_eq!(store.package_results(&active.key)?.len(), 1);
+        assert_eq!(
+            store.package_evidence([1; 16], &ids)?,
+            (Vec::new(), Vec::new())
+        );
+        let before = store.meta()?;
+        assert_eq!(store.commit_package(&input, || Ok(()))?, receipt);
+        assert_eq!(store.meta()?, before);
+        let mut wrong = active.clone();
+        wrong.key.scope_id = "other".into();
+        assert!(store
+            .package_completed(&wrong, &receipt, &crate::AnalysisReadControl::default())?
+            .is_none());
+        let mut forged = receipt.clone();
+        forged.commit_revision += 1;
+        assert!(store
+            .package_completed(&active, &forged, &crate::AnalysisReadControl::default())?
+            .is_none());
+    }
+    reopened.mark_package_stale(&after)?;
+    assert!(reopened
+        .package_completed(&active, &receipt, &crate::AnalysisReadControl::default())?
+        .is_none());
+    Ok(())
+}
+
+#[test]
 fn packages_retry_full_contract() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;

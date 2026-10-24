@@ -250,8 +250,6 @@ impl AnalysisStore {
             || input.window_id.len() > 256
             || input.request.is_empty()
             || input.metadata.is_empty()
-            || input.dependencies.len() > 64
-            || input.source_revisions.len() > 64
             || input
                 .source_revisions
                 .windows(2)
@@ -266,7 +264,6 @@ impl AnalysisStore {
                     || reference.result_id.len() > 256
                     || reference.commit_revision == 0
             })
-            || input.context_refs.len() > 256
             || input.created_utc_ns == 0
             || input
                 .witnesses

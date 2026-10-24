@@ -3395,3 +3395,38 @@ pass. The [source route](../guides/araphor-discovery-definition-review.md#trace-
 records the exact selection. Production Rust adds three and removes 13
 nonblank lines, excluding comments: net **-10**. Full-workspace CI, physical
 qualification and benchmarks were not run.
+
+
+## Retained package quotas and collection
+
+Result: **Done** for retained package and context quotas under TODO 13. The
+other resource boundaries remain **Not done**.
+
+Data removes fixed package, dependency, witness, context, metadata, result and
+checkpoint size or count ceilings. Existing storage quotas still apply.
+Identity, schema, digest, export, parameter, order, exact-retry and atomic-commit
+checks remain in the writer, reader and recovery paths. Completed input reads
+use one query with the original head, revision, scope and freshness fences.
+The former size probe and second fetch are removed.
+
+The global collector validates dependency records once and deletes complete
+unreferenced layers in one transaction. Each layer uses every original image,
+definition, activation, result, context and dependency pin predicate. Image
+cleanup uses only the exact deleted keys. The collector publishes one revision
+notice after a change and none after a no-op. Per-key collection keeps its
+existing dependency traversal. No cache, temporary table or new owner is added.
+
+Eleven distinct focused checks pass. They cover oversized contracts, more than
+64 dependencies, 8,193 witnesses, 257 contexts, 1,025 package revisions, more
+than 1 MiB of dependency JSON and 1,025 valid installed references. Actual
+reads, rollback, exact retry, finite storage quotas, backup and reopen remain
+covered. Retention checks keep image, definition, activation, dependency and
+context pins. An unused two-artifact chain is deleted without a second notice
+on a no-op sweep. The revised large closure check takes 431.82 seconds. This
+ordinary test still needs runtime attribution before further simplification;
+no performance improvement is claimed. The
+[source route and checks](../guides/araphor-discovery-definition-review.md#retained-package-quotas-and-collection)
+identify the owners. Strict Clippy, scoped formatting and whitespace checks
+pass. Production Rust adds 177 and removes 219 nonblank lines, excluding
+comments: net **-42**. Full-workspace CI, physical qualification and benchmarks
+were not run.

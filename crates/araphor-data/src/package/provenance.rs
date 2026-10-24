@@ -137,7 +137,6 @@ impl InstalledRefV1 {
             .ok_or_else(|| Code::Invalid.error("installed context references"))?;
         if context.sensitivity != ContextSensitivityV1::Tenant
             || values.is_empty()
-            || values.len() > crate::analysis::MAX_PACKAGE_ROWS
             || values.iter().any(|value| value.get("parameters").is_none())
         {
             return Err(Code::Invalid.error("installed context reference fields"));

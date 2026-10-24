@@ -84,9 +84,6 @@ impl AnalysisStore {
             if packages.contains_key(&reference) {
                 continue;
             }
-            if packages.len() == 64 {
-                return Self::reject_path(root, "the context package closure exceeds its limit");
-            }
             let (package, dependencies) = Self::context_package(reader, root, tenant, &reference)?;
             pending.extend(dependencies);
             packages.insert(reference, package);
@@ -103,14 +100,8 @@ impl AnalysisStore {
         let stored: Option<(Vec<u8>, String)> = reader
             .query_row(
                 "SELECT descriptor, dependencies FROM package_revisions
-             WHERE tenant_id = ? AND package_id = ? AND revision = ?
-             AND length(dependencies) <= ?",
-                params![
-                    tenant.as_slice(),
-                    reference.package_id,
-                    reference.revision,
-                    crate::analysis::MAX_PACKAGE_METADATA_BYTES as u64
-                ],
+             WHERE tenant_id = ? AND package_id = ? AND revision = ?",
+                params![tenant.as_slice(), reference.package_id, reference.revision,],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
@@ -118,7 +109,7 @@ impl AnalysisStore {
                 operation: "read context package closure",
             })?;
         let Some((descriptor, dependencies)) = stored else {
-            return Self::reject_path(root, "the context package revision is absent or too large");
+            return Self::reject_path(root, "the context package revision is absent");
         };
         let package: sdk::Package =
             serde_json::from_slice(&descriptor).context(JsonSnafu { path: root })?;

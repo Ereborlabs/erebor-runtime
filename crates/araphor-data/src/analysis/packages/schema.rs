@@ -91,7 +91,7 @@ impl AnalysisStore {
                 OR length(a.export_name) NOT BETWEEN 1 AND 256 OR length(a.grant_id) NOT BETWEEN 1 AND 256
                 OR a.generation = 0 OR a.generation > (SELECT commit_revision FROM store_meta)
                 OR (a.installed AND p.package_id IS NULL) OR (a.active AND NOT a.installed)
-                OR a.grant_id = '' OR octet_length(a.metadata) > 1048576
+                OR a.grant_id = ''
                 OR (a.result_id IS NULL AND a.checkpoint_revision <> 0)
                 OR (a.result_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM package_results r JOIN analysis_results x USING (result_id)
                     WHERE r.result_id = a.result_id AND r.tenant_id = a.tenant_id AND r.scope_id = a.scope_id
@@ -101,8 +101,7 @@ impl AnalysisStore {
                 LEFT JOIN package_revisions p ON p.tenant_id = r.tenant_id AND p.package_id = r.package_id AND p.revision = r.revision
                 WHERE x.result_id IS NULL OR x.tenant_id <> r.tenant_id OR x.processor_id <> 'analysis-package'
                 OR p.package_id IS NULL OR length(r.window_id) NOT BETWEEN 1 AND 256
-                OR octet_length(r.datasets) + octet_length(r.checkpoint) > 16777216
-                OR octet_length(r.commit_meta) NOT BETWEEN 1 AND 16777216"),
+                OR octet_length(r.commit_meta) = 0"),
             ("invalid package head", "SELECT 1 FROM package_heads h LEFT JOIN package_results r
                 ON r.result_id = h.result_id AND r.tenant_id = h.tenant_id AND r.scope_id = h.scope_id
                     AND r.package_id = h.package_id AND r.export_name = h.export_name AND r.window_id = h.window_id

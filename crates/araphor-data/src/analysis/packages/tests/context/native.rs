@@ -31,8 +31,54 @@ fn package_context_retains_closure() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let bundle = bundle()?;
+    let mut bundle = bundle()?;
+    let mut artifact = bundle.artifacts.remove(0);
+    for index in 0..1023 {
+        let dependency =
+            package(&format!("native-extra-{index:04}"), &"r".repeat(1024))?.decode_artifact()?;
+        artifact.descriptor.exports[0]
+            .inputs
+            .push(araphor_analysis_sdk::InputPort {
+                port: araphor_analysis_sdk::Port::new(
+                    format!("source-{index}"),
+                    araphor_analysis_sdk::Schema::empty(),
+                ),
+                source: araphor_analysis_sdk::InputSource::Table(
+                    araphor_analysis_sdk::TableRef::Output(araphor_analysis_sdk::OutputRef {
+                        package: dependency.descriptor.id.clone(),
+                        revision: dependency.descriptor.revision.clone(),
+                        export: "model".into(),
+                        output: "rows".into(),
+                    }),
+                ),
+            });
+        bundle.artifacts.push(dependency);
+    }
+    let dependency = &mut bundle.artifacts[0];
+    for index in 0..1024 {
+        let mut model = araphor_analysis_sdk::Model::new(
+            format!("model-{index}"),
+            Vec::new(),
+            dependency.descriptor.exports[0].outputs.clone(),
+        );
+        model.input_mode = araphor_analysis_sdk::InputMode::Resolved;
+        dependency
+            .implementations
+            .push(crate::PackageImplementationV1::Sql {
+                export: model.name.clone(),
+                program: crate::SqlModelV1 {
+                    outputs: std::collections::BTreeMap::from([("rows".into(), "SELECT 1".into())]),
+                    ..Default::default()
+                },
+            });
+        dependency.descriptor.exports.push(model);
+    }
+    bundle.artifacts.insert(0, artifact);
     let revisions = PackageRevisionV1::from_bundle(&bundle, [1; 16])?;
+    assert_eq!(revisions.len(), 1025);
+    let dependencies = &revisions[0].dependencies;
+    assert_eq!(dependencies.len(), 1024);
+    assert!(serde_json::to_vec(dependencies)?.len() > 1024 * 1024);
     let initial = store.meta()?;
     assert!(store
         .install_package(&revisions, || crate::AnalysisReadDeniedSnafu.fail())
@@ -48,6 +94,7 @@ fn package_context_retains_closure() -> TestResult {
         || Ok(()),
     )?;
     assert_eq!(store.meta()?, installed);
+    assert_eq!(store.package_revisions([1; 16])?.len(), revisions.len());
     let context =
         PackageBundleRef::new(&bundle)?.context([1; 16], &bundle.root, "model", "rows")?;
     let reference = store.intern_context(&context)?;
@@ -55,6 +102,38 @@ fn package_context_retains_closure() -> TestResult {
     assert_eq!(store.intern_context(&context)?, reference);
     assert_eq!(store.commit_context(&context)?, reference.commit_revision);
     assert_eq!(store.meta()?, pinned);
+    let references = bundle.artifacts[1]
+        .descriptor
+        .exports
+        .iter()
+        .map(|model| {
+            serde_json::json!({
+                "package_id": bundle.artifacts[1].descriptor.id,
+                "revision": bundle.artifacts[1].descriptor.revision,
+                "export": model.name, "generation": 1, "parameters": null, "root": bundle.root
+            })
+        })
+        .collect::<Vec<_>>();
+    let installed_context = crate::AnalysisContextVersionV1 {
+        key: crate::AnalysisContextKeyV1 {
+            owner_id: "graph-packages-v1".into(),
+            entity_key: b"installed".to_vec(),
+            ..context.key.clone()
+        },
+        body: serde_json::to_vec(&serde_json::json!({"installed_packages": references}))?,
+        ..context.clone()
+    };
+    assert_eq!(
+        crate::InstalledRefV1::context_refs(&installed_context)?
+            .ok_or("references")?
+            .len(),
+        1025
+    );
+    let installed_revision = store.commit_context(&installed_context)?;
+    assert_eq!(
+        store.commit_context(&installed_context)?,
+        installed_revision
+    );
     store.commit_context(&crate::AnalysisContextVersionV1 {
         key: crate::AnalysisContextKeyV1 {
             owner_id: "binary-owner".into(),
@@ -82,6 +161,15 @@ fn package_context_retains_closure() -> TestResult {
             store.context_version(&reference.key)?,
             Some(context.clone())
         );
+        assert_eq!(
+            store.context_version(&installed_context.key)?,
+            Some(installed_context.clone())
+        );
+        assert_eq!(
+            store.commit_context(&installed_context)?,
+            installed_revision
+        );
+        assert_eq!(store.package_revisions([1; 16])?.len(), revisions.len());
         let mut retained = Vec::new();
         for revision in &revisions {
             retained.push(
@@ -118,7 +206,14 @@ fn package_context_tenant_scope() -> TestResult {
     let context =
         PackageBundleRef::new(&bundle)?.context([2; 16], &bundle.root, "model", "rows")?;
     store.intern_context(&context)?;
+    let before = store.meta()?;
+    let mut notice = store.subscribe_revision();
+    notice.borrow_and_update();
     store.collect_package_admissions()?;
+    let after = store.meta()?;
+    assert_eq!(after.commit_revision, before.commit_revision + 1);
+    assert!(notice.has_changed()?);
+    assert_eq!(*notice.borrow_and_update(), after.commit_revision);
     assert!(store
         .package_revision([1; 16], "native-root", "v1")?
         .is_none());
@@ -131,6 +226,9 @@ fn package_context_tenant_scope() -> TestResult {
     assert!(store
         .package_revision([2; 16], "native-dependency", "v1")?
         .is_some());
+    store.collect_package_admissions()?;
+    assert_eq!(store.meta()?, after);
+    assert!(!notice.has_changed()?);
     Ok(())
 }
 

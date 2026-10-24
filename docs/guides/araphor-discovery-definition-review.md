@@ -3010,3 +3010,63 @@ Strict affected-owner Clippy, scoped formatting and whitespace checks pass.
 Production Rust adds three and removes 13 nonblank lines, excluding comments:
 net **-10**. Other TODO 13 boundaries remain open. Full-workspace CI, physical
 qualification and benchmarks were not run.
+
+
+## Retained package quotas and collection
+
+### Intended end state
+
+Data retains valid package contracts without hidden count or byte ceilings.
+The existing storage owner enforces configured quotas. Collection retains every
+live pin and releases unused artifacts in one atomic sweep.
+
+[Package admission](../../crates/araphor-data/src/analysis/packages/revisions.rs) validates typed revisions without a fixed closure ceiling.
+  -> [Package commit](../../crates/araphor-data/src/analysis/packages/commit.rs) retains contract and checkpoint data with the existing final guard and storage charges.
+  -> [Completed input](../../crates/araphor-data/src/analysis/packages/input.rs) fetches contract, body and window through one fully fenced query.
+  -> [Package recovery](../../crates/araphor-data/src/analysis/packages/recovery.rs) checks stored contracts without the removed admission ceilings.
+
+[AnalysisStore::collect_package_admissions](../../crates/araphor-data/src/analysis/packages/collection.rs) validates all stored dependency records once.
+  -> [release_package_rows](../../crates/araphor-data/src/analysis/packages/collection.rs) deletes one complete unreferenced layer with native SQL.
+  -> [Image cleanup](../../crates/araphor-data/src/analysis/packages/collection.rs) deletes only the exact returned uninstalled image keys.
+  -> [Collection commit](../../crates/araphor-data/src/analysis/packages/collection.rs) checks affected tenant charges and publishes one revision notice.
+
+[Package commit](../../crates/araphor-data/src/analysis/packages/commit.rs) fails its final guard or a configured storage quota.
+  -> [Data transaction](../../crates/araphor-data/src/analysis/packages/commit.rs) commits no partial result or checkpoint.
+
+The old global collector pages artifact keys and repeats the full retention
+query per artifact. The current collector uses the same predicates for a whole
+layer. It repeats only when that DELETE returns actual removed rows. This
+finite dependency traversal uses no clock. Installed images, definition pins,
+activation roots, results, native contexts, installed context references and
+incoming dependency edges keep their original tenant-scoped checks. A no-op
+sweep rolls back its empty transaction and sends no notice. Per-key collection
+shares the deletion predicate and keeps its existing recursive traversal.
+
+The completed-input query retains its original expected position, current
+head, scope, revision and freshness conditions. Removing the size probe does
+not permit a weaker second read. The query returns no completed input when a
+fence no longer matches. Typed decoding and exact receipt checks remain.
+
+Eleven distinct checks pass in separate selections. The large closure fixture
+keeps 1,025 revisions and more than 1 MiB of dependency JSON. Its 1,025 installed
+references use exports on the existing short-revision dependency. This avoids
+adding unrelated exports to the root model graph. Every retention, backup,
+digest and reopen assertion remains. The final case takes 431.82 seconds.
+That runtime remains an open simplification concern; this result is not a
+benchmark or a performance comparison.
+
+To repeat the focused checks:
+
+```sh
+target/debug/deps/araphor_data-4ab55c29d8526b42 analysis::packages::tests::context::native::package_context_retains_closure --exact --nocapture
+target/debug/deps/araphor_data-4ab55c29d8526b42 packages_preserve_native_references packages_large_contract_roundtrip package_context_tenant_scope completion_requires_actual_commit --nocapture --test-threads=2
+target/debug/deps/araphor_data-4ab55c29d8526b42 packages_release_unused_dependencies packages_retain_activation_root package_context_pins_dependency_artifact package_image_retains_closure definitions_retain_uninstalled_images uninstall_guard_keeps_closure --nocapture --test-threads=2
+```
+
+The checks retain large result and metadata round trips, final-guard rollback,
+exact retry, finite configured storage quotas, actual deletion, no-op notice
+behavior and the listed pin families. Strict affected-owner Clippy, scoped formatting
+and whitespace checks pass. Production Rust adds 177 and removes 219 nonblank
+lines, excluding comments: net **-42**. Tests, copied code and documents do not
+count as production reduction. Other TODO 13 boundaries remain open.
+Full-workspace CI, physical qualification and benchmarks were not run.

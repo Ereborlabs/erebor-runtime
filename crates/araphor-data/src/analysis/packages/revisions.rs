@@ -1,7 +1,7 @@
 use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
-use super::{PackageRevisionV1, MAX_PACKAGE_ROWS};
+use super::PackageRevisionV1;
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
@@ -10,8 +10,8 @@ impl AnalysisStore {
         revisions: &[PackageRevisionV1],
         check: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        if revisions.is_empty() || revisions.len() > 64 {
-            return self.reject("the package closure is empty or exceeds its limit");
+        if revisions.is_empty() {
+            return self.reject("the package closure is empty");
         }
         let tenant = revisions[0].tenant_id;
         let mut keys = std::collections::BTreeSet::new();
@@ -23,7 +23,6 @@ impl AnalysisStore {
                 || package.revision.len() > 4096
                 || package.descriptor.is_empty()
                 || package.artifact.is_empty()
-                || package.dependencies.len() > 64
                 || !keys.insert((&package.package_id, &package.revision))
             {
                 return self.reject("the package closure is invalid");
@@ -41,18 +40,6 @@ impl AnalysisStore {
             })?;
         let revision = self.package_next(&transaction)?;
         let changed = self.insert_package_revisions(&transaction, revisions, revision)?;
-        let count: u64 = transaction
-            .query_row(
-                "SELECT count(*) FROM package_revisions WHERE tenant_id = ?",
-                params![tenant.as_slice()],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "count package revisions",
-            })?;
-        if count > MAX_PACKAGE_ROWS as u64 {
-            return self.reject("the package revisions exceed their count limit");
-        }
         if !changed {
             check()?;
             return Ok(());

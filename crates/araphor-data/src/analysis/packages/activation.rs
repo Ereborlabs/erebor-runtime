@@ -17,7 +17,6 @@ impl AnalysisStore {
             || input.revision.len() > 4096
             || input.grant_id.is_empty()
             || input.grant_id.len() > 256
-            || input.metadata.len() > super::MAX_PACKAGE_METADATA_BYTES
         {
             return self.reject("the package activation is invalid");
         }
@@ -160,27 +159,6 @@ impl AnalysisStore {
             params![key.tenant_id.as_slice(), key.scope_id, key.package_id, key.export, active.revision, active.generation,
                 active.checkpoint_revision, active.result_id, active.grant_id, active.metadata, active.active],
         ).context(AnalysisDatabaseSnafu { operation: "write package activation" })?;
-        Self::check_package_scope(transaction, key)?;
-        Ok(())
-    }
-
-    pub(super) fn check_package_scope(
-        transaction: &Transaction<'_>,
-        key: &PackageKeyV1,
-    ) -> Result<()> {
-        let count: u64 = transaction
-            .query_row(
-                "SELECT count(*)
-             FROM package_activations WHERE tenant_id = ? AND scope_id = ? AND installed",
-                params![key.tenant_id.as_slice(), key.scope_id],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "bound package scope",
-            })?;
-        if count > super::MAX_PACKAGE_ROWS as u64 {
-            return Err(crate::PackageErrorCodeV1::Limit.error("package scope activations"));
-        }
         Ok(())
     }
 

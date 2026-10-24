@@ -153,18 +153,10 @@ impl AnalysisStore {
                         }
                         .build()
                     })?;
-            if serde_json::to_vec(&contract.dependencies)
-                .context(JsonSnafu { path: root })?
-                .len()
-                > super::MAX_PACKAGE_METADATA_BYTES
-            {
-                return Self::reject_path(root, "invalid package result");
-            }
-            if contract.source_revisions.len() > 64
-                || contract
-                    .source_revisions
-                    .windows(2)
-                    .any(|pair| pair[0].0 >= pair[1].0)
+            if contract
+                .source_revisions
+                .windows(2)
+                .any(|pair| pair[0].0 >= pair[1].0)
                 || contract.source_revisions.iter().any(|(name, captured)| {
                     name.is_empty() || name.len() > 128 || *captured >= result.commit_revision
                 })

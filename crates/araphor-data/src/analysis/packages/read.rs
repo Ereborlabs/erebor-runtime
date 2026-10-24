@@ -1,14 +1,10 @@
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
-use super::{
-    PackageActivationV1, PackageKeyV1, PackageResultV1, PackageRevisionV1, MAX_PACKAGE_ROWS,
-};
+use super::{PackageActivationV1, PackageKeyV1, PackageResultV1, PackageRevisionV1};
 use crate::{AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
-    pub(super) const RESULT_READ_BYTES: u64 = 64 * 1024 * 1024;
-
     pub fn package_current(
         &self,
         active: &PackageActivationV1,
@@ -153,16 +149,15 @@ impl AnalysisStore {
             let mut statement = reader
                 .prepare(
                     "SELECT package_id, revision FROM package_revisions WHERE tenant_id = ?
-                 ORDER BY package_id, revision LIMIT ?",
+                 ORDER BY package_id, revision",
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare package list",
                 })?;
             let keys = statement
-                .query_map(
-                    params![tenant.as_slice(), (MAX_PACKAGE_ROWS + 1) as u64],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )
+                .query_map(params![tenant.as_slice()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
                 .context(AnalysisDatabaseSnafu {
                     operation: "list package revisions",
                 })?
@@ -170,9 +165,6 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "decode package list",
                 })?;
-            if keys.len() > MAX_PACKAGE_ROWS {
-                return self.reject("the package list exceeds its row limit");
-            }
             keys.into_iter()
                 .map(|(package, revision)| {
                     Self::package_from(reader, tenant, &package, &revision)?
@@ -238,17 +230,11 @@ impl AnalysisStore {
         let mut statement = reader.prepare(
                 "SELECT package_id, export_name FROM package_activations
                  WHERE installed AND tenant_id = ? AND scope_id = ? AND (? IS NULL OR package_id = ?)
-                 ORDER BY package_id, export_name LIMIT ?",
+                 ORDER BY package_id, export_name",
             ).context(AnalysisDatabaseSnafu { operation: "prepare scoped package activations" })?;
         let keys = statement
             .query_map(
-                params![
-                    tenant.as_slice(),
-                    scope,
-                    package,
-                    package,
-                    (MAX_PACKAGE_ROWS + 1) as u64
-                ],
+                params![tenant.as_slice(), scope, package, package,],
                 |row| {
                     Ok(PackageKeyV1 {
                         tenant_id: tenant,
@@ -265,9 +251,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "decode scoped package activations",
             })?;
-        if keys.len() > MAX_PACKAGE_ROWS {
-            return self.reject("the package activations exceed their row limit");
-        }
         keys.into_iter()
             .map(|key| {
                 Self::activation_from(reader, &key)?
@@ -405,26 +388,38 @@ impl AnalysisStore {
 
     pub fn package_results(&self, key: &PackageKeyV1) -> Result<Vec<PackageResultV1>> {
         self.read_snapshot(|reader| {
-            let bytes: u64 = reader.query_row("SELECT COALESCE(SUM(octet_length(r.datasets) + octet_length(r.checkpoint)
-                + octet_length(x.body) + octet_length(x.request_meta) + octet_length(r.commit_meta)), 0)::UBIGINT
-                FROM package_heads h JOIN package_results r USING (result_id) JOIN analysis_results x USING (result_id)
-                WHERE h.tenant_id = ? AND h.scope_id = ? AND h.package_id = ? AND h.export_name = ?",
-                params![key.tenant_id.as_slice(), key.scope_id, key.package_id, key.export], |row| row.get(0),
-            ).context(AnalysisDatabaseSnafu { operation: "bound selected package results" })?;
-            if bytes > Self::RESULT_READ_BYTES { return self.reject("the package results exceed their byte limit"); }
-            let mut statement = reader.prepare(
-                "SELECT result_id FROM package_heads
+            let mut statement = reader
+                .prepare(
+                    "SELECT result_id FROM package_heads
                  WHERE tenant_id = ? AND scope_id = ? AND package_id = ? AND export_name = ?
-                 ORDER BY window_id LIMIT ?",
-            ).context(AnalysisDatabaseSnafu { operation: "prepare package results" })?;
-            let ids = statement.query_map(
-                params![key.tenant_id.as_slice(), key.scope_id, key.package_id, key.export, (MAX_PACKAGE_ROWS + 1) as u64],
-                |row| row.get::<_, String>(0),
-            ).context(AnalysisDatabaseSnafu { operation: "select package results" })?
-                .collect::<duckdb::Result<Vec<_>>>().context(AnalysisDatabaseSnafu { operation: "decode package result keys" })?;
-            if ids.len() > MAX_PACKAGE_ROWS { return self.reject("the package results exceed their row limit"); }
-            ids.into_iter().map(|id| Self::package_result_from(reader, key.tenant_id, &id, &self.root)?
-                .ok_or_else(|| self.state_error("the package result is absent"))).collect()
+                 ORDER BY window_id",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare package results",
+                })?;
+            let ids = statement
+                .query_map(
+                    params![
+                        key.tenant_id.as_slice(),
+                        key.scope_id,
+                        key.package_id,
+                        key.export
+                    ],
+                    |row| row.get::<_, String>(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "select package results",
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode package result keys",
+                })?;
+            ids.into_iter()
+                .map(|id| {
+                    Self::package_result_from(reader, key.tenant_id, &id, &self.root)?
+                        .ok_or_else(|| self.state_error("the package result is absent"))
+                })
+                .collect()
         })
     }
 }

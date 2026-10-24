@@ -16,10 +16,9 @@ impl AnalysisStore {
         tenant: [u8; 16],
         keys: &[AnalysisContextKeyV1],
     ) -> Result<Vec<AnalysisContextRefV1>> {
-        if keys.len() > 256
-            || keys
-                .iter()
-                .any(|key| key.tenant_id != tenant || !key.valid())
+        if keys
+            .iter()
+            .any(|key| key.tenant_id != tenant || !key.valid())
         {
             return self.reject("the package context keys are invalid");
         }
@@ -45,9 +44,6 @@ impl AnalysisStore {
         tenant: [u8; 16],
         ids: &[String],
     ) -> Result<Vec<PackageResultRefV1>> {
-        if ids.len() > 64 {
-            return self.reject("the package result references exceed their limit");
-        }
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -106,9 +102,6 @@ impl AnalysisStore {
     }
 
     pub fn package_evidence(&self, tenant: [u8; 16], ids: &[String]) -> Result<PackageEvidence> {
-        if ids.len() > 64 {
-            return self.reject("the package evidence sources exceed their limit");
-        }
         if ids.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
@@ -116,21 +109,6 @@ impl AnalysisStore {
             path: "<package-evidence>",
         })?;
         self.read_snapshot(|reader| {
-            let bytes: u64 = reader
-                .query_row(
-                    "SELECT COALESCE(SUM(octet_length(CASE WHEN x.processor_id = 'analysis-package'
-                    THEN p.commit_meta ELSE x.request_meta END)), 0)::UBIGINT
-                 FROM analysis_results x LEFT JOIN package_results p USING (result_id)
-                 WHERE x.tenant_id = ? AND x.result_id IN (SELECT unnest(CAST(? AS VARCHAR[])))",
-                    params![tenant.as_slice(), encoded],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "bound package evidence manifests",
-                })?;
-            if bytes > Self::RESULT_READ_BYTES {
-                return self.reject("the package evidence manifests exceed their byte limit");
-            }
             let mut statement = reader
                 .prepare(
                     "SELECT x.processor_id, CASE WHEN x.processor_id = 'analysis-package'
@@ -169,9 +147,6 @@ impl AnalysisStore {
                         .then(left.commit_revision.cmp(&right.commit_revision))
                 });
                 contexts.dedup();
-                if witnesses.len() > 8192 || contexts.len() > 256 {
-                    return self.reject("the package evidence references exceed their count limit");
-                }
             }
             Ok((witnesses.into_values().collect(), contexts))
         })
@@ -321,9 +296,6 @@ mod tests {
             store.package_evidence([1; 16], &[])?,
             (Vec::new(), Vec::new())
         );
-        let excess = vec!["result".to_owned(); 65];
-        assert!(store.package_result_refs([1; 16], &excess).is_err());
-        assert!(store.package_evidence([1; 16], &excess).is_err());
         Ok(())
     }
 }
