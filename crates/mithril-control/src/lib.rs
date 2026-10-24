@@ -38,6 +38,7 @@ pub use client_grpc::{ClientGrpcConfig, ClientGrpcOwner, ClientStream};
 pub use client_listener::{ClientListener, ClientListenerConfig};
 pub use config::{ControlConfig, ControlRuntimeParts, EvidenceAdmissionLimits};
 pub use decommission::*;
+pub use discovery::DiscoveryStaticPreviewV1;
 pub use error::{Error, Result};
 pub use evidence::*;
 pub use notification::*;

@@ -2851,3 +2851,87 @@ net **+104**. Builtin SQL adds 33 and removes 12: net **+21**, counted
 separately. Tests and documents are excluded. The overall 6,000-line production
 Rust reduction target remains open. Qualification covers this Linux host.
 Full-workspace CI, other platforms and benchmarks do not run for this delivery.
+
+
+## Recorded policy preview through Query
+
+This result covers TODO 7 in the changes based on `64f4a9d9c`.
+
+### Intended end state
+
+A caller supplies a recorded manifest, a candidate policy and the result of an
+installed package call through Query. Control returns the behavior snapshot
+and static simulations. Control starts no new package execution.
+
+[Query Session](../../crates/araphor-query/src/definition.rs) executes the selected installed package through native DataFusion planning.
+  -> [DiscoveryStaticPreviewV1::recorded](../../crates/mithril-control/src/discovery/preview.rs) receives the manifest, candidate, opaque call and result.
+  -> [DiscoveryOwner::recorded_result](../../crates/araphor-analysis/src/discovery/output.rs) checks the result binding, tenant, source identities and typed output.
+  -> [PolicyCompiler and PolicySimulator](../../crates/mithril-control/src/discovery/preview.rs) compute the candidate decisions for distinct recorded static keys.
+
+[Recorded preview](../../crates/mithril-control/src/discovery/preview.rs) rejects an invalid result, unsupported effect family or consuming exception.
+  -> [Recorded preview](../../crates/mithril-control/src/discovery/preview.rs) returns no partial preview.
+  -> [Query Session](../../crates/araphor-query/src/definition.rs) retains its existing execution lifetime and cleanup.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Query
+    participant Control
+    participant Analysis
+    Caller->>Query: Execute installed program
+    Query-->>Caller: Opaque call and result
+    Caller->>Control: recorded(manifest, candidate, call, result)
+    Control->>Analysis: recorded_result(manifest, call, result)
+    Analysis-->>Control: Validated behavior snapshot
+    Control-->>Caller: Snapshot and static simulations
+```
+
+The public constructor is the library consumer. No existing active RPC or
+production caller was found. This change adds no service, execution owner,
+snapshot reader or polling loop. The result type replaces the unused marker
+owner. Native Query and the installed package retain computation ownership.
+The caller uses the existing Query definition result as follows:
+
+```rust
+let preview = mithril_control::DiscoveryStaticPreviewV1::recorded(
+    &manifest,
+    &candidate,
+    &call,
+    &result,
+)?;
+```
+
+The compiler retains policy meaning. Preview supports exact File and Exec
+keys. A consuming exception requires runtime authority and is rejected here.
+Every returned simulation has physical result `NotAttempted`.
+
+The [five preview checks](../../crates/mithril-control/src/discovery/preview/tests.rs)
+execute the installed Discovery Wasm component through Query. They retain the
+three previous compiler, family and lowering assertions. They also reject a
+wrong call result, tenant, record source identity and dynamic exception. The
+counts adapter obtains the source-revision label from the manifest. These
+checks do not prove independent rejection of that label.
+
+All 29 distinct focused checks pass. The 24-case compatibility selection
+checks context cutoffs, permission,
+conflicts, omissions, grouping and baseline comparison through the existing
+Analysis owners. No test-only derivation replaces the installed computation.
+
+```sh
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=1 CARGO_PROFILE_TEST_DEBUG=1 \
+  cargo test --locked --offline -p mithril-control --lib discovery::preview::tests:: -- --test-threads=2
+target/debug/deps/araphor_analysis-d09ee11c321a85a9 context::tests:: discovery::output::tests::baseline:: --nocapture --test-threads=2
+```
+
+Scoped formatting and whitespace checks pass. Strict Clippy passes for the
+Control library and test targets in this affected-owner selection:
+
+```sh
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=1 CARGO_PROFILE_TEST_DEBUG=1 \
+  cargo clippy --locked --offline -p araphor-analysis-builtins -p araphor-data -p araphor-query -p araphor-analysis -p mithril-control --lib --tests --message-format=short -- -D warnings
+```
+
+Production Rust adds 10 and removes six nonblank lines, excluding comments:
+net **+4**. The moved and extended tests do not count as production reduction.
+Full-workspace CI, physical qualification and benchmarks were not run for
+this delivery.

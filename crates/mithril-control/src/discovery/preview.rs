@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
-use araphor_analysis_back::DiscoveryOwner;
+use araphor_analysis::DiscoveryOwner;
 use araphor_data::{BehaviorSnapshotV1, DiscoveryInputManifestV1};
+use araphor_query::definition::{CallResult, PackageCall};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -17,15 +18,14 @@ pub struct DiscoveryStaticPreviewV1 {
     pub simulations: Vec<EffectSimulationV1>,
 }
 
-pub struct DiscoveryPreviewOwner;
-
-impl DiscoveryPreviewOwner {
-    pub fn simulate_recorded(
+impl DiscoveryStaticPreviewV1 {
+    pub fn recorded(
         input: &DiscoveryInputManifestV1,
         candidate: &PolicyDocumentV1,
-        execution: &araphor_analysis_back::InstalledAnalysis,
+        call: &PackageCall,
+        result: &CallResult,
     ) -> Result<DiscoveryStaticPreviewV1> {
-        let derived = DiscoveryOwner::derive_recorded(input, execution)?;
+        let derived = DiscoveryOwner::recorded_result(input, call, result)?;
         let compiled = PolicyCompiler.compile(candidate)?;
         let keys: BTreeSet<_> = derived
             .snapshot
@@ -71,118 +71,4 @@ impl DiscoveryPreviewOwner {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{SimulatedDispositionV1, SimulatedPhysicalResultV1};
-    use erebor_interceptor_abi::KernelEffectFamilyV1;
-
-    type TestResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-    fn input() -> TestResult<DiscoveryInputManifestV1> {
-        DiscoveryInputManifestV1::try_from(
-            include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
-        )
-        .map_err(Into::into)
-    }
-
-    fn execution() -> TestResult<araphor_analysis_back::InstalledAnalysis> {
-        Ok(araphor_analysis_back::InstalledAnalysis::testing(
-            None,
-            input()?.tenant_id,
-        )?)
-    }
-
-    #[test]
-    fn discovery_preview_native_compiler() -> TestResult<()> {
-        let policy = PolicyDocumentV1::parse(
-            std::path::Path::new("policy-v1.yaml"),
-            include_bytes!("../../tests/fixtures/policy-v1.yaml"),
-        )?;
-        let preview = DiscoveryPreviewOwner::simulate_recorded(&input()?, &policy, &execution()?)?;
-        assert_eq!(preview.simulations.len(), 1);
-        assert_eq!(preview.snapshot.unresolved_records, 1);
-        assert_eq!(
-            preview.simulations[0].disposition,
-            SimulatedDispositionV1::WouldDeny
-        );
-        assert_eq!(
-            preview.simulations[0].physical_result,
-            SimulatedPhysicalResultV1::NotAttempted
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn discovery_preview_family_rejection() -> TestResult<()> {
-        let policy = PolicyDocumentV1::parse(
-            std::path::Path::new("policy-v1.yaml"),
-            include_bytes!("../../tests/fixtures/policy-v1.yaml"),
-        )?;
-        let mut input = input()?;
-        let operation = crate::CompiledOperationV1::try_from("CONNECT")?;
-        for context in &mut input.contexts {
-            context.static_key.effect_family = KernelEffectFamilyV1::Network as u16;
-            context.static_key.operation_id = "CONNECT".into();
-            context.static_key.operation = operation.kernel_id as u16;
-        }
-        for record in &mut input.records {
-            let mut wire = record.decode()?;
-            wire.effect_family = KernelEffectFamilyV1::Network as u32;
-            wire.operation = operation.kernel_id as u32;
-            record.wire_record = Vec::<u8>::try_from(&wire)?;
-        }
-        assert!(matches!(
-            DiscoveryPreviewOwner::simulate_recorded(&input, &policy, &execution()?),
-            Err(crate::Error::Discovery {
-                code: "STATIC_FAMILY_UNSUPPORTED",
-                ..
-            })
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn discovery_preview_native_lowering() -> TestResult<()> {
-        let mut spec = crate::WorkloadProtectionPolicySpec::parse(
-            std::path::Path::new("kubernetes-entry-roles-v1.yaml"),
-            include_bytes!("../../tests/fixtures/kubernetes-entry-roles-v1.yaml"),
-        )?;
-        spec.roles[0].files[0].recursive = false;
-        let mut resource = crate::policy_custom_resource("worker", "tenant-a", spec)?;
-        resource.metadata.uid = Some("30000000-0000-4000-8000-000000000001".into());
-        resource.metadata.generation = Some(1);
-        let policy = crate::lower_kubernetes_policy(
-            &resource,
-            "10000000-0000-4000-8000-000000000001",
-            "10000000-0000-4000-8000-000000000002",
-            "10000000-0000-4000-8000-000000000003",
-        )?;
-        let compiled = PolicyCompiler.compile(&policy)?;
-        let key = compiled
-            .compiled_cells
-            .iter()
-            .find(|cell| {
-                cell.key.effect_family == EffectFamilyV1::File
-                    && cell.key.operation_id == "OPEN_READ"
-                    && cell.key.entry_kind == crate::EntryKindV1::ContainerStart
-            })
-            .ok_or("lowered exact file key is absent")?;
-        assert!(key.key.object_selector.starts_with("PATH:"));
-        let mut input = input()?;
-        for context in &mut input.contexts {
-            context.static_key = araphor_data::DiscoveryPolicyKeyV1::try_from(&key.key)?;
-        }
-        let preview = DiscoveryPreviewOwner::simulate_recorded(&input, &policy, &execution()?)?;
-        assert_eq!(preview.source_policy_digest, compiled.source_policy_digest);
-        assert_eq!(preview.simulations.len(), 1);
-        assert_eq!(
-            preview.simulations[0].disposition,
-            SimulatedDispositionV1::Deny
-        );
-        assert_eq!(
-            preview.simulations[0].physical_result,
-            SimulatedPhysicalResultV1::NotAttempted
-        );
-        Ok(())
-    }
-}
+mod tests;

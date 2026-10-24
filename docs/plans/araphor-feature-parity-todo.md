@@ -44,7 +44,7 @@ The call fails, loses permission, or is cancelled
   -> a relevant event or an explicit request can start another call
 ```
 
-## Current status on 2026-10-23
+## Current status on 2026-10-24
 
 The status audit checked `9243df7030e735fc3ae4ec48f94235406d7dfc8b`. Item 12
 is complete in `98df70280`, with 33 passing focused checks. Its
@@ -56,7 +56,10 @@ focused checks. Its
 identifies the owners and proof. Item 8 is complete in the changes based on
 `a2f6cf800`, with 58 passing focused checks. Its
 [completion record](araphor-analysis-migration.md#discovery-continuation-across-expired-input)
-identifies the capture, native SQL and Data transaction owners. The other rows
+identifies the capture, native SQL and Data transaction owners. Item 7 is
+complete in the changes based on `64f4a9d9c`, with 29 passing focused checks.
+Its [completion record](araphor-analysis-migration.md#recorded-policy-preview-through-query)
+identifies the Query result and Control policy owners. The other rows
 retain the status audit.
 `Done` means that the stated behavior has a current implementation and mapped
 focused checks. It does not claim a new full-workspace CI result. `Not done`
@@ -73,7 +76,7 @@ identifies a specific remaining part of an otherwise implemented item.
 | 4. Discovery window completion and evidence | Done | Query window events seal profiles. Data retains the captured evidence. A later interval remains separate. |
 | 5. Exact versions for each profile | Done | Retained profiles bind exact input, context, definition and package versions. A code change closes the old interval. |
 | 6. Finite execution, refresh, reads and replay | Done | Current Analysis and Instance operations provide finite work, repair, authorized reads and replay from retained inputs. Missing frozen inputs or code return an explicit unavailable result. |
-| 7. Context, groups and baseline comparison | Not done | Native context, grouping and baseline operations are implemented. The Control recorded-preview consumer remains detached from the current Analysis owner. |
+| 7. Context, groups and baseline comparison | Done | Native context, grouping and baseline operations remain in Analysis. Control consumes the validated installed Query call result for static policy preview. |
 | 8. Discovery after an expired data range | Done | Native SQL processes captured retained records and exact expiry proofs. Data commits proven gaps, profile and progress together. Prefix, interior, multiple and expired-tail cases pass; unexplained holes and out-of-cut expiry cannot advance progress. |
 | 9. Graph and detector execution from Query events | Done | Native source subscriptions use the shared Host for detector execution, graph publication, expiry and recovery. Control starts this path independently of Discovery. |
 | 10. Notification execution from Query events | Done | Native subscriptions and the shared Host drive delivery, retries, ACK deadlines, restart and current permission checks. |
@@ -81,7 +84,7 @@ identifies a specific remaining part of an otherwise implemented item.
 | 12. Data and Wasm cancellation without periodic checks | Done | Wasm and Data lock waits use events and exact deadlines. Data sends one native interrupt at expiry and waits for an event. A native interrupt scope preserves cancellation across statement resets. |
 | 13. Configurable quotas, disabled by default | Not done | SDK package quotas are removed and Query/runtime quotas default to disabled. Mandatory evidence-admission defaults and the remaining resource-boundary audit are still open. |
 
-Result: **14 Done; 2 Not done**. The remaining items are **7 and 13**.
+Result: **15 Done; 1 Not done**. The remaining item is **13**.
 The separate 6,000-line production Rust reduction target still requires a
 current count and further simplification. Reference removal is complete.
 
@@ -658,8 +661,8 @@ execution and SDK metadata pass 55 focused checks.
 
 ### 7. Context selection, display groups, and baseline comparison
 
-**Status: Not done.** The finite operations are implemented. The Control
-recorded-preview consumer remains disconnected.
+**Status: Done.** Control consumes the current Query result through the
+existing Analysis output adapter.
 
 - **Before:** Callers could import and select permitted context, group behavior
   records for display, and compare current behavior with a reviewed baseline.
@@ -667,10 +670,13 @@ recorded-preview consumer remains disconnected.
   [context selection](../../crates/araphor-analysis/src/context/selection.rs).
   Native SQL and the [output adapter](../../crates/araphor-analysis/src/discovery/output.rs)
   supply grouping and reviewed-baseline comparison. Their finite assertions
-  are retained. Control's `discovery/mod.rs` compiles only policy code; its
-  [recorded-preview file](../../crates/mithril-control/src/discovery/preview.rs)
-  still refers to the retired crate and has no active module. Connect that
-  consumer to the current native path. Do not create another computation owner.
+  are retained. Control's public
+  [recorded-preview constructor](../../crates/mithril-control/src/discovery/preview.rs)
+  accepts the manifest, candidate policy, opaque package call and Query result.
+  The existing Analysis adapter checks binding, tenant, source identity and
+  typed output. Control retains its compiler and simulator. Preview supports
+  exact File and Exec keys and rejects consuming exceptions. Every simulation
+  reports `NotAttempted`. No new execution or service owner is added.
 - **Required:** Preserve their results and permission checks in new Analysis.
   Connect Control preview and the existing callers to that path.
 - **Reuse:** [Context policy](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/discovery/context.rs),

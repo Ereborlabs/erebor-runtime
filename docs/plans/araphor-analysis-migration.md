@@ -3317,3 +3317,33 @@ comments: net **+104**. Builtin SQL adds 33 and removes 12 such lines: net
 **+21**, counted separately. Tests and documents do not count toward production
 Rust reduction. The remaining parity items are **7 and 13**. Complete migration
 and the overall 6,000-line production Rust reduction target remain **Not done**.
+
+
+## Recorded policy preview through Query
+
+Result: **Done** for TODO 7 in the changes based on `64f4a9d9c`.
+The [source route and focused commands](../guides/araphor-discovery-definition-review.md#recorded-policy-preview-through-query)
+identify the public constructor and existing computation owners.
+
+Control consumes the installed Query package call and result through
+`DiscoveryOwner::recorded_result`. The existing adapter checks binding, tenant,
+record source identity and typed output. Control retains the candidate policy
+compiler, static simulation and unsupported-family checks. A consuming
+exception cannot be proved from a recorded snapshot and is rejected. Every
+simulation reports `NotAttempted`. The result type replaces the unused marker
+owner. No runtime, snapshot reader, service or polling loop is added.
+
+All 29 distinct focused checks pass: five installed-component preview checks
+and 24 existing context and baseline checks. The preview cases execute the
+installed Wasm component through native Query planning. The compatibility
+cases retain cutoffs, permission, conflict, omission, grouping and baseline
+results. The source-revision label in the counts adapter comes from the
+manifest; independent rejection of that label is not claimed.
+
+Scoped formatting, whitespace checks and strict Clippy pass for the affected
+Control library and test targets. The linked guide records the exact command.
+Production Rust adds 10 and removes six nonblank lines, excluding comments:
+net **+4**. Moved and extended tests do not count as production reduction.
+TODO 13, complete migration and the overall 6,000-line production Rust reduction
+target remain **Not done**. Full-workspace CI, physical qualification and
+benchmarks were not run for this delivery.
