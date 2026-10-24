@@ -20,17 +20,19 @@ async fn traversal_replacement_history() -> TestResult {
         .iter()
         .map(|request| request.result_id.clone())
         .collect();
-    let mut selection = AnalysisSelectionV1::new(source().tenant_id, vec![source()]);
-    selection.select_graphs(Selection::Exact(historical.result_ids.clone()), None)?;
-    let retained = fixture
-        .selected(
-            historical,
-            selection,
-            Limits::default(),
-            Arc::new(AnalysisReadControl::default()),
-            SUBJECT_SQL,
-        )
-        .await?;
+    let mut expected = historical.result_ids.clone();
+    expected.sort();
+    let retained = fixture.query(historical, SUBJECT_SQL).await?;
+    let mut selected = retained
+        .0
+        .page
+        .extraction
+        .graph_traversal()
+        .ok_or("historical traversal receipt")?
+        .result_ids
+        .clone();
+    selected.sort();
+    assert_eq!(selected, expected);
     assert_eq!(
         retained.1.iter().map(RecordBatch::num_rows).sum::<usize>(),
         8
@@ -41,18 +43,27 @@ async fn traversal_replacement_history() -> TestResult {
             .read_result(source().tenant_id, &original.result_id)?,
         Some(original.body.clone())
     );
-    let mut absent = TraversalFixture::request(8);
-    absent.result_ids = vec!["graph:traversal:absent".into()];
-    let mut selection = AnalysisSelectionV1::new(source().tenant_id, vec![source()]);
-    selection.select_graphs(Selection::Exact(absent.result_ids.clone()), None)?;
+    let mut denied = TraversalFixture::request(8);
+    denied.result_ids = vec![original.result_id.clone()];
     let error = fixture
         .selected(
-            absent,
-            selection,
+            denied,
+            AnalysisSelectionV1::new(source().tenant_id, Vec::new()),
             Limits::default(),
             Arc::new(AnalysisReadControl::default()),
             SUBJECT_SQL,
         )
+        .await
+        .err()
+        .ok_or("graph result without source permission")?;
+    assert!(matches!(
+        TraversalFixture::data_error(error.as_ref()),
+        Some(araphor_data::Error::AnalysisReadDenied { .. })
+    ));
+    let mut absent = TraversalFixture::request(8);
+    absent.result_ids = vec!["graph:traversal:absent".into()];
+    let error = fixture
+        .query(absent, SUBJECT_SQL)
         .await
         .err()
         .ok_or("absent graph result")?;

@@ -1035,6 +1035,19 @@ impl AnalysisStore {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
         }
         limits.check_keys(selection)?;
+        let requested = selection
+            .graph_traversal
+            .as_ref()
+            .map(|request| request.result_ids.as_slice())
+            .filter(|ids| !ids.is_empty());
+        if requested.is_some_and(|ids| {
+            !selection.graphs.is_all()
+                && ids
+                    .iter()
+                    .any(|id| !selection.graphs.as_slice().contains(id))
+        }) {
+            return crate::AnalysisReadDeniedSnafu.fail();
+        }
         let limit = limits.input_bytes;
         if !selection.sources.is_all()
             && !selection.contexts.is_all()
@@ -1044,6 +1057,7 @@ impl AnalysisStore {
             && !selection.graphs.is_all()
             && !selection.obligations.is_all()
             && selection.nodes.is_empty()
+            && requested.is_none()
         {
             return Ok((Cow::Borrowed(selection), 0));
         }
@@ -1073,9 +1087,12 @@ impl AnalysisStore {
             Selection::All => Vec::new(),
             Selection::Exact(keys) => keys,
         });
-        resolved.graphs = Selection::Exact(match resolved.graphs {
-            Selection::All => Vec::new(),
-            Selection::Exact(keys) => keys,
+        resolved.graphs = Selection::Exact(match requested {
+            Some(ids) => ids.to_vec(),
+            None => match resolved.graphs {
+                Selection::All => Vec::new(),
+                Selection::Exact(keys) => keys,
+            },
         });
         resolved.obligations = Selection::Exact(match resolved.obligations {
             Selection::All => Vec::new(),
@@ -1100,6 +1117,7 @@ impl AnalysisStore {
             .retain(|identity| {
                 resolved.nodes.is_empty() || resolved.nodes.contains(&identity.node_id)
             });
+        limits.check_keys(&resolved)?;
         let mut bytes = resolved.allocation_bytes();
         if bytes > limit {
             return Err(error());
@@ -1297,7 +1315,7 @@ impl AnalysisStore {
             profiles.sort();
             profiles.dedup();
         }
-        if selection.graphs.is_all() {
+        if selection.graphs.is_all() && requested.is_none() {
             let mut statement = snapshot.prepare(
                 "SELECT result_id FROM analysis_results
                  WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND stream_key = ?
@@ -2582,7 +2600,90 @@ mod tests {
                 &control,
                 AnalysisExtractLimits::default(),
             )?;
-            assert_eq!(resolved.graphs(), &[replacement.result_id]);
+            assert_eq!(
+                resolved.graphs(),
+                std::slice::from_ref(&replacement.result_id)
+            );
+
+            let traversal = crate::GraphTraversalV1 {
+                seeds: vec![fixture
+                    .snapshot
+                    .graph
+                    .subjects
+                    .first()
+                    .ok_or_else(|| fixture.store.state_error("the graph has no seed"))?
+                    .clone()],
+                result_ids: vec![fixture.request.result_id.clone()],
+                ..Default::default()
+            };
+            let mut requested = all.clone();
+            requested.select_graphs(Selection::All, Some(traversal.clone()))?;
+            let (resolved, bytes) = fixture.store.resolve_selection(
+                reader,
+                &requested,
+                &control,
+                AnalysisExtractLimits::default(),
+            )?;
+            assert_eq!(resolved.graphs(), traversal.result_ids);
+            assert!(bytes >= resolved.allocation_bytes());
+            for limits in [
+                AnalysisExtractLimits {
+                    keys: Some(requested.key_count()),
+                    ..Default::default()
+                },
+                AnalysisExtractLimits {
+                    input_bytes: requested.allocation_bytes(),
+                    ..Default::default()
+                },
+            ] {
+                assert!(matches!(
+                    fixture
+                        .store
+                        .resolve_selection(reader, &requested, &control, limits),
+                    Err(crate::Error::AnalysisInputTooLarge {
+                        resource: "selected input keys",
+                        ..
+                    })
+                ));
+            }
+
+            let mut permitted = exact.clone();
+            permitted.select_graphs(Selection::Exact(ids.clone()), Some(traversal.clone()))?;
+            let (resolved, _) = fixture.store.resolve_selection(
+                reader,
+                &permitted,
+                &control,
+                AnalysisExtractLimits::default(),
+            )?;
+            assert_eq!(resolved.graphs(), traversal.result_ids);
+            assert!(matches!(
+                fixture.store.resolve_selection(
+                    reader,
+                    &permitted,
+                    &control,
+                    AnalysisExtractLimits {
+                        keys: Some(permitted.key_count() - 1),
+                        ..Default::default()
+                    },
+                ),
+                Err(crate::Error::AnalysisInputTooLarge {
+                    resource: "selected input keys",
+                    ..
+                })
+            ));
+            for graphs in [vec![replacement.result_id.clone()], Vec::new()] {
+                let mut denied = exact.clone();
+                denied.select_graphs(Selection::Exact(graphs), Some(traversal.clone()))?;
+                assert!(matches!(
+                    fixture.store.resolve_selection(
+                        reader,
+                        &denied,
+                        &control,
+                        AnalysisExtractLimits::default(),
+                    ),
+                    Err(crate::Error::AnalysisReadDenied { .. })
+                ));
+            }
             Ok(())
         })?;
         Ok(())

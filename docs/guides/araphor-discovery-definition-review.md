@@ -2558,3 +2558,38 @@ The bundled cc backend is tested on this Linux host. Strict Clippy passes for
 Data, Query and Package Runtime, including their test targets. The CMake
 backend and other platforms are not executed. No
 full-workspace CI or performance result is claimed.
+
+## Traversal requests select saved graph versions
+
+This delivery covers the working-tree changes based on `98df70280`.
+DataFusion retains query parsing, planning, optimization and physical execution.
+Data resolves the permitted graph versions inside the existing captured read.
+The SDK completeness metadata part of TODO 3 remains **Not done**.
+
+### Intended end state
+
+A traversal that requests old result R1 reads R1 after R2 replaces the current
+head. The requested ID cannot widen the caller's tenant, source or binding
+permission. An empty ID list retains the current-head selection.
+
+[AnalysisStore::resolve_selection](../../crates/araphor-data/src/analysis/extraction.rs) Data receives a permitted selection and a traversal request
+  -> [AnalysisStore::resolve_selection](../../crates/araphor-data/src/analysis/extraction.rs) Data checks requested IDs against an explicit graph selection
+  -> [AnalysisStore::resolve_selection](../../crates/araphor-data/src/analysis/extraction.rs) Data resolves nonempty request IDs before current-head expansion
+  -> [GraphRows](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) the existing reader loads those exact retained versions
+  -> [AnalysisStore::traversal_scope](../../crates/araphor-data/src/analysis/extraction/graph/traversal/versions.rs) Data checks source and binding permission in the same snapshot
+
+The resolver checks the input selection and the normalized selection with the
+existing optional key and byte budgets. It adds no limit, selection owner,
+codec or read transaction. Missing versions retain the existing read-denied
+result. The prior borrowed fast path cannot bypass the requested-ID check.
+
+The [Data history check](../../crates/araphor-data/src/analysis/extraction.rs)
+passes for current heads, old pins under `All`, explicit allowed subsets,
+denied subsets and configured allocation accounting. The
+[native traversal history check](../../crates/araphor-analysis/src/graph/tests/traversal/recovery.rs)
+now requests old and absent IDs without a second selection workaround. It also
+checks a requested version with no permitted source. Both focused checks and
+formatting pass. Strict Clippy for the complete TODO 3 delivery is pending.
+The correction adds 18 nonblank production Rust lines, excluding comments.
+The overall production reduction target remains open. No full-workspace CI or
+performance result is claimed.

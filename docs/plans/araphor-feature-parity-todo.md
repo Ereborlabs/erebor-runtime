@@ -61,7 +61,7 @@ identifies a specific remaining part of an otherwise implemented item.
 | 16. Running Discovery instances | Done | Public lifecycle commands, independent instances, shared Query subscriptions, atomic state/progress, stop, current authority and restart recovery are implemented. |
 | 1. Package operations and saved state | Done | Image and Instance owners provide install, inspect, qualification, execution, update, rollback, removal and retained replay. SQL, Wasm and native calls preserve state and exact retry rules. |
 | 2. Installed package calls in SQL | Done | Native logical and physical package-call extensions execute SQL, Wasm and native exports with captured Arrow inputs, parameters and prior state. |
-| 3. Graph history and SDK input metadata | Not done | Historical selection works, but traversal request `result_ids` do not select versions by themselves. SDK coverage still omits selected-graph completeness and traversal boundaries. |
+| 3. Graph history and SDK input metadata | Not done | Traversal request `result_ids` now select permitted historical versions before current-head expansion. SDK coverage still omits selected-graph completeness and traversal boundaries. |
 | 4. Discovery window completion and evidence | Done | Query window events seal profiles. Data retains the captured evidence. A later interval remains separate. |
 | 5. Exact versions for each profile | Done | Retained profiles bind exact input, context, definition and package versions. A code change closes the old interval. |
 | 6. Finite execution, refresh, reads and replay | Done | Current Analysis and Instance operations provide finite work, repair, authorized reads and replay from retained inputs. Missing frozen inputs or code return an explicit unavailable result. |
@@ -544,17 +544,19 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 3. Graph history and SDK input metadata
 
-**Status: Not done.** Historical selection and graph input execution are
-implemented. Two request and metadata gaps remain.
+**Status: Not done.** Historical selection, request version pins and graph input
+execution are implemented. The SDK metadata gap remains.
 
 - **Before:** A traversal could select an exact old graph version. SDK inputs
   included graph completeness, missing-data reasons, and traversal boundaries.
 - **Now:** Native Query supplies graph datasets and exact historical selection
   through `AnalysisSelectionV1.graphs`. Data's
-  [traversal entry](../../crates/araphor-data/src/analysis/extraction/graph/traversal.rs)
-  does not pass the request's `result_ids` to version selection. The
+  [selection resolver](../../crates/araphor-data/src/analysis/extraction.rs)
+  applies nonempty request `result_ids` before it expands current graph heads.
+  Explicit selections cannot widen. Existing tenant, source, binding and
+  configured allocation checks remain. The
   [history test](../../crates/araphor-analysis/src/graph/tests/traversal/recovery.rs)
-  sets both selections itself. The
+  now supplies the version IDs only in the request. The
   [SDK receipt](../../crates/araphor-query/src/inputs/receipt.rs) combines source
   and inherited package coverage but does not add selected-graph completeness
   or traversal boundaries. Preserve the already transferred graph input tests.
