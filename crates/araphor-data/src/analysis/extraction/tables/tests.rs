@@ -434,6 +434,33 @@ fn unrequested_json_is_not_serialized() -> TestResult {
 }
 
 #[test]
+fn native_offsets_reject_overflow() -> TestResult {
+    for (length, expected) in [
+        (i32::MAX as usize, "selected input bytes"),
+        (i32::MAX as usize + 1, "native source Arrow allocation"),
+    ] {
+        let (mut output, control) = extraction()?;
+        output.limits.input_bytes = output.input_bytes + 4096;
+        let mut budget = output.sink(&control);
+        let schema = Arc::new(sdk::Schema::new(vec![sdk::Field::new(
+            "payload",
+            sdk::DataType::Binary,
+            false,
+        )]));
+        let mut table = Table::new(schema, &["payload"], &mut budget)?;
+        table.cell(0, &sdk::DataType::Binary, false, length)?;
+        table.measure()?;
+        assert!(matches!(
+            table.reserve(&mut budget),
+            Err(crate::Error::AnalysisInputTooLarge { resource, .. }) if resource == expected
+        ));
+        assert_eq!(table.total_rows, 0);
+        assert!(table.batches.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
 fn capacity_is_admitted_before_native_buffer_mutation() -> TestResult {
     let (mut output, control) = extraction()?;
     let columns = columns("events", &["source_cursor"])?;

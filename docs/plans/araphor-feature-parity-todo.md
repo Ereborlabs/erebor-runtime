@@ -47,9 +47,13 @@ The call fails, loses permission, or is cancelled
 ## Current status on 2026-10-23
 
 The status audit checked `9243df7030e735fc3ae4ec48f94235406d7dfc8b`. Item 12
-now includes the working-tree changes based on `d596f463` and 33 passing focused
-checks. Its [completion record](araphor-analysis-migration.md#scoped-native-interruption)
-identifies the source and verification. The other rows retain the status audit.
+is complete in `98df70280`, with 33 passing focused checks. Its
+[completion record](araphor-analysis-migration.md#scoped-native-interruption)
+identifies the source and verification. Item 3 includes the history correction
+in `8b8a119b7` and the metadata changes based on that commit, with 55 passing
+focused checks. Its
+[completion record](araphor-analysis-migration.md#graph-history-and-sdk-input-metadata)
+identifies the owners and proof. The other rows retain the status audit.
 `Done` means that the stated behavior has a current implementation and mapped
 focused checks. It does not claim a new full-workspace CI result. `Not done`
 identifies a specific remaining part of an otherwise implemented item.
@@ -61,7 +65,7 @@ identifies a specific remaining part of an otherwise implemented item.
 | 16. Running Discovery instances | Done | Public lifecycle commands, independent instances, shared Query subscriptions, atomic state/progress, stop, current authority and restart recovery are implemented. |
 | 1. Package operations and saved state | Done | Image and Instance owners provide install, inspect, qualification, execution, update, rollback, removal and retained replay. SQL, Wasm and native calls preserve state and exact retry rules. |
 | 2. Installed package calls in SQL | Done | Native logical and physical package-call extensions execute SQL, Wasm and native exports with captured Arrow inputs, parameters and prior state. |
-| 3. Graph history and SDK input metadata | Not done | Traversal request `result_ids` now select permitted historical versions before current-head expansion. SDK coverage still omits selected-graph completeness and traversal boundaries. |
+| 3. Graph history and SDK input metadata | Done | Traversal request `result_ids` select permitted historical versions. SDK inputs retain saved graph coverage, missing-data reasons and traversal boundaries from the same captured revision, including empty graphs. |
 | 4. Discovery window completion and evidence | Done | Query window events seal profiles. Data retains the captured evidence. A later interval remains separate. |
 | 5. Exact versions for each profile | Done | Retained profiles bind exact input, context, definition and package versions. A code change closes the old interval. |
 | 6. Finite execution, refresh, reads and replay | Done | Current Analysis and Instance operations provide finite work, repair, authorized reads and replay from retained inputs. Missing frozen inputs or code return an explicit unavailable result. |
@@ -73,7 +77,7 @@ identifies a specific remaining part of an otherwise implemented item.
 | 12. Data and Wasm cancellation without periodic checks | Done | Wasm and Data lock waits use events and exact deadlines. Data sends one native interrupt at expiry and waits for an event. A native interrupt scope preserves cancellation across statement resets. |
 | 13. Configurable quotas, disabled by default | Not done | SDK package quotas are removed and Query/runtime quotas default to disabled. Mandatory evidence-admission defaults and the remaining resource-boundary audit are still open. |
 
-Result: **12 Done; 4 Not done**. The remaining items are **3, 7, 8 and 13**.
+Result: **13 Done; 3 Not done**. The remaining items are **7, 8 and 13**.
 The separate 6,000-line production Rust reduction target still requires a
 current count and further simplification. Reference removal is complete.
 
@@ -544,8 +548,8 @@ contracts remain. Their presence does not qualify a complete producing path.
 
 ### 3. Graph history and SDK input metadata
 
-**Status: Not done.** Historical selection, request version pins and graph input
-execution are implemented. The SDK metadata gap remains.
+**Status: Done.** Historical selection, request version pins, graph input
+execution and SDK metadata pass 55 focused checks.
 
 - **Before:** A traversal could select an exact old graph version. SDK inputs
   included graph completeness, missing-data reasons, and traversal boundaries.
@@ -557,9 +561,15 @@ execution are implemented. The SDK metadata gap remains.
   configured allocation checks remain. The
   [history test](../../crates/araphor-analysis/src/graph/tests/traversal/recovery.rs)
   now supplies the version IDs only in the request. The
-  [SDK receipt](../../crates/araphor-query/src/inputs/receipt.rs) combines source
-  and inherited package coverage but does not add selected-graph completeness
-  or traversal boundaries. Preserve the already transferred graph input tests.
+  [SDK receipt](../../crates/araphor-query/src/inputs/receipt.rs) uses saved
+  coverage for graph inputs and retains source and inherited package coverage
+  for other inputs. A known graph gap remains `Gapped`. A traversal boundary
+  adds `GRAPH_HOP_BOUNDARY` and makes otherwise complete coverage `Unknown`.
+  Empty selected graphs retain their coverage and Arrow schemas. Native Query
+  supplies all inputs from one captured revision. The
+  [installed Wasm checks](../../crates/araphor-analysis/src/graph/tests/traversal/metadata.rs)
+  compare the guest's rows, schemas, revisions and coverage with those inputs.
+  Existing traversal, permission, history, buffer and allocation checks pass.
 - **Required:** Return the requested permitted version. Report whether that
   graph input is complete, incomplete, or limited by the traversal. Keep all
   input datasets under the same captured source revision.

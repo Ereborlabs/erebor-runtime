@@ -3243,3 +3243,35 @@ Qualification covers the bundled cc backend on this Linux host. CMake and
 other platforms are not executed. No full-workspace CI or benchmark runs.
 The remaining parity items are 3, 7, 8 and 13. Complete migration and the
 6,000-line production Rust reduction target remain **Not done**.
+
+## Graph history and SDK input metadata
+
+Result: **Done** for TODO 3. The history correction is in `8b8a119b7`.
+The metadata delivery covers the working-tree changes based on that commit.
+Read the [source route and exact focused commands](../guides/araphor-discovery-definition-review.md#captured-graph-coverage-in-sdk-inputs).
+
+Data resolves requested retained graph IDs before current-head expansion. It
+keeps tenant, source, binding and explicit-selection checks in the captured
+read. Data captures SDK coverage from the typed graph headers it already
+loads, including empty selected graphs. Query builds each graph input receipt
+from those captured references and the traversal receipt. Known gaps, missing
+data reasons and hop boundaries reach the installed package. Other inputs
+retain their existing coverage rules. The SDK coverage heap-size count replaces
+two duplicate counts. There is no new parser, planner, executor, codec,
+subscription owner, store read, polling loop or contract version.
+
+All 55 distinct focused cases pass: 15 SDK checks, 21 Data checks, eight Query
+checks and 11 Analysis traversal checks. The installed Wasm component returns
+the same rows, schemas, revisions and coverage that native Query supplies.
+The checks retain permission denial, exact history, empty graphs, buffer
+lifetime, configured resource bounds and native Arrow offset overflow.
+Scoped formatting and strict Clippy pass for all four affected owners,
+including test targets. Full-workspace CI, other platforms and benchmarks do
+not run for this bounded delivery.
+
+The metadata change adds 174 and removes 29 nonblank production Rust lines,
+excluding comments: net **+145**. The history correction adds 18. Complete
+TODO 3 therefore adds **163** production lines. Tests, documents, blank lines
+and copied code do not count toward production reduction. The remaining
+parity items are **7, 8 and 13**. Complete migration and the 6,000-line
+production Rust reduction target remain **Not done**.

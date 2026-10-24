@@ -113,7 +113,16 @@ impl TraversalFixture {
         result_id: &str,
     ) -> TestResult {
         let original = &self.requests[window];
-        snapshot.previous_result_id = Some(original.result_id.clone());
+        let head = self
+            .store
+            .graph_window_headers(
+                &original.scope.identity,
+                snapshot.first_cursor.checked_sub(1),
+            )?
+            .into_iter()
+            .find(|(_, head, _)| head.first_cursor == snapshot.first_cursor)
+            .ok_or("the replacement graph window is absent")?;
+        snapshot.previous_result_id = Some(head.0);
         let mut request = original.clone();
         request.result_id = result_id.into();
         request.expected_cursor = self.requests.len() as u64;

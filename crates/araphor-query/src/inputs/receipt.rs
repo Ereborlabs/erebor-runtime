@@ -307,6 +307,23 @@ impl Inputs {
                 .iter()
                 .any(|origin| origin.durable() == Some(name))
         };
+        let graph_source = |name: &str| {
+            matches!(
+                name,
+                "findings"
+                    | "relationships"
+                    | "graph_subjects"
+                    | "graph_branches"
+                    | "correlation_packages"
+                    | "policy_observations"
+                    | "graph_manifest"
+            )
+        };
+        let has_graph = port
+            .origins
+            .iter()
+            .filter_map(SourceOrigin::durable)
+            .any(graph_source);
         let target_only = has("targets")
             && !has("events")
             && !has("context")
@@ -320,23 +337,18 @@ impl Inputs {
             |origin: &AnalysisReferenceOriginV1, key: Option<&AnalysisContextKeyV1>| match origin {
                 AnalysisReferenceOriginV1::Context => key.is_some_and(context),
                 AnalysisReferenceOriginV1::Profile => has("behaviors") || has("discovery_state"),
-                AnalysisReferenceOriginV1::Graph => [
-                    "findings",
-                    "relationships",
-                    "graph_subjects",
-                    "graph_branches",
-                    "correlation_packages",
-                    "policy_observations",
-                    "graph_manifest",
-                ]
-                .iter()
-                .any(|name| has(name)),
+                AnalysisReferenceOriginV1::Graph => has_graph,
                 AnalysisReferenceOriginV1::Notification => has("notifications"),
                 AnalysisReferenceOriginV1::ExplicitResult => package.is_none(),
                 AnalysisReferenceOriginV1::Package(index) => scope.packages.contains(index),
             };
         let mut contexts = Vec::new();
         let mut results = Vec::new();
+        let mut graph_count = 0;
+        let mut graph_coverage = sdk::Coverage {
+            state: sdk::CoverageState::Complete,
+            limits: Vec::new(),
+        };
         for reference in &snapshot.page.extraction.references {
             match reference {
                 AnalysisReferenceV1::Context { reference, origins }
@@ -350,6 +362,24 @@ impl Inputs {
                     if origins.iter().any(|origin| includes(origin, None)) =>
                 {
                     results.push(reference);
+                    if has_graph && origins.contains(&AnalysisReferenceOriginV1::Graph) {
+                        let saved = snapshot
+                            .page
+                            .extraction
+                            .graph_coverage(&reference.result_id)
+                            .ok_or_else(|| {
+                                araphor_data::PackageErrorCodeV1::Incomplete
+                                    .error("captured graph coverage")
+                            })?;
+                        if saved.state == sdk::CoverageState::Gapped
+                            || (saved.state == sdk::CoverageState::Unknown
+                                && graph_coverage.state != sdk::CoverageState::Gapped)
+                        {
+                            graph_coverage.state = saved.state;
+                        }
+                        graph_coverage.limits.extend(saved.limits.iter().cloned());
+                        graph_count += 1;
+                    }
                 }
                 _ => {}
             }
@@ -410,7 +440,43 @@ impl Inputs {
             .missing_contexts
             .iter()
             .any(context);
-        let mut coverage = Self::source_coverage(&sources, missing)?;
+        if has_graph {
+            if graph_count == 0 {
+                graph_coverage.state = sdk::CoverageState::Unknown;
+                graph_coverage
+                    .limits
+                    .push("NO_SELECTED_GRAPH_VERSION".into());
+            }
+            if snapshot
+                .page
+                .extraction
+                .graph_traversal()
+                .is_some_and(|receipt| receipt.hop_boundary)
+            {
+                if graph_coverage.state != sdk::CoverageState::Gapped {
+                    graph_coverage.state = sdk::CoverageState::Unknown;
+                }
+                graph_coverage.limits.push("GRAPH_HOP_BOUNDARY".into());
+            }
+            graph_coverage.limits.sort_unstable();
+            graph_coverage.limits.dedup();
+        }
+        let mut coverage = if has_graph
+            && port
+                .origins
+                .iter()
+                .filter_map(SourceOrigin::durable)
+                .all(graph_source)
+        {
+            graph_coverage
+        } else {
+            let source = Self::source_coverage(&sources, missing)?;
+            if has_graph {
+                Self::coverage([&source, &graph_coverage].into_iter())
+            } else {
+                source
+            }
+        };
         let mut inherited = inherited.collect::<Vec<_>>();
         inherited.sort_by_key(|input| {
             let input = *input;

@@ -182,6 +182,17 @@ impl Output {
     }
 }
 
+impl Coverage {
+    pub fn metadata_bytes(&self) -> usize {
+        self.limits.iter().fold(
+            self.limits
+                .capacity()
+                .saturating_mul(std::mem::size_of::<String>()),
+            |bytes, limit| bytes.saturating_add(limit.capacity()),
+        )
+    }
+}
+
 impl Input {
     pub fn metadata_bytes(&self) -> usize {
         self.data

@@ -4,6 +4,7 @@ use std::mem::size_of;
 use std::ops::Bound;
 use std::sync::Arc;
 
+use araphor_analysis_sdk as sdk;
 use duckdb::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
@@ -671,6 +672,7 @@ pub struct AnalysisExtractionV1 {
     pub input_bytes: usize,
     pub(crate) trace_reads: Vec<[u8; 16]>,
     pub(crate) graph_traversal: Option<crate::GraphTraversalReceiptV1>,
+    graph_coverage: Vec<(String, sdk::Coverage)>,
     pub(crate) limits: AnalysisExtractLimits,
 }
 
@@ -733,7 +735,17 @@ impl AnalysisExtractionV1 {
                 self.graph_traversal
                     .as_ref()
                     .map_or(0, crate::GraphTraversalReceiptV1::heap_bytes),
+            )
+            .saturating_add(
+                self.graph_coverage
+                    .capacity()
+                    .saturating_mul(size_of::<(String, sdk::Coverage)>()),
             );
+        for (id, coverage) in &self.graph_coverage {
+            bytes = bytes
+                .saturating_add(id.capacity())
+                .saturating_add(coverage.metadata_bytes());
+        }
         for source in &self.sources {
             bytes = bytes
                 .saturating_add(source.receipt.identity.node_id.capacity())
@@ -934,6 +946,12 @@ impl AnalysisExtractionV1 {
     }
     pub fn graph_traversal(&self) -> Option<&crate::GraphTraversalReceiptV1> {
         self.graph_traversal.as_ref()
+    }
+    pub fn graph_coverage(&self, id: &str) -> Option<&sdk::Coverage> {
+        self.graph_coverage
+            .binary_search_by(|entry| entry.0.as_str().cmp(id))
+            .ok()
+            .map(|index| &self.graph_coverage[index].1)
     }
     fn sink<'a>(&'a mut self, control: &'a AnalysisReadControl) -> ReadBudget<'a> {
         self.row_budget(control, None)
@@ -1588,6 +1606,7 @@ impl AnalysisStore {
                 input_bytes: 0,
                 trace_reads: Vec::new(),
                 graph_traversal: None,
+                graph_coverage: Vec::new(),
                 limits,
                 replay_floor: Self::replay_floor_from(snapshot, selection.tenant_id)?,
             };
@@ -1930,6 +1949,7 @@ impl AnalysisStore {
                     }
                 }
                 graph.validate()?;
+                output.capture_graph(id, &graph, control)?;
                 let contexts = if graph_contexts {
                     self.graph_contexts(snapshot, selection.tenant_id, id, &mut output, control)?
                 } else { Vec::new() };

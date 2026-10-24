@@ -47,6 +47,7 @@ impl AnalysisStore {
                                 })
                         }))
                 {
+                    output.capture_graph(id, &header.snapshot, control)?;
                     let id = id.to_owned();
                     output.charge(id.capacity().saturating_add(bytes.capacity()))?;
                     let added = AnalysisExtractionV1::grow(

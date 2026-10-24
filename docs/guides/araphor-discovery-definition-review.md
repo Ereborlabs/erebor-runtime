@@ -2564,7 +2564,8 @@ full-workspace CI or performance result is claimed.
 This delivery covers the working-tree changes based on `98df70280`.
 DataFusion retains query parsing, planning, optimization and physical execution.
 Data resolves the permitted graph versions inside the existing captured read.
-The SDK completeness metadata part of TODO 3 remains **Not done**.
+That delivery leaves the SDK completeness metadata part of TODO 3 **Not done**.
+The later [metadata delivery](#captured-graph-coverage-in-sdk-inputs) closes it.
 
 ### Intended end state
 
@@ -2589,7 +2590,110 @@ denied subsets and configured allocation accounting. The
 [native traversal history check](../../crates/araphor-analysis/src/graph/tests/traversal/recovery.rs)
 now requests old and absent IDs without a second selection workaround. It also
 checks a requested version with no permitted source. Both focused checks and
-formatting pass. Strict Clippy for the complete TODO 3 delivery is pending.
+formatting pass. Strict Clippy for the complete TODO 3 delivery passes with the
+metadata delivery below.
 The correction adds 18 nonblank production Rust lines, excluding comments.
 The overall production reduction target remains open. No full-workspace CI or
 performance result is claimed.
+
+## Captured graph coverage in SDK inputs
+
+This delivery covers the working-tree changes based on `8b8a119b7`.
+Result: **Done** for TODO 3. DataFusion retains parsing, logical planning,
+optimization, physical planning and execution. No query language, graph row
+codec, planner, executor or subscription owner is added.
+
+### Read in this order
+
+1. [Data extraction](../../crates/araphor-data/src/analysis/extraction.rs)
+   owns the permitted read snapshot, graph-version selection and allocation
+   accounting. Its read-only `graph_coverage` lookup exposes captured metadata.
+2. [Graph capture](../../crates/araphor-data/src/analysis/extraction/graph.rs)
+   converts the already loaded typed manifest to SDK coverage. The
+   [traversal header path](../../crates/araphor-data/src/analysis/extraction/graph/traversal/versions.rs)
+   does this before it skips empty graph rows. It adds no store read.
+3. [Capture completion](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs)
+   sorts the captured graph IDs once. The lookup uses binary search. Existing
+   Data budgets charge the vector, IDs and reason strings.
+4. [Query receipts](../../crates/araphor-query/src/inputs/receipt.rs) combine
+   coverage only for the selected graph result references. A missing captured
+   entry returns the existing incomplete-input error. The existing receipt
+   hash still owns the input revision.
+5. [SDK coverage](../../crates/araphor-analysis-sdk/src/evaluation.rs) owns one
+   heap-size count for coverage strings. SDK Memory and Data capture reuse it.
+   The SDK contract, wire format and versions do not change.
+6. [Installed Wasm checks](../../crates/araphor-analysis/src/graph/tests/traversal/metadata.rs)
+   execute the existing `echo-inputs` component through native Query. They
+   compare returned rows, schemas, revisions and coverage with the captured
+   inputs.
+
+```mermaid
+sequenceDiagram
+    participant Data
+    participant Query
+    participant Package
+    Query->>Data: Capture permitted graph versions and rows
+    Data-->>Query: Arrow batches, graph coverage and traversal receipt
+    Query->>Query: Build each port's receipt from the captured references
+    Query->>Package: Execute the installed call with typed inputs
+    Package-->>Query: Return datasets and echoed input metadata
+```
+
+Graph inputs use the selected saved versions' coverage. They do not decode
+current source coverage and then discard it. Within graph coverage, a known
+gap takes precedence over an unknown range. Missing ranges add
+`GRAPH_INPUT_GAPS`. Reason strings are unique and sorted. No selected graph
+version returns `Unknown` with `NO_SELECTED_GRAPH_VERSION`. A traversal
+boundary adds `GRAPH_HOP_BOUNDARY` and returns `Unknown`, unless a known gap
+already requires `Gapped`. Event and local-only inputs receive no graph reason.
+Mixed and inherited inputs retain the existing general coverage combination.
+
+Empty graphs retain coverage even when SQL does not project `graph_manifest`.
+Their Arrow schemas remain present. Existing input reservations retain their
+buffers until the final reference drops. The fixture replacement helper now
+reads the current window head once before it replaces that window. Production
+still rejects a replacement that names a stale parent.
+
+### Focused proof
+
+All 55 distinct focused cases pass: 15 SDK checks, 21 Data checks, eight Query
+checks and 11 Analysis traversal checks. The checks cover exact old versions,
+tenant/source/binding permission, complete and unknown coverage, known gaps,
+empty graphs, hop boundaries, buffer lifetime, configured allocation limits
+and native Arrow offset overflow. The overflow check supplies lengths to the
+existing native table builder; it makes no large allocation. The seven old
+graph SDK assertion groups remain covered by these connected checks.
+
+Build the affected test targets with this command:
+
+```sh
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=1 CARGO_PROFILE_TEST_DEBUG=1 \
+  cargo test --locked --offline -p araphor-analysis-sdk -p araphor-data -p araphor-query -p araphor-analysis --lib --no-run --message-format=short
+```
+
+The final passing binaries under `target/debug/deps` use these selections.
+Each command ends with `--test-threads=2`:
+
+```sh
+araphor_analysis_sdk-bf0f6cb2d84c047e memory::tests:: tests::graph:: wire::tests::buffers:: --test-threads=2
+araphor_data-1ac346e6fdbeb57b analysis::extraction::tables::tests:: analysis::extraction::tests::analysis_exact_graph_history --test-threads=2
+araphor_query-efab3e35827cb2fd ports_keep_cursor_union dependent_ports_share_indices materialized_name_is_not_durable port_receipts_stay_scoped disjoint_ports_exclude_gap_witness function_does_not_inherit_table registration_reuses_input_claims buffers_outlive_producer_permits --test-threads=2
+araphor_analysis-4841a56580799f87 graph::tests::traversal:: --test-threads=2
+```
+
+The final fixture correction is built with the same environment and
+`cargo test --locked --offline -p araphor-analysis --lib --no-run --message-format=short`.
+The other three binaries cover unchanged final source. Scoped formatting and
+strict Clippy pass. Clippy includes all four affected owners and their tests:
+
+```sh
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=1 CARGO_PROFILE_TEST_DEBUG=1 \
+  cargo clippy --locked --offline -p araphor-analysis-sdk -p araphor-data -p araphor-query -p araphor-analysis --lib --tests --message-format=short -- -D warnings
+```
+
+This metadata delivery adds 174 and removes 29 nonblank production Rust lines,
+excluding comments: net **+145**. Together with the history correction, TODO 3
+adds **163** such lines. Tests and documents are excluded. The overall
+6,000-line reduction target remains open. Qualification covers this Linux
+host and the installed Wasm component. Full-workspace CI, other platforms and
+benchmarks do not run for this delivery.

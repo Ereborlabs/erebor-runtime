@@ -283,14 +283,7 @@ impl<'a> Capture<'a> {
     }
 
     fn package_bytes(coverage: &sdk::Coverage) -> usize {
-        size_of::<(usize, sdk::Coverage)>()
-            .saturating_add(
-                coverage
-                    .limits
-                    .capacity()
-                    .saturating_mul(size_of::<String>()),
-            )
-            .saturating_add(coverage.limits.iter().map(String::capacity).sum::<usize>())
+        size_of::<(usize, sdk::Coverage)>().saturating_add(coverage.metadata_bytes())
     }
 
     pub(super) fn finish(
@@ -301,6 +294,9 @@ impl<'a> Capture<'a> {
         control: &AnalysisReadControl,
     ) -> Result<AnalysisPositionPageV1> {
         self.metadata(&mut extraction, control)?;
+        extraction
+            .graph_coverage
+            .sort_unstable_by(|left, right| left.0.cmp(&right.0));
         {
             let mut budget = extraction.sink(control);
             for table in self.tables.values_mut() {

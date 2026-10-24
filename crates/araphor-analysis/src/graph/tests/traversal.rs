@@ -20,6 +20,7 @@ use super::*;
 mod bindings;
 mod fixtures;
 mod limits;
+mod metadata;
 mod recovery;
 use fixtures::TraversalFixture;
 

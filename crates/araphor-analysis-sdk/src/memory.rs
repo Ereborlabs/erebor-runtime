@@ -194,17 +194,9 @@ impl Memory {
             .owner
             .capacity()
             .saturating_add(revision.id.capacity())
-            .saturating_add(
-                coverage
-                    .limits
-                    .capacity()
-                    .saturating_mul(size_of::<String>()),
-            );
+            .saturating_add(coverage.metadata_bytes());
         if let Some(window) = &revision.window {
             bytes = bytes.saturating_add(window.source.capacity());
-        }
-        for limit in &coverage.limits {
-            bytes = bytes.saturating_add(limit.capacity());
         }
         bytes
     }
