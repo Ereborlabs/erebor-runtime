@@ -432,3 +432,43 @@ This result qualifies the recorded lightweight Wasm path and its native Query
 integration. It adds no native-artifact, Python, performance, or physical
 claim. The complete requirement map and the paired physical incident remain
 Not done. Full workspace CI and benchmarks were not run.
+
+
+## Acceptance proof reconciliation
+
+**Mapped component proof: Done. Paired current physical incident: Not done.**
+The current source closes the identified component proof gaps. The following
+assignments preserve the limits of each retained result. They do not establish
+a complete integrated matrix or extend a supported platform.
+
+| Duty | Source-bound proof and limit |
+| --- | --- |
+| Installation and inspection | The four public image, definition, lifecycle, and receipt cases pass. Four current CLI cases check shared requests, tenant scope, archive input, and exact JSONL metadata. CLI and RPC equality is compositional. No launched CLI or exact Table-render equality is claimed. |
+| Instance lifecycle | The public lifecycle and receipt cases join the retained Host, window, cancellation, and recovery proof. Installation and admission stay inert. |
+| Reusable algorithms | Seven current corpus cases check recorded input, merge, comparison, distinct keys, schema, and duplicate projection. Retained native parity and executed locked SQL dependencies cover their separate boundaries. |
+| Correlation | Seven current Context cases, three Graph baselines, and seven domain cases preserve approval, lifetimes, unrelated identities, conflicting credentials, partial Kubernetes stages, and retained policy ACK checks. Retained credential integration supplies its original installed-execution proof. |
+| General computation | Retained traversal, limits, bindings, and history checks combine with captured SQL/PRQL and actual native physical execution. Native SQL planning and native ABI execution remain separate claims. |
+| Declared targets | Retained Wasm/native cases keep their recorded artifacts, source, and host target. SQL uses native DataFusion execution. Python is not advertised or qualified. |
+| Recovery and update | Retained version checks keep their original failed aggregate run and isolated passing retry. The recovery record contains 28 distinct cases across 32 executions. The current public receipt and required-detector cases add their recorded integration proof. |
+| Execution boundary | Two current Wasm checks prove the allowed import contract and malformed-output rejection. The native loader check proves sealed dependency linkage and entrypoint execution, then rejects a null ABI. It does not prove a valid dependent Arrow model. Existing native cancellation, fault, join, and durable-commit proof keeps its original scope. |
+| Mandatory detection | The current required-detector case checks failure, retention, repair, state, progress, and the same human deadline. SinkUnavailable is explicit. External notification delivery is not claimed. |
+| Physical incident | Open. Run the protected-file denial and benign read through the current deployed Control, shared Host, installed detector, and query subscriptions. Historical physical results and unregistered retired-executor files do not close this duty. |
+
+The new records are matrix-analysis.json (24 passed), matrix-cli.json
+(4 passed), matrix-wasm-boundary.json (2 passed), and
+matrix-native-dependency.json (1 passed). All 31 executions pass without a
+source change. matrix-source.json has 1,251 hashes and SHA-256
+dd3486471b23832d724e55f6302eeefe2f63e89e9a8cf93a242b6faabe41a28e.
+Each record retains its exact selectors, binary hashes, environment, and log in
+[/home/navid/mithril-test-hosts/araphor-package-qualification-verification](/home/navid/mithril-test-hosts/araphor-package-qualification-verification).
+
+The Context, corpus, Graph, CLI, and Wasm processes use PATH=/nonexistent.
+The loader check uses the inherited PATH to compile two test-owned Rust shared
+libraries. Installed execution does not require that compiler. No claim is made
+that Python is absent from the filesystem. Retained traversal and native parity
+results are in data-lifecycle-owner-retirement-verification. Managed Graph and
+startup results are in graph-direct-publication-retirement-verification. Version
+and immutable-content results are in immutable-package-content-verification.
+historical-source-comparison-v2.json records the published pin comparison;
+changed-path pins do not cover every dependency or create a current passing run.
+No full CI, benchmark, new runtime, or physical execution is part of this result.

@@ -4288,3 +4288,14 @@ correct admission behavior. The repaired test removes that artificial limit;
 it does not bypass admission or retry with polling. The new proof uses Wasm
 detector packages through native Query. It does not qualify a physical actor,
 new native artifact, Python runtime, or performance target.
+
+
+## Acceptance proof reconciliation
+
+The [qualification assignments](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#acceptance-proof-reconciliation)
+identify the current component checks and retained source limits. The 31 new
+executions pass without a source change. This result adds no production code.
+Read the mapped test beside its owner before using a result. Native Graph
+observation semantics, native SQL planning, native ABI execution, and native
+loader linkage are separate boundaries. The paired current physical incident
+remains Not done.
