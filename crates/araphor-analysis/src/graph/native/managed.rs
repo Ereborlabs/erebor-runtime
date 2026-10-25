@@ -14,6 +14,31 @@ use super::{DefinitionRef, GraphFacts, GraphPublication};
 use crate::{Instance, Result};
 
 impl GraphPublication {
+    pub fn expiry_program() -> araphor_discovery_definition::Definition {
+        araphor_discovery_definition::Definition {
+            name: "graph-expiry".into(),
+            description: String::new(),
+            labels: Default::default(),
+            program: araphor_discovery_definition::Program::Sql {
+                source: araphor_discovery_definition::Source::Inline {
+                    inline: "WITH heads AS (
+                        SELECT tenant_id, source_key, graph_result_id, commit_revision,
+                            snapshot, context_refs, first_cursor, witness_deadline_utc_ns,
+                            retained_input_expired FROM graph_manifest
+                        QUALIFY ROW_NUMBER() OVER (PARTITION BY tenant_id, source_key,
+                            first_cursor ORDER BY commit_revision DESC) = 1
+                    ) SELECT h.graph_result_id, h.commit_revision, h.snapshot, h.context_refs, s.*
+                    FROM heads h JOIN graph_state s USING (tenant_id, source_key)
+                    WHERE NOT h.retained_input_expired AND (
+                        h.first_cursor <= s.retained_floor OR h.witness_deadline_utc_ns
+                            <= CAST(CAST(CURRENT_TIMESTAMP AS BIGINT) AS BIGINT UNSIGNED))
+                    ORDER BY h.tenant_id, h.source_key, h.first_cursor"
+                        .into(),
+                },
+            },
+        }
+    }
+
     pub(crate) fn uses_facts(&self, facts: &Arc<dyn GraphFacts>) -> bool {
         Arc::ptr_eq(&self.projection.facts, facts)
     }

@@ -16,7 +16,6 @@ mod expiry;
 
 pub(crate) struct GraphConversion {
     pub(crate) packet: araphor_data::analysis::GraphCommit,
-    pub(crate) previous: Option<(String, u64)>,
     pub(crate) completed: bool,
     pub(crate) deadline: u64,
     _memory: Option<MemoryReservation>,
@@ -34,7 +33,6 @@ impl GraphPublication {
         context: &TaskContext,
         receipt: &ExecutionReceipt,
         result_id: String,
-        advance: bool,
         control: &AnalysisReadControl,
     ) -> araphor_query::Result<GraphConversion> {
         control.check()?;
@@ -135,7 +133,7 @@ impl GraphPublication {
                 .ok_or_else(|| Code::Denied.error("graph image attribution"))?;
             contexts.push(araphor_data::AnalysisContextVersionV1::from_package(
                 bundle,
-                owner.grant.selection.tenant_id,
+                owner.projection.tenant,
                 call.package(),
                 call.export(),
                 call.output(),
@@ -196,8 +194,8 @@ impl GraphPublication {
             method_version: u64::from(GRAPH_SCHEMA_VERSION),
             identity: source,
         };
-        let advanced = advance && snapshot.last_cursor > captured.consumed;
-        let completed = !advance || (!owner.feedback && snapshot.last_cursor >= captured.accepted);
+        let advanced = snapshot.last_cursor > captured.consumed;
+        let completed = !owner.feedback && snapshot.last_cursor >= captured.accepted;
         let commit = AnalysisResultCommitV1 {
             scope,
             expected_cursor: captured.consumed,
@@ -218,7 +216,6 @@ impl GraphPublication {
             snapshot,
             owner.session.engine().limits().output_bytes,
         )?;
-        let previous = previous.map(|head| (head.id.clone(), head.revision));
         Ok(GraphConversion {
             packet: araphor_data::analysis::GraphCommit {
                 request: commit,
@@ -228,7 +225,6 @@ impl GraphPublication {
                 sources,
                 advance: advanced,
             },
-            previous,
             completed,
             deadline,
             _memory: memory,

@@ -4499,3 +4499,49 @@ verification. Coherent ownership and simpler code are the goal. A line count
 is a measured result, not an independent completion quota. This recovery
 checkpoint does not retire the remaining direct Graph path or qualify the
 remaining diagnostic event design. No performance result is claimed.
+
+
+## Required native redesign result
+
+Result: **Done** for the required native replacement. This result covers the required
+7.5.1 through 7.5.5 behavior in the approved native design. The source and plan
+review retains the observable contracts and the approved replacements below.
+The final 21-case check, relevant build, strict Clippy, and formatting pass.
+
+| Required behavior | Remaining owner |
+| --- | --- |
+| Graph rows, traversal, historical versions, complete scope, and atomic references | Data retains native storage and traversal. Query consumes captured Arrow relations. |
+| Typed authoring, named datasets, reasons, evidence, checkpoints, and current algorithms | SDK and Builtins retain the shared contracts and computation. Analysis retains host proof validation. |
+| OCI installation, definitions, execution, state, update, rollback, removal, and recovery | Package owns OCI admission. Instance and Query own execution. Data owns all-call atomic publication and history. |
+| Installed Wasm execution | Package Runtime retains exact imports, artifact/cache identity, separate evaluation state, configured limits, and joined cancellation. |
+| Installed native execution | The C/Arrow interface retains library and buffer lifetime, exact host target, cooperative cancellation, and prior commits after a fatal host fault. |
+
+Image installation and definition admission start no Discovery. Explicit
+Instances replace activation on installation. Source capture determines
+currentness. Current-format recovery remains required. SDK quotas and old
+activation stores stay removed. Native execution remains in process and uses
+the declared plugin type.
+
+The duplicate Data execution, package provenance, immutable content, and direct
+Graph execution owners are removed. Parser, logical planning, optimization,
+physical planning, and execution use DataFusion. Query subscriptions supply
+captured source changes and declared SQL deadlines. Query and Host wait on the
+existing authority, capacity, cancellation, and completion events. No package
+or Discovery polling loop is added.
+
+The [parity audit](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/araphor-redesign-final-parity-audit-v3.md) maps 46 duties
+and pins 190 files before the Graph cut. It closes the interrupted-startup gap
+through the committed Data recovery correction. The later Graph retirement
+and final focused proof are recorded in the
+[current migration result](araphor-analysis-migration.md#one-managed-graph-execution-route).
+The earlier source cuts, failures, and historical counts remain evidence for
+their recorded state. Coherent ownership and stable required behavior are the
+completion criteria. A line count is a measured result, not a quota.
+
+General maintained SQL is a later optimization. Python, later upstream
+algorithm ports, remote OCI distribution, and additional host qualification
+are separate work. Physical diagnostic transport and kernel supervision are
+not another package or Discovery executor. Their existing polling and failed
+latency qualification remain recorded; diagnostics remain disabled. This result
+does not claim that all repository polling is removed or that physical
+performance passed. Full CI and new performance workloads do not run.

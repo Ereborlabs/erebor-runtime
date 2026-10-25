@@ -130,9 +130,9 @@ async fn payload(
     fixture: &Fixture,
     expected: GraphReplayInputV1,
     state: sdk::CoverageState,
-    result_id: &str,
+    instance_id: &str,
     filter: &str,
-) -> TestResult {
+) -> TestResult<Arc<crate::Instance>> {
     let expected = expected.normalized()?;
     let revision = InputRevision::of(&(
         &expected.source,
@@ -143,14 +143,38 @@ async fn payload(
         &expected.missing_ranges,
     ))?;
     let expected_graph = Graph::new(&expected)?;
+    assert_eq!(expected.source, fixture.source);
     let publication = fixture.prepare(filter).await?;
-    let projection = Arc::clone(&publication.projection);
+    let grant = publication.grant.clone();
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let events = format!("SELECT * FROM events {filter}");
+    let owner = fixture
+        .managed_graph(&grant, &definition, instance_id, &events)
+        .await?;
+    let held = fixture.query.memory().input_reserved();
+    let projection = &owner
+        .graph_owner()
+        .ok_or("admitted Graph owner")?
+        .projection;
     let observed = projection.observe_capture();
-    let (id, _) = publication.refresh(result_id.into()).await?;
+    let before_instance = owner.admitted().clone();
+    let before = fixture.query.store().meta()?;
+    let receipt = owner
+        .run(managed::request("payload")?, &fixture.control)
+        .await?;
     let captured = observed.try_recv()?;
     assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
     assert_eq!(captured.inputs.len(), 3);
+    let canonical = Detector::inputs();
+    assert_eq!(captured.inputs.len(), canonical.len());
     for (index, input) in captured.inputs.iter().enumerate() {
+        assert!(input
+            .data
+            .batches
+            .iter()
+            .all(|batch| batch.schema().as_ref() == &canonical[index].schema));
         assert_eq!(input.revision.owner, araphor_data::GRAPH_PROCESSOR);
         assert_eq!(input.revision.id, revision);
         assert_eq!(
@@ -176,6 +200,28 @@ async fn payload(
         )?;
         assert_eq!(actual, expected_graph.projection()[index]);
     }
+    let first = expected
+        .records
+        .first()
+        .ok_or("selected Graph records")?
+        .id
+        .durable_cursor;
+    let last = expected
+        .records
+        .last()
+        .ok_or("selected Graph records")?
+        .id
+        .durable_cursor;
+    let heads = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?;
+    let (id, header, revision) = heads
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == first)
+        .ok_or("payload Graph window")?;
+    assert_eq!(header.last_cursor, last);
+    assert_eq!(revision, receipt.commit_revision);
     let actual = fixture
         .query
         .store()
@@ -211,7 +257,47 @@ async fn payload(
             .map(|fact| fact.key.clone())
             .collect::<Vec<_>>()
     );
-    Ok(())
+    actual.validate()?;
+    assert_eq!(receipt.results.len(), 3);
+    assert_eq!(
+        receipt.commit_revision,
+        before
+            .commit_revision
+            .checked_add(2)
+            .ok_or("payload revision overflow")?
+    );
+    let mut expected_meta = before;
+    expected_meta.commit_revision = receipt.commit_revision;
+    assert_eq!(fixture.query.store().meta()?, expected_meta);
+    let mut expected_instance = before_instance;
+    expected_instance.progress = receipt.commit_revision;
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .managed_instance(fixture.source.tenant_id, instance_id, &fixture.control)?
+            .ok_or("payload instance")?,
+        expected_instance
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .managed_history(&grant.selection, instance_id, &fixture.control)?,
+        std::slice::from_ref(&receipt)
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .processor_health(&actual.scope)?
+            .ok_or("payload Graph progress")?
+            .consumed_cursor,
+        last
+    );
+    drop(captured);
+    assert_eq!(fixture.query.memory().input_reserved(), held);
+    Ok(owner)
 }
 
 #[tokio::test]
@@ -267,21 +353,23 @@ async fn graph_complete_port_payloads() -> TestResult {
             state,
             gap_reasons: reasons,
         }];
-        payload(
-            &fixture,
-            GraphReplayInputV1 {
-                source: fixture.source.clone(),
-                records: fixture.records.clone(),
-                coverage,
-                coverage_keys,
-                facts,
-                missing_ranges: Vec::new(),
-            },
-            expected_state,
-            "graph:full-payload",
-            "",
-        )
-        .await?;
+        drop(
+            payload(
+                &fixture,
+                GraphReplayInputV1 {
+                    source: fixture.source.clone(),
+                    records: fixture.records.clone(),
+                    coverage,
+                    coverage_keys,
+                    facts,
+                    missing_ranges: Vec::new(),
+                },
+                expected_state,
+                "graph:full-payload",
+                "",
+            )
+            .await?,
+        );
     }
     Ok(())
 }
@@ -290,11 +378,32 @@ async fn graph_complete_port_payloads() -> TestResult {
 async fn graph_partial_coverage_reports() -> TestResult {
     let fixture = Fixture::with_records(Target::Sql, records(1, [[7; 16], [8; 16], [7; 16]])?)?;
     report(&fixture, 1, &[([7; 16], 11, "HEALTHY")])?;
-    let (first, _) = fixture
-        .prepare("")
-        .await?
-        .refresh("graph:partial-first".into())
+    let publication = fixture.prepare("").await?;
+    let first_grant = publication.grant.clone();
+    let first_definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&first_grant, &first_definition)?;
+    drop(publication);
+    let first_owner = fixture
+        .managed_graph(
+            &first_grant,
+            &first_definition,
+            "partial-first",
+            "SELECT * FROM events",
+        )
         .await?;
+    let first_receipt = first_owner
+        .run(managed::request("evaluate")?, &fixture.control)
+        .await?;
+    assert_eq!(first_receipt.results.len(), 3);
+    let (first, _, revision) = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 1)
+        .ok_or("first partial Graph window")?;
+    assert_eq!(revision, first_receipt.commit_revision);
+    drop(first_owner);
     let retained = fixture
         .query
         .store()
@@ -347,14 +456,16 @@ async fn graph_partial_coverage_reports() -> TestResult {
     .normalized()?;
     assert_eq!(expected.coverage.len(), 6);
     assert_eq!(expected.coverage_keys.len(), 4);
-    payload(
-        &fixture,
-        expected,
-        sdk::CoverageState::Unknown,
-        "graph:partial-second",
-        "",
-    )
-    .await?;
+    drop(
+        payload(
+            &fixture,
+            expected,
+            sdk::CoverageState::Unknown,
+            "graph:partial-second",
+            "",
+        )
+        .await?,
+    );
     assert_eq!(
         fixture
             .query
@@ -378,11 +489,31 @@ async fn graph_coverage_258_history() -> TestResult {
     let record = araphor_data::DiscoveryRecordV1::try_from((record.id, bytes.as_slice()))?;
     let fixture = Fixture::with_records(Target::Wasm, vec![record])?;
     report(&fixture, 1, &[([7; 16], 1, "HEALTHY")])?;
-    let (first, _) = fixture
-        .prepare("")
-        .await?
-        .refresh("graph:revision-one".into())
+    let publication = fixture.prepare("").await?;
+    let grant = publication.grant.clone();
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let owner = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "coverage-history",
+            "SELECT * FROM events",
+        )
         .await?;
+    let scope = araphor_data::ProcessorScopeV1 {
+        processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+        method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+        identity: fixture.source.clone(),
+    };
+    let store = fixture.query.store();
+    let first_receipt = owner
+        .run(managed::request("seed")?, &fixture.control)
+        .await?;
+    let head = store.processor_result(&scope)?.ok_or("native Graph head")?;
+    assert_eq!(head.commit_revision, first_receipt.commit_revision);
+    let first = head.result_id;
     let retained = fixture
         .query
         .store()
@@ -395,11 +526,15 @@ async fn graph_coverage_258_history() -> TestResult {
     for revision in 2..=258 {
         report(&fixture, revision, &[([7; 16], revision, "HEALTHY")])?;
     }
-    let (next, _) = fixture
-        .prepare("")
-        .await?
-        .refresh("graph:revision-258".into())
+    let updated = owner
+        .run(managed::request("revision-258")?, &fixture.control)
         .await?;
+    let heads = store.graph_window_headers(&fixture.source, None)?;
+    let (next, _, revision) = heads
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 1)
+        .ok_or("native Graph window")?;
+    assert_eq!(revision, updated.commit_revision);
     let current = fixture
         .query
         .store()
@@ -435,14 +570,67 @@ async fn graph_coverage_258_history() -> TestResult {
         retained.findings
     );
     report(&fixture, 259, &[])?;
+    let before_domain = fixture.graph_history()?;
+    let before_heads = store.graph_window_headers(&fixture.source, None)?;
+    let before_head = store.processor_result(&scope)?;
+    let before_health = store.processor_health(&scope)?.ok_or("Graph health")?;
+    let before_instance = store
+        .managed_instance(
+            fixture.source.tenant_id,
+            &owner.admitted().spec.id,
+            &fixture.control,
+        )?
+        .ok_or("Graph instance")?;
+    let before_history = store.managed_history(
+        &grant.selection,
+        &owner.admitted().spec.id,
+        &fixture.control,
+    )?;
     let before = fixture.query.store().meta()?;
-    let (unchanged, _) = fixture
-        .prepare("")
-        .await?
-        .refresh("graph:unrelated-259".into())
+    let repeated = owner
+        .run(managed::request("unrelated-259")?, &fixture.control)
         .await?;
-    assert_eq!(unchanged, next);
-    assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(before_heads.len(), 1);
+    assert_eq!(before_heads[0].0, next);
+    assert_eq!(fixture.graph_history()?, before_domain);
+    assert_eq!(
+        store.graph_window_headers(&fixture.source, None)?,
+        before_heads
+    );
+    assert_eq!(store.processor_result(&scope)?, before_head);
+    assert_eq!(
+        repeated.commit_revision,
+        before
+            .commit_revision
+            .checked_add(2)
+            .ok_or("native Graph revision")?
+    );
+    let mut expected_meta = before;
+    expected_meta.commit_revision = repeated.commit_revision;
+    assert_eq!(store.meta()?, expected_meta);
+    let mut expected_instance = before_instance;
+    expected_instance.progress = repeated.commit_revision;
+    assert_eq!(
+        store.managed_instance(
+            fixture.source.tenant_id,
+            &owner.admitted().spec.id,
+            &fixture.control
+        )?,
+        Some(expected_instance)
+    );
+    let mut expected_history = before_history;
+    expected_history.push(repeated.clone());
+    assert_eq!(
+        store.managed_history(
+            &grant.selection,
+            &owner.admitted().spec.id,
+            &fixture.control
+        )?,
+        expected_history
+    );
+    let mut expected_health = before_health;
+    expected_health.read_revision = repeated.commit_revision;
+    assert_eq!(store.processor_health(&scope)?, Some(expected_health));
     Ok(())
 }
 
@@ -459,11 +647,31 @@ async fn graph_malformed_report_rejected() -> TestResult {
         },
     )?;
     report(&fixture, 1, &[([7; 16], 1, "HEALTHY")])?;
-    let (first, _) = fixture
-        .prepare("")
-        .await?
-        .refresh("graph:before-corruption".into())
+    let publication = fixture.prepare("").await?;
+    let grant = publication.grant.clone();
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let owner = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "malformed-report",
+            "SELECT * FROM events",
+        )
         .await?;
+    let scope = araphor_data::ProcessorScopeV1 {
+        processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+        method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+        identity: fixture.source.clone(),
+    };
+    let store = fixture.query.store();
+    let first_receipt = owner
+        .run(managed::request("seed")?, &fixture.control)
+        .await?;
+    let head = store.processor_result(&scope)?.ok_or("native Graph head")?;
+    assert_eq!(head.commit_revision, first_receipt.commit_revision);
+    let first = head.result_id;
     let retained = fixture
         .query
         .store()
@@ -473,12 +681,41 @@ async fn graph_malformed_report_rejected() -> TestResult {
         "UPDATE coverage SET report = '\\xFF'::BLOB WHERE revision = 1",
         &[],
     )?;
+    let before_domain = fixture.graph_history()?;
+    let before_heads = store.graph_window_headers(&fixture.source, None)?;
+    let before_head = store.processor_result(&scope)?;
+    let before_health = store.processor_health(&scope)?.ok_or("Graph health")?;
+    let before_instance = store
+        .managed_instance(
+            fixture.source.tenant_id,
+            &owner.admitted().spec.id,
+            &fixture.control,
+        )?
+        .ok_or("Graph instance")?;
+    let before_history = store.managed_history(
+        &grant.selection,
+        &owner.admitted().spec.id,
+        &fixture.control,
+    )?;
+    let before_status = store.managed_status(
+        &grant.selection,
+        &owner.admitted().spec.id,
+        &fixture.control,
+    )?;
+    assert!(matches!(
+        before_status.readiness,
+        araphor_data::PackageReadinessV1::Inactive
+    ));
+    let before_resume = store.managed_resume(
+        fixture.source.tenant_id,
+        &owner.admitted().spec.id,
+        &fixture.control,
+    )?;
+    let before_usage = store.retained_usage(fixture.source.tenant_id)?;
     let before = fixture.query.store().meta()?;
     let calls = fixture.facts.calls.load(Ordering::SeqCst);
-    let failure = fixture
-        .prepare("")
-        .await?
-        .refresh("graph:corrupt-report".into())
+    let failure = owner
+        .run(managed::request("invalid")?, &fixture.control)
         .await
         .err()
         .ok_or("malformed selected report used fallback")?;
@@ -488,11 +725,68 @@ async fn graph_malformed_report_rejected() -> TestResult {
     );
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), calls);
     assert_eq!(fixture.query.store().meta()?, before);
-    assert!(fixture
-        .query
-        .store()
-        .graph_result(fixture.source.tenant_id, "graph:corrupt-report")?
+    assert_eq!(fixture.graph_history()?, before_domain);
+    assert_eq!(
+        store.graph_window_headers(&fixture.source, None)?,
+        before_heads
+    );
+    assert_eq!(store.processor_result(&scope)?, before_head);
+    assert_eq!(
+        store.managed_instance(
+            fixture.source.tenant_id,
+            &owner.admitted().spec.id,
+            &fixture.control
+        )?,
+        Some(before_instance)
+    );
+    assert_eq!(
+        store.managed_history(
+            &grant.selection,
+            &owner.admitted().spec.id,
+            &fixture.control
+        )?,
+        before_history
+    );
+    assert_eq!(store.processor_health(&scope)?, Some(before_health));
+    let status = store.managed_status(
+        &grant.selection,
+        &owner.admitted().spec.id,
+        &fixture.control,
+    )?;
+    assert_eq!(status.instance, before_status.instance);
+    assert_eq!(status.status_progress, before_status.status_progress);
+    assert!(matches!(
+        status.readiness,
+        araphor_data::PackageReadinessV1::Inactive
+    ));
+    assert_eq!(
+        store.managed_resume(
+            fixture.source.tenant_id,
+            &owner.admitted().spec.id,
+            &fixture.control
+        )?,
+        before_resume
+    );
+    assert!(store
+        .managed_attempt(
+            fixture.source.tenant_id,
+            &owner.admitted().spec.id,
+            "invalid",
+            &fixture.control
+        )?
         .is_none());
+    assert!(store
+        .managed_selected(
+            fixture.source.tenant_id,
+            &owner.admitted().spec.id,
+            "invalid",
+            &fixture.control
+        )?
+        .is_none());
+    assert_eq!(
+        store.retained_usage(fixture.source.tenant_id)?,
+        before_usage
+    );
     assert_eq!(
         fixture
             .query
@@ -500,6 +794,7 @@ async fn graph_malformed_report_rejected() -> TestResult {
             .graph_result(fixture.source.tenant_id, &first)?,
         Some(retained)
     );
+    drop(owner);
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     drop(fixture.query.memory().reserve_input(INPUT)?);
     Ok(())
@@ -597,11 +892,40 @@ async fn graph_extra_export_order() -> TestResult {
         .map(|id| call(id, "detect"))
         .collect::<Vec<_>>()
         .join(" UNION ALL ");
-    let (first, _) = fixture
-        .prepare_sql("*", "", sql)
-        .await?
-        .refresh("graph:extras".into())
+    let publication = fixture.prepare_sql("*", "", sql).await?;
+    let first_grant = publication.grant.clone();
+    let first_definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&first_grant, &first_definition)?;
+    drop(publication);
+    let first_owner = fixture
+        .managed_graph(
+            &first_grant,
+            &first_definition,
+            "extras-first",
+            "SELECT * FROM events",
+        )
         .await?;
+    let first_receipt = first_owner
+        .run(managed::request("evaluate")?, &fixture.control)
+        .await?;
+    assert_eq!(
+        first_owner
+            .graph_owner()
+            .ok_or("extra Graph owner")?
+            .calls
+            .len(),
+        5
+    );
+    assert_eq!(first_receipt.results.len(), 5);
+    let first = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 1)
+        .ok_or("first extra Graph window")?
+        .0;
+    drop(first_owner);
     let first = fixture
         .query
         .store()
@@ -627,11 +951,40 @@ async fn graph_extra_export_order() -> TestResult {
         .map(|id| call(id, "detect"))
         .collect::<Vec<_>>()
         .join(" UNION ALL ");
-    let (second, _) = fixture
-        .prepare_sql("*", "", sql)
-        .await?
-        .refresh("graph:reverse-extras".into())
+    let publication = fixture.prepare_sql("*", "", sql).await?;
+    let second_grant = publication.grant.clone();
+    let second_definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&second_grant, &second_definition)?;
+    drop(publication);
+    let second_owner = fixture
+        .managed_graph(
+            &second_grant,
+            &second_definition,
+            "extras-reversed",
+            "SELECT * FROM events",
+        )
         .await?;
+    let second_receipt = second_owner
+        .run(managed::request("evaluate")?, &fixture.control)
+        .await?;
+    assert_eq!(
+        second_owner
+            .graph_owner()
+            .ok_or("reversed Graph owner")?
+            .calls
+            .len(),
+        5
+    );
+    assert_eq!(second_receipt.results.len(), 5);
+    let second = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 1)
+        .ok_or("reversed extra Graph window")?
+        .0;
+    drop(second_owner);
     let second = fixture
         .query
         .store()
@@ -722,10 +1075,40 @@ async fn graph_canonical_fields_rejected() -> TestResult {
             .map(|id| call(id, "detect"))
             .collect::<Vec<_>>()
             .join(" UNION ALL ");
+        let events = format!("SELECT {columns} FROM events");
         let publication = fixture.prepare_sql(&columns, "", sql).await?;
-        let before = fixture.query.store().meta()?;
-        let failure = publication
-            .refresh("graph:changed-canonical-field".into())
+        let grant = publication.grant.clone();
+        let definition = publication.prepared.resolved().clone();
+        fixture.admit_definition(&grant, &definition)?;
+        drop(publication);
+        let id = "canonical-fields";
+        let owner = fixture
+            .managed_graph(&grant, &definition, id, &events)
+            .await?;
+        let store = fixture.query.store();
+        let initial = store.managed_status(&grant.selection, id, &fixture.control)?;
+        assert_eq!(&initial.instance, owner.admitted());
+        assert_eq!(initial.status_progress, 0);
+        assert!(matches!(
+            initial.readiness,
+            araphor_data::PackageReadinessV1::Inactive
+        ));
+        let before_domain = fixture.graph_history()?;
+        assert!(store
+            .graph_window_headers(&fixture.source, None)?
+            .is_empty());
+        let scope = araphor_data::ProcessorScopeV1 {
+            processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+            method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+            identity: fixture.source.clone(),
+        };
+        assert!(store.processor_result(&scope)?.is_none());
+        let before_health = store.processor_health(&scope)?;
+        let before_usage = store.retained_usage(fixture.source.tenant_id)?;
+        let before = store.meta()?;
+        let input = managed::request("invalid")?;
+        let failure = owner
+            .run(input.clone(), &fixture.control)
             .await
             .err()
             .ok_or("changed canonical event was published")?;
@@ -734,12 +1117,14 @@ async fn graph_canonical_fields_rejected() -> TestResult {
             "{field}: {failure:?}"
         );
         assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 0);
-        assert_eq!(fixture.query.store().meta()?, before);
-        assert!(fixture
-            .query
-            .store()
-            .graph_result(fixture.source.tenant_id, "graph:changed-canonical-field")?
-            .is_none());
+        fixture.assert_invalid_graph(
+            owner.as_ref(),
+            &input,
+            &before,
+            &before_domain,
+            before_health,
+            before_usage,
+        )?;
         drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     }
     Ok(())

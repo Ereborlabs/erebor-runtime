@@ -92,31 +92,38 @@ fn scoped_session_keeps_family() -> std::result::Result<(), Box<dyn std::error::
 #[tokio::test]
 async fn blocking_cancel_joins_worker(
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let control = Arc::new(control());
-    let stage = Arc::clone(&control);
-    let (entered, ready) = tokio::sync::oneshot::channel();
-    let (release, held) = std::sync::mpsc::channel();
-    let mut worker = tokio::spawn(async move {
-        Engine::blocking(stage, (), move || {
-            let _entered = entered.send(());
-            held.recv().map_err(|source| crate::Error::Sql {
-                source: datafusion::common::DataFusionError::External(Box::new(source)),
-            })?;
-            Ok(())
-        })
-        .await
-    });
-    ready.await?;
-    control.cancel()?;
-    assert!(tokio::time::timeout(Duration::from_millis(20), &mut worker)
-        .await
-        .is_err());
-    release.send(())?;
-    let error = tokio::time::timeout(Duration::from_secs(2), worker)
-        .await??
-        .err()
-        .ok_or("cancelled read must fail")?;
-    assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
+    for inherited in [false, true] {
+        let parent = Arc::new(control());
+        let control = if inherited {
+            Arc::new(parent.operation()?)
+        } else {
+            Arc::clone(&parent)
+        };
+        let stage = Arc::clone(&control);
+        let (entered, ready) = tokio::sync::oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let mut worker = tokio::spawn(async move {
+            Engine::blocking(stage, (), move || {
+                let _entered = entered.send(());
+                held.recv().map_err(|source| crate::Error::Sql {
+                    source: datafusion::common::DataFusionError::External(Box::new(source)),
+                })?;
+                Ok(())
+            })
+            .await
+        });
+        ready.await?;
+        parent.cancel()?;
+        assert!(tokio::time::timeout(Duration::from_millis(20), &mut worker)
+            .await
+            .is_err());
+        release.send(())?;
+        let error = tokio::time::timeout(Duration::from_secs(2), worker)
+            .await??
+            .err()
+            .ok_or("cancelled read must fail")?;
+        assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
+    }
     Ok(())
 }
 

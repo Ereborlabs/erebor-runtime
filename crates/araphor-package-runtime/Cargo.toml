@@ -23,7 +23,7 @@ snafu.workspace = true
 tempfile = "3.23.0"
 tokio.workspace = true
 tokio-util = { version = "0.7.19", features = ["rt"] }
-wasmtime = { version = "=49.0.2", default-features = false, features = ["component-model", "runtime", "cranelift", "std"] }
+wasmtime = { version = "=49.0.2", default-features = false, features = ["component-model", "runtime", "cranelift", "std", "parallel-compilation"] }
 wasmparser = "=0.258.3"
 
 [dev-dependencies]

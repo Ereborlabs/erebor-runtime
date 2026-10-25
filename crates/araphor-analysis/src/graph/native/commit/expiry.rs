@@ -123,7 +123,6 @@ impl GraphConversion {
                     sources,
                     advance: false,
                 },
-                previous: Some((previous_id.to_owned(), revision)),
                 completed: complete,
                 deadline,
                 _memory: Some(memory),

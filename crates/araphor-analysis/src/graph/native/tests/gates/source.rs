@@ -42,7 +42,7 @@ async fn retained_floor_is_gapped() -> TestResult {
     )?;
     report(&fixture, 1, &[([7; 16], 11, "HEALTHY")])?;
     let (facts, _) = Facts::default().facts(&[], &fixture.records)?;
-    payload(
+    let owner = payload(
         &fixture,
         GraphReplayInputV1 {
             source: source.clone(),
@@ -72,11 +72,19 @@ async fn retained_floor_is_gapped() -> TestResult {
         "",
     )
     .await?;
+    let (id, _, _) = fixture
+        .query
+        .store()
+        .graph_window_headers(&source, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 3)
+        .ok_or("retained-floor Graph window")?;
     let graph = fixture
         .query
         .store()
-        .graph_result(source.tenant_id, "graph:retained-floor")?
+        .graph_result(source.tenant_id, &id)?
         .ok_or("retained-floor graph")?;
+    let scope = graph.scope.clone();
     assert_eq!(graph.missing_ranges, vec![(1, 2)]);
     assert_eq!(graph.input_manifest.missing_ranges, vec![(1, 2)]);
     assert_eq!(
@@ -87,26 +95,98 @@ async fn retained_floor_is_gapped() -> TestResult {
         fixture
             .query
             .store()
-            .processor_health(&graph.scope)?
+            .processor_health(&scope)?
             .ok_or("graph progress")?
             .consumed_cursor,
-        2
+        graph.last_cursor
     );
+    assert_eq!(graph.last_cursor, 3);
+    let before_domain = fixture.graph_history()?;
+    let before_heads = fixture.query.store().graph_window_headers(&source, None)?;
+    let before_head = fixture.query.store().processor_result(&scope)?;
+    let before_health = fixture.query.store().processor_health(&scope)?;
+    let before_instance = fixture
+        .query
+        .store()
+        .managed_instance(
+            source.tenant_id,
+            &owner.admitted().spec.id,
+            &fixture.control,
+        )?
+        .ok_or("retained-floor instance")?;
+    let before_history = fixture.query.store().managed_history(
+        &owner.admitted().grant.selection,
+        &owner.admitted().spec.id,
+        &fixture.control,
+    )?;
     let before = fixture.query.store().meta()?;
-    let repeated = fixture
-        .prepare("")
-        .await?
-        .refresh("graph:retained-floor-repeat".into())
+    let repeated = owner
+        .run(managed::request("repeat")?, &fixture.control)
         .await?;
-    assert_eq!(repeated.0, "graph:retained-floor");
-    assert_eq!(fixture.query.store().meta()?, before);
+    let (next, _, _) = fixture
+        .query
+        .store()
+        .graph_window_headers(&source, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 3)
+        .ok_or("repeated retained-floor window")?;
+    assert_eq!(next, id);
     assert_eq!(
         fixture
             .query
             .store()
-            .graph_result(source.tenant_id, &repeated.0)?,
+            .graph_result(source.tenant_id, &next)?,
         Some(graph)
     );
+    assert_eq!(fixture.graph_history()?, before_domain);
+    assert_eq!(
+        fixture.query.store().graph_window_headers(&source, None)?,
+        before_heads
+    );
+    assert_eq!(fixture.query.store().processor_result(&scope)?, before_head);
+    assert_eq!(
+        repeated.commit_revision,
+        before
+            .commit_revision
+            .checked_add(2)
+            .ok_or("retained-floor revision overflow")?
+    );
+    let mut expected_meta = before;
+    expected_meta.commit_revision = repeated.commit_revision;
+    assert_eq!(fixture.query.store().meta()?, expected_meta);
+    let expected_health = before_health.map(|mut health| {
+        health.read_revision = repeated.commit_revision;
+        health
+    });
+    assert_eq!(
+        fixture.query.store().processor_health(&scope)?,
+        expected_health
+    );
+    let mut expected_instance = before_instance;
+    expected_instance.progress = repeated.commit_revision;
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .managed_instance(
+                source.tenant_id,
+                &owner.admitted().spec.id,
+                &fixture.control
+            )?
+            .ok_or("repeated retained-floor instance")?,
+        expected_instance
+    );
+    let mut expected_history = before_history;
+    expected_history.push(repeated);
+    assert_eq!(
+        fixture.query.store().managed_history(
+            &owner.admitted().grant.selection,
+            &owner.admitted().spec.id,
+            &fixture.control
+        )?,
+        expected_history
+    );
+    drop(owner);
     drop(fixture.query.reserve_evaluation(source.tenant_id)?);
     drop(fixture.query.memory().reserve_input(INPUT)?);
     Ok(())
@@ -116,11 +196,43 @@ async fn retained_floor_is_gapped() -> TestResult {
 async fn frozen_keys_preserve_source() -> TestResult {
     let fixture = Fixture::with_records(Target::Sql, records(1, [[7; 16], [8; 16], [7; 16]])?)?;
     report(&fixture, 1, &[([8; 16], 11, "HEALTHY")])?;
-    let (first, _) = fixture
-        .prepare("")
-        .await?
-        .refresh("graph:unselected-history".into())
+    let publication = fixture.prepare("").await?;
+    let first_grant = publication.grant.clone();
+    let first_definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&first_grant, &first_definition)?;
+    drop(publication);
+    let first_owner = fixture
+        .managed_graph(
+            &first_grant,
+            &first_definition,
+            "unselected-history",
+            "SELECT * FROM events",
+        )
         .await?;
+    let first_receipt = first_owner
+        .run(managed::request("evaluate")?, &fixture.control)
+        .await?;
+    let (first, _, revision) = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 1)
+        .ok_or("original target Graph window")?;
+    assert_eq!(revision, first_receipt.commit_revision);
+    let target_scope = araphor_data::ProcessorScopeV1 {
+        processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+        method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+        identity: fixture.source.clone(),
+    };
+    let consumed = fixture
+        .query
+        .store()
+        .processor_health(&target_scope)?
+        .ok_or("target native progress")?
+        .consumed_cursor;
+    assert_eq!(consumed, 3);
+    drop(first_owner);
     let original = fixture
         .query
         .store()
@@ -170,11 +282,37 @@ async fn frozen_keys_preserve_source() -> TestResult {
             }
             .encode_to_vec(),
         })?;
-    let (foreign, _) = fixture
+    let publication = fixture
         .prepare("WHERE source_id = decode(repeat('63', 16), 'hex')")
-        .await?
-        .refresh("graph:foreign-history".into())
         .await?;
+    let foreign_grant = publication.grant.clone();
+    let foreign_definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&foreign_grant, &foreign_definition)?;
+    drop(publication);
+    let foreign_owner = GraphPublication::admit(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        fixture.facts.clone(),
+        foreign_grant.clone(),
+        "foreign-history".into(),
+        other.clone(),
+        "SELECT * FROM events WHERE source_id = decode(repeat('63', 16), 'hex')".into(),
+        foreign_definition,
+        &fixture.control,
+    )
+    .await?;
+    let foreign_receipt = foreign_owner
+        .run(managed::request("evaluate")?, &fixture.control)
+        .await?;
+    let (foreign, _, revision) = fixture
+        .query
+        .store()
+        .graph_window_headers(&other, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 1)
+        .ok_or("foreign native Graph window")?;
+    assert_eq!(revision, foreign_receipt.commit_revision);
+    drop(foreign_owner);
     let retained = fixture
         .query
         .store()
@@ -216,8 +354,8 @@ async fn frozen_keys_preserve_source() -> TestResult {
     fixture.query.store().commit_graph_snapshot(
         araphor_data::AnalysisResultCommitV1 {
             scope: frozen.scope.clone(),
-            expected_cursor: 0,
-            consumed_cursor: 0,
+            expected_cursor: consumed,
+            consumed_cursor: consumed,
             coverage_revision: 1,
             context_revision: references
                 .iter()
@@ -250,45 +388,55 @@ async fn frozen_keys_preserve_source() -> TestResult {
     report(&fixture, 102, &[([7; 16], 22, "HEALTHY")])?;
     let selected = [fixture.records[0].clone(), fixture.records[2].clone()];
     let (facts, _) = Facts::default().facts(&[], &selected)?;
-    payload(
-        &fixture,
-        GraphReplayInputV1 {
-            source: fixture.source.clone(),
-            records: selected.to_vec(),
-            coverage: [0, 2]
-                .into_iter()
-                .map(|index| {
-                    range(
-                        &fixture,
-                        102,
-                        index,
-                        [7; 16],
-                        DiscoveryCoverageStateV1::Healthy,
-                        Vec::new(),
-                    )
-                })
-                .collect(),
-            coverage_keys: vec![GraphCoverageKeyV1 {
+    drop(
+        payload(
+            &fixture,
+            GraphReplayInputV1 {
                 source: fixture.source.clone(),
-                cpu_id: record.id.cpu_id,
-                report_revision: 102,
-                interval_id: [7; 16],
-                interval_revision: 22,
-                state: DiscoveryCoverageStateV1::Healthy,
-                gap_reasons: Vec::new(),
-            }],
-            facts,
-            missing_ranges: Vec::new(),
-        },
-        sdk::CoverageState::Complete,
-        "graph:selected-source-keys",
-        "WHERE source_id <> decode(repeat('63', 16), 'hex') AND source_cursor <> 2",
-    )
-    .await?;
+                records: selected.to_vec(),
+                coverage: [0, 2]
+                    .into_iter()
+                    .map(|index| {
+                        range(
+                            &fixture,
+                            102,
+                            index,
+                            [7; 16],
+                            DiscoveryCoverageStateV1::Healthy,
+                            Vec::new(),
+                        )
+                    })
+                    .collect(),
+                coverage_keys: vec![GraphCoverageKeyV1 {
+                    source: fixture.source.clone(),
+                    cpu_id: record.id.cpu_id,
+                    report_revision: 102,
+                    interval_id: [7; 16],
+                    interval_revision: 22,
+                    state: DiscoveryCoverageStateV1::Healthy,
+                    gap_reasons: Vec::new(),
+                }],
+                facts,
+                missing_ranges: Vec::new(),
+            },
+            sdk::CoverageState::Complete,
+            "graph:selected-source-keys",
+            "WHERE source_id <> decode(repeat('63', 16), 'hex') AND source_cursor <> 2",
+        )
+        .await?,
+    );
+    let selected_id = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 1)
+        .ok_or("selected target Graph window")?
+        .0;
     let selected = fixture
         .query
         .store()
-        .graph_result(fixture.source.tenant_id, "graph:selected-source-keys")?
+        .graph_result(fixture.source.tenant_id, &selected_id)?
         .ok_or("selected graph")?;
     assert_eq!(selected.previous_result_id.as_deref(), Some(checkpoint));
     assert!(selected.input_manifest.coverage.iter().all(|key| {

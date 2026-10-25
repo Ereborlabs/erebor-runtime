@@ -146,7 +146,6 @@ impl Projection {
                         id: Self::column::<StringArray>(batch, "graph_result_id")?
                             .value(row)
                             .into(),
-                        revision: Self::column::<UInt64Array>(batch, "commit_revision")?.value(row),
                         first: Self::column::<UInt64Array>(batch, "first_cursor")?.value(row),
                         deadline: Self::column::<UInt64Array>(batch, "witness_deadline_utc_ns")?
                             .value(row),

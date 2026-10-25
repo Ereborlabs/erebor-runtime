@@ -116,9 +116,10 @@ removes core debug names and debug sections, keeps the WIT metadata, and
 validates the component. One component can implement all declared exports.
 The package owner validates the manifest and referenced blobs during admission.
 Operators install the built folder or its OCI-layout tar archive. The package
-digest is the exact manifest's `sha256:` identity. The package owner compiles
-the component in its bounded
-compiler process. Installation does not run an author compiler or hook.
+digest is the exact manifest's `sha256:` identity. Package Runtime compiles
+the component in process with Wasmtime before execution. An explicit compiler
+address-space cap returns Unsupported. Installation does not run an author
+compiler or hook.
 `ComponentBuilder::package_component` writes the same folder from an existing
 component. It preserves the supplied component bytes.
 

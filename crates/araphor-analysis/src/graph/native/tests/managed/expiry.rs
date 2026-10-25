@@ -2,7 +2,6 @@ use super::*;
 
 #[tokio::test]
 async fn expiry_allows_new_input() -> TestResult {
-    use futures_util::StreamExt as _;
     let mut fixture = Fixture::target(Target::Wasm)?;
     fixture.serial_guests()?;
     let publication = fixture.prepare("").await?;
@@ -22,9 +21,8 @@ async fn expiry_allows_new_input() -> TestResult {
         &fixture.control,
     )
     .await?;
-    let first = evaluation
-        .run(request("initial")?, &fixture.control)
-        .await?;
+    let input = request("initial")?;
+    let first = evaluation.run(input.clone(), &fixture.control).await?;
     assert_eq!(first.results.len(), 3);
     let scope = araphor_data::ProcessorScopeV1 {
         processor_id: araphor_data::GRAPH_PROCESSOR.into(),
@@ -41,42 +39,322 @@ async fn expiry_allows_new_input() -> TestResult {
         .store()
         .graph_result(fixture.source.tenant_id, &original.result_id)?
         .ok_or("Graph expiry input")?;
-    let now = retained
-        .witness_deadline_utc_ns
-        .checked_add(1)
-        .ok_or("expiry time")?;
-    let mut publication = fixture.prepare("").await?;
-    publication.session = publication
-        .session
-        .operation(&AnalysisReadControl::default(), 0)?;
-    let expiry = publication.expiry_definition().await?;
-    let mut expiry = publication
-        .open_subscription(
-            expiry,
-            sink::Kind::Expire,
-            b"expired-graph-head",
-            super::super::expiry::Clock::new(now),
-        )
-        .await?;
-    let (entry, entered) = std::sync::mpsc::channel();
-    fixture.query.guest_entry(entry, None)?;
-    let (_, expired) = tokio::time::timeout(std::time::Duration::from_secs(30), expiry.next())
-        .await?
-        .ok_or("Graph expiry stream ended")??;
-    assert_eq!(expired.consumed_cursor, 3);
-    expiry.cancel_and_join().await?;
-    let (expired_id, _, _) = fixture
+    let body = fixture
         .query
         .store()
-        .graph_window_headers(&fixture.source, None)?
+        .read_result(fixture.source.tenant_id, &original.result_id)?
+        .ok_or("Graph input bytes")?;
+    let (witnesses, references) = fixture.query.store().package_evidence(
+        fixture.source.tenant_id,
+        std::slice::from_ref(&original.result_id),
+    )?;
+    let contexts = references
+        .iter()
+        .map(|reference| {
+            fixture
+                .query
+                .store()
+                .context_version(&reference.key)?
+                .ok_or_else(|| Code::Invalid.error("Graph input context"))
+        })
+        .collect::<araphor_data::Result<Vec<_>>>()?;
+    let calls = fixture.facts.calls.load(Ordering::SeqCst);
+    let receiver = fixture
+        .query
+        .store()
+        .managed_instance(
+            fixture.source.tenant_id,
+            &evaluation.admitted().spec.id,
+            &fixture.control,
+        )?
+        .ok_or("Graph input instance")?;
+    let source = fixture
+        .query
+        .store()
+        .source_receipt(&fixture.source)?
+        .ok_or("Graph input source")?;
+    let raw = fixture.query.store().read_page(&fixture.source, 1)?.records;
+    assert_eq!(raw.len(), 3);
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open_with_limits(
+        directory.path().join("data"),
+        araphor_data::RetentionLimitsV1 {
+            raw_max_age_ns: Some(araphor_data::GRAPH_WITNESS_TTL_NS),
+            raw_max_bytes: None,
+        },
+        Default::default(),
+    )?);
+    let donor = Fixture::stored(Target::Wasm, fixture.records.clone(), directory, store)?;
+    assert_eq!(donor.source, fixture.source);
+    assert_eq!(
+        donor.query.store().read_page(&donor.source, 1)?.records,
+        raw
+    );
+    assert_eq!(
+        donor.query.store().source_receipt(&donor.source)?,
+        Some(source.clone())
+    );
+    let before = donor.query.store().meta()?;
+    let sources = grant.selection.source_revisions(before.commit_revision);
+    let seeded = donor.query.store().commit_graph_snapshot(
+        araphor_data::AnalysisResultCommitV1 {
+            scope: scope.clone(),
+            expected_cursor: 0,
+            consumed_cursor: 3,
+            coverage_revision: source.coverage_revision,
+            context_revision: 0,
+            result_id: original.result_id.clone(),
+            body: Vec::new(),
+            created_utc_ns: input.time_utc_ns,
+            witnesses: witnesses.clone(),
+            context_refs: Vec::new(),
+        },
+        araphor_data::analysis::CanonicalGraph::bounded(
+            retained.clone(),
+            donor.query.limits().output_bytes,
+        )?,
+        &contexts,
+        &[],
+        &sources,
+        true,
+        || {
+            donor.control.check()?;
+            donor.authority.check(&grant, PackageActionV1::Run)
+        },
+    )?;
+    assert_eq!(seeded.consumed_cursor, 3);
+    assert_eq!(seeded.commit_revision, before.commit_revision + 1);
+    assert_eq!(
+        donor
+            .query
+            .store()
+            .graph_result(donor.source.tenant_id, &original.result_id)?,
+        Some(retained.clone())
+    );
+    assert_eq!(
+        donor
+            .query
+            .store()
+            .read_result(donor.source.tenant_id, &original.result_id)?,
+        Some(body.clone())
+    );
+    let donor_refs = references
+        .iter()
+        .map(|reference| AnalysisContextRefV1 {
+            key: reference.key.clone(),
+            commit_revision: seeded.commit_revision,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        donor.query.store().package_evidence(
+            donor.source.tenant_id,
+            std::slice::from_ref(&original.result_id)
+        )?,
+        (witnesses.clone(), donor_refs.clone())
+    );
+    for context in &contexts {
+        assert_eq!(
+            donor.query.store().context_version(&context.key)?,
+            Some(context.clone())
+        );
+    }
+    let removed = araphor_data::EvidenceRetentionOwner::new(donor.query.store()).retain(
+        &donor.source,
+        retained
+            .witness_deadline_utc_ns
+            .checked_add(1)
+            .ok_or("expiry retention time")?,
+    )?;
+    assert_eq!(removed.removed_records, 3);
+    assert_eq!(removed.retained_floor, retained.last_cursor);
+    let definition = donor
+        .query
+        .admit_definition(
+            donor.source.tenant_id,
+            GraphPublication::expiry_program(),
+            Arc::clone(&donor.control),
+        )
+        .await?;
+    donor.admit_definition(&grant, &definition)?;
+    let expiry = GraphPublication::admit_expiry(
+        Arc::clone(&donor.query),
+        donor.authority.clone(),
+        grant.clone(),
+        "expired-graph-head".into(),
+        donor.source.clone(),
+        &donor.control,
+    )
+    .await?;
+    assert!(expiry.graph_owner().is_none());
+    let (entry, entered) = std::sync::mpsc::channel();
+    donor.query.guest_entry(entry.clone(), None)?;
+    fixture.query.guest_entry(entry, None)?;
+    let current = request("due-head")?;
+    assert!(current.time_utc_ns < retained.witness_deadline_utc_ns);
+    let delivered = {
+        let control = AnalysisReadControl::default();
+        let work = expiry.run(current.clone(), &control);
+        tokio::pin!(work);
+        match tokio::time::timeout(std::time::Duration::from_secs(30), &mut work).await {
+            Ok(receipt) => receipt?,
+            Err(error) => {
+                let cancelled = control.cancel();
+                let joined = work.await;
+                return Err(format!(
+                    "Graph expiry completion: {error}; cancel={cancelled:?}; joined={joined:?}"
+                )
+                .into());
+            }
+        }
+    };
+    assert!(delivered.results.is_empty());
+    let (expired_id, _, revision) = donor
+        .query
+        .store()
+        .graph_window_headers(&donor.source, None)?
         .into_iter()
         .find(|(_, graph, _)| graph.first_cursor == retained.first_cursor)
-        .ok_or("Expired Graph head")?;
+        .ok_or("Donor expired Graph head")?;
+    assert_eq!(revision, delivered.commit_revision);
+    assert_ne!(expired_id, original.result_id);
     let expected = Graph::expire(
         &retained,
         &original.result_id,
         retained.context_notice_revision,
     )?;
+    let generated = donor
+        .query
+        .store()
+        .graph_result(donor.source.tenant_id, &expired_id)?
+        .ok_or("Donor expired Graph")?;
+    assert_eq!(generated, expected);
+    let expired_body = donor
+        .query
+        .store()
+        .read_result(donor.source.tenant_id, &expired_id)?
+        .ok_or("Donor expired Graph bytes")?;
+    assert_eq!(expired_body, serde_json::to_vec(&generated)?);
+    assert_eq!(
+        donor
+            .query
+            .store()
+            .package_evidence(donor.source.tenant_id, std::slice::from_ref(&expired_id))?,
+        (Vec::new(), donor_refs)
+    );
+    assert_eq!(
+        fixture.query.store().read_page(&fixture.source, 1)?.records,
+        raw
+    );
+    assert_eq!(
+        fixture.query.store().source_receipt(&fixture.source)?,
+        Some(source.clone())
+    );
+    assert_eq!(
+        fixture.query.store().processor_result(&scope)?,
+        Some(original.clone())
+    );
+    let before = fixture.query.store().meta()?;
+    let sources = grant.selection.source_revisions(before.commit_revision);
+    let expired = fixture.query.store().commit_graph_snapshot(
+        araphor_data::AnalysisResultCommitV1 {
+            scope: scope.clone(),
+            expected_cursor: 3,
+            consumed_cursor: 3,
+            coverage_revision: source.coverage_revision,
+            context_revision: 0,
+            result_id: expired_id.clone(),
+            body: Vec::new(),
+            created_utc_ns: current.time_utc_ns,
+            witnesses: Vec::new(),
+            context_refs: Vec::new(),
+        },
+        araphor_data::analysis::CanonicalGraph::bounded(
+            generated,
+            fixture.query.limits().output_bytes,
+        )?,
+        &[],
+        &references,
+        &sources,
+        false,
+        || {
+            fixture.control.check()?;
+            fixture.authority.check(&grant, PackageActionV1::Run)
+        },
+    )?;
+    assert_eq!(expired.consumed_cursor, 3);
+    assert_eq!(expired.commit_revision, before.commit_revision + 1);
+    assert_eq!(
+        fixture.query.store().managed_instance(
+            fixture.source.tenant_id,
+            &receiver.spec.id,
+            &fixture.control
+        )?,
+        Some(receiver)
+    );
+    assert_eq!(
+        fixture.query.store().read_page(&fixture.source, 1)?.records,
+        raw
+    );
+    assert_eq!(
+        fixture.query.store().source_receipt(&fixture.source)?,
+        Some(source)
+    );
+    assert_eq!(
+        fixture.query.store().processor_result(&scope)?,
+        Some(original.clone())
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .processor_health(&scope)?
+            .ok_or("Graph expiry progress")?
+            .consumed_cursor,
+        3
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, &original.result_id)?,
+        Some(retained.clone())
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .read_result(fixture.source.tenant_id, &original.result_id)?,
+        Some(body)
+    );
+    assert_eq!(
+        fixture.query.store().package_evidence(
+            fixture.source.tenant_id,
+            std::slice::from_ref(&original.result_id)
+        )?,
+        (witnesses, references.clone())
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .read_result(fixture.source.tenant_id, &expired_id)?,
+        Some(expired_body)
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .package_evidence(fixture.source.tenant_id, std::slice::from_ref(&expired_id))?,
+        (Vec::new(), references)
+    );
+    let (_, _, revision) = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?
+        .into_iter()
+        .find(|(id, _, _)| id == &expired_id)
+        .ok_or("Expired Graph head")?;
+    assert_eq!(revision, expired.commit_revision);
     assert_eq!(
         fixture
             .query
@@ -84,6 +362,8 @@ async fn expiry_allows_new_input() -> TestResult {
             .graph_result(fixture.source.tenant_id, &expired_id)?,
         Some(expected.clone())
     );
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), calls);
+    assert_eq!(donor.facts.calls.load(Ordering::SeqCst), 0);
     let facts = fixture.facts.calls.load(Ordering::SeqCst);
     assert!(evaluation
         .run(request("expired-only")?, &fixture.control)
@@ -91,6 +371,10 @@ async fn expiry_allows_new_input() -> TestResult {
         .results
         .is_empty());
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), facts);
+    assert_eq!(
+        fixture.query.store().read_page(&fixture.source, 1)?.records,
+        raw
+    );
     assert_eq!(
         entered.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)
@@ -373,6 +657,49 @@ async fn managed_expiry_is_atomic() -> TestResult {
         .into_iter()
         .map(|(id, graph, revision)| (id, graph.first_cursor, revision))
         .collect::<Vec<_>>();
+    let pointer = query.store().processor_result(&scope)?;
+    let metadata = query.store().meta()?;
+    let current = query
+        .store()
+        .managed_instance(source.tenant_id, &saved.spec.id, &control)?
+        .ok_or("Reopened expiry instance")?;
+    let history =
+        query
+            .store()
+            .managed_history(&current.grant.selection, &current.spec.id, &control)?;
+    let snapshots = || -> TestResult<GraphHistory> {
+        let mut inventory = Vec::new();
+        let mut after = None;
+        loop {
+            let page = query.store().graph_snapshots(
+                source.tenant_id,
+                Some(&source),
+                after.as_deref(),
+                false,
+            )?;
+            if page.is_empty() {
+                break;
+            }
+            for (id, graph, revision) in page {
+                after = Some(id.clone());
+                let body = query
+                    .store()
+                    .read_result(source.tenant_id, &id)?
+                    .ok_or("Reopened Graph history body")?;
+                inventory.push((
+                    id.clone(),
+                    graph,
+                    revision,
+                    Some(body),
+                    query
+                        .store()
+                        .package_evidence(source.tenant_id, std::slice::from_ref(&id))?,
+                ));
+            }
+        }
+        Ok(inventory)
+    };
+    let inventory = snapshots()?;
     let resumed = restored.run(request("already-expired")?, &control).await?;
     assert!(resumed.results.is_empty());
     assert_eq!(
@@ -391,6 +718,28 @@ async fn managed_expiry_is_atomic() -> TestResult {
     assert_eq!(
         entered.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)
+    );
+    assert_eq!(query.store().processor_result(&scope)?, pointer);
+    assert_eq!(snapshots()?, inventory);
+    assert_eq!(resumed.commit_revision, metadata.commit_revision + 2);
+    let mut expected_meta = metadata;
+    expected_meta.commit_revision = resumed.commit_revision;
+    assert_eq!(query.store().meta()?, expected_meta);
+    let mut expected_instance = current;
+    expected_instance.progress = resumed.commit_revision;
+    assert_eq!(
+        query
+            .store()
+            .managed_instance(source.tenant_id, &saved.spec.id, &control)?,
+        Some(expected_instance)
+    );
+    let mut expected_history = history;
+    expected_history.push(resumed);
+    assert_eq!(
+        query
+            .store()
+            .managed_history(&saved.grant.selection, &saved.spec.id, &control)?,
+        expected_history
     );
     Ok(())
 }

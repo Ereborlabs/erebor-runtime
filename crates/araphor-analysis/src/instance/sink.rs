@@ -372,7 +372,6 @@ impl DataSink for Publication {
                                 &task,
                                 &captured,
                                 format!("graph:{}", uuid::Uuid::new_v4()),
-                                true,
                                 control,
                             )?,
                     ),

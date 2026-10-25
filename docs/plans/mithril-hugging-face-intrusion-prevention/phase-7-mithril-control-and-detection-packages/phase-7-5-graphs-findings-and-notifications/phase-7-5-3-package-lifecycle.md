@@ -240,3 +240,11 @@ denied-open events by exact subject and resource. `denials.repeated` selects
 counts of at least three. Three matching events produce one row with count `3`.
 A corrected source window with two events removes that row after replacement.
 Restart retains the committed state; retry returns the original receipt.
+
+
+## Native redesign review on 2026-10-25
+
+Result: **Done** for the required native replacement.
+Read the [current owner map](../../../araphor-component-redesign.md#required-native-redesign-result)
+and [focused proof](../../../araphor-analysis-migration.md#one-managed-graph-execution-route).
+Earlier commands, versions, results, and limits apply to their recorded source.

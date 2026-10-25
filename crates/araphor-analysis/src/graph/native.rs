@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use araphor_analysis_builtins::graph::Detector;
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
-    AnalysisContextRefV1, AnalysisContextVersionV1, AnalysisResultReceiptV1, PackageActionV1,
-    PackageAuthorization, PackageErrorCodeV1 as Code, PackageGrantV1, StorePositionV1,
+    AnalysisContextRefV1, AnalysisContextVersionV1, PackageActionV1, PackageAuthorization,
+    PackageErrorCodeV1 as Code, PackageGrantV1, StorePositionV1,
 };
 use araphor_discovery_definition::{Definition, Program, ResolvedDefinition, Source};
 use araphor_query::definition::{PackageCall, PreparedDefinition};
@@ -14,9 +14,9 @@ use araphor_query::execution::{Limits, Session};
 use araphor_query::memory::Memory;
 use araphor_query::sources::SourceSnapshot;
 use datafusion::common::DataFusionError;
-use datafusion::datasource::{provider_as_source, view::ViewTable};
+use datafusion::datasource::view::ViewTable;
 use datafusion::execution::memory_pool::MemoryReservation;
-use datafusion::logical_expr::{dml::InsertOp, Extension, LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_expr::{Extension, LogicalPlan};
 use datafusion::sql::sqlparser::ast::Statement;
 use tokio::sync::OnceCell;
 
@@ -28,9 +28,6 @@ pub(crate) use commit::GraphConversion;
 mod managed;
 mod node;
 mod program;
-mod sink;
-mod subscription;
-pub use subscription::GraphSubscription;
 
 #[cfg(test)]
 mod tests;
@@ -46,7 +43,7 @@ pub trait GraphFacts: Send + Sync {
 #[derive(Clone)]
 pub struct GraphPublication {
     session: Session,
-    authority: Arc<dyn PackageAuthorization>,
+    #[cfg(test)]
     grant: PackageGrantV1,
     prepared: PreparedDefinition,
     feedback: bool,
@@ -87,7 +84,6 @@ struct Capture {
 
 struct Head {
     id: String,
-    revision: u64,
     first: u64,
     deadline: u64,
     coverage: u64,
@@ -350,116 +346,12 @@ impl GraphPublication {
         });
         Ok(Self {
             session,
-            authority,
+            #[cfg(test)]
             grant,
             prepared,
             feedback,
             calls,
             projection,
-        })
-    }
-
-    pub async fn refresh(self, result_id: String) -> Result<(String, AnalysisResultReceiptV1)> {
-        self.grant.remaining()?;
-        let mut changes = self.authority.changes_for(&self.grant);
-        let read = Arc::clone(self.session.control());
-        let receipt = Arc::new(Mutex::new(None));
-        let state = Arc::clone(&receipt);
-        let owner = Arc::new(self);
-        let execution = async {
-            let definition = owner.publication(
-                owner.prepared.clone(),
-                sink::Kind::Publish(false),
-                Some(result_id),
-                state,
-            )?;
-            owner
-                .session
-                .execute_definition(&definition, Default::default())
-                .await?;
-            Ok::<_, crate::Error>(())
-        };
-        tokio::pin!(execution);
-        owner.check_current().await?;
-        loop {
-            tokio::select! {
-                result = &mut execution => { result?; break; },
-                changed = changes.changed() => {
-                    let checked = if changed.is_ok() { owner.check_current().await }
-                        else { Err(Code::Incomplete.error("graph authority watch").into()) };
-                    if let Err(error) = checked {
-                        read.cancel()?;
-                        let _joined = execution.await;
-                        return Err(error);
-                    }
-                }
-            }
-        }
-        owner.check_current().await?;
-        let result = receipt
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-            .ok_or_else(|| Code::Incomplete.error("graph publication receipt"))?;
-        Ok(result)
-    }
-
-    fn publication(
-        self: &Arc<Self>,
-        mut definition: PreparedDefinition,
-        kind: sink::Kind,
-        result_id: Option<String>,
-        receipt: Arc<Mutex<Option<sink::Receipt>>>,
-    ) -> Result<PreparedDefinition> {
-        let sink = Arc::new(sink::Publication {
-            owner: Arc::clone(self),
-            schema: Arc::clone(definition.plan.schema().inner()),
-            result_id,
-            kind,
-            receipt,
-        });
-        definition.plan = LogicalPlanBuilder::insert_into(
-            definition.plan,
-            "__graph_publication",
-            provider_as_source(sink),
-            InsertOp::Append,
-        )
-        .and_then(LogicalPlanBuilder::build)
-        .map_err(|source| araphor_query::Error::Sql { source })?;
-        Ok(definition)
-    }
-
-    async fn check_current(self: &Arc<Self>) -> Result<()> {
-        let checked = Arc::clone(self);
-        let stage = Arc::clone(self.session.control());
-        araphor_query::execution::Engine::blocking(Arc::clone(&stage), (), move || {
-            checked.check(&stage).map_err(Into::into)
-        })
-        .await?;
-        Ok(())
-    }
-
-    fn check(&self, control: &araphor_data::AnalysisReadControl) -> araphor_data::Result<()> {
-        self.authorize(control, &mut || Ok(()))
-    }
-
-    fn authorize(
-        &self,
-        control: &araphor_data::AnalysisReadControl,
-        operation: &mut dyn FnMut() -> araphor_data::Result<()>,
-    ) -> araphor_data::Result<()> {
-        let grants = std::iter::once((&self.grant, PackageActionV1::Run, None))
-            .chain(
-                self.prepared
-                    .images()
-                    .map(|image| (&self.grant, PackageActionV1::Run, Some(image))),
-            )
-            .collect::<Vec<_>>();
-        self.authority.commit_many(&grants, &mut || {
-            self.grant.remaining()?;
-            self.session.control().check()?;
-            control.check()?;
-            operation()
         })
     }
 }

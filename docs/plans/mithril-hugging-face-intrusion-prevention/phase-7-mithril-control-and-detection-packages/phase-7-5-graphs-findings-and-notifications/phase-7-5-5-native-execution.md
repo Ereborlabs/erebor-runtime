@@ -284,3 +284,11 @@ does not change an earlier failure or interrupted result.
 The user-approved shared-process decision replaces the worker and isolation
 proposal. The historical independent one-second package-read failure has no
 confirmed cause. The later graph pass does not establish that cause.
+
+
+## Native redesign review on 2026-10-25
+
+Result: **Done** for the required native replacement.
+Read the [current owner map](../../../araphor-component-redesign.md#required-native-redesign-result)
+and [focused proof](../../../araphor-analysis-migration.md#one-managed-graph-execution-route).
+Earlier commands, versions, results, and limits apply to their recorded source.

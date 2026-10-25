@@ -1694,11 +1694,15 @@ remain **Not done**.
 
 ## Finite native Graph source and publication
 
+This section records the former finite execution route. Its results apply to
+the source recorded below. The direct executor is retired. Read the
+[current route](#one-managed-graph-execution-route) for the replacement.
+
 This production route replaces the earlier test-only Graph input boundary.
 It covers one `GraphPublication::refresh`; it does not advance the processor
 cursor or establish automatic producer recovery. Read these owners in order:
 
-1. [GraphPublication](../../crates/araphor-analysis/src/graph/native.rs) checks
+1. [GraphPublication](https://github.com/Ereborlabs/erebor-runtime/blob/cbc21f76103ccaf37bd85df337b83e1d4b3ebdc8/crates/araphor-analysis/src/graph/native.rs) checks
    the Run grant, complete source scope, exact image set, and current image
    trust. It rejects foreign call admissions before execution. Canonical
    coverage comes from the Engine rather than a caller table with the same name.
@@ -1720,7 +1724,7 @@ cursor or establish automatic producer recovery. Read these owners in order:
    Private admission identity binds each `CallResult` to its actual call.
    Metadata passes through only for one exact identity origin. Cleanup drains
    already-started shared futures and joins their workers; it does not rerun calls.
-5. The [Graph sink](../../crates/araphor-analysis/src/graph/native/sink.rs) wraps
+5. The [Graph sink](https://github.com/Ereborlabs/erebor-runtime/blob/cbc21f76103ccaf37bd85df337b83e1d4b3ebdc8/crates/araphor-analysis/src/graph/native/sink.rs) wraps
    the selected native plan through insert-only DML. Native `DataSinkExec` owns
    invocation and the one-row count. The Graph sink drains selected batches,
    checks configured row and byte totals, requires all three actual returns,
@@ -4034,3 +4038,57 @@ records 28 distinct cases, 32 successful case executions, and the final
 build, Clippy, and formatting passes. A test definition is not a pass. This
 bounded correction is **Done**. Direct Graph retirement and the complete
 redesign remain **Not done**.
+
+
+## One managed Graph execution route
+
+Result: **Done** for the required native replacement. Graph execution and expiry use the
+existing Instance and Query owners. The direct Graph sink, receipt delivery,
+and subscription protocol are removed. Data remains the transaction owner.
+
+[GraphOwner](../../crates/araphor-analysis/src/graph/feed.rs) receives source membership from a Query subscription.
+  -> [InstanceHost](../../crates/araphor-analysis/src/instance/host.rs) admits the selected managed program.
+  -> [GraphPublication](../../crates/araphor-analysis/src/graph/native/managed.rs) prepares exact images and the source program.
+  -> [InstanceHost](../../crates/araphor-analysis/src/instance/host.rs) drives the running Instance through its future collection.
+  -> [Query](../../crates/araphor-query/src/definition.rs) uses native parsing, logical planning, optimization, physical planning, and execution.
+  -> [Publication](../../crates/araphor-analysis/src/instance/sink.rs) drains the native stream and obtains its captured receipt.
+  -> [Graph conversion](../../crates/araphor-analysis/src/graph/native/commit.rs) checks the complete detector returns and proof bindings.
+  -> [Data](../../crates/araphor-data/src/analysis/progress/graph.rs) commits Graph rows, outputs, state, references, and progress together.
+
+```mermaid
+sequenceDiagram
+    GraphOwner->>InstanceHost: Admit source and expiry programs
+    InstanceHost->>Query: Drive the Instance subscription
+    Query->>Publication: Execute native DML with one captured receipt
+    Publication->>Data: Commit validated Graph and managed state
+    Data-->>Publication: Return the committed receipt
+    Publication-->>Query: Acknowledge a complete cut
+```
+
+Instance retains current authority checks. Graph preparation retains scope,
+image, and trust checks. Conversion retains the previous result ID. Expiry
+retains the captured result ID and revision check. Expiry changes the window
+head without advancing the processor pointer. Historical readers use window
+heads and exact IDs; they do not select replacement history through that
+advancing pointer.
+
+The old direct APIs are removed after their assertion duties pass at the
+remaining owners. The shared test Clock stays for native Query timing. A
+historical Data fixture proves expiry with no advancing head. Other fixtures
+use actual retained-floor expiry. They keep the production wall-time guards.
+
+[AnalysisReadControl](../../crates/araphor-data/src/analysis/read.rs) uses the existing Tokio cancellation token.
+Stage controls share cancellation. An operation gets a child token and its own
+native interrupt slot. [Engine::blocking](../../crates/araphor-query/src/execution.rs)
+forwards cancellation to that slot before it joins the worker.
+
+[Package Runtime](../../crates/araphor-package-runtime/src/wasm/cache.rs) uses
+Wasmtime parallel compilation. Compilation finishes all jobs before return.
+The existing compiler mutex and leases stay held. Shared Rayon threads can
+remain for the process lifetime. This change adds no compiler process.
+
+The [final qualification list](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/graph-final-qualification.json)
+contains 21 existing cases, including the actual native detector libraries.
+The final result and source pins are recorded in the
+[migration result](../plans/araphor-analysis-migration.md#one-managed-graph-execution-route).
+Full CI, benchmarks, physical diagnostics, and additional hosts are not checked.

@@ -280,7 +280,7 @@ async fn graph_conversion_failure_finishes() -> TestResult {
 }
 
 impl Fixture {
-    fn admit_definition(
+    pub(super) fn admit_definition(
         &self,
         grant: &PackageGrantV1,
         definition: &araphor_discovery_definition::ResolvedDefinition,
@@ -300,7 +300,7 @@ impl Fixture {
     }
 }
 
-fn request(id: &str) -> TestResult<araphor_data::ManagedRequest> {
+pub(super) fn request(id: &str) -> TestResult<araphor_data::ManagedRequest> {
     Ok(araphor_data::ManagedRequest {
         id: id.into(),
         time_utc_ns: u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?,
@@ -440,12 +440,173 @@ async fn managed_restores_native_inputs() -> TestResult {
 
 #[tokio::test]
 async fn managed_expiry_without_head() -> TestResult {
-    let fixture = Fixture::target(Target::Sql)?;
-    let publication = fixture.prepare("").await?;
-    let grant = publication.grant.clone();
-    let (id, _) = publication
-        .refresh("graph:managed-expiry-input".into())
+    let donor = Fixture::target(Target::Sql)?;
+    let (grant, definition) = donor.graph_definition().await?;
+    let native = donor
+        .managed_graph(&grant, &definition, "expiry-seed", "SELECT * FROM events")
         .await?;
+    let input = request("expiry-seed")?;
+    let generated = native.run(input.clone(), &donor.control).await?;
+    assert_eq!(generated.results.len(), 3);
+    let scope = donor.graph_scope();
+    let head = donor
+        .query
+        .store()
+        .processor_result(&scope)?
+        .ok_or("Native Graph seed head")?;
+    assert_eq!(head.commit_revision, generated.commit_revision);
+    let id = head.result_id;
+    let mut snapshot = donor
+        .query
+        .store()
+        .graph_result(donor.source.tenant_id, &id)?
+        .ok_or("Native Graph seed")?;
+    assert!(snapshot.previous_result_id.is_none());
+    assert_eq!(snapshot.context_notice_revision, 0);
+    let body = donor
+        .query
+        .store()
+        .read_result(donor.source.tenant_id, &id)?
+        .ok_or("Native Graph seed body")?;
+    assert_eq!(body, serde_json::to_vec(&snapshot)?);
+    let (mut witnesses, references) = donor
+        .query
+        .store()
+        .package_evidence(donor.source.tenant_id, std::slice::from_ref(&id))?;
+    let original_snapshot = snapshot.clone();
+    let original_witnesses = witnesses.clone();
+    snapshot.witness_deadline_utc_ns = request("historical-input")?
+        .time_utc_ns
+        .checked_sub(1)
+        .filter(|time| *time > 1)
+        .ok_or("Historical Graph deadline")?;
+    let created = snapshot
+        .witness_deadline_utc_ns
+        .checked_sub(araphor_data::GRAPH_WITNESS_TTL_NS)
+        .filter(|time| *time != 0)
+        .ok_or("Historical Graph creation time")?;
+    for witness in &mut witnesses {
+        witness.expires_utc_ns = snapshot.witness_deadline_utc_ns;
+    }
+    let mut restored = snapshot.clone();
+    restored.witness_deadline_utc_ns = original_snapshot.witness_deadline_utc_ns;
+    assert_eq!(restored, original_snapshot);
+    assert_eq!(serde_json::to_vec(&restored)?, body);
+    let mut restored = witnesses.clone();
+    for (restored, original) in restored.iter_mut().zip(&original_witnesses) {
+        restored.expires_utc_ns = original.expires_utc_ns;
+    }
+    assert_eq!(restored, original_witnesses);
+    let body = serde_json::to_vec(&snapshot)?;
+    let contexts = references
+        .iter()
+        .map(|reference| {
+            donor
+                .query
+                .store()
+                .context_version(&reference.key)?
+                .ok_or_else(|| Code::Invalid.error("Native Graph seed context"))
+        })
+        .collect::<araphor_data::Result<Vec<_>>>()?;
+    assert_eq!(
+        contexts
+            .iter()
+            .filter(|context| context.key.owner_id == "native-package-v1")
+            .count(),
+        3
+    );
+    let mut fixture = Fixture::with_records(Target::Sql, donor.records.clone())?;
+    fixture.facts = Arc::clone(&donor.facts);
+    assert_eq!(fixture.source, donor.source);
+    assert_eq!(fixture.graph_scope(), scope);
+    let store = fixture.query.store();
+    let source = store
+        .source_receipt(&fixture.source)?
+        .ok_or("Graph seed source receipt")?;
+    assert_eq!(
+        Some(source.clone()),
+        donor.query.store().source_receipt(&donor.source)?
+    );
+    assert_eq!(
+        store.read_page(&fixture.source, 1)?.records,
+        donor.query.store().read_page(&donor.source, 1)?.records
+    );
+    assert!(source.retained_floor < snapshot.first_cursor);
+    assert!(store.processor_result(&scope)?.is_none());
+    assert_eq!(
+        store
+            .processor_health(&scope)?
+            .ok_or("Fresh Graph progress")?
+            .consumed_cursor,
+        0
+    );
+    let before = store.meta()?;
+    let sources = grant.selection.source_revisions(before.commit_revision);
+    let retained = store.commit_graph_snapshot(
+        araphor_data::AnalysisResultCommitV1 {
+            scope: scope.clone(),
+            expected_cursor: 0,
+            consumed_cursor: 0,
+            coverage_revision: source.coverage_revision,
+            context_revision: 0,
+            result_id: id.clone(),
+            body: Vec::new(),
+            created_utc_ns: created,
+            witnesses: witnesses.clone(),
+            context_refs: Vec::new(),
+        },
+        araphor_data::analysis::CanonicalGraph::bounded(
+            snapshot.clone(),
+            fixture.query.limits().output_bytes,
+        )?,
+        &contexts,
+        &[],
+        &sources,
+        false,
+        || {
+            fixture.control.check()?;
+            fixture.authority.check(&grant, PackageActionV1::Run)
+        },
+    )?;
+    assert_eq!(retained.consumed_cursor, 0);
+    assert_eq!(retained.commit_revision, before.commit_revision + 1);
+    assert!(store.processor_result(&scope)?.is_none());
+    assert_eq!(
+        store
+            .processor_health(&scope)?
+            .ok_or("Retained Graph progress")?
+            .consumed_cursor,
+        0
+    );
+    assert_eq!(
+        store.graph_result(fixture.source.tenant_id, &id)?,
+        Some(snapshot.clone())
+    );
+    assert_eq!(
+        store.read_result(fixture.source.tenant_id, &id)?,
+        Some(body.clone())
+    );
+    let references = references
+        .iter()
+        .map(|reference| AnalysisContextRefV1 {
+            key: reference.key.clone(),
+            commit_revision: retained.commit_revision,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        store.package_evidence(fixture.source.tenant_id, std::slice::from_ref(&id))?,
+        (witnesses.clone(), references.clone())
+    );
+    for context in &contexts {
+        assert_eq!(store.context_version(&context.key)?, Some(context.clone()));
+    }
+    let headers = store.graph_window_headers(&fixture.source, None)?;
+    assert_eq!(headers.len(), 1);
+    let (result, header, revision) = headers.first().ok_or("Retained Graph seed window")?;
+    assert_eq!(result, &id);
+    assert_eq!(header.first_cursor, snapshot.first_cursor);
+    assert_eq!(header.last_cursor, snapshot.last_cursor);
+    assert_eq!(*revision, retained.commit_revision);
     let definition = fixture
         .query
         .admit_definition(
@@ -461,6 +622,7 @@ async fn managed_expiry_without_head() -> TestResult {
         identity: fixture.source.clone(),
     };
     let before = fixture.query.store().processor_result(&scope)?;
+    assert!(before.is_none());
     let job = GraphPublication::admit_expiry(
         Arc::clone(&fixture.query),
         fixture.authority.clone(),
@@ -471,7 +633,14 @@ async fn managed_expiry_without_head() -> TestResult {
     )
     .await?;
     assert!(!job.admitted().running);
-    let receipt = job.run(request("not-due")?, &fixture.control).await?;
+    let mut input = request("not-due")?;
+    input.time_utc_ns = snapshot
+        .witness_deadline_utc_ns
+        .checked_sub(1)
+        .filter(|time| *time != 0)
+        .ok_or("Historical Graph early time")?;
+    assert!(input.time_utc_ns < snapshot.witness_deadline_utc_ns);
+    let receipt = job.run(input, &fixture.control).await?;
     assert!(receipt.results.is_empty());
     let attempt = fixture
         .query
@@ -490,135 +659,12 @@ async fn managed_expiry_without_head() -> TestResult {
         .store()
         .graph_result(fixture.source.tenant_id, &id)?
         .is_some());
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn managed_gate_is_native() -> TestResult {
-    use datafusion::datasource::sink::DataSinkExec;
-    use datafusion::physical_plan::joins::CrossJoinExec;
-    use datafusion::physical_plan::ExecutionPlan;
-
-    fn packages(plan: &Arc<dyn ExecutionPlan>) -> usize {
-        usize::from(plan.name() == "PackageExec")
-            + plan
-                .children()
-                .iter()
-                .map(|child| packages(child))
-                .sum::<usize>()
-    }
-
-    fn cross(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
-        if plan.as_any().is::<CrossJoinExec>() {
-            return Some(Arc::clone(plan));
-        }
-        plan.children().iter().find_map(|child| cross(child))
-    }
-
-    fn limited(plan: &Arc<dyn ExecutionPlan>) -> bool {
-        plan.fetch() == Some(1) || plan.children().iter().any(|child| limited(child))
-    }
-
-    let fixture = Fixture::target(Target::Sql)?;
-    let mut publication = fixture.prepare("WHERE source_cursor > 3").await?;
-    let events = fixture
-        .query
-        .prepare("SELECT * FROM events WHERE source_cursor > 3", Vec::new())
-        .await?
-        .0;
-    let schema = Arc::clone(publication.prepared.plan.schema());
-    publication.prepared.plan = GraphPublication::input_gate(events, publication.prepared.plan)?;
-    assert_eq!(publication.prepared.plan.schema(), &schema);
-    let publication = Arc::new(publication);
-    let definition = publication.publication(
-        publication.prepared.clone(),
-        sink::Kind::Publish(false),
-        Some("graph:native-gate".into()),
-        Arc::new(Mutex::new(None)),
-    )?;
-    let state = fixture.query.catalog(BTreeMap::new())?;
-    let optimized = state.optimize(&definition.plan)?;
-    let physical = state
-        .query_planner()
-        .create_physical_plan(&optimized, &state)
-        .await?;
-    assert!(physical.as_any().is::<DataSinkExec>());
-    let joined = cross(&physical).ok_or("native Graph input CrossJoin")?;
-    let joined = joined
-        .as_any()
-        .downcast_ref::<CrossJoinExec>()
-        .ok_or("native Graph input CrossJoin type")?;
-    assert_eq!(packages(joined.left()), 0);
-    assert_eq!(packages(joined.right()), 3);
-    assert!(limited(joined.left()));
-    Ok(())
-}
-
-#[tokio::test]
-async fn managed_gate_skips_calls() -> TestResult {
-    let fixture = Fixture::target(Target::Wasm)?;
-    let publication = fixture.prepare("WHERE source_cursor > 3").await?;
-    let grant = publication.grant.clone();
-    let definition = publication.prepared.resolved().clone();
-    fixture.admit_definition(&grant, &definition)?;
-    let (entries, entered) = std::sync::mpsc::channel();
-    fixture.query.guest_entry(entries, None)?;
-    let instance = GraphPublication::admit(
-        Arc::clone(&fixture.query),
-        fixture.authority.clone(),
-        fixture.facts.clone(),
-        grant.clone(),
-        "empty-graph-gate".into(),
-        fixture.source.clone(),
-        "SELECT * FROM events WHERE source_cursor > 3".into(),
-        definition,
-        &fixture.control,
-    )
-    .await?;
-    let selection = instance
-        .admitted()
-        .spec
-        .destination
-        .selection(&grant.selection)?;
-    let tables = araphor_data::AnalysisTableRequests::from([
-        ("graph_manifest".into(), None),
-        ("graph_state".into(), None),
-    ]);
-    let (_, dependency) =
-        fixture
-            .query
-            .store()
-            .dependency_revision_for(&selection, &tables, &fixture.control)?;
-    let before = fixture.query.store().meta()?.commit_revision;
-    let receipt = instance.run(request("no-input")?, &fixture.control).await?;
-    assert!(receipt.results.is_empty());
-    assert!(receipt.commit_revision > before);
-    assert_eq!(
-        entered.try_recv(),
-        Err(std::sync::mpsc::TryRecvError::Empty)
-    );
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        fixture
-            .query
-            .store()
-            .dependency_revision_for(&selection, &tables, &fixture.control,)?
-            .1,
-        dependency
-    );
-    let scope = araphor_data::ProcessorScopeV1 {
-        processor_id: araphor_data::GRAPH_PROCESSOR.into(),
-        method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
-        identity: fixture.source.clone(),
-    };
-    assert!(fixture.query.store().processor_result(&scope)?.is_none());
     assert_eq!(
         fixture
             .query
             .store()
             .processor_health(&scope)?
-            .ok_or("Graph progress")?
+            .ok_or("Graph expiry progress")?
             .consumed_cursor,
         0
     );
@@ -626,16 +672,304 @@ async fn managed_gate_skips_calls() -> TestResult {
         fixture
             .query
             .store()
-            .managed_attempt(
+            .graph_result(fixture.source.tenant_id, &id)?,
+        Some(snapshot.clone())
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .read_result(fixture.source.tenant_id, &id)?,
+        Some(body.clone())
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .package_evidence(fixture.source.tenant_id, std::slice::from_ref(&id),)?,
+        (witnesses.clone(), references.clone())
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .graph_window_headers(&fixture.source, None)?,
+        headers
+    );
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
+    assert!(job.graph_owner().is_none());
+    let raw = fixture.query.store().read_page(&fixture.source, 1)?.records;
+    assert_eq!(
+        raw,
+        donor.query.store().read_page(&donor.source, 1)?.records
+    );
+    assert_eq!(raw.len(), 3);
+    assert!(
+        fixture
+            .query
+            .store()
+            .source_receipt(&fixture.source)?
+            .ok_or("Historical Graph source")?
+            .retained_floor
+            < snapshot.first_cursor
+    );
+    let (entry, entered) = std::sync::mpsc::channel();
+    fixture.query.guest_entry(entry, None)?;
+    let current = request("due")?;
+    assert!(current.time_utc_ns >= snapshot.witness_deadline_utc_ns);
+    let due = {
+        let control = AnalysisReadControl::default();
+        let work = job.run(current, &control);
+        tokio::pin!(work);
+        match tokio::time::timeout(std::time::Duration::from_secs(30), &mut work).await {
+            Ok(receipt) => receipt?,
+            Err(error) => {
+                let cancelled = control.cancel();
+                let joined = work.await;
+                return Err(format!(
+                    "Historical Graph expiry completion: {error}; cancel={cancelled:?}; joined={joined:?}"
+                ).into());
+            }
+        }
+    };
+    assert!(due.results.is_empty());
+    let heads = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?;
+    assert_eq!(heads.len(), 1);
+    let (expired_id, _, revision) = heads.first().ok_or("Historical expired Graph head")?;
+    assert_ne!(expired_id, &id);
+    assert_eq!(*revision, due.commit_revision);
+    let expected = Graph::expire(&snapshot, &id, snapshot.context_notice_revision)?;
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, expired_id)?,
+        Some(expected.clone())
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .read_result(fixture.source.tenant_id, expired_id)?,
+        Some(serde_json::to_vec(&expected)?)
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .package_evidence(fixture.source.tenant_id, std::slice::from_ref(expired_id))?,
+        (Vec::new(), references.clone())
+    );
+    assert_eq!(fixture.query.store().processor_result(&scope)?, before);
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .processor_health(&scope)?
+            .ok_or("Historical expired Graph progress")?
+            .consumed_cursor,
+        0
+    );
+    assert_eq!(
+        fixture.query.store().read_page(&fixture.source, 1)?.records,
+        raw
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, &id)?,
+        Some(snapshot)
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .read_result(fixture.source.tenant_id, &id)?,
+        Some(body)
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .package_evidence(fixture.source.tenant_id, std::slice::from_ref(&id))?,
+        (witnesses, references)
+    );
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        entered.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_gate_is_native() -> TestResult {
+    let fixture = Fixture::target(Target::Sql)?;
+    let publication = fixture.prepare("WHERE source_cursor > 3").await?;
+    let schema = Arc::clone(publication.prepared.plan.schema());
+    let grant = publication.grant.clone();
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let instance = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "native-gate",
+            "SELECT * FROM events WHERE source_cursor > 3",
+        )
+        .await?;
+    instance
+        .assert_graph_gate(&schema, request("native-gate")?)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_gate_skips_calls() -> TestResult {
+    for (target, predicate) in [
+        (Target::Wasm, "WHERE source_cursor > 3"),
+        (Target::Sql, "WHERE FALSE"),
+    ] {
+        let fixture = Fixture::target(target)?;
+        let publication = fixture.prepare(predicate).await?;
+        let grant = publication.grant.clone();
+        let definition = publication.prepared.resolved().clone();
+        fixture.admit_definition(&grant, &definition)?;
+        drop(publication);
+        let (entries, entered) = std::sync::mpsc::channel();
+        fixture.query.guest_entry(entries, None)?;
+        let instance = GraphPublication::admit(
+            Arc::clone(&fixture.query),
+            fixture.authority.clone(),
+            fixture.facts.clone(),
+            grant.clone(),
+            "empty-graph-gate".into(),
+            fixture.source.clone(),
+            format!("SELECT * FROM events {predicate}"),
+            definition,
+            &fixture.control,
+        )
+        .await?;
+        let selection = instance
+            .admitted()
+            .spec
+            .destination
+            .selection(&grant.selection)?;
+        let tables = araphor_data::AnalysisTableRequests::from([
+            ("graph_manifest".into(), None),
+            ("graph_state".into(), None),
+        ]);
+        let (_, dependency) =
+            fixture
+                .query
+                .store()
+                .dependency_revision_for(&selection, &tables, &fixture.control)?;
+        let store = fixture.query.store();
+        let before_instance = store
+            .managed_instance(
                 fixture.source.tenant_id,
                 "empty-graph-gate",
-                "no-input",
                 &fixture.control,
             )?
-            .ok_or("empty Graph attempt")?
-            .receipt(),
-        Some(&receipt)
-    );
+            .ok_or("empty Graph instance")?;
+        assert_eq!(before_instance, *instance.admitted());
+        assert_eq!(before_instance.progress, 0);
+        assert!(store
+            .managed_history(&grant.selection, "empty-graph-gate", &fixture.control)?
+            .is_empty());
+        assert!(fixture.graph_history()?.is_empty());
+        assert!(store
+            .graph_window_headers(&fixture.source, None)?
+            .is_empty());
+        let before = store.meta()?;
+        let receipt = instance.run(request("no-input")?, &fixture.control).await?;
+        assert!(receipt.results.is_empty());
+        assert_eq!(
+            receipt.commit_revision,
+            before
+                .commit_revision
+                .checked_add(2)
+                .ok_or("empty Graph revision")?
+        );
+        let mut expected_meta = before;
+        expected_meta.commit_revision = receipt.commit_revision;
+        assert_eq!(store.meta()?, expected_meta);
+        let mut expected_instance = before_instance;
+        expected_instance.progress = receipt.commit_revision;
+        assert_eq!(
+            store.managed_instance(
+                fixture.source.tenant_id,
+                "empty-graph-gate",
+                &fixture.control
+            )?,
+            Some(expected_instance.clone())
+        );
+        assert_eq!(
+            store.managed_history(&grant.selection, "empty-graph-gate", &fixture.control)?,
+            std::slice::from_ref(&receipt)
+        );
+        let status =
+            store.managed_status(&grant.selection, "empty-graph-gate", &fixture.control)?;
+        assert_eq!(status.instance, expected_instance);
+        assert_eq!(status.status_progress, receipt.commit_revision);
+        assert!(matches!(
+            status.readiness,
+            araphor_data::PackageReadinessV1::Inactive
+        ));
+        assert!(fixture.graph_history()?.is_empty());
+        assert!(store
+            .graph_window_headers(&fixture.source, None)?
+            .is_empty());
+        assert_eq!(
+            entered.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+        assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fixture
+                .query
+                .store()
+                .dependency_revision_for(&selection, &tables, &fixture.control,)?
+                .1,
+            dependency
+        );
+        let scope = araphor_data::ProcessorScopeV1 {
+            processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+            method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+            identity: fixture.source.clone(),
+        };
+        assert!(fixture.query.store().processor_result(&scope)?.is_none());
+        assert_eq!(
+            fixture
+                .query
+                .store()
+                .processor_health(&scope)?
+                .ok_or("Graph progress")?
+                .consumed_cursor,
+            0
+        );
+        assert_eq!(
+            fixture
+                .query
+                .store()
+                .managed_attempt(
+                    fixture.source.tenant_id,
+                    "empty-graph-gate",
+                    "no-input",
+                    &fixture.control,
+                )?
+                .ok_or("empty Graph attempt")?
+                .receipt(),
+            Some(&receipt)
+        );
+        drop(instance);
+        drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
+    }
     Ok(())
 }
 
@@ -644,9 +978,26 @@ async fn managed_expiry_reads_history() -> TestResult {
     let fixture = Fixture::target(Target::Sql)?;
     let publication = fixture.prepare("").await?;
     let grant = publication.grant.clone();
-    let (id, _) = publication
-        .refresh("graph:historical-expiry".into())
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let owner = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "historical-expiry-seed",
+            "SELECT * FROM events",
+        )
         .await?;
+    let seeded = owner.run(request("seed")?, &fixture.control).await?;
+    let head = fixture
+        .query
+        .store()
+        .processor_result(&fixture.graph_scope())?
+        .ok_or("native Graph history head")?;
+    assert_eq!(head.commit_revision, seeded.commit_revision);
+    assert_eq!(seeded.results.len(), 3);
+    let id = head.result_id;
     let original = fixture
         .query
         .store()

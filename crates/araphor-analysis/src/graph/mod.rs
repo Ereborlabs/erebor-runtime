@@ -31,7 +31,7 @@ mod finish;
 mod identity;
 mod native;
 pub(crate) use native::GraphConversion;
-pub use native::{GraphFacts, GraphPublication, GraphSubscription};
+pub use native::{GraphFacts, GraphPublication};
 mod output;
 mod policy;
 mod projection;

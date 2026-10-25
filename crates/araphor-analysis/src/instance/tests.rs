@@ -28,6 +28,81 @@ mod retained;
 mod reusing;
 pub(in crate::instance) mod version;
 
+impl Instance {
+    pub(crate) fn graph_owner(&self) -> Option<&Arc<crate::GraphPublication>> {
+        self.graph.as_ref()
+    }
+
+    pub(crate) async fn assert_graph_gate(
+        self: &Arc<Self>,
+        schema: &datafusion::common::DFSchemaRef,
+        request: ManagedRequest,
+    ) -> TestResult {
+        use datafusion::datasource::{provider_as_source, sink::DataSinkExec};
+        use datafusion::logical_expr::{dml::InsertOp, LogicalPlanBuilder};
+        use datafusion::physical_plan::joins::CrossJoinExec;
+        use datafusion::physical_plan::ExecutionPlan;
+
+        fn packages(plan: &Arc<dyn ExecutionPlan>) -> usize {
+            usize::from(plan.name() == "PackageExec")
+                + plan
+                    .children()
+                    .iter()
+                    .map(|child| packages(child))
+                    .sum::<usize>()
+        }
+
+        fn cross(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
+            if plan.as_any().is::<CrossJoinExec>() {
+                return Some(Arc::clone(plan));
+            }
+            plan.children().iter().find_map(|child| cross(child))
+        }
+
+        fn limited(plan: &Arc<dyn ExecutionPlan>) -> bool {
+            plan.fetch() == Some(1) || plan.children().iter().any(|child| limited(child))
+        }
+
+        assert_eq!(self.prepared.plan.schema(), schema);
+        let target = Arc::new(sink::Publication {
+            owner: Arc::clone(self),
+            schema: Arc::clone(self.prepared.plan.schema().inner()),
+            mode: sink::Mode::Managed {
+                witness_expiry: request.witness_expiry,
+                operation: Box::new(sink::Operation::Once {
+                    current: self.admitted.clone(),
+                    request,
+                    caller: None,
+                }),
+                state: Arc::new(Mutex::new(sink::Step::default())),
+            },
+        });
+        let plan = LogicalPlanBuilder::insert_into(
+            self.prepared.plan.clone(),
+            "__araphor_managed_output",
+            provider_as_source(target),
+            InsertOp::Append,
+        )
+        .and_then(LogicalPlanBuilder::build)?;
+        let state = self.query.catalog(BTreeMap::new())?;
+        let optimized = state.optimize(&plan)?;
+        let physical = state
+            .query_planner()
+            .create_physical_plan(&optimized, &state)
+            .await?;
+        assert!(physical.as_any().is::<DataSinkExec>());
+        let joined = cross(&physical).ok_or("native Graph input CrossJoin")?;
+        let joined = joined
+            .as_any()
+            .downcast_ref::<CrossJoinExec>()
+            .ok_or("native Graph input CrossJoin type")?;
+        assert_eq!(packages(joined.left()), 0);
+        assert_eq!(packages(joined.right()), 3);
+        assert!(limited(joined.left()));
+        Ok(())
+    }
+}
+
 pub(super) type TestResult<T = ()> =
     std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

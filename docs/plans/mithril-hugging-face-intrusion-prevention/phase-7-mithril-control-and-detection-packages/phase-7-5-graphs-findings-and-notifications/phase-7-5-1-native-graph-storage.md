@@ -401,3 +401,11 @@ cross-node causality, provider effects, performance, or unlimited graph size.
 The 64 MiB results above cover the native graph baseline. The later Wasm
 implementation uses a 128 MiB native store and backup validation limit. Graph
 windows stay at 4 MiB. Read the [current component review](wasm-execution-review.md).
+
+
+## Native redesign review on 2026-10-25
+
+Result: **Done** for the required native replacement.
+Read the [current owner map](../../../araphor-component-redesign.md#required-native-redesign-result)
+and [focused proof](../../../araphor-analysis-migration.md#one-managed-graph-execution-route).
+Earlier commands, versions, results, and limits apply to their recorded source.

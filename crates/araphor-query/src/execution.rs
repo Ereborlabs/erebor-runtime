@@ -430,6 +430,12 @@ impl Engine {
             })
             .await;
         if pending.active {
+            if matches!(
+                control.check(),
+                Err(araphor_data::Error::AnalysisReadCancelled { .. })
+            ) {
+                let _cancelled = control.cancel();
+            }
             let _result = worker.await;
             pending.active = false;
         }

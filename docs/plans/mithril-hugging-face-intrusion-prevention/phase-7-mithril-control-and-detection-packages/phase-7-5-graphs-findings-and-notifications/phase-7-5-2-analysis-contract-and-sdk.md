@@ -428,3 +428,11 @@ shared `HF-PROC-001` Rust export through the production graph owner. It returns
 the same finding, evidence, coverage limits, and notification behavior as the
 captured result. Missing coverage retains the incomplete result. This check
 requires no Wasm runtime or installed package.
+
+
+## Native redesign review on 2026-10-25
+
+Result: **Done** for the required native replacement.
+Read the [current owner map](../../../araphor-component-redesign.md#required-native-redesign-result)
+and [focused proof](../../../araphor-analysis-migration.md#one-managed-graph-execution-route).
+Earlier commands, versions, results, and limits apply to their recorded source.

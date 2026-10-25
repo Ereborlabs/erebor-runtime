@@ -3,11 +3,37 @@ use super::*;
 #[tokio::test]
 async fn immutable_facts_precede_guests() -> TestResult {
     let fixture = Fixture::target(Target::Wasm)?;
-    let (id, receipt) = fixture
-        .prepare("")
-        .await?
-        .refresh("graph:frozen-original".into())
+    let publication = fixture.prepare("").await?;
+    let grant = publication.grant.clone();
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let seed = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "immutable-seed",
+            "SELECT * FROM events",
+        )
         .await?;
+    let receipt = seed
+        .run(managed::request("seed")?, &fixture.control)
+        .await?;
+    assert_eq!(receipt.results.len(), 3);
+    let (id, _, revision) = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 1)
+        .ok_or("original Graph window")?;
+    assert_eq!(revision, receipt.commit_revision);
+    let seed_state = fixture
+        .query
+        .store()
+        .managed_instance(fixture.source.tenant_id, "immutable-seed", &fixture.control)?
+        .ok_or("seed Graph instance")?;
+    drop(seed);
     let original = fixture
         .query
         .store()
@@ -25,12 +51,15 @@ async fn immutable_facts_precede_guests() -> TestResult {
         .context_version(key)?
         .ok_or("retained fixture context")?;
     let head = fixture.query.store().processor_result(&original.scope)?;
-    let notice =
-        fixture
-            .query
-            .store()
-            .graph_notice(&original.scope, &id, receipt.commit_revision)?;
-    let before = fixture.query.store().meta()?;
+    let notice = fixture
+        .query
+        .store()
+        .graph_notice(&original.scope, &id, revision)?;
+    let frozen = fixture.query.store().frozen_result(&id)?;
+    let references = fixture
+        .query
+        .store()
+        .package_evidence(fixture.source.tenant_id, std::slice::from_ref(&id))?;
     let (entries, entered) = std::sync::mpsc::channel();
     fixture.query.guest_entry(entries, None)?;
     for field in ["body", "valid-from", "valid-until", "sensitivity"] {
@@ -49,10 +78,33 @@ async fn immutable_facts_precede_guests() -> TestResult {
             .changed
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = Some(changed);
-        let publication = fixture.prepare("").await?;
-        let projection = Arc::clone(&publication.projection);
-        let error = publication
-            .refresh(format!("graph:changed-{field}"))
+        let instance_id = format!("immutable-{field}");
+        let owner = fixture
+            .managed_graph(&grant, &definition, &instance_id, "SELECT * FROM events")
+            .await?;
+        let graph = owner
+            .graph_owner()
+            .ok_or("admitted immutable Graph owner")?;
+        let projection = &graph.projection;
+        let before_instance = owner.admitted().clone();
+        assert!(!before_instance.running);
+        assert_eq!(before_instance.progress, 0);
+        let before_domain = fixture.graph_history()?;
+        assert!(!before_domain.is_empty());
+        let before_heads = fixture
+            .query
+            .store()
+            .graph_window_headers(&fixture.source, None)?;
+        let before_health = fixture.query.store().processor_health(&original.scope)?;
+        let before_usage = fixture
+            .query
+            .store()
+            .retained_usage(fixture.source.tenant_id)?;
+        let before = fixture.query.store().meta()?;
+        let input = managed::request("changed")?;
+        assert!(input.time_utc_ns < original.witness_deadline_utc_ns);
+        let error = owner
+            .run(input.clone(), &fixture.control)
             .await
             .err()
             .ok_or("changed immutable Graph fact accepted")?;
@@ -65,10 +117,119 @@ async fn immutable_facts_precede_guests() -> TestResult {
             entered.try_recv(),
             Err(std::sync::mpsc::TryRecvError::Empty)
         );
-        assert_eq!(fixture.query.store().meta()?, before);
+        let saved = fixture
+            .query
+            .store()
+            .managed_attempt(
+                fixture.source.tenant_id,
+                &instance_id,
+                &input.id,
+                &fixture.control,
+            )?
+            .ok_or("immutable Graph attempt")?;
+        let revision = before
+            .commit_revision
+            .checked_add(2)
+            .ok_or("immutable revision overflow")?;
+        assert_eq!(
+            saved.terminal(),
+            Some(&araphor_data::ManagedTerminal {
+                instance: instance_id.clone(),
+                attempt: input.id.clone(),
+                revision,
+                exit: araphor_data::ManagedExit::Failed(Code::Invalid),
+                suspended: false,
+            })
+        );
+        assert!(saved.receipt().is_none());
+        assert_eq!(saved.instance(), &before_instance);
+        let mut supplied = saved.request().clone();
+        let frontier = supplied
+            .frontier
+            .take()
+            .ok_or("immutable native frontier")?;
+        assert_eq!(supplied, input);
+        assert!(!frontier.pending);
+        assert_eq!(frontier.next_change, Some(original.witness_deadline_utc_ns));
+        let cursor = araphor_query::follow::Cursor::decode(&frontier.cursor)?;
+        assert_eq!(cursor.encode()?, frontier.cursor);
+        assert_eq!(cursor.read_revision(), before.commit_revision);
+        assert_eq!(
+            cursor.position(),
+            StorePositionV1 {
+                commit_revision: 0,
+                ordinal: 0
+            }
+        );
+        let status = fixture.query.store().managed_status(
+            &grant.selection,
+            &instance_id,
+            &fixture.control,
+        )?;
+        assert_eq!(status.instance, before_instance);
+        assert_eq!(status.status_progress, 0);
+        assert!(
+            matches!(status.readiness, araphor_data::PackageReadinessV1::Failed {
+            code: Code::Invalid, field } if field == "model evaluation")
+        );
+        assert_eq!(
+            fixture.query.store().managed_resume(
+                fixture.source.tenant_id,
+                &instance_id,
+                &fixture.control
+            )?,
+            araphor_data::ManagedResume {
+                instance: before_instance.clone(),
+                frontier: Some(frontier),
+                completed: revision
+            }
+        );
+        let mut expected_meta = before;
+        expected_meta.commit_revision = revision;
+        assert_eq!(fixture.query.store().meta()?, expected_meta);
+        assert_eq!(
+            fixture
+                .query
+                .store()
+                .managed_instance(fixture.source.tenant_id, &instance_id, &fixture.control)?
+                .ok_or("failed immutable instance")?,
+            before_instance
+        );
+        assert!(fixture
+            .query
+            .store()
+            .managed_history(&grant.selection, &instance_id, &fixture.control)?
+            .is_empty());
+        assert!(fixture
+            .query
+            .store()
+            .managed_selected(
+                fixture.source.tenant_id,
+                &instance_id,
+                &input.id,
+                &fixture.control
+            )?
+            .is_none());
+        assert_eq!(fixture.graph_history()?, before_domain);
+        assert_eq!(fixture.query.store().frozen_result(&id)?, frozen);
+        assert_eq!(
+            fixture
+                .query
+                .store()
+                .graph_window_headers(&fixture.source, None)?,
+            before_heads
+        );
         assert_eq!(
             fixture.query.store().processor_result(&original.scope)?,
             head
+        );
+        let expected_health = before_health.map(|mut health| {
+            health.read_revision = revision;
+            health
+        });
+        assert_eq!(
+            fixture.query.store().processor_health(&original.scope)?,
+            expected_health
         );
         assert_eq!(
             fixture
@@ -88,18 +249,74 @@ async fn immutable_facts_precede_guests() -> TestResult {
                 .graph_notice(&original.scope, &id, receipt.commit_revision)?,
             notice
         );
+        assert_eq!(
+            fixture
+                .query
+                .store()
+                .package_evidence(fixture.source.tenant_id, std::slice::from_ref(&id))?,
+            references
+        );
+        assert_eq!(
+            fixture
+                .query
+                .store()
+                .managed_instance(fixture.source.tenant_id, "immutable-seed", &fixture.control)?
+                .ok_or("retained seed instance")?,
+            seed_state
+        );
+        assert_eq!(
+            fixture.query.store().managed_history(
+                &grant.selection,
+                "immutable-seed",
+                &fixture.control
+            )?,
+            std::slice::from_ref(&receipt)
+        );
+        let usage = fixture
+            .query
+            .store()
+            .retained_usage(fixture.source.tenant_id)?;
+        assert_eq!(
+            (usage.1, usage.2, usage.3),
+            (before_usage.1, before_usage.2, before_usage.3)
+        );
+        fixture.query.store().verify_state()?;
     }
     *fixture
         .facts
         .changed
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = None;
-    let publication = fixture.prepare("").await?;
-    let projection = Arc::clone(&publication.projection);
+    let owner = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "immutable-restored",
+            "SELECT * FROM events",
+        )
+        .await?;
+    let graph = owner.graph_owner().ok_or("recovered Graph owner")?;
+    let projection = &graph.projection;
     let observed = projection.observe_capture();
-    let repeated = publication
-        .clone()
-        .refresh("graph:unchanged-frozen".into())
+    let before_instance = fixture
+        .query
+        .store()
+        .managed_instance(
+            fixture.source.tenant_id,
+            "immutable-restored",
+            &fixture.control,
+        )?
+        .ok_or("restored immutable instance")?;
+    let before_domain = fixture.graph_history()?;
+    assert!(!before_domain.is_empty());
+    let before_heads = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?;
+    let before_health = fixture.query.store().processor_health(&original.scope)?;
+    let before = fixture.query.store().meta()?;
+    let repeated = owner
+        .run(managed::request("restored")?, &fixture.control)
         .await?;
     let captured = observed.try_recv()?;
     assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
@@ -122,16 +339,16 @@ async fn immutable_facts_precede_guests() -> TestResult {
     let expected = araphor_data::FindingV1::PACKAGES
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(publication.calls.len(), expected.len());
+    assert_eq!(graph.calls.len(), expected.len());
     assert_eq!(
-        publication
+        graph
             .calls
             .values()
             .map(|call| call.package().package_id.as_str())
             .collect::<std::collections::BTreeSet<_>>(),
         expected
     );
-    for call in publication.calls.values() {
+    for call in graph.calls.values() {
         let model = call
             .descriptor()
             .exports
@@ -140,10 +357,17 @@ async fn immutable_facts_precede_guests() -> TestResult {
             .ok_or("recovered Graph model")?;
         assert!(Graph::supports(model));
     }
+    let (recovered_id, _, _) = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 1)
+        .ok_or("recovered Graph window")?;
     let recovered = fixture
         .query
         .store()
-        .graph_result(fixture.source.tenant_id, &repeated.0)?
+        .graph_result(fixture.source.tenant_id, &recovered_id)?
         .ok_or("recovered Graph result")?;
     assert_eq!(recovered.packages.len(), expected.len());
     assert_eq!(
@@ -154,13 +378,105 @@ async fn immutable_facts_precede_guests() -> TestResult {
             .collect::<std::collections::BTreeSet<_>>(),
         expected
     );
-    assert_eq!(repeated, (id, receipt));
-    assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(recovered_id, id);
+    assert_eq!(recovered, original);
+    assert_eq!(fixture.graph_history()?, before_domain);
+    assert_eq!(fixture.query.store().frozen_result(&id)?, frozen);
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .graph_window_headers(&fixture.source, None)?,
+        before_heads
+    );
+    assert_eq!(
+        fixture.query.store().processor_result(&original.scope)?,
+        head
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .package_evidence(fixture.source.tenant_id, std::slice::from_ref(&id))?,
+        references
+    );
+    assert_eq!(fixture.query.store().context_version(key)?, Some(context));
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .managed_instance(fixture.source.tenant_id, "immutable-seed", &fixture.control)?
+            .ok_or("retained restored seed")?,
+        seed_state
+    );
+    assert_eq!(
+        fixture.query.store().managed_history(
+            &grant.selection,
+            "immutable-seed",
+            &fixture.control
+        )?,
+        std::slice::from_ref(&receipt)
+    );
+    assert_eq!(repeated.results.len(), 3);
+    assert_eq!(
+        repeated.commit_revision,
+        before
+            .commit_revision
+            .checked_add(2)
+            .ok_or("restored revision overflow")?
+    );
+    let mut expected_meta = before;
+    expected_meta.commit_revision = repeated.commit_revision;
+    assert_eq!(fixture.query.store().meta()?, expected_meta);
+    let mut expected_instance = before_instance;
+    expected_instance.progress = repeated.commit_revision;
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .managed_instance(
+                fixture.source.tenant_id,
+                "immutable-restored",
+                &fixture.control
+            )?
+            .ok_or("restored Graph progress")?,
+        expected_instance
+    );
+    assert_eq!(
+        fixture.query.store().managed_history(
+            &grant.selection,
+            "immutable-restored",
+            &fixture.control
+        )?,
+        std::slice::from_ref(&repeated)
+    );
+    let expected_health = before_health.map(|mut health| {
+        health.read_revision = repeated.commit_revision;
+        health
+    });
+    assert_eq!(
+        fixture.query.store().processor_health(&original.scope)?,
+        expected_health
+    );
+    let coverage = fixture
+        .query
+        .store()
+        .source_receipt(&fixture.source)?
+        .ok_or("restored source")?
+        .coverage_revision;
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .graph_notice(&original.scope, &id, receipt.commit_revision)?,
+        Some((repeated.commit_revision, coverage))
+    );
     assert_eq!(entered.try_recv(), Ok(()));
     assert_eq!(
         entered.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Disconnected)
     );
+    fixture.query.store().verify_state()?;
     Ok(())
 }
 
@@ -211,11 +527,32 @@ async fn native_input_spans_pages() -> TestResult {
         .records
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some(observed);
-    let (id, _) = fixture
-        .prepare("ORDER BY source_cursor DESC")
-        .await?
-        .refresh("graph:multiple-raw-pages".into())
+    let publication = fixture.prepare("ORDER BY source_cursor DESC").await?;
+    let grant = publication.grant.clone();
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let owner = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "native-pages",
+            "SELECT * FROM events ORDER BY source_cursor DESC",
+        )
         .await?;
+    let receipt = owner
+        .run(managed::request("pages")?, &fixture.control)
+        .await?;
+    assert_eq!(receipt.results.len(), 3);
+    let (id, header, revision) = fixture
+        .query
+        .store()
+        .graph_window_headers(&fixture.source, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == 1)
+        .ok_or("multiple-page Graph window")?;
+    assert_eq!(header.last_cursor, count);
+    assert_eq!(revision, receipt.commit_revision);
     let actual = fixture
         .query
         .store()
@@ -233,6 +570,15 @@ async fn native_input_spans_pages() -> TestResult {
     );
     assert_eq!((actual.first_cursor, actual.last_cursor), (1, count));
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .processor_health(&actual.scope)?
+            .ok_or("multiple-page Graph progress")?
+            .consumed_cursor,
+        count
+    );
     Ok(())
 }
 
@@ -264,17 +610,50 @@ async fn source_keeps_credential_join() -> TestResult {
         .map_err(|_| "Credential join facts")?
         .extend(input.facts);
     super::gates::report(&fixture, 1, &[([4; 16], 1, "HEALTHY")])?;
-    let mut stream = fixture
-        .prepare("")
-        .await?
-        .subscribe(b"Credential join boundary")
+    let publication = fixture.prepare("").await?;
+    let grant = publication.grant.clone();
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let owner = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "credential-join",
+            "SELECT * FROM events",
+        )
         .await?;
-    let (id, receipt) = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
-        .await?
-        .ok_or("Credential join stream ended")??;
-    assert_eq!(receipt.consumed_cursor, 258);
-    stream.cancel_and_join().await?;
+    let owner = fixture.running_graph(owner).await?;
+    assert!(owner.admitted().running);
+    let mut stream = owner.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        owner.admitted().lifecycle,
+    )?;
+    let received = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next()).await;
+    let joined = stream.cancel_and_join(&fixture.control).await;
+    if let Err(error) = joined {
+        return Err(format!("Credential join cleanup: {error}; receive={received:?}").into());
+    }
+    let receipt = received?.ok_or("Credential join stream ended")??;
     let store = fixture.query.store();
+    let scope = araphor_data::ProcessorScopeV1 {
+        processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+        method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+        identity: fixture.source.clone(),
+    };
+    let head = store
+        .processor_result(&scope)?
+        .ok_or("Credential join source head")?;
+    assert_eq!(head.commit_revision, receipt.commit_revision);
+    let id = head.result_id;
+    assert_eq!(
+        store
+            .processor_health(&scope)?
+            .ok_or("Credential join progress")?
+            .consumed_cursor,
+        258
+    );
     let graph = store
         .graph_result(fixture.source.tenant_id, &id)?
         .ok_or("Credential join Graph")?;
@@ -376,10 +755,31 @@ async fn source_preserves_dense_findings() -> TestResult {
     fixture.coverage(1, Some("HEALTHY"))?;
     let started = std::time::Instant::now();
     let publication = fixture.prepare("").await?;
+    let grant = publication.grant.clone();
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let owner = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "dense-findings",
+            "SELECT * FROM events",
+        )
+        .await?;
+    let owner = fixture.running_graph(owner).await?;
+    assert!(owner.admitted().running);
     let prepared = started.elapsed();
-    let projection = Arc::clone(&publication.projection);
-    let mut stream = publication.subscribe(b"Dense Graph findings").await?;
-    let (id, receipt) = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
+    let projection = &owner
+        .graph_owner()
+        .ok_or("dense running Graph owner")?
+        .projection;
+    let mut stream = owner.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        owner.admitted().lifecycle,
+    )?;
+    let received = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
         .await
         .map_err(|error| {
             format!(
@@ -390,15 +790,39 @@ async fn source_preserves_dense_findings() -> TestResult {
                 fixture.facts.calls.load(Ordering::SeqCst),
                 projection.projections.load(Ordering::SeqCst),
             )
-        })?
-        .ok_or("Dense Graph stream ended")??;
-    assert_eq!(receipt.consumed_cursor, 256);
-    stream.cancel_and_join().await?;
+        });
+    let joined = stream.cancel_and_join(&fixture.control).await;
+    if let Err(error) = joined {
+        return Err(format!("Dense Graph cleanup: {error}; receive={received:?}").into());
+    }
+    let receipt = received?.ok_or("Dense Graph stream ended")??;
+    let scope = araphor_data::ProcessorScopeV1 {
+        processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+        method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+        identity: fixture.source.clone(),
+    };
+    let head = fixture
+        .query
+        .store()
+        .processor_result(&scope)?
+        .ok_or("Dense Graph source head")?;
+    assert_eq!(head.commit_revision, receipt.commit_revision);
+    let id = head.result_id;
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .processor_health(&scope)?
+            .ok_or("Dense Graph progress")?
+            .consumed_cursor,
+        256
+    );
     let graph = fixture
         .query
         .store()
         .graph_result(fixture.source.tenant_id, &id)?
         .ok_or("Dense Graph result")?;
+    assert_eq!(graph.last_cursor, 256);
     assert_eq!(graph.findings.len(), 256);
     let mut native = std::collections::BTreeSet::new();
     let mut credential = None;

@@ -15,7 +15,7 @@ impl Fixture {
         Ok((grant, definition))
     }
 
-    pub(super) async fn managed_graph(
+    pub(in crate::graph::native::tests) async fn managed_graph(
         &self,
         grant: &PackageGrantV1,
         definition: &araphor_discovery_definition::ResolvedDefinition,
@@ -83,7 +83,10 @@ impl Fixture {
             })?)
     }
 
-    async fn running_graph(&self, job: Arc<crate::Instance>) -> TestResult<Arc<crate::Instance>> {
+    pub(in crate::graph::native::tests) async fn running_graph(
+        &self,
+        job: Arc<crate::Instance>,
+    ) -> TestResult<Arc<crate::Instance>> {
         let host = crate::InstanceHost::with_graph_facts(
             Arc::clone(&self.query),
             self.authority.clone(),
@@ -750,6 +753,15 @@ async fn manifest_tracks_exact_source() -> TestResult {
     let grant = publication.grant.clone();
     let definition = publication.prepared.resolved().clone();
     fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let owner = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "manifest-first",
+            "SELECT * FROM events",
+        )
+        .await?;
     let (plan, sources) = fixture
         .query
         .prepare(
@@ -776,7 +788,15 @@ async fn manifest_tracks_exact_source() -> TestResult {
             .sum::<usize>(),
         0
     );
-    let (id, first) = publication.refresh("graph:manifest-first".into()).await?;
+    let first = owner.run(request("seed")?, &fixture.control).await?;
+    let head = fixture
+        .query
+        .store()
+        .processor_result(&fixture.graph_scope())?
+        .ok_or("native Graph manifest head")?;
+    assert_eq!(head.commit_revision, first.commit_revision);
+    assert_eq!(first.results.len(), 3);
+    let id = head.result_id;
     let changed = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
         .await?
         .ok_or("first Graph manifest")??;
@@ -1080,6 +1100,7 @@ impl Fixture {
             .graph_result(self.source.tenant_id, &head.result_id)?
             .ok_or("Managed policy Graph body")?;
         graph.validate()?;
+        assert_eq!(graph.input_positions.len(), self.records.len());
         let evidence = self
             .records
             .iter()
@@ -1320,6 +1341,8 @@ async fn benign_stream_keeps_capture() -> TestResult {
         .managed_graph(&grant, &definition, "benign-stream", "SELECT * FROM events")
         .await?;
     let job = fixture.running_graph(job).await?;
+    let projection = &job.graph_owner().ok_or("Running Graph owner")?.projection;
+    let observed = projection.observe_capture();
     let memory = Arc::clone(fixture.query.memory());
     let held = memory.input_reserved();
     let (entry, release) = fixture.hold_facts();
@@ -1359,6 +1382,17 @@ async fn benign_stream_keeps_capture() -> TestResult {
         tokio::time::timeout(std::time::Duration::from_secs(30), worker).await??;
     let receipt = result.ok_or("Managed benign stream ended")??;
     fixture.assert_graph_receipt(&job, &receipt)?;
+    let captured = match observed.try_recv() {
+        Ok(captured) => captured,
+        Err(error) => {
+            let _terminal = stream.cancel_and_join(&fixture.control).await;
+            return Err(error.into());
+        }
+    };
+    assert!(captured.source.upgrade().is_none());
+    drop(captured);
+    assert!(observed.try_recv().is_err());
+    assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
     let before = fixture.query.store().meta()?;
     fixture.authority.set(false);
     assert!(
@@ -1369,6 +1403,7 @@ async fn benign_stream_keeps_capture() -> TestResult {
     );
     assert!(stream.cancel_and_join(&fixture.control).await?.is_none());
     assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
     fixture.assert_graph_receipt(&job, &receipt)?;
     assert_eq!(memory.input_reserved(), held);
     drop(

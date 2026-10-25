@@ -1203,3 +1203,24 @@ and [retirement result](araphor-analysis-migration.md#complete-reference-retirem
 Complete migration, `DataReadMonitor` removal and the required 6,000-line net
 production reduction remain **Not done**. No full-workspace pass or
 whole-migration production total is claimed.
+
+
+## Required native scope on 2026-10-25
+
+Result: **Done** for the required native replacement. The five required baseline plans map
+to the current SDK, Package, Query, Analysis, Runtime, and Data owners. Read the
+[required native result](araphor-component-redesign.md#required-native-redesign-result)
+and [Graph retirement proof](araphor-analysis-migration.md#one-managed-graph-execution-route).
+The dated table above keeps its earlier source and qualification boundary.
+
+Running-instance recovery includes interrupted current-generation native
+attempts after exclusive store reopen. The duplicate direct Graph executor
+is removed after its assertion transfer. All 21 final cases pass. The 17
+prerequisite cases pass on their separately recorded source.
+
+Quota configuration and disabled defaults are implemented. Item 13 retains
+its separate failed physical latency qualification; diagnostics remain disabled.
+General maintained SQL and later family features do not add a completion gate
+for the five required baseline plans. The user's completion criterion is
+coherent ownership and stable required behavior. The earlier standalone
+6,000-line criterion is superseded; no whole-migration reduction is claimed.

@@ -273,3 +273,11 @@ installed `HF-PROC-001` package. It returns the same finding, evidence reference
 coverage limits, and notification behavior as the prior implementation. Remove
 required coverage and the package retains the expected incomplete result. The
 kernel policy causes the denial; package evaluation reports its evidence.
+
+
+## Native redesign review on 2026-10-25
+
+Result: **Done** for the required native replacement.
+Read the [current owner map](../../../araphor-component-redesign.md#required-native-redesign-result)
+and [focused proof](../../../araphor-analysis-migration.md#one-managed-graph-execution-route).
+Earlier commands, versions, results, and limits apply to their recorded source.

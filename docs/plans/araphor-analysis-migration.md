@@ -4179,3 +4179,64 @@ the global redesign remain **Not done**. This record claims no BPF/backend ABI
 change, diagnostic polling removal, performance result, physical qualification,
 or full workspace CI. Verification follows the user's relevant-tests-only
 instruction.
+
+
+## One managed Graph execution route
+
+Result: **Done** for the required native replacement. The separate direct Graph executor is
+removed. `GraphPublication::refresh`, the direct subscription, both direct
+sinks, and their receipt and authority-watch state are retired. Graph admission,
+capture, domain conversion, Data commits, and the shared test Clock remain.
+The expiry SQL moves unchanged to the existing managed admission owner.
+
+Execution now uses Instance, native Query DML, the Instance publication sink,
+and the existing Data transaction. The converter removes a constant true
+argument and keeps the same advancing-cursor formula. It retains the previous
+result ID and expiry result ID/revision guards. Instance retains execution
+and commit authority. The separate Graph grant field remains only in tests.
+
+The old test assertions move to their actual native owners. The retirement
+maps 66 non-expiry duties and 13 expiry duties before it removes seven obsolete
+test functions. Tests keep complete bodies, history, evidence and context references, exact
+no-op revisions, current authority, cancellation, and resource release.
+
+The transfer found two production issues. Nested operation cancellation did
+not reach all descendants. Data now uses its existing Tokio cancellation
+primitive, and Query forwards the native interrupt before join. The unchanged
+dense Follow case also exceeded its 30-second bound during serial Wasm
+compilation. Runtime now enables Wasmtime's existing parallel compilation.
+It retains the outer compiler mutex, cache identity, configured limits, and
+joined worker lifetime. The dense Follow case keeps its workload and
+30-second timeout.
+
+The 17 prerequisite checks pass: six Analysis, eight Runtime, and three Query.
+The [prerequisite ledger](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/graph-expiry-parallel-clean-tests-ledger.json)
+pins their binaries, source, selectors, and logs. The clean build, strict
+relevant Clippy, and scoped formatting also pass. Earlier failed Follow and
+cancellation checks, the invalid future-time fixture draft, and the ENOSPC
+build records stay separate. A later pass does not change those results.
+
+Final qualification uses the
+[21-case list](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/graph-final-qualification.json)
+and [29-file source manifest](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/graph-final-source.json).
+The final build, strict Clippy, and scoped formatting pass. All 21 final
+cases pass: 19 Analysis cases, one Control proof case, and one actual native
+detector case. The [qualified ledger](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/graph-final-qualified-ledger.json)
+records exact selectors, binaries, source hashes, results, and logs. The first
+proof reader misses two outer result lines split by child output. Its failure
+stays in the raw record. A separate validated record checks exit 0 and the final
+19-pass root summary. Completed tests do not run again for this metadata repair.
+
+The [build](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/graph-final-build.json),
+[Clippy](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/graph-final-clippy.json), and
+[format](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/graph-final-fmt.json)
+records cover the same 29 source files. Clippy waits for an automatic editor
+workspace check before it runs. Documentation changes after these code checks.
+The native case uses the retained, checked
+`x86_64-unknown-linux-gnu` detector artifacts. It adds no artifact build or
+benchmark. Read the [current owner route](../guides/araphor-discovery-definition-review.md#one-managed-graph-execution-route).
+
+The [custody record](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/graph-final-custody.json) checks the protected user changes.
+Full workspace CI and physical or performance workloads do not run under the
+user's relevant-tests-only instruction. Physical diagnostics keep their separate
+failed latency result and remain disabled.

@@ -1,14 +1,12 @@
 use std::future::Future as _;
 #[cfg(any(test, feature = "test-fixtures"))]
 use std::sync::Mutex;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, TryLockError, TryLockResult,
-};
+use std::sync::{Arc, TryLockError, TryLockResult};
 use std::time::{Duration, Instant};
 
 use duckdb::{params, Connection};
 use snafu::ResultExt as _;
+use tokio_util::sync::CancellationToken;
 
 use super::{AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_RECORDS};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
@@ -23,8 +21,7 @@ type ReadStep = Box<dyn FnOnce() -> Result<()> + Send>;
 /// Shared cancellation and an optional read deadline. The default has no deadline.
 pub struct AnalysisReadControl {
     deadline: Option<Instant>,
-    cancelled: Arc<AtomicBool>,
-    cancelled_event: Arc<tokio::sync::Notify>,
+    cancelled: CancellationToken,
     interrupt: Arc<WaitMutex<Option<Arc<duckdb::InterruptHandle>>>>,
     monitor: Arc<ReadMonitor>,
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -41,14 +38,17 @@ impl Default for AnalysisReadControl {
 
 impl AnalysisReadControl {
     pub(super) fn monitored(monitor: Arc<ReadMonitor>) -> Self {
-        Self::at(None, monitor)
+        Self::at(None, monitor, CancellationToken::new())
     }
 
-    fn at(deadline: Option<Instant>, monitor: Arc<ReadMonitor>) -> Self {
+    fn at(
+        deadline: Option<Instant>,
+        monitor: Arc<ReadMonitor>,
+        cancelled: CancellationToken,
+    ) -> Self {
         Self {
             deadline,
-            cancelled: Arc::new(AtomicBool::new(false)),
-            cancelled_event: Arc::new(tokio::sync::Notify::new()),
+            cancelled,
             interrupt: Arc::new(WaitMutex::new(None)),
             monitor,
             #[cfg(any(test, feature = "test-fixtures"))]
@@ -75,14 +75,14 @@ impl AnalysisReadControl {
         Ok(Self::at(
             Some(Self::timeout_deadline(timeout)?),
             Arc::new(ReadMonitor::default()),
+            CancellationToken::new(),
         ))
     }
 
     fn child(&self, deadline: Option<Instant>) -> Self {
         Self {
             deadline,
-            cancelled: Arc::clone(&self.cancelled),
-            cancelled_event: Arc::clone(&self.cancelled_event),
+            cancelled: self.cancelled.clone(),
             interrupt: Arc::clone(&self.interrupt),
             monitor: Arc::clone(&self.monitor),
             #[cfg(any(test, feature = "test-fixtures"))]
@@ -111,19 +111,22 @@ impl AnalysisReadControl {
         Ok(self.child(deadline))
     }
 
-    /// Create separate cancellation state. The caller forwards parent cancellation.
+    /// Inherit parent cancellation. The caller still forwards native interrupts.
     pub fn operation(&self) -> Result<Self> {
         self.check()?;
         Ok(Self {
             #[cfg(any(test, feature = "test-fixtures"))]
             read_step: Arc::clone(&self.read_step),
-            ..Self::at(self.deadline, Arc::clone(&self.monitor))
+            ..Self::at(
+                self.deadline,
+                Arc::clone(&self.monitor),
+                self.cancelled.child_token(),
+            )
         })
     }
 
     pub fn cancel(&self) -> Result<()> {
-        self.cancelled.store(true, Ordering::Release);
-        self.cancelled_event.notify_waiters();
+        self.cancelled.cancel();
         let state = self.interrupt.lock().map_err(|_| Self::lock_error())?;
         if let Some(interrupt) = state.as_ref() {
             interrupt.interrupt();
@@ -132,12 +135,7 @@ impl AnalysisReadControl {
     }
 
     pub async fn cancelled(&self) {
-        let cancelled = self.cancelled_event.notified();
-        tokio::pin!(cancelled);
-        let _registered = cancelled.as_mut().enable();
-        if !self.cancelled.load(Ordering::Acquire) {
-            cancelled.await;
-        }
+        self.cancelled.cancelled().await;
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -161,7 +159,7 @@ impl AnalysisReadControl {
 
     #[track_caller]
     pub fn check(&self) -> Result<()> {
-        if self.cancelled.load(Ordering::Acquire) {
+        if self.cancelled.is_cancelled() {
             return crate::AnalysisReadCancelledSnafu.fail();
         }
         if self
@@ -198,9 +196,8 @@ impl AnalysisReadControl {
             let available = available.notified();
             tokio::pin!(available);
             let _registered = available.as_mut().enable();
-            let cancelled = self.cancelled_event.notified();
+            let cancelled = self.cancelled.cancelled();
             tokio::pin!(cancelled);
-            let _registered = cancelled.as_mut().enable();
             self.check()?;
             match acquire() {
                 Ok(guard) => {
@@ -287,9 +284,8 @@ impl AnalysisReadControl {
         &self,
         query: impl std::future::Future<Output = std::result::Result<T, E>>,
     ) -> std::result::Result<T, E> {
-        let cancelled = self.cancelled_event.notified();
+        let cancelled = self.cancelled.cancelled();
         tokio::pin!(cancelled);
-        let _registered = cancelled.as_mut().enable();
         self.check()?;
         let result = tokio::select! {
             biased;
@@ -647,6 +643,118 @@ mod tests {
         parent.check()?;
         parent.cancel()?;
         assert!(parent.operation().is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn operation_cancellation_descends() -> TestResult {
+        let parent = AnalysisReadControl::default();
+        let child = parent.operation()?;
+        let sibling = parent.operation()?;
+        let nested = child.operation()?;
+        let shared = child.within(None)?;
+        child.cancel()?;
+        for control in [&child, &nested, &shared] {
+            assert!(matches!(
+                control.check(),
+                Err(crate::Error::AnalysisReadCancelled { .. })
+            ));
+        }
+        parent.check()?;
+        sibling.check()?;
+        let descendant = sibling.operation()?;
+        let waiting = descendant.query_async(std::future::pending::<Result<()>>());
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        parent.cancel()?;
+        for control in [&parent, &sibling, &descendant] {
+            assert!(matches!(
+                control.check(),
+                Err(crate::Error::AnalysisReadCancelled { .. })
+            ));
+        }
+        assert!(matches!(
+            futures_util::poll!(&mut waiting),
+            std::task::Poll::Ready(Err(crate::Error::AnalysisReadCancelled { .. }))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn operation_cancellation_wakes_lock() -> TestResult {
+        let parent = AnalysisReadControl::default();
+        let child = parent.operation()?;
+        let lock = WaitMutex::new(());
+        let (entered, ready) = std::sync::mpsc::channel();
+        let (finished, stopped) = std::sync::mpsc::channel();
+        *child
+            .wait_signal
+            .lock()
+            .map_err(|_| "wait signal poisoned")? = Some(entered);
+        std::thread::scope(|scope| -> TestResult {
+            let held = lock.lock().map_err(|_| "held lock poisoned")?;
+            let worker = scope.spawn(|| {
+                let result = lock.until(&child).map(|_| ());
+                let _sent = finished.send(result);
+            });
+            ready.recv_timeout(Duration::from_secs(2))?;
+            parent.cancel()?;
+            let result = stopped.recv_timeout(Duration::from_secs(2));
+            drop(held);
+            worker.join().map_err(|_| "lock worker panicked")?;
+            assert!(matches!(
+                result?,
+                Err(crate::Error::AnalysisReadCancelled { .. })
+            ));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn inherited_cancel_interrupts_native() -> TestResult {
+        let connection = duckdb::Connection::open_in_memory()?;
+        let parent = AnalysisReadControl::default();
+        let child = parent.operation()?;
+        let mut interrupted = false;
+        let result = child.query_run(&connection, || {
+            parent.cancel()?;
+            assert!(matches!(
+                child.check(),
+                Err(crate::Error::AnalysisReadCancelled { .. })
+            ));
+            assert!(parent
+                .interrupt
+                .lock()
+                .map_err(|_| AnalysisReadControl::lock_error())?
+                .is_none());
+            child.cancel()?;
+            let result = connection.query_row("SELECT 1", [], |row| row.get::<_, i64>(0));
+            interrupted = result.is_err();
+            result.context(AnalysisDatabaseSnafu {
+                operation: "test inherited native cancellation",
+            })
+        });
+        assert!(interrupted);
+        assert!(matches!(
+            result,
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert!(child
+            .interrupt
+            .lock()
+            .map_err(|_| "interrupt poisoned")?
+            .is_none());
+        let fresh = AnalysisReadControl::default();
+        assert_eq!(
+            fresh.query_run(&connection, || {
+                connection
+                    .query_row("SELECT 1", [], |row| row.get::<_, i64>(0))
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "test inherited cancellation cleanup",
+                    })
+            })?,
+            1
+        );
         Ok(())
     }
 
