@@ -1930,19 +1930,23 @@ async fn count_consumes_committed_changes() {
     fixture.commit(&fixture.source, 1, 128, 1_000_000_000);
     let clock = TestClock::new(2_000_000_000);
     let mut subscription = fixture.subscribe(
-        "SELECT count(*) AS total, count(source_cursor) FILTER (WHERE operation = 7) AS selected, count(*) + 1 AS adjusted FROM events",
+        "SELECT count(*) AS total, count(source_cursor) FILTER (WHERE operation = 7) AS selected, count(*) + 1 AS adjusted, SUM(source_cursor) AS total_cursor, SUM(-CAST(source_cursor AS BIGINT)) AS negative_cursor FROM events",
         clock, None, true,
     );
     let first = next(&mut subscription).await;
     assert_eq!(values(&first, 0), vec![ScalarValue::Int64(Some(128))]);
     assert_eq!(values(&first, 1), vec![ScalarValue::Int64(Some(128))]);
     assert_eq!(values(&first, 2), vec![ScalarValue::Int64(Some(129))]);
+    assert_eq!(values(&first, 3), vec![ScalarValue::UInt64(Some(8256))]);
+    assert_eq!(values(&first, 4), vec![ScalarValue::Int64(Some(-8256))]);
     let scanned = first.snapshot.page.extraction.scanned_bytes;
     fixture.commit(&fixture.source, 129, 1, 1_500_000_000);
     let second = next(&mut subscription).await;
     assert_eq!(values(&second, 0), vec![ScalarValue::Int64(Some(129))]);
     assert_eq!(values(&second, 1), vec![ScalarValue::Int64(Some(129))]);
     assert_eq!(values(&second, 2), vec![ScalarValue::Int64(Some(130))]);
+    assert_eq!(values(&second, 3), vec![ScalarValue::UInt64(Some(8385))]);
+    assert_eq!(values(&second, 4), vec![ScalarValue::Int64(Some(-8385))]);
     assert_eq!(second.snapshot.witnesses.len(), 129);
     assert!(second.snapshot.page.extraction.scanned_bytes < scanned / 2);
     let cursor = second.cursor.clone();
@@ -1967,6 +1971,8 @@ async fn count_consumes_committed_changes() {
     assert_eq!(values(&removed, 0), vec![ScalarValue::Int64(Some(0))]);
     assert_eq!(values(&removed, 1), vec![ScalarValue::Int64(Some(0))]);
     assert_eq!(values(&removed, 2), vec![ScalarValue::Int64(Some(1))]);
+    assert_eq!(values(&removed, 3), vec![ScalarValue::UInt64(None)]);
+    assert_eq!(values(&removed, 4), vec![ScalarValue::Int64(None)]);
     assert_eq!(removed.snapshot.page.extraction.scanned_bytes, 0);
     assert!(removed.snapshot.witnesses.is_empty());
     assert!(removed.cursor.read_revision() > cursor.read_revision());

@@ -1,5 +1,7 @@
 # Discovery Definition Review
 
+Current retained aggregate execution is in [Native integral aggregation](#native-integral-aggregation).
+
 Current package provenance is in [One package provenance contract](#one-package-provenance-contract).
 
 Current Data execution ownership is in [One Data execution owner](#one-data-execution-owner).
@@ -3850,3 +3852,41 @@ check current provenance and retained code. The
 [migration result](../plans/araphor-analysis-migration.md#one-package-provenance-contract)
 records the exact test transfer and current completion status. No BPF or
 backend ABI changes in this consolidation.
+
+## Native integral aggregation
+
+This route extends the existing physical maintained-query path. It uses the
+installed DataFusion 53.1.0 aggregate implementation. The Query owner receives
+ordinary SQL and retains one operator state for the admitted subscription.
+
+[Logical subscription policy](../../crates/araphor-query/src/planner/subscription.rs) checks the original source and immutable expressions.
+  -> [SubscribeExec::compile](../../crates/araphor-query/src/stream/physical.rs) checks the optimized native aggregate, result types, and supported physical input shape.
+  -> [Kernel::new](../../crates/araphor-query/src/stream/physical/kernel.rs) calls native create_sliding_accumulator for every admitted expression.
+
+[Committed source changes](../../crates/araphor-query/src/sources/journal.rs) provide the exact before and after Arrow rows and frontier.
+  -> [Kernel::apply](../../crates/araphor-query/src/stream/physical/kernel.rs) runs the existing native filter and projection plans on those rows.
+  -> [Kernel::update](../../crates/araphor-query/src/stream/physical/kernel.rs) calls native retract_batch or update_batch.
+  -> [Native finalization](../../crates/araphor-query/src/stream/physical/kernel.rs) returns the original aggregate schema.
+  -> [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) preserves the existing source checks, output progress, and delivery sequence.
+
+The supported aggregates are native nondistinct COUNT and native global SUM
+with Int64 or UInt64 results. Every expression must qualify. Native integral
+SUM subtracts the supplied removed values and tracks non-null count. Floating
+sums depend on update order. Native sliding extrema use FIFO removal. The
+physical check therefore does not treat supports_retract_batch as a general
+arbitrary-removal capability.
+
+[SUM cases](../../crates/araphor-query/src/stream/physical/kernel/tests/sum.rs)
+compare each retained cut with fresh native execution. A failed cut terminates
+its stream. The partial ephemeral Kernel state is discarded without output
+or frontier advancement. The
+[existing Kernel tests](../../crates/araphor-query/src/stream/physical/kernel/tests.rs)
+retain cancellation and resource checks. [Stream tests](../../crates/araphor-query/src/stream/tests.rs)
+check default optimized selection and unsupported fallback.
+[Follow tests](../../crates/araphor-query/src/follow/tests.rs) check real source
+commits, removal, evidence, progress, and capacity release.
+[Runtime follow tests](../../crates/araphor-query/src/follow/tests/runtime.rs)
+check unchanged results, memory scope, and both integral and floating SUM.
+The [qualification record](../plans/araphor-analysis-migration.md#native-integral-aggregation)
+separates this supported boundary from general maintained SQL. BPF and the
+native/Wasm SDK ABI are outside this change.

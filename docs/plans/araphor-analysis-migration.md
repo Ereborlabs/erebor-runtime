@@ -1,5 +1,7 @@
 # Araphor Analysis migration
 
+Current retained aggregate scope is in [Native integral aggregation](#native-integral-aggregation).
+
 Current package provenance is in [One package provenance contract](#one-package-provenance-contract).
 
 Current Data execution ownership is in [One Data execution owner](#one-data-execution-owner).
@@ -3887,4 +3889,58 @@ Evidence is under
 `/home/navid/mithril-test-hosts/native-provenance-consolidation-verification`.
 The original 199-file archive has SHA-256
 `64b09ff2cdeb36ef72cc18fc7c30ef05435cd6febda5e20dc8473d1f66a9f3a9`.
+Full workspace CI, physical qualification, and benchmarks are not repeated.
+
+## Native integral aggregation
+
+This change follows `f02efde22`. Existing integral SUM SQL moves from repeated
+native replacement evaluation to the existing retained native aggregate path.
+DataFusion continues to own parsing, logical planning, optimization, physical
+plans, expressions, and aggregation. Query retains committed-change progress,
+source evidence, current authority, and output lifetime.
+
+| Required behavior | Proof owner |
+| --- | --- |
+| Exact aggregate values and types for each cut | Kernel cases compare retained results with fresh native bounded AggregateExec results. |
+| Signed and unsigned arithmetic, nulls, empty input, and wrapping | The same native differential cases retain exact Arrow schemas and values. |
+| Arbitrary removed rows and interleaved input changes | Kernel cases retract a non-prefix subset and compare the next complete native result. |
+| Actual optimized native selection | The stream tests use the existing Engine catalog and default optimizers. |
+| Real source progress, retained evidence, and removal | The existing 128-row follow case also checks signed and unsigned SUM. All original COUNT, read-byte, frontier, witness, pressure, cancellation, and capacity assertions remain. |
+| Unchanged result progress | The existing test runs for COUNT and integral SUM. The progress test retains integral execution and floating replacement execution. |
+| Failed processing and cleanup | Kernel failure and existing cancellation and capacity cases check no published output or advanced frontier and complete release. |
+
+Only the existing physical eligibility and accumulator construction change in
+production. Floating and decimal SUM, extrema, DISTINCT, grouping, partial
+aggregation, joins, changing clocks, and unsupported sources keep their native
+replacement path. New SQL syntax and a new aggregate implementation are not
+part of this change.
+
+A failed cut terminates its stream and drops the partial ephemeral Kernel
+state. It does not publish output or advance the frontier. The implementation
+does not reuse or roll back the failed accumulator state.
+
+Qualification: **94 distinct cases pass** across the recorded runs: 92 Query
+cases, one Control query case, and one lightweight E2E follow case. The final
+locked offline affected-owner library build and strict Clippy pass. Scoped
+Rust formatting and whitespace checks pass.
+
+The first seven-case run passes five cases. Two new proof cases fail. The
+wrapping fixture uses an unquoted CASE operand named value; the native parser
+reads VALUE as a named-argument operator. The fixture now quotes that same
+column. The error case inspects intentionally redacted outer error text; it
+now checks the preserved native ArrowError::DivideByZero cause. All literals,
+branches, cuts, frontier, no-output, and capacity assertions remain.
+
+Only those two failed cases run again; both pass. The production code, test
+helpers, and five passing test bodies remain unchanged. The other 87 cases,
+final build, and Clippy pass after this test-only correction. This record
+does not claim one simultaneous final-tree test run. The original failure
+log remains.
+
+Result: **Done** for native integral aggregation. General maintained SQL and
+the complete redesign remain **Not done**.
+Evidence is under
+`/home/navid/mithril-test-hosts/native-integral-maintenance-verification`.
+The 92-file source archive has SHA-256
+`919ab61e81e49029c3c23285cd8c41a2597fb39cc3003bf44312e9c9aca1046b`.
 Full workspace CI, physical qualification, and benchmarks are not repeated.

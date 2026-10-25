@@ -10,8 +10,7 @@ use datafusion::execution::{memory_pool::MemoryReservation, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr_common::utils::evaluate_expressions_to_arrays;
 use datafusion::physical_plan::aggregates::{
-    aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
-    AggregateExec, AggregateMode,
+    aggregate_expressions, finalize_aggregation, AccumulatorItem, AggregateExec, AggregateMode,
 };
 use datafusion::physical_plan::filter::batch_filter;
 use datafusion::physical_plan::ExecutionPlan;
@@ -37,7 +36,11 @@ impl Kernel {
         session.control().check()?;
         let expressions =
             aggregate_expressions(&definitions, &AggregateMode::Single, 0).context(SqlSnafu)?;
-        let accumulators = create_accumulators(&definitions).context(SqlSnafu)?;
+        let accumulators = definitions
+            .iter()
+            .map(|expression| expression.create_sliding_accumulator())
+            .collect::<datafusion::common::Result<Vec<_>>>()
+            .context(SqlSnafu)?;
         let bytes = [
             size_of::<Self>(),
             expressions.capacity() * size_of::<Vec<Arc<dyn PhysicalExpr>>>(),

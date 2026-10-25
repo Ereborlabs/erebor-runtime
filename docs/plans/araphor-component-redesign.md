@@ -1,5 +1,7 @@
 # Araphor Component Redesign Proposal
 
+Current retained aggregate scope is in [Native integral aggregation](#native-integral-aggregation).
+
 Current package provenance is in [One package provenance contract](#one-package-provenance-contract).
 
 Current Data execution ownership is in [One Data execution owner](#one-data-execution-owner).
@@ -4335,3 +4337,45 @@ build and strict Clippy pass. The
 [migration result](araphor-analysis-migration.md#one-package-provenance-contract)
 records the exact source and fixture boundaries.
 The complete redesign and general maintained SQL remain **Not done**.
+
+## Native integral aggregation
+
+The existing retained aggregate path also accepts global nondistinct native
+SUM with an Int64 or UInt64 result. Native COUNT remains supported. One
+SubscribeExec accepts the complete aggregate list only when every expression
+meets this contract. The original source, immutable-expression, and physical
+plan checks still apply.
+
+A committed source change arrives
+  -> Query loads the existing before and after Arrow batches
+  -> native filter and projection operators evaluate the admitted arguments
+  -> the existing Kernel calls native retract_batch and update_batch
+  -> current source checks pass
+  -> native finalization produces the exact aggregate schema and values
+  -> existing output progress and delivery rules apply
+
+Kernel construction now uses the native AggregateFunctionExpr sliding
+accumulator factory. DataFusion supplies both the COUNT accumulator and the
+integral sliding SUM accumulator. Araphor defines no SUM arithmetic or state.
+Integral SUM preserves native wrapping arithmetic and returns NULL after the
+last non-null value leaves. Floating SUM depends on update order. Native
+sliding MIN and MAX remove values in FIFO order. Those accumulators do not
+establish the required arbitrary-removal contract.
+
+Floating and decimal SUM, DISTINCT, grouping, partial aggregation, joins,
+changing clocks, and unsupported plans retain native replacement execution.
+The initial source snapshot and complete evidence receipts remain necessary.
+This change does not establish an O(delta) cost for the complete subscription.
+It adds no cross-subscription state sharing.
+
+A processing failure terminates the existing stream and discards its partial
+ephemeral Kernel state. The failed cut publishes no output or new frontier.
+This path does not promise accumulator rollback or reuse after failure.
+
+The [review route](../guides/araphor-discovery-definition-review.md#native-integral-aggregation)
+and [qualification record](araphor-analysis-migration.md#native-integral-aggregation)
+state the current physical boundary. Result: **Done** for native integral
+aggregation. The focused proof has 94 distinct passing cases across the
+recorded runs. The final affected-owner build, strict Clippy, formatting, and
+whitespace checks pass. General maintained SQL and the complete redesign
+remain **Not done**. No performance result is claimed.

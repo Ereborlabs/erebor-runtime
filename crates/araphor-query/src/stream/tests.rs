@@ -397,7 +397,9 @@ async fn binding_schema_is_exact() {
 async fn unsupported_plans_stay_batch() {
     let fixture = Fixture::new();
     for sql in [
-        "SELECT sum(kernel_sequence) FROM events",
+        "SELECT sum(CAST(kernel_sequence AS DOUBLE)) FROM events",
+        "SELECT sum(CAST(kernel_sequence AS DECIMAL(20, 0))) FROM events",
+        "SELECT min(kernel_sequence), max(kernel_sequence) FROM events",
         "SELECT count(DISTINCT kernel_sequence) FROM events",
         "SELECT operation_argument, count(*) FROM events GROUP BY operation_argument",
         "SELECT count(*) FROM events a JOIN events b ON a.source_cursor = b.source_cursor",
@@ -408,5 +410,22 @@ async fn unsupported_plans_stay_batch() {
         let physical = fixture.state.create_physical_plan(&logical).await.unwrap();
         let subscription = physical.as_any().downcast_ref::<SubscribeExec>().unwrap();
         assert!(!subscription.maintained(), "{sql}");
+    }
+}
+
+#[tokio::test]
+async fn integral_sum_uses_state() {
+    let fixture = Fixture::new();
+    for sql in [
+        "SELECT SUM(kernel_sequence) AS total FROM events",
+        "SELECT SUM(CAST(source_cursor AS BIGINT)) AS total FROM events",
+        "SELECT COUNT(*) AS n, SUM(source_cursor) AS total, SUM(-CAST(source_cursor AS BIGINT)) AS negative FROM events",
+        "SELECT SUM(CAST(kernel_sequence AS BIGINT) + 1) FILTER (WHERE source_cursor > 1) FROM events",
+    ] {
+        let plan = fixture.plan(sql, vec![]).await;
+        let logical = crate::planner::subscription::Subscribe::runtime(plan, false).unwrap();
+        let physical = fixture.state.create_physical_plan(&logical).await.unwrap();
+        let subscription = physical.as_any().downcast_ref::<SubscribeExec>().unwrap();
+        assert!(subscription.maintained(), "{sql}");
     }
 }

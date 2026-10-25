@@ -26,6 +26,8 @@ use crate::execution::{Engine, Limits};
 use crate::sources::{SourceData, SourceSnapshot};
 use crate::stream::Change;
 
+mod sum;
+
 type Input = Pin<Box<dyn Stream<Item = Result<Change>> + Send>>;
 type OutputStream = Pin<Box<dyn Stream<Item = Result<Output>> + Send>>;
 
@@ -499,7 +501,7 @@ async fn unsupported_aggregates_are_explicit() {
         &AggregateMode::Single
     );
     for sql in [
-        "SELECT SUM(kernel_sequence) FROM events",
+        "SELECT SUM(CAST(kernel_sequence AS DOUBLE)) FROM events",
         "SELECT COUNT(DISTINCT kernel_sequence) FROM events",
         "SELECT operation_argument, COUNT(*) FROM events GROUP BY operation_argument",
     ] {

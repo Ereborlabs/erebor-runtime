@@ -3,12 +3,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{DataFusionError, Result as NativeResult};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::Count;
+use datafusion::functions_aggregate::sum::Sum;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -134,7 +135,14 @@ impl SubscribeExec {
             || !definition.group_expr().is_true_no_grouping()
             || definition.aggr_expr().is_empty()
             || definition.aggr_expr().iter().any(|expression| {
-                expression.is_distinct() || !expression.fun().inner().as_any().is::<Count>()
+                let function = expression.fun().inner().as_any();
+                expression.is_distinct()
+                    || !(function.is::<Count>()
+                        || (function.is::<Sum>()
+                            && matches!(
+                                expression.field().data_type(),
+                                DataType::Int64 | DataType::UInt64
+                            )))
             })
         {
             return Ok(None);

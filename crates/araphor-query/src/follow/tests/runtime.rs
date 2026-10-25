@@ -170,76 +170,77 @@ async fn subscription_keeps_bindings() {
 
 #[tokio::test]
 async fn unchanged_result_advances_cursor() {
-    let fixture = Fixture::new(Limits::default());
-    fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
-    let clock = TestClock::new(2_000_000_000);
-    let mut subscription = fixture.subscribe(
+    for sql in [
         "SELECT count(*) AS total FROM events WHERE source_cursor = 1",
-        clock.clone(),
-        None,
-        true,
-    );
-    let first = next(&mut subscription).await;
-    assert_eq!(first.operation, Operation::Replace);
-    assert_eq!(values(&first, 0), [ScalarValue::Int64(Some(1))]);
-    assert_eq!(first.evaluated_utc_ns, 2_000_000_000);
+        "SELECT SUM(CAST(source_cursor AS BIGINT)) AS total FROM events WHERE source_cursor = 1",
+    ] {
+        let fixture = Fixture::new(Limits::default());
+        fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
+        let clock = TestClock::new(2_000_000_000);
+        let mut subscription = fixture.subscribe(sql, clock.clone(), None, true);
+        let first = next(&mut subscription).await;
+        assert_eq!(first.operation, Operation::Replace);
+        assert_eq!(values(&first, 0), [ScalarValue::Int64(Some(1))]);
+        assert_eq!(first.evaluated_utc_ns, 2_000_000_000);
 
-    // Change the test time without an extra clock notification.
-    clock.now.store(3_000_000_000, Ordering::SeqCst);
-    fixture.commit(&fixture.source, 2, 1, 2_500_000_000);
-    let completed = next(&mut subscription).await;
-    assert!(completed.batches.is_none());
-    assert!(!completed.clock_changed);
-    assert_eq!(completed.evaluated_utc_ns, 3_000_000_000);
-    assert!(completed.cursor.read_revision() > first.cursor.read_revision());
-    assert_eq!(
-        completed.cursor.read_revision(),
-        completed.snapshot.page.extraction.meta.commit_revision
-    );
-    assert_ne!(completed.cursor, first.cursor);
-    assert_eq!(
-        completed
-            .snapshot
-            .witnesses
-            .iter()
-            .map(|witness| witness.cursor)
-            .collect::<Vec<_>>(),
-        [1]
-    );
-    assert_eq!(
-        completed.snapshot.page.extraction.sources[0]
-            .receipt
-            .contiguous_cursor,
-        2
-    );
-    assert_eq!(completed.snapshot.page.extraction.scanned_bytes, 0);
+        // Change the test time without an extra clock notification.
+        clock.now.store(3_000_000_000, Ordering::SeqCst);
+        fixture.commit(&fixture.source, 2, 1, 2_500_000_000);
+        let completed = next(&mut subscription).await;
+        assert!(completed.batches.is_none());
+        assert!(!completed.clock_changed);
+        assert_eq!(completed.evaluated_utc_ns, 3_000_000_000);
+        assert!(completed.cursor.read_revision() > first.cursor.read_revision());
+        assert_eq!(
+            completed.cursor.read_revision(),
+            completed.snapshot.page.extraction.meta.commit_revision
+        );
+        assert_ne!(completed.cursor, first.cursor);
+        assert_eq!(
+            completed
+                .snapshot
+                .witnesses
+                .iter()
+                .map(|witness| witness.cursor)
+                .collect::<Vec<_>>(),
+            [1]
+        );
+        assert_eq!(
+            completed.snapshot.page.extraction.sources[0]
+                .receipt
+                .contiguous_cursor,
+            2
+        );
+        assert_eq!(completed.snapshot.page.extraction.scanned_bytes, 0);
 
-    let other = EvidenceIntakeIdentityV1 {
-        source_id: [8; 16],
-        ..fixture.source.clone()
-    };
-    clock.now.store(4_000_000_000, Ordering::SeqCst);
-    fixture.commit(&other, 1, 1, 3_500_000_000);
-    let unrelated = next(&mut subscription).await;
-    assert!(unrelated.batches.is_none());
-    assert!(!unrelated.clock_changed);
-    assert_eq!(unrelated.cursor, completed.cursor);
-    assert_eq!(unrelated.evaluated_utc_ns, completed.evaluated_utc_ns);
-    assert!(
-        unrelated.snapshot.page.extraction.meta.commit_revision > completed.cursor.read_revision()
-    );
+        let other = EvidenceIntakeIdentityV1 {
+            source_id: [8; 16],
+            ..fixture.source.clone()
+        };
+        clock.now.store(4_000_000_000, Ordering::SeqCst);
+        fixture.commit(&other, 1, 1, 3_500_000_000);
+        let unrelated = next(&mut subscription).await;
+        assert!(unrelated.batches.is_none());
+        assert!(!unrelated.clock_changed);
+        assert_eq!(unrelated.cursor, completed.cursor);
+        assert_eq!(unrelated.evaluated_utc_ns, completed.evaluated_utc_ns);
+        assert!(
+            unrelated.snapshot.page.extraction.meta.commit_revision
+                > completed.cursor.read_revision()
+        );
 
-    clock.set(5_000_000_000);
-    let health = next(&mut subscription).await;
-    assert!(health.batches.is_none());
-    assert!(health.clock_changed);
-    assert_eq!(health.cursor, completed.cursor);
-    assert_eq!(health.evaluated_utc_ns, completed.evaluated_utc_ns);
-    assert_eq!(
-        health.snapshot.page.extraction.meta,
-        unrelated.snapshot.page.extraction.meta
-    );
-    subscription.cancel().unwrap();
+        clock.set(5_000_000_000);
+        let health = next(&mut subscription).await;
+        assert!(health.batches.is_none());
+        assert!(health.clock_changed);
+        assert_eq!(health.cursor, completed.cursor);
+        assert_eq!(health.evaluated_utc_ns, completed.evaluated_utc_ns);
+        assert_eq!(
+            health.snapshot.page.extraction.meta,
+            unrelated.snapshot.page.extraction.meta
+        );
+        subscription.cancel().unwrap();
+    }
 }
 
 #[tokio::test]
@@ -326,45 +327,54 @@ async fn health_uses_remaining_capacity() {
 
 #[tokio::test]
 async fn fallback_sum_keeps_progress() {
-    let fixture = Fixture::new(Limits {
-        output_rows: 1,
-        ..Default::default()
-    });
-    fixture.commit(&fixture.source, 1, 2, 1_000_000_000);
-    let clock = TestClock::new(2_000_000_000);
-    let mut subscription = fixture.subscribe(
-        "SELECT CAST(sum(source_cursor) AS BIGINT UNSIGNED) AS total FROM events",
-        clock.clone(),
-        None,
-        true,
-    );
-    let first = next(&mut subscription).await;
-    assert_eq!(first.operation, Operation::Replace);
-    assert_eq!(values(&first, 0), [ScalarValue::UInt64(Some(3))]);
-    assert_eq!(first.evaluated_utc_ns, 2_000_000_000);
-    assert_eq!(first.snapshot.witnesses.len(), 2);
-    assert_eq!(
-        first.cursor.read_revision(),
-        first.snapshot.page.extraction.meta.commit_revision
-    );
-    assert!(first.exhausted && !first.limited);
-    let cursor = first.cursor.clone();
-    drop(first);
+    for (sql, expected) in [
+        (
+            "SELECT CAST(sum(source_cursor) AS BIGINT UNSIGNED) AS total FROM events",
+            [ScalarValue::UInt64(Some(3)), ScalarValue::UInt64(Some(6))],
+        ),
+        (
+            "SELECT SUM(CAST(source_cursor AS DOUBLE)) AS total FROM events",
+            [
+                ScalarValue::Float64(Some(3.0)),
+                ScalarValue::Float64(Some(6.0)),
+            ],
+        ),
+    ] {
+        let fixture = Fixture::new(Limits {
+            output_rows: 1,
+            ..Default::default()
+        });
+        fixture.commit(&fixture.source, 1, 2, 1_000_000_000);
+        let clock = TestClock::new(2_000_000_000);
+        let mut subscription = fixture.subscribe(sql, clock.clone(), None, true);
+        let first = next(&mut subscription).await;
+        assert_eq!(first.operation, Operation::Replace);
+        assert_eq!(values(&first, 0), [expected[0].clone()]);
+        assert_eq!(first.evaluated_utc_ns, 2_000_000_000);
+        assert_eq!(first.snapshot.witnesses.len(), 2);
+        assert_eq!(
+            first.cursor.read_revision(),
+            first.snapshot.page.extraction.meta.commit_revision
+        );
+        assert!(first.exhausted && !first.limited);
+        let cursor = first.cursor.clone();
+        drop(first);
 
-    clock.now.store(3_000_000_000, Ordering::SeqCst);
-    fixture.commit(&fixture.source, 3, 1, 2_500_000_000);
-    let second = next(&mut subscription).await;
-    assert_eq!(second.operation, Operation::Replace);
-    assert_eq!(values(&second, 0), [ScalarValue::UInt64(Some(6))]);
-    assert_eq!(second.evaluated_utc_ns, 3_000_000_000);
-    assert_eq!(second.snapshot.witnesses.len(), 3);
-    assert!(second.cursor.read_revision() > cursor.read_revision());
-    assert_eq!(
-        second.cursor.read_revision(),
-        second.snapshot.page.extraction.meta.commit_revision
-    );
-    assert!(second.exhausted && !second.limited);
-    subscription.cancel().unwrap();
+        clock.now.store(3_000_000_000, Ordering::SeqCst);
+        fixture.commit(&fixture.source, 3, 1, 2_500_000_000);
+        let second = next(&mut subscription).await;
+        assert_eq!(second.operation, Operation::Replace);
+        assert_eq!(values(&second, 0), [expected[1].clone()]);
+        assert_eq!(second.evaluated_utc_ns, 3_000_000_000);
+        assert_eq!(second.snapshot.witnesses.len(), 3);
+        assert!(second.cursor.read_revision() > cursor.read_revision());
+        assert_eq!(
+            second.cursor.read_revision(),
+            second.snapshot.page.extraction.meta.commit_revision
+        );
+        assert!(second.exhausted && !second.limited);
+        subscription.cancel().unwrap();
+    }
 }
 
 #[tokio::test]
