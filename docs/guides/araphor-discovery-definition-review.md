@@ -4233,3 +4233,58 @@ records exact red and green source boundaries, binary hashes, and checks.
 The pending integrated case fails at retained Graph call attestation. The
 health proof does not qualify that path or physical enforcement. BPF, the ABI,
 package artifacts, resource defaults, and the execution pipeline do not change.
+
+
+## Required detector recovery and retained call history
+
+The intended result is reactive required detection with retained input and
+state across a failed execution. The current lightweight case proves that
+result. Physical enforcement remains outside this result.
+
+[required_detector_recovers](../../crates/mithril-e2e/src/discovery/packages/required.rs) opens the production Control parts with optional Discovery disabled.
+  -> [Fixture::configured](../../crates/mithril-e2e/src/discovery/packages/fixture.rs) starts the returned shared Host and Graph tasks.
+  -> [upload](../../crates/mithril-e2e/src/discovery/packages/required/input.rs) supplies external Node WAL and coverage through the authenticated connection.
+  -> [Instance subscription](../../crates/araphor-analysis/src/instance/subscription.rs) derives execution from Query input.
+  -> [Saved::initial](../../crates/mithril-e2e/src/discovery/packages/required/observed.rs) reads the committed Graph, three package outputs, state, artifact metadata, and notification obligation.
+
+[required_detector_recovers](../../crates/mithril-e2e/src/discovery/packages/required.rs) joins the owners and reopens with an explicit fuel limit.
+  -> [Saved::failed](../../crates/mithril-e2e/src/discovery/packages/required/observed.rs) observes the Limit failure, protected progress, and incomplete health.
+  -> [EvidenceRetentionOwner](../../crates/araphor-data/src/analysis/retention.rs) runs one explicit retention step.
+  -> [Saved::retained](../../crates/mithril-e2e/src/discovery/packages/required/observed.rs) checks both raw frames and the original notification deadline after that step.
+
+[required_detector_recovers](../../crates/mithril-e2e/src/discovery/packages/required.rs) joins the owners and removes both fuel and artificial age constraints before repair.
+  -> [upload](../../crates/mithril-e2e/src/discovery/packages/required/input.rs) supplies event three.
+  -> [Saved::recovered](../../crates/mithril-e2e/src/discovery/packages/required/observed.rs) checks the atomic three-event result, checkpoint, Current progress, prior outputs, and unchanged deadline.
+
+The test keeps all start, upload, retention, configuration, and join actions
+visible. Input helpers supply external protocol data. Observation helpers only
+read, wait for revisions, and assert results. Saved contains values; it holds
+no Data or Query owner across exclusive reopen. Both shutdown attempts run
+before a stage error returns. The final OIDC service also joins. The 90-second
+observation limits and 15-second protocol limits are test watchdogs.
+
+[empty_gate_keeps_history](../../crates/araphor-analysis/src/graph/native/tests/managed/history.rs) adds a fourth input to a native SQL COUNT gate.
+  -> [retained_call_from](../../crates/araphor-data/src/analysis/managed/read.rs) validates the latest receipt and selected header plus the earlier call header.
+  -> [managed_source_freshness](../../crates/araphor-data/src/analysis/managed/read.rs) uses the original capture when the valid latest receipt omits that call.
+  -> [empty_gate_keeps_history](../../crates/araphor-analysis/src/graph/native/tests/managed/history.rs) checks exact stored context, output, and commit values with current=false.
+
+```mermaid
+sequenceDiagram
+    Instance->>Data: Commit empty projection
+    Reader->>Data: Read earlier package call
+    Data->>Data: Validate receipt and both headers
+    Data-->>Reader: Stored output with current=false
+```
+
+The same snapshot already identifies the current call reference. A different
+reference in the latest receipt is invalid. An omitted call can be valid.
+The reader permits that omission only after existing validators pass. The
+regression then damages the latest selected header and requires an error.
+No current claim, default quota, execution owner, or query stage is added.
+
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#required-detector-recovery-and-retained-call-history)
+records exact passing and failed sources. The earlier age-budget failure is
+correct admission behavior. The repaired test removes that artificial limit;
+it does not bypass admission or retry with polling. The new proof uses Wasm
+detector packages through native Query. It does not qualify a physical actor,
+new native artifact, Python runtime, or performance target.

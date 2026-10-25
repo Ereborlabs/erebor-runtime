@@ -1,0 +1,136 @@
+use super::notices::next_receipt;
+use super::*;
+use crate::graph::tests::fixture::{record, wire};
+
+#[tokio::test]
+async fn empty_gate_keeps_history() -> TestResult {
+    let records = (1..=3)
+        .map(|cursor| {
+            record(
+                cursor,
+                &wire(
+                    cursor,
+                    erebor_interceptor_abi::EffectPhysicalResultV1::DeniedBeforeEffect,
+                    2,
+                    2,
+                    [20; 16],
+                ),
+            )
+        })
+        .collect::<araphor_data::Result<Vec<_>>>()?;
+    let fixture = Fixture::with_records(Target::Wasm, records)?;
+    let (grant, definition) = fixture.graph_definition().await?;
+    let job = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "empty-history",
+            "SELECT * FROM events WHERE (SELECT COUNT(*) FROM events) = 3",
+        )
+        .await?;
+    let job = fixture.running_graph(job).await?;
+    let mut stream = job.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        job.admitted().lifecycle,
+    )?;
+    let outcome: TestResult = async {
+        let first = next_receipt(&mut stream).await?;
+        assert_eq!(first.results.len(), 3);
+        let data = fixture.query.store();
+        let current = data
+            .managed_instance(fixture.source.tenant_id, "empty-history", &fixture.control)?
+            .ok_or("initial Graph instance")?;
+        let now = request("inspect-history")?.time_utc_ns;
+        let mut saved = BTreeMap::new();
+        for (call, reference) in &first.results {
+            let araphor_data::ManagedOutput::Call { result, .. } =
+                data.managed_output(&current, &reference.result_id, now, &fixture.control)?
+            else {
+                return Err("initial Graph call".into());
+            };
+            assert!(result.current);
+            saved.insert(
+                *call,
+                (result.context, result.output, result.commit_revision),
+            );
+        }
+        let fourth = record(
+            4,
+            &wire(
+                4,
+                erebor_interceptor_abi::EffectPhysicalResultV1::DeniedBeforeEffect,
+                2,
+                2,
+                [20; 16],
+            ),
+        )?;
+        assert_eq!(fourth.id.stream, fixture.source);
+        data.accept_validated_batch(
+            fixture.source.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: fourth.id.cpu_id,
+                first_cursor: 4,
+                last_cursor: 4,
+                intake_utc_ns: 4,
+                frame_ends: vec![fourth.wire_record.len()],
+                framed_records: fourth.wire_record.into(),
+            },
+        )?;
+        let empty = next_receipt(&mut stream).await?;
+        assert!(empty.results.is_empty());
+        assert!(empty.commit_revision > first.commit_revision);
+        let current = data
+            .managed_instance(fixture.source.tenant_id, "empty-history", &fixture.control)?
+            .ok_or("empty Graph instance")?;
+        assert_eq!(current.progress, empty.commit_revision);
+        let requests = araphor_data::AnalysisTableRequests::new();
+        let captured = data.read_managed_tables(
+            &grant.selection,
+            &araphor_data::ManagedRead {
+                instance: current.clone(),
+                expected: None,
+                completed: None,
+                rebuild: false,
+            },
+            araphor_data::AnalysisTableRead {
+                requests: &requests,
+                event_ranges: None,
+                inputs: None,
+                mode: araphor_data::AnalysisReadModeV1::Complete,
+                now,
+            },
+            araphor_data::AnalysisExtractLimits::default(),
+            &fixture.control,
+        )?;
+        for (call, reference) in &first.results {
+            let prior = captured.state.prior(*call).ok_or("retained call head")?;
+            assert_eq!(
+                (&prior.result, prior.revision),
+                (&reference.result_id, reference.commit_revision)
+            );
+            let araphor_data::ManagedOutput::Call { result, .. } =
+                data.managed_output(&current, &reference.result_id, now, &fixture.control)?
+            else {
+                return Err("historical Graph call".into());
+            };
+            assert!(!result.current);
+            assert_eq!(
+                (result.context, result.output, result.commit_revision),
+                saved[call]
+            );
+        }
+        data.fault_write(
+            "UPDATE analysis_results SET request_meta = 'invalid'::BLOB WHERE tenant_id = ? AND result_id = ?",
+            &[&fixture.source.tenant_id.as_slice(), &empty.selected.result_id],
+        )?;
+        let reference = first.results.values().next().ok_or("historical call")?;
+        assert!(data
+            .managed_output(&current, &reference.result_id, now, &fixture.control)
+            .is_err());
+        Ok(())
+    }
+    .await;
+    stream.cancel_and_join(&fixture.control).await?;
+    outcome
+}

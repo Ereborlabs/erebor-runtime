@@ -98,7 +98,7 @@ impl Fixture {
     }
 }
 
-async fn next_receipt(
+pub(super) async fn next_receipt(
     stream: &mut crate::instance::Subscription,
 ) -> TestResult<araphor_data::ManagedReceipt> {
     Ok(

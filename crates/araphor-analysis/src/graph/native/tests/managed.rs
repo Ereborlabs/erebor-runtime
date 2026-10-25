@@ -1,6 +1,7 @@
 use super::*;
 
 mod expiry;
+mod history;
 mod notices;
 mod replay;
 mod restart;

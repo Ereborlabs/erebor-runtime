@@ -844,7 +844,10 @@ impl AnalysisStore {
             .as_ref()
             .filter(|receipt| {
                 receipt.commit_revision == current.progress
-                    && receipt.results.get(&record.call) == Some(&reference)
+                    && receipt
+                        .results
+                        .get(&record.call)
+                        .is_none_or(|retained| retained == &reference)
                     && attempt.terminal.is_none()
             })
             .ok_or_else(|| Code::Invalid.error("retained Graph call attestation"))?;
@@ -858,6 +861,9 @@ impl AnalysisStore {
             saved,
         )?;
         Self::validate_managed_header(reader, spec.tenant, id, record, revision)?;
+        if !receipt.results.contains_key(&record.call) {
+            return Ok(None);
+        }
         Ok(Some(attempt))
     }
 

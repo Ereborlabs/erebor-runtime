@@ -360,3 +360,75 @@ E2E test layout and one Data test name. Its SHA-256 is
 The test processes use PATH=/nonexistent. The pending E2E files remain outside
 this health deliverable. The integrated case, paired physical incident, and
 complete matrix remain Not done. No full CI or benchmark ran.
+
+
+## Required detector recovery and retained call history
+
+**Required detector failure and recovery: Done. Complete matrix: Not done.**
+[required_detector_recovers](../../../../../crates/mithril-e2e/src/discovery/packages/required.rs)
+uses the shared Host and Graph subscriptions returned by public ControlConfig.
+Optional Discovery is disabled. The external Node fixture sends authenticated
+WAL frames and coverage through the production connection. Data revision
+notifications wake the read assertions. No package execution loop is added.
+
+The case captures a Confirmed Process finding, its atomic three-call receipt,
+Wasm target and artifact metadata, output, checkpoint, and notification state.
+An exclusive reopen sets the Wasm fuel budget to one. An independent source
+then fails with Limit. Its required progress stays at zero. Health reports
+ProcessingFailed and incomplete input. An explicit retention step under the
+one-nanosecond age budget keeps both unconsumed frames with their exact bytes.
+The earlier Graph and all call outputs remain readable. The original
+notification obligation keeps its first_seen and human deadline.
+
+After both failed-stage owners join and all assertions pass, the case removes
+the fuel limit and the artificial age budget. Both settings are None during
+repair. A third source event then triggers the subscription. The new atomic
+receipt covers all three retained events. Required progress reaches three,
+lag reaches zero, and health becomes Current with complete input. Earlier
+results and state remain unchanged. The notification deadline does not reset.
+SinkUnavailable remains an explicit delivery outcome; this case does not
+claim successful external notification delivery.
+
+A separate read defect blocked the retained-output assertions. A valid native
+SQL gate can publish an empty projection while its prior call references
+remain stored. [retained_call_from](../../../../../crates/araphor-data/src/analysis/managed/read.rs)
+previously rejected that missing call as an invalid attestation. It now checks
+the latest receipt and selected header, then the original call header, before
+it falls back to the original capture. A different reference remains invalid.
+An old result does not gain current status from an empty publication.
+
+[empty_gate_keeps_history](../../../../../crates/araphor-analysis/src/graph/native/tests/managed/history.rs)
+uses native SQL COUNT with a real Wasm Graph subscription. Event four makes
+the gate empty. All three prior references, contexts, output bytes, and commit
+revisions remain available with current=false. A damaged latest selected
+header still causes an error. The existing unchanged-input reuse case also
+passes. No parser, planner, evaluator, state store, or quota default changes.
+
+Evidence is in
+[/home/navid/mithril-test-hosts/araphor-package-qualification-verification](/home/navid/mithril-test-hosts/araphor-package-qualification-verification).
+
+| Record | Result and source limit |
+| --- | --- |
+| required-final-tests.json | The integrated case fails on retained Graph call attestation before the read correction. |
+| attestation-red-tests.json | The focused empty-gate case reproduces that error before the correction. The later corruption-check suffix is not present in this red source. |
+| attestation-analysis-fixed.json | The empty-gate case with its corruption check and the existing unchanged-input reuse case pass with attestation-fixed-source.json. |
+| attestation-data-fixed.json | Nine relevant output, selected-reference, corruption, permission, and expiry cases pass with attestation-fixed-source.json. |
+| attestation-required-fixed.json | The case correctly receives ResourceExhausted while the test still keeps the one-nanosecond age budget during repair. Production admission is unchanged. |
+| required-repair-tests.json | The complete required-detector case passes with required-repair-source.json after the repair configuration removes that age budget. |
+| required-fixture-final.json | All four shared image, definition, public lifecycle, and receipt cases pass with required-final-source.json. That result precedes the Graph-only read correction. Their bodies are unchanged. |
+| required-repair-build.json, required-repair-clippy.json, required-repair-fmt.json | The relevant build, Clippy with warnings denied, and scoped formatting pass on the final source. |
+
+Both attestation-fixed-source.json and required-repair-source.json contain
+1,251 source hashes. The second manifest changes only the private repair-test
+configuration. Their respective SHA-256 values are
+b82317f56f12ea9fe7ea21492ef2fc635ddf2ef051bb97c7865b080810b42308 and
+dd3486471b23832d724e55f6302eeefe2f63e89e9a8cf93a242b6faabe41a28e.
+The passing integrated test binary SHA-256 is
+51eef075aaca1da829b7a38cf10898a733cd34891c1de4e1101d06f1b8dd278a.
+The test process uses PATH=/nonexistent. Each execution record retains its
+exact command, binary hash, source, result, and adjacent log.
+
+This result qualifies the recorded lightweight Wasm path and its native Query
+integration. It adds no native-artifact, Python, performance, or physical
+claim. The complete requirement map and the paired physical incident remain
+Not done. Full workspace CI and benchmarks were not run.

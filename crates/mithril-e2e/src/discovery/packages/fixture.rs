@@ -19,10 +19,8 @@ pub(super) struct Fixture {
     pub(super) control: ControlPlane,
     service: ClientGrpcOwner,
     auth: Arc<ClientAuth>,
-    host: Option<(
-        tokio::sync::watch::Sender<bool>,
-        tokio::task::JoinHandle<std::io::Result<()>>,
-    )>,
+    stop: tokio::sync::watch::Sender<bool>,
+    tasks: Vec<tokio::task::JoinHandle<std::io::Result<()>>>,
 }
 
 impl Fixture {
@@ -43,17 +41,22 @@ impl Fixture {
             .with_computed_bundle_digest(),
             intake.clone(),
         )?;
-        Self::from_control(control, auth)
+        Self::from_control(control, auth, ClientGrpcConfig::default())
     }
 
-    fn from_control(control: ControlPlane, auth: Arc<ClientAuth>) -> Result<Self> {
-        let service =
-            ClientGrpcOwner::new(control.clone(), auth.clone(), ClientGrpcConfig::default())?;
+    fn from_control(
+        control: ControlPlane,
+        auth: Arc<ClientAuth>,
+        client: ClientGrpcConfig,
+    ) -> Result<Self> {
+        let service = ClientGrpcOwner::new(control.clone(), auth.clone(), client)?;
+        let (stop, _) = tokio::sync::watch::channel(false);
         Ok(Self {
             control,
             service,
             auth,
-            host: None,
+            stop,
+            tasks: Vec::new(),
         })
     }
 
@@ -65,27 +68,66 @@ impl Fixture {
         if let Some(error) = parts.data_error.or(parts.discovery_error) {
             return Err(error.into());
         }
-        if parts.graph.is_some() || parts.discovery.is_some() {
-            return Err("instance fixture cannot discard configured source owners".into());
+        if parts.discovery.is_some() {
+            return Err("instance fixture cannot discard optional Discovery".into());
         }
+        let client = parts
+            .client
+            .as_ref()
+            .and_then(|client| client.investigation.clone())
+            .unwrap_or_default();
         let host = parts.instances.ok_or("configured Instance Host absent")?;
-        let mut fixture = Self::from_control(parts.control, auth)?;
-        let (stop, stopped) = tokio::sync::watch::channel(false);
-        let task = tokio::spawn(async move {
-            host.serve(stopped, u64::MAX)
+        let mut fixture = Self::from_control(parts.control, auth, client)?;
+        let stopped = fixture.stop.subscribe();
+        let stopping = stopped.clone();
+        let mut tasks = vec![tokio::spawn(async move {
+            host.serve(stopping, u64::MAX)
                 .await
                 .map_err(std::io::Error::other)
-        });
-        fixture.host = Some((stop, task));
+        })];
+        if let Some(graph) = parts.graph {
+            tasks.push(tokio::spawn(async move {
+                graph.run(stopped).await.map_err(std::io::Error::other)
+            }));
+        }
+        fixture.tasks = tasks;
         Ok(fixture)
     }
 
     pub(super) async fn shutdown(mut self) -> Result<()> {
-        if let Some((stop, task)) = self.host.take() {
-            stop.send_replace(true);
-            task.await??;
+        self.stop.send_replace(true);
+        for joined in futures_util::future::join_all(std::mem::take(&mut self.tasks)).await {
+            joined??;
         }
         Ok(())
+    }
+
+    pub(super) async fn observe<T>(
+        &self,
+        wait: std::time::Duration,
+        mut read: impl FnMut(&araphor_data::AnalysisStore) -> Result<Option<T>>,
+    ) -> Result<T> {
+        let data = self.control.analysis_store().ok_or("observation store")?;
+        let mut changes = data.subscribe_revision();
+        tokio::time::timeout(wait, async {
+            loop {
+                if let Some(value) = read(&data)? {
+                    return Ok::<_, Box<dyn std::error::Error>>(value);
+                }
+                changes.changed().await?;
+            }
+        })
+        .await?
+    }
+
+    pub(super) async fn listening(self, tls: &MtlsFixture) -> Result<(Self, ControlServerFixture)> {
+        match tls.start(self.control.clone()).await {
+            Ok(server) => Ok((self, server)),
+            Err(error) => {
+                self.shutdown().await?;
+                Err(error)
+            }
+        }
     }
 
     pub(super) async fn connected(
@@ -173,8 +215,6 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        if let Some((stop, _)) = &self.host {
-            stop.send_replace(true);
-        }
+        self.stop.send_replace(true);
     }
 }

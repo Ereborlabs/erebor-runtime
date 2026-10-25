@@ -10,6 +10,7 @@ mod definitions;
 mod fixture;
 mod images;
 mod lifecycle;
+mod required;
 mod wasm;
 
 use bundle::Denials;

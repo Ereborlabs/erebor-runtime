@@ -10,7 +10,7 @@ use mithril_control::{ClientAuthConfig, ClientListenerConfig, ControlConfig};
 
 use super::*;
 
-fn configuration(tls: &MtlsFixture, auth: &ClientAuthConfig) -> Result<ControlConfig> {
+pub(super) fn configuration(tls: &MtlsFixture, auth: &ClientAuthConfig) -> Result<ControlConfig> {
     let mut config = tls.configuration()?;
     config.client = Some(ClientListenerConfig {
         listen: crate::control_fixture::free_address()?,
@@ -79,11 +79,9 @@ fn input(fixture: &Fixture, revision: u64, count: u64) -> Result<()> {
 }
 
 async fn progress(fixture: &Fixture, id: &str, after: u64) -> Result<ManagedReceipt> {
-    let data = fixture.control.analysis_store().ok_or("progress store")?;
-    let mut changes = data.subscribe_revision();
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            let next = data
+    fixture
+        .observe(std::time::Duration::from_secs(30), |data| {
+            Ok(data
                 .managed_history(
                     &AnalysisSelectionV1::tenant([1; 16]),
                     id,
@@ -91,14 +89,9 @@ async fn progress(fixture: &Fixture, id: &str, after: u64) -> Result<ManagedRece
                 )?
                 .into_iter()
                 .filter(|receipt| receipt.commit_revision > after)
-                .max_by_key(|receipt| receipt.commit_revision);
-            if let Some(receipt) = next {
-                return Ok::<_, Box<dyn std::error::Error>>(receipt);
-            }
-            changes.changed().await?;
-        }
-    })
-    .await?
+                .max_by_key(|receipt| receipt.commit_revision))
+        })
+        .await
 }
 
 fn values(data: &Dataset, column: &str) -> Result<Vec<u64>> {
