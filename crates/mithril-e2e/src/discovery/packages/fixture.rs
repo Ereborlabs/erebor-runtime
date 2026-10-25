@@ -19,6 +19,10 @@ pub(super) struct Fixture {
     pub(super) control: ControlPlane,
     service: ClientGrpcOwner,
     auth: Arc<ClientAuth>,
+    host: Option<(
+        tokio::sync::watch::Sender<bool>,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    )>,
 }
 
 impl Fixture {
@@ -39,13 +43,64 @@ impl Fixture {
             .with_computed_bundle_digest(),
             intake.clone(),
         )?;
+        Self::from_control(control, auth)
+    }
+
+    fn from_control(control: ControlPlane, auth: Arc<ClientAuth>) -> Result<Self> {
         let service =
             ClientGrpcOwner::new(control.clone(), auth.clone(), ClientGrpcConfig::default())?;
         Ok(Self {
             control,
             service,
             auth,
+            host: None,
         })
+    }
+
+    pub(super) fn configured(
+        config: mithril_control::ControlConfig,
+        auth: Arc<ClientAuth>,
+    ) -> Result<Self> {
+        let parts = config.into_parts()?;
+        if let Some(error) = parts.data_error.or(parts.discovery_error) {
+            return Err(error.into());
+        }
+        if parts.graph.is_some() || parts.discovery.is_some() {
+            return Err("instance fixture cannot discard configured source owners".into());
+        }
+        let host = parts.instances.ok_or("configured Instance Host absent")?;
+        let mut fixture = Self::from_control(parts.control, auth)?;
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(async move {
+            host.serve(stopped, u64::MAX)
+                .await
+                .map_err(std::io::Error::other)
+        });
+        fixture.host = Some((stop, task));
+        Ok(fixture)
+    }
+
+    pub(super) async fn shutdown(mut self) -> Result<()> {
+        if let Some((stop, task)) = self.host.take() {
+            stop.send_replace(true);
+            task.await??;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn connected(
+        self,
+        tls: &MtlsFixture,
+        auth: &ClientAuthConfig,
+        credential: &Path,
+    ) -> Result<(Self, AraphorClient, ControlServerFixture)> {
+        match self.client(tls, auth, credential).await {
+            Ok((client, server)) => Ok((self, client, server)),
+            Err(error) => {
+                self.shutdown().await?;
+                Err(error)
+            }
+        }
     }
 
     pub(super) async fn client(
@@ -113,5 +168,13 @@ impl Fixture {
         let reply = self.service.package_operation(request).await?.into_inner();
         PackageResponseV1::from_bytes(&reply.result)
             .map_err(|_| tonic::Status::internal("fixture response"))
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        if let Some((stop, _)) = &self.host {
+            stop.send_replace(true);
+        }
     }
 }

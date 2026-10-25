@@ -4092,3 +4092,65 @@ contains 21 existing cases, including the actual native detector libraries.
 The final result and source pins are recorded in the
 [migration result](../plans/araphor-analysis-migration.md#one-managed-graph-execution-route).
 Full CI, benchmarks, physical diagnostics, and additional hosts are not checked.
+
+
+## Public client Instance lifecycle
+
+This qualification uses an OCI SQL package through the supported client.
+Its intended end state is explicit start, reactive execution, retained atomic
+state, joined stop, and receipt retry after reopen. The full package and
+physical qualification matrix remains open.
+
+[Fixture::configured](../../crates/mithril-e2e/src/discovery/packages/fixture.rs) obtains and serves the shared Host through public ControlConfig::into_parts.
+  -> [public_instance_reacts](../../crates/mithril-e2e/src/discovery/packages/lifecycle.rs) installs the Denials image and admits its YAML SQL definition.
+  -> [Package RPC](../../crates/mithril-control/src/client_grpc.rs) forwards authenticated package operations to the existing owners.
+  -> [InstanceHost](../../crates/araphor-analysis/src/instance/host.rs) admits the Instance without starting execution.
+
+[public_instance_reacts](../../crates/mithril-e2e/src/discovery/packages/lifecycle.rs) explicitly starts the admitted Instance.
+  -> [Instance](../../crates/araphor-analysis/src/instance/mod.rs) opens the Query subscription under current authority.
+  -> [Query](../../crates/araphor-query/src/definition.rs) uses DataFusion parsing, logical planning, optimization, physical planning, and execution.
+  -> [PackageExec](../../crates/araphor-query/src/definition/physical.rs) executes the two named, typed package calls against captured Arrow input.
+  -> [Publication](../../crates/araphor-analysis/src/instance/sink.rs) passes the complete captured receipt to Data.
+  -> [Data](../../crates/araphor-data/src/analysis/managed/commit.rs) commits results, checkpoint, references, and progress atomically.
+
+[input](../../crates/mithril-e2e/src/discovery/packages/lifecycle.rs) commits a changed external context snapshot through public Data APIs.
+  -> [Query follow](../../crates/araphor-query/src/follow/mod.rs) captures the relevant change and runs the existing physical plan.
+  -> [ManagedPrior::checkpoint](../../crates/araphor-data/src/analysis/managed/model.rs) resets prior state when input revision or coverage changes.
+  -> [public_instance_reacts](../../crates/mithril-e2e/src/discovery/packages/lifecycle.rs) checks the new count and reset state, then reads the intact earlier result.
+
+[public_instance_reacts](../../crates/mithril-e2e/src/discovery/packages/lifecycle.rs) stops the Instance and shuts down both fixture services.
+  -> [InstanceHost](../../crates/araphor-analysis/src/instance/host.rs) joins execution before stop returns.
+  -> [public_instance_reacts](../../crates/mithril-e2e/src/discovery/packages/lifecycle.rs) reopens the store and checks stopped intent, complete history, output, and checkpoint.
+
+[public_receipt_reopens](../../crates/mithril-e2e/src/discovery/packages/lifecycle.rs) repeats the same finite execution request before and after reopen.
+  -> [Instance](../../crates/araphor-analysis/src/instance/mod.rs) returns the existing receipt under current authority.
+  -> [public_receipt_reopens](../../crates/mithril-e2e/src/discovery/packages/lifecycle.rs) checks identical references and an unchanged metadata revision.
+
+```mermaid
+sequenceDiagram
+    Client->>Control: Install image and admit definition and Instance
+    Client->>Control: Explicit start
+    Control->>InstanceHost: Start admitted Instance
+    InstanceHost->>Query: Drive subscription
+    Query->>Data: Commit captured results and state
+    Data-->>Test: Notify revision change
+    Client->>Control: Stop Instance
+    Control->>InstanceHost: Cancel and join execution
+```
+
+The fixture owns transport and Host task handles. It does not reconstruct an
+execution owner. The progress helper subscribes before its first read and
+awaits Data revision changes. Its 30-second timeout is a test watchdog.
+Shutdown signals and joins both services, including returned error paths.
+The fixture Drop signals Host shutdown when a test panics.
+
+The initial test expected the changed-input checkpoint counter to advance.
+That expectation conflicted with the existing reset contract. The corrected
+case checks changed input revisions, reset state, and retained earlier state.
+The initial failure and lint failure remain in the evidence directory. No
+production behavior changed to make either check pass.
+
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#public-client-instance-qualification)
+records the exact tests, source manifests, binary hashes, and checks. This
+result covers SQL packages through the public client. It does not extend
+native or Wasm artifact qualification, BPF or ABI proof, or physical proof.

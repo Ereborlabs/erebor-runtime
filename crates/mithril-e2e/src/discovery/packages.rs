@@ -9,6 +9,7 @@ mod bundle;
 mod definitions;
 mod fixture;
 mod images;
+mod lifecycle;
 mod wasm;
 
 use bundle::Denials;
