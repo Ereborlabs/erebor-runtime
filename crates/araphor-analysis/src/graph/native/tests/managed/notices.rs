@@ -1023,3 +1023,665 @@ async fn managed_expiry_drains_heads() -> TestResult {
     stream.cancel_and_join(&fixture.control).await?;
     Ok(())
 }
+
+impl Fixture {
+    fn bound_evaluation(&mut self) -> TestResult {
+        let mut limits = self.query.limits().clone();
+        limits.global_evaluations = Some(1);
+        limits.tenant_evaluations = Some(1);
+        limits.input_capacity = Some(64 * 1024 * 1024);
+        limits.output_capacity = Some(64 * 1024 * 1024);
+        self.query = Engine::new(Arc::clone(self.query.store()), limits)?;
+        Ok(())
+    }
+
+    fn hold_facts(&self) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (entered, entry) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        *self
+            .facts
+            .gate
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some((entered, released));
+        (entry, release)
+    }
+
+    fn hold_authority(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        let (entered, entry) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        *self
+            .authority
+            .gate
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some((entered, released));
+        (entry, release)
+    }
+
+    fn assert_graph_receipt(
+        &self,
+        job: &crate::Instance,
+        receipt: &araphor_data::ManagedReceipt,
+    ) -> TestResult {
+        assert_eq!(receipt.results.len(), 3);
+        let head = self
+            .query
+            .store()
+            .processor_result(&self.graph_scope())?
+            .ok_or("Managed policy Graph head")?;
+        assert_eq!(head.commit_revision, receipt.commit_revision);
+        let graph = self
+            .query
+            .store()
+            .graph_result(self.source.tenant_id, &head.result_id)?
+            .ok_or("Managed policy Graph body")?;
+        graph.validate()?;
+        let evidence = self
+            .records
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            graph
+                .input_manifest
+                .evidence
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            evidence
+        );
+        assert_eq!(
+            graph
+                .input_positions
+                .iter()
+                .map(|(record, _)| record.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            evidence
+        );
+        assert!(graph
+            .input_positions
+            .iter()
+            .all(|(_, position)| position.commit_revision > 0));
+        assert_eq!(
+            graph
+                .packages
+                .iter()
+                .map(|package| package.package_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            araphor_data::FindingV1::PACKAGES
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        let (witnesses, contexts) = self
+            .query
+            .store()
+            .package_evidence(self.source.tenant_id, std::slice::from_ref(&head.result_id))?;
+        assert_eq!(
+            witnesses
+                .iter()
+                .map(|witness| witness.cursor)
+                .collect::<std::collections::BTreeSet<_>>(),
+            self.records
+                .iter()
+                .map(|record| record.id.durable_cursor)
+                .collect()
+        );
+        assert!(witnesses
+            .iter()
+            .all(|witness| witness.identity == self.source
+                && witness.expires_utc_ns == graph.witness_deadline_utc_ns));
+        let ids = receipt
+            .results
+            .values()
+            .map(|reference| reference.result_id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            self.query
+                .store()
+                .package_result_refs(self.source.tenant_id, &ids)?,
+            receipt.results.values().cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            contexts
+                .iter()
+                .filter(|reference| reference.key.owner_id == "native-package-v1")
+                .count(),
+            3
+        );
+        assert!(contexts
+            .iter()
+            .all(|reference| reference.key.tenant_id == self.source.tenant_id
+                && reference.commit_revision > 0));
+        let current = self
+            .query
+            .store()
+            .managed_instance(
+                self.source.tenant_id,
+                &job.admitted().spec.id,
+                &self.control,
+            )?
+            .ok_or("Managed policy stored instance")?;
+        assert_eq!(current.progress, receipt.commit_revision);
+        assert_eq!(
+            self.query.store().managed_history(
+                &current.grant.selection,
+                &current.spec.id,
+                &self.control,
+            )?,
+            std::slice::from_ref(receipt)
+        );
+        assert_eq!(
+            self.query
+                .store()
+                .processor_health(&self.graph_scope())?
+                .ok_or("Managed policy Graph progress")?
+                .consumed_cursor,
+            3
+        );
+        assert_eq!(self.facts.calls.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    fn assert_unpublished(
+        &self,
+        job: &crate::Instance,
+        attempt: &str,
+        exit: araphor_data::ManagedExit,
+    ) -> TestResult {
+        assert!(self
+            .query
+            .store()
+            .processor_result(&self.graph_scope())?
+            .is_none());
+        assert!(self.retained_heads()?.is_empty());
+        let current = self
+            .query
+            .store()
+            .managed_instance(
+                self.source.tenant_id,
+                &job.admitted().spec.id,
+                &self.control,
+            )?
+            .ok_or("Managed policy stored instance")?;
+        assert_eq!(current.spec, job.admitted().spec);
+        assert_eq!(current.grant, job.admitted().grant);
+        assert_eq!(current.generation, job.admitted().generation);
+        assert_eq!(current.progress, 0);
+        assert!(self
+            .query
+            .store()
+            .managed_history(&current.grant.selection, &current.spec.id, &self.control,)?
+            .is_empty());
+        if let Some(health) = self.query.store().processor_health(&self.graph_scope())? {
+            assert_eq!(health.consumed_cursor, 0);
+        }
+        let saved = self
+            .query
+            .store()
+            .managed_attempt(
+                self.source.tenant_id,
+                &current.spec.id,
+                attempt,
+                &self.control,
+            )?
+            .ok_or("Managed policy pending attempt")?;
+        assert!(saved.receipt().is_none());
+        if let Some(terminal) = saved.terminal() {
+            assert_eq!(terminal.exit, exit);
+            if let araphor_data::ManagedExit::Failed(code) = exit {
+                let status = self.query.store().managed_status(
+                    &current.grant.selection,
+                    &current.spec.id,
+                    &self.control,
+                )?;
+                assert_eq!(status.instance, current);
+                assert!(
+                    matches!(status.readiness, araphor_data::PackageReadinessV1::Failed { code: actual, .. } if actual == code)
+                );
+            }
+            if terminal.suspended {
+                assert!(!current.running);
+                assert_eq!(current.lifecycle, terminal.revision);
+            } else {
+                assert_eq!(current.lifecycle, job.admitted().lifecycle);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn benign_run_keeps_capture() -> TestResult {
+    let mut fixture = Fixture::target(Target::Sql)?;
+    fixture.bound_evaluation()?;
+    let (grant, definition) = fixture.graph_definition().await?;
+    let job = fixture
+        .managed_graph(&grant, &definition, "benign-run", "SELECT * FROM events")
+        .await?;
+    let memory = Arc::clone(fixture.query.memory());
+    let held = memory.input_reserved();
+    let (entry, release) = fixture.hold_facts();
+    let owner = Arc::clone(&job);
+    let control = Arc::new(AnalysisReadControl::default());
+    let stage = Arc::clone(&control);
+    let input = request("benign")?;
+    let worker = tokio::spawn(async move { owner.run(input, &stage).await });
+    tokio::task::spawn_blocking(move || entry.recv_timeout(std::time::Duration::from_secs(30)))
+        .await??;
+    let (entry, checked) = fixture.hold_authority();
+    fixture.authority.set(true);
+    let notice = tokio::time::timeout(std::time::Duration::from_secs(5), entry).await;
+    if let Err(error) = notice {
+        checked.send(())?;
+        release.send(())?;
+        let result: crate::Result<araphor_data::ManagedReceipt> = worker.await?;
+        return Err(
+            format!("Benign run did not check current images: {error}; result={result:?}").into(),
+        );
+    }
+    notice??;
+    assert!(!worker.is_finished());
+    assert!(fixture
+        .query
+        .reserve_evaluation(fixture.source.tenant_id)
+        .is_err());
+    checked.send(())?;
+    release.send(())?;
+    let receipt: crate::Result<araphor_data::ManagedReceipt> =
+        tokio::time::timeout(std::time::Duration::from_secs(30), worker).await??;
+    fixture.assert_graph_receipt(&job, &receipt?)?;
+    control.check()?;
+    assert_eq!(memory.input_reserved(), held);
+    drop(
+        memory.reserve_output(
+            fixture
+                .query
+                .limits()
+                .output_capacity
+                .ok_or("Managed Graph output capacity")?,
+        )?,
+    );
+    drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn benign_stream_keeps_capture() -> TestResult {
+    let mut fixture = Fixture::target(Target::Wasm)?;
+    fixture.bound_evaluation()?;
+    fixture.serial_guests()?;
+    let (grant, definition) = fixture.graph_definition().await?;
+    let job = fixture
+        .managed_graph(&grant, &definition, "benign-stream", "SELECT * FROM events")
+        .await?;
+    let job = fixture.running_graph(job).await?;
+    let memory = Arc::clone(fixture.query.memory());
+    let held = memory.input_reserved();
+    let (entry, release) = fixture.hold_facts();
+    let mut stream = job.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        job.admitted().lifecycle,
+    )?;
+    let worker = tokio::spawn(async move {
+        let result = stream.next().await;
+        (stream, result)
+    });
+    tokio::task::spawn_blocking(move || entry.recv_timeout(std::time::Duration::from_secs(30)))
+        .await??;
+    let (entry, checked) = fixture.hold_authority();
+    fixture.authority.set(true);
+    let notice = tokio::time::timeout(std::time::Duration::from_secs(5), entry).await;
+    if let Err(error) = notice {
+        checked.send(())?;
+        release.send(())?;
+        let (stream, result) = worker.await?;
+        let _terminal = stream.cancel_and_join(&fixture.control).await?;
+        return Err(format!(
+            "Benign stream did not check current images: {error}; result={result:?}"
+        )
+        .into());
+    }
+    notice??;
+    assert!(!worker.is_finished());
+    assert!(fixture
+        .query
+        .reserve_evaluation(fixture.source.tenant_id)
+        .is_err());
+    checked.send(())?;
+    release.send(())?;
+    let (mut stream, result) =
+        tokio::time::timeout(std::time::Duration::from_secs(30), worker).await??;
+    let receipt = result.ok_or("Managed benign stream ended")??;
+    fixture.assert_graph_receipt(&job, &receipt)?;
+    let before = fixture.query.store().meta()?;
+    fixture.authority.set(false);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
+            .await?
+            .ok_or("Managed revocation ended")?
+            .is_err()
+    );
+    assert!(stream.cancel_and_join(&fixture.control).await?.is_none());
+    assert_eq!(fixture.query.store().meta()?, before);
+    fixture.assert_graph_receipt(&job, &receipt)?;
+    assert_eq!(memory.input_reserved(), held);
+    drop(
+        memory.reserve_output(
+            fixture
+                .query
+                .limits()
+                .output_capacity
+                .ok_or("Managed Graph output capacity")?,
+        )?,
+    );
+    drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authority_denial_joins() -> TestResult {
+    use erebor_runtime_error::{ErrorExt as _, StatusCode};
+    for follow in [false, true] {
+        for trust in [false, true] {
+            let mut fixture = Fixture::target(Target::Sql)?;
+            fixture.bound_evaluation()?;
+            let (grant, definition) = fixture.graph_definition().await?;
+            let job = fixture
+                .managed_graph(&grant, &definition, "policy-denied", "SELECT * FROM events")
+                .await?;
+            let job = if follow {
+                fixture.running_graph(job).await?
+            } else {
+                job
+            };
+            let memory = Arc::clone(fixture.query.memory());
+            let held = memory.input_reserved();
+            let (entry, release) = fixture.hold_facts();
+            let owner = Arc::clone(&job);
+            let diagnostic = Arc::new(AnalysisReadControl::default());
+            let stage = Arc::clone(&diagnostic);
+            let input = request("denied")?;
+            let worker = tokio::spawn(async move {
+                if follow {
+                    let mut stream =
+                        owner.subscribe(stage, u64::MAX, owner.admitted().lifecycle)?;
+                    let result = stream
+                        .next()
+                        .await
+                        .ok_or_else(|| Code::Incomplete.error("Managed denial stream ended"))?;
+                    let terminal = stream
+                        .cancel_and_join(&AnalysisReadControl::default())
+                        .await?;
+                    Ok::<_, crate::Error>((result, terminal))
+                } else {
+                    Ok((owner.run(input, &stage).await, None))
+                }
+            });
+            tokio::task::spawn_blocking(move || {
+                entry.recv_timeout(std::time::Duration::from_secs(30))
+            })
+            .await??;
+            let pending = fixture.query.store().managed_history(
+                &job.admitted().grant.selection,
+                &job.admitted().spec.id,
+                &fixture.control,
+            )?;
+            assert!(pending.is_empty());
+            assert!(fixture
+                .query
+                .reserve_evaluation(fixture.source.tenant_id)
+                .is_err());
+            if trust {
+                fixture.authority.trusted.store(false, Ordering::SeqCst);
+                fixture.authority.check(&grant, PackageActionV1::Run)?;
+                fixture
+                    .authority
+                    .changes
+                    .send_modify(|revision| *revision += 1);
+            } else {
+                fixture.authority.set(false);
+            }
+            release.send(())?;
+            let (result, terminal) =
+                tokio::time::timeout(std::time::Duration::from_secs(30), worker).await???;
+            let error = result.err().ok_or("Managed authority denial published")?;
+            assert!(
+                error.status_code() == StatusCode::PermissionDenied
+                    || matches!(
+                        error,
+                        crate::Error::Query {
+                            source: araphor_query::Error::AuthorityChanged { .. }
+                        }
+                    )
+            );
+            let attempt = if follow {
+                let terminal = terminal.ok_or("Managed denial terminal")?;
+                assert_eq!(
+                    terminal.exit,
+                    araphor_data::ManagedExit::Failed(Code::Denied)
+                );
+                terminal.attempt
+            } else {
+                assert!(terminal.is_none());
+                "denied".into()
+            };
+            fixture.assert_unpublished(
+                &job,
+                &attempt,
+                araphor_data::ManagedExit::Failed(Code::Denied),
+            )?;
+            if follow {
+                assert!(diagnostic.check().is_err());
+            } else {
+                diagnostic.check()?;
+            }
+            assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(memory.input_reserved(), held);
+            drop(
+                memory.reserve_output(
+                    fixture
+                        .query
+                        .limits()
+                        .output_capacity
+                        .ok_or("Managed Graph output capacity")?,
+                )?,
+            );
+            drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checker_parent_cancel_joins() -> TestResult {
+    use erebor_runtime_error::{ErrorExt as _, StatusCode};
+    let mut fixture = Fixture::target(Target::Sql)?;
+    fixture.bound_evaluation()?;
+    let (grant, definition) = fixture.graph_definition().await?;
+    let job = fixture
+        .managed_graph(
+            &grant,
+            &definition,
+            "checker-cancel",
+            "SELECT * FROM events",
+        )
+        .await?;
+    let memory = Arc::clone(fixture.query.memory());
+    let held = memory.input_reserved();
+    let (entry, release) = fixture.hold_facts();
+    let owner = Arc::clone(&job);
+    let control = Arc::new(AnalysisReadControl::default());
+    let stage = Arc::clone(&control);
+    let input = request("cancel")?;
+    let mut worker = tokio::spawn(async move { owner.run(input, &stage).await });
+    tokio::task::spawn_blocking(move || entry.recv_timeout(std::time::Duration::from_secs(30)))
+        .await??;
+    let (entry, checked) = fixture.hold_authority();
+    fixture.authority.set(true);
+    let notice = tokio::time::timeout(std::time::Duration::from_secs(5), entry).await;
+    if let Err(error) = notice {
+        checked.send(())?;
+        release.send(())?;
+        let result: crate::Result<araphor_data::ManagedReceipt> = worker.await?;
+        return Err(
+            format!("Cancellation checker did not start: {error}; result={result:?}").into(),
+        );
+    }
+    notice??;
+    control.cancel()?;
+    release.send(())?;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), &mut worker)
+            .await
+            .is_err()
+    );
+    assert!(fixture
+        .query
+        .reserve_evaluation(fixture.source.tenant_id)
+        .is_err());
+    checked.send(())?;
+    let result: crate::Result<araphor_data::ManagedReceipt> =
+        tokio::time::timeout(std::time::Duration::from_secs(30), worker).await??;
+    let error = result.err().ok_or("Cancelled checker published")?;
+    assert_eq!(error.status_code(), StatusCode::Cancelled);
+    fixture.assert_unpublished(&job, "cancel", araphor_data::ManagedExit::Cancelled)?;
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(memory.input_reserved(), held);
+    drop(
+        memory.reserve_output(
+            fixture
+                .query
+                .limits()
+                .output_capacity
+                .ok_or("Managed Graph output capacity")?,
+        )?,
+    );
+    drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn committed_checker_drains() -> TestResult {
+    use erebor_runtime_error::{ErrorExt as _, StatusCode};
+    for cancel in [false, true] {
+        let mut fixture = Fixture::target(Target::Sql)?;
+        fixture.bound_evaluation()?;
+        let (grant, definition) = fixture.graph_definition().await?;
+        let job = fixture
+            .managed_graph(
+                &grant,
+                &definition,
+                "checker-commit",
+                "SELECT * FROM events",
+            )
+            .await?;
+        let memory = Arc::clone(fixture.query.memory());
+        let held = memory.input_reserved();
+        let (entered, entry) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        fixture.query.store().set_commit_hook(
+            araphor_data::AnalysisCommitStage::BeforeResultCommit,
+            move || {
+                entered
+                    .send(())
+                    .map_err(|_| Code::Incomplete.error("Managed commit observer"))?;
+                released
+                    .recv_timeout(std::time::Duration::from_secs(30))
+                    .map_err(|_| Code::Incomplete.error("Managed commit release"))?;
+                Ok(())
+            },
+        )?;
+        let owner = Arc::clone(&job);
+        let control = Arc::new(AnalysisReadControl::default());
+        let stage = Arc::clone(&control);
+        let input = request("committed")?;
+        let mut worker = tokio::spawn(async move { owner.run(input, &stage).await });
+        tokio::time::timeout(std::time::Duration::from_secs(30), entry).await??;
+        let mut revisions = fixture.query.store().subscribe_revision();
+        let (entry, checked) = fixture.hold_authority();
+        fixture.authority.set(true);
+        let notice = tokio::time::timeout(std::time::Duration::from_secs(5), entry).await;
+        if let Err(error) = notice {
+            checked.send(())?;
+            release.send(())?;
+            let result: crate::Result<araphor_data::ManagedReceipt> = worker.await?;
+            return Err(
+                format!("Committed checker did not start: {error}; result={result:?}").into(),
+            );
+        }
+        notice??;
+        release.send(())?;
+        tokio::time::timeout(std::time::Duration::from_secs(30), revisions.changed()).await??;
+        let saved = fixture
+            .query
+            .store()
+            .managed_attempt(
+                fixture.source.tenant_id,
+                "checker-commit",
+                "committed",
+                &fixture.control,
+            )?
+            .ok_or("Committed checker attempt")?;
+        let receipt = saved
+            .receipt()
+            .cloned()
+            .ok_or("Committed checker receipt")?;
+        assert_eq!(saved.terminal(), None);
+        fixture.assert_graph_receipt(&job, &receipt)?;
+        let before = fixture.query.store().meta()?;
+        if cancel {
+            control.cancel()?;
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut worker)
+                .await
+                .is_err()
+        );
+        checked.send(())?;
+        let result: crate::Result<araphor_data::ManagedReceipt> =
+            tokio::time::timeout(std::time::Duration::from_secs(30), worker).await??;
+        if cancel {
+            let error = result
+                .err()
+                .ok_or("Cancelled committed checker acknowledged")?;
+            assert_eq!(error.status_code(), StatusCode::Cancelled);
+        } else {
+            assert_eq!(result?, receipt);
+            control.check()?;
+        }
+        let retained = fixture
+            .query
+            .store()
+            .managed_attempt(
+                fixture.source.tenant_id,
+                "checker-commit",
+                "committed",
+                &fixture.control,
+            )?
+            .ok_or("Retained committed checker attempt")?;
+        assert_eq!(retained.request(), saved.request());
+        assert_eq!(retained.instance(), saved.instance());
+        assert_eq!(retained.receipt(), saved.receipt());
+        assert_eq!(retained.terminal(), saved.terminal());
+        assert_eq!(fixture.query.store().meta()?, before);
+        fixture.assert_graph_receipt(&job, &receipt)?;
+        assert_eq!(memory.input_reserved(), held);
+        drop(
+            memory.reserve_output(
+                fixture
+                    .query
+                    .limits()
+                    .output_capacity
+                    .ok_or("Managed Graph output capacity")?,
+            )?,
+        );
+        drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
+    }
+    Ok(())
+}

@@ -4432,3 +4432,49 @@ affected-owner build, strict Clippy, formatting, and whitespace checks pass.
 One existing Graph startup deadline failed during concurrent checks and
 passed on an unchanged isolated retry. General maintained SQL and the complete
 redesign remain **Not done**. No performance result is claimed.
+
+## Shared authority notices
+
+The goal is one coherent native execution path with clear ownership. A line
+count change is secondary. This change prepares the shared authority-notice
+boundary before a separate direct Graph publication retirement. It does not
+remove that Graph owner.
+
+An actual authority notice arrives
+  -> [Query Subscription](../../crates/araphor-query/src/follow/mod.rs) creates a separate check operation and takes its existing TaskTracker token
+  -> the existing blocking worker runs the complete Analysis policy check
+  -> [Instance::check_prepared](../../crates/araphor-analysis/src/instance/mod.rs) checks grant lifetime, Run authority, and every prepared image
+  -> a valid notice keeps the same native execution and captured inputs
+  -> rejection or a closed notice channel stops the subscription with AuthorityChanged
+
+Query drops the pending condition before it closes and waits for workers on
+normal source EOF. Dropping the check cancels only its separate operation.
+The session control stays valid before Subscription Drop. Explicit
+cancel_and_join drains the existing worker group. Nonblocking Drop leaves
+callback resources on the worker until callback cleanup ends.
+
+Finite Instance execution uses the same full policy check. Parent cancellation
+and rejection cancel and drain work. An already committed receipt stays
+stored. The [Instance sink](../../crates/araphor-analysis/src/instance/sink.rs)
+and [Data commit guards](../../crates/araphor-data/src/analysis/managed/commit.rs)
+remain at the atomic publication boundary. No parser, planner, capture owner,
+polling task, clock, or worker registry is added.
+
+Expiry proof has two parts: a fake Query clock checks the unchanged native
+expiry SQL at the exact deadline; a real Managed subscription publishes and
+recovers expiry after the retained floor changes. This is not virtual-clock
+Managed publication. The existing wall-time publication guard and witness
+lifetime remain.
+
+The [review route](../guides/araphor-discovery-definition-review.md#shared-authority-notices)
+and [qualification record](araphor-analysis-migration.md#shared-authority-notices)
+state the source and proof boundary. Result: **Done** for this notice
+prerequisite. Its focused record has 63 distinct passing cases: ten new tests
+and 53 existing tests. The final affected-owner build, strict Clippy, and
+scoped Rust formatting pass. The cases run in separate focused selections,
+not one full final-tree suite. Direct Graph retirement, general maintained
+SQL, and the complete redesign remain **Not done**.
+Completion of this prerequisite is not overall completion; stable product
+behavior, preserved or replaced 7.5.1–7.5.5 functionality through the new
+design, retirement of duplicate owners, and verification remain.
+No performance result is claimed.

@@ -19,7 +19,7 @@ impl Clock {
         })
     }
 
-    fn advance(&self, now: u64) {
+    pub(super) fn advance(&self, now: u64) {
         self.now.store(now, Ordering::SeqCst);
         self.changes.send_modify(|revision| *revision += 1);
     }

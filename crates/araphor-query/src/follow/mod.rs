@@ -266,6 +266,41 @@ impl Subscription {
         })
     }
 
+    pub fn until_checked(
+        self,
+        mut changes: tokio::sync::watch::Receiver<u64>,
+        check: impl Fn(&AnalysisReadControl) -> Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        let control = Arc::clone(self.session.control());
+        let workers = self.workers.clone();
+        let check = Arc::new(check);
+        self.until(async move {
+            loop {
+                if changes.changed().await.is_err() {
+                    return;
+                }
+                let Ok(control) = control.operation().map(Arc::new) else {
+                    return;
+                };
+                let lease = workers.token();
+                if workers.is_closed() {
+                    return;
+                }
+                let stage = Arc::clone(&control);
+                let check = Arc::clone(&check);
+                if Engine::blocking(control, lease, move || {
+                    stage.check()?;
+                    check(&stage)
+                })
+                .await
+                .is_err()
+                {
+                    return;
+                }
+            }
+        })
+    }
+
     pub fn until(self, changed: impl std::future::Future<Output = ()> + Send + 'static) -> Self {
         self.until_error(async move {
             changed.await;
@@ -301,13 +336,9 @@ impl Subscription {
                     None => {
                         let reason = stream.take_result();
                         drop(stream);
-                        if let Some(reason) = reason {
-                            workers.close();
-                            workers.wait().await;
-                            Some((Err((reason, None)), None))
-                        } else {
-                            None
-                        }
+                        workers.close();
+                        workers.wait().await;
+                        reason.map(|reason| (Err((reason, None)), None))
                     }
                 }
             }

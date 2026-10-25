@@ -248,15 +248,17 @@ impl Instance {
         if self.admitted.spec.destination == araphor_data::ManagedDestination::Notification {
             return Err(Code::Unsupported.error("notification managed run").into());
         }
-        self.authorized(self.authority.as_ref(), control, |operation| async move {
-            self.execute(request, caller, &operation).await
-        })
+        self.authorized(
+            Arc::clone(&self.authority),
+            control,
+            |operation| async move { self.execute(request, caller, &operation).await },
+        )
         .await
     }
 
     async fn authorized<T, F>(
         &self,
-        authority: &dyn PackageAuthorization,
+        authority: Arc<dyn PackageAuthorization>,
         control: &AnalysisReadControl,
         work: impl FnOnce(Arc<AnalysisReadControl>) -> F,
     ) -> Result<T>
@@ -274,7 +276,7 @@ impl Instance {
     }
 
     async fn authorized_on<T, F>(
-        authority: &dyn PackageAuthorization,
+        authority: Arc<dyn PackageAuthorization>,
         grant: &PackageGrantV1,
         prepared: &PreparedDefinition,
         control: &AnalysisReadControl,
@@ -284,24 +286,54 @@ impl Instance {
         F: Future<Output = Result<T>>,
     {
         let mut changes = authority.changes_for(grant);
-        Self::check_prepared(authority, grant, prepared)?;
+        Self::check_prepared(authority.as_ref(), grant, prepared)?;
         let operation = Arc::new(control.operation()?.within(grant.remaining()?)?);
         let execution = work(Arc::clone(&operation));
         tokio::pin!(execution);
-        let result = tokio::select! {
-            result = &mut execution => result,
-            _ = changes.changed() => {
-                operation.cancel()?;
-                match execution.await {
-                    Ok(receipt) => Ok(receipt),
-                    Err(_) => Err(Code::Denied.error("managed authority change").into()),
+        let result = loop {
+            tokio::select! {
+                result = &mut execution => break result,
+                changed = changes.changed() => {
+                    let checked = if changed.is_ok() {
+                        let authority = Arc::clone(&authority);
+                        let grant = grant.clone();
+                        let prepared = prepared.clone();
+                        let stage = Arc::clone(&operation);
+                        let pending = Engine::blocking(Arc::clone(&operation), (), move || {
+                            stage.check()?;
+                            Self::check_prepared(authority.as_ref(), &grant, &prepared)?;
+                            stage.check()?;
+                            Ok(())
+                        });
+                        tokio::pin!(pending);
+                        tokio::select! {
+                            checked = &mut pending => checked,
+                            stopped = control.query_async(std::future::pending::<Result<T>>()) => {
+                                operation.cancel()?;
+                                let _checked = pending.await;
+                                break match execution.await {
+                                    Ok(receipt) => Ok(receipt),
+                                    Err(_) => stopped,
+                                };
+                            }
+                        }
+                    } else {
+                        Err(Code::Denied.error("managed authority change").into())
+                    };
+                    if checked.is_err() {
+                        operation.cancel()?;
+                        break match execution.await {
+                            Ok(receipt) => Ok(receipt),
+                            Err(_) => Err(Code::Denied.error("managed authority change").into()),
+                        };
+                    }
                 }
-            }
-            stopped = control.query_async(std::future::pending::<Result<T>>()) => {
-                operation.cancel()?;
-                match execution.await {
-                    Ok(receipt) => Ok(receipt),
-                    Err(_) => stopped,
+                stopped = control.query_async(std::future::pending::<Result<T>>()) => {
+                    operation.cancel()?;
+                    break match execution.await {
+                        Ok(receipt) => Ok(receipt),
+                        Err(_) => stopped,
+                    };
                 }
             }
         };
@@ -309,7 +341,7 @@ impl Instance {
             return Err(Code::Denied.error("managed grant expiry").into());
         }
         let receipt = result?;
-        Self::authorize(authority, grant, prepared, || {
+        Self::authorize(authority.as_ref(), grant, prepared, || {
             control.check()?;
             Ok(receipt)
         })

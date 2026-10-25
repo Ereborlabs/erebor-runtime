@@ -423,6 +423,7 @@ async fn valid_notice_keeps_instance() -> TestResult {
         ..Default::default()
     })?;
     let (_, mut stream) = fixture.terminal_stream("valid-notice", "cancel").await?;
+    assert_eq!(stream.owner.prepared.images().count(), 1);
     let before = fixture
         .query
         .store()
@@ -451,8 +452,27 @@ async fn valid_notice_keeps_instance() -> TestResult {
         .clone()
         .ok_or("native notice attempt")?;
     let registered = fixture.query.store().meta()?;
+    let (checked, observed) = tokio::sync::oneshot::channel();
+    *fixture
+        .authority
+        .checked
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(checked);
     fixture.authority.set(true);
-    tokio::time::timeout(Duration::from_secs(30), control.cancelled()).await?;
+    match tokio::time::timeout(Duration::from_secs(30), observed).await {
+        Ok(Ok(())) => {}
+        notice => {
+            let _cancelled = control.cancel();
+            let _released = release.send(());
+            if let Ok((stream, _)) = worker.await {
+                let _joined = stream
+                    .cancel_and_join(&AnalysisReadControl::default())
+                    .await;
+            }
+            return Err(format!("Benign authority check was not observed: {notice:?}").into());
+        }
+    }
+    control.check()?;
     assert!(!worker.is_finished());
     assert!(fixture.query.reserve_evaluation([1; 16]).is_err());
     let pending = fixture
@@ -468,6 +488,8 @@ async fn valid_notice_keeps_instance() -> TestResult {
     assert!(pending.terminal().is_none());
     assert!(pending.receipt().is_none());
     assert_eq!(fixture.query.store().meta()?, registered);
+    control.cancel()?;
+    tokio::time::timeout(Duration::from_secs(30), control.cancelled()).await?;
     release.send(())?;
     let (stream, result) = tokio::time::timeout(Duration::from_secs(30), worker).await??;
     let error = result
@@ -852,7 +874,7 @@ async fn postcommit_notice_keeps_receipt() -> TestResult {
         fixture.progress("postcommit-notice")?,
         receipt.commit_revision
     );
-    fixture.authority.set(true);
+    fixture.authority.set(false);
     let error = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("notice stream ended")?
@@ -885,6 +907,7 @@ async fn postcommit_notice_keeps_receipt() -> TestResult {
         fixture.progress("postcommit-notice")?,
         receipt.commit_revision
     );
+    fixture.authority.set(true);
     let mut resumed = instance.subscribe(
         Arc::new(AnalysisReadControl::default()),
         u64::MAX,

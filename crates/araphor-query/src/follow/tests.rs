@@ -31,6 +31,7 @@ mod clock;
 mod discovery;
 mod fixed;
 mod model;
+mod policy;
 mod progress;
 mod runtime;
 mod trace;

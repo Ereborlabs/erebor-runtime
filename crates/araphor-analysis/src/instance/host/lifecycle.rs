@@ -361,7 +361,7 @@ impl InstanceHost {
                 let owner = Arc::clone(&instance);
                 let final_authority = Arc::clone(&authority);
                 instance
-                    .authorized(authority.as_ref(), &operation, move |stage| async move {
+                    .authorized(authority, &operation, move |stage| async move {
                         let selected = Arc::clone(&owner);
                         let read = Arc::clone(&stage);
                         let current = Engine::blocking(Arc::clone(&stage), (), move || {

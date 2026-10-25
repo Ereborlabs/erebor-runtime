@@ -4012,3 +4012,97 @@ Evidence is under
 The original 888-file source archive has SHA-256
 `d88a1c5c766ec4db7f325ac3b46317198c2338c89a9d6aaea6a48bae640847a4`.
 Full workspace CI, benchmarks, and physical qualification are not repeated.
+
+## Shared authority notices
+
+This prerequisite follows `3b395fc82`. It moves notice checks onto the existing
+execution owners so a valid policy notice does not discard current work.
+The direct Graph publication owner remains. This change does not claim a
+completed whole-owner retirement.
+
+[Instance::authorized_on](../../crates/araphor-analysis/src/instance/mod.rs) starts finite work with a separate operation control.
+  -> an actual authority notice runs the full grant, Run, and prepared-image check on the existing blocking worker
+  -> a successful check keeps the same execution and capture
+  -> rejection or parent cancellation cancels the operation and drains work before return
+
+[Instance::subscribe_on](../../crates/araphor-analysis/src/instance/subscription.rs) installs the full policy callback on the Query stream.
+  -> [Subscription::until_checked](../../crates/araphor-query/src/follow/mod.rs) waits for an actual notice, creates separate cancellation state, and takes the existing TaskTracker token before spawn
+  -> the blocking closure holds that token through the callback and capture cleanup
+  -> a valid check keeps the current stream; rejection or channel closure maps to AuthorityChanged
+  -> normal EOF drops the condition before closing and waiting for workers
+
+Explicit cancellation joins the worker group. Nonblocking Drop cancels the
+check and keeps its captured resources on the worker until cleanup ends.
+Finite cancellation also drains its authority checker. An existing committed
+receipt is not undone by cancellation. The sink and Data commit guards remain
+unchanged. Source-current checks, exact native receipts, final authority,
+transaction atomicity, and current delivery checks keep their existing owners.
+
+| Proof owner | Exact boundary |
+| --- | --- |
+| [Analysis notice tests](../../crates/araphor-analysis/src/graph/native/tests/managed/notices.rs) | Valid finite and subscription notices keep captured work. Real Run or image rejection, parent cancellation, and a held checker after commit retain join and stored-receipt rules. |
+| [Query policy tests](../../crates/araphor-query/src/follow/tests/policy.rs) | Benign, rejected, and closed notices; normal native EOF, explicit join, Drop, independent check cancellation, and reservation retention through callback cleanup. |
+| [expiry_query_clock](../../crates/araphor-analysis/src/graph/native/tests/managed/expiry.rs) | The unchanged native expiry SQL selects the exact retained head at the fake Query deadline, without Graph writes, facts work, or guest work. |
+| [managed_expiry_subscription_recovers](../../crates/araphor-analysis/src/graph/native/tests/managed/expiry.rs) | A real retained-floor notice drives actual Managed expiry publication, exact Graph data and references, receipts, progress, cancellation, and reopen. |
+
+The two expiry cases form a compositional proof. They do not move wall time
+or publish Managed results at a future virtual time. The seven-day witness
+lifetime and Data's publication-time guard remain. The initial two expiry
+fixtures attempted future-time publication and failed with Invalid managed
+publication time. Their correction keeps the Query clock proof separate from
+actual retained-floor publication. The original failure records remain.
+
+The unchanged-production baseline records four authority capture/join failures,
+one passing denial case, and those two invalid future-time fixtures. The
+policy checks address the authority boundary. The fixture corrections do not
+change production time rules.
+
+Qualification: **63 distinct cases pass** for this prerequisite. This count
+contains ten new tests and 53 existing tests. It excludes previous deliverable
+counts and repeated executions.
+
+| Owner | New tests | Existing tests | Distinct passes |
+| --- | ---: | ---: | ---: |
+| Query | 3 | 21 | 24 |
+| Analysis | 7 | 30 | 37 |
+| Control | 0 | 1 | 1 |
+| Lightweight E2E | 0 | 1 | 1 |
+| Total | 10 | 53 | 63 |
+
+The native selections run explicitly with --ignored. All selected native
+cases execute and pass; no selected case remains ignored. The adapted existing
+benign-notice case observes the complete valid notice check, keeps execution
+live, then explicitly cancels. All 17 original lifecycle, rollback, terminal,
+progress, and resource assertions remain.
+
+The final affected-owner library build, strict Clippy, and scoped Rust
+formatting pass. The three Query branch repeats and one Analysis helper-caller
+repeat pass. Those repeats
+count once in the totals above. The Query binary stays identical across the
+last Analysis test-only rebuild.
+
+Evidence is under
+`/home/navid/mithril-test-hosts/graph-managed-publication-consolidation-verification`.
+The baseline, first failures, repair packets, source hashes, and separate runs
+remain in that directory. The initial Query selection passes two cases and
+fails the cleanup case because that test polls the unfused stream again after
+EOF. The approved repair removes only that extra poll. The first EOF, child
+control, ordering, reservation, and callback cleanup assertions remain. Its
+exact retry passes. The runs retain separate 13-path and 15-path source
+records. The optional test observer defaults to None for other fixtures.
+The fixture adaptation changes only test observation and keeps its assertions.
+The six production files are unchanged through the first focused passing runs. Strict Clippy then reports manual_map in the Query
+EOF result branch. The correction uses native Option::map after the same
+worker cleanup. A later Clippy check reports cmp_owned and
+cloned_ref_to_slice_refs in a new test assertion helper. Its repair uses the
+existing cross-type equality and std::slice::from_ref without changing
+assertions or values. The final build, Clippy, and targeted repeats pass.
+The initial lint failure logs remain. The record does not rerun all prior
+cases on one final tree. Original user working changes remain. These checks
+do not establish a full clean-tree CI result. The original source archive contains 1,095 files
+and has SHA-256
+`1cdd59aac95bf964b158fc2e29c4a1bff8924c90cfb31e73f79f9e53b4bf915e`.
+Result: **Done** for this shared notice prerequisite. Direct Graph retirement,
+general maintained SQL, and the complete redesign remain **Not done**.
+BPF and backend ABI changes, performance measurement, physical qualification,
+and full workspace CI are outside this record.

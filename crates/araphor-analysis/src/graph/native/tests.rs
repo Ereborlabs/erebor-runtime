@@ -34,6 +34,7 @@ impl Projection {
 struct Authority {
     changes: watch::Sender<u64>,
     allowed: AtomicBool,
+    trusted: AtomicBool,
     gate: Mutex<
         Option<(
             tokio::sync::oneshot::Sender<()>,
@@ -70,6 +71,9 @@ impl PackageAuthorization for Authority {
             release
                 .recv_timeout(std::time::Duration::from_secs(30))
                 .map_err(|_| Code::Incomplete.error("Graph admission release"))?;
+        }
+        if !self.trusted.load(Ordering::SeqCst) {
+            return Err(Code::Denied.error("graph fixture image trust"));
         }
         self.check(grant, PackageActionV1::Run)
     }
@@ -442,6 +446,7 @@ impl Fixture {
             authority: Arc::new(Authority {
                 changes: watch::channel(0).0,
                 allowed: AtomicBool::new(true),
+                trusted: AtomicBool::new(true),
                 gate: Mutex::default(),
             }),
             _graph: graph,

@@ -442,6 +442,7 @@ async fn native_faults_reopen() -> TestResult {
             ),
             changes: tokio::sync::watch::channel(0).0,
             deny_next: AtomicBool::new(false),
+            checked: Mutex::default(),
             revoked: Mutex::default(),
         });
         let instance = Instance::admit(

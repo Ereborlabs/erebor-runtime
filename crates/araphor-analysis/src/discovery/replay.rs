@@ -91,7 +91,7 @@ impl DiscoveryOwner {
             };
             let (replayed, prepared, saved) = Instance::replay_retained(
                 query,
-                authority.as_ref(),
+                Arc::clone(authority),
                 grant,
                 &producer.spec.id,
                 &producer.result.result_id,

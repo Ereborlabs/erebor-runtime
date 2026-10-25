@@ -16,7 +16,7 @@ impl Instance {
             |operation| async move {
                 Self::replay_saved(
                     &self.query,
-                    self.authority.as_ref(),
+                    Arc::clone(&self.authority),
                     &self.admitted.grant,
                     &self.admitted.spec.id,
                     result,
@@ -50,7 +50,7 @@ impl Instance {
     ) -> Result<DefinitionOutput> {
         let (output, prepared, _saved) = Self::replay_retained(
             &query,
-            authority.as_ref(),
+            Arc::clone(&authority),
             &grant,
             instance,
             result,
@@ -73,21 +73,29 @@ impl Instance {
     // The caller keeps this admission for the final combined permission check.
     pub(crate) async fn replay_retained(
         query: &Arc<Engine>,
-        authority: &dyn PackageAuthorization,
+        authority: Arc<dyn PackageAuthorization>,
         grant: &PackageGrantV1,
         instance: &str,
         result: &str,
         control: &AnalysisReadControl,
     ) -> Result<(DefinitionOutput, PreparedDefinition, MemoryReservation)> {
-        Self::inspect(authority, grant, control, |read| {
-            Self::replay_saved(query, authority, grant, instance, result, None, read)
+        Self::inspect(authority.as_ref(), grant, control, |read| {
+            Self::replay_saved(
+                query,
+                Arc::clone(&authority),
+                grant,
+                instance,
+                result,
+                None,
+                read,
+            )
         })
         .await
     }
 
     async fn replay_saved(
         query: &Arc<Engine>,
-        authority: &dyn PackageAuthorization,
+        authority: Arc<dyn PackageAuthorization>,
         grant: &PackageGrantV1,
         instance: &str,
         result: &str,

@@ -113,6 +113,7 @@ impl Instance {
                 .definition
                 .digest()
                 .map_err(araphor_data::Error::from)?;
+            let owner = Arc::clone(self);
             let query = session
                 .subscribe_managed(
                     self.prepared.clone(),
@@ -124,7 +125,16 @@ impl Instance {
                         resume.frontier
                     },
                 )?
-                .until_change(changes);
+                .until_checked(changes, move |read| {
+                    read.check()?;
+                    Self::check_prepared(
+                        owner.authority.as_ref(),
+                        &owner.admitted.grant,
+                        &owner.prepared,
+                    )?;
+                    read.check()?;
+                    Ok(())
+                });
             Ok(Subscription {
                 query,
                 owner: Arc::clone(self),

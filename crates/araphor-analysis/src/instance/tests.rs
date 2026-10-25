@@ -36,6 +36,7 @@ pub(super) struct Authority {
     images: Mutex<BTreeSet<String>>,
     changes: tokio::sync::watch::Sender<u64>,
     deny_next: AtomicBool,
+    pub(super) checked: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     revoked: Mutex<BTreeSet<u64>>,
 }
 
@@ -83,6 +84,14 @@ impl PackageAuthorization for Authority {
             .contains(bundle.digest())
         {
             return Err(Code::Denied.error("instance fixture trust"));
+        }
+        if let Some(checked) = self
+            .checked
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            let _observed = checked.send(());
         }
         Ok(())
     }
@@ -168,6 +177,7 @@ impl Fixture {
                 images: Mutex::default(),
                 changes: tokio::sync::watch::channel(0).0,
                 deny_next: AtomicBool::new(false),
+                checked: Mutex::default(),
                 revoked: Mutex::default(),
             }),
             grant: PackageGrantV1 {

@@ -3935,3 +3935,66 @@ The [migration result](../plans/araphor-analysis-migration.md#one-immutable-pack
 records the 158 distinct passing cases, source hashes, and retained initial
 Graph startup failure. The historical E2E context fixture is outside
 the module graph and is unchanged. BPF and the native/Wasm ABI do not change.
+
+## Shared authority notices
+
+This route reviews the shared notice prerequisite after `3b395fc82`.
+The direct Graph publication owner is still present. Query owns native stream
+work and its existing TaskTracker. Analysis owns the complete policy check.
+Data owns the atomic publication guards.
+
+[Instance::subscribe_on](../../crates/araphor-analysis/src/instance/subscription.rs) binds the current grant and prepared definition to the notice callback.
+  -> [Subscription::until_checked](../../crates/araphor-query/src/follow/mod.rs) waits for an actual watch notice.
+  -> [AnalysisReadControl::operation](../../crates/araphor-data/src/analysis/read.rs) supplies independent cancellation state with the existing deadline and monitor.
+  -> [Engine::blocking](../../crates/araphor-query/src/execution.rs) holds the tracker token acquired before spawn while the full callback runs and its captures are destroyed.
+  -> [Instance::check_prepared](../../crates/araphor-analysis/src/instance/mod.rs) checks grant lifetime, Run authority, and every prepared image.
+  -> [Subscription::until_checked](../../crates/araphor-query/src/follow/mod.rs) retains the same native execution and capture after a valid check.
+
+[Subscription::until_error](../../crates/araphor-query/src/follow/mod.rs) observes source EOF or a failed condition.
+  -> [Subscription::until_error](../../crates/araphor-query/src/follow/mod.rs) drops TakeUntil and its pending condition before closing the tracker.
+  -> [PendingRead::drop](../../crates/araphor-query/src/execution.rs) cancels only the independent check operation.
+  -> [Subscription::until_error](../../crates/araphor-query/src/follow/mod.rs) waits for worker cleanup before returning EOF or the condition's error.
+
+Normal EOF does not cancel the session control before Subscription Drop.
+Explicit cancel_and_join cancels and joins the existing worker group.
+Nonblocking Drop does not promise a synchronous join; the blocking closure
+keeps its callback resources and tracker token until cleanup ends.
+
+[Instance::authorized_on](../../crates/araphor-analysis/src/instance/mod.rs)
+keeps finite execution and the authority checker in one cancellation boundary.
+A benign notice keeps work. Rejection and parent cancellation drain it. The
+[Instance sink](../../crates/araphor-analysis/src/instance/sink.rs) and
+[Managed commit](../../crates/araphor-data/src/analysis/managed/commit.rs) retain
+final authority and atomic publication. A stored receipt remains stored when
+a caller cancels during a later check. Current receipt delivery still checks
+authority.
+
+Subscription::blocking creates one operation future before the stream moves.
+An external notice loop cannot rearm that method after Query owns the stream.
+until_checked keeps repeated worker leases inside the existing Subscription
+owner. It exports no worker owner and adds no runner. The native parser,
+optimizer, capture, package execution, and Data commit flow stay in place.
+
+Read the [Query policy tests](../../crates/araphor-query/src/follow/tests/policy.rs)
+for notice mapping and held callback cleanup. The test gates hold a real input
+reservation during the callback and during destruction of its captures.
+The [Analysis notice tests](../../crates/araphor-analysis/src/graph/native/tests/managed/notices.rs)
+check capture retention, complete authority, cancellation, and committed
+receipt retention. The adapted [benign-notice fixture](../../crates/araphor-analysis/src/instance/subscription/tests.rs)
+observes the full valid notice check before explicit cancellation. Its original
+lifecycle and rollback assertions remain, and the exact adapted case passes.
+
+Read both [expiry cases](../../crates/araphor-analysis/src/graph/native/tests/managed/expiry.rs).
+expiry_query_clock checks deadline selection through native Query SQL with a
+fake clock and no domain write. managed_expiry_subscription_recovers checks
+actual Managed publication after a real retained-floor change, followed by
+recovery. Together they preserve the deadline and publication boundary. They
+do not prove virtual-clock Managed publication or finite Managed publication
+at the future wall-time deadline.
+
+The [qualification record](../plans/araphor-analysis-migration.md#shared-authority-notices)
+records ten new and 53 existing passing tests for this prerequisite, separate
+source records, initial failures, and exact repairs and retries. Result:
+**Done** for the shared notice prerequisite. Direct Graph retirement and the
+complete redesign remain **Not done**. This record makes no BPF, backend ABI,
+performance, physical-qualification, or full workspace CI claim.
