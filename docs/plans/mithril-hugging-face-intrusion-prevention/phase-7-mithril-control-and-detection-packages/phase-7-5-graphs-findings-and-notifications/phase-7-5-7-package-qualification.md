@@ -266,3 +266,46 @@ they add no new native, Wasm, Python, BPF, performance, or physical claim.
 The required detector failure and repair path, the paired physical incident,
 and the remaining matrix mapping stay open. Full workspace CI was not run,
 as the user requires relevant checks only.
+
+
+## Kernel coverage counter boundary
+
+**Counter boundary correction: Done. Complete matrix: Not done.** The kernel
+increments next_sequence before it assigns that value to an event. Node sends
+the same counter in its coverage report. The native SQL and Data interval
+checks previously required a greater closing counter. An interval with correct
+counters could therefore remain Unknown.
+
+The [native SQL](../../../../../crates/araphor-analysis-builtins/src/discovery/sql/coverage_ranges.sql)
+and [Data interval check](../../../../../crates/araphor-data/src/discovery/profile.rs)
+now accept a closing counter equal to the last interval sequence. Existing
+state, source, opening counter, loss, regression, and accounting checks remain.
+Kernel, Node, wire fields, versions, and configured limits do not change.
+
+The [counter regression](../../../../../crates/araphor-analysis/src/package/tests/sql/coverage.rs)
+checks both SQL output and the Data predicate. It covers HEALTHY and CLOSED
+intervals at sequence 10 and u64::MAX. Each boundary has an exact counter, a
+stale counter, and invalid accounting. The test computes no MAX+1 value.
+The earlier closing-counter negative case now uses 9 for a last sequence of 10.
+Its rejection assertion remains. Existing overflow, loss, missing-counter,
+regression, source identity, cursor hole, and SQL scope assertions remain.
+
+Evidence is in
+[/home/navid/mithril-test-hosts/araphor-package-qualification-verification](/home/navid/mithril-test-hosts/araphor-package-qualification-verification).
+coverage-red.json and its log retain the initial failure: SQL returned UNKNOWN
+and the Data predicate returned false for an exact healthy tail. After the
+correction, coverage-fixed-tests.json records all eight cases in the affected
+coverage module passing with coverage-fixed-source.json. The library build
+passed in coverage-fixed-build.json. Clippy with warnings denied and scoped
+formatting passed in coverage-clippy-final.json and coverage-fmt-final.json
+with d2-wait-source.json. The later source changes affect only private E2E
+fixtures and their pending detector case. The three counter files remain equal.
+
+The source manifest SHA-256 for coverage-fixed-source.json is
+6b8e6e9b7bb88648c90b4396af8d4a80847adb56996c45e0ef1674770d2f2820.
+The passing coverage test binary SHA-256 is
+25d83f10ce9925452abe4c44d245e24134802b69b65df4152b50f192c90594a8.
+Each record retains its exact command and source boundary. The pending
+required-detector case and its failed attempts remain separate evidence.
+No full CI, benchmark, physical qualification, or complete matrix pass is
+claimed by this correction.

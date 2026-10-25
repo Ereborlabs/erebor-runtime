@@ -4154,3 +4154,46 @@ The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/ph
 records the exact tests, source manifests, binary hashes, and checks. This
 result covers SQL packages through the public client. It does not extend
 native or Wasm artifact qualification, BPF or ABI proof, or physical proof.
+
+
+## Kernel coverage counter boundary
+
+The consumer must classify the final assigned sequence of a complete interval
+correctly. Its intended end state is consistent SQL and Data classification,
+with all existing loss and accounting guards.
+
+[Kernel effect emission](../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) increments the counter and assigns it to one effect.
+  -> [Node coverage](../../crates/mithril-node/src/observation/coverage.rs) retains the sampled counters and observed interval.
+  -> [ControlConnection::send_coverage_report](../../crates/mithril-node/src/control.rs) sends those counters through the authenticated coverage protocol.
+  -> [Coverage SQL](../../crates/araphor-analysis-builtins/src/discovery/sql/coverage_ranges.sql) uses native DataFusion operators to accept the inclusive closing sequence after all other guards pass.
+  -> [Graph::proof](../../crates/araphor-analysis/src/graph/proof.rs) uses the selected coverage range when it derives evidence quality.
+
+[CoverageInterval::is_complete](../../crates/araphor-data/src/discovery/profile.rs) applies the same counter boundary to the portable interval value.
+  -> [coverage_includes_assigned_tail](../../crates/araphor-analysis/src/package/tests/sql/coverage.rs) compares its result with native SQL output.
+
+```mermaid
+sequenceDiagram
+    Kernel->>Node: Effect N and sampled counter N
+    Node->>Control: Authenticated interval and exact counters
+    Control->>Data: Retain the coverage report
+    Query->>Data: Capture events and coverage
+    Query->>Query: Execute native coverage SQL
+    Query-->>Graph: Return the classified range
+```
+
+The greater-than check required another sequence after the final event. The
+inclusive check follows the existing producer contract. It adds no conversion
+at the protocol boundary. It keeps unknown state, missing counters, stale
+counters, loss, regression, and invalid accounting unqualified.
+
+The test uses valid opening counters at last-1 and closing counters at last.
+It checks exact, stale, and invalid-accounting variants for HEALTHY and CLOSED
+at 10 and u64::MAX. The existing overflow case still rejects invalid sums.
+The earlier closing-counter negative keeps its rejection with a counter that
+is lower than the interval end. No timeout or assertion is removed.
+
+The [qualification record](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#kernel-coverage-counter-boundary)
+retains the red result, eight passing coverage cases, exact source and binary
+hashes, build, Clippy, and formatting. The BPF map, counter layout, Node code,
+and wire format are unchanged. These checks do not qualify physical enforcement
+or close the pending required-detector and complete package matrix duties.

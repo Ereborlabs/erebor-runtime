@@ -44,7 +44,7 @@ impl crate::CoverageInterval {
                     }) && before.next_sequence <= self.first_sequence
                         && self
                             .last_sequence
-                            .is_some_and(|last| after.next_sequence > last)
+                            .is_some_and(|last| after.next_sequence >= last)
                 })
     }
 }

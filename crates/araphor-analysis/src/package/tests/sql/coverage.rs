@@ -384,7 +384,7 @@ async fn coverage_states_match() -> Result<()> {
             "missing closing" => interval.closing_counters = None,
             "missing last" => interval.last_sequence = None,
             "opening sequence" => interval.opening_counters.as_mut().unwrap().next_sequence = 2,
-            "closing sequence" => interval.closing_counters.as_mut().unwrap().next_sequence = 10,
+            "closing sequence" => interval.closing_counters.as_mut().unwrap().next_sequence = 9,
             "counter mismatch" => interval.closing_counters.as_mut().unwrap().requested = 11,
             "lost" => interval.closing_counters.as_mut().unwrap().lost = 1,
             "suppressed" => interval.closing_counters.as_mut().unwrap().suppressed = 1,
@@ -598,5 +598,64 @@ async fn sql_keeps_cte_scope() -> Result<()> {
     let result = fixture.coverage_query(&sql).await?;
     assert_eq!(cells(&result, "state")?, ["HEALTHY"]);
     assert_eq!(cells(&result, "expected_records")?, ["1"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn coverage_includes_assigned_tail() -> Result<()> {
+    let fixture = Fixture::new()?;
+    for last in [10, u64::MAX] {
+        for state in ["HEALTHY", "CLOSED"] {
+            for case in ["exact", "stale", "accounting"] {
+                let event = Event {
+                    sequence: Some(last),
+                    ..Default::default()
+                };
+                let mut report = Report::new(&event);
+                let interval = report.interval.as_mut().unwrap();
+                interval.state = state.into();
+                interval.first_sequence = last;
+                interval.last_sequence = Some(last);
+                interval.opening_counters = Some(CoverageCounters {
+                    attempted: last - 1,
+                    requested: last - 1,
+                    emitted: last - 1,
+                    next_sequence: last - 1,
+                    ..Default::default()
+                });
+                interval.closing_counters = Some(CoverageCounters {
+                    attempted: last,
+                    requested: last,
+                    emitted: last,
+                    next_sequence: last,
+                    ..Default::default()
+                });
+                match case {
+                    "stale" => interval.closing_counters.as_mut().unwrap().next_sequence = last - 1,
+                    "accounting" => {
+                        interval.closing_counters.as_mut().unwrap().attempted = last - 1
+                    }
+                    _ => {}
+                }
+                let complete = interval.is_complete();
+                let result = fixture.coverage(&[event], &[report], false).await?;
+                let expected = if case == "exact" { state } else { "UNKNOWN" };
+                assert_eq!(
+                    (cells(&result, "state")?, complete),
+                    (vec![expected.to_string()], case == "exact"),
+                    "{last} {state} {case}"
+                );
+                assert_eq!(
+                    reasons(&result, 0)?,
+                    if case == "exact" {
+                        Vec::<String>::new()
+                    } else {
+                        vec!["COVERAGE_UNQUALIFIED".into()]
+                    },
+                    "{last} {state} {case}"
+                );
+            }
+        }
+    }
     Ok(())
 }

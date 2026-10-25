@@ -85,7 +85,7 @@ FROM (
                                     + CAST(closing_lost AS DECIMAL(20, 0))
                                     = CAST(closing_requested AS DECIMAL(20, 0))
                                 AND opening_next_sequence <= first_sequence
-                                AND closing_next_sequence > last_sequence) AS complete
+                                AND closing_next_sequence >= last_sequence) AS complete
                         FROM (
                             SELECT coverage.*,
                                 (state = 'GAPPED' OR gap_reasons <> ''
