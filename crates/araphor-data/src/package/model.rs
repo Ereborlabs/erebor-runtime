@@ -6,7 +6,7 @@ use tokio::sync::watch;
 
 use crate::{AnalysisSelectionV1, Result};
 
-use super::{PackageArtifactIdentityV1, PackageBundleRef, PackageBundleV1, PackageRefV1};
+use super::{PackageArtifactIdentityV1, PackageBundle, PackageBundleV1, PackageRefV1};
 
 mod request;
 
@@ -151,12 +151,12 @@ pub enum PackageActionV1 {
 
 pub trait PackageAuthorization: Send + Sync + 'static {
     fn check(&self, grant: &PackageGrantV1, action: PackageActionV1) -> Result<()>;
-    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundleRef<'_>) -> Result<()>;
+    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundle) -> Result<()>;
     fn commit(
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleRef<'_>,
+        bundle: &PackageBundle,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()>;
     fn changes(&self) -> watch::Receiver<u64>;
@@ -167,11 +167,7 @@ pub trait PackageAuthorization: Send + Sync + 'static {
 
     fn commit_many(
         &self,
-        grants: &[(
-            &PackageGrantV1,
-            PackageActionV1,
-            Option<&PackageBundleRef<'_>>,
-        )],
+        grants: &[(&PackageGrantV1, PackageActionV1, Option<&PackageBundle>)],
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         let [(grant, action, Some(bundle))] = grants else {

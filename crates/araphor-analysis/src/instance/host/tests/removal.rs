@@ -15,7 +15,7 @@ impl PackageAuthorization for RemoveAuthority {
         self.inner.check(grant, action)
     }
 
-    fn admit(&self, _: &PackageGrantV1, _: &PackageBundleRef<'_>) -> araphor_data::Result<()> {
+    fn admit(&self, _: &PackageGrantV1, _: &PackageBundle) -> araphor_data::Result<()> {
         self.admissions.fetch_add(1, Ordering::SeqCst);
         Err(Code::Denied.error("remove fixture execution trust"))
     }
@@ -24,7 +24,7 @@ impl PackageAuthorization for RemoveAuthority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        image: &PackageBundleRef<'_>,
+        image: &PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(
@@ -35,11 +35,7 @@ impl PackageAuthorization for RemoveAuthority {
 
     fn commit_many(
         &self,
-        entries: &[(
-            &PackageGrantV1,
-            PackageActionV1,
-            Option<&PackageBundleRef<'_>>,
-        )],
+        entries: &[(&PackageGrantV1, PackageActionV1, Option<&PackageBundle>)],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         for (grant, action, image) in entries {

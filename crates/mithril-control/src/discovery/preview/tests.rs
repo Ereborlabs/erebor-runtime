@@ -52,7 +52,11 @@ impl Fixture {
                 fixtures: Vec::new(),
             }],
         };
-        store.install_package_image(input()?.tenant_id, &bundle, || Ok(()))?;
+        store.install_package_image(
+            input()?.tenant_id,
+            &araphor_data::PackageBundle::try_from(bundle)?,
+            || Ok(()),
+        )?;
         Ok(Self {
             query: Engine::new(store, Limits::default())?,
             _directory: directory,

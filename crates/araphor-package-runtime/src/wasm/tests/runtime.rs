@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use araphor_analysis_sdk as sdk;
-use araphor_package::{PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1};
+use araphor_package::{
+    PackageArtifactV1, PackageBundle, PackageBundleV1, PackageImplementationV1, PackageRefV1,
+};
 use sdk::arrow_array::{StringArray, UInt64Array};
 
 use crate::{AnalysisReadControl, Error, PackageErrorCodeV1 as Code, WasmLimits};
@@ -53,8 +55,8 @@ fn evaluation(package: &sdk::Package, mode: &str, amount: u64) -> sdk::Result<sd
     })
 }
 
-fn bundle(package: &sdk::Package) -> Arc<PackageBundleV1> {
-    Arc::new(PackageBundleV1 {
+fn bundle(package: &sdk::Package) -> araphor_package::Result<Arc<PackageBundle>> {
+    Ok(Arc::new(PackageBundle::try_from(PackageBundleV1 {
         schema_version: 1,
         root: PackageRefV1 {
             package_id: package.id.clone(),
@@ -68,7 +70,7 @@ fn bundle(package: &sdk::Package) -> Arc<PackageBundleV1> {
             }],
             fixtures: Vec::new(),
         }],
-    })
+    })?))
 }
 
 fn value(output: &sdk::Output) -> std::result::Result<u64, &'static str> {
@@ -295,8 +297,8 @@ async fn runtime_cancellation_joins_guest_and_releases_capacity() -> TestResult 
     wasm.admit(COMPONENT, &control)?;
     let package = package();
     let input = evaluation(&package, "cancel", 0)?;
-    let bundle = bundle(&package);
-    let reference = bundle.root.clone();
+    let bundle = bundle(&package)?;
+    let reference = bundle.bundle().root.clone();
     let workers = crate::TaskTracker::new();
     let (entered, entering) = std::sync::mpsc::channel();
     let (release, released) = std::sync::mpsc::channel();
@@ -349,8 +351,8 @@ async fn dropped_runtime_future_retains_worker_until_completion() -> TestResult 
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     wasm.admit(COMPONENT, &control)?;
     let package = package();
-    let bundle = bundle(&package);
-    let reference = bundle.root.clone();
+    let bundle = bundle(&package)?;
+    let reference = bundle.bundle().root.clone();
     let workers = crate::TaskTracker::new();
     let (entered, entering) = std::sync::mpsc::channel();
     let (release, released) = std::sync::mpsc::channel();
@@ -382,12 +384,12 @@ async fn dropped_runtime_future_retains_worker_until_completion() -> TestResult 
     ));
     release.send(())?;
     completed.await;
-    let image = self::bundle(&package);
+    let image = self::bundle(&package)?;
     assert!(matches!(
         runtime
             .evaluate(
                 Arc::clone(&image),
-                image.root.clone(),
+                image.bundle().root.clone(),
                 evaluation(&package, "echo", 9)?,
                 subsequent.within(None)?,
                 &workers,
@@ -423,7 +425,7 @@ fn runtime_deadline_joins_queued_worker() -> TestResult {
                 .wasm()?
                 .admit(COMPONENT, &AnalysisReadControl::default())?;
             let package = package();
-            let image = bundle(&package);
+            let image = bundle(&package)?;
             let workers = crate::TaskTracker::new();
             let (entered, entering) = tokio::sync::oneshot::channel();
             let (release, released) = std::sync::mpsc::channel();
@@ -435,7 +437,7 @@ fn runtime_deadline_joins_queued_worker() -> TestResult {
             let control = AnalysisReadControl::with_timeout(Duration::from_secs(1))?;
             let call = runtime.evaluate(
                 Arc::clone(&image),
-                image.root.clone(),
+                image.bundle().root.clone(),
                 evaluation(&package, "echo", 42)?,
                 control.within(None)?,
                 &workers,

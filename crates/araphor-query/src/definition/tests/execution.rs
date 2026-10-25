@@ -1542,13 +1542,13 @@ async fn native_caps_keep_targets() -> TestResult {
     let error = fixture.prepare(&Fixture::sql(
         r#"SELECT * FROM "runtime-fixture"."3".accumulate(input => (SELECT CAST(7 AS BIGINT UNSIGNED) AS value))"#
     )).await.err().ok_or("capped Native call admitted")?;
-    let bundle = Arc::new(bundle);
+    let bundle = Arc::new(araphor_package::PackageBundle::try_from(bundle)?);
     let control = AnalysisReadControl::default();
     let workers = araphor_package_runtime::TaskTracker::new();
     let prepared = runtime
         .prepare(
             Arc::clone(&bundle),
-            bundle.root.clone(),
+            bundle.bundle().root.clone(),
             "accumulate".into(),
             &control,
         )
@@ -1568,7 +1568,7 @@ async fn native_caps_keep_targets() -> TestResult {
     let called = runtime
         .evaluate(
             Arc::clone(&bundle),
-            bundle.root.clone(),
+            bundle.bundle().root.clone(),
             evaluation,
             control.within(None)?,
             &workers,
@@ -1605,7 +1605,7 @@ async fn native_caps_keep_targets() -> TestResult {
     assert!(matches!(
         runtime.prepare(
             Arc::clone(&bundle),
-            bundle.root.clone(),
+            bundle.bundle().root.clone(),
             "accumulate".into(),
             &control
         ),

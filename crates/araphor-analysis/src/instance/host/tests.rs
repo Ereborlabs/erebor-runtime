@@ -4,7 +4,7 @@ use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 use araphor_analysis_sdk as sdk;
-use araphor_data::{ManagedInstance, PackageActionV1, PackageBundleRef, PackageGrantV1};
+use araphor_data::{ManagedInstance, PackageActionV1, PackageBundle, PackageGrantV1};
 
 use super::*;
 use crate::instance::tests::{bundle, Authority as FixtureAuthority, Fixture, TestResult};
@@ -69,11 +69,7 @@ impl PackageAuthorization for Authority {
         Ok(())
     }
 
-    fn admit(
-        &self,
-        grant: &PackageGrantV1,
-        image: &PackageBundleRef<'_>,
-    ) -> araphor_data::Result<()> {
+    fn admit(&self, grant: &PackageGrantV1, image: &PackageBundle) -> araphor_data::Result<()> {
         let gate = self
             .gate
             .lock()
@@ -95,7 +91,7 @@ impl PackageAuthorization for Authority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        image: &PackageBundleRef<'_>,
+        image: &PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(
@@ -106,11 +102,7 @@ impl PackageAuthorization for Authority {
 
     fn commit_many(
         &self,
-        grants: &[(
-            &PackageGrantV1,
-            PackageActionV1,
-            Option<&PackageBundleRef<'_>>,
-        )],
+        grants: &[(&PackageGrantV1, PackageActionV1, Option<&PackageBundle>)],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         if let Some((grant, action, _)) = grants

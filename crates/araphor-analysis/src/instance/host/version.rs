@@ -339,11 +339,8 @@ impl InstanceHost {
         let memory = Arc::clone(session.memory());
         Engine::blocking(Arc::clone(control), (), move || {
             authority.check(&current.grant, PackageActionV1::Run)?;
-            for (bundle, digest) in prepared.images() {
-                authority.admit(
-                    &current.grant,
-                    &araphor_data::PackageBundleRef::retained(bundle, digest),
-                )?;
+            for bundle in prepared.images() {
+                authority.admit(&current.grant, bundle)?;
             }
             let digest = prepared
                 .resolved()

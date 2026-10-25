@@ -97,7 +97,7 @@ admission data. QuerySql charges retained SQL strings, parameters, source
 facts, LogicalPlan nodes, expressions, schemas, and literals. Admission tests
 one export's retained charge before the next export. This does not establish
 a transient parser-memory limit.
-[PackageBundleRef](../../crates/araphor-data/src/package/bundle.rs) exposes a
+[PackageBundleRef](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-data/src/package/bundle.rs) exposes a
 content-derived digest without a caller-supplied digest field.
 [ClientAuth](../../crates/mithril-control/src/client_auth/packages.rs) checks
 current trust membership. The commit callback still holds current authority.

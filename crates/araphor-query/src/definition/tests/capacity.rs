@@ -50,11 +50,19 @@ async fn image_capacity_follows_plan() -> TestResult {
     let prepared = fixture.prepare(&Fixture::definition()).await?;
     let calls = Fixture::calls(&prepared.plan)?;
     let call = calls.first().ok_or("package call absent")?;
-    let (_, _, reservation) = prepared.admission.images.first().ok_or("image absent")?;
+    let (_, reservation) = prepared.admission.images.first().ok_or("image absent")?;
     assert!(Arc::ptr_eq(reservation, &call._image));
+    assert_eq!(
+        reservation.size(),
+        call.bundle.allocated_bytes()?
+            + std::mem::size_of::<(
+                Arc<araphor_package::PackageBundle>,
+                Arc<datafusion::execution::memory_pool::MemoryReservation>,
+            )>()
+    );
     assert!(std::ptr::eq(
         call.descriptor(),
-        &call.bundle.artifacts[call.artifact].descriptor
+        &call.bundle.bundle().artifacts[call.artifact].descriptor
     ));
     let bytes = reservation.size() + call._metadata.size();
     assert!(bytes > 0 && bytes < CAPACITY);
@@ -102,16 +110,22 @@ async fn image_capacity_is_shared() -> TestResult {
     second.artifacts[0].descriptor.revision = "r2".into();
     let images = super::super::package::Packages::new(
         &fixture.engine,
-        vec![second, Fixture::bundle()],
+        vec![
+            araphor_package::PackageBundle::try_from(second)?,
+            araphor_package::PackageBundle::try_from(Fixture::bundle())?,
+        ],
         [1; 16],
         Default::default(),
         Arc::clone(fixture.engine.memory()),
     )?;
-    assert_eq!(images.bundles[0].0.root.revision, "r1");
-    assert_eq!(images.bundles[1].0.root.revision, "r2");
+    assert_eq!(images.bundles[0].0.bundle().root.revision, "r1");
+    assert_eq!(images.bundles[1].0.bundle().root.revision, "r2");
     let duplicate = super::super::package::Packages::new(
         &fixture.engine,
-        vec![Fixture::bundle(), Fixture::bundle()],
+        vec![
+            araphor_package::PackageBundle::try_from(Fixture::bundle())?,
+            araphor_package::PackageBundle::try_from(Fixture::bundle())?,
+        ],
         [1; 16],
         Default::default(),
         Arc::clone(fixture.engine.memory()),

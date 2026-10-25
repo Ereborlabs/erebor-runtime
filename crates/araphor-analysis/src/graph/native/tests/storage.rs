@@ -23,10 +23,11 @@ impl Fixture {
         let mut contexts = publication
             .prepared
             .images()
-            .map(|(bundle, digest)| {
-                PackageBundleRef::retained(bundle, digest).context(
+            .map(|bundle| {
+                AnalysisContextVersionV1::from_package(
+                    bundle,
                     self.source.tenant_id,
-                    &bundle.root,
+                    &bundle.bundle().root,
                     "detect",
                     "subjects",
                 )

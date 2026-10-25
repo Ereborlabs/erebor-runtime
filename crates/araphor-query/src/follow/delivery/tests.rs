@@ -349,7 +349,7 @@ async fn package_checkpoint_releases_capacity(
     use araphor_analysis_sdk as sdk;
     use araphor_discovery_definition::{Definition, Program, Source};
     use araphor_package::{
-        PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1,
+        PackageArtifactV1, PackageBundle, PackageBundleV1, PackageImplementationV1, PackageRefV1,
     };
 
     let capacity = 64 * 1024;
@@ -378,7 +378,7 @@ async fn package_checkpoint_releases_capacity(
 
     store.install_package_image(
         [1; 16],
-        &PackageBundleV1 {
+        &PackageBundle::try_from(PackageBundleV1 {
             schema_version: 1,
             root: PackageRefV1 {
                 package_id: "runtime-fixture".into(),
@@ -392,7 +392,7 @@ async fn package_checkpoint_releases_capacity(
                 }],
                 fixtures: Vec::new(),
             }],
-        },
+        })?,
         || Ok(()),
     )?;
     let control = AnalysisReadControl::default();

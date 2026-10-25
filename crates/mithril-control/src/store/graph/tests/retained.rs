@@ -476,7 +476,7 @@ impl araphor_data::PackageAuthorization for GraphAuthority {
     fn admit(
         &self,
         grant: &araphor_data::PackageGrantV1,
-        _: &araphor_data::PackageBundleRef<'_>,
+        _: &araphor_data::PackageBundle,
     ) -> araphor_data::Result<()> {
         grant.remaining()?;
         Ok(())
@@ -485,7 +485,7 @@ impl araphor_data::PackageAuthorization for GraphAuthority {
         &self,
         grant: &araphor_data::PackageGrantV1,
         action: araphor_data::PackageActionV1,
-        image: &araphor_data::PackageBundleRef<'_>,
+        image: &araphor_data::PackageBundle,
         callback: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(
@@ -498,7 +498,7 @@ impl araphor_data::PackageAuthorization for GraphAuthority {
         grants: &[(
             &araphor_data::PackageGrantV1,
             araphor_data::PackageActionV1,
-            Option<&araphor_data::PackageBundleRef<'_>>,
+            Option<&araphor_data::PackageBundle>,
         )],
         callback: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
@@ -613,11 +613,11 @@ async fn graph_captures_control_proofs() -> TestValue<()> {
         };
         data.install_package_image(
             tenant,
-            &PackageBundleV1 {
+            &araphor_data::PackageBundle::try_from(PackageBundleV1 {
                 schema_version: 1,
                 root: artifact.reference(),
                 artifacts: vec![artifact],
-            },
+            })?,
             || Ok(()),
         )?;
     }

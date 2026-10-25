@@ -133,7 +133,11 @@ async fn result_requires_exact_image() -> TestResult {
                 fixtures: Vec::new(),
             }],
         };
-        store.install_package_image(input.source.tenant_id, &bundle, || Ok(()))?;
+        store.install_package_image(
+            input.source.tenant_id,
+            &araphor_package::PackageBundle::try_from(bundle)?,
+            || Ok(()),
+        )?;
         let definition = Definition {
             name: "graph-origin".into(),
             description: String::new(),

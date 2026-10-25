@@ -85,11 +85,11 @@ impl PreparedDefinition {
         &self.admission.sources
     }
 
-    pub fn images(&self) -> impl Iterator<Item = (&araphor_package::PackageBundleV1, &str)> {
+    pub fn images(&self) -> impl Iterator<Item = &araphor_package::PackageBundle> {
         self.admission
             .images
             .iter()
-            .map(|(bundle, digest, _)| (bundle.as_ref(), digest.as_str()))
+            .map(|(bundle, _)| bundle.as_ref())
     }
 }
 
@@ -315,6 +315,7 @@ impl Engine {
                 for reference in references {
                     if !bundles.iter().any(|bundle| {
                         bundle
+                            .bundle()
                             .artifacts
                             .iter()
                             .any(|artifact| artifact.reference() == reference)
@@ -338,6 +339,7 @@ impl Engine {
                     })?;
                 for reference in references {
                     bundle
+                        .bundle()
                         .artifact(&reference)
                         .map_err(araphor_data::Error::from)?;
                 }

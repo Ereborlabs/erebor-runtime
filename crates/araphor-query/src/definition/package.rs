@@ -6,9 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use araphor_analysis_sdk as sdk;
 use araphor_discovery_definition::ImagePin;
-use araphor_package::{
-    ModelRef, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
-};
+use araphor_package::{ModelRef, PackageBundle, PackageImplementationV1, PackageRefV1, SqlModelV1};
 use datafusion::catalog::TableProvider;
 use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion::common::{DFSchema, DataFusionError, ScalarValue};
@@ -43,7 +41,7 @@ mod scope;
 use scope::Scope;
 
 type Exports = BTreeMap<ModelRef, BTreeMap<String, LogicalPlan>>;
-pub(super) type Bundles = [(Arc<PackageBundleV1>, String, Arc<MemoryReservation>)];
+pub(super) type Bundles = [(Arc<PackageBundle>, Arc<MemoryReservation>)];
 
 type InputPlans = BTreeMap<String, (LogicalPlan, BTreeSet<SourceOrigin>)>;
 
@@ -114,13 +112,16 @@ impl fmt::Debug for Packages {
 impl Packages {
     pub(super) fn new(
         engine: &Engine,
-        mut bundles: Vec<PackageBundleV1>,
+        mut bundles: Vec<PackageBundle>,
         tenant: [u8; 16],
         tables: BTreeMap<String, Arc<dyn TableProvider>>,
         memory: Arc<crate::memory::Memory>,
     ) -> Result<Self> {
-        bundles.sort_unstable_by(|left, right| left.root.cmp(&right.root));
-        if bundles.windows(2).any(|pair| pair[0].root == pair[1].root) {
+        bundles.sort_unstable_by(|left, right| left.bundle().root.cmp(&right.bundle().root));
+        if bundles
+            .windows(2)
+            .any(|pair| pair[0].bundle().root == pair[1].bundle().root)
+        {
             return InvalidSnafu {
                 field: "duplicate definition image",
             }
@@ -128,26 +129,18 @@ impl Packages {
         }
         let mut images = Vec::with_capacity(bundles.len());
         for bundle in bundles {
-            let bytes =
-                bundle
-                    .allocated_bytes()
-                    .map_err(araphor_data::Error::from)?
-                    .checked_add(
-                        std::mem::size_of::<PackageBundleV1>()
-                            + std::mem::size_of::<(
-                                Arc<PackageBundleV1>,
-                                String,
-                                Arc<MemoryReservation>,
-                            )>(),
-                    )
-                    .ok_or_else(|| {
-                        araphor_data::PackageErrorCodeV1::Limit.error("package image memory")
-                    })?;
+            let bytes = bundle
+                .allocated_bytes()
+                .map_err(araphor_data::Error::from)?
+                .checked_add(std::mem::size_of::<(
+                    Arc<PackageBundle>,
+                    Arc<MemoryReservation>,
+                )>())
+                .ok_or_else(|| {
+                    araphor_data::PackageErrorCodeV1::Limit.error("package image memory")
+                })?;
             let reservation = memory.reserve_input(bytes).context(SqlSnafu)?;
-            bundle.validate().map_err(araphor_data::Error::from)?;
-            let digest = bundle.digest().map_err(araphor_data::Error::from)?;
-            reservation.try_grow(digest.capacity()).context(SqlSnafu)?;
-            images.push((Arc::new(bundle), digest, Arc::new(reservation)));
+            images.push((Arc::new(bundle), Arc::new(reservation)));
         }
         let mut sources = SourceSnapshot::providers();
         for (name, table) in tables {
@@ -232,7 +225,7 @@ impl Packages {
     ) -> Result<LogicalPlan> {
         let index = match self
             .bundles
-            .binary_search_by(|(bundle, _, _)| bundle.root.cmp(&image))
+            .binary_search_by(|(bundle, _)| bundle.bundle().root.cmp(&image))
         {
             Ok(index) => index,
             Err(_) => {
@@ -240,7 +233,7 @@ impl Packages {
                     .bundles
                     .iter()
                     .enumerate()
-                    .filter(|(_, (bundle, _, _))| bundle.artifact(&image).is_ok());
+                    .filter(|(_, (bundle, _))| bundle.bundle().artifact(&image).is_ok());
                 let index = candidates.next().map(|(index, _)| index).ok_or_else(|| {
                     InvalidSnafu {
                         field: "installed package image",
@@ -256,10 +249,11 @@ impl Packages {
                 index
             }
         };
-        let (bundle, digest, reservation) = &self.bundles[index];
+        let (bundle, reservation) = &self.bundles[index];
+        let content = bundle.bundle();
         let pin = ImagePin {
-            image: bundle.root.clone(),
-            digest: digest.clone(),
+            image: content.root.clone(),
+            digest: bundle.digest().into(),
         };
         self.state()?
             .pins
@@ -268,7 +262,7 @@ impl Packages {
             package: image,
             export,
         };
-        let model = bundle
+        let model = content
             .artifact(&root.package)
             .map_err(araphor_data::Error::from)?
             .descriptor
@@ -386,7 +380,7 @@ impl Packages {
             owner: self,
             key: root.clone(),
         };
-        let order = bundle
+        let order = content
             .order_for(&root.package, Some(&root.export))
             .map_err(araphor_data::Error::from)?;
         let mut needed = BTreeSet::from([root.clone()]);
@@ -394,7 +388,7 @@ impl Packages {
             if !needed.contains(key) {
                 continue;
             }
-            let artifact = bundle
+            let artifact = content
                 .artifact(&key.package)
                 .map_err(araphor_data::Error::from)?;
             let model = artifact
@@ -425,7 +419,7 @@ impl Packages {
         let empty_parameters = BTreeMap::new();
         let mut exports = Exports::new();
         for key in order.into_iter().filter(|key| needed.contains(key)) {
-            let artifact = bundle
+            let artifact = content
                 .artifact(&key.package)
                 .map_err(araphor_data::Error::from)?;
             let model = artifact
@@ -495,7 +489,7 @@ impl Packages {
                     }
                     .build()
                 })?;
-            let artifact_index = bundle
+            let artifact_index = content
                 .artifacts
                 .iter()
                 .position(|candidate| std::ptr::eq(candidate, artifact))

@@ -104,10 +104,11 @@ impl Fixture {
             root: artifact.reference(),
             artifacts: vec![artifact],
         };
+        let image = crate::PackageBundle::try_from(image)?;
         store.install_package_image([1; 16], &image, || Ok(()))?;
         let pin = ImagePin {
-            image: image.root.clone(),
-            digest: image.digest()?,
+            image: image.bundle().root.clone(),
+            digest: image.digest().into(),
         };
         let sql = "SELECT * FROM \"managed-fixture\".\"r1\".count(source => (SELECT 1::BIGINT UNSIGNED AS value), increment => 2) a CROSS JOIN \"managed-fixture\".\"r1\".count(source => (SELECT 1::BIGINT UNSIGNED AS value), increment => 3) b".to_owned();
         let sql = if extra {
@@ -147,7 +148,7 @@ impl Fixture {
         };
         let spec = ManagedSpec { destination: crate::ManagedDestination::Selected, tenant: [1; 16], id: "counter".into(), manifest: ManagedManifest {
             format: 1, planner: "datafusion-53/sql-call-1".into(), definition: definition.digest()?, selected_schema: model.outputs[0].schema.clone(), calls: [(10, 2), (11, 3)].into_iter().map(|(id, increment)| (id, ManagedCall {
-                image: pin.clone(), package: image.root.clone(), export: "count".into(), target: "sql".into(), artifact: None, arguments: vec![format!("source => (SELECT 1::BIGINT UNSIGNED AS value){auxiliary}, increment => {increment}")], dependencies: BTreeSet::new(),
+                image: pin.clone(), package: image.bundle().root.clone(), export: "count".into(), target: "sql".into(), artifact: None, arguments: vec![format!("source => (SELECT 1::BIGINT UNSIGNED AS value){auxiliary}, increment => {increment}")], dependencies: BTreeSet::new(),
             })).collect(),
         }, definition };
         let instance = store.admit_managed(&spec, &grant, || Ok(()))?;
@@ -687,8 +688,8 @@ fn managed_calls_commit_atomically() -> TestResult {
                 &AnalysisReadControl::default(),
             )?
             .ok_or("retained image absent")?;
-        assert_eq!(image.root, pin.image);
-        assert_eq!(image.digest()?, pin.digest);
+        assert_eq!(image.bundle().root, pin.image);
+        assert_eq!(image.digest(), pin.digest);
     }
     let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;
     let retry = restored

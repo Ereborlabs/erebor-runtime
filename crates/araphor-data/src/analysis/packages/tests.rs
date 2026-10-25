@@ -167,12 +167,13 @@ fn retained_rows_check_contract() -> TestResult {
         root: artifact.reference(),
         artifacts: std::iter::once(artifact).chain(dependencies).collect(),
     };
+    let bundle = crate::PackageBundle::try_from(bundle)?;
     let original = PackageRevisionV1::from_bundle(&bundle, [1; 16])?
         .into_iter()
-        .find(|row| row.package_id == bundle.root.package_id)
+        .find(|row| row.package_id == bundle.bundle().root.package_id)
         .ok_or("root revision absent")?;
     assert_eq!(original.dependencies.len(), 2);
-    assert_eq!(original.decode_artifact()?, bundle.artifacts[0]);
+    assert_eq!(original.decode_artifact()?, bundle.bundle().artifacts[0]);
     for fault in [
         "id",
         "revision",
@@ -193,7 +194,7 @@ fn retained_rows_check_contract() -> TestResult {
         let mut changed = original.clone();
         match fault {
             "id" | "revision" => {
-                let mut artifact = bundle.artifacts[0].clone();
+                let mut artifact = bundle.bundle().artifacts[0].clone();
                 if fault == "id" {
                     artifact.descriptor.id = "row-other".into();
                 } else {
@@ -203,7 +204,7 @@ fn retained_rows_check_contract() -> TestResult {
                 changed.artifact = artifact.encode()?;
             }
             "descriptor" => {
-                let mut descriptor = bundle.artifacts[0].descriptor.clone();
+                let mut descriptor = bundle.bundle().artifacts[0].descriptor.clone();
                 descriptor.exports[0].name = "changed".into();
                 changed.descriptor = serde_json::to_vec(&descriptor)?;
             }
@@ -276,7 +277,7 @@ fn retained_rows_check_contract() -> TestResult {
             }
         };
         if fault == "reversed" {
-            assert_eq!(changed.decode_artifact()?, bundle.artifacts[0]);
+            assert_eq!(changed.decode_artifact()?, bundle.bundle().artifacts[0]);
         } else {
             let error = changed
                 .decode_artifact()
@@ -302,15 +303,21 @@ fn retained_rows_check_contract() -> TestResult {
         }
         let result = store.package_image(
             [1; 16],
-            &bundle.root.package_id,
-            Some(&bundle.root.revision),
+            &bundle.bundle().root.package_id,
+            Some(&bundle.bundle().root.revision),
             &crate::AnalysisReadControl::default(),
         );
         if fault == "reversed" {
             let image = result?.ok_or("valid reordered image absent")?;
-            assert_eq!(image.artifact(&bundle.root)?, &bundle.artifacts[0]);
-            assert_eq!(image.artifacts.len(), bundle.artifacts.len());
-            assert_eq!(image.digest()?, bundle.digest()?);
+            assert_eq!(
+                image.bundle().artifact(&bundle.bundle().root)?,
+                &bundle.bundle().artifacts[0]
+            );
+            assert_eq!(
+                image.bundle().artifacts.len(),
+                bundle.bundle().artifacts.len()
+            );
+            assert_eq!(image.digest(), bundle.digest());
         } else {
             let error = result.err().ok_or("invalid stored row read")?;
             assert!(retained(&error), "{fault}: {error:?}");
@@ -327,12 +334,12 @@ fn retained_rows_check_contract() -> TestResult {
             let image = store
                 .package_image(
                     [1; 16],
-                    &bundle.root.package_id,
-                    Some(&bundle.root.revision),
+                    &bundle.bundle().root.package_id,
+                    Some(&bundle.bundle().root.revision),
                     &crate::AnalysisReadControl::default(),
                 )?
                 .ok_or("reopened image absent")?;
-            assert_eq!(image.digest()?, bundle.digest()?);
+            assert_eq!(image.digest(), bundle.digest());
         } else {
             let error = reopened.err().ok_or("invalid stored row reopened")?;
             assert!(retained(&error), "{fault}: {error:?}");

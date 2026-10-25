@@ -3,7 +3,7 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use araphor_data::{AnalysisSelectionV1, AnalysisStore};
-use araphor_package::{PackageArtifactV1, PackageImplementationV1, SqlModelV1};
+use araphor_package::{PackageArtifactV1, PackageBundleV1, PackageImplementationV1, SqlModelV1};
 use sdk::arrow_array::{StringArray, UInt64Array};
 
 mod artifact;
@@ -33,7 +33,7 @@ impl PackageAuthorization for Authority {
         grant.remaining().map(|_| ())
     }
 
-    fn admit(&self, _: &PackageGrantV1, bundle: &PackageBundleRef<'_>) -> araphor_data::Result<()> {
+    fn admit(&self, _: &PackageGrantV1, bundle: &PackageBundle) -> araphor_data::Result<()> {
         if bundle.digest() != self.digest {
             return Err(Code::Denied.error("fixture trust"));
         }
@@ -44,7 +44,7 @@ impl PackageAuthorization for Authority {
         &self,
         _: &PackageGrantV1,
         _: PackageActionV1,
-        _: &PackageBundleRef<'_>,
+        _: &PackageBundle,
         _: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         Err(Code::Denied.error("fixture commit"))
@@ -73,10 +73,12 @@ impl Fixture {
     ) -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-        store.install_package_image([1; 16], bundle, || Ok(()))?;
+        let admitted =
+            PackageBundle::try_from(bundle.clone()).map_err(araphor_data::Error::from)?;
+        store.install_package_image([1; 16], &admitted, || Ok(()))?;
         let query = Engine::new(store, limits)?;
         let authority = Arc::new(Authority {
-            digest: bundle.digest()?,
+            digest: admitted.digest().into(),
             checks: AtomicUsize::new(0),
             deny_at: AtomicUsize::new(usize::MAX),
             changes: tokio::sync::watch::channel(0).0,

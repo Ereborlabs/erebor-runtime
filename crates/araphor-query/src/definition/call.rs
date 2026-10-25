@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::inputs::Inputs;
 use araphor_analysis_sdk as sdk;
 use araphor_discovery_definition::ImagePin;
-use araphor_package::{PackageBundleV1, PackageRefV1};
+use araphor_package::{PackageBundle, PackageRefV1};
 use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion::common::{DFSchemaRef, DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
@@ -24,7 +24,7 @@ pub struct PackageCall {
     pub(crate) output: String,
     pub(crate) arguments: Arc<[String]>,
     pub(crate) artifact: usize,
-    pub(crate) bundle: Arc<PackageBundleV1>,
+    pub(crate) bundle: Arc<PackageBundle>,
     pub(crate) sql: Option<SqlCall>,
     pub(crate) input_scope: Arc<Inputs>,
     pub(super) admitted: Arc<[LogicalPlan]>,
@@ -195,7 +195,7 @@ impl PackageCall {
         &self.export
     }
     pub fn descriptor(&self) -> &sdk::Package {
-        &self.bundle.artifacts[self.artifact].descriptor
+        &self.bundle.bundle().artifacts[self.artifact].descriptor
     }
     pub fn output(&self) -> &str {
         &self.output

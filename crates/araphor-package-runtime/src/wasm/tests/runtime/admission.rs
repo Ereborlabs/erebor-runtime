@@ -26,12 +26,12 @@ async fn owned_admission_binds_runtime() -> TestResult {
     let first = crate::Runtime::new(quota)?;
     let second = crate::Runtime::new(quota)?;
     let package = package();
-    let image = bundle(&package);
+    let image = bundle(&package)?;
     let control = AnalysisReadControl::default();
     let prepared = first
         .prepare(
             Arc::clone(&image),
-            image.root.clone(),
+            image.bundle().root.clone(),
             "evaluate".into(),
             &control,
         )?
@@ -39,7 +39,7 @@ async fn owned_admission_binds_runtime() -> TestResult {
     let other = second
         .prepare(
             Arc::clone(&image),
-            image.root.clone(),
+            image.bundle().root.clone(),
             "evaluate".into(),
             &control,
         )?
@@ -48,7 +48,7 @@ async fn owned_admission_binds_runtime() -> TestResult {
     let workers = crate::TaskTracker::new();
     let finite = first.evaluate(
         Arc::clone(&image),
-        image.root.clone(),
+        image.bundle().root.clone(),
         evaluation(&package, "echo", 9)?,
         control.within(None)?,
         &workers,
@@ -68,7 +68,7 @@ async fn owned_admission_binds_runtime() -> TestResult {
     let error = first
         .evaluate_reserved(
             Arc::clone(&image),
-            image.root.clone(),
+            image.bundle().root.clone(),
             evaluation(&package, "echo", 9)?,
             control.within(None)?,
             &workers,
@@ -135,7 +135,7 @@ async fn owned_admission_binds_runtime() -> TestResult {
     let (_, output) = first
         .evaluate_reserved(
             Arc::clone(&image),
-            image.root.clone(),
+            image.bundle().root.clone(),
             evaluation(&package, "echo", 9)?,
             control.within(None)?,
             &workers,
@@ -161,7 +161,7 @@ async fn owned_admission_binds_runtime() -> TestResult {
     let error = first
         .evaluate_reserved(
             Arc::clone(&image),
-            image.root.clone(),
+            image.bundle().root.clone(),
             evaluation(&package, "echo", 9)?,
             control.within(None)?,
             &workers,
@@ -241,12 +241,12 @@ async fn admission_cancellation_and_zero() -> TestResult {
             ..Default::default()
         })?;
         let package = package();
-        let image = bundle(&package);
+        let image = bundle(&package)?;
         let control = AnalysisReadControl::default();
         let prepared = runtime
             .prepare(
                 Arc::clone(&image),
-                image.root.clone(),
+                image.bundle().root.clone(),
                 "evaluate".into(),
                 &control,
             )?

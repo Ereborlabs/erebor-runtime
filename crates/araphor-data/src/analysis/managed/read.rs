@@ -244,7 +244,7 @@ impl AnalysisStore {
                 &AnalysisReadControl::default(),
             )?
             .ok_or_else(|| Code::Missing.error("managed image"))?;
-            if bundle.digest()? != pin.digest {
+            if bundle.digest() != pin.digest {
                 return Err(Code::Conflict.error("managed image digest"));
             }
             for call in spec
@@ -253,7 +253,7 @@ impl AnalysisStore {
                 .values()
                 .filter(|call| call.image == *pin)
             {
-                let artifact = bundle.artifact(&call.package)?;
+                let artifact = bundle.bundle().artifact(&call.package)?;
                 if !artifact
                     .descriptor
                     .exports

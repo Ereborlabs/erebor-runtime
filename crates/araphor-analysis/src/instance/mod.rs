@@ -4,8 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use araphor_data::{
     AnalysisReadControl, ManagedInstance, ManagedReceipt, ManagedRequest, ManagedSpec,
-    PackageActionV1, PackageAuthorization, PackageBundleRef, PackageErrorCodeV1 as Code,
-    PackageGrantV1,
+    PackageActionV1, PackageAuthorization, PackageErrorCodeV1 as Code, PackageGrantV1,
 };
 use araphor_discovery_definition::ResolvedDefinition;
 use araphor_query::definition::PreparedDefinition;
@@ -164,8 +163,8 @@ impl Instance {
         definition.validate().map_err(araphor_data::Error::from)?;
         let (admitted, prepared, calls, metadata) =
             Engine::blocking(read, (), move || {
-                for (bundle, digest) in prepared.images() {
-                    check.admit(&grant, &PackageBundleRef::retained(bundle, digest))?;
+                for bundle in prepared.images() {
+                    check.admit(&grant, bundle)?;
                 }
                 let (manifest, calls) = Self::manifest(&prepared)?;
                 if destination == araphor_data::ManagedDestination::Notification {
@@ -463,8 +462,8 @@ impl Instance {
     ) -> araphor_data::Result<()> {
         grant.remaining()?;
         authority.check(grant, PackageActionV1::Run)?;
-        for (bundle, digest) in prepared.images() {
-            authority.admit(grant, &PackageBundleRef::retained(bundle, digest))?;
+        for bundle in prepared.images() {
+            authority.admit(grant, bundle)?;
         }
         Ok(())
     }
@@ -530,17 +529,17 @@ impl Instance {
             }
             grant.permitted_by(&caller.selection)?;
         }
-        let bundles = prepared
-            .images()
-            .map(|(bundle, digest)| PackageBundleRef::retained(bundle, digest))
-            .collect::<Vec<_>>();
         let Some(&action) = actions.first() else {
             return Err(Code::Invalid.error("managed authority actions"));
         };
         let grants = actions
             .iter()
             .map(|action| (grant, *action, None))
-            .chain(bundles.iter().map(|bundle| (grant, action, Some(bundle))))
+            .chain(
+                prepared
+                    .images()
+                    .map(|bundle| (grant, action, Some(bundle))),
+            )
             .chain(caller.map(|(grant, action, _)| (grant, action, None)))
             .collect::<Vec<_>>();
         let mut operation = Some(operation);

@@ -1,5 +1,7 @@
 # Discovery Definition Review
 
+Current immutable image ownership is in [One immutable package content owner](#one-immutable-package-content-owner).
+
 Current retained aggregate execution is in [Native integral aggregation](#native-integral-aggregation).
 
 Current package provenance is in [One package provenance contract](#one-package-provenance-contract).
@@ -700,10 +702,10 @@ status or history API.
 
 ## Shared admitted image ownership
 
-[Packages::new](../../crates/araphor-query/src/definition/package.rs) sorts exact
+[Packages::new](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-query/src/definition/package.rs) sorts exact
 image keys and rejects duplicates before native planning.
-  -> [PackageBundleV1::allocated_bytes](../../crates/araphor-package/src/memory.rs) measures defined image payload and buffer capacities after Data decode.
-  -> [Packages::new](../../crates/araphor-query/src/definition/package.rs) reserves shared input capacity before image validation, digest construction, and planning.
+  -> [PackageBundleV1::allocated_bytes](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/memory.rs) measures defined image payload and buffer capacities after Data decode.
+  -> [Packages::new](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-query/src/definition/package.rs) reserves shared input capacity before image validation, digest construction, and planning.
   -> [PackageCall](../../crates/araphor-query/src/definition/call.rs) borrows the descriptor from its immutable image and shares the image reservation.
   -> [PreparedDefinition::images](../../crates/araphor-query/src/definition.rs) exposes borrowed image references for Instance authority and manifest checks.
   -> [PackageExec::new](../../crates/araphor-query/src/definition/physical.rs) retains the image charge through cold preparation and result delivery.
@@ -3890,3 +3892,46 @@ check unchanged results, memory scope, and both integral and floating SUM.
 The [qualification record](../plans/araphor-analysis-migration.md#native-integral-aggregation)
 separates this supported boundary from general maintained SQL. BPF and the
 native/Wasm SDK ABI are outside this change.
+
+## One immutable package content owner
+
+The pure Package owner retains immutable content. It does not retain a tenant,
+grant, SQL plan, runtime, or execution state.
+
+[PackageBundle](../../crates/araphor-package/src/admission.rs) admits raw V1 content through TryFrom or checked.
+  -> [Native OCI layout](../../crates/araphor-package/src/admission.rs) supplies the canonical digest with each factory's required check order.
+  -> [Metadata](../../crates/araphor-package/src/metadata.rs) projects the retained content and digest.
+  -> [Footprint](../../crates/araphor-package/src/admission.rs) counts the owner header, raw heap, and digest capacity.
+
+[Data image reads](../../crates/araphor-data/src/analysis/packages/image.rs) select the exact current installed or retained record.
+  -> [Row decoding](../../crates/araphor-data/src/analysis/packages/model.rs) checks stored identity, descriptor, artifact, and dependency keys.
+  -> [Checked admission](../../crates/araphor-package/src/admission.rs) validates that reconstructed content against the stored digest.
+  -> [Query Packages](../../crates/araphor-query/src/definition/package.rs) retains one owner Arc and the existing image reservation.
+  -> [PackageCall](../../crates/araphor-query/src/definition/call.rs) shares that owner with its admitted native input/body plans.
+  -> [Runtime Prepared](../../crates/araphor-package-runtime/src/lib.rs) keeps the exact runtime, content, package, export, and component identity.
+  -> The call and worker lease keep the image reservation.
+  -> [evaluate_reserved](../../crates/araphor-package-runtime/src/lib.rs) checks the separate worker permit.
+
+[Data contexts](../../crates/araphor-data/src/package/provenance.rs) construct the existing native provenance body from the owner.
+  -> [Current context validation](../../crates/araphor-data/src/analysis/context/provenance.rs) still reads and checks current stored artifacts.
+  -> [Managed image checks](../../crates/araphor-data/src/analysis/managed/read.rs) still compare saved call, target, artifact, and pin values.
+
+[Control discovery setup](../../crates/mithril-control/src/service/packages.rs) admits its built-in content before the tenant loop.
+  -> [Manual Package](../../crates/araphor-analysis/src/package.rs) holds that admitted Arc and current authority.
+  -> First lazy preparation still loads an installed image and checks the original pin.
+  -> [Graph setup](../../crates/mithril-control/src/service/packages/graph.rs), [Instance](../../crates/araphor-analysis/src/instance/mod.rs), and [publication](../../crates/araphor-analysis/src/discovery/publication/managed.rs) borrow actual prepared owners for existing authority and context operations.
+
+[RPC installation](../../crates/mithril-control/src/client_grpc/packages.rs)
+admits content after the raw transport handoff. The same owner supplies
+metadata, current authority, and Data installation. Installation starts no
+Discovery. Raw transport and metadata response shapes remain unchanged.
+
+[Admission tests](../../crates/araphor-package/src/tests.rs) check retained allocations, metadata, and factory error order.
+[Memory tests](../../crates/araphor-package/src/memory/tests.rs) check the complete owner charge.
+[Prepared identity tests](../../crates/araphor-package-runtime/src/wasm/tests/runtime/prepared.rs) reject a separate equal-content owner and a foreign runtime.
+[Subscription tests](../../crates/araphor-analysis/src/package/tests/subscriptions.rs) check real cold uninstall/reinstall for SQL and Wasm, trust denial, valid retry, and current revocation.
+
+The [migration result](../plans/araphor-analysis-migration.md#one-immutable-package-content-owner)
+records the 158 distinct passing cases, source hashes, and retained initial
+Graph startup failure. The historical E2E context fixture is outside
+the module graph and is unchanged. BPF and the native/Wasm ABI do not change.

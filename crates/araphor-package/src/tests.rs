@@ -251,3 +251,56 @@ fn image_closure_has_no_count_cap() -> TestResult {
     ));
     Ok(())
 }
+
+#[test]
+fn admission_retains_checked_content() -> TestResult {
+    let raw = bundle("1", "SELECT 7::BIGINT UNSIGNED AS count");
+    let digest = raw.digest()?;
+    let metadata = raw.metadata()?;
+    let pointer = raw.artifacts.as_ptr();
+    let implementation = &raw.artifacts[0].implementations[0];
+    let PackageImplementationV1::Sql { program, .. } = implementation else {
+        return Err("SQL implementation absent".into());
+    };
+    let sql = program.outputs["rows"].as_ptr();
+    let admitted = PackageBundle::try_from(raw)?;
+    assert_eq!(admitted.bundle().artifacts.as_ptr(), pointer);
+    let PackageImplementationV1::Sql { program, .. } =
+        &admitted.bundle().artifacts[0].implementations[0]
+    else {
+        return Err("admitted SQL implementation absent".into());
+    };
+    assert_eq!(program.outputs["rows"].as_ptr(), sql);
+    assert_eq!(admitted.digest(), digest);
+    assert_eq!(admitted.metadata()?, metadata);
+    let checked = PackageBundle::checked(admitted.bundle().clone(), &digest)?
+        .ok_or("matching admitted bundle absent")?;
+    assert_eq!(checked.digest(), digest);
+    assert_eq!(checked.metadata()?, metadata);
+    Ok(())
+}
+
+#[test]
+fn admission_preserves_error_order() -> TestResult {
+    let mut raw = bundle("1", "SELECT 7::BIGINT UNSIGNED AS count");
+    raw.schema_version = 0;
+    let digest = raw.digest()?;
+    assert!(matches!(
+        PackageBundle::try_from(raw.clone()),
+        Err(Error::Package {
+            code: ErrorCode::Invalid,
+            field: "bundle version or package count",
+            ..
+        })
+    ));
+    assert!(PackageBundle::checked(raw.clone(), "wrong digest")?.is_none());
+    assert!(matches!(
+        PackageBundle::checked(raw, &digest),
+        Err(Error::Package {
+            code: ErrorCode::Invalid,
+            field: "bundle version or package count",
+            ..
+        })
+    ));
+    Ok(())
+}

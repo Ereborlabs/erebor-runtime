@@ -49,7 +49,7 @@ async fn guests_overlap_with_independent_lifetimes() -> TestResult {
     })?;
     let wasm = runtime.wasm()?;
     let package = Discovery::package();
-    let image = Arc::new(PackageBundleV1 {
+    let image = Arc::new(PackageBundle::try_from(PackageBundleV1 {
         schema_version: 1,
         root: PackageRefV1 {
             package_id: package.id.clone(),
@@ -58,12 +58,16 @@ async fn guests_overlap_with_independent_lifetimes() -> TestResult {
         artifacts: vec![PackageArtifactV1 {
             descriptor: package.clone(),
             implementations: vec![PackageImplementationV1::Wasm {
-                exports: vec!["groups".into()],
+                exports: package
+                    .exports
+                    .iter()
+                    .map(|model| model.name.clone())
+                    .collect(),
                 artifact: araphor_analysis_builtins::components::DISCOVERY.to_vec(),
             }],
             fixtures: Vec::new(),
         }],
-    });
+    })?);
     let first_control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let second_control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     wasm.admit(
@@ -77,7 +81,7 @@ async fn guests_overlap_with_independent_lifetimes() -> TestResult {
     wasm.guest_entry(entered, Some(released))?;
     let first = runtime.evaluate(
         Arc::clone(&image),
-        image.root.clone(),
+        image.bundle().root.clone(),
         input(&package, "first"),
         first_control.within(None)?,
         &workers,
@@ -91,7 +95,7 @@ async fn guests_overlap_with_independent_lifetimes() -> TestResult {
     wasm.guest_entry(entered, Some(released))?;
     let second = runtime.evaluate(
         Arc::clone(&image),
-        image.root.clone(),
+        image.bundle().root.clone(),
         input(&package, "second"),
         second_control.within(None)?,
         &workers,

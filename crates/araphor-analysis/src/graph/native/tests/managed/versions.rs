@@ -7,12 +7,13 @@ async fn managed_versions_rebuild_graph() -> TestResult {
     let publication = fixture.prepare("").await?;
     let grant = publication.grant.clone();
     let first = publication.prepared.resolved().clone();
-    for (bundle, _) in publication.prepared.images() {
-        let mut next = bundle.clone();
+    for bundle in publication.prepared.images() {
+        let mut next = bundle.bundle().clone();
         next.root.revision = "2".into();
         for artifact in &mut next.artifacts {
             artifact.descriptor.revision = "2".into();
         }
+        let next = PackageBundle::try_from(next)?;
         fixture
             .authority
             .commit_many(&[(&grant, PackageActionV1::Install, None)], &mut || {

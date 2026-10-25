@@ -36,16 +36,16 @@ The following flow records the removed package activation path.
 
 ## Image installation without execution
 
-[ClientGrpcOwner::image_request](../../crates/mithril-control/src/client_grpc/packages.rs) An operator installs an image
-  -> [PackageBundleV1::metadata](../../crates/araphor-package/src/metadata.rs) the image owner validates the bundle and returns declarations without executable buffers
+[ClientGrpcOwner::image_request](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/mithril-control/src/client_grpc/packages.rs) An operator installs an image
+  -> [PackageBundleV1::metadata](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/metadata.rs) the image owner validates the bundle and returns declarations without executable buffers
   -> [ClientAuth](../../crates/mithril-control/src/client_auth/packages.rs) Control checks the current grant and exact image trust pin
   -> [AnalysisStore::install_package_image](../../crates/araphor-data/src/analysis/packages/image.rs) Data commits the complete revision closure and its image root in one transaction
   -> [AnalysisStore::collect_package_rows](../../crates/araphor-data/src/analysis/packages/collection.rs) the image root and dependency references retain the code during collection
 
-[ClientGrpcOwner::image_request](../../crates/mithril-control/src/client_grpc/packages.rs) An operator inspects an image
+[ClientGrpcOwner::image_request](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/mithril-control/src/client_grpc/packages.rs) An operator inspects an image
   -> [AnalysisStore::package_image](../../crates/araphor-data/src/analysis/packages/image.rs) Data loads the exact requested revision or the last installed image for that tenant
   -> [AnalysisStore::package_image_from](../../crates/araphor-data/src/analysis/packages/image.rs) Data reconstructs the locked closure and checks the saved manifest digest
-  -> [PackageBundleV1::metadata](../../crates/araphor-package/src/metadata.rs) the response contains descriptors, targets, artifact identities, and fixture names
+  -> [PackageBundleV1::metadata](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/metadata.rs) the response contains descriptors, targets, artifact identities, and fixture names
 
 The [image namespace](../../crates/araphor-cli/src/cli/araphor/packages.rs)
 provides install and inspect operations. Image installation does not create an

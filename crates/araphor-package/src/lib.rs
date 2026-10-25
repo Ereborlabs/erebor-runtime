@@ -8,7 +8,7 @@ mod metadata;
 pub mod native;
 mod oci;
 
-pub use admission::ModelRef;
+pub use admission::{ModelRef, PackageBundle};
 pub use bundle::{PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1};
 pub(crate) use error::{AnalysisContractSnafu, IoSnafu, PackageEncodingSnafu};
 pub use error::{Error, ErrorCode, Result};

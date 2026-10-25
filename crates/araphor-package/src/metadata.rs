@@ -47,7 +47,11 @@ pub struct PackageImageImplementationV1 {
 
 impl crate::PackageBundleV1 {
     pub fn metadata(&self) -> Result<PackageImageV1> {
-        self.validate()?;
+        let digest = self.validated_layout()?.digest();
+        self.metadata_from(digest)
+    }
+
+    fn metadata_from(&self, digest: String) -> Result<PackageImageV1> {
         let mut artifacts = self.artifacts.iter().collect::<Vec<_>>();
         artifacts.sort_by(|left, right| {
             (&left.descriptor.id, &left.descriptor.revision)
@@ -55,7 +59,7 @@ impl crate::PackageBundleV1 {
         });
         Ok(PackageImageV1 {
             root: self.root.clone(),
-            digest: self.digest()?,
+            digest,
             artifacts: artifacts
                 .into_iter()
                 .map(|artifact| {
@@ -81,5 +85,11 @@ impl crate::PackageBundleV1 {
                 })
                 .collect::<Result<Vec<_>>>()?,
         })
+    }
+}
+
+impl crate::PackageBundle {
+    pub fn metadata(&self) -> Result<PackageImageV1> {
+        self.bundle().metadata_from(self.digest().into())
     }
 }

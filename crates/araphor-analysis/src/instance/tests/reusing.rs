@@ -22,8 +22,11 @@ async fn retained_runs_check_authority() -> TestResult {
     let owner = Arc::downgrade(&instance);
     let definition = instance.prepared.resolved().clone();
     let manifest = instance.admitted().spec.manifest.clone();
-    let pointer = instance.prepared.images().next().ok_or("image absent")?.0
-        as *const PackageBundleV1 as usize;
+    let admitted = instance.prepared.images().next().ok_or("image absent")?;
+    let pointer = (
+        admitted as *const PackageBundle as usize,
+        admitted.bundle().artifacts.as_ptr() as usize,
+    );
     let retained = fixture.query.memory().input_reserved();
     assert!(retained > 0 && retained < CAPACITY);
     assert_eq!(instance.prepared.images().count(), 1);
@@ -69,9 +72,12 @@ async fn retained_runs_check_authority() -> TestResult {
         );
         assert_eq!(instance.prepared.resolved(), &definition);
         assert_eq!(instance.admitted().spec.manifest, manifest);
+        let admitted = instance.prepared.images().next().ok_or("image absent")?;
         assert_eq!(
-            instance.prepared.images().next().ok_or("image absent")?.0 as *const PackageBundleV1
-                as usize,
+            (
+                admitted as *const PackageBundle as usize,
+                admitted.bundle().artifacts.as_ptr() as usize,
+            ),
             pointer
         );
         assert_eq!(fixture.query.memory().input_reserved(), retained);

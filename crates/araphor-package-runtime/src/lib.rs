@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use araphor_analysis_sdk as sdk;
-use araphor_package::{PackageBundleV1, PackageImplementationV1, PackageRefV1};
+use araphor_package::{PackageBundle, PackageImplementationV1, PackageRefV1};
 use snafu::ResultExt as _;
 
 pub use araphor_data::{AnalysisReadControl, PackageErrorCodeV1};
@@ -28,7 +28,7 @@ pub struct Runtime {
 #[derive(Clone)]
 pub struct Prepared {
     runtime: Weak<Runtime>,
-    bundle: Arc<PackageBundleV1>,
+    bundle: Arc<PackageBundle>,
     package: PackageRefV1,
     export: String,
     component: wasm::PreparedComponent,
@@ -112,13 +112,13 @@ impl Runtime {
 
     pub fn prepare(
         self: &Arc<Self>,
-        bundle: Arc<PackageBundleV1>,
+        bundle: Arc<PackageBundle>,
         package: PackageRefV1,
         export: String,
         control: &AnalysisReadControl,
     ) -> Result<Option<Prepared>> {
         control.check()?;
-        let artifact = bundle.artifact(&package)?;
+        let artifact = bundle.bundle().artifact(&package)?;
         match artifact.implementation(&export)? {
             PackageImplementationV1::Wasm {
                 artifact: bytes, ..
@@ -182,7 +182,7 @@ impl Runtime {
 
     pub async fn evaluate(
         self: &Arc<Self>,
-        bundle: Arc<PackageBundleV1>,
+        bundle: Arc<PackageBundle>,
         package: PackageRefV1,
         evaluation: sdk::Evaluation,
         control: AnalysisReadControl,
@@ -205,7 +205,7 @@ impl Runtime {
     #[allow(clippy::too_many_arguments)]
     pub async fn evaluate_reserved(
         self: &Arc<Self>,
-        bundle: Arc<PackageBundleV1>,
+        bundle: Arc<PackageBundle>,
         package: PackageRefV1,
         evaluation: sdk::Evaluation,
         control: AnalysisReadControl,
@@ -232,7 +232,7 @@ impl Runtime {
                 .error("prepared package binding")
                 .into());
         }
-        let artifact = bundle.artifact(&package)?;
+        let artifact = bundle.bundle().artifact(&package)?;
         let wasm = match artifact.implementation(&evaluation.export)? {
             PackageImplementationV1::Wasm { .. } => Some(self.wasm()?),
             PackageImplementationV1::Native { .. } => {
@@ -262,7 +262,7 @@ impl Runtime {
             let _admission = admission.as_ref().map(wasm::EvaluationPermit::retain);
             let _lease = lease;
             let result: Result<_> = (move || {
-                let artifact = bundle.artifact(&package)?;
+                let artifact = bundle.bundle().artifact(&package)?;
                 let implementation = artifact.implementation(&evaluation.export)?;
                 if let Some(runtime) = wasm {
                     let PackageImplementationV1::Wasm {

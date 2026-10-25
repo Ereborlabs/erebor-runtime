@@ -1,7 +1,8 @@
 use araphor_analysis_sdk as sdk;
 use araphor_discovery_definition::{Definition, Program, Source};
 use araphor_package::{
-    PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
+    PackageArtifactV1, PackageBundle, PackageBundleV1, PackageImplementationV1, PackageRefV1,
+    SqlModelV1,
 };
 
 use super::*;
@@ -33,7 +34,7 @@ async fn model_notification_deadlines() -> TestResult {
                 fixtures: Vec::new(),
             }],
         };
-        fixture.store.install_package_image(fixture.source.tenant_id, &image, || Ok(()))?;
+        fixture.store.install_package_image(fixture.source.tenant_id, &PackageBundle::try_from(image)?, || Ok(()))?;
         let control = AnalysisReadControl::with_timeout(Duration::from_secs(20))?;
         let prepared = fixture.engine.prepare_definition(fixture.source.tenant_id, &Definition {
             name: "notification-clock".into(), description: "Select the notification deadline.".into(), labels: BTreeMap::new(),

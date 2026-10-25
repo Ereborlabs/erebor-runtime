@@ -236,18 +236,14 @@ impl PackageAuthorization for PublicationAuthority {
     fn check(&self, grant: &PackageGrantV1, action: PackageActionV1) -> araphor_data::Result<()> {
         self.inner.check(grant, action)
     }
-    fn admit(
-        &self,
-        grant: &PackageGrantV1,
-        bundle: &PackageBundleRef<'_>,
-    ) -> araphor_data::Result<()> {
+    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundle) -> araphor_data::Result<()> {
         self.inner.admit(grant, bundle)
     }
     fn commit(
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleRef<'_>,
+        bundle: &PackageBundle,
         work: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(&[(grant, action, Some(bundle))], work)
@@ -257,11 +253,7 @@ impl PackageAuthorization for PublicationAuthority {
     }
     fn commit_many(
         &self,
-        grants: &[(
-            &PackageGrantV1,
-            PackageActionV1,
-            Option<&PackageBundleRef<'_>>,
-        )],
+        grants: &[(&PackageGrantV1, PackageActionV1, Option<&PackageBundle>)],
         work: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         if grants

@@ -99,7 +99,11 @@ impl Fixture {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let tenant = super::fixture::source().tenant_id;
-        store.install_package_image(tenant, &bundle, || Ok(()))?;
+        store.install_package_image(
+            tenant,
+            &araphor_package::PackageBundle::try_from(bundle)?,
+            || Ok(()),
+        )?;
         let engine = Engine::new(
             Arc::clone(&store),
             Limits {

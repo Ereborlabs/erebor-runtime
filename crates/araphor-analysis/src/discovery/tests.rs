@@ -5,7 +5,7 @@ use araphor_analysis_sdk as sdk;
 use araphor_analysis_sdk::arrow_array::{RecordBatch, UInt64Array};
 use araphor_data::{
     AnalysisSelectionV1, AnalysisStore, DiscoveryInputManifestV1, DiscoveryProfileV1,
-    DiscoveryRecordV1, PackageActionV1, PackageAuthorization, PackageBundleRef, PackageGrantV1,
+    DiscoveryRecordV1, PackageActionV1, PackageAuthorization, PackageBundle, PackageGrantV1,
     ProcessorClassV1, ProcessorRetirementV1, ProcessorScopeV1, ValidatedEvidenceBatchV1,
     DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
 };
@@ -35,25 +35,21 @@ impl PackageAuthorization for Authority {
     fn check(&self, _: &PackageGrantV1, _: PackageActionV1) -> araphor_data::Result<()> {
         Ok(())
     }
-    fn admit(&self, _: &PackageGrantV1, _: &PackageBundleRef<'_>) -> araphor_data::Result<()> {
+    fn admit(&self, _: &PackageGrantV1, _: &PackageBundle) -> araphor_data::Result<()> {
         Ok(())
     }
     fn commit(
         &self,
         _: &PackageGrantV1,
         _: PackageActionV1,
-        _: &PackageBundleRef<'_>,
+        _: &PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         operation()
     }
     fn commit_many(
         &self,
-        grants: &[(
-            &PackageGrantV1,
-            PackageActionV1,
-            Option<&PackageBundleRef<'_>>,
-        )],
+        grants: &[(&PackageGrantV1, PackageActionV1, Option<&PackageBundle>)],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         if grants.is_empty() || !grants.iter().any(|(_, _, image)| image.is_none()) {
@@ -109,7 +105,11 @@ impl Fixture {
             retention,
             Default::default(),
         )?);
-        store.install_package_image(source.tenant_id, &Package::discovery_bundle()?, || Ok(()))?;
+        store.install_package_image(
+            source.tenant_id,
+            &PackageBundle::try_from(Package::discovery_bundle()?)?,
+            || Ok(()),
+        )?;
         let mut query = Engine::new(
             Arc::clone(&store),
             Limits {
@@ -145,7 +145,7 @@ impl Fixture {
                     expires_utc_ns: None,
                     authorization_id: None,
                 },
-                crate::Package::discovery_bundle()?,
+                Arc::new(PackageBundle::try_from(crate::Package::discovery_bundle()?)?),
                 "live",
                 "snapshot",
             )?],
@@ -188,7 +188,7 @@ impl Fixture {
     }
 
     fn constant_owner(&self, sql: &str) -> TestResult<DiscoveryOwner> {
-        let bundle = Self::constant_bundle(sql)?;
+        let bundle = Arc::new(PackageBundle::try_from(Self::constant_bundle(sql)?)?);
         self.store
             .install_package_image(self.source.tenant_id, &bundle, || Ok(()))?;
         let authority: Arc<dyn PackageAuthorization> = Arc::new(Authority(watch::channel(0).0));
@@ -760,6 +760,7 @@ async fn native_unchanged_return_rejected() -> TestResult {
         },
         artifacts: vec![artifact],
     };
+    let bundle = Arc::new(PackageBundle::try_from(bundle)?);
     fixture
         .store
         .install_package_image(fixture.source.tenant_id, &bundle, || Ok(()))?;
@@ -773,7 +774,7 @@ async fn native_unchanged_return_rejected() -> TestResult {
             expires_utc_ns: None,
             authorization_id: None,
         },
-        bundle.clone(),
+        Arc::clone(&bundle),
         "constant",
         "data",
     )?);
@@ -833,7 +834,13 @@ async fn native_unchanged_return_rejected() -> TestResult {
         .ok_or("reason detail type")?;
     assert_eq!(cursors.values().as_ref(), &[2]);
     let instance = fixture
-        .managed_package("auxiliary-profile", bundle, "constant", "data", true)
+        .managed_package(
+            "auxiliary-profile",
+            bundle.bundle().clone(),
+            "constant",
+            "data",
+            true,
+        )
         .await?;
     let health = fixture
         .store
@@ -1074,9 +1081,11 @@ async fn native_setup_skips_retirement() -> TestResult {
 fn owner_registration_is_balanced() -> TestResult {
     let fixture = Fixture::new(Limits::default())?;
     let other = Fixture::new(Limits::default())?;
-    other
-        .store
-        .install_package_image([42; 16], &Package::discovery_bundle()?, || Ok(()))?;
+    other.store.install_package_image(
+        [42; 16],
+        &PackageBundle::try_from(Package::discovery_bundle()?)?,
+        || Ok(()),
+    )?;
     let authority: Arc<dyn PackageAuthorization> = Arc::new(Authority(watch::channel(0).0));
     let host = InstanceHost::new(Arc::clone(&fixture.query), Arc::clone(&authority));
     let package = |query: &Arc<Engine>, tenant| {
@@ -1090,7 +1099,7 @@ fn owner_registration_is_balanced() -> TestResult {
                 expires_utc_ns: None,
                 authorization_id: None,
             },
-            Package::discovery_bundle()?,
+            Arc::new(PackageBundle::try_from(Package::discovery_bundle()?)?),
             "live",
             "snapshot",
         )

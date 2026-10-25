@@ -21,7 +21,7 @@ Restart and identical retry preserve the committed result.
 
 ## Implementation review flow
 
-[PackageArtifactV1::implementation](../../../../../crates/araphor-data/src/package/bundle.rs) Package admission selects a component artifact
+[PackageArtifactV1::implementation](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/bundle.rs) Package admission selects a component artifact
   -> [CompileBudget](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/admission.rs) the execution owner checks its contract version, imports, and declared features
   -> [WasmExecution::compiled](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/wasm/cache.rs) Wasmtime validates and prepares the component under compilation limits
   -> [AnalysisPackageOwner::install](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/lifecycle.rs) the package owner records target compatibility before activation
@@ -108,7 +108,7 @@ archive. Installation has no author compiler, download, or hook. The host
 compiles admitted Wasm bytes in its bounded worker. Remote registry and
 publisher-verification work remains deferred.
 
-[PackageBundleV1::encode](../../../../../crates/araphor-data/src/package/bundle.rs)
+[PackageBundleV1::encode](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/bundle.rs)
 produces the current OCI-layout archive for SQL and component packages.
 All packages use the exact OCI manifest's `sha256:` identity for trust pins.
 The canonical Araphor config and manifest subset permits identity reconstruction

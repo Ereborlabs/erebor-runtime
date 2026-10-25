@@ -72,9 +72,11 @@ impl Fixture {
     }
 
     fn install(&self, bundle: &PackageBundleV1) -> TestResult {
+        let bundle = araphor_package::PackageBundle::try_from(bundle.clone())
+            .map_err(araphor_data::Error::from)?;
         self.engine
             .store()
-            .install_package_image([1; 16], bundle, || Ok(()))?;
+            .install_package_image([1; 16], &bundle, || Ok(()))?;
         Ok(())
     }
 
@@ -412,10 +414,7 @@ async fn native_package_call_rejections() -> TestResult {
     ));
     let before = fixture.engine.store().meta()?;
     assert!(matches!(
-        fixture
-            .engine
-            .store()
-            .install_package_image([1; 16], &bundle, || Ok(())),
+        araphor_package::PackageBundle::try_from(bundle).map_err(araphor_data::Error::from),
         Err(araphor_data::Error::Package {
             code: araphor_data::PackageErrorCodeV1::Invalid,
             field: "plugin execution type",

@@ -144,29 +144,34 @@ impl ControlPlane {
 
 impl ControlPackages {
     pub(crate) fn discovery(&self) -> crate::Result<araphor_analysis::DiscoveryOwner> {
-        let bundle = araphor_analysis::Package::discovery_bundle()?;
-        let digest = bundle.digest().map_err(araphor_data::Error::from)?;
+        let bundle = Arc::new(
+            araphor_data::PackageBundle::try_from(araphor_analysis::Package::discovery_bundle()?)
+                .map_err(araphor_data::Error::from)?,
+        );
         let packages = self
             .authority
             .tenants
             .keys()
             .map(|tenant| {
                 let grant = self.authority.grant(*tenant);
-                let retained = araphor_data::PackageBundleRef::retained(&bundle, &digest);
-                self.authority
-                    .commit(&grant, PackageActionV1::Install, &retained, &mut || {
+                self.authority.commit(
+                    &grant,
+                    PackageActionV1::Install,
+                    bundle.as_ref(),
+                    &mut || {
                         self.query
                             .store()
                             .install_package_image(*tenant, &bundle, || {
                                 grant.remaining().map(|_| ())
                             })?;
                         Ok(())
-                    })?;
+                    },
+                )?;
                 araphor_analysis::Package::new(
                     self.query.clone(),
                     self.authority.clone(),
                     self.authority.grant(*tenant),
-                    bundle.clone(),
+                    Arc::clone(&bundle),
                     "live",
                     "snapshot",
                 )
@@ -332,7 +337,7 @@ impl PackageAuthorization for ControlPackageAuthority {
     fn admit(
         &self,
         grant: &PackageGrantV1,
-        bundle: &araphor_data::PackageBundleRef<'_>,
+        bundle: &araphor_data::PackageBundle,
     ) -> araphor_data::Result<()> {
         if Self::notification(grant) {
             return Err(Self::denied());
@@ -356,7 +361,7 @@ impl PackageAuthorization for ControlPackageAuthority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &araphor_data::PackageBundleRef<'_>,
+        bundle: &araphor_data::PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(&[(grant, action, Some(bundle))], operation)
@@ -367,7 +372,7 @@ impl PackageAuthorization for ControlPackageAuthority {
         grants: &[(
             &PackageGrantV1,
             PackageActionV1,
-            Option<&araphor_data::PackageBundleRef<'_>>,
+            Option<&araphor_data::PackageBundle>,
         )],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
@@ -529,14 +534,9 @@ mod tests {
             }
             assert!(authority.check(&altered, PackageActionV1::Run).is_err());
         }
-        let bundle = araphor_analysis::Package::discovery_bundle()?;
-        let digest = bundle.digest()?;
-        assert!(authority
-            .admit(
-                &grant,
-                &araphor_data::PackageBundleRef::retained(&bundle, &digest)
-            )
-            .is_err());
+        let bundle =
+            araphor_data::PackageBundle::try_from(araphor_analysis::Package::discovery_bundle()?)?;
+        assert!(authority.admit(&grant, &bundle).is_err());
         Ok(())
     }
 

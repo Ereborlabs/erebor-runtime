@@ -25,7 +25,7 @@ async fn prepared_closures_stay_pinned() -> TestResult {
     assert!(Arc::ptr_eq(&prepared.admission, &copy.admission));
     let admission = Arc::downgrade(&prepared.admission);
     let image = Arc::downgrade(&prepared.admission.images[0].0);
-    let charge = Arc::downgrade(&prepared.admission.images[0].2);
+    let charge = Arc::downgrade(&prepared.admission.images[0].1);
     let pins = prepared.resolved().images.clone();
     assert_eq!(pins.len(), 1);
     assert_eq!(pins[0].image.revision, "r1");
@@ -35,7 +35,7 @@ async fn prepared_closures_stay_pinned() -> TestResult {
     let metadata = Arc::downgrade(&calls.first().ok_or("call absent")?._metadata);
     for call in &calls {
         assert!(Arc::ptr_eq(&call.bundle, &prepared.admission.images[0].0));
-        assert!(Arc::ptr_eq(&call._image, &prepared.admission.images[0].2));
+        assert!(Arc::ptr_eq(&call._image, &prepared.admission.images[0].1));
     }
     drop(calls);
     let before = fixture.engine.store().meta()?;
@@ -156,8 +156,8 @@ async fn prepared_owners_keep_scope() -> TestResult {
         &prepared.admission.images[0].0
     ));
     assert!(!Arc::ptr_eq(
-        &other.admission.images[0].2,
-        &prepared.admission.images[0].2
+        &other.admission.images[0].1,
+        &prepared.admission.images[0].1
     ));
     let second = Arc::downgrade(&other.admission.images[0].0);
     let missing = foreign
@@ -179,10 +179,11 @@ async fn prepared_owners_keep_scope() -> TestResult {
             }
         }
     ));
-    fixture
-        .engine
-        .store()
-        .install_package_image([2; 16], &image, || Ok(()))?;
+    fixture.engine.store().install_package_image(
+        [2; 16],
+        &araphor_package::PackageBundle::try_from(image.clone())?,
+        || Ok(()),
+    )?;
     let tenant = foreign
         .prepare_definition(
             [2; 16],
@@ -298,7 +299,7 @@ async fn prepared_dependency_stays_pinned() -> TestResult {
         ))
         .await?;
     let retained = Arc::downgrade(&prepared.admission.images[0].0);
-    let charge = Arc::downgrade(&prepared.admission.images[0].2);
+    let charge = Arc::downgrade(&prepared.admission.images[0].1);
     let mut replacement = original.clone();
     replacement.root.revision = "r2".into();
     replacement.artifacts[0].descriptor.revision = "r2".into();
@@ -323,10 +324,11 @@ async fn prepared_dependency_stays_pinned() -> TestResult {
     changed.artifacts[0].descriptor.revision = "r1".into();
     let before = fixture.engine.store().meta()?;
     assert!(matches!(
-        fixture
-            .engine
-            .store()
-            .install_package_image([1; 16], &changed, || Ok(())),
+        fixture.engine.store().install_package_image(
+            [1; 16],
+            &araphor_package::PackageBundle::try_from(changed)?,
+            || Ok(())
+        ),
         Err(araphor_data::Error::AnalysisConflict { .. })
     ));
     assert_eq!(fixture.engine.store().meta()?, before);
@@ -344,7 +346,9 @@ async fn prepared_dependency_stays_pinned() -> TestResult {
     assert_eq!(prepared.images().count(), 1);
     assert_eq!(updated.images().count(), 1);
     for (definition, expected) in [(&prepared, &original), (&updated, &replacement)] {
-        let (image, digest) = definition.images().next().ok_or("image absent")?;
+        let admitted = definition.images().next().ok_or("image absent")?;
+        let image = admitted.bundle();
+        let digest = admitted.digest();
         assert_eq!(image.root, expected.root);
         assert_eq!(image.artifacts, expected.artifacts);
         assert_eq!(digest, expected.digest()?);

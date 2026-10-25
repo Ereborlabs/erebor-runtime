@@ -81,10 +81,11 @@ async fn nonempty_tenant_guests_overlap() -> TestResult {
         }],
     };
     fixture.install(&bundle)?;
-    fixture
-        .engine
-        .store()
-        .install_package_image([2; 16], &bundle, || Ok(()))?;
+    fixture.engine.store().install_package_image(
+        [2; 16],
+        &araphor_package::PackageBundle::try_from(bundle)?,
+        || Ok(()),
+    )?;
     let revision = fixture.engine.store().meta()?.commit_revision;
     let first_control = AnalysisReadControl::default();
     let second_control = AnalysisReadControl::default();
@@ -376,8 +377,10 @@ async fn prepared_guest_keeps_identity() -> TestResult {
         },
         ..Default::default()
     })?;
-    let bundle = Arc::new(super::execution::component("wasm", "evaluate")?);
-    let model = &bundle.artifacts[0].descriptor.exports[0];
+    let bundle = Arc::new(araphor_package::PackageBundle::try_from(
+        super::execution::component("wasm", "evaluate")?,
+    )?);
+    let model = &bundle.bundle().artifacts[0].descriptor.exports[0];
     let evaluation = sdk::Evaluation {
         export: model.name.clone(),
         inputs: Vec::new(),
@@ -396,7 +399,7 @@ async fn prepared_guest_keeps_identity() -> TestResult {
     let prepared = runtime
         .prepare(
             Arc::clone(&bundle),
-            bundle.root.clone(),
+            bundle.bundle().root.clone(),
             model.name.clone(),
             &control,
         )?
@@ -404,12 +407,17 @@ async fn prepared_guest_keeps_identity() -> TestResult {
     let workers = TaskTracker::new();
     for (owner, image) in [
         (foreign, Arc::clone(&bundle)),
-        (Arc::clone(&runtime), Arc::new(bundle.as_ref().clone())),
+        (
+            Arc::clone(&runtime),
+            Arc::new(araphor_package::PackageBundle::try_from(
+                bundle.bundle().clone(),
+            )?),
+        ),
     ] {
         let error = owner
             .evaluate_reserved(
                 image,
-                bundle.root.clone(),
+                bundle.bundle().root.clone(),
                 evaluation.clone(),
                 control.within(None)?,
                 &workers,
@@ -435,7 +443,7 @@ async fn prepared_guest_keeps_identity() -> TestResult {
     let (_, output) = runtime
         .evaluate_reserved(
             Arc::clone(&bundle),
-            bundle.root.clone(),
+            bundle.bundle().root.clone(),
             evaluation,
             control.within(None)?,
             &workers,

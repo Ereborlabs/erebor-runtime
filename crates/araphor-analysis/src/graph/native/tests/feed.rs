@@ -423,11 +423,7 @@ impl PackageAuthorization for ProgramAuthority {
         self.inner.check(grant, action)
     }
 
-    fn admit(
-        &self,
-        grant: &PackageGrantV1,
-        bundle: &PackageBundleRef<'_>,
-    ) -> araphor_data::Result<()> {
+    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundle) -> araphor_data::Result<()> {
         self.check(grant, PackageActionV1::Run)?;
         self.inner.admit(grant, bundle)
     }
@@ -436,7 +432,7 @@ impl PackageAuthorization for ProgramAuthority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleRef<'_>,
+        bundle: &PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.check(grant, action)?;
@@ -445,11 +441,7 @@ impl PackageAuthorization for ProgramAuthority {
 
     fn commit_many(
         &self,
-        grants: &[(
-            &PackageGrantV1,
-            PackageActionV1,
-            Option<&PackageBundleRef<'_>>,
-        )],
+        grants: &[(&PackageGrantV1, PackageActionV1, Option<&PackageBundle>)],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         for (grant, action, _) in grants {

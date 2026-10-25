@@ -6,18 +6,19 @@ use snafu::ResultExt as _;
 use super::PackageRevisionV1;
 use crate::{
     AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisReadControl, AnalysisStore,
-    PackageBundleV1, PackageErrorCodeV1 as Code, PackageRefV1, Result,
+    PackageBundle, PackageBundleV1, PackageErrorCodeV1 as Code, PackageRefV1, Result,
 };
 
 impl AnalysisStore {
     pub fn install_package_image(
         &self,
         tenant: [u8; 16],
-        bundle: &PackageBundleV1,
+        bundle: &PackageBundle,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<u64> {
         let revisions = PackageRevisionV1::from_bundle(bundle, tenant)?;
-        let digest = bundle.digest()?;
+        let digest = bundle.digest();
+        let bundle = bundle.bundle();
         let mut guard = self.writer()?;
         let transaction = guard
             .get_mut()?
@@ -34,7 +35,7 @@ impl AnalysisStore {
         )?;
         if existing
             .as_ref()
-            .is_some_and(|(_, saved, _, _)| *saved != digest)
+            .is_some_and(|(_, saved, _, _)| saved.as_str() != digest)
         {
             return AnalysisConflictSnafu.fail();
         }
@@ -85,7 +86,7 @@ impl AnalysisStore {
         package: &str,
         revision: Option<&str>,
         control: &AnalysisReadControl,
-    ) -> Result<Option<PackageBundleV1>> {
+    ) -> Result<Option<PackageBundle>> {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |reader| {
             Self::package_image_from(reader, tenant, package, revision, control)
@@ -150,7 +151,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         pin: &araphor_discovery_definition::ImagePin,
         control: &AnalysisReadControl,
-    ) -> Result<Option<PackageBundleV1>> {
+    ) -> Result<Option<PackageBundle>> {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |reader| {
             Self::retained_package_image_from(reader, tenant, pin, control)
@@ -162,7 +163,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         pin: &araphor_discovery_definition::ImagePin,
         control: &AnalysisReadControl,
-    ) -> Result<Option<PackageBundleV1>> {
+    ) -> Result<Option<PackageBundle>> {
         pin.validate()?;
         let Some((_, digest, _, _)) = Self::package_image_record(
             reader,
@@ -213,7 +214,7 @@ impl AnalysisStore {
         package: &str,
         revision: Option<&str>,
         control: &AnalysisReadControl,
-    ) -> Result<Option<PackageBundleV1>> {
+    ) -> Result<Option<PackageBundle>> {
         let Some((revision, digest, _, true)) =
             Self::package_image_record(reader, tenant, package, revision, true)?
         else {
@@ -232,7 +233,7 @@ impl AnalysisStore {
         root: PackageRefV1,
         digest: &str,
         control: &AnalysisReadControl,
-    ) -> Result<PackageBundleV1> {
+    ) -> Result<PackageBundle> {
         let artifacts = Self::package_artifacts_from(reader, tenant, &root, control)
             .map_err(crate::Error::stored_artifact)?;
         let bundle = PackageBundleV1 {
@@ -240,16 +241,14 @@ impl AnalysisStore {
             root,
             artifacts,
         };
-        if bundle
-            .checked_layout(digest)
+        let bundle = PackageBundle::checked(bundle, digest)
             .map_err(crate::Error::from)
             .map_err(crate::Error::stored_artifact)?
-            .is_none()
-        {
-            return Err(Code::Invalid
-                .error("retained image digest")
-                .stored_artifact());
-        }
+            .ok_or_else(|| {
+                Code::Invalid
+                    .error("retained image digest")
+                    .stored_artifact()
+            })?;
         control.check()?;
         Ok(bundle)
     }

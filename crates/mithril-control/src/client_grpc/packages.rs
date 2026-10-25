@@ -1,6 +1,6 @@
 use araphor_data::{
     AnalysisReadControl, AnalysisSelectionV1, PackageActionV1, PackageAuthorization as _,
-    PackageBundleRef, PackageErrorCodeV1, PackageGrantV1, PackageRequestV1, PackageResponseV1,
+    PackageBundle, PackageErrorCodeV1, PackageGrantV1, PackageRequestV1, PackageResponseV1,
 };
 
 use super::*;
@@ -216,10 +216,10 @@ impl ClientGrpcOwner {
             }
             let image = match request {
                 PackageRequestV1::InstallImage { bundle } => {
+                    let bundle = PackageBundle::try_from(bundle)?;
                     let image = bundle.metadata()?;
-                    let retained = PackageBundleRef::retained(&bundle, &image.digest);
-                    authority.admit(&grant, &retained)?;
-                    authority.commit(&grant, action, &retained, &mut || {
+                    authority.admit(&grant, &bundle)?;
+                    authority.commit(&grant, action, &bundle, &mut || {
                         store.install_package_image(grant.selection.tenant_id, &bundle, || {
                             grant.remaining()?;
                             control.check()

@@ -215,7 +215,7 @@ impl PackageAuthorization for ClientAuth {
     fn admit(
         &self,
         grant: &PackageGrantV1,
-        bundle: &araphor_data::PackageBundleRef<'_>,
+        bundle: &araphor_data::PackageBundle,
     ) -> araphor_data::Result<()> {
         let digest = bundle.digest().to_owned();
         let state = self
@@ -238,7 +238,7 @@ impl PackageAuthorization for ClientAuth {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &araphor_data::PackageBundleRef<'_>,
+        bundle: &araphor_data::PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(&[(grant, action, Some(bundle))], operation)
@@ -253,7 +253,7 @@ impl PackageAuthorization for ClientAuth {
         grants: &[(
             &PackageGrantV1,
             PackageActionV1,
-            Option<&araphor_data::PackageBundleRef<'_>>,
+            Option<&araphor_data::PackageBundle>,
         )],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {

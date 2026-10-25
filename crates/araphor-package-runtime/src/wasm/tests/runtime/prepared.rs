@@ -16,13 +16,13 @@ async fn preparation_precedes_guest_timeout() -> TestResult {
     let digest = sha2::Sha256::digest(COMPONENT).into();
     assert!(wasm.cached(&digest)?.is_none());
     let package = package();
-    let image = bundle(&package);
+    let image = bundle(&package)?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let workers = crate::TaskTracker::new();
     let result = runtime
         .evaluate(
             Arc::clone(&image),
-            image.root.clone(),
+            image.bundle().root.clone(),
             evaluation(&package, "echo", 42)?,
             control.within(None)?,
             &workers,
@@ -167,5 +167,95 @@ fn retained_trap_keeps_code() -> TestResult {
     );
     drop(error);
     assert!(retained.upgrade().is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn prepared_owner_keeps_identity() -> TestResult {
+    let limits = crate::Limits {
+        wasm: WasmLimits {
+            evaluations: Some(1),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let first = crate::Runtime::new(limits)?;
+    let second = crate::Runtime::new(limits)?;
+    let package = package();
+    let image = bundle(&package)?;
+    let other = bundle(&package)?;
+    assert_eq!(image.digest(), other.digest());
+    assert!(!Arc::ptr_eq(&image, &other));
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let prepared = first
+        .prepare(
+            Arc::clone(&image),
+            image.bundle().root.clone(),
+            "evaluate".into(),
+            &control,
+        )?
+        .ok_or("prepared component")?;
+    let workers = crate::TaskTracker::new();
+    for (runtime, content) in [(&first, &other), (&second, &image)] {
+        let error = runtime
+            .evaluate_reserved(
+                Arc::clone(content),
+                content.bundle().root.clone(),
+                evaluation(&package, "echo", 42)?,
+                control.within(None)?,
+                &workers,
+                None,
+                Some(prepared.clone()),
+                None,
+                (),
+            )
+            .await
+            .err()
+            .ok_or("foreign prepared binding accepted")?;
+        assert!(matches!(
+            error,
+            Error::Data {
+                source: araphor_data::Error::Package {
+                    code: Code::Invalid,
+                    field: "prepared package binding",
+                    ..
+                }
+            }
+        ));
+        assert!(workers.is_empty());
+        assert_eq!(
+            first
+                .wasm()?
+                .evaluations
+                .as_ref()
+                .map(|capacity| capacity.available_permits()),
+            Some(1)
+        );
+        assert!(second.wasm.lock().map_err(|_| "runtime lock")?.is_none());
+    }
+    let (_, output) = first
+        .evaluate_reserved(
+            Arc::clone(&image),
+            image.bundle().root.clone(),
+            evaluation(&package, "echo", 42)?,
+            control.within(None)?,
+            &workers,
+            None,
+            Some(prepared),
+            None,
+            (),
+        )
+        .await?;
+    assert_eq!(value(&output)?, 42);
+    assert_eq!(
+        first
+            .wasm()?
+            .evaluations
+            .as_ref()
+            .map(|capacity| capacity.available_permits()),
+        Some(1)
+    );
+    workers.close();
+    workers.wait().await;
     Ok(())
 }

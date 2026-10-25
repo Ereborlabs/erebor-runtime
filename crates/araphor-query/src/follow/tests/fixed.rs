@@ -95,7 +95,8 @@ async fn fixed_input_retains_call() -> Result<(), Box<dyn std::error::Error + Se
     use araphor_analysis_sdk as sdk;
     use araphor_discovery_definition::{Definition, Program, Source};
     use araphor_package::{
-        PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
+        PackageArtifactV1, PackageBundle, PackageBundleV1, PackageImplementationV1, PackageRefV1,
+        SqlModelV1,
     };
     let fixture = Fixture::new(Limits::default());
     fixture.commit(&fixture.source, 1, 1, 2_100_000_123);
@@ -143,9 +144,11 @@ async fn fixed_input_retains_call() -> Result<(), Box<dyn std::error::Error + Se
             fixtures: Vec::new(),
         }],
     };
-    fixture
-        .store
-        .install_package_image(fixture.source.tenant_id, &image, || Ok(()))?;
+    fixture.store.install_package_image(
+        fixture.source.tenant_id,
+        &PackageBundle::try_from(image)?,
+        || Ok(()),
+    )?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(20))?;
     let prepared = fixture
         .engine
@@ -277,7 +280,8 @@ async fn fixed_ports_close_independently() -> Result<(), Box<dyn std::error::Err
     use araphor_analysis_sdk as sdk;
     use araphor_discovery_definition::{Definition, Program, Source};
     use araphor_package::{
-        PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
+        PackageArtifactV1, PackageBundle, PackageBundleV1, PackageImplementationV1, PackageRefV1,
+        SqlModelV1,
     };
     use sdk::arrow_array::Array as _;
 
@@ -354,9 +358,11 @@ async fn fixed_ports_close_independently() -> Result<(), Box<dyn std::error::Err
                 fixtures: Vec::new(),
             }],
         };
-        fixture
-            .store
-            .install_package_image(fixture.source.tenant_id, &image, || Ok(()))?;
+        fixture.store.install_package_image(
+            fixture.source.tenant_id,
+            &PackageBundle::try_from(image)?,
+            || Ok(()),
+        )?;
         let sql = if nested {
             format!(
                 r#"SELECT * FROM "window-scopes"."1".wrapped(source => (

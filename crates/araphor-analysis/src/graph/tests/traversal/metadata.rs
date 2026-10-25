@@ -74,11 +74,11 @@ impl TraversalFixture {
         };
         self.store.install_package_image(
             source().tenant_id,
-            &PackageBundleV1 {
+            &araphor_data::PackageBundle::try_from(PackageBundleV1 {
                 schema_version: 1,
                 root: artifact.reference(),
                 artifacts: vec![artifact],
-            },
+            })?,
             || Ok(()),
         )?;
         Ok(Engine::new(

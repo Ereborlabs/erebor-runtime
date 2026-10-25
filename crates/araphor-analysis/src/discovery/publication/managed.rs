@@ -4,8 +4,8 @@ use araphor_data::analysis::{PackageResultRefV1, PreparedProfile, ProfileCommit}
 use araphor_data::{
     AnalysisContextRefV1, AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadControl,
     AnalysisResultCommitV1, DiscoveryHistoryRowV1, DiscoveryProfileV1, DiscoverySnapshotRowV1,
-    EvidenceIntakeIdentityV1, ManagedDestination, PackageBundleRef, PackageErrorCodeV1 as Code,
-    ProcessorScopeV1, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
+    EvidenceIntakeIdentityV1, ManagedDestination, PackageErrorCodeV1 as Code, ProcessorScopeV1,
+    DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
 };
 use araphor_query::definition::{ExecutionReceipt, PackageCall, PreparedDefinition};
 use araphor_query::follow::WindowSource;
@@ -119,10 +119,12 @@ impl DiscoveryOwner {
             return Err(Code::Invalid.error("profile output source").into());
         }
         let mut contexts = Vec::new();
-        for (bundle, digest) in prepared.images().filter(|(bundle, digest)| {
-            bundle.root == selected.image().image && *digest == selected.image().digest
+        for bundle in prepared.images().filter(|bundle| {
+            bundle.bundle().root == selected.image().image
+                && bundle.digest() == selected.image().digest
         }) {
-            contexts.push(PackageBundleRef::retained(bundle, digest).context(
+            contexts.push(araphor_data::AnalysisContextVersionV1::from_package(
+                bundle,
                 source.tenant_id,
                 selected.package(),
                 selected.export(),

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
-    AnalysisReadControl, PackageActionV1, PackageAuthorization, PackageBundleRef, PackageBundleV1,
+    AnalysisReadControl, PackageActionV1, PackageAuthorization, PackageBundle,
     PackageErrorCodeV1 as Code, PackageFixtureV1, PackageGrantV1, PackageRefV1,
 };
 use araphor_query::definition::{Invocation, PackageCall};
@@ -93,9 +93,8 @@ impl Qualification {
         let bundle = self
             .image(grant.selection.tenant_id, image, control)
             .await?;
-        let retained = PackageBundleRef::new(&bundle)?;
-        self.check(grant, &retained, control)?;
-        let artifact = bundle.artifact(target)?;
+        self.check(grant, &bundle, control)?;
+        let artifact = bundle.bundle().artifact(target)?;
         let fixtures = artifact
             .fixtures
             .iter()
@@ -106,7 +105,7 @@ impl Qualification {
         }
         let mut results = Vec::new();
         for fixture in fixtures {
-            self.check(grant, &retained, control)?;
+            self.check(grant, &bundle, control)?;
             let model = artifact
                 .descriptor
                 .exports
@@ -150,7 +149,7 @@ impl Qualification {
             let prepared = session.prepare_image(&definition, image.clone()).await?;
             if prepared.resolved().images.len() != 1
                 || prepared.resolved().images[0].image != *image
-                || prepared.resolved().images[0].digest != retained.digest()
+                || prepared.resolved().images[0].digest != bundle.digest()
             {
                 return Err(Code::Denied.error("fixture image pin").into());
             }
@@ -205,26 +204,26 @@ impl Qualification {
                 .ok_or_else(|| Code::Incomplete.error("fixture package return"))?;
             let passed =
                 fixture.compare_output(&artifact.descriptor, call.evaluation(), call.output())?;
-            self.check(grant, &retained, control)?;
+            self.check(grant, &bundle, control)?;
             results.push(FixtureResult {
                 fixture: fixture.name.clone(),
                 passed,
             });
         }
-        self.check(grant, &retained, control)?;
+        self.check(grant, &bundle, control)?;
         Ok(results)
     }
 
     fn check(
         &self,
         grant: &PackageGrantV1,
-        retained: &PackageBundleRef<'_>,
+        bundle: &PackageBundle,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         control.check()?;
         grant.remaining()?;
         self.authority.check(grant, PackageActionV1::Test)?;
-        self.authority.admit(grant, retained)?;
+        self.authority.admit(grant, bundle)?;
         Ok(())
     }
 
@@ -233,7 +232,7 @@ impl Qualification {
         tenant: [u8; 16],
         image: &PackageRefV1,
         control: &Arc<AnalysisReadControl>,
-    ) -> Result<PackageBundleV1> {
+    ) -> Result<PackageBundle> {
         let store = Arc::clone(self.query.store());
         let image = image.clone();
         let operation = ReadOperation(Arc::new(control.operation()?));

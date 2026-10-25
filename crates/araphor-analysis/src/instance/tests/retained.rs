@@ -100,7 +100,7 @@ async fn retained_alias_keeps_identity() -> TestResult {
         .await?;
     assert!(prepared
         .images()
-        .all(|(image, _)| image.root.package_id == "retained-consumer"));
+        .all(|image| image.bundle().root.package_id == "retained-consumer"));
     let captured = session.capture_definition(&prepared, invocation()).await?;
     assert_eq!(
         captured.snapshot().results().collect::<Vec<_>>(),

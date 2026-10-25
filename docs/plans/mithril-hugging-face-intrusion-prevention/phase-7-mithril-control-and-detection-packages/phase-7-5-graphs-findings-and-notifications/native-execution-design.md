@@ -45,7 +45,7 @@ the original proposal. D6 records that correction.
 | [Native header](../../../../../crates/araphor-analysis-sdk/src/bindings/analysis.h) | Defines the v1 function table and typed request, output, release, error, and cancellation fields. No table accessor symbol is declared. |
 | [SDK guest](../../../../../crates/araphor-analysis-sdk/src/guest.rs) | Supplies the shared `Guest` computation interface and Wasm export adapter. |
 | [SDK wire](../../../../../crates/araphor-analysis-sdk/src/wire/mod.rs) | Supplies typed Arrow IPC, bounded buffers, and independent exchange validation. |
-| [Package artifact](../../../../../crates/araphor-data/src/package/bundle.rs) | Native contains only one export and artifact bytes. Selection chooses Wasm, then SQL. |
+| [Package artifact](https://github.com/Ereborlabs/erebor-runtime/blob/2b9384ec76140ea56211ea5120c9381b80e40c64/crates/araphor-data/src/package/bundle.rs) | Native contains only one export and artifact bytes. Selection chooses Wasm, then SQL. |
 | [Package execution](../../../../../crates/araphor-data/src/package/execution.rs) | Executes SQL or Wasm. Native returns Unsupported. |
 | [Package owner](../../../../../crates/araphor-data/src/package/owner.rs) | Owns four operation permits, authority checks, grant expiry, and cancellation. |
 | [Package commit](../../../../../crates/araphor-data/src/package/installed/commit.rs) | Rejects stale activation generations, package revisions, and metadata. |

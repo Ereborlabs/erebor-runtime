@@ -56,22 +56,26 @@ impl TraversalFixture {
                 root: artifact.reference(),
                 artifacts: vec![artifact],
             };
+            let bundle = araphor_package::PackageBundle::try_from(bundle)?;
             let installed = store.install_package_image(source().tenant_id, &bundle, || Ok(()))?;
             let retained = store
                 .package_image(
                     source().tenant_id,
-                    &bundle.root.package_id,
-                    Some(&bundle.root.revision),
+                    &bundle.bundle().root.package_id,
+                    Some(&bundle.bundle().root.revision),
                     &AnalysisReadControl::default(),
                 )?
                 .ok_or("builtin image is absent")?;
-            assert_eq!(retained.schema_version, bundle.schema_version);
-            assert_eq!(retained.root, bundle.root);
+            assert_eq!(
+                retained.bundle().schema_version,
+                bundle.bundle().schema_version
+            );
+            assert_eq!(retained.bundle().root, bundle.bundle().root);
             assert!(
-                retained.artifacts == bundle.artifacts,
+                retained.bundle().artifacts == bundle.bundle().artifacts,
                 "builtin artifacts differ"
             );
-            assert_eq!(retained.digest()?, bundle.digest()?);
+            assert_eq!(retained.digest(), bundle.digest());
             let before = store.meta()?;
             let revision = *store.subscribe_revision().borrow();
             assert_eq!(

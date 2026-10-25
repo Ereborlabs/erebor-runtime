@@ -2,9 +2,8 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Weak};
 
 use araphor_data::{
-    AnalysisReadControl, AnalysisResultCommitV1, AnalysisWitnessV1, PackageBundleRef,
-    PackageErrorCodeV1 as Code, ProcessorScopeV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
-    GRAPH_WITNESS_TTL_NS,
+    AnalysisReadControl, AnalysisResultCommitV1, AnalysisWitnessV1, PackageErrorCodeV1 as Code,
+    ProcessorScopeV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, GRAPH_WITNESS_TTL_NS,
 };
 use araphor_query::definition::ExecutionReceipt;
 use datafusion::execution::memory_pool::MemoryReservation;
@@ -126,14 +125,16 @@ impl GraphPublication {
         }
         for id in calls.keys() {
             let call = &owner.calls[id];
-            let (bundle, digest) = owner
+            let bundle = owner
                 .prepared
                 .images()
-                .find(|(bundle, digest)| {
-                    bundle.root == call.image().image && *digest == call.image().digest.as_str()
+                .find(|bundle| {
+                    bundle.bundle().root == call.image().image
+                        && bundle.digest() == call.image().digest.as_str()
                 })
                 .ok_or_else(|| Code::Denied.error("graph image attribution"))?;
-            contexts.push(PackageBundleRef::retained(bundle, digest).context(
+            contexts.push(araphor_data::AnalysisContextVersionV1::from_package(
+                bundle,
                 owner.grant.selection.tenant_id,
                 call.package(),
                 call.export(),

@@ -1,5 +1,7 @@
 # Araphor Component Redesign Proposal
 
+Current immutable image ownership is in [One immutable package content owner](#one-immutable-package-content-owner).
+
 Current retained aggregate scope is in [Native integral aggregation](#native-integral-aggregation).
 
 Current package provenance is in [One package provenance contract](#one-package-provenance-contract).
@@ -4379,3 +4381,54 @@ aggregation. The focused proof has 94 distinct passing cases across the
 recorded runs. The final affected-owner build, strict Clippy, formatting, and
 whitespace checks pass. General maintained SQL and the complete redesign
 remain **Not done**. No performance result is claimed.
+
+## One immutable package content owner
+
+Simple ownership and a coherent native execution path are the criteria.
+A lower line count is a possible result of the change.
+
+PackageBundle in araphor-package replaces the borrowed PackageBundleRef and
+separate raw-content/digest pairs. It owns the existing PackageBundleV1 value
+and canonical digest. Its fields are private. Callers share the same owner
+through Arc where their lifetimes require it. No payload copy, validity flag,
+lookup cache, or retained second OCI layout is added.
+
+Raw authoring or transport content enters admission
+  -> TryFrom<PackageBundleV1> checks structure and obtains one native OCI layout
+  -> the owner retains the moved content and canonical digest
+  -> metadata and context construction borrow that owner
+  -> Query retains the same owner beside its existing image reservation
+  -> native SQL planning remains specific to the definition and its bindings
+  -> Runtime Prepared retains the same content owner and exact code identity
+  -> the call and worker lease retain the image reservation
+  -> evaluate_reserved checks the separate worker permit
+
+Data reads an installed or retained image
+  -> Data checks current stored rows and dependency projections
+  -> PackageBundle::checked checks the expected digest before structure
+  -> Data returns a fresh content owner for that read
+  -> Query does not repeat canonical admission for the same returned object
+
+Current authority and mutable store checks remain separate from content
+admission. Data still owns installation, tenant scope, context validation,
+retention, recovery, and atomic commits. Runtime still checks the actual host,
+invocation, prepared handle, worker permit, and output. The native parser,
+logical planner, optimizer, physical planner, and execution route remain.
+
+Control admits built-in content once before its tenant loop. Manual Package
+owners share that immutable content. Their first lazy preparation still reads
+the installed image and compares its original pin. Uninstall before that read
+must reject the first execution even when a context retains the image rows.
+An already prepared program retains its established immutable-code lifetime.
+
+The raw V1 authoring, transport, codec, and checked metadata APIs remain.
+The owning type has exactly two checked entry points: TryFrom and checked.
+No unchecked retained constructor or old reference alias remains. The
+[review route](../guides/araphor-discovery-definition-review.md#one-immutable-package-content-owner)
+and [migration result](araphor-analysis-migration.md#one-immutable-package-content-owner)
+record the exact scope. Result: **Done** for this content-owner consolidation.
+All 158 distinct focused cases pass across the recorded runs. The final
+affected-owner build, strict Clippy, formatting, and whitespace checks pass.
+One existing Graph startup deadline failed during concurrent checks and
+passed on an unchanged isolated retry. General maintained SQL and the complete
+redesign remain **Not done**. No performance result is claimed.

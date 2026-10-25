@@ -54,7 +54,7 @@ impl PackageAuthorization for Reader {
         Ok(())
     }
 
-    fn admit(&self, _: &PackageGrantV1, _: &PackageBundleRef<'_>) -> araphor_data::Result<()> {
+    fn admit(&self, _: &PackageGrantV1, _: &PackageBundle) -> araphor_data::Result<()> {
         Err(Code::Denied.error("historical reader cannot execute images"))
     }
 
@@ -62,7 +62,7 @@ impl PackageAuthorization for Reader {
         &self,
         _: &PackageGrantV1,
         _: PackageActionV1,
-        _: &PackageBundleRef<'_>,
+        _: &PackageBundle,
         _: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         Err(Code::Denied.error("historical reader cannot publish"))

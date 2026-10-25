@@ -55,12 +55,12 @@ async fn renewal_keeps_checkpoint() -> TestResult {
         renewed
             .prepared
             .images()
-            .map(|(image, _)| image.encode())
+            .map(|image| image.bundle().encode())
             .collect::<std::result::Result<Vec<_>, _>>()?,
         instance
             .prepared
             .images()
-            .map(|(image, _)| image.encode())
+            .map(|image| image.bundle().encode())
             .collect::<std::result::Result<Vec<_>, _>>()?
     );
     let before = fixture.query.store().meta()?;

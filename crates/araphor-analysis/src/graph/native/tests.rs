@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use araphor_data::{
     AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, DiscoveryInputManifestV1,
-    EvidenceIntakeIdentityV1, PackageArtifactV1, PackageBundleV1, PackageImplementationV1,
-    ValidatedEvidenceBatchV1,
+    EvidenceIntakeIdentityV1, PackageArtifactV1, PackageBundle, PackageBundleV1,
+    PackageImplementationV1, ValidatedEvidenceBatchV1,
 };
 use araphor_query::execution::Engine;
 use tokio::sync::watch;
@@ -57,7 +57,7 @@ impl PackageAuthorization for Authority {
         }
         Ok(())
     }
-    fn admit(&self, grant: &PackageGrantV1, _: &PackageBundleRef<'_>) -> araphor_data::Result<()> {
+    fn admit(&self, grant: &PackageGrantV1, _: &PackageBundle) -> araphor_data::Result<()> {
         if let Some((entered, release)) = self
             .gate
             .lock()
@@ -77,7 +77,7 @@ impl PackageAuthorization for Authority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleRef<'_>,
+        bundle: &PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(
@@ -87,11 +87,7 @@ impl PackageAuthorization for Authority {
     }
     fn commit_many(
         &self,
-        grants: &[(
-            &PackageGrantV1,
-            PackageActionV1,
-            Option<&PackageBundleRef<'_>>,
-        )],
+        grants: &[(&PackageGrantV1, PackageActionV1, Option<&PackageBundle>)],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         if grants.is_empty() || !grants.iter().any(|(_, _, image)| image.is_none()) {
@@ -427,11 +423,11 @@ impl Fixture {
             };
             store.install_package_image(
                 source.tenant_id,
-                &PackageBundleV1 {
+                &araphor_data::PackageBundle::try_from(PackageBundleV1 {
                     schema_version: 1,
                     root: artifact.reference(),
                     artifacts: vec![artifact],
-                },
+                })?,
                 || Ok(()),
             )?;
         }
@@ -1153,11 +1149,11 @@ async fn rejects_foreign_event_call() -> TestResult {
     };
     fixture.query.store().install_package_image(
         fixture.source.tenant_id,
-        &PackageBundleV1 {
+        &araphor_data::PackageBundle::try_from(PackageBundleV1 {
             schema_version: 1,
             root: artifact.reference(),
             artifacts: vec![artifact],
-        },
+        })?,
         || Ok(()),
     )?;
     let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;

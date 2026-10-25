@@ -30,7 +30,7 @@ for exact source cuts, terminal proof, and limits.
 [install](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/lifecycle.rs) Admission evaluates an installed native plugin
   -> [Qualification](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/artifact.rs) the package owner checks platform, CPU, system libraries, and ABI requirements
   -> [NativeExecution::admit](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/mod.rs) the package owner validates the admitted native library and its dependencies
-  -> [Bundle::implementation](../../../../../crates/araphor-data/src/package/bundle.rs) the package owner uses the plugin's declared native implementation
+  -> [Bundle::implementation](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/bundle.rs) the package owner uses the plugin's declared native implementation
 
 [InstalledAnalysis::evaluate](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/installed.rs) The scheduler invokes the export
   -> [evaluate_native](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/query/model/component.rs) the package owner supplies authorized typed batches to the Rust native adapter
@@ -47,7 +47,7 @@ for exact source cuts, terminal proof, and limits.
 [native fault fixture](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/tests/native/restart.rs) A native fault terminates Araphor
   -> [in-process call](https://github.com/Ereborlabs/erebor-runtime/blob/d20ee0fd6f364f9b8d03eddf50a97bc60c9e02a8/crates/araphor-data/src/package/native/loading.rs) the process cannot perform worker recovery
   -> [AnalysisStore::open](../../../../../crates/araphor-data/src/analysis/mod.rs) restart restores the prior complete durable commit
-  -> [Bundle::implementation](../../../../../crates/araphor-data/src/package/bundle.rs) the package owner does not select Wasm as a fallback
+  -> [Bundle::implementation](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/bundle.rs) the package owner does not select Wasm as a fallback
 
 The committed fault fixture passes with the final native libraries. The linked
 recovery owner predates native execution. No worker recovery path exists in
@@ -69,7 +69,7 @@ Read the [current package storage guide](../../../../guides/araphor-binary-packa
 for OCI layout, stored bytes, and quota accounting. Installation does not invoke
 a compiler or download dependencies.
 
-The [bundle](../../../../../crates/araphor-data/src/package/bundle.rs) contains
+The [bundle](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/bundle.rs) contains
 one declared implementation for an export. Admission rejects ambiguous target
 declarations. Qualified native metadata contains exports, target, CPU features, contract
 version, system library requirements, and

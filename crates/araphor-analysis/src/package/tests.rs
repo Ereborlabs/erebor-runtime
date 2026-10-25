@@ -14,14 +14,14 @@ impl PackageAuthorization for Authority {
     fn check(&self, _: &PackageGrantV1, _: PackageActionV1) -> araphor_data::Result<()> {
         Ok(())
     }
-    fn admit(&self, _: &PackageGrantV1, _: &PackageBundleRef<'_>) -> araphor_data::Result<()> {
+    fn admit(&self, _: &PackageGrantV1, _: &PackageBundle) -> araphor_data::Result<()> {
         Ok(())
     }
     fn commit(
         &self,
         _: &PackageGrantV1,
         _: PackageActionV1,
-        _: &PackageBundleRef<'_>,
+        _: &PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         operation()
@@ -34,7 +34,8 @@ impl PackageAuthorization for Authority {
 fn fixture() -> TestResult<(tempfile::TempDir, Package)> {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-    store.install_package_image([1; 16], &Package::discovery_bundle()?, || Ok(()))?;
+    let bundle = Arc::new(PackageBundle::try_from(Package::discovery_bundle()?)?);
+    store.install_package_image([1; 16], &bundle, || Ok(()))?;
     let query = Engine::new(store, Default::default())?;
     let grant = PackageGrantV1 {
         principal: "fixture".into(),
@@ -47,7 +48,7 @@ fn fixture() -> TestResult<(tempfile::TempDir, Package)> {
         query,
         Arc::new(Authority(tokio::sync::watch::channel(0).0)),
         grant,
-        crate::Package::discovery_bundle()?,
+        bundle,
         "live",
         "snapshot",
     )?;

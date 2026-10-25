@@ -76,11 +76,7 @@ impl PackageAuthorization for Actions {
         Ok(())
     }
 
-    fn admit(
-        &self,
-        grant: &PackageGrantV1,
-        image: &PackageBundleRef<'_>,
-    ) -> araphor_data::Result<()> {
+    fn admit(&self, grant: &PackageGrantV1, image: &PackageBundle) -> araphor_data::Result<()> {
         if self
             .blocked
             .lock()
@@ -118,7 +114,7 @@ impl PackageAuthorization for Actions {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        image: &PackageBundleRef<'_>,
+        image: &PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(
@@ -129,11 +125,7 @@ impl PackageAuthorization for Actions {
 
     fn commit_many(
         &self,
-        grants: &[(
-            &PackageGrantV1,
-            PackageActionV1,
-            Option<&PackageBundleRef<'_>>,
-        )],
+        grants: &[(&PackageGrantV1, PackageActionV1, Option<&PackageBundle>)],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.committed
@@ -1722,11 +1714,7 @@ impl PackageAuthorization for FinalInspector {
         Ok(())
     }
 
-    fn admit(
-        &self,
-        grant: &PackageGrantV1,
-        image: &PackageBundleRef<'_>,
-    ) -> araphor_data::Result<()> {
+    fn admit(&self, grant: &PackageGrantV1, image: &PackageBundle) -> araphor_data::Result<()> {
         self.inner.admit(grant, image)
     }
 
@@ -1734,7 +1722,7 @@ impl PackageAuthorization for FinalInspector {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        image: &PackageBundleRef<'_>,
+        image: &PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.inner.commit(grant, action, image, operation)
@@ -1742,11 +1730,7 @@ impl PackageAuthorization for FinalInspector {
 
     fn commit_many(
         &self,
-        grants: &[(
-            &PackageGrantV1,
-            PackageActionV1,
-            Option<&PackageBundleRef<'_>>,
-        )],
+        grants: &[(&PackageGrantV1, PackageActionV1, Option<&PackageBundle>)],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.inner.commit_many(grants, operation)

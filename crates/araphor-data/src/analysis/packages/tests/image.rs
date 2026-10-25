@@ -1,6 +1,6 @@
 use super::*;
 use crate::analysis::tests::assert_no_execution;
-use crate::{AnalysisReadControl, PackageBundleV1, PackageImplementationV1};
+use crate::{AnalysisReadControl, PackageBundle, PackageBundleV1, PackageImplementationV1};
 
 #[test]
 fn revision_reads_release_capacity() -> TestResult {
@@ -68,7 +68,7 @@ fn image(revision: &str) -> crate::Result<PackageBundleV1> {
     })
 }
 
-fn inspect(store: &AnalysisStore, revision: Option<&str>) -> crate::Result<PackageBundleV1> {
+fn inspect(store: &AnalysisStore, revision: Option<&str>) -> crate::Result<PackageBundle> {
     store
         .package_image(
             [1; 16],
@@ -85,12 +85,12 @@ fn package_image_retains_closure() -> TestResult {
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
     let notices = store.subscribe_activations();
-    let image = image("v1")?;
-    let digest = image.digest()?;
+    let image = PackageBundle::try_from(image("v1")?)?;
+    let digest = image.digest();
     let expected_metadata = image.metadata()?;
-    let mut expected = image.artifacts.clone();
+    let mut expected = image.bundle().artifacts.clone();
     expected.sort_by_key(crate::PackageArtifactV1::reference);
-    let metadata = PackageRevisionV1::from_artifact(&image.artifacts[0], [1; 16])?;
+    let metadata = PackageRevisionV1::from_artifact(&image.bundle().artifacts[0], [1; 16])?;
     assert!(metadata.artifact.is_empty());
     assert_eq!(metadata.dependencies.len(), 1);
     let installed = store.install_package_image([1; 16], &image, || Ok(()))?;
@@ -114,8 +114,8 @@ fn package_image_retains_closure() -> TestResult {
         charge.1,
         (revision_bytes
             + 256
-            + image.root.package_id.len()
-            + image.root.revision.len()
+            + image.bundle().root.package_id.len()
+            + image.bundle().root.revision.len()
             + digest.len()) as u64
     );
     let mut checked = false;
@@ -135,9 +135,9 @@ fn package_image_retains_closure() -> TestResult {
     assert_no_execution(&store)?;
     assert!(!notices.has_changed()?);
     let retained = inspect(&store, None)?;
-    assert_eq!(retained.digest()?, digest);
+    assert_eq!(retained.digest(), digest);
     assert_eq!(retained.metadata()?, expected_metadata);
-    assert_eq!(inspect(&store, Some("v1"))?.artifacts, expected);
+    assert_eq!(inspect(&store, Some("v1"))?.bundle().artifacts, expected);
     store.install_package(&[package("unreferenced", "v1")?], || Ok(()))?;
     store.collect_package_admissions()?;
     assert!(store
@@ -159,8 +159,8 @@ fn package_image_retains_closure() -> TestResult {
         let notices = store.subscribe_activations();
         store.collect_package_admissions()?;
         let actual = inspect(store, None)?;
-        assert_eq!(actual.digest()?, digest);
-        assert_eq!(actual.artifacts, expected);
+        assert_eq!(actual.digest(), digest);
+        assert_eq!(actual.bundle().artifacts, expected);
         assert_eq!(actual.metadata()?, expected_metadata);
         assert_no_execution(store)?;
         assert_eq!(
@@ -177,7 +177,7 @@ fn package_image_retains_closure() -> TestResult {
 fn package_image_install_is_atomic() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let image = image("v1")?;
+    let image = PackageBundle::try_from(image("v1")?)?;
     let before = store.meta()?;
     let mut checked = false;
     assert!(store
@@ -202,25 +202,26 @@ fn package_image_install_is_atomic() -> TestResult {
         store.install_package_image([1; 16], &image, || Ok(()))?,
         installed
     );
-    let mut changed = image.clone();
+    let mut changed = image.bundle().clone();
     let PackageImplementationV1::Sql { program, .. } = &mut changed.artifacts[0].implementations[0]
     else {
         return Err("SQL image fixture is absent".into());
     };
     program.outputs.insert("rows".into(), "SELECT 2".into());
+    let changed = PackageBundle::try_from(changed)?;
     assert!(matches!(
         store.install_package_image([1; 16], &changed, || Ok(())),
         Err(crate::Error::AnalysisConflict { .. })
     ));
     assert_eq!(store.meta()?, before);
-    assert_eq!(inspect(&store, None)?.digest()?, image.digest()?);
+    assert_eq!(inspect(&store, None)?.digest(), image.digest());
     let cancelled = AnalysisReadControl::default();
     cancelled.cancel()?;
     assert!(matches!(
         store.package_image([1; 16], "image-root", None, &cancelled),
         Err(crate::Error::AnalysisReadCancelled { .. })
     ));
-    assert_eq!(inspect(&store, None)?.digest()?, image.digest()?);
+    assert_eq!(inspect(&store, None)?.digest(), image.digest());
     Ok(())
 }
 
@@ -228,18 +229,18 @@ fn package_image_install_is_atomic() -> TestResult {
 fn package_image_versions_and_tenants() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let first = image("v1")?;
-    let second = image("v2")?;
+    let first = PackageBundle::try_from(image("v1")?)?;
+    let second = PackageBundle::try_from(image("v2")?)?;
     let first_revision = store.install_package_image([1; 16], &first, || Ok(()))?;
     let second_revision = store.install_package_image([1; 16], &second, || Ok(()))?;
     assert!(second_revision > first_revision);
-    assert_eq!(inspect(&store, None)?.digest()?, second.digest()?);
-    assert_eq!(inspect(&store, Some("v1"))?.digest()?, first.digest()?);
+    assert_eq!(inspect(&store, None)?.digest(), second.digest());
+    assert_eq!(inspect(&store, Some("v1"))?.digest(), first.digest());
     assert_eq!(
         store.install_package_image([1; 16], &first, || Ok(()))?,
         first_revision
     );
-    assert_eq!(inspect(&store, None)?.digest()?, second.digest()?);
+    assert_eq!(inspect(&store, None)?.digest(), second.digest());
     let control = AnalysisReadControl::default();
     assert!(store
         .package_image([2; 16], "image-root", None, &control)?
@@ -253,10 +254,10 @@ fn package_image_versions_and_tenants() -> TestResult {
         store
             .package_image([2; 16], "image-root", None, &control)?
             .ok_or("tenant image absent")?
-            .digest()?,
-        first.digest()?
+            .digest(),
+        first.digest()
     );
-    assert_eq!(inspect(&store, Some("v1"))?.digest()?, first.digest()?);
+    assert_eq!(inspect(&store, Some("v1"))?.digest(), first.digest());
     Ok(())
 }
 
@@ -272,16 +273,13 @@ fn package_image_rejects_invalid_closure() -> TestResult {
         araphor_analysis_sdk::DataType::UInt64,
         false,
     )]);
+    let mut missing = invalid.clone();
+    missing.artifacts.pop();
     let before = store.meta()?;
-    assert!(store
-        .install_package_image([1; 16], &invalid, || Ok(()))
-        .is_err());
+    assert!(PackageBundle::try_from(invalid).is_err());
     assert_eq!(store.meta()?, before);
     assert!(store.package_revisions([1; 16])?.is_empty());
-    invalid.artifacts.pop();
-    assert!(store
-        .install_package_image([1; 16], &invalid, || Ok(()))
-        .is_err());
+    assert!(PackageBundle::try_from(missing).is_err());
     assert_eq!(store.meta()?, before);
     assert!(store.package_revisions([1; 16])?.is_empty());
     Ok(())
@@ -292,7 +290,8 @@ fn package_image_recovery_checks_digest() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    store.install_package_image([1; 16], &image("v1")?, || Ok(()))?;
+    let image = PackageBundle::try_from(image("v1")?)?;
+    store.install_package_image([1; 16], &image, || Ok(()))?;
     {
         let mut writer = store.writer()?;
         writer.get_mut()?.execute(
@@ -328,6 +327,7 @@ fn package_image_large_roundtrip() -> TestResult {
     let mut expected = PackageRevisionV1::from_artifact(&bundle.artifacts[0], [1; 16])?;
     expected.artifact = bundle.artifacts[0].encode()?;
     assert!(expected.artifact.len() > 32 * 1024 * 1024);
+    let bundle = PackageBundle::try_from(bundle)?;
     let installed = store.install_package_image([1; 16], &bundle, || Ok(()))?;
     assert_no_execution(&store)?;
     let before = *store.subscribe_revision().borrow();
@@ -340,23 +340,22 @@ fn package_image_large_roundtrip() -> TestResult {
         "retained revision differs"
     );
     assert_eq!(*store.subscribe_revision().borrow(), before);
-    bundle
-        .artifacts
-        .sort_by_key(crate::PackageArtifactV1::reference);
+    let mut expected = bundle.bundle().artifacts.iter().collect::<Vec<_>>();
+    expected.sort_by_key(|artifact| artifact.reference());
     drop(store);
     let store = AnalysisStore::open(&root)?;
     let restored = inspect(&store, Some("large"))?;
     assert!(
-        restored.artifacts == bundle.artifacts,
+        restored.bundle().artifacts.iter().collect::<Vec<_>>() == expected,
         "retained artifacts differ"
     );
-    let digest = restored.digest()?;
-    let bytes = restored.encode()?;
+    let digest = restored.digest().to_owned();
+    let bytes = restored.bundle().encode()?;
     assert!(bytes.len() > 32 * 1024 * 1024);
     drop(restored);
     let restored = PackageBundleV1::from_bytes(&bytes)?;
     assert!(
-        restored.artifacts == bundle.artifacts,
+        restored.artifacts.iter().collect::<Vec<_>>() == expected,
         "decoded artifacts differ"
     );
     assert_eq!(restored.digest()?, digest);
@@ -378,76 +377,85 @@ fn uninstall_releases_exclusive_closure() -> TestResult {
         root: first.artifacts[1].reference(),
         artifacts: vec![first.artifacts[1].clone()],
     };
-    let pin = |image: &PackageBundleV1| -> crate::Result<araphor_discovery_definition::ImagePin> {
-        Ok(araphor_discovery_definition::ImagePin {
-            image: image.root.clone(),
-            digest: image.digest()?,
-        })
+    let first = PackageBundle::try_from(first)?;
+    let second = PackageBundle::try_from(second)?;
+    let dependency = PackageBundle::try_from(dependency)?;
+    let pin = |image: &PackageBundle| araphor_discovery_definition::ImagePin {
+        image: image.bundle().root.clone(),
+        digest: image.digest().into(),
     };
     for bundle in [&first, &second, &dependency] {
         store.install_package_image([1; 16], bundle, || Ok(()))?;
     }
     store.install_package_image([2; 16], &first, || Ok(()))?;
-    assert!(store.uninstall_package_image([1; 16], &pin(&first)?, || Ok(()))?);
+    assert!(store.uninstall_package_image([1; 16], &pin(&first), || Ok(()))?);
     assert!(store
         .package_image(
             [1; 16],
-            &first.root.package_id,
+            &first.bundle().root.package_id,
             None,
             &AnalysisReadControl::default()
         )?
         .is_none());
     assert!(store
-        .package_revision([1; 16], &first.root.package_id, &first.root.revision)?
+        .package_revision(
+            [1; 16],
+            &first.bundle().root.package_id,
+            &first.bundle().root.revision
+        )?
         .is_none());
     assert_eq!(
         store
             .package_image(
                 [1; 16],
-                &second.root.package_id,
+                &second.bundle().root.package_id,
                 None,
                 &AnalysisReadControl::default()
             )?
             .ok_or("shared image")?
-            .digest()?,
-        second.digest()?
+            .digest(),
+        second.digest()
     );
     assert!(store
         .package_revision(
             [1; 16],
-            &dependency.root.package_id,
-            &dependency.root.revision
+            &dependency.bundle().root.package_id,
+            &dependency.bundle().root.revision
         )?
         .is_some());
-    assert!(store.uninstall_package_image([1; 16], &pin(&second)?, || Ok(()))?);
+    assert!(store.uninstall_package_image([1; 16], &pin(&second), || Ok(()))?);
     assert!(store
-        .package_revision([1; 16], &second.root.package_id, &second.root.revision)?
+        .package_revision(
+            [1; 16],
+            &second.bundle().root.package_id,
+            &second.bundle().root.revision
+        )?
         .is_none());
     assert_eq!(
         store
             .package_image(
                 [1; 16],
-                &dependency.root.package_id,
+                &dependency.bundle().root.package_id,
                 None,
                 &AnalysisReadControl::default()
             )?
             .ok_or("explicit dependency")?
-            .digest()?,
-        dependency.digest()?
+            .digest(),
+        dependency.digest()
     );
-    assert!(store.uninstall_package_image([1; 16], &pin(&dependency)?, || Ok(()))?);
+    assert!(store.uninstall_package_image([1; 16], &pin(&dependency), || Ok(()))?);
     assert!(store.package_revisions([1; 16])?.is_empty());
     assert_eq!(
         store
             .package_image(
                 [2; 16],
-                &first.root.package_id,
+                &first.bundle().root.package_id,
                 None,
                 &AnalysisReadControl::default()
             )?
             .ok_or("other tenant image")?
-            .digest()?,
-        first.digest()?
+            .digest(),
+        first.digest()
     );
     drop(store);
     let reopened = AnalysisStore::open(&root)?;
@@ -456,13 +464,13 @@ fn uninstall_releases_exclusive_closure() -> TestResult {
         reopened
             .package_image(
                 [2; 16],
-                &first.root.package_id,
+                &first.bundle().root.package_id,
                 None,
                 &AnalysisReadControl::default()
             )?
             .ok_or("restored tenant image")?
-            .digest()?,
-        first.digest()?
+            .digest(),
+        first.digest()
     );
     Ok(())
 }
@@ -471,11 +479,11 @@ fn uninstall_releases_exclusive_closure() -> TestResult {
 fn uninstall_guard_keeps_closure() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let bundle = image("v1")?;
+    let bundle = PackageBundle::try_from(image("v1")?)?;
     let installed = store.install_package_image([1; 16], &bundle, || Ok(()))?;
     let pin = araphor_discovery_definition::ImagePin {
-        image: bundle.root.clone(),
-        digest: bundle.digest()?,
+        image: bundle.bundle().root.clone(),
+        digest: bundle.digest().into(),
     };
     let before = store.meta()?;
     let revisions = store.package_revisions([1; 16])?;
@@ -489,7 +497,7 @@ fn uninstall_guard_keeps_closure() -> TestResult {
     assert!(checked);
     assert_eq!(store.meta()?, before);
     assert_eq!(store.package_revisions([1; 16])?, revisions);
-    assert_eq!(inspect(&store, None)?.digest()?, pin.digest);
+    assert_eq!(inspect(&store, None)?.digest(), pin.digest);
     assert_eq!(
         store.install_package_image([1; 16], &bundle, || Ok(()))?,
         installed
@@ -518,13 +526,13 @@ fn definitions_retain_uninstalled_images() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let first = image("v1")?;
-    let second = image("v2")?;
+    let first = PackageBundle::try_from(image("v1")?)?;
+    let second = PackageBundle::try_from(image("v2")?)?;
     store.install_package_image([1; 16], &first, || Ok(()))?;
     let installed = store.install_package_image([1; 16], &second, || Ok(()))?;
     let pin = ImagePin {
-        image: second.root.clone(),
-        digest: second.digest()?,
+        image: second.bundle().root.clone(),
+        digest: second.digest().into(),
     };
     let sql = "SELECT * FROM \"image-root\".\"v2\".model()".to_owned();
     let definition = ResolvedDefinition::new(
@@ -543,7 +551,7 @@ fn definitions_retain_uninstalled_images() -> TestResult {
     )?;
     store.admit_definition([1; 16], &definition, || Ok(()))?;
     assert!(store.uninstall_package_image([1; 16], &pin, || Ok(()))?);
-    assert_eq!(inspect(&store, None)?.digest()?, first.digest()?);
+    assert_eq!(inspect(&store, None)?.digest(), first.digest());
     assert!(store
         .package_image(
             [1; 16],
@@ -557,8 +565,8 @@ fn definitions_retain_uninstalled_images() -> TestResult {
         store
             .retained_package_image([1; 16], &pin, &AnalysisReadControl::default())?
             .ok_or("retained image")?
-            .digest()?,
-        second.digest()?
+            .digest(),
+        second.digest()
     );
     assert_eq!(
         store.definition(
@@ -572,13 +580,14 @@ fn definitions_retain_uninstalled_images() -> TestResult {
     let mut fresh = definition.clone();
     fresh.definition.name = "fresh-image".into();
     assert!(store.admit_definition([1; 16], &fresh, || Ok(())).is_err());
-    let mut collision = second.clone();
+    let mut collision = second.bundle().clone();
     let PackageImplementationV1::Sql { program, .. } =
         &mut collision.artifacts[0].implementations[0]
     else {
         return Err("SQL image fixture".into());
     };
     program.outputs.insert("rows".into(), "SELECT 2".into());
+    let collision = PackageBundle::try_from(collision)?;
     assert!(store
         .install_package_image([1; 16], &collision, || Ok(()))
         .is_err());
@@ -590,8 +599,8 @@ fn definitions_retain_uninstalled_images() -> TestResult {
         reopened
             .retained_package_image([1; 16], &pin, &AnalysisReadControl::default())?
             .ok_or("restored image")?
-            .digest()?,
-        second.digest()?
+            .digest(),
+        second.digest()
     );
     let reinstalled = reopened.install_package_image([1; 16], &second, || Ok(()))?;
     assert!(reinstalled > installed);
@@ -599,7 +608,7 @@ fn definitions_retain_uninstalled_images() -> TestResult {
         reopened.install_package_image([1; 16], &second, || Ok(()))?,
         reinstalled
     );
-    assert_eq!(inspect(&reopened, None)?.digest()?, second.digest()?);
+    assert_eq!(inspect(&reopened, None)?.digest(), second.digest());
     reopened.admit_definition([1; 16], &fresh, || Ok(()))?;
     Ok(())
 }
@@ -622,9 +631,10 @@ fn uninstall_collects_unused_native() -> TestResult {
             })
             .collect();
     }
+    let bundle = PackageBundle::try_from(bundle)?;
     let pin = araphor_discovery_definition::ImagePin {
-        image: bundle.root.clone(),
-        digest: bundle.digest()?,
+        image: bundle.bundle().root.clone(),
+        digest: bundle.digest().into(),
     };
     let receipt = store.install_package_image([1; 16], &bundle, || Ok(()))?;
     let before = store.meta()?;

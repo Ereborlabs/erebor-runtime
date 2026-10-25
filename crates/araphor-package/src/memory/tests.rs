@@ -213,3 +213,20 @@ fn memory_overflow_is_rejected() {
         })
     ));
 }
+
+#[test]
+fn admitted_capacity_is_charged() -> TestResult {
+    let mut raw = crate::tests::bundle("1", "SELECT 7::BIGINT UNSIGNED AS count");
+    string(&mut raw.root.package_id);
+    string(&mut raw.root.revision);
+    grow(&mut raw.artifacts);
+    let heap = raw.allocated_bytes()?;
+    let digest = raw.digest()?;
+    let admitted = crate::PackageBundle::try_from(raw)?;
+    assert_eq!(
+        admitted.allocated_bytes()?,
+        size_of::<crate::PackageBundle>() + heap + digest.capacity()
+    );
+    assert_eq!(admitted.digest(), digest);
+    Ok(())
+}

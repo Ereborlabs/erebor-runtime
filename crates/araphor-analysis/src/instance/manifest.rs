@@ -39,16 +39,17 @@ impl Instance {
                 }
                 let bundle = definition
                     .images()
-                    .find(|(bundle, digest)| {
-                        bundle.root == call.image().image && *digest == call.image().digest
+                    .find(|bundle| {
+                        bundle.bundle().root == call.image().image
+                            && bundle.digest() == call.image().digest
                     })
-                    .map(|(bundle, _)| bundle)
                     .ok_or_else(|| {
                         datafusion::common::DataFusionError::External(Box::new(
                             Code::Missing.error("managed call image"),
                         ))
                     })?;
                 let implementation = bundle
+                    .bundle()
                     .artifact(call.package())
                     .and_then(|artifact| artifact.implementation(call.export()))
                     .map_err(|source| {

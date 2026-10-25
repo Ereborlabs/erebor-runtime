@@ -1,5 +1,7 @@
 # Araphor Analysis migration
 
+Current immutable image ownership is in [One immutable package content owner](#one-immutable-package-content-owner).
+
 Current retained aggregate scope is in [Native integral aggregation](#native-integral-aggregation).
 
 Current package provenance is in [One package provenance contract](#one-package-provenance-contract).
@@ -3944,3 +3946,69 @@ Evidence is under
 The 92-file source archive has SHA-256
 `919ab61e81e49029c3c23285cd8c41a2597fb39cc3003bf44312e9c9aca1046b`.
 Full workspace CI, physical qualification, and benchmarks are not repeated.
+
+## One immutable package content owner
+
+This change follows `bd2c4bc77`. It replaces the unchecked borrowed reference
+with PackageBundle in the pure Package crate. Data re-exports the same type.
+The owner retains one private raw payload and its canonical digest. Raw
+PackageBundleV1 remains the mutable authoring and wire value.
+
+| Required behavior | Retained or replacement owner |
+| --- | --- |
+| Canonical admission | Exactly TryFrom(raw) and checked(raw, expected). The first checks structure before encoding. The second retains digest-first mismatch behavior. Both use the existing native OCI layout. |
+| Metadata and footprint | Admitted metadata projects the stored digest without revalidation. Raw metadata stays checked. The owner charge includes its header, payload heap, and digest capacity. Query adds the existing two-Arc tuple header once. |
+| Store truth | Data keeps row decoding, dependency and digest checks, installed versus retained selection, tenant guards, collection, reopen, and current manifest checks. |
+| Context identity | AnalysisContextVersionV1 owns construction and provenance parsing. Native body fields, byte order, keys, selected export/output checks, and generic contexts remain. |
+| Native query execution | Prepared definitions, calls, replay, and runtime share actual owner identity and the existing reservation. SQL admission remains specific to each definition. Equal digests do not merge independent engines or allocations. |
+| Manual and built-in lifetime | Control shares one admitted built-in value across its producer loop. First lazy manual preparation still requires a fresh installed read and exact pin. Cold uninstall/reinstall, trust, and current revocation use public owners. |
+| Invocation safety | SDK, host, guest, parameter, prepared-handle, permit, cancellation, output, and commit guards remain at their current owners. Canonical content grants no right to execute. |
+
+The old Data bundle-reference module is removed. No compatibility alias,
+unchecked constructor, cache, schema version, or serialized protocol is added.
+Existing structural negative tests enter the checked content constructor.
+Their rejection, exact error, no-write, and cleanup assertions remain.
+
+The existing historical E2E context fixture is outside the module graph.
+It is unchanged and excluded from this deliverable. All original user working
+files and staged changes remain. The focused checks cover the recorded
+working source; they do not establish a full clean-tree CI result.
+
+Result: **Done** for this content-owner consolidation. The focused record has
+158 distinct passing cases and 159 case executions. No selected case is ignored.
+
+| Owner | Distinct passing cases |
+| --- | ---: |
+| Package | 18 |
+| Data | 25 |
+| Runtime | 5 |
+| Query | 32 |
+| Analysis | 54 |
+| Control | 22 |
+| Lightweight E2E | 2 |
+
+The initial composed build rejects stale fixture call shapes. An exact caller
+repair retains every prior assertion. The next build rejects a test-only crate
+path. It is changed to Data's existing re-export. The composed build then passes.
+The final build and strict Clippy checks pass after the historical fixture is
+excluded. Every compiled test binary remains identical. All 84 final changed
+source paths match their hashes in each recorded test-start snapshot.
+
+The first Analysis run has 52 passes and one failure. The existing Graph version
+test reaches its 30-second startup deadline with no facts callback recorded.
+That exact test passes alone with the same binary, test, and deadline. No test
+or production fix is applied for this failure. Concurrent load is a possible
+cause; the isolated pass does not establish that cause. The original failure
+and retry remain in integration.json, retry.json, and verification.json.
+
+The checks include cold uninstall/reinstall for SQL and Wasm, current authority,
+prepared identity, native execution, image capacity, stored corruption, atomic
+context and result commits, and the original large image. The 1,025-artifact
+closure retains its 1,024 dependencies and 1,025 exports through collection,
+backup, reopen, and restore. No acceptance assertion or deadline is reduced.
+General maintained SQL and the complete redesign remain **Not done**.
+Evidence is under
+`/home/navid/mithril-test-hosts/immutable-package-content-verification`.
+The original 888-file source archive has SHA-256
+`d88a1c5c766ec4db7f325ac3b46317198c2338c89a9d6aaea6a48bae640847a4`.
+Full workspace CI, benchmarks, and physical qualification are not repeated.

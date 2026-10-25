@@ -505,7 +505,7 @@ with glibc 2.39. Full workspace CI and benchmarks are not run. Complete redesign
 Implementation and selected host verification: **Done**. The [component record](araphor-component-redesign.md#shared-package-oci-persistence)
 and [storage review](../guides/araphor-binary-package-storage-review.md)
 name the source owners and focused cases.
-[PackageArtifactV1::encode and from_bytes](../../crates/araphor-data/src/package/bundle.rs)
+[PackageArtifactV1::encode and from_bytes](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/bundle.rs)
 reuse the existing PackageOci metadata and raw-layer codec. The separate
 StoredArtifact CBOR codec is deleted. The retained OCI descriptor must agree
 with the separate descriptor column. Fixture bytes remain raw layers, external

@@ -104,7 +104,11 @@ impl Fixture {
     fn installed(bundle: PackageBundleV1, limits: Limits) -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-        store.install_package_image(Self::input()?.tenant_id, &bundle, || Ok(()))?;
+        store.install_package_image(
+            Self::input()?.tenant_id,
+            &araphor_package::PackageBundle::try_from(bundle.clone())?,
+            || Ok(()),
+        )?;
         Ok(Self {
             query: Engine::new(store, limits)?,
             bundle,

@@ -126,7 +126,7 @@ async fn replay_survives_raw_retention() -> TestResult {
     )?);
     fixture.store.install_package_image(
         fixture.source.tenant_id,
-        &Package::discovery_bundle()?,
+        &PackageBundle::try_from(Package::discovery_bundle()?)?,
         || Ok(()),
     )?;
     let mut query = Engine::new(

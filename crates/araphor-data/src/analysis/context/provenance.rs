@@ -1,14 +1,13 @@
 use duckdb::Connection;
 
 use super::*;
-use crate::PackageBundleRef;
 
 impl AnalysisStore {
     pub(in crate::analysis) fn validate_context_packages(
         reader: &Connection,
         context: &AnalysisContextVersionV1,
     ) -> Result<()> {
-        let Some(reference) = PackageBundleRef::provenance(context)? else {
+        let Some(reference) = context.package_provenance()? else {
             return Ok(());
         };
         let artifacts = Self::package_artifacts_from(

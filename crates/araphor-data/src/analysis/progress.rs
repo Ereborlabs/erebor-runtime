@@ -875,7 +875,7 @@ impl AnalysisStore {
             }
             expected_keys.extend(graph.input_manifest.context.iter());
             for context in contexts {
-                if crate::PackageBundleRef::provenance(context)?.is_some() {
+                if context.package_provenance()?.is_some() {
                     expected_keys.insert(&context.key);
                 } else {
                     let fact = crate::GraphFactV1::try_from(context)?;

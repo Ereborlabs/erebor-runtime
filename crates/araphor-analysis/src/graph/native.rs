@@ -6,8 +6,7 @@ use araphor_analysis_builtins::graph::Detector;
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
     AnalysisContextRefV1, AnalysisContextVersionV1, AnalysisResultReceiptV1, PackageActionV1,
-    PackageAuthorization, PackageBundleRef, PackageErrorCodeV1 as Code, PackageGrantV1,
-    StorePositionV1,
+    PackageAuthorization, PackageErrorCodeV1 as Code, PackageGrantV1, StorePositionV1,
 };
 use araphor_discovery_definition::{Definition, Program, ResolvedDefinition, Source};
 use araphor_query::definition::{PackageCall, PreparedDefinition};
@@ -251,8 +250,9 @@ impl GraphPublication {
         let mut calls = BTreeMap::new();
         let mut foreign = false;
         PackageCall::any(&prepared.plan, &mut |call| {
-            if !prepared.images().any(|(bundle, digest)| {
-                bundle.root == call.image().image && digest == call.image().digest.as_str()
+            if !prepared.images().any(|bundle| {
+                bundle.bundle().root == call.image().image
+                    && bundle.digest() == call.image().digest.as_str()
             }) {
                 foreign = true;
                 return Ok(false);
@@ -293,8 +293,8 @@ impl GraphPublication {
             araphor_query::execution::Engine::blocking(Arc::clone(&stage), (), move || {
                 granted.remaining()?;
                 check.check(&granted, PackageActionV1::Run)?;
-                for (bundle, digest) in prepared.images() {
-                    check.admit(&granted, &PackageBundleRef::retained(bundle, digest))?;
+                for bundle in prepared.images() {
+                    check.admit(&granted, bundle)?;
                 }
                 stage.check()?;
                 Ok(prepared)
@@ -303,20 +303,21 @@ impl GraphPublication {
         let packages = calls
             .values()
             .map(|call| {
-                let (bundle, digest) = prepared
+                let bundle = prepared
                     .images()
-                    .find(|(bundle, digest)| {
-                        bundle.root == call.image().image && *digest == call.image().digest.as_str()
+                    .find(|bundle| {
+                        bundle.bundle().root == call.image().image
+                            && bundle.digest() == call.image().digest.as_str()
                     })
                     .ok_or_else(|| Code::Denied.error("graph image attribution"))?;
-                Ok(PackageBundleRef::retained(bundle, digest)
-                    .context(
-                        grant.selection.tenant_id,
-                        call.package(),
-                        call.export(),
-                        call.output(),
-                    )?
-                    .key)
+                Ok(araphor_data::AnalysisContextVersionV1::from_package(
+                    bundle,
+                    grant.selection.tenant_id,
+                    call.package(),
+                    call.export(),
+                    call.output(),
+                )?
+                .key)
             })
             .collect::<araphor_data::Result<std::collections::BTreeSet<_>>>()?;
         let selected = Arc::downgrade(&projection);
@@ -447,15 +448,10 @@ impl GraphPublication {
         control: &araphor_data::AnalysisReadControl,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
-        let images = self
-            .prepared
-            .images()
-            .map(|(bundle, digest)| PackageBundleRef::retained(bundle, digest))
-            .collect::<Vec<_>>();
         let grants = std::iter::once((&self.grant, PackageActionV1::Run, None))
             .chain(
-                images
-                    .iter()
+                self.prepared
+                    .images()
                     .map(|image| (&self.grant, PackageActionV1::Run, Some(image))),
             )
             .collect::<Vec<_>>();

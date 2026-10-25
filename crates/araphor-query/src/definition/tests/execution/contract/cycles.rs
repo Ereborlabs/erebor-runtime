@@ -61,10 +61,7 @@ async fn image_rejects_artifact_cycles() -> TestResult {
     assert_eq!(selected.order()?.len(), 3);
     let before = fixture.engine.store().meta()?;
     assert!(matches!(
-        fixture
-            .engine
-            .store()
-            .install_package_image([1; 16], &selected, || Ok(())),
+        araphor_package::PackageBundle::try_from(selected).map_err(araphor_data::Error::from),
         Err(araphor_data::Error::Package {
             code: araphor_data::PackageErrorCodeV1::Invalid,
             field: "artifact dependency cycle",

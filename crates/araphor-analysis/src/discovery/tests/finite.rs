@@ -122,7 +122,7 @@ impl PartitionStream for RetirementGate {
 
 impl Fixture {
     async fn gated_profile(&self, gate: Arc<RetirementGate>) -> TestResult<Arc<crate::Instance>> {
-        let image = Package::discovery_bundle()?;
+        let image = PackageBundle::try_from(Package::discovery_bundle()?)?;
         self.store
             .install_package_image(self.source.tenant_id, &image, || Ok(()))?;
         let grant = PackageGrantV1 {
@@ -148,7 +148,7 @@ impl Fixture {
                 source: Source::Inline {
                     inline: format!(
                         "SELECT profile.* FROM ({}) AS profile CROSS JOIN retirement_gate WHERE retirement_gate.allowed",
-                        Program::call(&image.root, "live", "snapshot")?.sql()?,
+                        Program::call(&image.bundle().root, "live", "snapshot")?.sql()?,
                     ),
                 },
             },
@@ -156,7 +156,7 @@ impl Fixture {
         let prepared = session.prepare_definition(&definition).await?;
         let mut selected = None;
         PackageCall::any(&prepared.plan, &mut |call| {
-            if call.package() == &image.root
+            if call.package() == &image.bundle().root
                 && call.export() == "live"
                 && call.output() == "snapshot"
             {
@@ -304,6 +304,7 @@ async fn publication_rejects_auxiliary_returns() -> TestResult {
                 sql: "SELECT __row_index AS output_row, value FROM output_data".into(),
             });
         }
+        let image = Arc::new(PackageBundle::try_from(image)?);
         fixture
             .store
             .install_package_image(fixture.source.tenant_id, &image, || Ok(()))?;

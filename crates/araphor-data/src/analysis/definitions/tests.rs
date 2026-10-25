@@ -241,7 +241,7 @@ fn definition_check_is_atomic() -> TestResult {
 fn definition_requires_exact_image() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let image = sql_image();
+    let image = crate::PackageBundle::try_from(sql_image())?;
     let sql = "SELECT * FROM \"definition-image\".\"1\".count()";
     let definition = Definition {
         name: "package-counts".into(),
@@ -255,8 +255,8 @@ fn definition_requires_exact_image() -> TestResult {
         definition,
         sql.into(),
         vec![ImagePin {
-            image: image.root.clone(),
-            digest: image.digest()?,
+            image: image.bundle().root.clone(),
+            digest: image.digest().into(),
         }],
     )?;
     for tenant in [None, Some([2; 16])] {

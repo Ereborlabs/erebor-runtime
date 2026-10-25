@@ -35,11 +35,11 @@ async fn graph_conversion_failure_finishes() -> TestResult {
     };
     fixture.query.store().install_package_image(
         fixture.source.tenant_id,
-        &PackageBundleV1 {
+        &araphor_data::PackageBundle::try_from(PackageBundleV1 {
             schema_version: 1,
             root: artifact.reference(),
             artifacts: vec![artifact],
-        },
+        })?,
         || Ok(()),
     )?;
     let sql = araphor_data::FindingV1::PACKAGES

@@ -141,7 +141,7 @@ fn package_commit_holds_authority() -> std::result::Result<(), Box<dyn std::erro
         tenant_id: Uuid::from_bytes([1; 16]).to_string(),
         bundle_digest: bundle.digest()?,
     }])?;
-    let admitted = araphor_data::PackageBundleRef::new(&bundle)?;
+    let admitted = araphor_data::PackageBundle::try_from(bundle.clone())?;
     let mut committed = false;
     owner.commit(&grant, PackageActionV1::Run, &admitted, &mut || {
         assert!(matches!(
@@ -154,7 +154,7 @@ fn package_commit_holds_authority() -> std::result::Result<(), Box<dyn std::erro
     assert!(committed);
     let changed = self::bundle("SELECT 2::BIGINT UNSIGNED AS count");
     assert_ne!(bundle.digest()?, changed.digest()?);
-    let changed_ref = araphor_data::PackageBundleRef::new(&changed)?;
+    let changed_ref = araphor_data::PackageBundle::try_from(changed.clone())?;
     assert!(owner.admit(&grant, &changed_ref).is_err());
     committed = false;
     assert!(owner
@@ -483,8 +483,8 @@ fn definition_commit_checks_images() -> std::result::Result<(), Box<dyn std::err
     let grant = access.package_grant(AnalysisSelectionV1::tenant([1; 16]), PackageActionV1::Run)?;
     let first = bundle("SELECT 1::BIGINT UNSIGNED AS count");
     let second = bundle("SELECT 2::BIGINT UNSIGNED AS count");
-    let first_ref = araphor_data::PackageBundleRef::new(&first)?;
-    let second_ref = araphor_data::PackageBundleRef::new(&second)?;
+    let first_ref = araphor_data::PackageBundle::try_from(first.clone())?;
+    let second_ref = araphor_data::PackageBundle::try_from(second.clone())?;
     let pin = |bundle: &PackageBundleV1| -> std::result::Result<PackageTrustPinV1, Box<dyn std::error::Error>> {
         Ok(PackageTrustPinV1 {
             tenant_id: Uuid::from_bytes([1; 16]).to_string(),

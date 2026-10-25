@@ -38,6 +38,7 @@ impl PackageExec {
         let artifact = self
             .call
             .bundle
+            .bundle()
             .artifact(&self.call.package)
             .map_err(external)?;
         let wasm = matches!(

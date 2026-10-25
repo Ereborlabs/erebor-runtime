@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::{
-    AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, PackageBundleRef,
-};
+use crate::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, PackageBundle};
 
 fn proposed(
     fixture: &mut CommitFixture,
@@ -73,12 +71,14 @@ fn proposed(
         root: artifact.reference(),
         artifacts: vec![artifact],
     };
+    let bundle = PackageBundle::try_from(bundle)?;
     fixture
         .store
         .install_package_image(tenant, &bundle, || Ok(()))?;
-    let pin = PackageBundleRef::retained(&bundle, &bundle.digest()?).context(
+    let pin = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
         tenant,
-        &bundle.root,
+        &bundle.bundle().root,
         "count",
         "rows",
     )?;

@@ -87,7 +87,7 @@ async fn image_install_roundtrip() -> Result<()> {
             &Default::default(),
         )?
         .ok_or("retained image absent")?;
-    assert_eq!(retained.artifacts, bundle.artifacts);
+    assert_eq!(retained.bundle().artifacts, bundle.artifacts);
     oidc.shutdown().await?;
     Ok(())
 }

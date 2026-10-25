@@ -28,21 +28,17 @@ impl Session {
         let mut call = selected.ok_or_else(|| PackageErrorCodeV1::Missing.error("replay call"))?;
         if call.tenant() != self.selection().tenant_id
             || call.export() != evaluation.export
-            || !definition
-                .admission
-                .images
-                .iter()
-                .any(|(bundle, digest, image)| {
-                    Arc::ptr_eq(bundle, &call.bundle)
-                        && Arc::ptr_eq(image, &call._image)
-                        && bundle.root == call.pin.image
-                        && *digest == call.pin.digest
-                })
+            || !definition.admission.images.iter().any(|(bundle, image)| {
+                Arc::ptr_eq(bundle, &call.bundle)
+                    && Arc::ptr_eq(image, &call._image)
+                    && bundle.bundle().root == call.pin.image
+                    && bundle.digest() == call.pin.digest
+            })
         {
             return Err(PackageErrorCodeV1::Denied.error("replay call scope").into());
         }
         let bundle = Arc::clone(&call.bundle);
-        let descriptor = &bundle.artifacts[call.artifact].descriptor;
+        let descriptor = &bundle.bundle().artifacts[call.artifact].descriptor;
         let mut session = self.clone();
         session.tables = Arc::default();
         let replay = {

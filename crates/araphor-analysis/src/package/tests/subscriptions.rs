@@ -8,7 +8,7 @@ use araphor_analysis_sdk as sdk;
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, PackageRefV1,
 };
-use araphor_package::{PackageArtifactV1, PackageImplementationV1, SqlModelV1};
+use araphor_package::{PackageArtifactV1, PackageBundleV1, PackageImplementationV1, SqlModelV1};
 use araphor_query::follow::{Subscription, Update};
 use futures_util::{FutureExt as _, StreamExt as _};
 use sdk::arrow_array::UInt64Array;
@@ -28,7 +28,7 @@ impl PackageAuthorization for Grant {
         grant.remaining().map(|_| ())
     }
 
-    fn admit(&self, _: &PackageGrantV1, bundle: &PackageBundleRef<'_>) -> araphor_data::Result<()> {
+    fn admit(&self, _: &PackageGrantV1, bundle: &PackageBundle) -> araphor_data::Result<()> {
         if !self.trusted.load(Ordering::SeqCst) || bundle.digest() != self.digest {
             return Err(Code::Denied.error("subscription fixture trust"));
         }
@@ -39,7 +39,7 @@ impl PackageAuthorization for Grant {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleRef<'_>,
+        bundle: &PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.check(grant, action)?;
@@ -62,6 +62,7 @@ impl Fixture {
     fn new(bundle: PackageBundleV1, export: &str, output: &str) -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let bundle = Arc::new(PackageBundle::try_from(bundle)?);
         store.install_package_image([1; 16], &bundle, || Ok(()))?;
         store.commit_context(&AnalysisContextVersionV1 {
             key: AnalysisContextKeyV1 {
@@ -77,7 +78,7 @@ impl Fixture {
             body: vec![7],
         })?;
         let authority = Arc::new(Grant {
-            digest: bundle.digest()?,
+            digest: bundle.digest().into(),
             revoked: AtomicBool::new(false),
             trusted: AtomicBool::new(true),
             changes: tokio::sync::watch::channel(0).0,
@@ -216,9 +217,10 @@ async fn captures_inputs(target: &str) -> TestResult {
             && reference.key.owner_revision == 7
             && reference.commit_revision <= initial.commit_revision
     }));
-    let expected = PackageBundleRef::retained(&package.bundle, &package.digest).context(
+    let expected = AnalysisContextVersionV1::from_package(
+        &package.bundle,
         package.grant.selection.tenant_id,
-        &package.bundle.root,
+        &package.bundle.bundle().root,
         &package.export,
         &package.output,
     )?;
@@ -229,8 +231,14 @@ async fn captures_inputs(target: &str) -> TestResult {
     let retained = package.query.store().intern_context(&expected)?;
     assert_eq!(package.query.store().meta()?, initial);
     assert!(contexts.iter().any(|reference| **reference == retained));
-    assert_eq!(prepared.resolved().images[0].image, package.bundle.root);
-    assert_eq!(prepared.resolved().images[0].digest, package.digest);
+    assert_eq!(
+        prepared.resolved().images[0].image,
+        package.bundle.bundle().root
+    );
+    assert_eq!(
+        prepared.resolved().images[0].digest,
+        package.bundle.digest()
+    );
     let digest = prepared.resolved().digest()?;
     assert_eq!(
         package.query.store().definition(
@@ -511,9 +519,9 @@ async fn subscription_rechecks_image_trust() -> TestResult {
 fn package_requires_installed_image() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
-    let bundle = Fixture::bundle("sql")?;
+    let bundle = Arc::new(PackageBundle::try_from(Fixture::bundle("sql")?)?);
     let authority = Arc::new(Grant {
-        digest: bundle.digest()?,
+        digest: bundle.digest().into(),
         revoked: AtomicBool::new(false),
         trusted: AtomicBool::new(true),
         changes: tokio::sync::watch::channel(0).0,
@@ -529,7 +537,7 @@ fn package_requires_installed_image() -> TestResult {
             expires_utc_ns: None,
             authorization_id: None,
         },
-        bundle.clone(),
+        Arc::clone(&bundle),
         "echo-inputs",
         "context_versions",
     );
@@ -537,11 +545,153 @@ fn package_requires_installed_image() -> TestResult {
     assert!(store
         .package_image(
             [1; 16],
-            &bundle.root.package_id,
-            Some(&bundle.root.revision),
+            &bundle.bundle().root.package_id,
+            Some(&bundle.bundle().root.revision),
             &AnalysisReadControl::default()
         )?
         .is_none());
     assert_eq!(store.meta()?, before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_subscribe_requires_installation() -> TestResult {
+    use erebor_runtime_error::{ErrorExt as _, StatusCode};
+
+    for target in ["sql", "wasm"] {
+        let fixture = Fixture::new(Fixture::bundle(target)?, "echo-inputs", "context_versions")?;
+        let package = &fixture.package;
+        let store = package.query.store();
+        assert!(package.prepared.get().is_none());
+        let pin = araphor_discovery_definition::ImagePin {
+            image: package.bundle.bundle().root.clone(),
+            digest: package.bundle.digest().into(),
+        };
+        let context = AnalysisContextVersionV1::from_package(
+            &package.bundle,
+            package.grant.selection.tenant_id,
+            &pin.image,
+            &package.export,
+            &package.output,
+        )?;
+        let original = store
+            .context_version(&context.key)?
+            .ok_or("package context")?;
+        assert_eq!(original, context);
+        let rows = store.package_revisions([1; 16])?;
+        assert!(!rows.is_empty());
+        assert!(store.uninstall_package_image([1; 16], &pin, || Ok(()))?);
+        assert!(store
+            .package_image(
+                [1; 16],
+                &pin.image.package_id,
+                Some(&pin.image.revision),
+                &AnalysisReadControl::default(),
+            )?
+            .is_none());
+        let retained = store
+            .retained_package_image([1; 16], &pin, &AnalysisReadControl::default())?
+            .ok_or("retained package image")?;
+        assert_eq!(
+            (
+                retained.bundle().schema_version,
+                &retained.bundle().root,
+                &retained.bundle().artifacts,
+            ),
+            (
+                package.bundle.bundle().schema_version,
+                &package.bundle.bundle().root,
+                &package.bundle.bundle().artifacts,
+            )
+        );
+        assert_eq!(retained.digest(), pin.digest);
+        assert_eq!(store.context_version(&context.key)?, Some(original.clone()));
+        assert_eq!(store.package_revisions([1; 16])?, rows);
+        let before = store.meta()?;
+        let reserved = package.query.memory().input_reserved();
+        assert_eq!(reserved, 0);
+        let error = package
+            .subscribe(None, false)
+            .await
+            .err()
+            .ok_or("cold uninstalled package ran")?;
+        assert_eq!(error.status_code(), StatusCode::NotFound);
+        assert!(matches!(
+            error,
+            crate::Error::Query {
+                source: araphor_query::Error::Data {
+                    source: araphor_data::Error::Package {
+                        code: Code::Missing,
+                        field: "definition image revision",
+                        ..
+                    }
+                }
+            }
+        ));
+        assert!(package.prepared.get().is_none());
+        assert_eq!(package.query.memory().input_reserved(), reserved);
+        assert_eq!(store.meta()?, before);
+        assert_eq!(store.package_revisions([1; 16])?, rows);
+        assert_eq!(store.context_version(&context.key)?, Some(original.clone()));
+
+        store.install_package_image([1; 16], &package.bundle, || Ok(()))?;
+        let installed = store.meta()?;
+        fixture.authority.trusted.store(false, Ordering::SeqCst);
+        let error = package
+            .subscribe(None, false)
+            .await
+            .err()
+            .ok_or("untrusted retry ran")?;
+        assert!(matches!(
+            error,
+            crate::Error::Data {
+                source: araphor_data::Error::Package {
+                    code: Code::Denied,
+                    field: "subscription fixture trust",
+                    ..
+                }
+            }
+        ));
+        assert!(package.prepared.get().is_none());
+        assert_eq!(package.query.memory().input_reserved(), reserved);
+        assert_eq!(store.meta()?, installed);
+        assert_eq!(store.package_revisions([1; 16])?, rows);
+        fixture.authority.trusted.store(true, Ordering::SeqCst);
+        let mut stream = package.subscribe(None, false).await?;
+        let update = Fixture::next(&mut stream).await?;
+        let (prepared, call) = package.prepared.get().ok_or("retried admission")?;
+        assert_eq!(prepared.resolved().images, [pin]);
+        assert!(update
+            .calls
+            .get(&call.id())
+            .is_some_and(|result| result.belongs_to(call)));
+        assert_eq!(update.calls.len(), 1);
+        assert!(update.batches.as_ref().is_some_and(|batches| batches
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>()
+            == 2));
+        assert_eq!(store.meta()?, installed);
+        assert_eq!(store.package_revisions([1; 16])?, rows);
+        assert_eq!(store.context_version(&context.key)?, Some(original));
+        stream.cancel_and_join().await?;
+        fixture.authority.revoked.store(true, Ordering::SeqCst);
+        let error = package
+            .subscribe(None, false)
+            .await
+            .err()
+            .ok_or("revoked warm package ran")?;
+        assert!(matches!(
+            error,
+            crate::Error::Data {
+                source: araphor_data::Error::Package {
+                    code: Code::Denied,
+                    field: "subscription fixture authority",
+                    ..
+                }
+            }
+        ));
+        assert_eq!(store.meta()?, installed);
+    }
     Ok(())
 }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{PackageBundleRef, PackageBundleV1, PackageRefV1};
+use crate::{PackageBundle, PackageBundleV1, PackageRefV1};
 
 fn bundle() -> crate::Result<PackageBundleV1> {
     let mut root = package("native-root", "v1")?.decode_artifact()?;
@@ -74,6 +74,7 @@ fn package_context_retains_closure() -> TestResult {
         dependency.descriptor.exports.push(model);
     }
     bundle.artifacts.insert(0, artifact);
+    let bundle = PackageBundle::try_from(bundle)?;
     let revisions = PackageRevisionV1::from_bundle(&bundle, [1; 16])?;
     assert_eq!(revisions.len(), 1025);
     let dependencies = &revisions[0].dependencies;
@@ -95,17 +96,23 @@ fn package_context_retains_closure() -> TestResult {
     )?;
     assert_eq!(store.meta()?, installed);
     assert_eq!(store.package_revisions([1; 16])?.len(), revisions.len());
-    let context =
-        PackageBundleRef::new(&bundle)?.context([1; 16], &bundle.root, "model", "rows")?;
+    let context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [1; 16],
+        &bundle.bundle().root,
+        "model",
+        "rows",
+    )?;
     let reference = store.intern_context(&context)?;
     let pinned = store.meta()?;
     assert_eq!(store.intern_context(&context)?, reference);
     assert_eq!(store.commit_context(&context)?, reference.commit_revision);
     assert_eq!(store.meta()?, pinned);
-    assert_eq!(bundle.artifacts[1].descriptor.exports.len(), 1025);
-    let export_context = PackageBundleRef::new(&bundle)?.context(
+    assert_eq!(bundle.bundle().artifacts[1].descriptor.exports.len(), 1025);
+    let export_context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
         [1; 16],
-        &bundle.artifacts[1].reference(),
+        &bundle.bundle().artifacts[1].reference(),
         "model-1023",
         "rows",
     )?;
@@ -156,11 +163,11 @@ fn package_context_retains_closure() -> TestResult {
         assert_eq!(
             PackageBundleV1 {
                 schema_version: 1,
-                root: bundle.root.clone(),
+                root: bundle.bundle().root.clone(),
                 artifacts: retained
             }
             .digest()?,
-            bundle.digest()?
+            bundle.digest()
         );
     }
     Ok(())
@@ -170,15 +177,20 @@ fn package_context_retains_closure() -> TestResult {
 fn package_context_tenant_scope() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let bundle = bundle()?;
+    let bundle = PackageBundle::try_from(bundle()?)?;
     for tenant in [1, 2] {
         store.install_package(
             &PackageRevisionV1::from_bundle(&bundle, [tenant; 16])?,
             || Ok(()),
         )?;
     }
-    let context =
-        PackageBundleRef::new(&bundle)?.context([2; 16], &bundle.root, "model", "rows")?;
+    let context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [2; 16],
+        &bundle.bundle().root,
+        "model",
+        "rows",
+    )?;
     store.intern_context(&context)?;
     let before = store.meta()?;
     let mut notice = store.subscribe_revision();
@@ -211,13 +223,18 @@ fn package_context_checks_artifact() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let bundle = bundle()?;
+    let bundle = PackageBundle::try_from(bundle()?)?;
     store.install_package(
         &PackageRevisionV1::from_bundle(&bundle, [1; 16])?,
         || Ok(()),
     )?;
-    let context =
-        PackageBundleRef::new(&bundle)?.context([1; 16], &bundle.root, "model", "rows")?;
+    let context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [1; 16],
+        &bundle.bundle().root,
+        "model",
+        "rows",
+    )?;
     let original: serde_json::Value = serde_json::from_slice(&context.body)?;
     let initial = store.meta()?;
     for change in 0..7 {
@@ -248,7 +265,7 @@ fn package_context_checks_artifact() -> TestResult {
         assert_eq!(store.meta()?, initial);
     }
     store.intern_context(&context)?;
-    let mut changed = bundle.artifacts[0].clone();
+    let mut changed = bundle.bundle().artifacts[0].clone();
     let crate::PackageImplementationV1::Sql { program, .. } = &mut changed.implementations[0]
     else {
         return Err("SQL implementation absent".into());
@@ -269,33 +286,39 @@ fn package_context_pins_dependency_artifact() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let bundle = bundle()?;
+    let bundle = PackageBundle::try_from(bundle()?)?;
     store.install_package_image([1; 16], &bundle, || Ok(()))?;
-    let retained = PackageBundleRef::new(&bundle)?;
     let dependency = PackageRefV1 {
         package_id: "native-dependency".into(),
         revision: "v1".into(),
     };
-    let context = retained.context([1; 16], &dependency, "model", "rows")?;
-    let mut invalid = bundle.clone();
+    let context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [1; 16],
+        &dependency,
+        "model",
+        "rows",
+    )?;
+    let mut invalid = bundle.bundle().clone();
     invalid.schema_version = 0;
     assert!(matches!(
-        PackageBundleRef::retained(&invalid, retained.digest()).context(
-            [1; 16],
-            &dependency,
-            "model",
-            "rows"
-        ),
+        PackageBundle::try_from(invalid).map_err(crate::Error::from),
         Err(crate::Error::Package {
             code: crate::PackageErrorCodeV1::Invalid,
             field: "bundle version or package count",
             ..
         })
     ));
-    let root_context = retained.context([1; 16], &bundle.root, "model", "rows")?;
+    let root_context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [1; 16],
+        &bundle.bundle().root,
+        "model",
+        "rows",
+    )?;
     assert_ne!(context.key, root_context.key);
     let body: serde_json::Value = serde_json::from_slice(&context.body)?;
-    assert_eq!(body["root"], serde_json::to_value(&bundle.root)?);
+    assert_eq!(body["root"], serde_json::to_value(&bundle.bundle().root)?);
     assert_eq!(body["package"], serde_json::to_value(&dependency)?);
     let pin = store.intern_context(&context)?;
     for (package, export, output) in [
@@ -318,7 +341,10 @@ fn package_context_pins_dependency_artifact() -> TestResult {
         (dependency.clone(), "missing", "rows"),
         (dependency.clone(), "model", "missing"),
     ] {
-        assert!(retained.context([1; 16], &package, export, output).is_err());
+        assert!(crate::AnalysisContextVersionV1::from_package(
+            &bundle, [1; 16], &package, export, output
+        )
+        .is_err());
     }
     let before = store.meta()?;
     let mut forged = context.clone();
@@ -340,13 +366,18 @@ fn native_context_rejects_corruption() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
-        let bundle = bundle()?;
+        let bundle = PackageBundle::try_from(bundle()?)?;
         store.install_package(
             &PackageRevisionV1::from_bundle(&bundle, [1; 16])?,
             || Ok(()),
         )?;
-        let context =
-            PackageBundleRef::new(&bundle)?.context([1; 16], &bundle.root, "model", "rows")?;
+        let context = crate::AnalysisContextVersionV1::from_package(
+            &bundle,
+            [1; 16],
+            &bundle.bundle().root,
+            "model",
+            "rows",
+        )?;
         store.commit_context(&context)?;
         {
             let mut writer = store.writer()?;
@@ -363,15 +394,22 @@ fn native_context_rejects_corruption() -> TestResult {
                 "artifact" => {
                     writer.execute(
                         "DELETE FROM package_revisions WHERE package_id = ?",
-                        duckdb::params![bundle.root.package_id],
+                        duckdb::params![bundle.bundle().root.package_id],
                     )?;
                 }
                 _ => {
-                    let mut descriptor = bundle.artifact(&bundle.root)?.descriptor.clone();
+                    let mut descriptor = bundle
+                        .bundle()
+                        .artifact(&bundle.bundle().root)?
+                        .descriptor
+                        .clone();
                     descriptor.exports[0].name = "changed".into();
                     writer.execute(
                         "UPDATE package_revisions SET descriptor = ? WHERE package_id = ?",
-                        duckdb::params![serde_json::to_vec(&descriptor)?, bundle.root.package_id],
+                        duckdb::params![
+                            serde_json::to_vec(&descriptor)?,
+                            bundle.bundle().root.package_id
+                        ],
                     )?;
                 }
             }

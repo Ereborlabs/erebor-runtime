@@ -7,8 +7,8 @@ use araphor_analysis_sdk as sdk;
 use araphor_data::{AnalysisSelectionV1, AnalysisStore};
 use araphor_discovery_definition::{Definition, Program, Source};
 use araphor_package::{
-    PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
-    SqlReasonV1,
+    PackageArtifactV1, PackageBundle, PackageBundleV1, PackageImplementationV1, PackageRefV1,
+    SqlModelV1, SqlReasonV1,
 };
 use araphor_query::definition::PackageCall;
 use erebor_runtime_error::ErrorExt as _;
@@ -75,7 +75,7 @@ impl PackageAuthorization for Authority {
         }
         Ok(())
     }
-    fn admit(&self, _: &PackageGrantV1, bundle: &PackageBundleRef<'_>) -> araphor_data::Result<()> {
+    fn admit(&self, _: &PackageGrantV1, bundle: &PackageBundle) -> araphor_data::Result<()> {
         if !self
             .images
             .lock()
@@ -90,7 +90,7 @@ impl PackageAuthorization for Authority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleRef<'_>,
+        bundle: &PackageBundle,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(
@@ -100,11 +100,7 @@ impl PackageAuthorization for Authority {
     }
     fn commit_many(
         &self,
-        grants: &[(
-            &PackageGrantV1,
-            PackageActionV1,
-            Option<&PackageBundleRef<'_>>,
-        )],
+        grants: &[(&PackageGrantV1, PackageActionV1, Option<&PackageBundle>)],
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         if self.deny_next.swap(false, Ordering::SeqCst) {
@@ -221,14 +217,15 @@ impl Fixture {
     }
 
     pub(super) fn install(&self, bundle: &PackageBundleV1) -> TestResult {
+        let bundle = PackageBundle::try_from(bundle.clone()).map_err(araphor_data::Error::from)?;
         self.query
             .store()
-            .install_package_image([1; 16], bundle, || Ok(()))?;
+            .install_package_image([1; 16], &bundle, || Ok(()))?;
         self.authority
             .images
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .insert(bundle.digest()?);
+            .insert(bundle.digest().into());
         Ok(())
     }
 
@@ -1568,7 +1565,7 @@ async fn instance_shares_admitted_images() -> TestResult {
         .ok_or("package call absent")?;
     assert!(std::ptr::eq(
         call.descriptor(),
-        &images[0].0.artifacts[0].descriptor
+        &images[0].bundle().artifacts[0].descriptor
     ));
     assert!(PackageCall::any(
         &instance.prepared.plan,

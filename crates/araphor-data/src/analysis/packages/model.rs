@@ -39,13 +39,13 @@ impl PackageRevisionV1 {
     }
 
     pub fn from_bundle(
-        bundle: &crate::PackageBundleV1,
+        bundle: &crate::PackageBundle,
         tenant: [u8; 16],
     ) -> crate::Result<Vec<Self>> {
         if tenant == [0; 16] {
             return Err(crate::PackageErrorCodeV1::Invalid.error("package revision tenant"));
         }
-        bundle.validate()?;
+        let bundle = bundle.bundle();
         bundle
             .artifacts
             .iter()

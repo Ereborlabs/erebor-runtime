@@ -385,7 +385,7 @@ async fn guest_drop_keeps_worker_lease() -> TestResult {
     let workers = TaskTracker::new();
     let package = bundle.root.clone();
     let mut call = Box::pin(runtime.evaluate_reserved(
-        Arc::new(bundle),
+        Arc::new(araphor_package::PackageBundle::try_from(bundle)?),
         package,
         evaluation,
         AnalysisReadControl::default(),

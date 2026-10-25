@@ -13,10 +13,65 @@ pub struct ModelRef {
     pub export: String,
 }
 
+pub struct PackageBundle {
+    value: PackageBundleV1,
+    digest: String,
+}
+
+impl TryFrom<PackageBundleV1> for PackageBundle {
+    type Error = crate::Error;
+
+    fn try_from(value: PackageBundleV1) -> Result<Self> {
+        let digest = value.validated_layout()?.digest();
+        Ok(Self { value, digest })
+    }
+}
+
+impl PackageBundle {
+    pub fn checked(value: PackageBundleV1, expected: &str) -> Result<Option<Self>> {
+        if value.checked_layout(expected)?.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            value,
+            digest: expected.into(),
+        }))
+    }
+
+    pub fn bundle(&self) -> &PackageBundleV1 {
+        &self.value
+    }
+
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    pub fn allocated_bytes(&self) -> Result<usize> {
+        std::mem::size_of::<Self>()
+            .checked_add(self.value.allocated_bytes()?)
+            .and_then(|bytes| bytes.checked_add(self.digest.capacity()))
+            .ok_or_else(|| Code::Limit.error("package image memory"))
+    }
+}
+
+impl std::fmt::Debug for PackageBundle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PackageBundle")
+            .field("root", &self.value.root)
+            .field("digest", &self.digest)
+            .finish()
+    }
+}
+
 impl PackageBundleV1 {
     pub fn validate(&self) -> Result<()> {
+        self.validated_layout().map(|_| ())
+    }
+
+    pub(crate) fn validated_layout(&self) -> Result<Layout<'_>> {
         self.validate_structure()?;
-        self.check_encoding()
+        super::oci::PackageOci::layout(self)
     }
 
     /// Return the native layout after the digest and bundle checks pass.

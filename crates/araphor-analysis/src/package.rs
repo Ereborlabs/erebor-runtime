@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use araphor_data::{
     AnalysisReadControl, AnalysisSelectionV1, EvidenceIntakeIdentityV1, PackageActionV1,
-    PackageAuthorization, PackageBundleRef, PackageBundleV1, PackageErrorCodeV1 as Code,
-    PackageGrantV1, Selection,
+    PackageAuthorization, PackageBundle, PackageErrorCodeV1 as Code, PackageGrantV1, Selection,
 };
 use araphor_discovery_definition::{Definition, Program};
 use araphor_query::definition::{PackageCall, PreparedDefinition};
@@ -20,8 +19,7 @@ pub struct Package {
     pub(crate) query: Arc<Engine>,
     pub(crate) grant: PackageGrantV1,
     pub(crate) authority: Arc<dyn PackageAuthorization>,
-    bundle: PackageBundleV1,
-    digest: String,
+    bundle: Arc<PackageBundle>,
     export: String,
     output: String,
     prepared: OnceCell<(PreparedDefinition, PackageCall)>,
@@ -32,17 +30,20 @@ impl Package {
         query: Arc<Engine>,
         authority: Arc<dyn PackageAuthorization>,
         grant: PackageGrantV1,
-        bundle: PackageBundleV1,
+        bundle: Arc<PackageBundle>,
         export: &str,
         output: &str,
     ) -> Result<Self> {
-        bundle.validate()?;
-        let digest = bundle.digest()?;
-        let retained = PackageBundleRef::retained(&bundle, &digest);
-        let context = retained.context(grant.selection.tenant_id, &bundle.root, export, output)?;
+        let context = araphor_data::AnalysisContextVersionV1::from_package(
+            bundle.as_ref(),
+            grant.selection.tenant_id,
+            &bundle.bundle().root,
+            export,
+            output,
+        )?;
         grant.remaining()?;
         let mut reference = None;
-        authority.commit(&grant, PackageActionV1::Run, &retained, &mut || {
+        authority.commit(&grant, PackageActionV1::Run, bundle.as_ref(), &mut || {
             reference = Some(
                 query
                     .store()
@@ -57,7 +58,6 @@ impl Package {
             authority,
             grant,
             bundle,
-            digest,
             export: export.into(),
             output: output.into(),
             prepared: OnceCell::new(),
@@ -69,10 +69,7 @@ impl Package {
     pub(crate) fn check(&self) -> araphor_data::Result<()> {
         let _remaining = self.grant.remaining()?;
         self.authority.check(&self.grant, PackageActionV1::Run)?;
-        self.authority.admit(
-            &self.grant,
-            &PackageBundleRef::retained(&self.bundle, &self.digest),
-        )?;
+        self.authority.admit(&self.grant, self.bundle.as_ref())?;
         Ok(())
     }
 
@@ -111,14 +108,14 @@ impl Package {
                 let definition = Definition {
                     name: format!(
                         "{}/{}/{}/{}",
-                        self.bundle.root.package_id,
-                        self.bundle.root.revision,
+                        self.bundle.bundle().root.package_id,
+                        self.bundle.bundle().root.revision,
                         self.export,
                         self.output
                     ),
                     description: String::new(),
                     labels: Default::default(),
-                    program: Program::call(&self.bundle.root, &self.export, &self.output)
+                    program: Program::call(&self.bundle.bundle().root, &self.export, &self.output)
                         .map_err(araphor_data::Error::from)?,
                 };
                 let control = Arc::new(self.control()?);
@@ -131,8 +128,8 @@ impl Package {
                     )
                     .await?;
                 if prepared.resolved().images.len() != 1
-                    || prepared.resolved().images[0].image != self.bundle.root
-                    || prepared.resolved().images[0].digest != self.digest
+                    || prepared.resolved().images[0].image != self.bundle.bundle().root
+                    || prepared.resolved().images[0].digest != self.bundle.digest()
                 {
                     return Err(Code::Denied.error("package image pin").into());
                 }
@@ -153,7 +150,7 @@ impl Package {
                             Code::Unsupported.error("subscription checkpoint"),
                         )));
                     }
-                    if call.package() == &self.bundle.root
+                    if call.package() == &self.bundle.bundle().root
                         && call.export() == self.export
                         && call.output() == self.output
                         && root.replace(call.clone()).is_some()
@@ -207,7 +204,7 @@ impl Package {
         self.authority.commit(
             &self.grant,
             PackageActionV1::Run,
-            &PackageBundleRef::retained(&self.bundle, &self.digest),
+            self.bundle.as_ref(),
             &mut || {
                 let _remaining = self.grant.remaining()?;
                 output = Some(operation

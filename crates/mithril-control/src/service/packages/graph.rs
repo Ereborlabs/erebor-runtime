@@ -1,6 +1,6 @@
 use super::*;
 use araphor_analysis::{GraphOwner, GraphProgram, GraphPublication};
-use araphor_data::{AnalysisReadControl, PackageBundleRef};
+use araphor_data::{AnalysisReadControl, PackageBundle};
 use araphor_discovery_definition::{Definition, Program, Source};
 
 impl ControlPackages {
@@ -20,20 +20,16 @@ impl ControlPackages {
         let control = Arc::new(AnalysisReadControl::default());
         let images = GraphProgram::images()
             .into_iter()
-            .map(|bundle| {
-                let digest = bundle.digest().map_err(araphor_data::Error::from)?;
-                Ok((bundle, digest))
-            })
+            .map(|bundle| PackageBundle::try_from(bundle).map_err(araphor_data::Error::from))
             .collect::<araphor_data::Result<Vec<_>>>()?;
         let mut programs = Vec::new();
         for tenant in self.authority.tenants.keys() {
             let Some(grant) = self.authority.graph_grant(*tenant) else {
                 continue;
             };
-            for (bundle, digest) in &images {
-                let retained = PackageBundleRef::retained(bundle, digest);
+            for bundle in &images {
                 self.authority
-                    .commit(&grant, PackageActionV1::Install, &retained, &mut || {
+                    .commit(&grant, PackageActionV1::Install, bundle, &mut || {
                         self.query
                             .store()
                             .install_package_image(*tenant, bundle, || control.check())?;
@@ -61,9 +57,9 @@ impl ControlPackages {
             .await?;
             if program.definition.images.len() != images.len()
                 || program.definition.images.iter().any(|pin| {
-                    !images
-                        .iter()
-                        .any(|(bundle, digest)| bundle.root == pin.image && *digest == pin.digest)
+                    !images.iter().any(|bundle| {
+                        bundle.bundle().root == pin.image && bundle.digest() == pin.digest
+                    })
                 })
             {
                 return Err(crate::error::InvalidConfigurationSnafu {
@@ -80,20 +76,15 @@ impl ControlPackages {
                 )
                 .await?;
             for definition in [&program.definition, &expiry] {
-                let retained = images
-                    .iter()
-                    .filter(|(bundle, digest)| {
-                        definition
-                            .images
-                            .iter()
-                            .any(|pin| pin.image == bundle.root && pin.digest == *digest)
-                    })
-                    .map(|(bundle, digest)| PackageBundleRef::retained(bundle, digest))
-                    .collect::<Vec<_>>();
                 let mut grants = vec![(&grant, PackageActionV1::Install, None)];
                 grants.extend(
-                    retained
+                    images
                         .iter()
+                        .filter(|image| {
+                            definition.images.iter().any(|pin| {
+                                pin.image == image.bundle().root && pin.digest == image.digest()
+                            })
+                        })
                         .map(|image| (&grant, PackageActionV1::Install, Some(image))),
                 );
                 self.authority.commit_many(&grants, &mut || {

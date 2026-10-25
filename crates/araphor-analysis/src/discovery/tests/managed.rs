@@ -156,6 +156,7 @@ impl Fixture {
             expires_utc_ns: None,
             authorization_id: None,
         };
+        let image = Arc::new(PackageBundle::try_from(image)?);
         self.store
             .install_package_image(self.source.tenant_id, &image, || Ok(()))?;
         let package = Package::new(
