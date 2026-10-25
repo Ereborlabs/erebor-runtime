@@ -806,6 +806,7 @@ impl AnalysisStore {
             #[cfg(test)]
             store.crash_at("restore.after");
         }
+        store.recover_managed_startup()?;
         fs::remove_file(&pending).context(IoSnafu { path: &pending })?;
         File::open(root)
             .context(IoSnafu { path: root })?

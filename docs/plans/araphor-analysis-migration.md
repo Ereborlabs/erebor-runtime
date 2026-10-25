@@ -4106,3 +4106,76 @@ Result: **Done** for this shared notice prerequisite. Direct Graph retirement,
 general maintained SQL, and the complete redesign remain **Not done**.
 BPF and backend ABI changes, performance measurement, physical qualification,
 and full workspace CI are outside this record.
+
+
+## Interrupted native execution recovery
+
+Result: **Done** for this bounded startup correction. The running Graph
+restart baseline exposed a durable native pending attempt which blocked
+`managed_resume`. Its former process cannot finish that attempt with a live
+claim after restart. The bounded correction belongs to Data store startup.
+
+Public store open acquires the existing exclusive lease and rejects an
+incomplete restore marker. It constructs the store and recovers segments,
+then selects unfinished attempts whose generation equals the stored current
+generation and whose request has a native frontier. One transaction records
+a separate Cancelled terminal for each selected attempt. It checks configured
+logical quotas for each affected tenant, commits, and publishes the final
+revision. Unconfigured quotas stay disabled. An empty selection makes no
+metadata change.
+
+Validated backup restore uses the raw leased constructor. It checks the exact
+store identity, manifest, and sealed segment catalog, commits the new recovery
+epoch, then closes the interrupted attempts. It removes `restore.pending` and
+syncs the directory only after success. A settlement failure rolls back that
+transaction and keeps the marker; the earlier epoch commit remains. Live
+recovery and source-backup reopening do not perform startup settlement.
+
+The change reuses the existing terminal row writer. It preserves committed
+outputs, checkpoints, evidence, progress, running intent, lifecycle, generation,
+and failure state. Raw requests without a native frontier and unfinished
+noncurrent generations remain pending. The old native request cannot execute
+again. The existing Host restores from committed progress and applies its
+current authority, image, and lifecycle guards before a new Query step.
+No schema, version, public API, scheduler, or polling loop is added. Read the
+[source review route](../guides/araphor-discovery-definition-review.md#interrupted-native-execution-recovery).
+
+The [pass ledger](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/recovery-v3-pass-ledger.json)
+records 28 distinct passes from separate focused runs: seven new startup
+cases, thirteen retained managed cases, four backup/restore cases, two Graph
+atomic restart cases, one Native abort case, and one running Graph Host case.
+The Native abort selector ran with `--ignored` and source-built artifacts.
+The ledger does not include earlier Control or direct Graph baseline passes.
+The [nine-file source manifest](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/recovery-v3-final-source.json)
+pins this checkpoint. The production recovery bytes are the same across these
+runs. The final test-only slice-borrow repairs affect three Data tests and the
+Host restart case. All four repeats pass. The ledger contains 28 distinct
+cases and 32 successful case executions across eight runs.
+
+Final checks on the nine recorded source files:
+
+| Check | Record | Result |
+| --- | --- | --- |
+| Relevant library build, no run | [build-6](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/recovery-v3-build-6.json) | Pass |
+| Three affected Data tests | [data-final](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/recovery-v3-data-final.json) | 3 pass |
+| Running Graph Host repeat | [host-final](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/recovery-v3-host-final.json) | 1 pass |
+| Relevant-package library/test Clippy, warnings denied | [clippy-3](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/recovery-v3-clippy-3.json) | Pass |
+| Nine-file formatting check | [format-final](/home/navid/mithril-test-hosts/graph-direct-publication-retirement-verification/recovery-v3-format-final.json) | Pass |
+
+Retained failures remain evidence. The first build used equality for a
+readiness enum without PartialEq; the proof now uses a variant match. The
+first Host run omitted the expected witness read revision after the startup
+terminal; the proof now checks that exact revision before it compares the
+remaining cut. The next Host run hit its 30-second parent watchdog. The
+parent now uses the existing 60-second fixture bound, and the retained Host
+pass is separate evidence. This test bound is not a product deadline or
+performance claim. The first Clippy run found four slice-clone test warnings. The next run found
+one more in the Host test; the five test-only repairs preserve the assertions.
+Final Clippy passes. The initial build, both Clippy failures, and both Host
+failures remain in the same evidence directory.
+
+Direct Graph retirement, the complete required native parity transfer, and
+the global redesign remain **Not done**. This record claims no BPF/backend ABI
+change, diagnostic polling removal, performance result, physical qualification,
+or full workspace CI. Verification follows the user's relevant-tests-only
+instruction.

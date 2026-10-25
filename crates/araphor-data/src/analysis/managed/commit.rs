@@ -176,10 +176,10 @@ impl AnalysisStore {
         #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(super::super::AnalysisCommitStage::BeforeResultCommit)?;
         check()?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("managed.before");
         self.commit_metadata(transaction, "commit complete managed step")?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("managed.after");
         self.revision.send_replace(revision);
         if input.attempt.switches_version() {

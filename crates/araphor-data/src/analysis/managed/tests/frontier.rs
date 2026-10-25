@@ -159,7 +159,7 @@ fn assert_frontier(completed: bool) -> TestResult {
 }
 
 #[test]
-fn pending_frontier_blocks_restart() -> TestResult {
+fn pending_frontier_settles_startup() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
@@ -171,7 +171,7 @@ fn pending_frontier_blocks_restart() -> TestResult {
         cursor: b"native-cursor".to_vec(),
         next_change: None,
     });
-    store.register_managed_attempt(&captured, &input, || Ok(()))?;
+    let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     let mut other = input.clone();
     other.id = "replacement-is-forbidden".into();
     assert!(matches!(
@@ -191,8 +191,8 @@ fn pending_frontier_blocks_restart() -> TestResult {
         )?
         .is_none());
     let before = store.meta()?;
-    drop(store);
-    let store = AnalysisStore::open(&root)?;
+    store.recover()?;
+    assert_eq!(store.meta()?, before);
     assert!(matches!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default()),
         Err(crate::Error::Package {
@@ -201,8 +201,161 @@ fn pending_frontier_blocks_restart() -> TestResult {
             ..
         })
     ));
-    assert_eq!(store.meta()?, before);
-    assert_eq!(fixture.current(&store)?.progress, 0);
+    let loaded = store
+        .managed_attempt(
+            [1; 16],
+            "counter",
+            &input.id,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("live native intent")?;
+    assert_eq!(
+        serde_json::to_vec(&loaded.0)?,
+        serde_json::to_vec(&attempt.0)?
+    );
+    assert!(matches!(
+        store.finish_managed(&loaded, ManagedExit::Cancelled, || Ok(())),
+        Err(crate::Error::Package {
+            code: Code::Incomplete,
+            ..
+        })
+    ));
+    assert!(attempt
+        .2
+        .as_ref()
+        .ok_or("live native claim")?
+        .has_changed()
+        .is_ok());
+    drop(store);
+    assert!(attempt
+        .2
+        .as_ref()
+        .ok_or("closed native claim")?
+        .has_changed()
+        .is_err());
+    let store = AnalysisStore::open(&root)?;
+    let mut expected = before.clone();
+    expected.commit_revision += 1;
+    assert_eq!(store.meta()?, expected);
+    assert_eq!(fixture.current(&store)?, fixture.instance);
+    let terminal = ManagedTerminal {
+        instance: "counter".into(),
+        attempt: input.id.clone(),
+        revision: expected.commit_revision,
+        exit: ManagedExit::Cancelled,
+        suspended: false,
+    };
+    let loaded = store
+        .managed_attempt(
+            [1; 16],
+            "counter",
+            &input.id,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("settled native intent")?;
+    assert_eq!(loaded.request(), &input);
+    assert_eq!(loaded.instance(), captured.instance());
+    assert!(loaded.receipt().is_none());
+    assert_eq!(loaded.terminal(), Some(&terminal));
+    let mut saved = attempt.0.clone();
+    saved.terminal = Some(terminal.clone());
+    assert_eq!(serde_json::to_vec(&loaded.0)?, serde_json::to_vec(&saved)?);
+    assert_eq!(
+        store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
+        ManagedResume {
+            instance: fixture.instance.clone(),
+            frontier: None,
+            completed: terminal.revision
+        }
+    );
+    let status = store.managed_status(
+        &fixture.instance.grant.selection,
+        "counter",
+        &AnalysisReadControl::default(),
+    )?;
+    assert!(matches!(
+        status.readiness,
+        crate::PackageReadinessV1::Inactive
+    ));
+    assert_eq!(status.status_progress, 0);
+    assert!(store
+        .managed_selected(
+            [1; 16],
+            "counter",
+            &input.id,
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+    let rows: (u64, u64) = store.read_snapshot(|reader| reader.query_row("SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_arrow)", [], |row| Ok((row.get(0)?, row.get(1)?))).context(crate::AnalysisDatabaseSnafu { operation: "read settled native output absence" }))?;
+    assert_eq!(rows, (0, 0));
+    let mut checked = false;
+    assert_eq!(
+        store.finish_managed(&loaded, ManagedExit::Cancelled, || {
+            checked = true;
+            Ok(())
+        })?,
+        terminal
+    );
+    assert!(checked);
+    assert!(matches!(
+        store.finish_managed(&loaded, ManagedExit::Cancelled, || Err(
+            Code::Denied.error("startup terminal authority")
+        )),
+        Err(crate::Error::Package {
+            code: Code::Denied,
+            ..
+        })
+    ));
+    assert_eq!(
+        store.finish_managed(&attempt, ManagedExit::Cancelled, || Ok(()))?,
+        terminal
+    );
+    assert!(matches!(
+        store.finish_managed(&loaded, ManagedExit::Failed(Code::Incomplete), || Ok(())),
+        Err(crate::Error::AnalysisConflict { .. })
+    ));
+    assert_eq!(
+        store
+            .register_managed_attempt(&captured, &input, || Ok(()))?
+            .terminal(),
+        Some(&terminal)
+    );
+    let evaluations = [
+        fixture.evaluation(&input, 10, Some(&captured))?,
+        fixture.evaluation(&input, 11, Some(&captured))?,
+    ];
+    let outputs = [fixture.output(2)?, fixture.output(3)?];
+    for stale in [&attempt, &loaded] {
+        let error = fixture
+            .publish(&store, stale, &evaluations, &outputs)
+            .err()
+            .ok_or("settled native intent published")?;
+        assert!(matches!(
+            error.downcast_ref::<crate::Error>(),
+            Some(crate::Error::AnalysisConflict { .. })
+        ));
+    }
+    assert_eq!(store.meta()?, expected);
+    assert_eq!(
+        *store.subscribe_revision().borrow(),
+        expected.commit_revision
+    );
+    store.verify_state()?;
+    drop(store);
+    let store = AnalysisStore::open(&root)?;
+    assert_eq!(store.meta()?, expected);
+    assert_eq!(
+        store
+            .managed_attempt(
+                [1; 16],
+                "counter",
+                &input.id,
+                &AnalysisReadControl::default()
+            )?
+            .ok_or("clean-open native terminal")?
+            .terminal(),
+        Some(&terminal)
+    );
     Ok(())
 }
 

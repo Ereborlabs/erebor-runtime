@@ -3998,3 +3998,39 @@ source records, initial failures, and exact repairs and retries. Result:
 **Done** for the shared notice prerequisite. Direct Graph retirement and the
 complete redesign remain **Not done**. This record makes no BPF, backend ABI,
 performance, physical-qualification, or full workspace CI claim.
+
+
+## Interrupted native execution recovery
+
+Read [exclusive store open](../../crates/araphor-data/src/analysis/mod.rs),
+[startup terminal settlement](../../crates/araphor-data/src/analysis/managed/terminal.rs),
+and [validated backup restore](../../crates/araphor-data/src/analysis/backup.rs)
+first. Public open runs settlement after construction and segment recovery.
+Restore runs it after exact manifest/catalog validation and the recovery-epoch
+commit, before it removes the pending marker. The raw constructor, live
+recovery, and source-backup reopening do not settle native attempts.
+
+The startup query selects unfinished current-generation attempts. It skips
+requests without a native frontier. The existing row writer records Cancelled
+terminals in one transaction; per-tenant quota checks precede commit and the
+final revision notice. It does not mutate committed Instance or domain state.
+
+Then read [resume selection](../../crates/araphor-data/src/analysis/managed/read.rs)
+and [Host restoration](../../crates/araphor-analysis/src/instance/host.rs).
+Cancelled selects the committed frontier. The existing Host checks current
+authority, image admission, and lifecycle before it opens the native Query
+subscription. Data retains the atomic publication boundary. DataFusion does
+not own these durable attempt and exclusive store-lease rules. Native package
+libraries remain in process.
+
+The [Data frontier tests](../../crates/araphor-data/src/analysis/managed/tests/frontier.rs)
+and [terminal tests](../../crates/araphor-data/src/analysis/managed/tests/terminal.rs)
+cover startup selection, live claims, committed state, generations, logical
+quota rollback, and restore ordering. The [Graph restart tests](../../crates/araphor-analysis/src/graph/native/tests/managed/restart.rs)
+cover an actual interrupted Host and atomic publication. The [Native abort test](../../crates/araphor-analysis/src/instance/tests/checkpoint.rs)
+uses the source-built in-process library and proves reopened checkpoint state.
+The [qualification record](../plans/araphor-analysis-migration.md#interrupted-native-execution-recovery)
+records 28 distinct cases, 32 successful case executions, and the final
+build, Clippy, and formatting passes. A test definition is not a pass. This
+bounded correction is **Done**. Direct Graph retirement and the complete
+redesign remain **Not done**.

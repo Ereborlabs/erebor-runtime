@@ -4478,3 +4478,24 @@ Completion of this prerequisite is not overall completion; stable product
 behavior, preserved or replaced 7.5.1–7.5.5 functionality through the new
 design, retirement of duplicate owners, and verification remain.
 No performance result is claimed.
+
+
+## Interrupted native execution recovery
+
+Result: **Done** for the bounded interrupted-execution correction. The final
+relevant library build, four affected test repeats, strict Clippy, and
+formatting checks pass on the recorded source. The
+[recovery record](araphor-analysis-migration.md#interrupted-native-execution-recovery)
+states the exact evidence and proof limits.
+
+Data closes interrupted native attempts before it exposes the exclusively
+reopened store. The existing Host then restores the Query subscription from
+committed state. This uses the current Data terminal rows and Host. It adds
+no execution owner or polling loop.
+
+The complete redesign remains **Not done**. Its stop criteria remain stable
+required behavior through the new design, removal of duplicate owners, and
+verification. Coherent ownership and simpler code are the goal. A line count
+is a measured result, not an independent completion quota. This recovery
+checkpoint does not retire the remaining direct Graph path or qualify the
+remaining diagnostic event design. No performance result is claimed.

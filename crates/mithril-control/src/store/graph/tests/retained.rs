@@ -960,6 +960,505 @@ async fn graph_captures_control_proofs() -> TestValue<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn managed_captures_control_proofs() -> TestValue<()> {
+    use araphor_analysis::{GraphProgram, GraphPublication};
+    use araphor_analysis_builtins::{components, graph::Detector};
+    use araphor_data::{
+        ManagedRequest, PackageActionV1, PackageArtifactV1, PackageAuthorization as _,
+        PackageBundleV1, PackageGrantV1, PackageImplementationV1, ProcessorScopeV1,
+        ValidatedEvidenceBatchV1,
+    };
+    use araphor_discovery_definition::{Definition, Program, Source};
+    use araphor_query::execution::Engine;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let directory = tempfile::tempdir()?;
+    let (control, record, bundle, mut rollout) = fixture(&directory.path().join("control"))?;
+    let tenant = record.id.stream.tenant_id;
+    let data = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let mut feed = owner(&control, Arc::clone(&data), tenant)?;
+    let mut expected_versions = std::collections::BTreeSet::new();
+    for (state, generation, digest) in [
+        (PolicyActivationStateV1::Received, None, '1'),
+        (PolicyActivationStateV1::Staged, Some(7), '2'),
+        (PolicyActivationStateV1::Active, Some(8), '4'),
+    ] {
+        acknowledge(&control, &bundle, &mut rollout, state, generation, digest)?;
+        expected_versions.insert(rollout.transition_version);
+    }
+    feed.reconcile()?;
+    let _graph = data.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant(tenant)])?;
+    data.register_graph(&record.id.stream)?;
+    data.accept_validated_batch(
+        record.id.stream.clone(),
+        ValidatedEvidenceBatchV1 {
+            cpu_id: record.id.cpu_id,
+            first_cursor: record.id.durable_cursor,
+            last_cursor: record.id.durable_cursor,
+            intake_utc_ns: 1,
+            frame_ends: vec![record.wire_record.len()],
+            framed_records: record.wire_record.clone().into(),
+        },
+    )?;
+    for (detector, bytes) in [
+        (Detector::Process, components::PROCESS),
+        (Detector::Credentials, components::CREDENTIALS),
+        (Detector::Kubernetes, components::KUBERNETES),
+    ] {
+        let artifact = PackageArtifactV1 {
+            descriptor: detector.descriptor(),
+            implementations: vec![PackageImplementationV1::Wasm {
+                exports: vec!["detect".into()],
+                artifact: bytes.to_vec(),
+            }],
+            fixtures: Vec::new(),
+        };
+        data.install_package_image(
+            tenant,
+            &araphor_data::PackageBundle::try_from(PackageBundleV1 {
+                schema_version: 1,
+                root: artifact.reference(),
+                artifacts: vec![artifact],
+            })?,
+            || Ok(()),
+        )?;
+    }
+    let query = Engine::new(Arc::clone(&data), Default::default())?;
+    let selection = AnalysisSelectionV1::tenant(tenant);
+    let read = AnalysisReadControl::default();
+    let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
+    let sql = araphor_data::FindingV1::PACKAGES.iter().map(|id| format!(
+        "SELECT * FROM \"{id}\".\"1\".detect('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))"
+    )).collect::<Vec<_>>().join(" UNION ALL ");
+    let definition = Definition {
+        name: "control-graph-capture".into(),
+        description: String::new(),
+        labels: Default::default(),
+        program: Program::Sql {
+            source: Source::Inline { inline: sql },
+        },
+    };
+    let authority = Arc::new(GraphAuthority::new());
+    let grant = PackageGrantV1 {
+        principal: "control-graph-fixture".into(),
+        revision: 1,
+        selection: selection.clone(),
+        expires_utc_ns: None,
+        authorization_id: None,
+    };
+    let facts = Arc::new(feed);
+    let program = GraphProgram::prepare(
+        query.session(selection.clone(), &read, now)?,
+        authority.clone(),
+        grant.clone(),
+        "SELECT * FROM events".into(),
+        definition,
+        facts.clone(),
+    )
+    .await?;
+    authority.commit_many(&[(&grant, PackageActionV1::Install, None)], &mut || {
+        data.admit_definition(tenant, &program.definition, || read.check())?;
+        Ok(())
+    })?;
+    let instance = GraphPublication::admit(
+        Arc::clone(&query),
+        authority,
+        facts,
+        grant.clone(),
+        "control-proofs".into(),
+        record.id.stream.clone(),
+        program.events_sql.clone(),
+        program.definition.clone(),
+        &read,
+    )
+    .await?;
+    let scope = ProcessorScopeV1 {
+        processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+        method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+        identity: record.id.stream.clone(),
+    };
+    let domain = || {
+        let mut history = Vec::new();
+        let mut after = None;
+        loop {
+            let page =
+                data.graph_snapshots(tenant, Some(&record.id.stream), after.as_deref(), false)?;
+            if page.is_empty() {
+                break;
+            }
+            for (id, graph, revision) in page {
+                after = Some(id.clone());
+                history.push((
+                    id.clone(),
+                    graph,
+                    revision,
+                    data.read_result(tenant, &id)?,
+                    data.package_evidence(tenant, std::slice::from_ref(&id))?,
+                ));
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error>>((
+            data.processor_result(&scope)?,
+            data.graph_window_headers(&record.id.stream, None)?,
+            history,
+        ))
+    };
+    let mut input = ManagedRequest {
+        id: "control-proof".into(),
+        time_utc_ns: now,
+        seed: Some(17),
+        rebuild: false,
+        witness_expiry: u64::MAX,
+        frontier: None,
+    };
+    let first = instance.run(input.clone(), &read).await?;
+    assert_eq!(first.results.len(), 3);
+    let original_head = data.processor_result(&scope)?.ok_or("native Graph head")?;
+    let id = original_head.result_id.clone();
+    let retained = data.graph_result(tenant, &id)?.ok_or("graph result")?;
+    let first_cursor = retained.first_cursor;
+    let policies = retained
+        .graph
+        .facts
+        .iter()
+        .filter_map(|fact| match &fact.value {
+            GraphFactValueV1::Policy(policy) => Some(policy),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(policies.len(), 1);
+    assert_eq!(policies[0].state, PolicyProvenanceStateV1::Exact);
+    assert_eq!(
+        policies[0]
+            .activation_acknowledgement
+            .as_ref()
+            .ok_or("exact ACK")?
+            .owner_revision,
+        rollout.transition_version
+    );
+    let (_, refs) = data.package_evidence(tenant, std::slice::from_ref(&id))?;
+    assert!(refs
+        .iter()
+        .any(|pin| pin.key.owner_id == "mithril-control/policy-candidate"));
+    assert_eq!(
+        refs.iter()
+            .filter(|pin| pin.key.owner_id == "mithril-control/activation-ack")
+            .map(|pin| pin.key.owner_revision)
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected_versions
+    );
+    assert!(refs
+        .iter()
+        .any(|pin| pin.key.owner_id == "native-package-v1"));
+    let original = retained.clone();
+    let original_body = data.read_result(tenant, &id)?;
+    let original_evidence = data.package_evidence(tenant, std::slice::from_ref(&id))?;
+    assert_eq!(domain()?.2.len(), 1);
+    assert_eq!(
+        data.managed_history(&selection, "control-proofs", &read)?,
+        vec![first.clone()]
+    );
+    let (same_control, unrelated_record, unrelated_bundle, mut unrelated_rollout) =
+        populate_version(control.clone(), 2)?;
+    assert_ne!(
+        unrelated_bundle.candidate.candidate_content_id,
+        bundle.candidate.candidate_content_id
+    );
+    assert_ne!(
+        unrelated_bundle.profile_artifact.header.profile_id,
+        bundle.profile_artifact.header.profile_id
+    );
+    assert_ne!(
+        unrelated_bundle.candidate.policy_source_revision_id,
+        bundle.candidate.policy_source_revision_id
+    );
+    assert_eq!(
+        same_control.bundle_for_candidate("node-a", &bundle.candidate.candidate_content_id)?,
+        Some(bundle.clone())
+    );
+    assert_eq!(unrelated_record.id.stream, record.id.stream);
+    acknowledge(
+        &same_control,
+        &unrelated_bundle,
+        &mut unrelated_rollout,
+        PolicyActivationStateV1::Active,
+        Some(8),
+        '6',
+    )?;
+    let mut feed = owner(&same_control, Arc::clone(&data), tenant)?;
+    feed.reconcile()?;
+    let before = domain()?;
+    input.id = "unrelated-policy".into();
+    input.time_utc_ns = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
+    let unchanged = instance.run(input.clone(), &read).await?;
+    assert_eq!(domain()?, before);
+    assert_eq!(
+        data.graph_result(tenant, &id)?.ok_or("graph result")?,
+        retained
+    );
+    assert_eq!(
+        data.package_evidence(tenant, std::slice::from_ref(&id))?.1,
+        refs
+    );
+    assert_eq!(
+        data.managed_history(&selection, "control-proofs", &read)?,
+        vec![first.clone(), unchanged.clone()]
+    );
+
+    let source = same_control
+        .source_revision(&bundle.candidate.policy_source_revision_id)?
+        .ok_or("original source")?;
+    let replacement = rollout_transaction(
+        &source,
+        &bundle.profile_artifact,
+        vec![(
+            bundle.candidate.exact_target.clone(),
+            Some(bundle.candidate.candidate_content_id.clone()),
+        )],
+        PolicyDeliveryOperationV1::Replace,
+        bundle
+            .profile_artifact
+            .policy_document
+            .rollout
+            .rollout_generation,
+        bundle
+            .candidate
+            .distribution_sequence
+            .checked_add(1)
+            .ok_or("replacement sequence")?,
+        &ed25519_dalek::SigningKey::from_bytes(&[7; 32]),
+    )?;
+    let next_bundle = replacement
+        .bundles
+        .first()
+        .ok_or("replacement bundle")?
+        .clone();
+    let mut next_rollout = replacement
+        .rollout_states
+        .first()
+        .ok_or("replacement rollout")?
+        .clone();
+    same_control.create_rollout(
+        replacement.target_snapshot,
+        replacement.bundles,
+        replacement.rollout_states,
+    )?;
+    assert_eq!(
+        next_bundle
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(bundle.candidate.candidate_content_id.as_str())
+    );
+    acknowledge(
+        &same_control,
+        &next_bundle,
+        &mut next_rollout,
+        PolicyActivationStateV1::Stale,
+        Some(8),
+        '7',
+    )?;
+    let mut feed = owner(&same_control, Arc::clone(&data), tenant)?;
+    feed.reconcile()?;
+    let before = data.meta()?;
+    let domain_before = domain()?;
+    let mut restricted = selection.clone();
+    restricted.contexts = araphor_data::Selection::Exact(
+        refs.iter()
+            .filter(|reference| reference.key.owner_id != "native-package-v1")
+            .map(|reference| reference.key.clone())
+            .collect(),
+    );
+    let denied = GraphPublication::admit(
+        Arc::clone(&query),
+        Arc::new(GraphAuthority::new()),
+        Arc::new(feed),
+        PackageGrantV1 {
+            selection: restricted,
+            ..grant.clone()
+        },
+        "control-restricted".into(),
+        record.id.stream.clone(),
+        program.events_sql.clone(),
+        program.definition.clone(),
+        &read,
+    )
+    .await;
+    let Err(denied) = denied else {
+        return Err("restricted context history was admitted".into());
+    };
+    assert_eq!(
+        erebor_runtime_error::ErrorExt::status_code(&denied),
+        erebor_runtime_error::StatusCode::PermissionDenied
+    );
+    assert_eq!(data.meta()?, before);
+    assert_eq!(domain()?, domain_before);
+
+    input.id = "contradictory-ack".into();
+    input.time_utc_ns = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
+    let changed = instance.run(input.clone(), &read).await?;
+    let (contradicted, _, revision) = data
+        .graph_window_headers(&record.id.stream, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == first_cursor)
+        .ok_or("contradicted native Graph window")?;
+    assert_eq!(revision, changed.commit_revision);
+    assert_eq!(data.processor_result(&scope)?, Some(original_head.clone()));
+    assert_ne!(contradicted, id);
+    let retained = data
+        .graph_result(tenant, &contradicted)?
+        .ok_or("contradicted graph")?;
+    assert!(
+        retained.graph.facts.iter().any(|fact| matches!(&fact.value,
+        GraphFactValueV1::Policy(policy) if policy.state == PolicyProvenanceStateV1::Contradicted))
+    );
+    assert!(retained.packages.iter().any(|package| package.package_id
+        == araphor_data::FindingV1::PACKAGES[0]
+        && package.state == araphor_data::GraphPackageStateV1::Contradicted));
+    let (_, refs) = data.package_evidence(tenant, std::slice::from_ref(&contradicted))?;
+    assert!(refs
+        .iter()
+        .any(|pin| pin.key.owner_id == "mithril-control/activation-ack"
+            && pin.key.owner_revision == rollout.transition_version));
+    assert!(refs.iter().any(|pin| {
+        pin.key.owner_id == "mithril-control/activation-ack"
+            && pin.key.entity_key.as_slice()
+                == next_bundle.candidate.candidate_content_id.as_bytes()
+            && pin.key.owner_revision == next_rollout.transition_version
+    }));
+    assert_eq!(
+        same_control.bundle_for_candidate("node-a", &bundle.candidate.candidate_content_id)?,
+        Some(bundle.clone())
+    );
+    let (same_control, _, later_bundle, _) = populate_version(same_control.clone(), 3)?;
+    assert_ne!(
+        later_bundle.profile_artifact.header.profile_id,
+        bundle.profile_artifact.header.profile_id
+    );
+    assert_ne!(
+        later_bundle.profile_artifact.header.profile_id,
+        unrelated_bundle.profile_artifact.header.profile_id
+    );
+    assert_ne!(
+        later_bundle.candidate.policy_source_revision_id,
+        unrelated_bundle.candidate.policy_source_revision_id
+    );
+    assert_eq!(
+        same_control.bundle_for_candidate("node-a", &bundle.candidate.candidate_content_id)?,
+        Some(bundle.clone())
+    );
+    assert_eq!(data.graph_result(tenant, &id)?, Some(original));
+    assert_eq!(data.read_result(tenant, &id)?, original_body);
+    assert_eq!(
+        data.package_evidence(tenant, std::slice::from_ref(&id))?,
+        original_evidence
+    );
+    assert_eq!(domain()?.2.len(), 2);
+    assert_eq!(
+        data.managed_history(&selection, "control-proofs", &read)?,
+        vec![first, unchanged, changed]
+    );
+    let authority = Arc::new(GraphAuthority::new());
+    let publication_feed = CapturedFacts {
+        owner: owner(&same_control, Arc::clone(&data), tenant)?,
+        authority: Arc::clone(&authority),
+        update: std::sync::Mutex::new(Some(owner(&same_control, Arc::clone(&data), tenant)?)),
+    };
+    let publication = GraphPublication::admit(
+        Arc::clone(&query),
+        authority.clone(),
+        Arc::new(publication_feed),
+        grant.clone(),
+        "control-race".into(),
+        record.id.stream.clone(),
+        program.events_sql.clone(),
+        program.definition.clone(),
+        &read,
+    )
+    .await?;
+    let before = domain()?;
+    input.id = "context-after-capture".into();
+    input.time_utc_ns = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
+    let denied = publication
+        .run(input.clone(), &read)
+        .await
+        .err()
+        .ok_or("changed captured context was published")?;
+    assert_eq!(
+        erebor_runtime_error::ErrorExt::status_code(&denied),
+        erebor_runtime_error::StatusCode::AlreadyExists
+    );
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&denied);
+    let mut conflict = false;
+    while let Some(error) = source {
+        conflict |= matches!(
+            error.downcast_ref::<araphor_data::Error>(),
+            Some(araphor_data::Error::AnalysisConflict { .. })
+        );
+        source = if let Some(araphor_analysis::Error::Data { source }) =
+            error.downcast_ref::<araphor_analysis::Error>()
+        {
+            Some(source)
+        } else if let Some(araphor_analysis::Error::Query { source }) =
+            error.downcast_ref::<araphor_analysis::Error>()
+        {
+            Some(source)
+        } else if let Some(araphor_query::Error::Data { source }) =
+            error.downcast_ref::<araphor_query::Error>()
+        {
+            Some(source)
+        } else {
+            error.source()
+        };
+    }
+    assert!(conflict, "{denied:?}");
+    assert!(authority
+        .1
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_none());
+    assert_eq!(domain()?, before);
+    assert_eq!(data.graph_result(tenant, &contradicted)?, Some(retained));
+    assert!(data
+        .managed_history(&selection, "control-race", &read)?
+        .is_empty());
+    if let Some(attempt) = data.managed_attempt(tenant, "control-race", &input.id, &read)? {
+        assert!(attempt.receipt().is_none());
+    }
+
+    let publication = GraphPublication::admit(
+        Arc::clone(&query),
+        Arc::new(GraphAuthority::new()),
+        Arc::new(owner(&same_control, Arc::clone(&data), tenant)?),
+        grant,
+        "control-fresh".into(),
+        record.id.stream.clone(),
+        program.events_sql,
+        program.definition,
+        &read,
+    )
+    .await?;
+    let before = domain()?;
+    input.id = "fresh-context-noop".into();
+    input.time_utc_ns = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
+    let fresh = publication.run(input, &read).await?;
+    assert_eq!(domain()?, before);
+    let (unchanged, _, _) = data
+        .graph_window_headers(&record.id.stream, None)?
+        .into_iter()
+        .find(|(_, header, _)| header.first_cursor == first_cursor)
+        .ok_or("fresh native Graph window")?;
+    assert_eq!(unchanged, contradicted);
+    assert_eq!(data.processor_result(&scope)?, Some(original_head));
+    assert_eq!(
+        data.managed_history(&selection, "control-fresh", &read)?,
+        vec![fresh]
+    );
+    data.verify_state()?;
+    Ok(())
+}
+
 #[test]
 fn retained_credential_selectors() -> TestResult {
     use crate::{LocalObjectSelectorV1, ObjectClassifierSelectorV1, PathSelectorV1, RuleMatchV1};

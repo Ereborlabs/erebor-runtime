@@ -261,7 +261,9 @@ impl AnalysisStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => return Err(source).context(IoSnafu { path: &pending }),
         }
-        Self::open_leased(root, retention, storage, lease)
+        let store = Self::open_leased(root, retention, storage, lease)?;
+        store.recover_managed_startup()?;
+        Ok(store)
     }
 
     fn open_leased(

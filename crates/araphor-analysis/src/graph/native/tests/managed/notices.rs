@@ -2,7 +2,7 @@ use super::*;
 use futures_util::StreamExt as _;
 
 impl Fixture {
-    async fn graph_definition(
+    pub(super) async fn graph_definition(
         &self,
     ) -> TestResult<(
         PackageGrantV1,
@@ -15,7 +15,7 @@ impl Fixture {
         Ok((grant, definition))
     }
 
-    async fn managed_graph(
+    pub(super) async fn managed_graph(
         &self,
         grant: &PackageGrantV1,
         definition: &araphor_discovery_definition::ResolvedDefinition,
@@ -56,7 +56,7 @@ impl Fixture {
             .collect()
     }
 
-    fn graph_scope(&self) -> araphor_data::ProcessorScopeV1 {
+    pub(super) fn graph_scope(&self) -> araphor_data::ProcessorScopeV1 {
         araphor_data::ProcessorScopeV1 {
             processor_id: araphor_data::GRAPH_PROCESSOR.into(),
             method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
