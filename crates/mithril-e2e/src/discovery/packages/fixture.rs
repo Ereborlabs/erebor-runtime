@@ -136,7 +136,7 @@ impl Fixture {
         auth: &ClientAuthConfig,
         credential: &Path,
     ) -> Result<(Self, AraphorClient, ControlServerFixture)> {
-        match self.client(tls, auth, credential).await {
+        match self.client(tls, auth, credential, [1; 16]).await {
             Ok((client, server)) => Ok((self, client, server)),
             Err(error) => {
                 self.shutdown().await?;
@@ -150,6 +150,7 @@ impl Fixture {
         tls: &MtlsFixture,
         auth: &ClientAuthConfig,
         credential: &Path,
+        tenant: [u8; 16],
     ) -> Result<(AraphorClient, ControlServerFixture)> {
         let address = free_address()?;
         let endpoint = format!("https://localhost:{}", address.port());
@@ -170,7 +171,7 @@ impl Fixture {
         let server = ControlServerFixture::client(listener, address).await?;
         match AraphorClient::connect(AraphorProfile {
             endpoint,
-            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+            tenant_id: uuid::Uuid::from_bytes(tenant).to_string(),
             credential_file: credential.to_path_buf(),
             ca_file: Some(tls.files.ca.clone()),
         })

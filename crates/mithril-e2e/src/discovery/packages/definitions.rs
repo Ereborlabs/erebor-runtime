@@ -115,7 +115,7 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
     }
     let credential = root.join("definition-token");
     fs::write(&credential, b"fixture-access")?;
-    let (client, server) = fixture.client(&tls, &config, &credential).await?;
+    let (client, server) = fixture.client(&tls, &config, &credential, [1; 16]).await?;
     let reply = client
         .package_operation(PackageOperationRequest {
             definition: PackageRequestV1::InstallImage {

@@ -3,6 +3,7 @@ use zerocopy::IntoBytes as _;
 
 use super::*;
 
+mod incident;
 mod input;
 mod observed;
 

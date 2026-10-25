@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, error::Error as StdError, fs, path::Path};
 
-use mithril_control::{ControlStore, EvidenceIdV1};
+use mithril_control::EvidenceIdV1;
 
 use crate::control_fixture::{OutagePolicyFixture, OUTAGE_NAMESPACE_UID};
 
@@ -16,22 +16,22 @@ fn fixture_handle<'a>(
         + 1)
 }
 
+pub(super) struct SignedCatalog {
+    pub(super) catalog: mithril_node::NodeDiscoveryContextCatalog,
+    pub(super) raw: erebor_interceptor_abi::EffectObservationV1,
+    pub(super) workload: mithril_control::WorkloadTargetFactV1,
+    pub(super) bundle: mithril_control::PolicyBundleV1,
+}
+
 pub(super) fn signed_catalog(
-    store: &ControlStore,
+    owner: mithril_control::PolicyDesiredStateOwner,
     root: &Path,
     boot: EvidenceIdV1,
-) -> Result<
-    (
-        mithril_node::NodeDiscoveryContextCatalog,
-        erebor_interceptor_abi::EffectObservationV1,
-        mithril_control::WorkloadTargetFactV1,
-    ),
-    Box<dyn StdError>,
-> {
-    let fixture = OutagePolicyFixture::new(store.clone());
+    now: i64,
+) -> Result<SignedCatalog, Box<dyn StdError>> {
+    let fixture = OutagePolicyFixture { owner };
     let resource = fixture.resource(1)?;
     let mut inventory = fixture.inventory(&resource)?;
-    let now = 1_800_000_000_000_000_000;
     let result = fixture
         .owner
         .reconcile(&resource, OUTAGE_NAMESPACE_UID, &inventory, now)?;
@@ -42,14 +42,8 @@ pub(super) fn signed_catalog(
     let artifact_path = root.join("signed-profile.json");
     super::write_json(&artifact_path, &bundle.profile_artifact)?;
     let key_path = root.join("policy-public-key");
-    fs::write(
-        &key_path,
-        hex::encode(
-            ed25519_dalek::SigningKey::from_bytes(&[7; 32])
-                .verifying_key()
-                .to_bytes(),
-        ),
-    )?;
+    let (_, public_key, _) = fixture.owner.signer_identity();
+    fs::write(&key_path, public_key)?;
     let artifact = mithril_control::PolicyArtifactOwner::default().load_verified_at(
         &artifact_path,
         &key_path,
@@ -183,5 +177,10 @@ pub(super) fn signed_catalog(
     };
     let mut catalog = mithril_node::NodeDiscoveryContextCatalog::default();
     catalog.add_verified_binding(&artifact, &binding, &[object], boot);
-    Ok((catalog, raw, workload))
+    Ok(SignedCatalog {
+        catalog,
+        raw,
+        workload,
+        bundle: bundle.clone(),
+    })
 }

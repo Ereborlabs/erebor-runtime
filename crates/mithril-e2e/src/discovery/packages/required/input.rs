@@ -90,6 +90,14 @@ pub(super) async fn upload(
         .connector(server, "node-a", [7; 16])
         .connect(registration, false, &mut trust)
         .await?;
+    upload_on(tls, &mut connection, wal).await
+}
+
+pub(super) async fn upload_on(
+    tls: &MtlsFixture,
+    connection: &mut ControlConnection,
+    wal: &EffectObservationStore,
+) -> Result<(EvidenceIntakeIdentityV1, Vec<u8>)> {
     let batch = wal.next_evidence_batch().ok_or("required WAL batch")?;
     let wire: mithril_control::EvidenceBatch = batch.clone().into();
     let source = tls.identity(wire.source_id.as_slice().try_into()?);
@@ -106,7 +114,10 @@ pub(super) async fn upload(
     wal.acknowledge_evidence(ack)?;
     assert_eq!(wal.pending_evidence_records(), 0);
     let mut health = [EffectObservationHealthV1::default(); 4];
-    health[3] = EffectObservationHealthV1 {
+    let sample = health
+        .get_mut(usize::try_from(wire.cpu_id)?)
+        .ok_or("required coverage CPU is outside the sample")?;
+    *sample = EffectObservationHealthV1 {
         attempted: batch.last_cursor,
         requested: batch.last_cursor,
         emitted: batch.last_cursor,
@@ -120,7 +131,7 @@ pub(super) async fn upload(
     let current = snapshot
         .current_intervals()
         .into_iter()
-        .find(|interval| interval.cpu_id == 3)
+        .find(|interval| interval.cpu_id == wire.cpu_id)
         .ok_or("required coverage interval")?;
     assert_eq!(current.source_id.to_be_bytes(), source.source_id);
     assert!(current.supports_negative_claim());
@@ -143,11 +154,15 @@ pub(super) async fn configuration(
     oidc: &OidcFixture,
 ) -> Result<(ControlConfig, NotificationGrantV1, Arc<ClientAuth>)> {
     let tenant = EvidenceIdV1::new(1, 2).to_be_bytes();
-    let auth = oidc.auth(
+    let mut auth = oidc.auth(
         "https://localhost:44444",
         Some(tenant),
         tls.files.ca.clone(),
     );
+    auth.service
+        .as_mut()
+        .ok_or("required service auth")?
+        .max_age_seconds = 300;
     let mut config = lifecycle::configuration(tls, &auth)?;
     config.graph_enabled = true;
     config.discovery = false;

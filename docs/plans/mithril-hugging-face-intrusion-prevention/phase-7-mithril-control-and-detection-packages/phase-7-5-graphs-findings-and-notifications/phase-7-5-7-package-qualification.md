@@ -472,3 +472,60 @@ and immutable-content results are in immutable-package-content-verification.
 historical-source-comparison-v2.json records the published pin comparison;
 changed-path pins do not cover every dependency or create a current passing run.
 No full CI, benchmark, new runtime, or physical execution is part of this result.
+
+
+## Reactive incident subscription proof
+
+**Paired lightweight subscription: Done. Current physical incident: Not done.**
+[follows_cpu_streams](../../../../../crates/mithril-e2e/src/discovery/packages/required/incident/lightweight.rs)
+uses the configured Control policy owner, shared Host, authenticated Node
+connection, and public Query Follow API. It uses no manual Graph executor or
+client status timer. Optional Discovery is disabled.
+
+The case verifies the configured signer and the exact prepared and downloaded
+policy bundle. The same Node connection acknowledges activation at generation
+eight and sends both WAL inputs and coverage. CPUs three and two have different
+source IDs with the same task lifetime. The query captures each exact accepted
+frame and waits for each source's Graph cut and healthy coverage.
+
+The case requires one Confirmed Process finding with a Prevented EACCES effect
+and Exact policy provenance. It excludes the benign record from every current
+finding. The retained decision includes reason, limits, severity, required
+action, effect proof, and policy states and limits. Missing ancestry remains
+explicit. The notification refers to that finding and Graph result. Finding
+and failure-escalation attempts both report SinkUnavailable. No human ACK or
+external delivery is claimed. All three query streams complete their
+checkpoints before the case uses their rows.
+
+The new fixture first exposed three reader/setup errors: a second exclusive
+Control store open, text reads of binary JSON columns, and the Exec family
+value in a file-read filter. The corrected fixture uses the policy owner from
+ControlConfig, the Arrow binary values, and shared ABI enum parameters.
+Its service grant lasts 300 seconds, within the existing token lifetime.
+The 90-second observation watchdog, production auth checks, and notification
+deadlines do not change. Failure diagnostics use bounded cached metadata.
+The original errors and all earlier failed runs remain stored.
+
+The existing signed-catalog helper now accepts its owner and time. Its other
+caller keeps the same fixed time, inputs, and assertions. The DataStore test
+module moves to a separate file without a module or selector change. This
+change adds no production API, executor, scheduler, schema, quota, or version.
+
+Evidence is in
+[/home/navid/mithril-test-hosts/araphor-package-qualification-verification](/home/navid/mithril-test-hosts/araphor-package-qualification-verification).
+follow-filter-pair.json records one passing case.
+follow-filter-regressions.json records six passing affected cases: signed
+catalog bounds, image and definition admission, public Instance lifecycle,
+receipt reopen, and required-detector recovery. The relevant build, Clippy
+with warnings denied, and scoped formatting pass. The test processes use
+PATH=/nonexistent. No full CI, benchmark, or physical case ran.
+
+follow-filter-source.json has 1,257 hashes, including the two consumed test
+key files. Its SHA-256 is
+78f52a3fdc08a123372224704a51597e5945a005fe00da8602d1a06abab89706.
+The passing E2E binary SHA-256 is
+a222f8f46f718dead0b1a920484794c5695ac456dfdaa11a062d19a0b7219118.
+incident-lightweight.json preserves the full passing report for the physical
+comparison. Its SHA-256 is
+98beec5b9de151b2f10fe53e6a106e3e3b3c06e97bc979c7c6b51d6c8fc1659e.
+The paired current physical case and the complete matrix remain Not done.

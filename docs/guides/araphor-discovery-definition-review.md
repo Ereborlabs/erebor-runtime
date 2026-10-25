@@ -4299,3 +4299,32 @@ Read the mapped test beside its owner before using a result. Native Graph
 observation semantics, native SQL planning, native ABI execution, and native
 loader linkage are separate boundaries. The paired current physical incident
 remains Not done.
+
+
+## Reactive incident subscription proof
+
+The intended result is the same complete decision from the lightweight input
+and the physical file-read case. The lightweight input now passes. The current
+physical result remains Not done.
+
+[follows_cpu_streams](../../crates/mithril-e2e/src/discovery/packages/required/incident/lightweight.rs) starts the existing configured owners and acknowledges the exact policy through the public Node connection.
+  -> [signed_catalog](../../crates/mithril-e2e/src/discovery/roundtrip.rs) uses that policy owner and verifies its actual signer key.
+  -> [upload_on](../../crates/mithril-e2e/src/discovery/packages/required/input.rs) retains the same authenticated session for evidence and coverage ACKs.
+  -> [Incident::subscribe](../../crates/mithril-e2e/src/discovery/packages/required/incident.rs) opens the events, graph_manifest, and notifications Query Follow streams.
+  -> [Incident::wait](../../crates/mithril-e2e/src/discovery/packages/required/incident.rs) clears each replacement and waits for completed checkpoints.
+  -> [Incident::result](../../crates/mithril-e2e/src/discovery/packages/required/incident.rs) validates both source cuts, healthy coverage, exact policy, all-current benign exclusion, one denied finding, and its notification.
+
+The [input fixture](../../crates/mithril-e2e/src/discovery/packages/required/incident/input.rs)
+uses checked key and seal files with production configuration validation.
+The event query binds ABI enum values. JSON columns keep their Arrow Binary
+representation. The three streams only observe production results. They do
+not drive another execution owner. All network and Host shutdown attempts
+complete before a stage error returns.
+
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#reactive-incident-subscription-proof)
+records seven passing executions, exact source and binary hashes, the full
+decision report, earlier failures, and the remaining physical boundary.
+The [outlined DataStore tests](../../crates/mithril-e2e/src/discovery/data_store/tests.rs)
+keep their module name, selectors, and assertions. BPF, the package ABI,
+production auth, resource defaults, and native DataFusion execution do not
+change in this deliverable.
