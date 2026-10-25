@@ -334,7 +334,7 @@ impl AnalysisStore {
                     operation: "read processor coverage health",
                 })?;
             let failed = scope.processor_id == crate::GRAPH_PROCESSOR
-                && self.graph_processing_failed(snapshot, &scope.identity)?;
+                && Self::managed_graph_failed(snapshot, &scope.identity)?;
             let state = if retired {
                 ProcessorStateV1::Retired
             } else if failed {

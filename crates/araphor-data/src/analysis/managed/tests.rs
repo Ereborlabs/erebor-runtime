@@ -18,6 +18,7 @@ use crate::{
 
 mod destination;
 mod guards;
+mod health;
 mod history;
 mod input;
 mod lifecycle;

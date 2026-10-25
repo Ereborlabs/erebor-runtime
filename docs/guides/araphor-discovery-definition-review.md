@@ -4197,3 +4197,39 @@ retains the red result, eight passing coverage cases, exact source and binary
 hashes, build, Clippy, and formatting. The BPF map, counter layout, Node code,
 and wire format are unchanged. These checks do not qualify physical enforcement
 or close the pending required-detector and complete package matrix duties.
+
+
+## Required Graph failure status
+
+The intended result is one failure status derived from the managed Instance.
+Health must preserve a failed sibling until that Instance succeeds or is
+removed. The query subscription and execution pipeline do not change.
+
+[finish_managed](../../crates/araphor-data/src/analysis/managed/terminal.rs) records a failed attempt.
+  -> [managed status](../../crates/araphor-data/src/analysis/managed/status.rs) retains and validates the failure at the Instance progress revision.
+  -> [managed_graph_failed](../../crates/araphor-data/src/analysis/managed/status.rs) joins each failed Instance to its current version in the same health snapshot.
+  -> [processor_health](../../crates/araphor-data/src/analysis/health.rs) reports ProcessingFailed and incomplete input for a matching source.
+
+[commit_managed](../../crates/araphor-data/src/analysis/managed/commit.rs) completes a successful attempt.
+  -> [commit_managed](../../crates/araphor-data/src/analysis/managed/commit.rs) clears that Instance failure in the atomic commit.
+  -> [processor_health](../../crates/araphor-data/src/analysis/health.rs) preserves any other matching failed Instance.
+
+Data remains the only durable owner. The read includes Evaluate and Expire,
+custom names, and finite Instances. It excludes removed Instances, other
+sources, other tenants, and noncurrent versions. It materializes candidate
+rows before nested validation queries. It uses existing row, Instance, and
+failure validation. It adds no schema, index, cache, or background work.
+The old graph_set_health context and memory channel has no live caller and is
+removed. Stored historical contexts are not deleted.
+
+The [Data tests](../../crates/araphor-data/src/analysis/managed/tests/health.rs)
+check exact destination and source matching, nonrunning failures, reopen, and
+removal of failed siblings. The [conversion test](../../crates/araphor-analysis/src/graph/native/tests/managed.rs)
+checks an actual conversion failure, independent successful work, the existing
+terminated retry rejection, and repair of the same Instance.
+
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#required-graph-failure-status)
+records exact red and green source boundaries, binary hashes, and checks.
+The pending integrated case fails at retained Graph call attestation. The
+health proof does not qualify that path or physical enforcement. BPF, the ABI,
+package artifacts, resource defaults, and the execution pipeline do not change.

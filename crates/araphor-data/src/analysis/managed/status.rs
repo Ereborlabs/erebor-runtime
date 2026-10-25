@@ -5,8 +5,8 @@ use snafu::ResultExt as _;
 use super::super::AnalysisStore;
 use super::{model::Attempt, ManagedExit, ManagedInstance, ManagedStatus};
 use crate::{
-    AnalysisDatabaseSnafu, AnalysisReadControl, AnalysisSelectionV1, PackageErrorCodeV1 as Code,
-    PackageReadinessV1, Result,
+    AnalysisDatabaseSnafu, AnalysisReadControl, AnalysisSelectionV1, EvidenceIntakeIdentityV1,
+    ManagedDestination, PackageErrorCodeV1 as Code, PackageReadinessV1, Result,
 };
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
@@ -47,6 +47,55 @@ impl Failure {
 }
 
 impl AnalysisStore {
+    pub(in crate::analysis) fn managed_graph_failed(
+        reader: &Connection,
+        source: &EvidenceIntakeIdentityV1,
+    ) -> Result<bool> {
+        let instances = {
+            let mut statement = reader.prepare(
+                "SELECT i.instance_id, v.spec, i.authority, i.generation, i.progress, i.running, i.removed, i.lifecycle FROM managed_instances i JOIN managed_versions v USING (tenant_id, instance_id, generation) WHERE i.tenant_id = ? AND NOT i.removed AND i.failure IS NOT NULL",
+            ).context(AnalysisDatabaseSnafu { operation: "prepare Graph failure candidates" })?;
+            let rows = statement
+                .query_map(params![source.tenant_id.as_slice()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        (
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                        ),
+                    ))
+                })
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read Graph failure candidates",
+                })?;
+            let mut instances = Vec::new();
+            for row in rows {
+                let (id, values) = row.context(AnalysisDatabaseSnafu {
+                    operation: "decode Graph failure candidate",
+                })?;
+                instances.push(Self::managed_row(source.tenant_id, &id, values)?);
+            }
+            instances
+        };
+        let mut failed = false;
+        for instance in instances {
+            instance.validate()?;
+            if matches!(
+                &instance.spec.destination,
+                ManagedDestination::Graph { source: current, .. } if current == source
+            ) {
+                failed |= Self::validate_managed_failure(reader, &instance)?
+                    .is_some_and(|failure| failure.progress == instance.progress);
+            }
+        }
+        Ok(failed)
+    }
+
     pub fn managed_status(
         &self,
         selection: &AnalysisSelectionV1,

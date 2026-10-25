@@ -309,3 +309,54 @@ Each record retains its exact command and source boundary. The pending
 required-detector case and its failed attempts remain separate evidence.
 No full CI, benchmark, physical qualification, or complete matrix pass is
 claimed by this correction.
+
+
+## Required Graph failure status
+
+**Health correction: Done. Integrated required detection: Not done.**
+A failed managed Graph Instance already retains its failure in Data. Processor
+health previously read a separate context and memory flag. That flag had no
+live writer. Health could report Lagging after a required package failed.
+
+[managed_graph_failed](../../../../../crates/araphor-data/src/analysis/managed/status.rs)
+now reads current failed Instances from the same health snapshot. It checks
+the requested tenant and exact source. Both Evaluate and Expire failures apply.
+Custom Instance names and finite Instances are supported. A successful sibling
+does not hide a failure. The existing successful commit clears its own failure.
+Removal excludes that Instance. Existing Instance and failure validators check
+the stored data. Prepared versions do not replace the current destination.
+
+The unused graph_set_health API, its context reader, and its memory set are
+removed. Historical context rows remain stored. This change adds no schema,
+index, cache, clock, polling loop, or execution owner. Each health read scans
+current failed candidates for the requested tenant. This result makes no
+performance claim.
+
+The [Data regressions](../../../../../crates/araphor-data/src/analysis/managed/tests/health.rs)
+check custom Evaluate and Expire IDs, nonrunning failures, exclusive reopen,
+sibling removal, exact source lifetimes, tenants, destinations, and prepared
+versions. The [conversion regression](../../../../../crates/araphor-analysis/src/graph/native/tests/managed.rs)
+keeps its real conversion error, sibling success, terminated-request conflict,
+and repair of the same Instance. It now checks ProcessingFailed until that
+repair succeeds, then Current with complete coverage.
+
+Evidence is in
+[/home/navid/mithril-test-hosts/araphor-package-qualification-verification](/home/navid/mithril-test-hosts/araphor-package-qualification-verification).
+
+| Record | Result and source limit |
+| --- | --- |
+| health-data-red.json, health-conversion-red.json | Two new Data cases and the conversion case fail on the missing failure status. Exact logs, source, and binary hashes remain stored. |
+| health-data-fixed.json | Ten relevant Data cases pass with health-fixed-source.json. The cases include both new regressions, processor health, and the existing failure, corruption, authority, and recovery checks. |
+| health-conversion-fixed.json | The real conversion and same-Instance repair case passes with health-fixed-source.json. |
+| health-renamed-final.json | The destination regression passes after its name changes to graph_health_current_destination. Its body is unchanged. This repeats one Data case. It does not add a distinct case. |
+| required-final-build.json, required-clippy-final.json, required-fmt-final.json | The relevant library build, Clippy with warnings denied, and formatting pass with required-final-source.json. |
+| required-final-tests.json | The pending integrated detector case fails with retained Graph call attestation. This failure does not qualify required detection or the complete matrix. |
+
+health-fixed-source.json has 1,248 source hashes. Its SHA-256 is
+28e2251bb027f6280bcecccd8aab4ddedb3ed5eda0b71eccf5878430215bc83a.
+The later required-final-source.json has 1,250 hashes. It changes the pending
+E2E test layout and one Data test name. Its SHA-256 is
+3f4fb64028bfa42d4355ef9a8d50b0106930e062df8179aee45a522b7dfba7fa.
+The test processes use PATH=/nonexistent. The pending E2E files remain outside
+this health deliverable. The integrated case, paired physical incident, and
+complete matrix remain Not done. No full CI or benchmark ran.

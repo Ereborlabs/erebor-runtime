@@ -130,8 +130,11 @@ async fn graph_conversion_failure_finishes() -> TestResult {
         .store()
         .processor_health(&scope)?
         .ok_or("failed Graph source progress")?;
-    assert_eq!(health.state, araphor_data::ProcessorStateV1::Lagging);
-    assert!(!health.incomplete);
+    assert_eq!(
+        health.state,
+        araphor_data::ProcessorStateV1::ProcessingFailed
+    );
+    assert!(health.incomplete);
     assert!(fixture
         .query
         .store()
@@ -202,9 +205,12 @@ async fn graph_conversion_failure_finishes() -> TestResult {
         .store()
         .processor_health(&scope)?
         .ok_or("independent Graph source progress")?;
-    assert_eq!(health.state, araphor_data::ProcessorStateV1::Current);
+    assert_eq!(
+        health.state,
+        araphor_data::ProcessorStateV1::ProcessingFailed
+    );
     assert_eq!(health.consumed_cursor, 3);
-    assert!(!health.incomplete);
+    assert!(health.incomplete);
     let before = fixture.query.store().meta()?;
     assert!(matches!(
         job.run(input, &fixture.control).await,
@@ -267,15 +273,14 @@ async fn graph_conversion_failure_finishes() -> TestResult {
             .commit_revision,
         receipt.commit_revision
     );
-    assert_eq!(
-        fixture
-            .query
-            .store()
-            .processor_health(&scope)?
-            .ok_or("recovered Graph processor")?
-            .consumed_cursor,
-        4
-    );
+    let health = fixture
+        .query
+        .store()
+        .processor_health(&scope)?
+        .ok_or("recovered Graph processor")?;
+    assert_eq!(health.consumed_cursor, 4);
+    assert_eq!(health.state, araphor_data::ProcessorStateV1::Current);
+    assert!(!health.incomplete);
     Ok(())
 }
 
