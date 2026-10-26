@@ -9,7 +9,7 @@ COPY ui/mithril-console ./
 COPY crates/mithril-control/proto /src/crates/mithril-control/proto
 RUN npm run build
 
-FROM rust:1.92-trixie AS build
+FROM rust:1.97.1-trixie AS build
 ARG CARGO_BUILD_JOBS=4
 
 RUN apt-get update \
@@ -18,9 +18,11 @@ RUN apt-get update \
        libtool make pkg-config protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
+RUN rustup target add wasm32-unknown-unknown
 COPY Cargo.lock Cargo.toml ./
 COPY bpf ./bpf
 COPY crates ./crates
+COPY vendor ./vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \

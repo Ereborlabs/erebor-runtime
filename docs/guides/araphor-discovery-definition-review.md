@@ -4328,3 +4328,24 @@ The [outlined DataStore tests](../../crates/mithril-e2e/src/discovery/data_store
 keep their module name, selectors, and assertions. BPF, the package ABI,
 production auth, resource defaults, and native DataFusion execution do not
 change in this deliverable.
+
+
+## Deployment image build inputs
+
+Read [the production Docker recipe](../../packaging/mithril/Dockerfile) and
+[its input filter](../../packaging/mithril/Dockerfile.dockerignore) together.
+The recipe copies vendor because Cargo uses the local DuckDB patch. The input
+filter must admit that directory. Rust 1.97.1 meets the locked dependency
+compiler requirement. wasm32-unknown-unknown supports the existing component
+build. Node and Control retain their existing runtime stages and commands.
+
+The existing VM harness builds both production image targets. No second image
+builder or runtime loader was added. In the qualification evidence directory,
+vm-preparation.json retains the failed missing-vendor build.
+vm-preparation-retry.json records the successful cold build on
+image-build-source.json. image-load-checks.json records ldd, --help, and binary
+hash checks for both resulting images. vm-artifacts.json binds imported guest
+image IDs and the archive hash. These records prove build and load inputs;
+they do not prove the current physical incident. See the
+[qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#deployment-image-build-inputs)
+for the source limits and the open incident duty.

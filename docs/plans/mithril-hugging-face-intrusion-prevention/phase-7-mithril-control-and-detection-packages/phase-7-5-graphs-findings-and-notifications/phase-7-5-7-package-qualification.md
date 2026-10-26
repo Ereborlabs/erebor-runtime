@@ -529,3 +529,22 @@ incident-lightweight.json preserves the full passing report for the physical
 comparison. Its SHA-256 is
 98beec5b9de151b2f10fe53e6a106e3e3b3c06e97bc979c7c6b51d6c8fc1659e.
 The paired current physical case and the complete matrix remain Not done.
+
+
+## Deployment image build inputs
+
+**Deployment image build: Done. Current physical incident: Not done.**
+The existing production Docker recipe omitted the vendored DuckDB source. Its
+Rust base also preceded the locked dependencies' required compiler. The build
+now copies vendor, uses Rust 1.97.1, and installs wasm32-unknown-unknown for the
+existing built-in component build. The runtime stages do not change.
+
+vm-preparation.json retains the missing-vendor failure before VM creation.
+vm-preparation-retry.json records the corrected Node and Control image build
+through the existing VM harness. It passed in 1,908.546 seconds with
+image-build-source.json. This elapsed time includes cold image preparation; it
+is not a test runtime or benchmark. image-load-checks.json records successful
+ldd, --help, and binary SHA-256 checks for both images. vm-artifacts.json records
+the image IDs, imported guest IDs, archive hash, and original source boundary.
+The records remain in the qualification evidence directory above. These build
+and load checks do not establish an integrated physical incident pass.

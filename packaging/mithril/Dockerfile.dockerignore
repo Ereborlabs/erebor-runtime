@@ -5,6 +5,8 @@
 !bpf/**
 !crates
 !crates/**
+!vendor
+!vendor/**
 !ui
 !ui/mithril-console
 !ui/mithril-console/**
