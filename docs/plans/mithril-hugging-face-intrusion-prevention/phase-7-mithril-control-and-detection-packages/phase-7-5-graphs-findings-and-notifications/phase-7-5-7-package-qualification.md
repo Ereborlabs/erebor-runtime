@@ -632,3 +632,27 @@ The owned VM remains retained. The case produces no physical PASS result JSON.
 The [incident review](../../../../guides/araphor-discovery-definition-review.md#current-paired-incident-reading-route) gives the source reading route.
 Prior failures and their source limits remain recorded. These results establish
 no performance, full-incident, Python package execution, or external-delivery qualification.
+
+
+## Shared public failure diagnostics
+
+**Shared diagnostic collection: Done. Physical incident and complete matrix: Not done.**
+The six private E2E paths replace the direct-store progress helper and two failure wrappers with one public-client collector before cleanup.
+The original 90-second wait, result assertions, and returned error remain unchanged. Collection has one separate five-second bound.
+[client-diagnostic-light.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/client-diagnostic-light.json) records follows_wal_backlog passing in 53.036 seconds: one pass, zero failures, and zero ignored cases.
+[Clippy](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/client-diagnostic-clippy.json) passes with warnings denied in 16.784 seconds. [Scoped formatting](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/client-diagnostic-fmt.json) passes in 0.043 seconds.
+The 1,430-file client-diagnostic-source-v3.json SHA-256 is a45557e8e0de070260e0ed92fc4f8206e125bd0c8603b26bee82e4345b6ed248.
+The executable SHA-256 is 589e08f0e65907f4dad202d93054d70b3e9959555f2b9296f52c5c8274cfc33b. The [paired report](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/client-diagnostic-light-report.json) SHA-256 is eb3bbc3b60ebb9e18a2359b532a0333d60edd91436b79d08a40ae5e8b82b0731.
+The 2,035-file client-diagnostic-full-source.json SHA-256 is 064bb950d494ffe3ae8fe382addf95bd18ac40c72ccca2a02e9c4fd1a474cbc1.
+The [image-source comparison](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/client-diagnostic-image-source-comparison.json) finds only six private E2E source differences. The image build source remains separately pinned.
+[physical-client-diagnostic.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/physical-client-diagnostic.json) and its log retain exit 101 in 214.643 seconds. Libtest reports zero passes, one failure, and zero ignored cases in 168.18 seconds.
+Both physical read assertions pass. The complete incident result still times out. Actual Node and Control Pod manifest identities match the imported production images.
+The collector finishes within its five-second bound. One marker retains nine projected diagnostic records, including independent RPC errors.
+The finite graph_state query completes without a limited result at read revision 169: accepted cursor 754, consumed cursor 745, processor present, and not retired.
+Its head is graph:b3d937dd-2229-489d-83c6-01908d04721f. The cached actor Graph is graph:cde2f2f8-6956-49a4-b956-b435d0f5d4e3 at cursor 745; selected CPU 1 records are 721 and 730. Notifications are empty.
+Evaluate inspection returns Unavailable. Independent Evaluate history reads retain successful receipts at commit revisions 106 and 93.
+Expire is running and Ready with progress 90. Its history has empty call projections at commits 90, 60, and 54. These revisions are store commits, not source cursors.
+The public reads and the held Follow cache are separate snapshots. They do not place head replacement before or after the observation deadline.
+The first eight cached findings concern unrelated cursors 100–107. Selected-record input membership, exact coverage matching, finding state, and policy remain unknown.
+The [reading route](../../../../guides/araphor-discovery-definition-review.md#shared-public-failure-diagnostics) states the projections and their limits. No later physical rerun, production correction, watchdog increase, or automatic repair is recorded.
+Prior failures remain retained. No complete matrix, physical PASS, performance, full-incident, Python package execution, or external-delivery qualification is claimed.

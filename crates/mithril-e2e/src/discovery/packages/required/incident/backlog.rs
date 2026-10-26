@@ -52,14 +52,7 @@ async fn follows_wal_backlog() -> Result<()> {
                 input.set_discovery_context(Some(Arc::new(prepared.catalog)));
                 let uploaded =
                     input::append_reads(&tls, &mut node, &input, &source, prepared.raw).await?;
-                let observed = observed.wait().await;
-                if observed.is_err() {
-                    eprintln!(
-                        "incident producer state={:?}",
-                        input::progress(&fixture, &source, &[])
-                    );
-                }
-                let observed = observed?;
+                let observed = observed.wait(&client).await?;
                 for ((record, bytes), cursor) in
                     observed.records.iter().zip(uploaded).zip([941, 950])
                 {

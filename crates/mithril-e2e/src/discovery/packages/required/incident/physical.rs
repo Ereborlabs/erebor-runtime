@@ -61,7 +61,7 @@ fn protected_read_package<P: Platform + 'static>() -> TestResult<()> {
                     .len()
                 );
                 actor.ensure_running("physical file read controls")?;
-                let observed = observed.wait().await?;
+                let observed = observed.wait(&client).await?;
                 assert_eq!(observed.decision, expected["decision"]);
                 let identity = observed.identity(&client).await?;
                 Ok((observed, denied, allowed, identity))

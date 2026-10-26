@@ -91,7 +91,7 @@ impl Incident {
         })
     }
 
-    pub(super) async fn wait(mut self) -> Result<Observed> {
+    pub(super) async fn wait(mut self, client: &AraphorClient) -> Result<Observed> {
         let waited = tokio::time::timeout(Duration::from_secs(90), async {
             loop {
                 if let Some(observed) = self.result()? {
@@ -168,6 +168,15 @@ impl Incident {
                         "deadline": notice.deadline,
                     })).collect::<Vec<_>>(),
                 })
+            );
+            let mut progress = Vec::new();
+            let finished =
+                tokio::time::timeout(Duration::from_secs(5), self.progress(client, &mut progress))
+                    .await
+                    .is_ok();
+            eprintln!(
+                "incident producer state={}",
+                json!({"finished": finished, "reads": progress})
             );
         }
         result

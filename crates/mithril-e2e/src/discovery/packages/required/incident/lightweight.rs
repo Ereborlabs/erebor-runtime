@@ -48,7 +48,7 @@ async fn follows_cpu_streams() -> Result<()> {
                 let delivered = input::fetch_policy(&mut node, &prepared.bundle).await?;
                 let ack = OutagePolicyFixture::active_acknowledgement(&delivered, 8, at);
                 assert_eq!(node.acknowledge_policy(ack).await?.rollout_state, "ACTIVE");
-                let background = input::background(&tls, &mut node).await?;
+                input::background(&tls, &mut node).await?;
                 let observed = Incident::subscribe(&client, 7, 0).await?;
                 let catalog = Arc::new(prepared.catalog);
                 let mut uploaded = Vec::new();
@@ -62,14 +62,7 @@ async fn follows_cpu_streams() -> Result<()> {
                     uploaded.push(upload_on(&tls, &mut node, &input).await?);
                 }
                 assert_ne!(uploaded[0].0.source_id, uploaded[1].0.source_id);
-                let observed = observed.wait().await;
-                if observed.is_err() {
-                    eprintln!(
-                        "incident producer state={:?}",
-                        input::progress(&fixture, &background, &uploaded)
-                    );
-                }
-                let observed = observed?;
+                let observed = observed.wait(&client).await?;
                 assert!(observed.partial_pages > 0);
                 for (record, (source, bytes)) in observed.records.iter().zip(uploaded) {
                     assert_eq!(record.id.stream, source);

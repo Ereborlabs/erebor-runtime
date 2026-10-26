@@ -4448,3 +4448,21 @@ The [verifier stop](/home/navid/mithril-test-hosts/araphor-package-qualification
 [Owned-resource absence](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/physical-core-failure-collection.json) is verified. The VM remains retained and no physical PASS result exists.
 The complete matrix and current physical incident remain Not done. Prior failures and source limits remain.
 No performance, full-incident, Python package execution, or successful external-delivery result is claimed.
+
+
+## Shared public failure diagnostics
+
+The intended result is bounded producer evidence before incident cleanup. A failed incident must retain its original error.
+[Incident::wait](../../crates/mithril-e2e/src/discovery/packages/required/incident.rs) starts collection only after its existing wait fails, while the authenticated client and Control remain alive.
+  -> [Incident::progress](../../crates/mithril-e2e/src/discovery/packages/required/incident/identity.rs) deduplicates exact selected sources and writes each completed projection into an outer vector under one five-second timeout.
+  -> The public Query API reads six graph_state fields through the existing [Data source provider](../../crates/araphor-data/src/analysis/extraction/tables/graph_state.rs), with the binary source key bound as a parameter.
+  -> The existing package encode/decode helper reads Evaluate and Expire status and the latest three successful history receipts independently. One read error does not skip later reads.
+The projected diagnostic metadata retains partial results. SQL NULL, missing values, limited rows, errors, checkpoint, EOF, and terminal Completed remain distinct.
+Status omits the definition revision. History omits the frontier. Status progress and receipt revisions are store commits, not source cursors; pending and cancelled attempts are not exposed.
+The three wait callers share this collector. The direct-store progress helper and two failure wrappers are removed. The successful path sends no diagnostic RPC.
+No event payload, package specification, or grant is added to the diagnostic output. No polling, retry, API, executor, scheduler, or store is added.
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#shared-public-failure-diagnostics) records the passing normal case, static checks, source hashes, and retained physical failure.
+The physical collector finishes with one producer marker and nine projected records. The native finite source read is nonlimited and terminal Completed at revision 169.
+The cached actor Graph reaches cursor 745 for selected records 721/730, but notifications are empty. Its first eight printed findings concern unrelated records 100–107.
+Evaluate inspection is Unavailable; its successful history and Expire status/history remain recorded independently. Separate snapshots cannot date head replacement relative to the wait deadline.
+Exact selected-input membership, matching coverage, and the selected finding's policy remain unproved. The physical incident, complete matrix, and cause remain open; this deliverable changes no production owner.
