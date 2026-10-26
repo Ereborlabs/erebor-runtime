@@ -176,6 +176,19 @@ pub(crate) trait Platform: Sized {
     fn setup(_name: &str) -> TestResult<Self> {
         pending("setup")
     }
+    fn configure_control(
+        &mut self,
+        _update: impl FnOnce(&mut serde_json::Value) -> TestResult<()>,
+    ) -> TestResult<()> {
+        pending("configure Control")
+    }
+    fn client_operation<T, F, Fut>(&mut self, _tenant: &str, _operation: F) -> TestResult<T>
+    where
+        F: FnOnce(erebor_runtime_client::AraphorProfile) -> Fut,
+        Fut: std::future::Future<Output = TestResult<T>>,
+    {
+        pending("use the authenticated client")
+    }
     fn start_control(&mut self) -> TestResult<()> {
         pending("start Control")
     }

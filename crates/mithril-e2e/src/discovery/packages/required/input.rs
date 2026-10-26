@@ -167,6 +167,18 @@ pub(super) async fn configuration(
     config.graph_enabled = true;
     config.discovery = false;
     config.data_retention.raw_max_age_ns = Some(1);
+    let (grant, routes) = notification_inputs(tenant);
+    config.notifications = mithril_control::NotificationControlConfigV1 {
+        grants: vec![grant.clone()],
+        routes,
+        ..Default::default()
+    };
+    Ok((config, grant, Arc::new(ClientAuth::load(&auth).await?)))
+}
+
+pub(super) fn notification_inputs(
+    tenant: [u8; 16],
+) -> (NotificationGrantV1, Vec<NotificationPolicyV1>) {
     let grant = NotificationGrantV1 {
         tenant_id: tenant,
         principal_id: [9; 16],
@@ -180,29 +192,25 @@ pub(super) async fn configuration(
         max_sensitivity: ContextSensitivityV1::HostRestricted,
         expires_utc_ns: u64::MAX,
     };
-    config.notifications = mithril_control::NotificationControlConfigV1 {
-        grants: vec![grant.clone()],
-        routes: ["escalation", "primary"]
-            .into_iter()
-            .map(|route| NotificationPolicyV1 {
-                tenant_id: tenant,
-                route_id: route.into(),
-                revision: 1,
-                package_ids: vec![if route == "primary" {
-                    "HF-PROC-001".into()
-                } else {
-                    "HF-XNODE-001".into()
-                }],
-                minimum_priority: NotificationPriorityV1::Info,
-                acknowledgement_ns: 3_600_000_000_000,
-                retry_limit: 4,
-                retry_delay_ns: 3_600_000_000_000,
-                escalation_route_id: "escalation".into(),
-                max_sensitivity: ContextSensitivityV1::HostRestricted,
-                allow_concerns: false,
-            })
-            .collect(),
-        ..Default::default()
-    };
-    Ok((config, grant, Arc::new(ClientAuth::load(&auth).await?)))
+    let routes = ["escalation", "primary"]
+        .into_iter()
+        .map(|route| NotificationPolicyV1 {
+            tenant_id: tenant,
+            route_id: route.into(),
+            revision: 1,
+            package_ids: vec![if route == "primary" {
+                "HF-PROC-001".into()
+            } else {
+                "HF-XNODE-001".into()
+            }],
+            minimum_priority: NotificationPriorityV1::Info,
+            acknowledgement_ns: 3_600_000_000_000,
+            retry_limit: 4,
+            retry_delay_ns: 3_600_000_000_000,
+            escalation_route_id: "escalation".into(),
+            max_sensitivity: ContextSensitivityV1::HostRestricted,
+            allow_concerns: false,
+        })
+        .collect();
+    (grant, routes)
 }

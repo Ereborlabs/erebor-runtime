@@ -4409,3 +4409,42 @@ Both checks cover capture-lint-final-source.json. These elapsed times establish 
 Existing Data transactions, Query, native DataFusion execution, and Host owners remain in use.
 No scheduler, store, polling path, quota, or package version is added.
 The complete matrix and current physical incident remain Not done.
+
+
+## Current paired incident reading route
+
+The intended result is one complete decision from the shared lightweight
+consumer and the physical read case. Current physical proof remains Not done.
+
+[follows_wal_backlog](../../crates/mithril-e2e/src/discovery/packages/required/incident/backlog.rs) uses [WAL input helpers](../../crates/mithril-e2e/src/discovery/packages/required/incident/input.rs) for contiguous CPU 1 input and exact selected frames.
+  -> [Incident::subscribe and Incident::wait](../../crates/mithril-e2e/src/discovery/packages/required/incident.rs) observe events, Graphs, and notifications through complete Query checkpoints.
+  -> [protected_read_package](../../crates/mithril-e2e/src/discovery/packages/required/incident/physical.rs) reuses that consumer through [Platform::client_operation](../../crates/mithril-e2e/src/platform.rs).
+  -> [Kubernetes::run_client](../../crates/mithril-e2e/src/platform/kubernetes/client.rs) obtains the query profile and emits actual Node/Control Pod UIDs and resolved image identities.
+  -> [input::checked_client](../../crates/mithril-e2e/src/discovery/packages/required/incident/physical/input.rs) checks rejection of an unissued token and another tenant.
+  -> [protected_read_package](../../crates/mithril-e2e/src/discovery/packages/required/incident/physical.rs) requires protected EACCES with zero bytes and a benign read with the exact file length.
+  -> [Observed::check_physical](../../crates/mithril-e2e/src/discovery/packages/required/incident/physical/observed.rs) checks a complete observation against the actor and Node snapshot.
+  -> [Observed::identity](../../crates/mithril-e2e/src/discovery/packages/required/incident/identity.rs) reads installed image/definition bindings, targets, call results, and atomic receipts.
+  -> [physical cleanup](../../crates/mithril-e2e/src/discovery/packages/required/incident/physical.rs) stops the actor and Node before [platform teardown](../../crates/mithril-e2e/src/platform/kubernetes.rs) removes owned resources.
+
+The 15 E2E paths add no executor, store, framework, polling path, or runtime correction.
+The same-source fixture preserves defaults and the 90-second observation bound.
+Its bounded groups do not reproduce physical 100 ms cadence, continuous traffic, or real Node coverage scheduling.
+
+[backlog-same-source.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/backlog-same-source.json) passes in 56.497 seconds; [backlog-multi-source.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/backlog-multi-source.json) passes in 116.787 seconds.
+Each normal case reports one pass, zero failures, and zero ignored cases.
+The backlog-current-source.json SHA-256 is 2b8c31af3ba75c967bcfd1d8363943a9905f90fa968bd8724ea2b5d8eab6d03b.
+The actual executable SHA-256 is bba1ca71062957d1642f6a2c1cf6634de6b42c66eef4a7ad2fac64cfcab5fa31.
+The [same-source report](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/backlog-current-report.json) SHA-256 is 327b846efb89aa4de68df5a5bf07c332a213eba21671bfc517ce390c3b716dda.
+The [multi-source report](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/incident-lightweight-backlog.json) SHA-256 is 7f1b6fd67ebbb5b16bc68f1067a8feabe2d82eb6edb05389e7ac4b478112f1db.
+[backlog-clippy.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/backlog-clippy.json) passes in 17.633 seconds; [backlog-fmt.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/backlog-fmt.json) passes for the final three paths in 0.038 seconds.
+Other Rust bytes retain the prior 13-path [formatting proof](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/e2e-core-fmt.json); the unchanged OIDC fixture retains its [syntax proof](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/e2e-core-python-syntax.json).
+
+[physical-core-incident.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/physical-core-incident.json) retains exit 101 after both guarded reads pass and the observer times out.
+Its older source/executable boundary remains separate from these two current lightweight passes.
+The valid two-role Pod marker does not prove completion of Graph processing.
+Selected CPU 1 records are at 941/950. The cached CPU 0 Graph is at 139; notifications are empty.
+Producer versus Follow cause remains unproved. The unrelated missing ACK is not a diagnosed cause.
+The [verifier stop](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/image-core-reuse-stop.json) and [manifest/config diagnosis](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/image-core-identity-diagnosis.json) remain recorded; no reimport occurs.
+[Owned-resource absence](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/physical-core-failure-collection.json) is verified. The VM remains retained and no physical PASS result exists.
+The complete matrix and current physical incident remain Not done. Prior failures and source limits remain.
+No performance, full-incident, Python package execution, or successful external-delivery result is claimed.

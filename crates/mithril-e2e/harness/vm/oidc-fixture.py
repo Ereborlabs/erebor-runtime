@@ -5,6 +5,7 @@ import base64
 import hashlib
 import http.server
 import json
+from pathlib import Path
 import secrets
 import ssl
 import subprocess
@@ -21,6 +22,9 @@ class Provider(http.server.BaseHTTPRequestHandler):
     issuer = ""
     private_key = ""
     modulus = ""
+    service_token = ""
+    service_started = 0
+    service_expires = 0
 
     def log_message(self, message, *args):
         print(message % args, flush=True)
@@ -87,12 +91,29 @@ class Provider(http.server.BaseHTTPRequestHandler):
             return
         self.send_error(404)
 
+    @classmethod
+    def introspection(cls, form):
+        now = int(time.time())
+        if (not cls.service_token or form.get("token") != [cls.service_token]
+                or form.get("token_type_hint") != ["access_token"]
+                or not cls.service_started <= now < cls.service_expires):
+            return {"active": False}
+        return {
+            "active": True, "iss": cls.issuer, "sub": "mithril-vm-operator",
+            "aud": ["mithril-vm-query"], "token_type": "Bearer",
+            "nbf": cls.service_started, "exp": cls.service_expires,
+        }
+
     def do_POST(self):
-        if urllib.parse.urlparse(self.path).path != "/token":
+        path = urllib.parse.urlparse(self.path).path
+        if path not in ("/token", "/introspect"):
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
         form = urllib.parse.parse_qs(self.rfile.read(length).decode())
+        if path == "/introspect":
+            self.json_response(200, self.introspection(form))
+            return
         code = form.get("code", [""])[0]
         verifier = form.get("code_verifier", [""])[0]
         record = self.codes.pop(code, None)
@@ -137,6 +158,7 @@ def main():
     parser.add_argument("--private-key", required=True)
     parser.add_argument("--signing-key")
     parser.add_argument("--issuer", required=True)
+    parser.add_argument("--service-token-file", type=Path)
     args = parser.parse_args()
     host, port = args.listen.rsplit(":", 1)
     signing_key = args.signing_key or args.private_key
@@ -146,6 +168,13 @@ def main():
         text=True,
         stdout=subprocess.PIPE,
     ).stdout.strip().split("=", 1)[1]
+    if args.service_token_file is not None:
+        token = args.service_token_file.read_text().strip()
+        if not token or any(value.isspace() for value in token):
+            parser.error("the service token file must contain one token")
+        Provider.service_token = token
+        Provider.service_started = int(time.time())
+        Provider.service_expires = Provider.service_started + 3600
     Provider.issuer = args.issuer
     Provider.private_key = signing_key
     Provider.modulus = base64url(bytes.fromhex(modulus))

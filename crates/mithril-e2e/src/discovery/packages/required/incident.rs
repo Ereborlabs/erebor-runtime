@@ -15,15 +15,20 @@ use serde_json::json;
 
 use super::Result;
 
+mod backlog;
+mod identity;
 mod input;
 mod lightweight;
+mod physical;
 
 pub(super) struct Incident {
     streams: [tonic::Streaming<wire::QueryFrame>; 3],
     records: BTreeMap<DiscoveryRecordIdV1, DiscoveryRecordV1>,
-    graphs: BTreeMap<EvidenceIntakeIdentityV1, (String, GraphSnapshotV1)>,
+    graphs: BTreeMap<EvidenceIntakeIdentityV1, (String, u64, GraphSnapshotV1)>,
     notices: BTreeMap<String, Notice>,
     complete: [bool; 3],
+    exhausted: [bool; 3],
+    partial_pages: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -40,9 +45,10 @@ struct Notice {
 #[derive(Serialize)]
 pub(super) struct Observed {
     pub(super) records: [DiscoveryRecordV1; 2],
-    graphs: Vec<(String, GraphSnapshotV1)>,
+    graphs: Vec<(String, u64, GraphSnapshotV1)>,
     notice: Notice,
     pub(super) decision: serde_json::Value,
+    pub(super) partial_pages: usize,
 }
 
 impl Incident {
@@ -64,7 +70,7 @@ impl Incident {
         }).await?;
         let graphs = client
             .query(wire::QueryRequest {
-                sql: "SELECT graph_result_id, snapshot FROM graph_manifest".into(),
+                sql: "SELECT graph_result_id, snapshot, commit_revision FROM graph_manifest".into(),
                 follow: true,
                 ..Default::default()
             })
@@ -80,6 +86,8 @@ impl Incident {
             graphs: BTreeMap::new(),
             notices: BTreeMap::new(),
             complete: [false; 3],
+            exhausted: [false; 3],
+            partial_pages: 0,
         })
     }
 
@@ -100,7 +108,13 @@ impl Incident {
                 let frame = frame.ok_or("incident Follow stream closed")?;
                 match frame.payload {
                     Some(Payload::Rows(rows)) => {
-                        assert!(!rows.limited);
+                        self.exhausted[source] = !rows.limited;
+                        if source == 0
+                            && rows.limited
+                            && frame.operation == wire::QueryOperation::Append as i32
+                        {
+                            self.partial_pages += 1;
+                        }
                         self.complete[source] = false;
                         if frame.operation == wire::QueryOperation::Replace as i32 {
                             match source {
@@ -114,7 +128,9 @@ impl Incident {
                             self.row(source, row)?;
                         }
                     }
-                    Some(Payload::Checkpoint(_)) => self.complete[source] = true,
+                    Some(Payload::Checkpoint(_)) => {
+                        self.complete[source] = self.exhausted[source];
+                    }
                     Some(Payload::Error(error)) => {
                         return Err(format!("incident Follow: {error:?}").into())
                     }
@@ -134,9 +150,9 @@ impl Incident {
             eprintln!(
                 "incident Follow state={}",
                 json!({
-                    "complete": self.complete,
+                    "complete": self.complete, "exhausted": self.exhausted,
                     "records": self.records.keys().take(8).collect::<Vec<_>>(),
-                    "graphs": self.graphs.values().take(8).map(|(id, graph)| json!({
+                    "graphs": self.graphs.values().take(8).map(|(id, _, graph)| json!({
                         "id": id, "source": graph.scope.identity, "cursor": graph.last_cursor,
                         "coverage": graph.input_manifest.coverage.iter().take(8).collect::<Vec<_>>(),
                         "missing_ranges": graph.missing_ranges.iter().take(8).collect::<Vec<_>>(),
@@ -188,12 +204,12 @@ impl Incident {
                 }
             }
             1 => {
-                assert_eq!(row.values.len(), 2);
+                assert_eq!(row.values.len(), 3);
                 let graph: GraphSnapshotV1 = serde_json::from_slice(Self::binary(&row, 1)?)?;
                 graph.validate()?;
                 self.graphs.insert(
                     graph.scope.identity.clone(),
-                    (Self::text(&row, 0)?.into(), graph),
+                    (Self::text(&row, 0)?.into(), Self::number(&row, 2)?, graph),
                 );
             }
             2 => {
@@ -247,7 +263,7 @@ impl Incident {
         };
         let mut graphs = Vec::new();
         for record in [denied, allowed] {
-            let Some((id, graph)) = self.graphs.get(&record.id.stream) else {
+            let Some((id, revision, graph)) = self.graphs.get(&record.id.stream) else {
                 return Ok(None);
             };
             let wire = record.decode()?;
@@ -267,8 +283,9 @@ impl Incident {
             {
                 return Ok(None);
             }
-            if !graphs.iter().any(|(key, _)| key == id) {
-                graphs.push((id.clone(), graph.clone()));
+            if !graphs.iter().any(|(key, _, _)| key == id) {
+                assert!(*revision > 0);
+                graphs.push((id.clone(), *revision, graph.clone()));
             }
         }
         assert_eq!(denied.id.stream.tenant_id, allowed.id.stream.tenant_id);
@@ -285,7 +302,7 @@ impl Incident {
         assert!(self
             .graphs
             .values()
-            .all(|(_, graph)| graph.findings.iter().all(|finding| {
+            .all(|(_, _, graph)| graph.findings.iter().all(|finding| {
                 !finding
                     .effects
                     .iter()
@@ -294,7 +311,7 @@ impl Incident {
         let matched = self
             .graphs
             .values()
-            .flat_map(|(id, graph)| graph.findings.iter().map(move |finding| (id, finding)))
+            .flat_map(|(id, _, graph)| graph.findings.iter().map(move |finding| (id, finding)))
             .filter(|(_, finding)| {
                 finding.package_id == "HF-PROC-001"
                     && finding
@@ -360,6 +377,7 @@ impl Incident {
             records: [denied.clone(), allowed.clone()],
             decision: Self::decision(finding),
             notice: notice.clone(),
+            partial_pages: self.partial_pages,
             graphs,
         }))
     }

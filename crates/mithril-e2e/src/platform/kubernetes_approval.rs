@@ -39,6 +39,8 @@ pub(super) struct KubernetesApproval {
     oidc: Option<ProcessFixture>,
     forward: Option<ProcessFixture>,
     credential: Option<PathBuf>,
+    query_credential: PathBuf,
+    service_secret: String,
 }
 
 impl KubernetesApproval {
@@ -86,6 +88,9 @@ impl KubernetesApproval {
             .args(["-copy_extensions", "copy", "-out"])
             .arg(&cert);
         Self::run(&mut command, "sign the administrative certificate")?;
+        let query_credential = key_dir.path().join("query-token");
+        fs::write(&query_credential, uuid::Uuid::new_v4().to_string())?;
+        fs::set_permissions(&query_credential, fs::Permissions::from_mode(0o600))?;
         Ok(Self {
             root: root.to_owned(),
             _key_dir: key_dir,
@@ -97,6 +102,8 @@ impl KubernetesApproval {
             oidc: None,
             forward: None,
             credential: None,
+            query_credential,
+            service_secret: uuid::Uuid::new_v4().to_string(),
         })
     }
 
@@ -121,8 +128,21 @@ impl KubernetesApproval {
         Path::new(CA_PATH)
     }
 
+    pub(super) fn query_profile(&self, tenant: &str) -> erebor_runtime_client::AraphorProfile {
+        erebor_runtime_client::AraphorProfile {
+            endpoint: ADMIN_URL.into(),
+            tenant_id: tenant.into(),
+            credential_file: self.query_credential.clone(),
+            ca_file: Some(PathBuf::from(CA_PATH)),
+        }
+    }
+
     pub(super) fn secrets(&self) -> TestResult<BTreeMap<String, String>> {
         Ok(BTreeMap::from([
+            (
+                "service-client-secret".to_owned(),
+                self.service_secret.clone(),
+            ),
             ("k3s-ca.crt".to_owned(), fs::read_to_string(CA_PATH)?),
             (
                 "administrative.crt".to_owned(),
@@ -164,7 +184,9 @@ impl KubernetesApproval {
             .args(["--certificate", CERT_PATH, "--private-key", KEY_PATH])
             .arg("--signing-key")
             .arg(&self.key)
-            .args(["--issuer", &issuer]);
+            .args(["--issuer", &issuer])
+            .arg("--service-token-file")
+            .arg(&self.query_credential);
         let mut process = ProcessFixture::spawn(&mut command, &script)?;
         let client = self.client(runtime)?;
         let last = RefCell::new(String::from("<absent>"));

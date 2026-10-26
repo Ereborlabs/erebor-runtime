@@ -588,3 +588,47 @@ That diagnostic reaches the same strict predicate at 49.166 seconds without new 
 These final checks cover capture-lint-final-source.json. They establish no performance result.
 Existing Data transactions, Query, native DataFusion execution, and Host owners remain in use.
 No scheduler, store, polling path, quota, or version is added.
+
+
+## Paired incident fixture qualification and retained physical failure
+
+**Current lightweight fixtures and affected checks: Done.
+Current physical incident and complete matrix: Not done.**
+
+The deliverable changes 15 E2E source paths: the prior 14 paths and backlog.rs.
+It adds no production runtime correction. The original multi-source case remains.
+The same-source case uploads CPU 1 prefix groups 256/256/256/172, then records
+941, 942–949, and 950. Each upload checks its bounds, ACK, and canonical source.
+Both selected records retain the shared decision, coverage, notification, and receipt checks.
+The fixture does not emulate physical 100 ms batching or continuous Node coverage scheduling.
+
+[backlog-same-source.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/backlog-same-source.json) records follows_wal_backlog passing in 56.497 seconds.
+[backlog-multi-source.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/backlog-multi-source.json) records follows_cpu_streams passing in 116.787 seconds.
+Each normal case reports one pass, zero failures, and zero ignored cases.
+The 1,430-file backlog-current-source.json SHA-256 is 2b8c31af3ba75c967bcfd1d8363943a9905f90fa968bd8724ea2b5d8eab6d03b.
+The actual executable SHA-256 is bba1ca71062957d1642f6a2c1cf6634de6b42c66eef4a7ad2fac64cfcab5fa31.
+The [same-source report](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/backlog-current-report.json) SHA-256 is 327b846efb89aa4de68df5a5bf07c332a213eba21671bfc517ce390c3b716dda.
+The [multi-source report](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/incident-lightweight-backlog.json) SHA-256 is 7f1b6fd67ebbb5b16bc68f1067a8feabe2d82eb6edb05389e7ac4b478112f1db.
+
+[backlog-clippy.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/backlog-clippy.json) records warnings-denied Clippy passing in 17.633 seconds.
+[backlog-fmt.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/backlog-fmt.json) records the final three-path formatting pass in 0.038 seconds.
+The other Rust paths retain [e2e-core-fmt.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/e2e-core-fmt.json), the prior 13-path check in 0.114 seconds, on their unchanged bytes.
+The unchanged OIDC fixture retains the passing [Python syntax check](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/e2e-core-python-syntax.json).
+
+[physical-core-incident.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/physical-core-incident.json) and its raw log retain exit 101 in 210.419 seconds.
+Libtest reports zero passes, one failure, and zero ignored cases in 164.08 seconds.
+Both guarded read assertions pass. The observer then times out before a complete result.
+This run uses image-core-build-source.json, E2E source 48e54ce2ce06b4c483105a03f6ddfc9b99b65a2faa40cca5725477c272c22409,
+and executable b34e1d01ee4ac67c717892ef8c6f9fa8a6e2a062055809e01b390f9104b12570.
+Its two native Pod manifest identities match the freshly imported production images.
+[image-core-reuse-stop.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/image-core-reuse-stop.json) retains the earlier empty-repoDigests verifier stop.
+The [read-only identity diagnosis](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/image-core-identity-diagnosis.json) verifies manifest-to-config mapping without reimport or retagging.
+The selected records share CPU 1 and one source at cursors 941 and 950.
+The cached Graph belongs to CPU 0 at cursor 139. Notifications are empty.
+Producer failure versus Follow observation remains unproved. The other source's missing ACK is not a root-cause finding.
+[physical-core-failure-collection.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/physical-core-failure-collection.json) verifies normal owned-resource absence.
+The owned VM remains retained. The case produces no physical PASS result JSON.
+
+The [incident review](../../../../guides/araphor-discovery-definition-review.md#current-paired-incident-reading-route) gives the source reading route.
+Prior failures and their source limits remain recorded. These results establish
+no performance, full-incident, Python package execution, or external-delivery qualification.
