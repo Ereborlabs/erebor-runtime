@@ -2,10 +2,13 @@ use std::collections::btree_map::Entry;
 
 use mithril_control::{
     DiscoveryDigestV1, EvidenceDecisionCatalogV1, EvidenceExactFileObject, EvidenceFileObjectV1,
-    ObservationEnvelopeV1,
+    EvidenceRuntimeBindingV1, ObservationEnvelopeV1,
 };
 
 use super::*;
+
+#[cfg(test)]
+mod runtime_tests;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ContextKey {
@@ -49,6 +52,7 @@ mod tests {
             })
             .ok_or("no unambiguous signed context")?;
         let sealed: EvidenceDecisionCatalogV1 = serde_json::from_slice(&bytes)?;
+        assert!(sealed.runtime_binding.is_none());
         assert_eq!(
             sealed.policy_document_digest,
             artifact.header.policy_document_digest
@@ -315,6 +319,60 @@ impl NodeDiscoveryContextCatalog {
         objects: &[ExactFileObjectConfig],
         boot: Id128V1,
     ) -> Result<()> {
+        let runtime_binding = match (
+            &binding.scheduled_binding_authority_id,
+            &binding.scheduled_target_digest,
+        ) {
+            (None, None) => None,
+            (Some(authority), Some(digest)) => {
+                ensure!(
+                    authority
+                        == &crate::ScheduledRuntimeBindingV1::authority_binding_id(
+                            &binding.pod_uid,
+                            &binding.container_name,
+                        )
+                        && digest.len() == 64
+                        && digest
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+                    IdentityStateSnafu {
+                        reason: "catalog binding has invalid signed scheduling metadata",
+                    }
+                );
+                if binding.container_id.starts_with("scheduled:") {
+                    ensure!(
+                        binding.binding_id == *authority,
+                        IdentityStateSnafu {
+                            reason: "catalog placeholder differs from its scheduled authority",
+                        }
+                    );
+                    None
+                } else {
+                    let proof = EvidenceRuntimeBindingV1 {
+                        container_id: binding.container_id.clone(),
+                        signed_target_digest: digest.clone(),
+                    };
+                    ensure!(
+                        proof.valid()
+                            && binding.binding_id
+                                == crate::ScheduledRuntimeBindingV1::runtime_binding_id(
+                                    authority,
+                                    &proof.container_id,
+                                ),
+                        IdentityStateSnafu {
+                            reason: "catalog binding differs from its concrete runtime identity",
+                        }
+                    );
+                    Some(proof)
+                }
+            }
+            _ => {
+                return IdentityStateSnafu {
+                    reason: "catalog binding has incomplete signed scheduling metadata",
+                }
+                .fail();
+            }
+        };
         let roles = handles(
             artifact
                 .policy_document
@@ -415,6 +473,7 @@ impl NodeDiscoveryContextCatalog {
                     policy_document_digest: artifact.header.policy_document_digest.clone(),
                     profile_generation_ref_id: key.generation,
                     binding_id,
+                    runtime_binding: runtime_binding.clone(),
                     role_id: role,
                     state_id: state,
                     entry_rule_id: entry_rule,

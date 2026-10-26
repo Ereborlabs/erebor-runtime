@@ -52,6 +52,7 @@ impl CatalogFixture {
                 object_selector: "PATH:/test".into(),
                 binding_lifecycle: BindingLifecycleV1::Active,
             },
+            runtime_binding: None,
             digest: DiscoveryDigestV1([0; 32]),
         };
         catalog.digest = catalog.content_digest()?;
@@ -117,6 +118,38 @@ impl CatalogFixture {
             .ok_or("context")?
             .catalog_json = self.catalog.clone().seal()?;
         Ok(())
+    }
+
+    fn target(&self) -> crate::WorkloadTargetFactV1 {
+        crate::WorkloadTargetFactV1 {
+            node_id: self.identity.node_id.clone(),
+            workload_binding_generation_digest: "ab".repeat(32),
+            execution_set_id: self.catalog.static_key.execution_set_id.clone(),
+            cluster_uid: "cluster-a".into(),
+            namespace_uid: "namespace-a".into(),
+            controller_uid: "controller-a".into(),
+            service_account_uid: "account-a".into(),
+            pod_uid: "pod-a".into(),
+            container_id: format!("scheduled:{}", "a".repeat(64)),
+            container_name: "worker".into(),
+            container_kind: crate::ContainerKindV1::Application,
+            image_digest: format!("sha256:{}", "b".repeat(64)),
+            pod_labels: Default::default(),
+            kubernetes: Some(crate::KubernetesWorkloadIdentityV1 {
+                namespace_name: "tenant-a".into(),
+                pod_name: "worker-a".into(),
+                profile_id: self.catalog.profile_id.clone(),
+                policy_source_revision_id: "policy-a".into(),
+                binding_id: uuid::Uuid::from_bytes(self.catalog.binding_id.to_be_bytes())
+                    .to_string(),
+                protected_scope_id: self.catalog.static_key.protected_scope_id.clone(),
+                workload_selector_id: self.catalog.static_key.workload_selector_id.clone(),
+                kubernetes_node_name: "node-a".into(),
+                kubernetes_node_uid: "node-uid-a".into(),
+                node_boot_id: "02".repeat(16),
+                label_epoch: self.identity.label_epoch,
+            }),
+        }
     }
 }
 
@@ -278,5 +311,137 @@ fn catalog_absence_states() -> TestResult {
         context.catalog_state = state.into();
         assert!(EvidenceDecisionCatalogV1::from_context(&context).is_err());
     }
+    Ok(())
+}
+
+#[test]
+fn catalog_runtime_group() -> TestResult {
+    use serde_json::json;
+
+    let mut fixture = CatalogFixture::new()?;
+    fixture.catalog.runtime_binding = Some(EvidenceRuntimeBindingV1 {
+        container_id: "containerd:Az9-_.".into(),
+        signed_target_digest: "ab".repeat(32),
+    });
+    fixture.reseal()?;
+    fixture.check()?;
+    let complete = serde_json::to_value(&fixture.catalog)?;
+    for proof in [
+        json!(null),
+        json!({}),
+        json!({"container_id": "runtime-a"}),
+        json!({"signed_target_digest": "ab".repeat(32)}),
+        json!({"container_id": 7, "signed_target_digest": "ab".repeat(32)}),
+        json!({"container_id": "runtime-a", "signed_target_digest": null}),
+        json!({"container_id": "runtime-a", "signed_target_digest": "ab".repeat(32), "unknown": true}),
+        json!({"container_id": "", "signed_target_digest": "ab".repeat(32)}),
+        json!({"container_id": "bad container", "signed_target_digest": "ab".repeat(32)}),
+        json!({"container_id": "scheduled:abc", "signed_target_digest": "ab".repeat(32)}),
+        json!({"container_id": "runtime-a", "signed_target_digest": "AB".repeat(32)}),
+        json!({"container_id": "runtime-a", "signed_target_digest": "ab"}),
+    ] {
+        let mut changed = complete.clone();
+        changed["runtime_binding"] = proof;
+        let bytes = serde_json::to_vec(&changed)?;
+        let bytes = match serde_json::from_slice::<EvidenceDecisionCatalogV1>(&bytes) {
+            Ok(catalog) => catalog.seal()?,
+            Err(_) => bytes,
+        };
+        fixture
+            .record
+            .decision_context
+            .as_mut()
+            .ok_or("context")?
+            .catalog_json = bytes;
+        assert!(fixture.check().is_err(), "accepted runtime proof {changed}");
+    }
+    Ok(())
+}
+
+#[test]
+fn catalog_runtime_target() -> TestResult {
+    use crate::KubernetesWorkloadIdentityV1 as Identity;
+
+    let mut fixture = CatalogFixture::new()?;
+    let mut target = fixture.target();
+    assert!(fixture.catalog.matches_binding(&target));
+    let authority = Identity::authority_binding_id(&target.pod_uid, &target.container_name);
+    target.kubernetes.as_mut().ok_or("identity")?.binding_id = authority.clone();
+    assert!(!fixture.catalog.matches_binding(&target));
+    let container = "a".repeat(64);
+    fixture.catalog.binding_id =
+        uuid::Uuid::parse_str(&Identity::runtime_binding_id(&authority, &container))?
+            .into_bytes()
+            .into();
+    fixture.catalog.runtime_binding = Some(EvidenceRuntimeBindingV1 {
+        container_id: container,
+        signed_target_digest: target.workload_binding_generation_digest.clone(),
+    });
+    assert!(fixture.catalog.matches_binding(&target));
+    for change in 0..8 {
+        let mut catalog = fixture.catalog.clone();
+        let mut changed = target.clone();
+        match change {
+            0 => {
+                catalog
+                    .runtime_binding
+                    .as_mut()
+                    .ok_or("proof")?
+                    .container_id = "other".into()
+            }
+            1 => {
+                catalog
+                    .runtime_binding
+                    .as_mut()
+                    .ok_or("proof")?
+                    .signed_target_digest = "cd".repeat(32)
+            }
+            2 => {
+                changed.kubernetes.as_mut().ok_or("identity")?.binding_id =
+                    uuid::Uuid::from_bytes([99; 16]).to_string()
+            }
+            3 => catalog.binding_id = [99; 16].into(),
+            4 => changed.pod_uid = "pod-b".into(),
+            5 => changed.container_name = "other".into(),
+            6 => changed.kubernetes = None,
+            7 => catalog.binding_id = uuid::Uuid::parse_str(&authority)?.into_bytes().into(),
+            _ => unreachable!(),
+        }
+        assert!(
+            !catalog.matches_binding(&changed),
+            "accepted mutation {change}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn catalog_absent_runtime() -> TestResult {
+    const ABSENT_CATALOG: &str = concat!(
+        r#"{"node_boot_id":{"high":144680345676153346,"low":144680345676153346},"#,
+        r#""profile_id":"13131313-1313-1313-1313-131313131313","#,
+        r#""profile_version":20,"#,
+        r#""policy_document_digest":"abababababababababababababababababababababababababababababababab","#,
+        r#""profile_generation_ref_id":11,"#,
+        r#""binding_id":{"high":1519143629599610133,"low":1519143629599610133},"#,
+        r#""role_id":22,"#,
+        r#""state_id":23,"#,
+        r#""entry_rule_id":24,"#,
+        r#""exact_file_object":{"profile_generation_ref_id":11,"mount_id_unique":12,"inode":13,"inode_generation":14,"mount_namespace_inode":15,"filesystem_device":16},"#,
+        r#""exact_object_key_id":17,"#,
+        r#""composite_atom_id":18,"#,
+        r#""static_key":{"workload_selector_id":"workload","protected_scope_id":"06060606-0606-0606-0606-060606060606","execution_set_id":"07070707-0707-0707-0707-070707070707","entry_kind":"CONTAINER_START","role_id":"application","process_state_id":"running","effect_family":"FILE","operation_id":"OPEN_READ","object_selector":"PATH:/test","binding_lifecycle":"ACTIVE"},"#,
+        r#""digest":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}"#,
+    );
+    let mut catalog = CatalogFixture::new()?.catalog;
+    catalog.digest = DiscoveryDigestV1([0; 32]);
+    assert_eq!(serde_json::to_vec(&catalog)?, ABSENT_CATALOG.as_bytes());
+    let absent: serde_json::Value = serde_json::from_str(ABSENT_CATALOG)?;
+    assert_eq!(
+        catalog.content_digest()?,
+        DiscoveryDigestV1::of(&("decision-catalog-v1", absent))?
+    );
+    let decoded: EvidenceDecisionCatalogV1 = serde_json::from_str(ABSENT_CATALOG)?;
+    assert!(decoded.runtime_binding.is_none());
     Ok(())
 }

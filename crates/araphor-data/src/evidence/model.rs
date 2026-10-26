@@ -58,6 +58,32 @@ pub struct ObservationEnvelopeV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct EvidenceRuntimeBindingV1 {
+    pub container_id: String,
+    pub signed_target_digest: String,
+}
+
+impl EvidenceRuntimeBindingV1 {
+    pub fn valid(&self) -> bool {
+        crate::KubernetesWorkloadIdentityV1::valid_container_id(&self.container_id)
+            && !self.container_id.starts_with("scheduled:")
+            && self.signed_target_digest.len() == 64
+            && self
+                .signed_target_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }
+
+    fn deserialize_present<'de, D>(deserializer: D) -> Result<Option<Self>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::deserialize(deserializer).map(Some)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceDecisionCatalogV1 {
     pub node_boot_id: EvidenceIdV1,
     pub profile_id: String,
@@ -72,10 +98,39 @@ pub struct EvidenceDecisionCatalogV1 {
     pub exact_object_key_id: u64,
     pub composite_atom_id: u64,
     pub static_key: crate::StaticDecisionKeyV1,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "EvidenceRuntimeBindingV1::deserialize_present"
+    )]
+    pub runtime_binding: Option<EvidenceRuntimeBindingV1>,
     pub digest: crate::DiscoveryDigestV1,
 }
 
 impl EvidenceDecisionCatalogV1 {
+    pub fn matches_binding(&self, target: &crate::WorkloadTargetFactV1) -> bool {
+        let Some(identity) = &target.kubernetes else {
+            return false;
+        };
+        let binding = uuid::Uuid::from_bytes(self.binding_id.to_be_bytes()).to_string();
+        match &self.runtime_binding {
+            None => identity.binding_id == binding,
+            Some(proof) => {
+                proof.valid()
+                    && proof.signed_target_digest == target.workload_binding_generation_digest
+                    && identity.binding_id
+                        == crate::KubernetesWorkloadIdentityV1::authority_binding_id(
+                            &target.pod_uid,
+                            &target.container_name,
+                        )
+                    && crate::KubernetesWorkloadIdentityV1::runtime_binding_id(
+                        &identity.binding_id,
+                        &proof.container_id,
+                    ) == binding
+            }
+        }
+    }
+
     pub fn content_digest(&self) -> crate::Result<crate::DiscoveryDigestV1> {
         let mut content = self.clone();
         content.digest = crate::DiscoveryDigestV1([0; 32]);
@@ -124,6 +179,10 @@ impl EvidenceDecisionCatalogV1 {
             .build()
         })?;
         if catalog.digest != digest
+            || catalog
+                .runtime_binding
+                .as_ref()
+                .is_some_and(|proof| !proof.valid())
             || catalog.profile_version == 0
             || !uuid::Uuid::parse_str(&catalog.profile_id).is_ok_and(|id| !id.is_nil())
             || catalog.policy_document_digest.len() != 64

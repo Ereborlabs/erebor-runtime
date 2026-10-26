@@ -7,6 +7,8 @@ use araphor_data::{
 use arrow_array::{Array, BinaryArray, StringArray, UInt64Array};
 use std::sync::Arc;
 
+mod runtime;
+
 type TestValue<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn capture(

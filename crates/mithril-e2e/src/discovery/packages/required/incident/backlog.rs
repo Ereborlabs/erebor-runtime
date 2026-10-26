@@ -24,7 +24,8 @@ async fn follows_wal_backlog() -> Result<()> {
                 .control
                 .policy_desired_state()
                 .ok_or("configured policy owner")?;
-            let prepared = signed_catalog(owner, tls.path(), [7; 16].into(), at)?;
+            let container = "12".repeat(32);
+            let prepared = signed_catalog(owner, tls.path(), [7; 16].into(), at, Some(&container))?;
             assert!(fixture
                 .control
                 .replace_kubernetes_workload_inventory(vec![prepared.workload])?);
@@ -52,6 +53,15 @@ async fn follows_wal_backlog() -> Result<()> {
                 input.set_discovery_context(Some(Arc::new(prepared.catalog)));
                 let uploaded =
                     input::append_reads(&tls, &mut node, &input, &source, prepared.raw).await?;
+                let denied = mithril_control::EvidenceRecord::try_from(uploaded[0].as_slice())?;
+                let context = denied.decision_context.as_ref().ok_or("runtime context")?;
+                let catalog = mithril_control::EvidenceDecisionCatalogV1::from_context(context)?
+                    .ok_or("runtime catalog")?;
+                let proof = catalog.runtime_binding.as_ref().ok_or("runtime proof")?;
+                assert_eq!(
+                    (&proof.container_id, catalog.binding_id),
+                    (&container, prepared.raw.binding_id)
+                );
                 let observed = observed.wait(&client).await?;
                 for ((record, bytes), cursor) in
                     observed.records.iter().zip(uploaded).zip([941, 950])

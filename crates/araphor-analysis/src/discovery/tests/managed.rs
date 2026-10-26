@@ -212,6 +212,7 @@ impl Fixture {
             filesystem_device: 25,
         };
         let catalog = EvidenceDecisionCatalogV1 {
+            runtime_binding: None,
             node_boot_id: self.source.node_boot_id.into(),
             profile_id: binding.policy_revision.profile_id.clone(),
             profile_version: binding.policy_revision.profile_version,

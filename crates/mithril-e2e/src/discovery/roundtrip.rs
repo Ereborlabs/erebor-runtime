@@ -28,10 +28,23 @@ pub(super) fn signed_catalog(
     root: &Path,
     boot: EvidenceIdV1,
     now: i64,
+    runtime_container: Option<&str>,
 ) -> Result<SignedCatalog, Box<dyn StdError>> {
     let fixture = OutagePolicyFixture { owner };
     let resource = fixture.resource(1)?;
     let mut inventory = fixture.inventory(&resource)?;
+    for workload in &mut inventory {
+        let identity = workload
+            .kubernetes
+            .as_mut()
+            .ok_or("the workload identity is absent")?;
+        identity.binding_id = mithril_node::ScheduledRuntimeBindingV1::authority_binding_id(
+            &workload.pod_uid,
+            &workload.container_name,
+        );
+        workload.workload_binding_generation_digest =
+            mithril_control::workload_target_fact_digest(workload)?;
+    }
     let result = fixture
         .owner
         .reconcile(&resource, OUTAGE_NAMESPACE_UID, &inventory, now)?;
@@ -77,14 +90,24 @@ pub(super) fn signed_catalog(
         .find(|selector| cell.key.object_selector == format!("PATH:{}", selector.path_selector_id))
         .ok_or("the signed path selector is absent")?;
     let binding = mithril_node::WorkloadBindingConfig {
-        binding_id: identity.binding_id.clone(),
-        scheduled_binding_authority_id: Some("synthetic-scheduled-authority".into()),
+        binding_id: runtime_container.map_or_else(
+            || identity.binding_id.clone(),
+            |container| {
+                mithril_node::ScheduledRuntimeBindingV1::runtime_binding_id(
+                    &identity.binding_id,
+                    container,
+                )
+            },
+        ),
+        scheduled_binding_authority_id: Some(identity.binding_id.clone()),
         scheduled_target_digest: Some(workload.workload_binding_generation_digest.clone()),
         execution_set_id: workload.execution_set_id.clone(),
         protected_scope_id: identity.protected_scope_id.clone(),
         workload_selector_id: identity.workload_selector_id.clone(),
         profile_id: artifact.header.profile_id.clone(),
-        container_id: workload.container_id.clone(),
+        container_id: runtime_container
+            .unwrap_or(&workload.container_id)
+            .to_owned(),
         namespace: identity.namespace_name.clone(),
         cluster_uid: workload.cluster_uid.clone(),
         namespace_uid: workload.namespace_uid.clone(),
@@ -175,6 +198,38 @@ pub(super) fn signed_catalog(
         )?),
         ..Default::default()
     };
+    if let Some(container) = runtime_container {
+        let authority = mithril_node::ScheduledRuntimeBindingV1::authority_binding_id(
+            &workload.pod_uid,
+            &workload.container_name,
+        );
+        let runtime =
+            mithril_node::ScheduledRuntimeBindingV1::runtime_binding_id(&authority, container);
+        assert_eq!(identity.binding_id, authority);
+        assert_eq!(
+            binding.scheduled_binding_authority_id.as_deref(),
+            Some(authority.as_str())
+        );
+        assert_eq!(
+            binding.scheduled_target_digest.as_deref(),
+            Some(workload.workload_binding_generation_digest.as_str())
+        );
+        assert_eq!(binding.container_id, container);
+        assert_ne!(runtime, authority);
+        assert_eq!(
+            raw.binding_id.to_be_bytes(),
+            uuid::Uuid::parse_str(&runtime)?.into_bytes()
+        );
+        assert!(workload.container_id.starts_with("scheduled:"));
+        assert_eq!(
+            bundle.candidate.exact_target.workload_targets,
+            vec![workload.clone()]
+        );
+        assert_eq!(
+            mithril_control::workload_target_fact_digest(&workload)?,
+            workload.workload_binding_generation_digest
+        );
+    }
     let mut catalog = mithril_node::NodeDiscoveryContextCatalog::default();
     catalog.add_verified_binding(&artifact, &binding, &[object], boot);
     Ok(SignedCatalog {

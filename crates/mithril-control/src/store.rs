@@ -4634,6 +4634,7 @@ mod tests {
         observation.effect.exact_object_id =
             Some(crate::EvidenceFileObjectV1::from(&object).observation_id(26));
         let catalog = crate::EvidenceDecisionCatalogV1 {
+            runtime_binding: None,
             node_boot_id: observation.node_boot_id,
             profile_id: artifact.header.profile_id.clone(),
             profile_version: artifact.header.profile_version,

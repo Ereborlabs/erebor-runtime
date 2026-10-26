@@ -27,7 +27,8 @@ pub use evidence::{
     EffectFamilyV1, EntryKindV1, EvidenceDecisionCatalogV1, EvidenceDecisionContext,
     EvidenceDigestV1, EvidenceExactFileObject, EvidenceFileObjectV1, EvidenceIdV1,
     EvidenceModelError, EvidenceModelResult, EvidenceRecord, EvidenceRecords,
-    EvidenceTemporalCoverage, KernelEffectEvidenceV1, ObservationEnvelopeV1, StaticDecisionKeyV1,
+    EvidenceRuntimeBindingV1, EvidenceTemporalCoverage, KernelEffectEvidenceV1,
+    ObservationEnvelopeV1, StaticDecisionKeyV1,
 };
 pub use graph::*;
 pub use notification::*;

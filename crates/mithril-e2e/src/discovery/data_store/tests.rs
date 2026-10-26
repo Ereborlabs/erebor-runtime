@@ -44,6 +44,7 @@ async fn data_context_bounds() -> Result<()> {
         tls.path(),
         boot,
         i64::try_from(START)?,
+        None,
     )?;
     let (catalog, mut raw) = (prepared.catalog, prepared.raw);
     raw.source_sequence = 1;

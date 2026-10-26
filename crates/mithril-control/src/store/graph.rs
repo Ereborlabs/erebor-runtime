@@ -56,7 +56,6 @@ impl GraphContext {
         })?;
         let tenant = uuid::Uuid::from_bytes(stream.tenant_id).to_string();
         let boot = hex::encode(stream.node_boot_id);
-        let binding = uuid::Uuid::from_bytes(catalog.binding_id.to_be_bytes()).to_string();
         let execution = <[u8; 16]>::try_from(wire.execution_set_id.as_ref())
             .ok()
             .map(uuid::Uuid::from_bytes)
@@ -98,7 +97,7 @@ impl GraphContext {
                         workload.node_id == stream.node_id
                             && identity.node_boot_id == boot
                             && identity.label_epoch == stream.label_epoch
-                            && identity.binding_id == binding
+                            && catalog.matches_binding(workload)
                             && identity.profile_id == catalog.profile_id
                             && identity.policy_source_revision_id
                                 == candidate.policy_source_revision_id
@@ -499,6 +498,11 @@ mod tests {
         let identity = workload.kubernetes.as_mut().ok_or("identity")?;
         identity.protected_scope_id = static_key.protected_scope_id.clone();
         identity.workload_selector_id = static_key.workload_selector_id.clone();
+        identity.binding_id = araphor_data::KubernetesWorkloadIdentityV1::authority_binding_id(
+            &workload.pod_uid,
+            &workload.container_name,
+        );
+        workload.container_id = format!("scheduled:{}", "1".repeat(64));
         let binding_id = uuid::Uuid::parse_str(&identity.binding_id)?.into_bytes();
         workload.workload_binding_generation_digest = crate::workload_target_fact_digest(workload)?;
         target.workload_binding_generation_digests =
@@ -574,6 +578,7 @@ mod tests {
             policy_document_digest: artifact.header.policy_document_digest.clone(),
             profile_generation_ref_id: 8,
             binding_id: binding_id.into(),
+            runtime_binding: None,
             role_id: 1,
             state_id: 2,
             entry_rule_id: 3,

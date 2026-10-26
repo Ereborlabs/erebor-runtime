@@ -884,11 +884,8 @@ impl KubernetesWorkloadInventoryOwner {
                 "scheduled:{}",
                 sha256_parts(&[pod_uid.as_bytes(), container.name.as_bytes()])
             );
-            let binding_id = derived_uuid(&[
-                b"MITHRIL-KUBERNETES-BINDING-V1\0",
-                pod_uid.as_bytes(),
-                container.name.as_bytes(),
-            ]);
+            let binding_id =
+                KubernetesWorkloadIdentityV1::authority_binding_id(pod_uid, &container.name);
             let kubernetes = KubernetesWorkloadIdentityV1 {
                 namespace_name: namespace_name.clone(),
                 pod_name: pod_name.to_owned(),

@@ -25,7 +25,7 @@ async fn follows_cpu_streams() -> Result<()> {
                 .control
                 .policy_desired_state()
                 .ok_or("configured policy owner")?;
-            let prepared = signed_catalog(owner, tls.path(), [7; 16].into(), at)?;
+            let prepared = signed_catalog(owner, tls.path(), [7; 16].into(), at, None)?;
             assert!(fixture
                 .control
                 .replace_kubernetes_workload_inventory(vec![prepared.workload])?);

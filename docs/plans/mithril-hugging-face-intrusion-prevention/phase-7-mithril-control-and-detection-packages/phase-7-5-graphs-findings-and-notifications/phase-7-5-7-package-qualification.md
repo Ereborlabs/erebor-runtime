@@ -691,3 +691,34 @@ Nominal removed bytes are 4,397,007,520. Recorded free space rises from 2,790,64
 The latest executable, reports, logs, and archive remain. Node and Control image identities are unchanged. No physical case is rerun.
 The [runtime evidence proposal](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-binding-proof-proposal.md>) requires explicit user approval before production metadata or trust checks change.
 No such production change, complete matrix, physical PASS, benchmark, Python package execution, or external-delivery result is recorded.
+
+
+## Runtime binding metadata verification
+
+**Runtime metadata and affected lightweight checks: Done. Current physical incident: Not done.**
+The user approved the two-field metadata contract after the retained failing probe.
+Data now owns EvidenceRuntimeBindingV1 with container_id and signed_target_digest as one complete optional catalog group.
+The digest identifies the signed workload fact. Node saves the group for a verified running binding.
+An absent group retains exact binding equality and the previous encoding. A null, partial, malformed, or invalid present group is rejected without a direct-match fallback.
+The shared KubernetesWorkloadIdentityV1 owns the unchanged authority and runtime identity calculations and container-ID grammar.
+Control checks the group against the retained signed target and keeps its workload digest, Node, boot, label, profile, generation, execution, scope, ACK, and unique-target checks.
+Node ID stays in the evidence stream and signed target; it is not duplicated in the catalog group.
+The existing test-only discovery reader uses the same binding predicate. It is not a production API.
+
+[Build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-build.json>) passes for the four affected owners in 238.243 seconds.
+The 2,038-pin runtime-link-source.json SHA-256 is 169c5f5adf3a3259e5bbb21b48311fdda53b3311da6b8ff8f04a9691b5cc30ec.
+The E2E executable SHA-256 is b92efb52b950c3e95f740bd400d37647df8d26658326223eeb3c657be31cb8cd.
+[Data checks](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-data-tests.json>) pass nine cases for identity vectors, existing grammar, catalog fields, invalid groups, target matching, and absent-group bytes and digest.
+[Node and Control checks](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-owner-and-backlog-tests.json>) pass 21 owner cases, including generation, arbitrary binding, wrong runtime link, wrong Node, and wrong boot rejection.
+The same record includes the runtime backlog case passing in 59.059 seconds, with one pass, zero failures, and zero ignored cases.
+The strict observer now requires and obtains Exact policy provenance for the composed Node runtime input; its finding, notification, coverage, and atomic receipt checks remain.
+[Scheduled-input checks](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-scheduled-tests.json>) pass data_context_bounds in 3.278 seconds and follows_cpu_streams in 107.671 seconds.
+Each reports one pass, zero failures, and zero ignored cases. These records cover 33 distinct focused cases in total.
+The fixtures derive the real scheduled authority before signing. They keep the signed placeholder and use the concrete container only in Node input.
+
+[Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-clippy-final.json>) passes for the four affected owners with warnings denied in 114.167 seconds.
+[Scoped formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-fmt-final.json>) passes in 0.266 seconds. Source pins stay unchanged through these checks.
+The existing Protobuf catalog_json field carries the new JSON metadata group.
+No version, Protobuf field, SDK ABI, quota, polling loop, executor, scheduler, store, or DataFusion operator is added.
+Node and Control must use the changed catalog contract together. No mixed-version or independent container-attestation result is claimed.
+The current-source production images and paired physical incident remain to be qualified. These test times are not benchmark results.

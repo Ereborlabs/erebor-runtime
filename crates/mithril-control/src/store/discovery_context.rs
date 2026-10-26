@@ -51,7 +51,6 @@ impl ControlStore {
         }
         let tenant = uuid::Uuid::from_bytes(stream.tenant_id).to_string();
         let boot = hex::encode(stream.node_boot_id);
-        let binding = uuid::Uuid::from_bytes(catalog.binding_id.to_be_bytes()).to_string();
         if observation.effect.execution_set_id.is_none()
             || observation.effect.authority_domain_id.is_some_and(|id| {
                 uuid::Uuid::from_bytes(id.to_be_bytes()).to_string()
@@ -97,7 +96,7 @@ impl ControlStore {
                     if workload.node_id != stream.node_id
                         || identity.node_boot_id != boot
                         || identity.label_epoch != stream.label_epoch
-                        || identity.binding_id != binding
+                        || !catalog.matches_binding(workload)
                         || identity.profile_id != catalog.profile_id
                         || identity.policy_source_revision_id != snapshot.policy_source_revision_id
                     {

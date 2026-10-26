@@ -4489,3 +4489,40 @@ The probe calls public identity builders and catalog emission, not the private f
 The [qualification record](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#selected-record-diagnostics-and-runtime-binding-gap) gives exact source, executable, build, test, and physical setup limits.
 The proposed runtime metadata contract requires explicit user approval. It is not implemented.
 The approved VM recovery removes only two obsolete executables after hash checks and restores the frozen actor image through the existing harness. It adds no source change or physical PASS. Future physical runs can use the existing read-only source mount with an exact executable hash and a source freeze, or replace one owned copy. Do not retain a new 2.2 GB copy for each iteration.
+
+
+## Runtime binding metadata reading route
+
+The catalog now saves a verified running container's ID and signed workload fact digest as one optional EvidenceRuntimeBindingV1 group.
+[The shared workload identity](../../crates/araphor-data/src/workload.rs) owns the authority/runtime calculations and the existing container-ID grammar.
+[The catalog model](../../crates/araphor-data/src/evidence/model.rs) rejects incomplete or invalid present groups, preserves absent-group bytes, and supplies matches_binding.
+[Node catalog emission](../../crates/mithril-node/src/policy/discovery.rs) checks paired scheduling metadata before it creates entries. An invalid pair makes the catalog unavailable.
+[Runtime admission](../../crates/mithril-node/src/runtime_admission.rs) delegates identity calculations to the shared owner.
+[Control target construction](../../crates/mithril-control/src/policy/kubernetes_workloads.rs) uses the same scheduled authority calculation.
+[Retained Graph facts](../../crates/mithril-control/src/store/graph.rs) replace only their binding comparison with the shared predicate. All surrounding authority and ACK checks remain.
+
+Node ID is already part of [the authenticated stream identity](../../crates/araphor-analysis-builtins/src/discovery/source.rs).
+Each [record ID](../../crates/araphor-analysis-builtins/src/discovery/model.rs) carries that stream with its CPU and cursor.
+The signed workload fact also has Node ID. Control checks Node ID, boot, and label epoch before it accepts the runtime link.
+The new group does not add a Node table or duplicate Node ID. It connects the running container to the retained signed workload fact.
+
+```mermaid
+flowchart LR
+  B[Verified Node binding] --> C[Decision catalog]
+  S[Authenticated Node stream] --> R[Evidence record]
+  C --> R
+  R --> P[DataFusion physical package operator]
+  T[Signed target and activation ACK] --> V[Existing Control checks]
+  P --> V
+  V --> E[Declared package evaluator]
+  E --> D[Atomic Data commit]
+```
+
+[Data tests](../../crates/araphor-data/src/evidence/catalog_tests.rs) cover complete and malformed groups, no fallback, target mismatch, and absent-group encoding.
+[Shared identity tests](../../crates/araphor-data/src/workload/tests.rs) pin the old calculation results and grammar.
+[Node tests](../../crates/mithril-node/src/policy/discovery/runtime_tests.rs) check emission, omission, and invalid metadata.
+[Control runtime tests](../../crates/mithril-control/src/store/graph/tests/retained/runtime.rs) check Exact only after the matching ACTIVE generation and reject resealed foreign links, Nodes, and boots.
+[The backlog case](../../crates/mithril-e2e/src/discovery/packages/required/incident/backlog.rs) now uses a concrete runtime container through the existing WAL, authenticated ACK, Query, package, and receipt owners.
+The two scheduled-input callers remain. All three use a real scheduled authority before signing; no fake authority remains in their shared fixture.
+The [qualification record](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#runtime-binding-metadata-verification) states the 33 passing focused cases, exact source/executable bounds, static checks, and pending physical proof.
+This link is authenticated Node metadata. It does not independently attest a remote container or establish current runtime liveness.
