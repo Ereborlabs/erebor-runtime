@@ -152,16 +152,77 @@ impl Incident {
                 json!({
                     "complete": self.complete, "exhausted": self.exhausted,
                     "records": self.records.keys().take(8).collect::<Vec<_>>(),
-                    "graphs": self.graphs.values().take(8).map(|(id, _, graph)| json!({
-                        "id": id, "source": graph.scope.identity, "cursor": graph.last_cursor,
-                        "coverage": graph.input_manifest.coverage.iter().take(8).collect::<Vec<_>>(),
-                        "missing_ranges": graph.missing_ranges.iter().take(8).collect::<Vec<_>>(),
-                        "findings": graph.findings.iter().take(8).map(|finding| json!({
-                            "id": finding.finding_id, "state": finding.state,
-                            "policy": finding.policy_provenance.iter().take(8)
-                                .map(|policy| (&policy.state, &policy.limits)).collect::<Vec<_>>(),
-                        })).collect::<Vec<_>>(),
-                    })).collect::<Vec<_>>(),
+                    "graphs": self.graphs.values().take(8).map(|(id, revision, graph)| {
+                        let selected = self.records.values()
+                            .filter(|record| record.id.stream == graph.scope.identity)
+                            .collect::<Vec<_>>();
+                        let findings = graph.findings.iter().filter(|finding| {
+                            finding.effects.iter().any(|effect| {
+                                selected.iter().any(|record| record.id == effect.evidence)
+                            })
+                        }).collect::<Vec<_>>();
+                        json!({
+                            "id": id, "commit_revision": revision,
+                            "source": graph.scope.identity, "cursor": graph.last_cursor,
+                            "selected_record_count": selected.len(),
+                            "selected_records": selected.iter().map(|record| {
+                                let member = graph.input_manifest.evidence.contains(&record.id);
+                                match record.decode() {
+                                    Ok(wire) => {
+                                        let coverage = graph.input_manifest.coverage.iter()
+                                            .filter(|coverage| {
+                                                coverage.source == record.id.stream
+                                                    && coverage.cpu_id == record.id.cpu_id
+                                                    && coverage.interval_id.as_slice()
+                                                        == wire.coverage_interval_id.as_ref()
+                                            }).collect::<Vec<_>>();
+                                        json!({
+                                            "id": record.id, "manifest_member": member,
+                                            "expected_coverage_interval": wire.coverage_interval_id.to_vec(),
+                                            "temporal": {
+                                                "observed_boottime_ns": wire.observed_boottime_ns,
+                                                "ingested_utc_ns": wire.ingested_utc_ns,
+                                                "coverage": wire.temporal_coverage,
+                                            },
+                                            "matching_coverage_count": coverage.len(),
+                                            "matching_coverage": coverage.iter().take(8).collect::<Vec<_>>(),
+                                            "matching_healthy_closed_no_gaps": coverage.iter().any(|coverage| {
+                                                matches!(coverage.state,
+                                                    DiscoveryCoverageStateV1::Healthy | DiscoveryCoverageStateV1::Closed)
+                                                    && coverage.gap_reasons.is_empty()
+                                            }),
+                                        })
+                                    }
+                                    Err(error) => json!({
+                                        "id": record.id, "manifest_member": member,
+                                        "decode_error": error.to_string(),
+                                    }),
+                                }
+                            }).collect::<Vec<_>>(),
+                            "missing_ranges": graph.missing_ranges.iter().take(8).collect::<Vec<_>>(),
+                            "finding_count": graph.findings.len(),
+                            "selected_finding_count": findings.len(),
+                            "findings": findings.iter().take(8).map(|finding| json!({
+                                "id": finding.finding_id, "package_id": finding.package_id,
+                                "state": finding.state, "reason": finding.reason, "limits": finding.limits,
+                                "selected_evidence": finding.effects.iter()
+                                    .filter(|effect| selected.iter().any(|record| record.id == effect.evidence))
+                                    .map(|effect| &effect.evidence).collect::<Vec<_>>(),
+                                "policy_count": finding.policy_provenance.len(),
+                                "policy": finding.policy_provenance.iter().take(8)
+                                    .map(|policy| (&policy.state, &policy.limits)).collect::<Vec<_>>(),
+                                "notice": self.notices.get(&finding.finding_id).map(|notice| json!({
+                                    "finding": notice.finding_id, "result": notice.result_id,
+                                    "attempt_count": notice.attempts.len(),
+                                    "attempts": notice.attempts.iter().take(8).map(|attempt| json!({
+                                        "kind": attempt.kind, "result": attempt.result,
+                                    })).collect::<Vec<_>>(),
+                                    "first_seen": notice.first_seen, "deadline": notice.deadline,
+                                    "acknowledged": notice.acknowledged, "failure": notice.failure,
+                                })),
+                            })).collect::<Vec<_>>(),
+                        })
+                    }).collect::<Vec<_>>(),
                     "notices": self.notices.values().take(8).map(|notice| json!({
                         "finding": notice.finding_id, "result": notice.result_id,
                         "attempts": notice.attempts.len(), "failure": notice.failure,

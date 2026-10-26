@@ -656,3 +656,38 @@ The public reads and the held Follow cache are separate snapshots. They do not p
 The first eight cached findings concern unrelated cursors 100–107. Selected-record input membership, exact coverage matching, finding state, and policy remain unknown.
 The [reading route](../../../../guides/araphor-discovery-definition-review.md#shared-public-failure-diagnostics) states the projections and their limits. No later physical rerun, production correction, watchdog increase, or automatic repair is recorded.
 Prior failures remain retained. No complete matrix, physical PASS, performance, full-incident, Python package execution, or external-delivery qualification is claimed.
+
+
+## Selected-record diagnostics and runtime binding gap
+
+**Selected-record diagnostics: Done. Runtime policy match and physical incident: Not done.**
+The cached failure projection selects findings by the observed records before it applies its output bound.
+It records Graph input membership, exact interval coverage, selected finding policy, and linked notification attempts.
+It adds no RPC, production owner, polling path, or change to the original wait and result criteria.
+[Build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/cached-selected-build.json>) passes in 33.878 seconds.
+[Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/cached-selected-clippy.json>) passes with warnings denied in 18.046 seconds; scoped formatting passes in 0.030 seconds.
+These checks cover cached-selected-source.json, 1,430 pins with SHA-256 237d2bff0922796997ced8a88f59144e6f4535c2dcb6267007255af41bd2aa1a.
+
+The [runtime-input probe](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-backlog-probe.json>) reuses follows_wal_backlog and its production owners.
+The signed target keeps its scheduled authority and container placeholder. Only Node input gets the derived runtime binding and concrete container ID.
+The fixture checks the target digest, distinct identities, decoded uploaded catalog, and ACTIVE ACK before the unchanged observer wait.
+Its build passes in 34.708 seconds. The one test fails in 111.687 seconds: zero passes, one failure, zero ignored cases.
+The [selected facts](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-backlog-probe-facts.json>) show Graph cursor 950 with records 941 and 950 in its manifest and matching healthy coverage without gaps.
+The selected HF-PROC-001 finding is Confirmed. Its policy provenance is Missing with ActivationAcknowledgementMissing.
+Its linked notification exists with two SinkUnavailable attempts. The strict observer requires Exact policy provenance and times out.
+This result is a composed Node-input policy-match gap. It does not prove the physical timeout cause or execute the private full runtime resolver.
+The temporary four-path input variant is retained as runtime-catalog-backlog-probe-candidate and restored after the test.
+Its 1,430-pin source SHA-256 is 2caa29b0924899536735b7b514f4afbada7b7122d3bf8c1556c5048280486097; its executable SHA-256 is 6f35b840d7c4ff7864b1566c5d59b833e3aa33b112312b350320a959be64d81d.
+Source restoration does not change that executable. The prior normal pass remains bound to its recorded source and executable.
+The [earlier probe](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-catalog-probe.json>) did not compile: E0599, because discovery_context is a test-only Control module. It established no runtime result; its inputs were restored.
+
+The [latest physical attempt](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/physical-cached-selected.json>) fails during actor setup in 102.767 seconds, before subscriptions or physical read assertions.
+It emits no native image, cached incident, or producer marker and gives no new incident qualification.
+The [read-only collection](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/physical-cached-selected-image-absence.json>) confirms owned namespace, pin, socket, and lock absence.
+Its bounded journal records image GC at 17:37:29 UTC: 92 percent use, an 85 percent threshold, and removal of the exact Python image.
+At collection, three retained test executables used about 6.6 GB. DiskPressure=False did not negate the separate image-GC threshold.
+The [approved VM recovery](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/cached-selected-gc-recovery-continuation.json) removes only two obsolete executable copies after hash checks and restores the exact Python image through the existing harness.
+Nominal removed bytes are 4,397,007,520. Recorded free space rises from 2,790,641,664 bytes before cleanup to 7,187,443,712 bytes after cleanup; final use is 65 percent after image recovery.
+The latest executable, reports, logs, and archive remain. Node and Control image identities are unchanged. No physical case is rerun.
+The [runtime evidence proposal](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-binding-proof-proposal.md>) requires explicit user approval before production metadata or trust checks change.
+No such production change, complete matrix, physical PASS, benchmark, Python package execution, or external-delivery result is recorded.

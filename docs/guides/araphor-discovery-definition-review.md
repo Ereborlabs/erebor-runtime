@@ -4466,3 +4466,26 @@ The physical collector finishes with one producer marker and nine projected reco
 The cached actor Graph reaches cursor 745 for selected records 721/730, but notifications are empty. Its first eight printed findings concern unrelated records 100–107.
 Evaluate inspection is Unavailable; its successful history and Expire status/history remain recorded independently. Separate snapshots cannot date head replacement relative to the wait deadline.
 Exact selected-input membership, matching coverage, and the selected finding's policy remain unproved. The physical incident, complete matrix, and cause remain open; this deliverable changes no production owner.
+
+
+## Selected-record failure and runtime binding reading route
+
+[Incident::wait](../../crates/mithril-e2e/src/discovery/packages/required/incident.rs) now selects cached findings that refer to the observed source and evidence IDs before it bounds diagnostic output.
+For each selected record, it records exact Graph input membership and interval coverage. For each selected finding, it records policy state and linked notification attempts.
+The projection uses the held Follow cache. It adds no query, RPC, polling, production owner, or change to the successful result criteria.
+
+The retained runtime-input probe uses the existing [backlog scenario](../../crates/mithril-e2e/src/discovery/packages/required/incident/backlog.rs) and [signed catalog fixture](../../crates/mithril-e2e/src/discovery/roundtrip.rs).
+Its temporary inputs preserve the signed scheduled target and give only Node the concrete container and derived runtime binding.
+[ScheduledRuntimeBindingV1](../../crates/mithril-node/src/runtime_admission.rs) defines the authority and runtime derivations.
+[NodeDiscoveryContextCatalog](../../crates/mithril-node/src/policy/discovery.rs) emits the observed runtime binding.
+[EvidenceDecisionCatalogV1](../../crates/araphor-data/src/evidence/model.rs) validates catalog and wire coordinates but has no scheduled-to-runtime witness.
+The production [GraphContext::facts](../../crates/mithril-control/src/store/graph.rs) compares that binding with the retained signed workload identity.
+Control's discovery_context module is test-only. Do not use it as a production E2E API.
+
+The [probe facts](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-backlog-probe-facts.json>) retain both selected records and matching healthy coverage at cursor 950.
+The finding is Confirmed and has a linked notification with two SinkUnavailable attempts, but policy provenance is Missing despite the preceding ACTIVE ACK assertion.
+The observer requires Exact and fails. This result exercises the selected-record diagnostic projection; it does not prove the earlier physical timeout cause.
+The probe calls public identity builders and catalog emission, not the private full runtime resolver. All temporary input edits are restored.
+The [qualification record](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#selected-record-diagnostics-and-runtime-binding-gap) gives exact source, executable, build, test, and physical setup limits.
+The proposed runtime metadata contract requires explicit user approval. It is not implemented.
+The approved VM recovery removes only two obsolete executables after hash checks and restores the frozen actor image through the existing harness. It adds no source change or physical PASS. Future physical runs can use the existing read-only source mount with an exact executable hash and a source freeze, or replace one owned copy. Do not retain a new 2.2 GB copy for each iteration.
