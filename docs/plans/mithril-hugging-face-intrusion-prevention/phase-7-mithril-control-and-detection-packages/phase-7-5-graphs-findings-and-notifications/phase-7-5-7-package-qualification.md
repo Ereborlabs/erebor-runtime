@@ -722,3 +722,43 @@ The existing Protobuf catalog_json field carries the new JSON metadata group.
 No version, Protobuf field, SDK ABI, quota, polling loop, executor, scheduler, store, or DataFusion operator is added.
 Node and Control must use the changed catalog contract together. No mixed-version or independent container-attestation result is claimed.
 The current-source production images and paired physical incident remain to be qualified. These test times are not benchmark results.
+
+
+## Runtime image result and independent failure reads
+
+**Image build and diagnostic checks: Done. Paired physical incident: Not done.**
+The [image build](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-image-build.json) passes on source 169c5f5a with the earlier 2,038 pins.
+The [archive](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-image-archive-metadata.json) contains the exact Node and Control manifest-to-config links.
+The [VM preparation](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-vm-preparation.json) verifies these links, the mounted b92efb52 executable, the paired lightweight input, and the unchanged actor image.
+It uses the retained VM and copies no test executable.
+
+The [physical case](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-physical.json) fails with zero passes, one failure, and zero ignored cases.
+Libtest takes 173.52 seconds; the provider process takes 218.101 seconds.
+Both physical read assertions pass before the incident wait: protected EACCES with zero bytes, and benign errno zero with the complete fixture length.
+The native Pod marker binds Node to manifest 63a5936a and Control to manifest 9af46295.
+The later native snapshot comparison and atomic receipt checks do not run.
+The [retained facts](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-failure-facts.json) show CPU1 records 443/452 on source 7753bb72.
+The only cached Graph is from source cfc0d1f8 at cursor 639 and has 138 findings. It contains neither selected record; the notice cache is empty.
+This other Graph does not establish the selected source's policy, coverage, or publication state.
+
+The separate five-second producer collection opens graph_state but receives no frame.
+Its sequential Instance status and history reads never start. This is an incomplete read, not an empty-state result or a proven producer failure.
+Owned namespace, process, pin, socket, and lease absence checks pass.
+The [exact CRI log collection](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-failure-cri-collection.json) records both service log paths as absent after normal cleanup.
+No successful result.json exists. No physical retry is made.
+
+The failure-only collector now drives its five existing reads independently for each deduplicated source.
+Existing futures_util::future::join_all drives one finite graph_state query and Evaluate/Expire status and history requests.
+A borrowed Mutex retains each started marker and received result through the unchanged five-second cancellation boundary.
+Poison recovery preserves the original wait error. No lock crosses an await.
+The successful incident assertions and 90-second watchdog do not change.
+
+The [configured public-RPC test](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-independent-diagnostic-test-v4.json) passes in 7.734 seconds: one pass, zero failures, zero ignored cases.
+Two external record IDs share one source. The actual collector emits five starts, retains all four correlated NotFound results, and completes the empty finite Graph query.
+The fixture enables Graph through the existing Control configuration. It does not upload or decode the empty record bodies.
+The [earlier fixture observation](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-independent-diagnostic-test-v3.json) returned Unimplemented because Fixture::open leaves that relation unavailable; it is not a production query failure.
+[Build](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-independent-diagnostic-build-v4.json) passes in 34.940 seconds, [Clippy](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-independent-diagnostic-clippy-v4.json) in 16.980 seconds, and [scoped formatting](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-independent-diagnostic-fmt-v4.json) in 0.031 seconds.
+These checks cover 2,039 pins, SHA-256 03fb10a05da4987b3546cb3e38a10e04cb03f44ea17095c032827c03c9223b1a.
+The executable SHA-256 is cad458aa8f2bd16568aac18aee169cb483b51dbb1dfc7058a6fa02b2a48c0329.
+This test proves public-RPC wiring, source deduplication, and independent result retention. It does not hold one request pending or prove a physical cause.
+The current production source remains unchanged. The physical incident, additional input qualification, and final VM removal remain Not done.

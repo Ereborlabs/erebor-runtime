@@ -1,3 +1,5 @@
+use std::sync::{Mutex, PoisonError};
+
 use araphor_data::{
     ManagedGraphOperation, PackageRequestV1 as Request, PackageResponseV1 as Response,
 };
@@ -5,92 +7,101 @@ use erebor_runtime_client::AraphorClient;
 use erebor_runtime_ipc::araphor::{
     self as wire, query_frame::Payload, query_value::Kind, PackageOperationRequest,
 };
+use futures_util::{future::BoxFuture, FutureExt as _};
 use serde_json::{json, Value};
 
 use super::{Incident, Observed};
 use crate::platform::TestResult;
 
 impl Incident {
-    pub(super) async fn progress(&self, client: &AraphorClient, output: &mut Vec<Value>) {
+    pub(super) async fn progress(&self, client: &AraphorClient, output: &Mutex<Vec<Value>>) {
         let sources = self
             .records
             .keys()
             .map(|record| record.stream.clone())
             .collect::<std::collections::BTreeSet<_>>();
+        let mut reads: Vec<BoxFuture<'_, ()>> = Vec::new();
         for source in sources {
-            match client.query(wire::QueryRequest {
-                sql: "SELECT contiguous_cursor, coverage_revision, consumed_cursor, current_result_id, processor_present, retired FROM graph_state WHERE source_key = $1".into(),
-                parameters: vec![wire::QueryValue {
-                    kind: Some(Kind::Binary(source.key())),
-                }],
-                follow: false,
-                ..Default::default()
-            }).await {
-                Ok(mut stream) => {
-                    output.push(json!({
-                        "source": source, "read": "graph_state", "opened": true,
-                        "columns": ["contiguous_cursor", "coverage_revision", "consumed_cursor",
-                            "current_result_id", "processor_present", "retired"],
-                    }));
-                    loop {
-                        let frame = match stream.message().await {
-                            Ok(Some(frame)) => frame,
-                            Ok(None) => {
-                                output.push(json!({
-                                    "source": source, "read": "graph_state", "eof": true,
-                                }));
-                                break;
-                            }
-                            Err(error) => {
-                                output.push(json!({
-                                    "source": source, "read": "graph_state", "error": error.to_string(),
-                                }));
-                                break;
-                            }
-                        };
-                        let terminal = matches!(
-                            &frame.payload,
-                            Some(Payload::Error(_) | Payload::Terminal(_))
-                        );
-                        let value = match frame.payload {
-                            Some(Payload::Rows(rows)) => json!({
-                                "limited": rows.limited,
-                                "rows": rows.rows.into_iter().map(|row| {
-                                    row.values.into_iter().map(|value| match value.kind {
-                                        Some(Kind::Null(_)) => Value::Null,
-                                        Some(Kind::Unsigned(value)) => json!(value),
-                                        Some(Kind::Text(value)) => json!(value),
-                                        Some(Kind::Boolean(value)) => json!(value),
-                                        None => json!({"missing": true}),
-                                        _ => json!({"error": "unexpected graph_state value"}),
-                                    }).collect::<Vec<_>>()
-                                }).collect::<Vec<_>>(),
-                            }),
-                            Some(Payload::Checkpoint(_)) => json!({"checkpoint": true}),
-                            Some(Payload::Error(error)) => json!({
-                                "error": {"code": error.code, "reason": error.reason},
-                            }),
-                            Some(Payload::Terminal(terminal)) => json!({"terminal": terminal.reason}),
-                            Some(Payload::Metadata(_)) => json!({"metadata": true}),
-                            Some(Payload::Health(_)) => json!({"health": true}),
-                            None => json!({"missing_payload": true}),
-                        };
-                        output.push(json!({
-                            "source": source, "read": "graph_state",
-                            "read_revision": frame.read_revision, "operation": frame.operation,
-                            "frame": value,
+            let query = source.clone();
+            reads.push(async move {
+                let source = query;
+                output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                    "source": source, "read": "graph_state", "started": true,
+                }));
+                match client.query(wire::QueryRequest {
+                    sql: "SELECT contiguous_cursor, coverage_revision, consumed_cursor, current_result_id, processor_present, retired FROM graph_state WHERE source_key = $1".into(),
+                    parameters: vec![wire::QueryValue {
+                        kind: Some(Kind::Binary(source.key())),
+                    }],
+                    follow: false,
+                    ..Default::default()
+                }).await {
+                    Ok(mut stream) => {
+                        output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                            "source": source, "read": "graph_state", "opened": true,
+                            "columns": ["contiguous_cursor", "coverage_revision", "consumed_cursor",
+                                "current_result_id", "processor_present", "retired"],
                         }));
-                        if terminal {
-                            break;
+                        loop {
+                            let frame = match stream.message().await {
+                                Ok(Some(frame)) => frame,
+                                Ok(None) => {
+                                    output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                                        "source": source, "read": "graph_state", "eof": true,
+                                    }));
+                                    break;
+                                }
+                                Err(error) => {
+                                    output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                                        "source": source, "read": "graph_state", "error": error.to_string(),
+                                    }));
+                                    break;
+                                }
+                            };
+                            let terminal = matches!(
+                                &frame.payload,
+                                Some(Payload::Error(_) | Payload::Terminal(_))
+                            );
+                            let value = match frame.payload {
+                                Some(Payload::Rows(rows)) => json!({
+                                    "limited": rows.limited,
+                                    "rows": rows.rows.into_iter().map(|row| {
+                                        row.values.into_iter().map(|value| match value.kind {
+                                            Some(Kind::Null(_)) => Value::Null,
+                                            Some(Kind::Unsigned(value)) => json!(value),
+                                            Some(Kind::Text(value)) => json!(value),
+                                            Some(Kind::Boolean(value)) => json!(value),
+                                            None => json!({"missing": true}),
+                                            _ => json!({"error": "unexpected graph_state value"}),
+                                        }).collect::<Vec<_>>()
+                                    }).collect::<Vec<_>>(),
+                                }),
+                                Some(Payload::Checkpoint(_)) => json!({"checkpoint": true}),
+                                Some(Payload::Error(error)) => json!({
+                                    "error": {"code": error.code, "reason": error.reason},
+                                }),
+                                Some(Payload::Terminal(terminal)) => json!({"terminal": terminal.reason}),
+                                Some(Payload::Metadata(_)) => json!({"metadata": true}),
+                                Some(Payload::Health(_)) => json!({"health": true}),
+                                None => json!({"missing_payload": true}),
+                            };
+                            output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                                "source": source, "read": "graph_state",
+                                "read_revision": frame.read_revision, "operation": frame.operation,
+                                "frame": value,
+                            }));
+                            if terminal {
+                                break;
+                            }
                         }
                     }
+                    Err(error) => {
+                        output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                            "source": source, "read": "graph_state", "error": error.to_string(),
+                        }));
+                    }
                 }
-                Err(error) => {
-                    output.push(json!({
-                        "source": source, "read": "graph_state", "error": error.to_string(),
-                    }));
-                }
-            }
+            }.boxed());
             for operation in [
                 ManagedGraphOperation::Evaluate,
                 ManagedGraphOperation::Expire,
@@ -110,30 +121,38 @@ impl Incident {
                         },
                     ),
                 ] {
-                    let result = match Observed::inspect(client, read, request).await {
-                        Ok(Response::Instance(status)) if read == "InspectInstance" => json!({
-                            "id": status.id, "generation": status.generation,
-                            "lifecycle": status.lifecycle, "running": status.running,
-                            "removed": status.removed, "progress": status.progress,
-                            "readiness": status.readiness, "status_progress": status.status_progress,
-                        }),
-                        Ok(Response::History(history)) if read == "InspectInstanceHistory" => {
-                            json!({
-                                "history": history.into_iter().rev().take(3).map(|receipt| json!({
-                                    "attempt": receipt.attempt, "commit_revision": receipt.commit_revision,
-                                    "selected": receipt.selected, "calls": receipt.results,
-                                })).collect::<Vec<_>>(),
-                            })
-                        }
-                        Ok(_) => json!({"error": "unexpected package response"}),
-                        Err(error) => json!({"error": error.to_string()}),
-                    };
-                    output.push(json!({
-                        "source": source, "instance": id, "read": read, "result": result,
-                    }));
+                    let source = source.clone();
+                    let id = id.clone();
+                    reads.push(async move {
+                        output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                            "source": source, "instance": id, "read": read, "started": true,
+                        }));
+                        let result = match Observed::inspect(client, read, request).await {
+                            Ok(Response::Instance(status)) if read == "InspectInstance" => json!({
+                                "id": status.id, "generation": status.generation,
+                                "lifecycle": status.lifecycle, "running": status.running,
+                                "removed": status.removed, "progress": status.progress,
+                                "readiness": status.readiness, "status_progress": status.status_progress,
+                            }),
+                            Ok(Response::History(history)) if read == "InspectInstanceHistory" => {
+                                json!({
+                                    "history": history.into_iter().rev().take(3).map(|receipt| json!({
+                                        "attempt": receipt.attempt, "commit_revision": receipt.commit_revision,
+                                        "selected": receipt.selected, "calls": receipt.results,
+                                    })).collect::<Vec<_>>(),
+                                })
+                            }
+                            Ok(_) => json!({"error": "unexpected package response"}),
+                            Err(error) => json!({"error": error.to_string()}),
+                        };
+                        output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                            "source": source, "instance": id, "read": read, "result": result,
+                        }));
+                    }.boxed());
                 }
             }
         }
+        futures_util::future::join_all(reads).await;
     }
 }
 

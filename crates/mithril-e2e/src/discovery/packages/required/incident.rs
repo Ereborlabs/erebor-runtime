@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, PoisonError},
+    time::Duration,
+};
 
 use araphor_data::{
     DiscoveryCoverageStateV1, DiscoveryRecordIdV1, DiscoveryRecordV1, EvidenceIntakeIdentityV1,
@@ -20,6 +24,7 @@ mod identity;
 mod input;
 mod lightweight;
 mod physical;
+mod progress;
 
 pub(super) struct Incident {
     streams: [tonic::Streaming<wire::QueryFrame>; 3],
@@ -230,14 +235,14 @@ impl Incident {
                     })).collect::<Vec<_>>(),
                 })
             );
-            let mut progress = Vec::new();
+            let progress = Mutex::new(Vec::new());
             let finished =
-                tokio::time::timeout(Duration::from_secs(5), self.progress(client, &mut progress))
+                tokio::time::timeout(Duration::from_secs(5), self.progress(client, &progress))
                     .await
                     .is_ok();
             eprintln!(
                 "incident producer state={}",
-                json!({"finished": finished, "reads": progress})
+                json!({"finished": finished, "reads": progress.into_inner().unwrap_or_else(PoisonError::into_inner)})
             );
         }
         result

@@ -4526,3 +4526,23 @@ flowchart LR
 The two scheduled-input callers remain. All three use a real scheduled authority before signing; no fake authority remains in their shared fixture.
 The [qualification record](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#runtime-binding-metadata-verification) states the 33 passing focused cases, exact source/executable bounds, static checks, and pending physical proof.
 This link is authenticated Node metadata. It does not independently attest a remote container or establish current runtime liveness.
+
+
+## Independent incident failure reads
+
+[Incident::wait](../../crates/mithril-e2e/src/discovery/packages/required/incident.rs) keeps its original error and five-second failure collection bound.
+[Incident::progress](../../crates/mithril-e2e/src/discovery/packages/required/incident/identity.rs) deduplicates source identities from the held record IDs.
+For each source, it starts one finite graph_state query plus Evaluate and Expire InspectInstance and InspectInstanceHistory calls.
+The installed futures_util join_all drives all five futures. A borrowed Mutex holds only the test's JSON observations; each lock ends before the next await.
+Started markers identify requests that did not finish. The outer timeout drops pending futures, then reads the retained observations.
+Poison recovery keeps this diagnostic from replacing the original wait error.
+Query uses the existing native DataFusion route. Instance reads use the existing public package API. No runtime owner changes.
+
+[The ordinary public-RPC test](../../crates/mithril-e2e/src/discovery/packages/required/incident/progress.rs) uses the configured Control fixture with Graph enabled.
+Two external IDs for one source must yield five started requests, four correctly identified NotFound results, and an empty finite query that reaches Completed.
+Its empty record bodies do not enter ingestion or decoding. The test checks result identities without an ordering requirement.
+It proves diagnostic wiring and result retention; it does not hold a query pending.
+
+The [physical failure facts](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-failure-facts.json) retain both successful read assertions and the missing selected-source Graph result.
+The cached Graph belongs to another source. The old sequential diagnostic receives no query frame and never reaches status/history.
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#runtime-image-result-and-independent-failure-reads) records source hashes, passing diagnostic checks, cleanup absence, and the remaining physical proof.
