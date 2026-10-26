@@ -1,4 +1,6 @@
 use super::*;
+
+mod arrivals;
 use crate::{GraphOwner, GraphProgram, InstanceHost};
 use araphor_data::{ManagedGraphOperation, ProcessorScopeV1};
 
@@ -107,10 +109,18 @@ fn scope(source: &EvidenceIntakeIdentityV1) -> ProcessorScopeV1 {
 
 pub(super) async fn observe(
     query: &Arc<Engine>,
+    ready: impl FnMut() -> TestResult<bool>,
+) -> TestResult {
+    observe_for(query, std::time::Duration::from_secs(30), ready).await
+}
+
+pub(super) async fn observe_for(
+    query: &Arc<Engine>,
+    timeout: std::time::Duration,
     mut ready: impl FnMut() -> TestResult<bool>,
 ) -> TestResult {
     let mut notices = query.store().subscribe_revision();
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    tokio::time::timeout(timeout, async {
         loop {
             notices.borrow_and_update();
             let observed = match ready() {

@@ -548,3 +548,43 @@ ldd, --help, and binary SHA-256 checks for both images. vm-artifacts.json record
 the image IDs, imported guest IDs, archive hash, and original source boundary.
 The records remain in the qualification evidence directory above. These build
 and load checks do not establish an integrated physical incident pass.
+
+
+## Captured source invalidation and empty reads
+
+**Focused capture checks: 23 pass. Controlled arrivals: Done.
+Complete matrix and current physical incident: Not done.**
+
+The intended result is reactive execution from a valid captured source cut.
+The [capture review](../../../../guides/araphor-discovery-definition-review.md#capture-scope-and-reactive-source-changes)
+gives the five changed production files, reading flow, lifecycle, and tests.
+Data seals relation guards from the incoming scope after Query pruning.
+Resolved rows retain authorization, exact references, witnesses, and input limits.
+An empty selected Graph read retains its guards against a later Graph commit.
+
+Data distinguishes source invalidation from owner or state conflicts.
+Reactive subscriptions settle the typed source error as Cancelled.
+Finite execution retains Failed(Conflict). Trace revocation retains AnalysisConflict.
+Cancellation preserves earlier Instance failure, output, checkpoint, and progress.
+Resume excludes the cancelled attempt's frontier. The terminal completion
+revision can advance without advancing Instance progress.
+
+[capture-final-tests.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-final-tests.json) records 23 passes and the original controlled 30-second failure.
+The capture-final-source.json SHA-256 is db61ac21a562959d142efe32c1c66cf8d6c4117ad8d91be82b56c4d645fa3170.
+[capture-lint-final-test.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-lint-final-test.json) records the normal controlled pass in 66.718 seconds.
+The capture-lint-final-source.json SHA-256 is 48e54ce2ce06b4c483105a03f6ddfc9b99b65a2faa40cca5725477c272c22409.
+Only private feed.rs and feed/arrivals.rs differ between these manifests.
+All production file bytes are identical. Records retain commands, executable hashes, and logs.
+
+The private observe_for helper keeps existing observe callers at 30 seconds.
+The new case uses 90 seconds for three Evaluate and three Expire subscriptions.
+It keeps exact Graph cuts, Current health, and current Expire frontiers with future deadlines.
+[late-observation-test.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/late-observation-test.json) retains the diagnostic and its original failed outcome.
+That diagnostic reaches the same strict predicate at 49.166 seconds without new inputs.
+[arrival-final-clippy.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/arrival-final-clippy.json) retains the earlier expect lint failure.
+
+[capture-lint-final-clippy.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-lint-final-clippy.json) records passing Clippy for Data, Query, and Analysis with warnings denied in 22.410 seconds.
+[capture-lint-final-fmt.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-lint-final-fmt.json) records passing scoped formatting in 0.665 seconds.
+These final checks cover capture-lint-final-source.json. They establish no performance result.
+Existing Data transactions, Query, native DataFusion execution, and Host owners remain in use.
+No scheduler, store, polling path, quota, or version is added.

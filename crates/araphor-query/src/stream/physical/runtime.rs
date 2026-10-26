@@ -399,6 +399,7 @@ impl Runtime {
                                 &error,
                                 crate::Error::Data {
                                     source: araphor_data::Error::AnalysisConflict { .. }
+                                        | araphor_data::Error::AnalysisSourceChanged { .. }
                                 }
                             )
                         {

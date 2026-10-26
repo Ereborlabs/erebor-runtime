@@ -302,100 +302,110 @@ async fn finite_sql_preserves_progress() -> TestResult {
 
 #[tokio::test]
 async fn failed_publication_rolls_back() -> TestResult {
-    let fixture = Fixture::new(Default::default())?;
-    let instance = fixture
-        .admit("publication", "SELECT CAST(7 AS BIGINT UNSIGNED) AS value")
-        .await?;
-    let commits = Arc::new(AtomicUsize::new(0));
-    let entered = Arc::clone(&commits);
-    fixture.query.store().set_commit_hook(
-        araphor_data::AnalysisCommitStage::BeforeResultCommit,
-        move || {
-            entered.fetch_add(1, Ordering::SeqCst);
-            Err(Code::Invalid.error("finite publication fixture"))
-        },
-    )?;
-    let input = request("publication-error");
-    let error = instance
-        .run(input.clone(), &AnalysisReadControl::default())
-        .await
-        .err()
-        .ok_or("failed commit published")?;
-    assert_eq!(
-        Subscription::failure(&error),
-        ManagedExit::Failed(Code::Invalid)
-    );
-    assert_eq!(commits.load(Ordering::SeqCst), 1);
-    let failed = fixture
-        .query
-        .store()
-        .managed_attempt(
-            [1; 16],
-            "publication",
-            &input.id,
-            &AnalysisReadControl::default(),
-        )?
-        .ok_or("publication attempt")?;
-    saved_request(failed.request(), &input)?;
-    assert_eq!(
-        failed.terminal().map(|terminal| terminal.exit),
-        Some(ManagedExit::Failed(Code::Invalid))
-    );
-    assert!(failed.receipt().is_none());
-    assert_eq!(fixture.progress("publication")?, 0);
-    assert!(fixture
-        .query
-        .store()
-        .managed_selected(
-            [1; 16],
-            "publication",
-            &input.id,
-            &AnalysisReadControl::default()
-        )?
-        .is_none());
-    let before = fixture.query.store().meta()?;
-    let error = instance
-        .run(input, &AnalysisReadControl::default())
-        .await
-        .err()
-        .ok_or("terminated publication replayed")?;
-    assert!(matches!(
-        error,
-        crate::Error::Data {
-            source: araphor_data::Error::Package {
-                code: Code::Conflict,
-                field: "managed attempt terminated",
-                ..
+    for source_changed in [false, true] {
+        let code = if source_changed {
+            Code::Conflict
+        } else {
+            Code::Invalid
+        };
+        let fixture = Fixture::new(Default::default())?;
+        let instance = fixture
+            .admit("publication", "SELECT CAST(7 AS BIGINT UNSIGNED) AS value")
+            .await?;
+        let commits = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::clone(&commits);
+        fixture.query.store().set_commit_hook(
+            araphor_data::AnalysisCommitStage::BeforeResultCommit,
+            move || {
+                entered.fetch_add(1, Ordering::SeqCst);
+                if source_changed {
+                    Err(araphor_data::Error::AnalysisSourceChanged {
+                        location: snafu::location!(),
+                    })
+                } else {
+                    Err(Code::Invalid.error("finite publication fixture"))
+                }
+            },
+        )?;
+        let input = request("publication-error");
+        let error = instance
+            .run(input.clone(), &AnalysisReadControl::default())
+            .await
+            .err()
+            .ok_or("failed commit published")?;
+        assert_eq!(Subscription::failure(&error), ManagedExit::Failed(code));
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
+        let failed = fixture
+            .query
+            .store()
+            .managed_attempt(
+                [1; 16],
+                "publication",
+                &input.id,
+                &AnalysisReadControl::default(),
+            )?
+            .ok_or("publication attempt")?;
+        saved_request(failed.request(), &input)?;
+        assert_eq!(
+            failed.terminal().map(|terminal| terminal.exit),
+            Some(ManagedExit::Failed(code))
+        );
+        assert!(failed.receipt().is_none());
+        assert_eq!(fixture.progress("publication")?, 0);
+        assert!(fixture
+            .query
+            .store()
+            .managed_selected(
+                [1; 16],
+                "publication",
+                &input.id,
+                &AnalysisReadControl::default()
+            )?
+            .is_none());
+        let before = fixture.query.store().meta()?;
+        let error = instance
+            .run(input, &AnalysisReadControl::default())
+            .await
+            .err()
+            .ok_or("terminated publication replayed")?;
+        assert!(matches!(
+            error,
+            crate::Error::Data {
+                source: araphor_data::Error::Package {
+                    code: Code::Conflict,
+                    field: "managed attempt terminated",
+                    ..
+                }
             }
-        }
-    ));
-    assert_eq!(commits.load(Ordering::SeqCst), 1);
-    assert_eq!(fixture.query.store().meta()?, before);
-    let receipt = instance
-        .run(request("after-rollback"), &AnalysisReadControl::default())
-        .await?;
-    assert!(receipt.commit_revision > before.commit_revision);
-    assert_eq!(fixture.progress("publication")?, receipt.commit_revision);
-    let selected = fixture
-        .query
-        .store()
-        .managed_selected(
-            [1; 16],
-            "publication",
-            &receipt.attempt,
-            &AnalysisReadControl::default(),
-        )?
-        .ok_or("healthy publication selected output")?;
-    assert_eq!(selected.data.batches.len(), 1);
-    let batch = &selected.data.batches[0];
-    assert_eq!(batch.num_rows(), 1);
-    let values = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<sdk::arrow_array::UInt64Array>()
-        .ok_or("healthy selected value type")?;
-    assert_eq!(values.value(0), 7);
-    assert_eq!(commits.load(Ordering::SeqCst), 1);
+        ));
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.query.store().meta()?, before);
+        let receipt = instance
+            .run(request("after-rollback"), &AnalysisReadControl::default())
+            .await?;
+        assert!(receipt.commit_revision > before.commit_revision);
+        assert_eq!(fixture.progress("publication")?, receipt.commit_revision);
+        let selected = fixture
+            .query
+            .store()
+            .managed_selected(
+                [1; 16],
+                "publication",
+                &receipt.attempt,
+                &AnalysisReadControl::default(),
+            )?
+            .ok_or("healthy publication selected output")?;
+        assert_eq!(selected.data.batches.len(), 1);
+        let batch = &selected.data.batches[0];
+        assert_eq!(batch.num_rows(), 1);
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<sdk::arrow_array::UInt64Array>()
+            .ok_or("healthy selected value type")?;
+        assert_eq!(values.value(0), 7);
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
+    }
     Ok(())
 }
 

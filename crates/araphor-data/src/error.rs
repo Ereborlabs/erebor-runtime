@@ -229,6 +229,11 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Captured analysis sources changed"))]
+    AnalysisSourceChanged {
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Analysis file `{}` failed: {source}", path.display()))]
     Io {
         path: PathBuf,
@@ -365,9 +370,9 @@ impl ErrorExt for Error {
             | Self::AnalysisBusy { .. }
             | Self::ProtectedInputCapacity { .. }
             | Self::RetentionUnavailable { .. } => StatusCode::Unavailable,
-            Self::AnalysisConflict { .. } | Self::DiscoveryConflict { .. } => {
-                StatusCode::AlreadyExists
-            }
+            Self::AnalysisConflict { .. }
+            | Self::AnalysisSourceChanged { .. }
+            | Self::DiscoveryConflict { .. } => StatusCode::AlreadyExists,
             Self::EvidenceFrame { .. }
             | Self::EvidenceDecode { .. }
             | Self::AnalysisState { .. }

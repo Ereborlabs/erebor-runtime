@@ -4349,3 +4349,63 @@ image IDs and the archive hash. These records prove build and load inputs;
 they do not prove the current physical incident. See the
 [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#deployment-image-build-inputs)
 for the source limits and the open incident duty.
+
+
+## Capture scope and reactive source changes
+
+A capture must guard selected inputs, including an empty selected relation.
+The intended result is rejection of stale work with preserved durable state.
+
+[Query source capture](../../crates/araphor-query/src/sources/rows.rs) applies Query pruning before the Data read.
+  -> [AnalysisStore::read_tables_inner](../../crates/araphor-data/src/analysis/extraction.rs) retains the incoming scope and resolves the row scope.
+  -> [ManagedCapture::seal](../../crates/araphor-data/src/analysis/managed/capture.rs) derives relation guards from the incoming scope at both capture exits.
+  -> [AnalysisStore::check_managed_capture](../../crates/araphor-data/src/analysis/managed/commit.rs) checks owner state, prior calls, source revisions, and trace access.
+  -> [AnalysisSourceChanged](../../crates/araphor-data/src/error.rs) identifies a changed source after owner checks pass and trace reads remain valid.
+  -> [Query capture recovery](../../crates/araphor-query/src/stream/physical/runtime.rs) preserves the captured source cut after rejected registration.
+  -> [Subscription::failed](../../crates/araphor-analysis/src/instance/subscription.rs) maps this typed cause through Query and DataFusion wrappers to Cancelled.
+  -> [Subscription::cancel_and_join](../../crates/araphor-analysis/src/instance/subscription.rs) joins execution before [AnalysisStore::finish_managed](../../crates/araphor-data/src/analysis/managed/terminal.rs) records a registered terminal attempt.
+
+```mermaid
+sequenceDiagram
+    Query->>Data: Validate captured work
+    Data-->>Query: AnalysisSourceChanged
+    Query-->>Subscription: Return the typed cause
+    Subscription-->>Host: Return the failed stream item
+    Host->>Subscription: Cancel and join
+    Subscription->>Query: Join active execution
+    opt Attempt was registered
+        Subscription->>Data: finish_managed(Cancelled)
+    end
+    Host->>Query: Open the next capture
+```
+
+Owner or state conflicts retain AnalysisConflict. Trace revocation also retains AnalysisConflict.
+AnalysisSourceChanged retains AlreadyExists status and the NonRetryable hint.
+Reactive cancellation records no admission failure.
+[Finite execution](../../crates/araphor-analysis/src/instance/mod.rs) still stores Failed(Conflict).
+Other package failures retain their codes. Authority revocation keeps Denied settlement.
+Cancellation preserves the earlier Instance failure, output, checkpoint, and progress.
+Resume excludes the cancelled attempt's frontier. The terminal completion revision can advance.
+An empty selected Graph read retains its guards. A later Graph invalidates that capture.
+A capture with the Graph relation pruned has no Graph relation guard. Resolved rows retain authorization,
+exact references, witnesses, and input-limit accounting.
+
+[empty_graph_keeps_capture, source_change_keeps_commit, and trace_revocation_keeps_commit](../../crates/araphor-data/src/analysis/managed/tests/input/current.rs) check preserved state and rejected stale writes.
+[cancelled_frontier_is_unconsumed](../../crates/araphor-data/src/analysis/managed/tests/readiness.rs) checks frontier selection and exclusive reopen.
+[stale_admission_keeps_capture_cut](../../crates/araphor-query/src/definition/tests/captured/managed.rs) checks captured recovery.
+[source_invalidation_is_reactive](../../crates/araphor-analysis/src/instance/subscription/tests.rs) and [failed_publication_rolls_back](../../crates/araphor-analysis/src/instance/tests/finite.rs) check reactive and finite classification.
+
+[capture-final-tests.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-final-tests.json) records 23 passes and the original controlled 30-second failure.
+Its capture-final-source.json SHA-256 is db61ac21a562959d142efe32c1c66cf8d6c4117ad8d91be82b56c4d645fa3170.
+[capture-lint-final-test.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-lint-final-test.json) records the normal controlled pass in 66.718 seconds.
+Its capture-lint-final-source.json SHA-256 is 48e54ce2ce06b4c483105a03f6ddfc9b99b65a2faa40cca5725477c272c22409.
+Only private [feed.rs](../../crates/araphor-analysis/src/graph/native/tests/feed.rs) and [feed/arrivals.rs](../../crates/araphor-analysis/src/graph/native/tests/feed/arrivals.rs) differ between those manifests; all production bytes match.
+The new six-subscription case uses 90 seconds and keeps exact Graph cuts, Current health, and current Expire frontiers with future deadlines. Existing observe callers keep 30 seconds.
+[late-observation-test.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/late-observation-test.json) retains the diagnostic that reaches the same strict predicate at 49.166 seconds without new inputs and preserves its original failed outcome.
+[arrival-final-clippy.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/arrival-final-clippy.json) retains the earlier expect lint failure.
+[capture-lint-final-clippy.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-lint-final-clippy.json) records passing affected-crate Clippy with warnings denied in 22.410 seconds.
+[capture-lint-final-fmt.json](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-lint-final-fmt.json) records passing scoped formatting in 0.665 seconds.
+Both checks cover capture-lint-final-source.json. These elapsed times establish no performance result.
+Existing Data transactions, Query, native DataFusion execution, and Host owners remain in use.
+No scheduler, store, polling path, quota, or package version is added.
+The complete matrix and current physical incident remain Not done.

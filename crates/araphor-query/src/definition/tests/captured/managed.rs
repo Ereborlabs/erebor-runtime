@@ -922,7 +922,7 @@ async fn failed_offer_keeps_cut_idle() -> TestResult {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stale_admission_keeps_capture_cut() -> TestResult {
-    for related in [true, false] {
+    for (related, invalidated) in [(true, false), (false, false), (true, true), (false, true)] {
         let fixture = fixture().await?;
         let (entered, observed) = tokio::sync::oneshot::channel();
         let (release, held) = mpsc::channel();
@@ -932,8 +932,14 @@ async fn stale_admission_keeps_capture_cut() -> TestResult {
                 release: Mutex::new(held),
             }),
             admission_error: Mutex::new(Some(crate::Error::Data {
-                source: araphor_data::Error::AnalysisConflict {
-                    location: snafu::location!(),
+                source: if invalidated {
+                    araphor_data::Error::AnalysisSourceChanged {
+                        location: snafu::location!(),
+                    }
+                } else {
+                    araphor_data::Error::AnalysisConflict {
+                        location: snafu::location!(),
+                    }
                 },
             })),
             ..Default::default()
@@ -1001,10 +1007,18 @@ async fn stale_admission_keeps_capture_cut() -> TestResult {
         let mut source: &(dyn std::error::Error + 'static) = &error;
         loop {
             if matches!(
-                source.downcast_ref::<crate::Error>(),
-                Some(crate::Error::Data {
-                    source: araphor_data::Error::AnalysisConflict { .. }
-                })
+                (source.downcast_ref::<crate::Error>(), invalidated),
+                (
+                    Some(crate::Error::Data {
+                        source: araphor_data::Error::AnalysisConflict { .. }
+                    }),
+                    false
+                ) | (
+                    Some(crate::Error::Data {
+                        source: araphor_data::Error::AnalysisSourceChanged { .. }
+                    }),
+                    true
+                )
             ) {
                 break;
             }

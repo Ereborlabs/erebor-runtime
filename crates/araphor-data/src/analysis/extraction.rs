@@ -1557,6 +1557,7 @@ impl AnalysisStore {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
+            let requested = selection;
             let (selection, key_bytes) =
                 self.resolve_selection(snapshot, selection, control, limits)?;
             let selection = selection.as_ref();
@@ -1839,7 +1840,7 @@ impl AnalysisStore {
                 }
                 control.check()?;
                 let page = capture.finish(output, end, true, control)?;
-                if let Some(state) = &mut managed { state.seal(selection, &page.extraction); }
+                if let Some(state) = &mut managed { state.seal(requested, &page.extraction); }
                 return Ok((page, managed));
             }
             if let Some(packages) = packages {
@@ -2047,7 +2048,7 @@ impl AnalysisStore {
                     commit_revision: 0,
                     ordinal: 0,
                 }), exhausted, control)?;
-            if let Some(state) = &mut managed { state.seal(selection, &page.extraction); }
+            if let Some(state) = &mut managed { state.seal(requested, &page.extraction); }
             Ok((page, managed))
         })
     }

@@ -327,7 +327,13 @@ struct CommitState {
 
 impl Saved {
     fn commit_state(&self) -> TestResult<CommitState> {
-        let (heads, attempts, results, arrows, references) = self.store.read_snapshot(|reader| {
+        self.fixture.commit_state(&self.store)
+    }
+}
+
+impl Fixture {
+    fn commit_state(&self, store: &AnalysisStore) -> TestResult<CommitState> {
+        let (heads, attempts, results, arrows, references) = store.read_snapshot(|reader| {
             let mut statement = reader.prepare(
                 "SELECT call_id, state_revision, result_id FROM managed_calls ORDER BY call_id",
             ).context(crate::AnalysisDatabaseSnafu { operation: "prepare saved call heads" })?;
@@ -363,16 +369,16 @@ impl Saved {
             Ok((heads, attempts, results, arrows, references))
         })?;
         Ok(CommitState {
-            meta: self.store.meta()?,
-            instance: self.fixture.current(&self.store)?,
+            meta: store.meta()?,
+            instance: self.current(store)?,
             heads,
             attempts,
             results,
             arrows,
             references,
-            history: self.store.managed_history(
-                &self.fixture.instance.grant.selection,
-                &self.fixture.instance.spec.id,
+            history: store.managed_history(
+                &self.instance.grant.selection,
+                &self.instance.spec.id,
                 &AnalysisReadControl::default(),
             )?,
         })
@@ -406,6 +412,18 @@ fn source_change_keeps_commit() -> TestResult {
     let outputs = [saved.fixture.output(8)?, saved.fixture.output(4)?];
     Saved::append(&saved.store, 2)?;
     let before = saved.commit_state()?;
+    let stale = request("stale-source-registration");
+    assert!(matches!(
+        saved
+            .store
+            .register_managed_attempt(&captured, &stale, || Ok(())),
+        Err(crate::Error::AnalysisSourceChanged { .. })
+    ));
+    assert!(saved
+        .store
+        .managed_attempt([1; 16], &current.spec.id, &stale.id, &control)?
+        .is_none());
+    assert_eq!(saved.commit_state()?, before);
     let changed = saved
         .store
         .managed_result(&current, &reference.result_id, 10, &control)?;
@@ -448,7 +466,7 @@ fn source_change_keeps_commit() -> TestResult {
         .ok_or("stale source publication succeeded")?;
     assert!(matches!(
         failure.downcast_ref::<crate::Error>(),
-        Some(crate::Error::AnalysisConflict { .. })
+        Some(crate::Error::AnalysisSourceChanged { .. })
     ));
     assert_eq!(saved.commit_state()?, before);
     saved.permits()?;
@@ -582,5 +600,153 @@ fn raw_fault_keeps_commit() -> TestResult {
         receipt.commit_revision
     );
     saved.permits()?;
+    Ok(())
+}
+
+#[test]
+fn empty_graph_keeps_capture() -> TestResult {
+    use crate::analysis::graph_rows::tests::fixture::CommitFixture;
+
+    for selected in [false, true] {
+        let graph = CommitFixture::new()?;
+        let store = graph.store.as_ref();
+        let mut selection = AnalysisSelectionV1::new(
+            graph.snapshot.scope.identity.tenant_id,
+            vec![graph.snapshot.scope.identity.clone()],
+        );
+        selection.select_graphs(
+            if selected {
+                crate::Selection::All
+            } else {
+                crate::Selection::Exact(Vec::new())
+            },
+            None,
+        )?;
+        let fixture = Fixture::admit_scope(store, false, selection.clone())?;
+        let requests = if selected {
+            let schema = &AnalysisStore::table_schemas()["graph_manifest"];
+            AnalysisTableRequests::from([(
+                "graph_manifest".into(),
+                Some((0..schema.fields().len()).collect()),
+            )])
+        } else {
+            AnalysisTableRequests::new()
+        };
+        let control = AnalysisReadControl::default();
+        let capture = || -> TestResult<_> {
+            let instance = fixture.current(store)?;
+            Ok(store.read_managed_tables(
+                &selection,
+                &ManagedRead {
+                    instance,
+                    expected: None,
+                    rebuild: false,
+                    completed: None,
+                },
+                AnalysisTableRead {
+                    requests: &requests,
+                    event_ranges: None,
+                    inputs: None,
+                    mode: AnalysisReadModeV1::Complete,
+                    now: 10,
+                },
+                AnalysisExtractLimits::default(),
+                &control,
+            )?)
+        };
+        let initial = capture()?;
+        assert_eq!(initial.page.next_change, None);
+        assert_eq!(
+            initial
+                .page
+                .tables
+                .get("graph_manifest")
+                .into_iter()
+                .flatten()
+                .map(sdk::RecordBatch::num_rows)
+                .sum::<usize>(),
+            0
+        );
+        let first = request("unchanged-empty");
+        let first_attempt = store.register_managed_attempt(&initial.state, &first, || Ok(()))?;
+        let seeded = fixture.publish(
+            store,
+            &first_attempt,
+            &[
+                fixture.evaluation(&first, 10, Some(&initial.state))?,
+                fixture.evaluation(&first, 11, Some(&initial.state))?,
+            ],
+            &[fixture.output(2)?, fixture.output(3)?],
+        )?;
+        assert_eq!(fixture.current(store)?.progress, seeded.commit_revision);
+        let empty = capture()?;
+        assert_eq!(empty.page.next_change, None);
+        assert_eq!(
+            empty
+                .page
+                .tables
+                .get("graph_manifest")
+                .into_iter()
+                .flatten()
+                .map(sdk::RecordBatch::num_rows)
+                .sum::<usize>(),
+            0
+        );
+        let pending = request("empty-pending");
+        let attempt = store.register_managed_attempt(&empty.state, &pending, || Ok(()))?;
+        let evaluations = [
+            fixture.evaluation(&pending, 10, Some(&empty.state))?,
+            fixture.evaluation(&pending, 11, Some(&empty.state))?,
+        ];
+        let outputs = [fixture.output(8)?, fixture.output(9)?];
+        let committed = store.commit_graph(&graph.request, true, || Ok(()))?;
+        if !selected {
+            let receipt = fixture.publish(store, &attempt, &evaluations, &outputs)?;
+            assert!(receipt.commit_revision > committed.commit_revision);
+            assert_eq!(fixture.current(store)?.progress, receipt.commit_revision);
+            continue;
+        }
+        let before = fixture.commit_state(store)?;
+        assert_eq!(before.history, [seeded]);
+        let mut checked = false;
+        assert!(
+            matches!(
+                store.register_managed_attempt(&empty.state, &request("empty-stale"), || {
+                    checked = true;
+                    Ok(())
+                }),
+                Err(crate::Error::AnalysisSourceChanged { .. })
+            ),
+            "late Graph did not invalidate empty capture"
+        );
+        assert!(!checked);
+        assert_eq!(fixture.commit_state(store)?, before);
+        let failure = fixture
+            .publish(store, &attempt, &evaluations, &outputs)
+            .err()
+            .ok_or("late Graph accepted stale empty publication")?;
+        assert!(matches!(
+            failure.downcast_ref::<crate::Error>(),
+            Some(crate::Error::AnalysisSourceChanged { .. })
+        ));
+        assert_eq!(fixture.commit_state(store)?, before);
+        let fresh = capture()?;
+        assert_eq!(
+            fresh.page.tables["graph_manifest"]
+                .iter()
+                .map(sdk::RecordBatch::num_rows)
+                .sum::<usize>(),
+            1
+        );
+        assert_eq!(
+            fresh.page.next_change,
+            Some(graph.snapshot.witness_deadline_utc_ns)
+        );
+        assert!(fresh.page.extraction.references.iter().any(|entry| entry
+            .result()
+            .is_some_and(|result| result.result_id == graph.request.result_id
+                && result.commit_revision == committed.commit_revision)));
+        assert_eq!(fixture.commit_state(store)?, before);
+    }
     Ok(())
 }

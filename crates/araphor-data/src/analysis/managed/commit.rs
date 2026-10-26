@@ -345,7 +345,13 @@ impl AnalysisStore {
         }
         let control = AnalysisReadControl::default();
         if !Self::package_sources_current(reader, &capture.sources, &control)? {
-            return crate::AnalysisConflictSnafu.fail();
+            return if Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, &control)
+                .is_ok()
+            {
+                crate::AnalysisSourceChangedSnafu.fail()
+            } else {
+                crate::AnalysisConflictSnafu.fail()
+            };
         }
         Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, &control)?;
         for reference in &capture.contexts {

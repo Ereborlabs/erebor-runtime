@@ -59,53 +59,61 @@ fn failed_frontier_keeps_progress() -> TestResult {
 #[test]
 fn cancelled_frontier_is_unconsumed() -> TestResult {
     let directory = tempfile::tempdir()?;
+    let resumed = {
+        let store = AnalysisStore::open(directory.path().join("store"))?;
+        let fixture = Fixture::admit(&store)?;
+        let captured = fixture.capture(&store, false)?;
+        let mut first = request("successful");
+        first.frontier = Some(ManagedFrontier {
+            pending: false,
+            cursor: vec![1],
+            next_change: Some(50),
+        });
+        let attempt = store.register_managed_attempt(&captured, &first, || Ok(()))?;
+        let evaluations = [
+            fixture.evaluation(&first, 10, Some(&captured))?,
+            fixture.evaluation(&first, 11, Some(&captured))?,
+        ];
+        let outputs = [fixture.output(2)?, fixture.output(3)?];
+        let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+        let captured = fixture.capture(&store, false)?;
+        let mut input = request("cancelled");
+        input.frontier = Some(ManagedFrontier {
+            pending: false,
+            cursor: vec![2],
+            next_change: Some(75),
+        });
+        let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
+        let terminal = store.finish_managed(&attempt, ManagedExit::Cancelled, || Ok(()))?;
+        let resumed = store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?;
+        assert_eq!(resumed.instance.progress, receipt.commit_revision);
+        assert_eq!(resumed.frontier, first.frontier);
+        assert_ne!(resumed.frontier, input.frontier);
+        assert_eq!(resumed.completed, terminal.revision);
+        assert_eq!(attempt.request(), &input);
+        assert!(store
+            .managed_selected(
+                [1; 16],
+                "counter",
+                &input.id,
+                &AnalysisReadControl::default()
+            )?
+            .is_none());
+        assert!(store
+            .managed_selected(
+                [1; 16],
+                "counter",
+                &first.id,
+                &AnalysisReadControl::default()
+            )?
+            .is_some());
+        resumed
+    };
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
-    let captured = fixture.capture(&store, false)?;
-    let mut first = request("successful");
-    first.frontier = Some(ManagedFrontier {
-        pending: false,
-        cursor: vec![1],
-        next_change: Some(50),
-    });
-    let attempt = store.register_managed_attempt(&captured, &first, || Ok(()))?;
-    let evaluations = [
-        fixture.evaluation(&first, 10, Some(&captured))?,
-        fixture.evaluation(&first, 11, Some(&captured))?,
-    ];
-    let outputs = [fixture.output(2)?, fixture.output(3)?];
-    let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
-    let captured = fixture.capture(&store, false)?;
-    let mut input = request("cancelled");
-    input.frontier = Some(ManagedFrontier {
-        pending: false,
-        cursor: vec![2],
-        next_change: Some(75),
-    });
-    let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
-    let terminal = store.finish_managed(&attempt, ManagedExit::Cancelled, || Ok(()))?;
-    let resumed = store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?;
-    assert_eq!(resumed.instance.progress, receipt.commit_revision);
-    assert_eq!(resumed.frontier, first.frontier);
-    assert_ne!(resumed.frontier, input.frontier);
-    assert_eq!(resumed.completed, terminal.revision);
-    assert_eq!(attempt.request(), &input);
-    assert!(store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            &input.id,
-            &AnalysisReadControl::default()
-        )?
-        .is_none());
-    assert!(store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            &first.id,
-            &AnalysisReadControl::default()
-        )?
-        .is_some());
+    assert_eq!(
+        store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
+        resumed
+    );
     Ok(())
 }
 

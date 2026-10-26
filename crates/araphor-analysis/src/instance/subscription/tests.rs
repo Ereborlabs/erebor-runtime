@@ -1050,3 +1050,83 @@ async fn opening_failure_keeps_intent() -> TestResult {
     assert!(resume.frontier.is_none());
     Ok(())
 }
+
+#[tokio::test]
+async fn source_invalidation_is_reactive() -> TestResult {
+    use datafusion::error::DataFusionError;
+
+    let fixture = Fixture::new(Default::default())?;
+    let (_, mut stream) = fixture
+        .terminal_stream("source-invalidation", "trap")
+        .await?;
+    let changed = || araphor_data::Error::AnalysisSourceChanged {
+        location: snafu::location!(),
+    };
+    for error in [
+        crate::Error::from(changed()),
+        crate::Error::from(araphor_query::Error::from(changed())),
+        crate::Error::from(araphor_query::Error::Sql {
+            source: DataFusionError::External(Box::new(changed())),
+        }),
+        crate::Error::from(araphor_query::Error::Sql {
+            source: DataFusionError::Context(
+                "native worker".into(),
+                Box::new(DataFusionError::External(Box::new(
+                    araphor_query::Error::from(changed()),
+                ))),
+            ),
+        }),
+    ] {
+        assert_eq!(error.status_code(), StatusCode::AlreadyExists);
+        assert_eq!(
+            error.retry_hint(),
+            erebor_runtime_error::RetryHint::NonRetryable
+        );
+        assert_eq!(
+            Subscription::failure(&error),
+            ManagedExit::Failed(Code::Conflict)
+        );
+        stream.failed(&error);
+        assert_eq!(stream.terminal, Some(ManagedExit::Cancelled));
+        assert_eq!(stream.diagnostic, None);
+    }
+    for (code, error) in [
+        (
+            Code::Conflict,
+            crate::Error::from(araphor_data::Error::AnalysisConflict {
+                location: snafu::location!(),
+            }),
+        ),
+        (
+            Code::Conflict,
+            crate::Error::from(Code::Conflict.error("model conflict")),
+        ),
+        (
+            Code::Invalid,
+            crate::Error::from(Code::Invalid.error("model invalid")),
+        ),
+        (
+            Code::Limit,
+            crate::Error::from(Code::Limit.error("model limit")),
+        ),
+        (
+            Code::Denied,
+            crate::Error::from(Code::Denied.error("model denied")),
+        ),
+    ] {
+        stream.failed(&error);
+        assert_eq!(stream.terminal, Some(ManagedExit::Failed(code)));
+        assert_eq!(stream.diagnostic, Some(code));
+    }
+    let cancelled = crate::Error::from(araphor_data::Error::AnalysisReadCancelled {
+        location: snafu::location!(),
+    });
+    stream.failed(&cancelled);
+    assert_eq!(stream.terminal, Some(ManagedExit::Cancelled));
+    assert_eq!(stream.diagnostic, None);
+    assert!(stream
+        .cancel_and_join(&AnalysisReadControl::default())
+        .await?
+        .is_none());
+    Ok(())
+}

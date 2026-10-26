@@ -216,8 +216,22 @@ impl Subscription {
     }
 
     pub(super) fn failed(&mut self, error: &crate::Error) {
-        self.terminal = Some(Self::failure(error));
-        self.diagnostic = Self::admission(error);
+        let invalidated = Self::causes(error).any(|source| {
+            matches!(
+                source.downcast_ref::<araphor_data::Error>(),
+                Some(araphor_data::Error::AnalysisSourceChanged { .. })
+            )
+        });
+        self.terminal = Some(if invalidated {
+            ManagedExit::Cancelled
+        } else {
+            Self::failure(error)
+        });
+        self.diagnostic = if invalidated {
+            None
+        } else {
+            Self::admission(error)
+        };
     }
 
     pub(super) fn admission(error: &crate::Error) -> Option<Code> {
@@ -252,12 +266,29 @@ impl Subscription {
         }
     }
 
+    fn causes(error: &crate::Error) -> impl Iterator<Item = &(dyn std::error::Error + 'static)> {
+        std::iter::successors(
+            Some(error as &(dyn std::error::Error + 'static)),
+            |source| {
+                let source = *source;
+                match source.downcast_ref::<crate::Error>() {
+                    Some(crate::Error::Data { source }) => Some(source),
+                    Some(crate::Error::Query { source }) => Some(source),
+                    _ => match source.downcast_ref::<araphor_query::Error>() {
+                        Some(araphor_query::Error::Data { source }) => Some(source),
+                        Some(araphor_query::Error::Contract { source }) => Some(source),
+                        _ => source.source(),
+                    },
+                }
+            },
+        )
+    }
+
     pub(super) fn failure(error: &crate::Error) -> ManagedExit {
         if error.status_code() == StatusCode::Cancelled {
             return ManagedExit::Cancelled;
         }
-        let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
-        while let Some(source) = current {
+        for source in Self::causes(error) {
             if matches!(
                 source.downcast_ref::<araphor_query::Error>(),
                 Some(araphor_query::Error::AuthorityChanged { .. })
@@ -275,15 +306,6 @@ impl Subscription {
             {
                 return ManagedExit::Failed(Code::Limit);
             }
-            current = match source.downcast_ref::<crate::Error>() {
-                Some(crate::Error::Data { source }) => Some(source),
-                Some(crate::Error::Query { source }) => Some(source),
-                _ => match source.downcast_ref::<araphor_query::Error>() {
-                    Some(araphor_query::Error::Data { source }) => Some(source),
-                    Some(araphor_query::Error::Contract { source }) => Some(source),
-                    _ => source.source(),
-                },
-            };
         }
         if matches!(error, crate::Error::Query { source } if matches!(araphor_query::Failure::from(source),
             araphor_query::Failure::InputTooLarge | araphor_query::Failure::ResultTooLarge))
