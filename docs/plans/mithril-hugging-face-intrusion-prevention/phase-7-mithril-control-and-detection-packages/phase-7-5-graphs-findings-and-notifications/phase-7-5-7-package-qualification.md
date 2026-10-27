@@ -821,3 +821,35 @@ The test executable SHA-256 is d6648b312f752724bf0ab6c7e602a26719fbf085890d42cc8
 The 2,042-file source manifest is public-manifest-test-source.json, SHA-256 d472139186991809b92b6934caef6f2bf2d808ce2ff96c4f9e1546316fab1116.
 The [Analysis build](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/public-manifest-test-build.json), [strict Clippy](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/public-manifest-clippy.json), and [one-file formatting](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/public-manifest-fmt.json) pass. No unchanged behavioral case is repeated.
 This test adds no production owner or behavior. It does not establish the busy-WAL timeout cause, gRPC delivery, concurrent load behavior, or physical qualification.
+
+
+## Batched result references
+
+**Shared reference writes and focused Data checks: Done. Busy WAL and complete qualification: Not done.**
+The [Data diagnostic](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/reference-probe-facts.json>) separates reference writes from transaction commit.
+The first actor publication saves 4,700 evidence references and 43 context references for five result owners.
+The reference intervals total 3.856 seconds inside a 5.704-second writer interval. The transaction commit takes 65 milliseconds.
+These are parent-reader observations from one failing test. They include scheduling and are not benchmark results or proof of the sole timeout cause.
+The diagnostic test fails in 122.123 seconds. Both temporary Data files return to their original hashes before the production change.
+
+Data now uses its existing DuckDB appender pattern in insert_references.
+Each table has one scoped appender and an explicit checked flush. All reference rows, values, witness/segment pairs, and empty-input guards remain.
+The caller keeps the writer and transaction. The appenders close before later quota and publication checks.
+The [review route](../../../../guides/araphor-discovery-definition-review.md#batched-result-reference-writes) links the three call sites and rollback proof.
+
+The [focused build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/references-bulk-build.json>) passes in 232.182 seconds.
+The [test record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/references-bulk-tests.json>) retains five passing Data cases and one failing WAL case.
+The new context_failure_rolls_back case requires a context flush error after evidence flush, complete rollback, retained captured context, and successful retry after schema restoration.
+Existing checks retain exact 8,193 evidence and 257 context references through retention and reopen, atomic context publication, final-authority rollback, and Graph appender constraint rollback.
+The unchanged busy-WAL case fails in 121.286 seconds. Its actor cache remains at cursor 940 and its background cache at 639.
+The selected record cache is empty. Both producer-state queries open but return no frames before the common five-second diagnostic limit.
+The [failure facts](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/references-bulk-wal-facts.json>) do not establish current producer cursors or acceptance times for records 941 and 950.
+No end-to-end speed improvement or complete incident result is established.
+
+[Data Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/references-bulk-clippy.json>) passes with warnings denied in 270.843 seconds.
+[Two-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/references-bulk-fmt.json>) passes in 0.034 seconds.
+These checks cover references-bulk-source.json with 2,042 pins and SHA-256 91b85d207dc04140cd35ef87b2d0f235cc7847ff58e120b4b937f8737743d381.
+The Data executable SHA-256 is 888677d04ed70d8c11ba0f8756dd9b72b374fba107c1d9a0bdd94fc31d69d752.
+The E2E executable SHA-256 is c20a7896b309a1a468ccc4e91e752dc42152faab7b6e5ff3f622c8fbfb8c67c2.
+Source and executable hashes remain unchanged through the checks. No full CI or benchmark runs.
+PENDING: busy-input completion, current images, paired physical result, resource absence, final records, and owned VM removal.

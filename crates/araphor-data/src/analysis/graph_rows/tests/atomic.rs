@@ -112,6 +112,110 @@ fn proof(
 }
 
 #[test]
+fn context_failure_rolls_back() -> TestResult {
+    let mut fixture = CommitFixture::new()?;
+    let rows = proposed(&mut fixture)?;
+    let captured = proof(&fixture)?;
+    assert!(!fixture.snapshot.input_manifest.evidence.is_empty());
+    let original: String = {
+        let writer = fixture.store.writer_access()?;
+        writer.get()?.query_row(
+            "SELECT sql FROM duckdb_tables() WHERE table_name = 'context_refs'",
+            [],
+            |row| row.get(0),
+        )?
+    };
+    let rejecting = original.replacen("PRIMARY KEY", "CHECK (false), PRIMARY KEY", 1);
+    assert_ne!(rejecting, original);
+    fixture
+        .store
+        .fault_write(&format!("DROP TABLE context_refs; {rejecting}"), &[])?;
+    let before = fixture.store.meta()?;
+    let sources = vec![("context_versions".into(), before.commit_revision)];
+    assert!(matches!(
+        fixture.store.commit_graph_snapshot(
+            fixture.request.clone(),
+            CanonicalGraph::new(fixture.snapshot.clone())?,
+            &rows,
+            std::slice::from_ref(&captured),
+            &sources,
+            true,
+            || Ok(()),
+        ),
+        Err(crate::Error::AnalysisDatabase {
+            operation: "flush exact result context",
+            ..
+        })
+    ));
+    assert_eq!(fixture.store.meta()?, before);
+    assert!(fixture.store.context_version(&captured.key)?.is_some());
+    for context in &rows {
+        assert!(fixture.store.context_version(&context.key)?.is_none());
+    }
+    assert!(fixture
+        .store
+        .read_result(
+            fixture.request.scope.identity.tenant_id,
+            &fixture.request.result_id,
+        )?
+        .is_none());
+    assert!(fixture
+        .store
+        .graph_snapshot(&fixture.request.scope.identity)?
+        .is_none());
+    assert_eq!(
+        fixture
+            .store
+            .processor_health(&fixture.request.scope)?
+            .ok_or("graph progress")?
+            .consumed_cursor,
+        0
+    );
+    {
+        let writer = fixture.store.writer_access()?;
+        for table in [
+            "graph_subjects",
+            "graph_relationships",
+            "graph_findings",
+            "evidence_refs",
+            "context_refs",
+        ] {
+            let count: u64 =
+                writer
+                    .get()?
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })?;
+            assert_eq!(count, 0, "retained rows in {table}");
+        }
+    }
+    fixture
+        .store
+        .fault_write(&format!("DROP TABLE context_refs; {original}"), &[])?;
+    let receipt = fixture.store.commit_graph_snapshot(
+        fixture.request.clone(),
+        CanonicalGraph::new(fixture.snapshot.clone())?,
+        &rows,
+        std::slice::from_ref(&captured),
+        &sources,
+        true,
+        || Ok(()),
+    )?;
+    assert_eq!(receipt.commit_revision, before.commit_revision + 1);
+    let (witnesses, references) = fixture.store.package_evidence(
+        fixture.request.scope.identity.tenant_id,
+        std::slice::from_ref(&fixture.request.result_id),
+    )?;
+    assert_eq!(
+        witnesses.len(),
+        fixture.snapshot.input_manifest.evidence.len()
+    );
+    assert_eq!(references.len(), rows.len() + 1);
+    assert!(references.contains(&captured));
+    Ok(())
+}
+
+#[test]
 fn graph_contexts_commit_atomically() -> TestResult {
     let mut fixture = CommitFixture::new()?;
     let rows = proposed(&mut fixture)?;

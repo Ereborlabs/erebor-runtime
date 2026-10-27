@@ -4622,3 +4622,32 @@ It checks exact evidence, receipt revision, previous-result linkage, captured re
 The [case record](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/public-manifest-test-test.json) reports one pass. Analysis-only strict Clippy and one-file formatting also pass.
 Source: public-manifest-test-source.json, SHA-256 d472139186991809b92b6934caef6f2bf2d808ce2ff96c4f9e1546316fab1116.
 This is ordinary native Follow proof. The busy-WAL, gRPC replacement, concurrent-load, and current physical results remain Not done.
+
+
+## Batched result reference writes
+
+**Shared Data write path: Done. Busy-input and physical qualification: Not done.**
+Data retains one reference set for each result. For example, three new detector results, one selected result, and one Graph can each retain the same 950 evidence records.
+These five owners require 4,750 evidence reference rows. The change groups writes and preserves all rows.
+
+[commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) receives a managed result under the existing writer transaction.
+  -> [managed_commit_rows and insert_managed](../../crates/araphor-data/src/analysis/managed/commit.rs) save references for new package results and the selected result.
+  -> [progress_rows](../../crates/araphor-data/src/analysis/progress.rs) saves references for a new Graph result.
+  -> [insert_references](../../crates/araphor-data/src/analysis/packages/witnesses.rs) appends the exact evidence and context rows through the supplied transaction.
+  -> [commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) checks publication and commits the complete result.
+
+[insert_references](../../crates/araphor-data/src/analysis/packages/witnesses.rs) gives each table a local appender. Each appender flushes with a checked result and closes before the function returns.
+The existing [GraphRows::insert](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) uses the same pattern.
+The six evidence columns, seven context columns, witness/segment pairs, empty-input guards, and transaction owner remain unchanged.
+Later quota SQL sees the flushed rows before the transaction commits.
+
+[context_failure_rolls_back](../../crates/araphor-data/src/analysis/graph_rows/tests/atomic.rs) forces a context flush failure after evidence flush.
+  -> [Transaction](../../vendor/duckdb/src/transaction.rs) drops the failed publication without commit.
+  -> [context_failure_rolls_back](../../crates/araphor-data/src/analysis/graph_rows/tests/atomic.rs) requires no retained Graph, result, reference rows, or proposed contexts, and unchanged metadata and progress.
+  -> [context_failure_rolls_back](../../crates/araphor-data/src/analysis/graph_rows/tests/atomic.rs) retains the captured context and commits successfully after schema restoration.
+
+The [five Data cases](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/references-bulk-tests.json>) pass, including exact large-reference retention and reopen.
+Data-only strict Clippy and two-file formatting pass. Source: references-bulk-source.json, SHA-256 91b85d207dc04140cd35ef87b2d0f235cc7847ff58e120b4b937f8737743d381.
+The same record retains the unchanged WAL failure in 121.286 seconds. The selected-record cache is empty and producer cursor reads are incomplete.
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#batched-result-references) keeps the diagnostic source and normal executable identities separate.
+No complete incident, current physical, end-to-end performance, full CI, or benchmark result is claimed.

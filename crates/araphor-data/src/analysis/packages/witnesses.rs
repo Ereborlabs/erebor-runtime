@@ -217,14 +217,15 @@ impl AnalysisStore {
         contexts: &[AnalysisContextRefV1],
     ) -> Result<()> {
         if !witnesses.is_empty() && !segments.is_empty() {
-            let mut statement = transaction
-                .prepare("INSERT INTO evidence_refs VALUES (?, ?, ?, ?, ?, ?)")
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert exact witness",
-                })?;
+            let mut appender =
+                transaction
+                    .appender("evidence_refs")
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "insert exact witness",
+                    })?;
             for (witness, segment) in witnesses.iter().zip(segments) {
-                statement
-                    .execute(params![
+                appender
+                    .append_row(params![
                         id,
                         witness.identity.tenant().as_slice(),
                         witness.identity.key().as_slice(),
@@ -236,16 +237,20 @@ impl AnalysisStore {
                         operation: "insert exact witness",
                     })?;
             }
+            appender.flush().context(AnalysisDatabaseSnafu {
+                operation: "flush exact witnesses",
+            })?;
         }
         if !contexts.is_empty() {
-            let mut statement = transaction
-                .prepare("INSERT INTO context_refs VALUES (?, ?, ?, ?, ?, ?, ?)")
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert exact result context",
-                })?;
+            let mut appender =
+                transaction
+                    .appender("context_refs")
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "insert exact result context",
+                    })?;
             for reference in contexts {
-                statement
-                    .execute(params![
+                appender
+                    .append_row(params![
                         id,
                         reference.key.tenant_id.as_slice(),
                         reference.key.owner_id,
@@ -258,6 +263,9 @@ impl AnalysisStore {
                         operation: "insert exact result context",
                     })?;
             }
+            appender.flush().context(AnalysisDatabaseSnafu {
+                operation: "flush exact result context",
+            })?;
         }
         Ok(())
     }
