@@ -11,7 +11,7 @@ use futures_core::Stream;
 use snafu::ResultExt as _;
 
 use crate::execution::{Permit, Session};
-use crate::sources::ArrowSnapshot;
+use crate::sources::{ArrowSnapshot, CapturedRequests};
 
 pub(crate) mod physical;
 pub(crate) mod progress;
@@ -58,7 +58,9 @@ impl Run {
         session: &Session,
         selection: AnalysisSelectionV1,
         permit: Option<&Arc<Permit>>,
+        requests: Option<&Arc<CapturedRequests>>,
     ) -> crate::Result<(AnalysisStoreMetaV1, u64)> {
+        let requests = requests.cloned();
         loop {
             let stage = Arc::new(
                 session
@@ -69,6 +71,7 @@ impl Run {
             let store = Arc::clone(session.engine().store());
             let selection = selection.clone();
             let run = Arc::clone(self);
+            let requests = requests.clone();
             let managed = session.managed.clone();
             let limits = AnalysisExtractLimits {
                 scan_bytes: session.engine().limits().scan_bytes,
@@ -78,15 +81,13 @@ impl Run {
             };
             let scope = (session.token()?, permit.cloned());
             match crate::execution::Engine::blocking(stage, scope, move || {
+                let tables = requests
+                    .as_deref()
+                    .map_or_else(|| run.sources(), CapturedRequests::tables);
                 match &managed {
-                    Some(managed) => store.managed_dependency_revision(
-                        &selection,
-                        run.sources(),
-                        managed,
-                        limits,
-                        &worker,
-                    ),
-                    None => store.dependency_revision_for(&selection, run.sources(), &worker),
+                    Some(managed) => store
+                        .managed_dependency_revision(&selection, tables, managed, limits, &worker),
+                    None => store.dependency_revision_for(&selection, tables, &worker),
                 }
                 .map_err(crate::Error::from)
             })

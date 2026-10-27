@@ -129,7 +129,7 @@ impl SourceRecovery {
         let selection = SourceSnapshot::selection(&self.selection, &self.requests)?;
         let (meta, revision) = self
             .run
-            .dependencies(&session, selection.clone(), None)
+            .dependencies(&session, selection.clone(), None, None)
             .await?;
         if revision > self.revision {
             return Ok(());
@@ -142,7 +142,7 @@ impl SourceRecovery {
                 Wake::Source => {
                     let (meta, revision) = self
                         .run
-                        .dependencies(&session, selection.clone(), None)
+                        .dependencies(&session, selection.clone(), None, None)
                         .await?;
                     if revision > self.revision {
                         return Ok(());

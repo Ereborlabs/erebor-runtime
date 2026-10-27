@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
@@ -20,6 +20,30 @@ mod package;
 #[cfg(test)]
 mod tests;
 
+pub(crate) struct CapturedRequests {
+    tables: AnalysisTableRequests,
+    _memory: MemoryReservation,
+}
+
+impl CapturedRequests {
+    pub(crate) fn tables(&self) -> &AnalysisTableRequests {
+        &self.tables
+    }
+
+    fn allocation_bytes(tables: &AnalysisTableRequests) -> Option<usize> {
+        tables
+            .iter()
+            .try_fold(size_of::<Self>(), |bytes, (name, columns)| {
+                bytes
+                    .checked_add(size_of::<(String, Option<BTreeSet<usize>>)>())?
+                    .checked_add(name.capacity())?
+                    .checked_add(columns.as_ref().map_or(Some(0), |columns| {
+                        columns.len().checked_mul(size_of::<usize>())
+                    })?)
+            })
+    }
+}
+
 pub struct ArrowSnapshot {
     pub page: AnalysisPositionPageV1,
     pub selection: AnalysisSelectionV1,
@@ -29,6 +53,7 @@ pub struct ArrowSnapshot {
     pub next_change: Option<u64>,
     pub windows: Vec<crate::follow::WindowRange>,
     pub(crate) now: u64,
+    requests: Arc<CapturedRequests>,
     managed: Option<araphor_data::ManagedCapture>,
     _metadata: MemoryReservation,
 }
@@ -43,6 +68,10 @@ impl std::fmt::Debug for ArrowSnapshot {
 }
 
 impl ArrowSnapshot {
+    pub(crate) fn requests(&self) -> &Arc<CapturedRequests> {
+        &self.requests
+    }
+
     pub fn time_utc_ns(&self) -> u64 {
         self.now
     }
@@ -770,12 +799,17 @@ impl SourceSnapshot {
                 })
         });
         let retained = removed.saturating_add(source_bytes);
+        let request_bytes = CapturedRequests::allocation_bytes(requests).ok_or_else(overflow)?;
+        let total = metadata
+            .checked_add(retained)
+            .and_then(|bytes| bytes.checked_add(request_bytes))
+            .ok_or_else(overflow)?;
         let limit = if metadata_read {
             limits.input_bytes
         } else {
             reservation.size()
         };
-        if (prepaid || metadata_read) && metadata.saturating_add(retained) > limit {
+        if (prepaid || metadata_read) && total > limit {
             let source = DataFusionError::ResourcesExhausted(
                 "source metadata exceeds the admitted input".into(),
             );
@@ -788,9 +822,13 @@ impl SourceSnapshot {
                 source
             });
         }
-        reservation.try_resize(metadata.saturating_add(retained))?;
+        reservation.try_resize(total)?;
         let table_memory = reservation.split(retained);
         control.check().map_err(Self::data_error)?;
+        let requests = Arc::new(CapturedRequests {
+            tables: requests.clone(),
+            _memory: reservation.split(request_bytes),
+        });
         let receipt = Arc::new(ArrowSnapshot {
             mutable_discovery: std::mem::take(&mut page.mutable_discovery),
             received_min: page.received_min.take(),
@@ -800,6 +838,7 @@ impl SourceSnapshot {
             page,
             selection,
             witnesses,
+            requests,
             managed,
             _metadata: reservation,
         });

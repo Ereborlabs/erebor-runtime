@@ -148,7 +148,8 @@ fn witnesses_keep_source_receipt() -> TestResult {
     assert_eq!(captured.receipt._metadata.size(), expected);
     assert_eq!(shared.witnesses.len(), 2);
     drop(shared);
-    let held = memory.reserve_input(capacity - expected)?;
+    let held =
+        memory.reserve_input(capacity - expected - captured.receipt.requests()._memory.size())?;
     let mut larger = Vec::with_capacity(64);
     larger.extend(captured.receipt.witnesses.iter().cloned());
     let error = captured
@@ -237,7 +238,7 @@ async fn receipt_releases_binary_scratch() -> TestResult {
     let reference = receipt.contexts().next().ok_or("context reference")?;
     assert_eq!(reference.key, context.key);
     assert_eq!(reference.commit_revision, revision);
-    let metadata = receipt._metadata.size();
+    let metadata = receipt._metadata.size() + receipt.requests()._memory.size();
     assert!(
         metadata
             >= std::mem::size_of::<ArrowSnapshot>()
@@ -869,7 +870,7 @@ fn retirement_map_charges_once() -> TestResult {
         + gaps.capacity() * size_of::<AnalysisGapV1>();
     assert_eq!(captured._memory.size(), removed + table_metadata);
     let receipt = Arc::clone(&captured.receipt);
-    let metadata = receipt._metadata.size();
+    let metadata = receipt._metadata.size() + receipt.requests()._memory.size();
     let available = memory.reserve_input(capacity - metadata - removed - table_metadata)?;
     assert!(memory.reserve_input(1).is_err());
     drop(available);
@@ -878,6 +879,59 @@ fn retirement_map_charges_once() -> TestResult {
     assert!(memory.reserve_input(1).is_err());
     drop(available);
     drop(receipt);
+    drop(memory.reserve_input(capacity)?);
+    Ok(())
+}
+
+#[test]
+fn captured_requests_keep_charge() -> TestResult {
+    use araphor_data::AnalysisExtractLimits;
+
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let capacity = 32 * 1024;
+    let memory = crate::memory::Memory::new(Some(capacity), None);
+    let source = SourceSnapshot::new(
+        store,
+        AnalysisSelectionV1::new([1; 16], Vec::new()),
+        None,
+        AnalysisExtractLimits {
+            input_bytes: capacity,
+            ..Default::default()
+        },
+        AnalysisReadControl::default(),
+        None,
+        1,
+        Arc::clone(&memory),
+        None,
+    );
+    let column = SourceSnapshot::schemas()["context_versions"].index_of("owner_id")?;
+    let tables = BTreeMap::from([
+        ("context_versions".into(), Some(BTreeSet::from([column]))),
+        ("events".into(), None),
+    ]);
+    let receipt = source.capture(
+        &tables,
+        super::ScanBounds::default(),
+        super::ReadMode::Snapshot,
+    )?;
+    let previous = Arc::downgrade(&receipt);
+    let requests = Arc::clone(receipt.requests());
+    assert_eq!(requests.tables(), &tables);
+    let held = memory.input_reserved();
+    let shared = Arc::clone(&requests);
+    assert_eq!(memory.input_reserved(), held);
+    drop(receipt);
+    drop(source);
+    assert!(previous.upgrade().is_none());
+    let retained = memory.input_reserved();
+    assert!(retained > 0 && retained < held);
+    assert_eq!(retained, requests._memory.size());
+    drop(requests);
+    assert_eq!(memory.input_reserved(), retained);
+    assert_eq!(shared.tables(), &tables);
+    drop(shared);
+    assert_eq!(memory.input_reserved(), 0);
     drop(memory.reserve_input(capacity)?);
     Ok(())
 }
@@ -914,7 +968,9 @@ fn metadata_respects_input_bounds() -> TestResult {
     };
     let unbounded = Memory::new(None, None);
     let captured = read(Arc::clone(&unbounded), usize::MAX)?;
-    let bytes = captured.receipt._metadata.size() + captured._memory.size();
+    let bytes = captured.receipt._metadata.size()
+        + captured.receipt.requests()._memory.size()
+        + captured._memory.size();
     assert!(bytes > 1);
     drop(captured);
     assert_eq!(unbounded.input_reserved(), 0);
@@ -927,7 +983,12 @@ fn metadata_respects_input_bounds() -> TestResult {
     );
     assert_eq!(unbounded.input_reserved(), 0);
     let exact = read(Arc::clone(&unbounded), bytes)?;
-    assert_eq!(exact.receipt._metadata.size() + exact._memory.size(), bytes);
+    assert_eq!(
+        exact.receipt._metadata.size()
+            + exact.receipt.requests()._memory.size()
+            + exact._memory.size(),
+        bytes
+    );
     drop(exact);
     assert_eq!(unbounded.input_reserved(), 0);
 
@@ -952,7 +1013,9 @@ fn metadata_respects_input_bounds() -> TestResult {
     drop(pressure);
     let recovered = read(Arc::clone(&shared), bytes)?;
     assert_eq!(
-        recovered.receipt._metadata.size() + recovered._memory.size(),
+        recovered.receipt._metadata.size()
+            + recovered.receipt.requests()._memory.size()
+            + recovered._memory.size(),
         bytes
     );
     drop(recovered);

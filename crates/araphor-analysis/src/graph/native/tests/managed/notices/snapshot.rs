@@ -1,6 +1,7 @@
 use super::*;
 use crate::graph::native::tests::feed::append;
 use crate::graph::tests::fixture::wire;
+use datafusion::common::ScalarValue;
 use futures_util::FutureExt as _;
 
 #[tokio::test]
@@ -36,6 +37,33 @@ async fn manifest_replacement_rebinds() -> TestResult {
         )
         .await?;
     let mut receipt = job.run(request("seed")?, &fixture.control).await?;
+    let original_head = fixture
+        .query
+        .store()
+        .processor_result(&fixture.graph_scope())?
+        .ok_or("Graph notice head")?;
+    let original_notice = fixture
+        .query
+        .store()
+        .graph_notice(
+            &fixture.graph_scope(),
+            &original_head.result_id,
+            original_head.commit_revision,
+        )?
+        .ok_or("Graph notice baseline")?;
+    let (notice_plan, notice_sources) = fixture
+        .query
+        .prepare(
+            "SELECT graph_result_id, notice_context_revision FROM graph_manifest WHERE notice_context_revision > $1",
+            vec![ScalarValue::UInt64(Some(original_notice.0))],
+        )
+        .await?;
+    let notice_control = AnalysisReadControl::default();
+    let notice_session = fixture.query.session(
+        AnalysisSelectionV1::tenant(fixture.source.tenant_id),
+        &notice_control,
+        request("notice-manifest-time")?.time_utc_ns,
+    )?;
     let (plan, sources) = fixture
         .query
         .prepare(
@@ -50,8 +78,33 @@ async fn manifest_replacement_rebinds() -> TestResult {
         request("manifest-time")?.time_utc_ns,
     )?;
     let mut stream = session.subscribe(plan, sources, b"replacement Graph manifest", true)?;
+    let mut notice_stream = None;
     let outcome = std::panic::AssertUnwindSafe(async {
+        notice_stream = Some(notice_session.subscribe(
+            notice_plan,
+            notice_sources,
+            b"Graph notice predicate",
+            true,
+        )?);
+        let notices = notice_stream.as_mut().ok_or("Graph notice subscription")?;
+        let initial_notice =
+            tokio::time::timeout(std::time::Duration::from_secs(30), notices.next())
+                .await?
+                .ok_or("initial Graph notice manifest")??;
+        assert!(initial_notice.batches.is_some());
+        assert_eq!(
+            initial_notice
+                .batches
+                .iter()
+                .flatten()
+                .map(sdk::RecordBatch::num_rows)
+                .sum::<usize>(),
+            0,
+        );
+        let mut notice_cursor = initial_notice.cursor.clone();
+        drop(initial_notice);
         let mut original = None::<(String, u64, araphor_data::GraphSnapshotV1)>;
+        let mut original_cursor = None::<araphor_query::follow::Cursor>;
         for last in [3, 4] {
             if last == 4 {
                 append(&fixture.query, &fixture.source, &fourth, 4)?;
@@ -68,6 +121,12 @@ async fn manifest_replacement_rebinds() -> TestResult {
             })
             .await??;
             assert_eq!(update.operation, araphor_query::follow::Operation::Replace);
+            if let Some(cursor) = &original_cursor {
+                assert!(update.cursor.read_revision() > cursor.read_revision());
+                assert_ne!(&update.cursor, cursor);
+            }
+            let cursor = update.cursor.clone();
+            let evaluated = update.evaluated_utc_ns;
             let batches = update.batches.as_ref().ok_or("Graph manifest rows")?;
             assert_eq!(
                 batches
@@ -149,17 +208,125 @@ async fn manifest_replacement_rebinds() -> TestResult {
                 original = Some((id, revision, graph));
             }
             drop(update);
+            if last == 3 {
+                original_cursor = Some(cursor.clone());
+                let (id, revision, graph) = original.as_ref().ok_or("original Graph manifest")?;
+                for version in [1, 2] {
+                    let signal = fixture.signal_notice(version)?;
+                    assert!(signal > original_notice.0);
+                    assert!(signal > cursor.read_revision());
+                    assert!(signal > notice_cursor.read_revision());
+                    fixture.query.store().mark_graph_notice(
+                        &fixture.graph_scope(),
+                        id,
+                        *revision,
+                        signal,
+                        original_notice.1,
+                        || fixture.control.check(),
+                    )?;
+                    assert_eq!(
+                        fixture.query.store().graph_notice(
+                            &fixture.graph_scope(),
+                            id,
+                            *revision
+                        )?,
+                        Some((signal, original_notice.1)),
+                    );
+                    assert_eq!(
+                        fixture
+                            .query
+                            .store()
+                            .processor_result(&fixture.graph_scope())?,
+                        Some(original_head.clone()),
+                    );
+                    assert_eq!(
+                        fixture
+                            .query
+                            .store()
+                            .graph_result(fixture.source.tenant_id, id)?,
+                        Some(graph.clone()),
+                    );
+                    let noticed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                        loop {
+                            let update = notices
+                                .next()
+                                .await
+                                .ok_or("Graph notice manifest ended")??;
+                            if update.snapshot.page.extraction.meta.commit_revision >= signal {
+                                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(update);
+                            }
+                        }
+                    })
+                    .await??;
+                    assert_eq!(noticed.operation, araphor_query::follow::Operation::Replace);
+                    assert_ne!(noticed.cursor, notice_cursor);
+                    assert!(noticed.cursor.read_revision() >= signal);
+                    let batches = noticed.batches.as_ref().ok_or("Graph notice rows")?;
+                    assert_eq!(
+                        batches
+                            .iter()
+                            .map(sdk::RecordBatch::num_rows)
+                            .sum::<usize>(),
+                        1
+                    );
+                    let batch = batches
+                        .iter()
+                        .find(|batch| batch.num_rows() != 0)
+                        .ok_or("Graph notice row")?;
+                    assert_eq!(
+                        batch
+                            .columns()
+                            .iter()
+                            .map(|column| ScalarValue::try_from_array(column, 0))
+                            .collect::<std::result::Result<Vec<_>, _>>()?,
+                        vec![
+                            ScalarValue::Utf8(Some(id.clone())),
+                            ScalarValue::UInt64(Some(signal))
+                        ],
+                    );
+                    notice_cursor = noticed.cursor.clone();
+                    drop(noticed);
+                    let metadata =
+                        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                            loop {
+                                let update = stream
+                                    .next()
+                                    .await
+                                    .ok_or("Graph manifest ended after notice")??;
+                                if update.snapshot.page.extraction.meta.commit_revision >= signal {
+                                    return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
+                                        update,
+                                    );
+                                }
+                            }
+                        })
+                        .await??;
+                    assert!(metadata.batches.is_none());
+                    assert_eq!(metadata.cursor, cursor);
+                    assert_eq!(metadata.evaluated_utc_ns, evaluated);
+                    assert!(metadata.snapshot.results().any(
+                        |result| result.result_id == *id && result.commit_revision == *revision
+                    ));
+                    drop(metadata);
+                }
+            }
         }
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     })
     .catch_unwind()
     .await;
-    let joined = stream.cancel_and_join().await;
+    let (joined, notice_joined) = tokio::join!(stream.cancel_and_join(), async {
+        match notice_stream {
+            Some(stream) => stream.cancel_and_join().await,
+            None => Ok(()),
+        }
+    });
     match outcome {
         Ok(outcome) => outcome?,
         Err(panic) => std::panic::resume_unwind(panic),
     }
     joined?;
+    notice_joined?;
     Ok(())
 }
 

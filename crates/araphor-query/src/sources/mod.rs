@@ -43,7 +43,7 @@ mod tests;
 
 pub(crate) use journal::Changes;
 pub use rows::ArrowSnapshot;
-pub(crate) use rows::Captured;
+pub(crate) use rows::{Captured, CapturedRequests};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum SourceOrigin {

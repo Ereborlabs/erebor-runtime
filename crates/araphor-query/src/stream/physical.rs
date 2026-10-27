@@ -204,7 +204,9 @@ impl SubscribeExec {
                     && run.resume_expiry.is_none_or(|expiry| expiry > now)
             }) {
                 let selection = SourceSnapshot::selection(&run.selection(now)?, run.sources())?;
-                let (meta, revision) = run.dependencies(&session, selection, Some(&permit)).await?;
+                let (meta, revision) = run
+                    .dependencies(&session, selection, Some(&permit), None)
+                    .await?;
                 cursor.check_store(&meta)?;
                 if revision <= cursor.read_revision() {
                     let calls = session

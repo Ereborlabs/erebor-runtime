@@ -4651,3 +4651,35 @@ Data-only strict Clippy and two-file formatting pass. Source: references-bulk-so
 The same record retains the unchanged WAL failure in 121.286 seconds. The selected-record cache is empty and producer cursor reads are incomplete.
 The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#batched-result-references) keeps the diagnostic source and normal executable identities separate.
 No complete incident, current physical, end-to-end performance, full CI, or benchmark result is claimed.
+
+
+## Physical projection dependencies
+
+**Native dependency correction and owner checks: Done. Busy-input and physical qualification: Not done.**
+The query SELECT graph_result_id, snapshot, commit_revision FROM graph_manifest does not select mutable notice fields.
+Data already distinguishes these columns. The subscription must use the projection that native DataFusion planning supplies.
+
+[Session::capture_physical](../../crates/araphor-query/src/execution.rs) receives the optimized physical plan.
+  -> [SourceSnapshot::requests](../../crates/araphor-query/src/sources/mod.rs) collects native scan columns, including filter, join, package-input, and window columns.
+  -> [SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) checks the complete allocation and stores the exact request map in CapturedRequests.
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) retains that owner after physical capture.
+  -> [Run::dependencies](../../crates/araphor-query/src/stream/mod.rs) supplies the map to the existing Data dependency API.
+  -> [read_dependency_revision](../../crates/araphor-data/src/analysis/dependencies.rs) applies its existing column rules and safety dependencies.
+
+[CapturedRequests](../../crates/araphor-query/src/sources/rows.rs) owns only the native request map and its DataFusion MemoryReservation.
+Admission includes owner and map bytes before split. Arc handles share one charge. The final owner drop releases the reservation.
+[Runtime::metadata_update](../../crates/araphor-query/src/stream/physical/runtime.rs) can replace its metadata snapshot without replacing the last physical map or freeing that map's charge.
+[Runtime::complete_window](../../crates/araphor-query/src/stream/physical/runtime.rs) uses its retained window snapshot's map.
+[Resume](../../crates/araphor-query/src/stream/physical.rs) and [source recovery](../../crates/araphor-query/src/stream/recovery.rs) keep conservative dependency requests before a valid physical capture.
+Every admitted relation key remains, including unresolved entries. Query reuses the existing native visitor; Data keeps authorization, lifecycle, freshness, raw coverage, retention, recovery, Graph-head, and deadline checks.
+
+[manifest_replacement_rebinds](../../crates/araphor-analysis/src/graph/native/tests/managed/notices/snapshot.rs) first checks the real notice-sensitive filter response, then requires an unchanged cursor for the three-column query.
+The [RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-notice-red-facts.json>) shows an unnecessary change from cursor revision 11 to 12.
+The [GREEN record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-green-test.json>) proves two metadata cycles preserve the cursor while notice-sensitive output still reacts and record 4 still produces an exact replacement.
+[captured_requests_keep_charge](../../crates/araphor-query/src/sources/rows/tests.rs) uses a real capture. A weak reference proves the old snapshot is freed while the exact map and its charge remain. Arc clones add no second charge; the last drop permits full-capacity admission again.
+Existing complete-charge assertions now include the split owner. Their capacities and failure requirements stay unchanged.
+
+The [focused checks](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-checks.json>) contain 19 further owner passes and the unchanged WAL failure. Scoped Query/Analysis Clippy and eight-file formatting pass.
+Source: projection-requests-source.json, SHA-256 7c0d2f9f65e4056e43f2ef9af5a4af3aee5d3fcc93e6580f24eb93401bb9fdd9.
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#physical-projections-for-subscription-dependencies) retains the separate RED source and executable identities.
+The failed WAL case does not establish current producer cursors or the complete timeout cause. Current physical qualification and complete incident proof remain Not done.

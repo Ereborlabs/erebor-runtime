@@ -853,3 +853,38 @@ The Data executable SHA-256 is 888677d04ed70d8c11ba0f8756dd9b72b374fba107c1d9a0b
 The E2E executable SHA-256 is c20a7896b309a1a468ccc4e91e752dc42152faab7b6e5ff3f622c8fbfb8c67c2.
 Source and executable hashes remain unchanged through the checks. No full CI or benchmark runs.
 PENDING: busy-input completion, current images, paired physical result, resource absence, final records, and owned VM removal.
+
+
+## Physical projections for subscription dependencies
+
+**Dependency correction and focused owner checks: Done. Busy WAL and complete qualification: Not done.**
+Query admission retains relation names before physical planning. Native physical scans already add the required column indices for capture.
+Subscription dependency checks previously used only the admission map. A graph_manifest relation with no known projection therefore included mutable notice revisions for a query that selected only saved result fields.
+Data already has the required column rules. Query now retains the same physical request map and supplies it to the existing Data dependency API.
+All admitted relation keys remain. Prephysical, resume, and recovery checks keep the conservative admission map.
+The [reading route](../../../../guides/araphor-discovery-definition-review.md#physical-projection-dependencies) links native collection, retained ownership, and the existing guards.
+
+The [test-only RED](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-notice-red-facts.json>) fails at the intended cursor comparison in 10.157 seconds.
+After a facts-only notice, the unchanged three-column query advances from cursor revision 11 to 12. The notice-sensitive query and unchanged head/body checks pass first.
+The RED source SHA-256 is 000cd2b66ff884d2c6ff9deb49205b03653e452b6477514251772a4fa2c07d81. Its Analysis executable SHA-256 is 6a02ac36ba44f068c3e1940afd8d0b4935362d42cae79ec9be9b2e9553667539.
+The [GREEN case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-green-test.json>) passes in 13.917 seconds.
+It now checks two consecutive notices. The three-column cursor stays unchanged, the notice-sensitive filter reacts each time, and the real fourth-record replacement retains every prior assertion.
+
+CapturedRequests owns the exact map and its DataFusion memory reservation. Admission checks include both owner and map bytes before the reservation is split.
+ArrowSnapshot and Runtime share this owner. Metadata updates can replace the old snapshot while the map and its charge remain together.
+The [focused record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-checks.json>) has 15 passing Query cases and four passing Analysis cases.
+These checks cover charge lifetime, existing input bounds, witness and binary scratch accounting, projection, filters, joins, windows, restart, limited pages, Graph notices, captured-input catch-up, and expiry.
+The new lifetime case proves that the old snapshot is freed, Arc clones add no charge, and the final owner drop releases the charge. Existing test limits are unchanged.
+Together with the GREEN case, these records contain 20 distinct passing cases on the corrected source.
+
+The same record retains the unchanged busy-WAL failure in 121.691 seconds: zero passes, one failure, zero ignored cases.
+Both selected records are visible, but the cached actor Graph remains at cursor 940 and excludes them. The background Graph remains at 639 with 138 findings; notifications are empty.
+The [failure facts](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-wal-facts.json>) keep the separate status/history responses and incomplete producer-state queries. Current producer heads and consumed cursors remain unknown.
+This correction does not establish the full timeout cause or an end-to-end speed improvement.
+
+[Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-clippy.json>) passes for Query and Analysis with warnings denied in 70.084 seconds.
+[Formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-fmt.json>) passes for the eight changed Rust files in 0.088 seconds.
+The corrected source is projection-requests-source.json, with 2,042 pins and SHA-256 7c0d2f9f65e4056e43f2ef9af5a4af3aee5d3fcc93e6580f24eb93401bb9fdd9.
+The [build record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-check-build.json>) binds the Query and E2E executables; the [GREEN build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-green-build.json>) binds the Analysis executable.
+The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-check-integrity.json>) confirms unchanged source, executables, and excluded files. No full CI, benchmark, or physical case runs.
+PENDING: busy-input completion, current images, paired physical result, final records, resource absence, and owned VM removal.

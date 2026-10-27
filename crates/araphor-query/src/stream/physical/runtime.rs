@@ -11,7 +11,7 @@ use super::{kernel::Kernel, Compiled, Mode, SubscribeExec};
 use crate::definition::CapturedExecution;
 use crate::execution::{PendingRead, PhysicalStream, Read, Session};
 use crate::follow::Operation;
-use crate::sources::{ArrowSnapshot, Changes, SourceData};
+use crate::sources::{ArrowSnapshot, CapturedRequests, Changes, SourceData};
 use crate::stream::progress::{Progress, Wake};
 use crate::stream::{Event, Output, Run, StreamError};
 use crate::{Result, SqlSnafu};
@@ -24,6 +24,7 @@ pub(super) struct Runtime {
     maintained: Option<Maintained>,
     progress: Progress,
     snapshot: Option<Arc<ArrowSnapshot>>,
+    requests: Option<Arc<CapturedRequests>>,
     cut: Option<WindowCut>,
     advance_window: bool,
     revision: u64,
@@ -101,6 +102,7 @@ impl Runtime {
             maintained,
             progress,
             snapshot: None,
+            requests: None,
             cut: None,
             advance_window: false,
             content: None,
@@ -179,7 +181,7 @@ impl Runtime {
             .clone();
         let (meta, revision) = self
             .run
-            .dependencies(&self.run.session, selection, None)
+            .dependencies(&self.run.session, selection, None, self.requests.as_ref())
             .await?;
         self.check_store(&meta)?;
         self.progress.checked(meta.commit_revision);
@@ -225,7 +227,7 @@ impl Runtime {
         if self.snapshot.is_none() && self.run.resume.is_some() && self.run.managed.is_none() {
             let (meta, _) = self
                 .run
-                .dependencies(&self.run.session, selection.clone(), Some(&permit))
+                .dependencies(&self.run.session, selection.clone(), Some(&permit), None)
                 .await?;
             self.check_store(&meta)?;
         }
@@ -257,6 +259,7 @@ impl Runtime {
                     )
                     .await?;
                 self.check_store(&snapshot.page.extraction.meta)?;
+                self.requests = Some(Arc::clone(snapshot.requests()));
                 self.snapshot = Some(Arc::clone(&snapshot));
                 Output::page(
                     &session,
@@ -277,6 +280,7 @@ impl Runtime {
                         &output.snapshot.page.extraction.meta,
                     )?;
                 }
+                self.requests = Some(Arc::clone(output.snapshot.requests()));
                 self.snapshot = Some(Arc::clone(&output.snapshot));
                 let batches = output.batches.take().ok_or_else(Self::state_error)?;
                 output._control.check()?;
@@ -347,6 +351,7 @@ impl Runtime {
                         {
                             let cursor = cursor.clone();
                             let (captured, mut pending) = captured.into_parts();
+                            self.requests = Some(Arc::clone(captured.snapshot.requests()));
                             self.snapshot = Some(Arc::clone(&captured.snapshot));
                             if captured.snapshot.windows.iter().any(|window| window.active) {
                                 self.cut = Some(WindowCut {
@@ -423,6 +428,7 @@ impl Runtime {
                     reservation,
                 } = captured.start()?;
                 self.check_store(&snapshot.page.extraction.meta)?;
+                self.requests = Some(Arc::clone(snapshot.requests()));
                 self.snapshot = Some(Arc::clone(&snapshot));
                 let output = Output {
                     snapshot,
@@ -472,6 +478,7 @@ impl Runtime {
         self.position = Some(output.position);
         self.progress
             .captured(self.captured, output.snapshot.next_change);
+        self.requests = Some(Arc::clone(output.snapshot.requests()));
         self.snapshot = Some(Arc::clone(&output.snapshot));
         self.evaluated = now;
         let completed = self.run.managed.is_none() || calls.published_revision() != 0;
@@ -535,7 +542,12 @@ impl Runtime {
             .collect::<Vec<_>>();
         let (meta, _) = self
             .run
-            .dependencies(&self.run.session, cut.snapshot.selection.clone(), None)
+            .dependencies(
+                &self.run.session,
+                cut.snapshot.selection.clone(),
+                None,
+                Some(cut.snapshot.requests()),
+            )
             .await?;
         self.check_store(&meta)?;
         if meta.commit_revision < self.revision {
