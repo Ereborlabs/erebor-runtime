@@ -1,4 +1,4 @@
-use duckdb::{params, Connection};
+use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::{
@@ -171,6 +171,11 @@ impl AnalysisStore {
         };
         let (coordinator, mut reader) = self.coordinated_reader(control)?;
         let all_traces = selection.traces.is_all();
+        let graph_sources = (tables.contains_key("graph_state")
+            && !tables.contains_key("discovery_state")
+            && !selection.sources.is_all()
+            && !selection.sources.is_empty())
+        .then_some(selection.sources.as_slice());
         control.run(&mut reader, |snapshot| {
             if let Some(managed) = managed {
                 Self::check_managed_metadata(snapshot, managed)?;
@@ -187,12 +192,40 @@ impl AnalysisStore {
             drop(coordinator);
             let mut revision = self.selected_revision(selection, meta.commit_revision, control)?;
             if tables.contains_key("discovery_state") || tables.contains_key("graph_state") {
+                let scoped_progress = if let Some(sources) = graph_sources {
+                    let mut heads = snapshot.prepare(
+                        "SELECT r.commit_revision FROM processor_progress p
+                         JOIN analysis_results r ON r.tenant_id = p.tenant_id
+                            AND r.processor_id = p.processor_id AND r.method_version = p.method_version
+                            AND r.stream_key = p.stream_key AND r.result_id = p.result_id
+                         WHERE p.processor_id = ? AND p.method_version = ?
+                            AND p.tenant_id = ? AND p.stream_key = ? AND p.class = 'required'
+                            AND NOT p.retired AND p.result_id <> '' AND r.commit_revision <= ?",
+                    ).context(AnalysisDatabaseSnafu { operation: "prepare graph progress dependencies" })?;
+                    let mut maximum = 0;
+                    let mut complete = true;
+                    for source in sources {
+                        control.check()?;
+                        let head = heads.query_row(
+                            params![crate::GRAPH_PROCESSOR, crate::GRAPH_SCHEMA_VERSION,
+                                source.tenant_id.as_slice(), source.key().as_slice(), meta.commit_revision],
+                            |row| row.get::<_, u64>(0),
+                        ).optional().context(AnalysisDatabaseSnafu { operation: "read graph progress dependencies" })?;
+                        let Some(head) = head else { complete = false; break; };
+                        maximum = maximum.max(head);
+                    }
+                    complete.then_some(maximum)
+                } else { None };
                 let mut statement = snapshot.prepare(
                     "SELECT COALESCE(MAX(last_changed_revision), 0)::UBIGINT
                      FROM relation_revisions WHERE relation_name = ? AND last_changed_revision <= ?",
                 ).context(AnalysisDatabaseSnafu { operation: "prepare relation dependencies" })?;
                 for relation in ["processor_progress", "processor_gaps"] {
                     control.check()?;
+                    if let Some(scoped) = scoped_progress.filter(|_| relation == "processor_progress") {
+                        revision = revision.max(scoped);
+                        continue;
+                    }
                     let changed = statement.query_row(params![relation, meta.commit_revision], |row| row.get::<_, u64>(0))
                         .context(AnalysisDatabaseSnafu { operation: "read relation dependencies" })?;
                     revision = revision.max(changed);
@@ -687,6 +720,180 @@ mod tests {
                 .graph_result(selection.tenant_id, &fixture.request.result_id)?,
             Some(fixture.snapshot)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn graph_state_scoped_dependencies() -> TestResult {
+        let mut fixture = CommitFixture::new()?;
+        let source = fixture.snapshot.scope.identity.clone();
+        let selection = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]);
+        drop(fixture._graph);
+        fixture._graph = fixture.store.lease_graph(vec![selection.clone()])?;
+        let mut other = source.clone();
+        other.source_id[0] ^= 1;
+        other.node_id = format!("{}-other", source.node_id);
+        fixture
+            .store
+            .accept_validated_batch(other.clone(), batch(1, 10))?;
+        let other_scope = ProcessorScopeV1 {
+            identity: other.clone(),
+            ..fixture.request.scope.clone()
+        };
+        assert!(fixture.store.processor_health(&other_scope)?.is_none());
+        let first = fixture
+            .store
+            .commit_graph(&fixture.request, true, || Ok(()))?;
+        let tables = AnalysisTableRequests::from([("graph_state".into(), None)]);
+        let control = AnalysisReadControl::default();
+        let before = fixture
+            .store
+            .dependency_revision_for(&selection, &tables, &control)?;
+        assert_eq!(before.1, first.commit_revision);
+        fixture.store.register_graph(&other)?;
+        let after = fixture
+            .store
+            .dependency_revision_for(&selection, &tables, &control)?;
+        assert!(after.0.commit_revision > before.0.commit_revision);
+        assert_eq!(
+            after.1, before.1,
+            "An unrelated Graph registration changed the dependency."
+        );
+
+        let mut graph = fixture.snapshot.clone();
+        graph.previous_result_id = Some(fixture.request.result_id.clone());
+        assert_ne!(
+            graph.packages[0].state,
+            crate::GraphPackageStateV1::CoverageInsufficient
+        );
+        graph.packages[0].state = crate::GraphPackageStateV1::CoverageInsufficient;
+        graph.validate()?;
+        let mut replacement = fixture.request.clone();
+        replacement.result_id = "graph:state-replacement".into();
+        replacement.expected_cursor = first.consumed_cursor;
+        replacement.created_utc_ns += 1;
+        replacement.body = serde_json::to_vec(&graph)?;
+        let head = fixture.store.commit_graph(&replacement, true, || Ok(()))?;
+        assert_eq!(head.consumed_cursor, first.consumed_cursor);
+        assert!(head.commit_revision > after.0.commit_revision);
+        assert_eq!(fixture.store.graph_snapshot(&source)?, Some(graph));
+        assert_eq!(
+            fixture
+                .store
+                .dependency_revision_for(&selection, &tables, &control)?
+                .1,
+            head.commit_revision
+        );
+
+        let mut absent = source.clone();
+        absent.source_id[0] ^= 2;
+        let absent = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone(), absent]);
+        let mut optional = source.clone();
+        optional.source_id[0] ^= 4;
+        fixture.store.register_processor(
+            &ProcessorScopeV1 {
+                identity: optional.clone(),
+                ..fixture.request.scope.clone()
+            },
+            crate::ProcessorClassV1::Optional,
+            1,
+        )?;
+        let optional = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone(), optional]);
+        let unpublished =
+            AnalysisSelectionV1::new(source.tenant_id, vec![source.clone(), other.clone()]);
+        let mut all = selection.clone();
+        all.sources = crate::Selection::All;
+        all.nodes.push(source.node_id.clone());
+        let empty = AnalysisSelectionV1::new(source.tenant_id, Vec::new());
+        let mixed = AnalysisTableRequests::from([
+            ("graph_state".into(), None),
+            ("discovery_state".into(), None),
+        ]);
+        let changed = fixture.store.register_processor(
+            &ProcessorScopeV1 {
+                identity: other,
+                processor_id: DISCOVERY_PROCESSOR.into(),
+                method_version: u64::from(DISCOVERY_SCHEMA_VERSION),
+            },
+            crate::ProcessorClassV1::Required,
+            1,
+        )?;
+        for (name, selection, tables) in [
+            ("all", &all, &tables),
+            ("empty", &empty, &tables),
+            ("unpublished", &unpublished, &tables),
+            ("absent", &absent, &tables),
+            ("optional", &optional, &tables),
+            ("mixed", &selection, &mixed),
+        ] {
+            let (meta, dependency) = fixture
+                .store
+                .dependency_revision_for(selection, tables, &control)?;
+            assert_eq!(
+                (meta.commit_revision, dependency),
+                (changed, changed),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            fixture
+                .store
+                .dependency_revision_for(&selection, &tables, &control)?
+                .1,
+            head.commit_revision
+        );
+
+        let gap = fixture
+            .store
+            .retire_required(&crate::ProcessorRetirementV1 {
+                scope: other_scope.clone(),
+                change_id: "graph-state-gap".into(),
+                reason: "Stop the unprocessed Graph source.".into(),
+                expected_cursor: 0,
+                cutoff_cursor: 1,
+            })?;
+        assert_eq!(
+            fixture.store.processor_gaps(&other_scope, 0)?,
+            [crate::AnalysisGapV1 {
+                first_cursor: 1,
+                last_cursor: 1,
+                commit_revision: gap,
+            }]
+        );
+        assert_eq!(
+            fixture
+                .store
+                .dependency_revision_for(&selection, &tables, &control)?
+                .1,
+            gap
+        );
+        let retirement = crate::ProcessorRetirementV1 {
+            scope: fixture.request.scope.clone(),
+            change_id: "graph-state-stop".into(),
+            reason: "Stop the completed Graph source.".into(),
+            expected_cursor: head.consumed_cursor,
+            cutoff_cursor: head.consumed_cursor,
+        };
+        let retired = fixture.store.retire_required(&retirement)?;
+        assert!(fixture
+            .store
+            .processor_gaps(&retirement.scope, 0)?
+            .is_empty());
+        let stopped = fixture
+            .store
+            .dependency_revision_for(&selection, &tables, &control)?;
+        assert_eq!((stopped.0.commit_revision, stopped.1), (retired, retired));
+        assert_eq!(fixture.store.retire_required(&retirement)?, retired);
+        let repeated = fixture
+            .store
+            .dependency_revision_for(&selection, &tables, &control)?;
+        assert_eq!((repeated.0.commit_revision, repeated.1), (retired, retired));
+        let path = fixture.store.root.clone();
+        drop(fixture._graph);
+        drop(fixture.store);
+        let reopened = AnalysisStore::open(path)?;
+        let restored = reopened.dependency_revision_for(&selection, &tables, &control)?;
+        assert_eq!((restored.0.commit_revision, restored.1), (retired, retired));
         Ok(())
     }
 }

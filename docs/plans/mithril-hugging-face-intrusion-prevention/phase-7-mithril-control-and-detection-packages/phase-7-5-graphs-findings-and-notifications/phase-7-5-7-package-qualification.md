@@ -986,3 +986,36 @@ The background state query returns no frame within the existing failure collecto
 Source and executable hashes remain unchanged through the checks.
 The removed serialization passes are source-proven; an overall execution-time improvement is not established.
 PENDING: busy-input completion, current images, paired physical result, final evidence records, resource absence, and owned VM removal.
+
+
+## Source-specific Graph progress dependencies
+
+**Progress dependency correction and focused Data proof: Done. Busy-input and complete qualification: Not done.**
+A graph_state subscription with exact source A previously used the global processor_progress revision.
+Registration of unrelated source B changed that dependency even after A had a published Graph.
+Data now reads the current required Graph head for each original exact source within the existing SQL snapshot.
+It uses the maximum head revision only when every source has a matching active required processor and stored result.
+All-source, empty, mixed discovery_state, absent, unpublished, optional, and retired selections retain the global fallback.
+The global processor_gaps dependency remains in every case. Source, coverage, expiry, recovery, context, and other result dependencies also remain.
+Query retains its native DataFusion source capture and subscription execution. No schema, index, cache, scheduler, clock, quota, or public API is added.
+The [reading route](../../../../guides/araphor-discovery-definition-review.md#source-specific-graph-progress-dependencies) identifies the owner and guards.
+
+The [corrected RED](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/scoped-graph-progress-red-v2-facts.json>) fails at the intended assertion: unrelated registration changes dependency 5 to 6.
+The first test-only attempt fails earlier because the fixture retains its old Graph lease; that failure is not production RED proof.
+The corrected fixture releases that lease before it acquires the exact-source lease. Existing ownership checks remain.
+The [GREEN regression](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/scoped-graph-progress-green-checks.json>) passes in 2.545 seconds.
+It checks unrelated registration, a published head replacement at the same consumed cursor, global fallbacks, a real global gap, selected retirement without a gap, idempotence, and reopen.
+Its optional-source scenario has no published head. It does not independently test an optional published head or inject a missing stored result.
+The [four existing dependency checks](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/scoped-graph-progress-checks.json>) pass on the same source.
+The Data build passes in 52.746 seconds; the E2E build passes in 138.895 seconds.
+[Data Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/scoped-graph-progress-clippy.json>) passes with warnings denied in 17.036 seconds.
+[One-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/scoped-graph-progress-fmt.json>) passes in 0.039 seconds.
+The source manifest is scoped-graph-progress-green-source.json, SHA-256 765c178e07d30811201dfe6eb93455ecf5d9c8fb72a751c631856d2aaa5ec5e6, with 2,042 pins.
+
+The unchanged [busy-WAL case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/scoped-graph-progress-wal-facts.json>) still fails in 120.706 seconds: zero passes, one failure, zero ignored cases.
+The client cache contains records 941 and 950, actor Graph cursor 940, background Graph cursor 641 with 138 findings, and zero selected notifications.
+A later finite actor state query reports consumed cursor 950 at read revision 86.
+That read does not prove publication or full Graph delivery before the wait expired. The remaining delay and overall speed improvement are unproven.
+[Integrity checks](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/scoped-graph-progress-check-integrity.json>) confirm unchanged source, executables, and excluded files.
+No full CI, benchmark, image build, or physical case runs.
+PENDING: busy-input completion, current images, paired physical result, final evidence records, resource absence, and owned VM removal.

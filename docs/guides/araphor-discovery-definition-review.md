@@ -4760,3 +4760,25 @@ It also keeps its deadline, header-only, corruption, witness, and reference asse
 The focused record covers nine Data cases and ordinary Follow replacement on source 593704df.
 The separate busy-WAL case still fails. Its later producer read is not proof of timely final delivery.
 See [the qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#reuse-canonical-graph-snapshots) for source and artifact limits.
+
+
+## Source-specific Graph progress dependencies
+
+[AnalysisStore::read_dependency_revision](../../crates/araphor-data/src/analysis/dependencies.rs) receives a native query dependency request.
+  -> It retains the original nonempty exact source list when graph_state is requested without discovery_state.
+  -> It opens the existing coordinated SQL snapshot and resolves the selection.
+  -> It joins each original source processor to its current stored Graph result.
+  -> It uses the maximum head commit only when every source has an active required match.
+  -> Otherwise, it uses the existing global processor_progress revision.
+  -> It always includes the global processor_gaps revision and the existing source and context dependencies.
+
+The original list is captured before selection resolution. An All request remains global even if node filtering resolves to one source.
+The join matches tenant, processor, method, stream, and result. The result commit cannot exceed the SQL snapshot revision.
+An absent row, empty result, optional processor, retired processor, or missing matching result selects the global fallback.
+Global gaps remain visible even when selected progress uses published heads.
+Query continues to read this revision through its existing native DataFusion subscription path. No execution or durable-state owner changes.
+
+[graph_state_scoped_dependencies](../../crates/araphor-data/src/analysis/dependencies.rs) uses real Graph commits and exact-source ownership.
+It verifies unrelated registration, a new head at the same consumed cursor, fallbacks, global gaps, retirement, idempotence, and reopen.
+Its optional-source case has no head. A published optional head and stored-row corruption are not independently exercised.
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#source-specific-graph-progress-dependencies) records RED, five passing focused cases, static checks, source identity, and the unresolved busy-input failure.
