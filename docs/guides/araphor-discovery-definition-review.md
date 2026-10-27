@@ -4708,3 +4708,30 @@ It checks every output column and exact references before it checks that new obl
 The [RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-red-facts.json>) shows 24,938 excess scanned bytes.
 The [GREEN record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-green-test.json>) also covers exact scoped IDs, an excluded source, and missing-Graph behavior.
 The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#shared-notification-graph-reads) records six focused Data passes, scoped static checks, source identity, and the separate unresolved WAL failure.
+
+
+## Reactive read admission
+
+**Shared admission and focused Data proof: Done. Busy-input and physical qualification: Not done.**
+[AnalysisStore::coordinated_reader](../../crates/araphor-data/src/analysis/connection.rs) serves the two reads that require a writer-coordinated source cut.
+[Table capture](../../crates/araphor-data/src/analysis/extraction.rs) and [dependency reads](../../crates/araphor-data/src/analysis/dependencies.rs) call this same private method.
+Ordinary reader acquisition keeps its existing path. Query continues to use Data through the same native DataFusion source APIs.
+
+The method acquires the writer, projects pending raw input, reserves one admission permit, and takes the maintenance lease.
+  -> It selects one ordinal and tries both reader slots.
+  -> If a slot is free, it returns the existing coordinator and reader guards.
+  -> If both are busy, it releases the maintenance lease and writer.
+  -> It waits through the existing selected-reader lock notification and immediately releases that probe guard.
+  -> It reacquires the writer, repeats raw projection and readiness checks, takes the lease, and tries again.
+
+One permit and ordinal survive this wait. Each existing [lock primitive](../../crates/araphor-data/src/analysis/read/locks.rs) uses the registered release event and [read control](../../crates/araphor-data/src/analysis/read.rs) for cancellation and deadlines.
+The probe performs no SQL. It ends before writer acquisition, which preserves the writer-first order used by backup, recovery, retention, and rotation.
+All production maintenance writers already own the writer. The method therefore keeps the existing maintenance.read_until path.
+The callers open their SQL transaction only after successful admission. They read metadata, resolve selection, and release the coordinator at their original points.
+Each retry starts without captured snapshot metadata or a resolved selection. The successful reader retains its maintenance lease until it is released.
+
+[capture_wait_releases_writer](../../crates/araphor-data/src/analysis/connection.rs) uses public read_tables, both real reader slots, and the existing WouldBlock test event.
+It releases and joins before asserting the saved writer availability. The [RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-wait-red-facts.json>) and [GREEN record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-green-test.json>) retain that exact assertion.
+[capture_retry_state](../../crates/araphor-data/src/analysis/connection.rs) verifies a newly accepted cut and cancellation while queued, including configured-permit cleanup.
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#reactive-read-admission) records the eleven further owner passes, separate source states, static checks, and unresolved incident result.
+The later actor state at cursor 950 is collected after the incident wait error. It does not prove when the producer published that head or when the subscriber could receive it.

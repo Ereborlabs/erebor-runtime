@@ -169,9 +169,8 @@ impl AnalysisStore {
             }
             None => false,
         };
-        let coordinator = self.read_coordinator(control)?;
+        let (coordinator, mut reader) = self.coordinated_reader(control)?;
         let all_traces = selection.traces.is_all();
-        let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
             if let Some(managed) = managed {
                 Self::check_managed_metadata(snapshot, managed)?;

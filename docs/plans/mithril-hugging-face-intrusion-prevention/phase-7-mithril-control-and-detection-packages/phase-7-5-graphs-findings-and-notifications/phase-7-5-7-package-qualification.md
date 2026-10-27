@@ -919,3 +919,35 @@ The corrected source is notification-graph-reuse-source.json, with 2,042 pins an
 The [normal build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-check-build.json>) binds Query and E2E executables; the [GREEN build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-green-build.json>) binds the Data executable.
 The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-check-integrity.json>) confirms unchanged source, executables, and excluded files. No full CI, benchmark, or physical case runs.
 PENDING: busy-input completion, current images, paired physical result, final records, resource absence, and owned VM removal.
+
+
+## Reactive read admission
+
+**Shared admission correction and focused Data proof: Done. Busy WAL and complete qualification: Not done.**
+The capture trace records one read that retains the writer coordinator during a 5.218-second reader wait.
+The [deterministic RED](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-wait-red-facts.json>) isolates this condition with both real reader slots held.
+The public read completes after release. Only the saved writer-availability assertion fails. The test uses the existing lock event and one availability check.
+
+Data now uses one private coordinated_reader method for table capture and dependency reads.
+If both reader slots are busy, it releases the maintenance lease and writer, waits for the selected reader, releases that probe, and retries writer acquisition and raw projection.
+One admission permit and one reader ordinal remain with the operation. Both callers retain their existing SQL snapshot, metadata, selection, and coordinator-release points.
+The [review route](../../../../guides/araphor-discovery-definition-review.md#reactive-read-admission) links the owners, lock order, and tests.
+
+The [unchanged GREEN regression](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-green-test.json>) passes in 0.361 seconds on its recorded source ff369732.
+The [direct state case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-state-test.json>) passes in 1.144 seconds.
+It accepts new input while both readers remain held. After release, the queued capture returns its exact new revision, source receipt, and event cursor without another write.
+Its second scenario cancels the queued read before reader release and verifies the returned permit. Both scenarios restore all three configured permits and free the locks.
+This state case adds one test to the first GREEN source; production and the first regression remain unchanged.
+The [eleven existing Data cases](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-checks.json>) also pass. They cover admission, release events, cancellation, deadlines, poison, rotation, snapshot maintenance, and dependency selection.
+
+The unchanged normal busy-WAL case still fails in 121.050 seconds: zero passes, one failure, zero ignored cases.
+The failure cache has actor Graph 941 at revision 100, background Graph 639 with 138 findings, and no event rows or notices. Selected finding and policy checks are not projected.
+During collection after the wait error, the actor state query returns accepted=consumed=950 and a newer Graph head at read revision 162.
+The [failure facts](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-wal-facts.json>) retain that later snapshot separately. It does not establish publication before the deadline or the full final Graph body.
+The background state query returns no frames. Its current head and accepted or consumed cursors remain unknown. The complete timeout cause and end-to-end speed remain unproven.
+
+[Strict Data Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-clippy.json>) passes in 16.391 seconds. [Three-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-fmt.json>) passes in 0.134 seconds.
+The final source is coordinated-reader-state-source.json, with 2,042 pins and SHA-256 616d357c963872017dc51ffb7276da100b0fd575285b51c6273741cc02a3e57f.
+The [normal build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-check-build.json>) binds Query and E2E executables; the [state build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-state-build.json>) binds the Data executable.
+The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-check-integrity.json>) confirms unchanged source, executables, and excluded files. No full CI, benchmark, or physical case runs.
+PENDING: busy-input completion, current images, paired physical result, final records, resource absence, and owned VM removal.

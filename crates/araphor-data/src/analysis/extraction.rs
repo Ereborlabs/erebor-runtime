@@ -1549,12 +1549,11 @@ impl AnalysisStore {
                 ) || name.starts_with("catalog_key_")
             })
         });
-        let coordinator = self.read_coordinator(control)?;
+        let (coordinator, mut reader) = self.coordinated_reader(control)?;
         let explicit_traces = !selection.traces.is_all() && !selection.traces.as_slice().is_empty();
         let unscoped_notifications = selection.sources.is_all()
             && selection.nodes.is_empty()
             && selection.binding_ids.is_empty();
-        let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
             let requested = selection;
