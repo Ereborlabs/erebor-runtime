@@ -888,3 +888,34 @@ The corrected source is projection-requests-source.json, with 2,042 pins and SHA
 The [build record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-check-build.json>) binds the Query and E2E executables; the [GREEN build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-green-build.json>) binds the Analysis executable.
 The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/projection-requests-check-integrity.json>) confirms unchanged source, executables, and excluded files. No full CI, benchmark, or physical case runs.
 PENDING: busy-input completion, current images, paired physical result, final records, resource absence, and owned VM removal.
+
+
+## Shared notification Graph reads
+
+**Graph read reuse and six focused Data cases: Done. Busy WAL and complete qualification: Not done.**
+The [capture diagnostic](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-boundary-postcommit-probe-facts.json>) records two notification captures with 5.593-second and 6.749-second materialization intervals.
+These intervals include scheduling and other capture work. They do not identify the sole timeout cause.
+Source inspection finds one complete finding read and Graph validation for each obligation that references a finding, even when several obligations reference the same saved Graph.
+
+The existing Data capture now retains each permitted Graph and its checked revision in a local sorted vector.
+The first read keeps the full finding validation, selected-source check, and binding authorization. Each obligation keeps its result reference, finding filter, context reference, and route checks.
+Later obligations borrow their finding from that checked Graph. The capture closure owns and releases the vector.
+Existing input-budget methods admit its key and vector capacity. The Graph allocation retains the existing charge for each actual read.
+The [review route](../../../../guides/araphor-discovery-definition-review.md#shared-notification-graph-reads) links these owners and checks.
+
+The [deterministic RED](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-red-facts.json>) passes all exact row and reference checks before its scan assertion fails: 43,485 bytes instead of 18,547 bytes.
+Three obligations reference one real Graph. The expected scan adds only the two new serialized context bodies to the original capture.
+The [GREEN case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-green-test.json>) passes in 1.778 seconds, including that assertion and exact notification IDs for allowed bindings, denied bindings, an excluded source, and a missing Graph.
+The missing Graph remains visible as unavailable to an unscoped query and is excluded from the scoped query.
+The [five further Data checks](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-checks.json>) pass for Graph integrity, tenant separation, cancellation, extraction limits, and allocation bounds.
+
+The unchanged normal busy-WAL case still fails in 121.951 seconds: zero passes, one failure, zero ignored cases.
+Its actor cache contains records 941 and 950, but its Graph remains at 940. The background Graph remains at 639 with 138 findings; notifications are empty.
+The [failure facts](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-wal-facts.json>) preserve the incomplete producer queries. Current producer heads and accepted or consumed cursors remain unknown.
+The repeated-read correction does not establish an end-to-end speed improvement or complete incident result.
+
+[Strict Data Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-clippy.json>) passes in 16.767 seconds. [Two-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-fmt.json>) passes in 0.122 seconds.
+The corrected source is notification-graph-reuse-source.json, with 2,042 pins and SHA-256 611c0f41c7fea729d49260b2597859091ac0570e35719320b8361b6d5ee46a9c.
+The [normal build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-check-build.json>) binds Query and E2E executables; the [GREEN build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-green-build.json>) binds the Data executable.
+The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-check-integrity.json>) confirms unchanged source, executables, and excluded files. No full CI, benchmark, or physical case runs.
+PENDING: busy-input completion, current images, paired physical result, final records, resource absence, and owned VM removal.

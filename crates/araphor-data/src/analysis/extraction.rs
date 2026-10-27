@@ -1944,6 +1944,7 @@ impl AnalysisStore {
             }
             self.extract_graph_coverage(snapshot, &read, &mut output, &mut capture, control)?;
             let mut routes = BTreeMap::new();
+            let mut graphs = Vec::<(String, u64, crate::GraphSnapshotV1)>::new();
             for key in selection.obligations.as_slice() {
                 control.check()?;
                 let (context, revision) = Self::read_context_from(snapshot, &self.root, key)?
@@ -1952,28 +1953,40 @@ impl AnalysisStore {
                 output.charge(context.body.capacity().saturating_mul(2))?;
                 let obligation = crate::NotificationObligationV1::try_from(&context)?;
                 let finding = if let Some(reference) = &obligation.finding {
-                    let metadata: Option<(Vec<u8>, u64)> = snapshot.query_row(
-                        "SELECT stream_key, commit_revision FROM analysis_results
-                         WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?
-                            AND stream_key IS NOT NULL",
-                        params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR,
-                            crate::GRAPH_SCHEMA_VERSION, reference.result_id], |row| Ok((row.get(0)?, row.get(1)?)),
-                    ).optional().context(AnalysisDatabaseSnafu {
-                        operation: "read notification graph source",
-                    })?;
-                    if let Some((source_key, graph_revision)) = metadata {
-                        let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
-                        let header = self.graph_input(snapshot, selection.tenant_id,
-                            &reference.result_id, &mut output, control, false)?;
-                        let mut graph = header.snapshot;
-                        if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
-                        if !selection.permits_graph(&graph) { continue; }
-                        output.reference_result(&reference.result_id, graph_revision, AnalysisReferenceOriginV1::Notification)?;
-                        graph.findings.iter().position(|finding| finding.finding_id == reference.finding_id)
-                            .map(|index| graph.findings.swap_remove(index))
-                    } else if unscoped_notifications { None } else { continue; }
+                    let index = match graphs.binary_search_by(|(id, _, _)| id.cmp(&reference.result_id)) {
+                        Ok(index) => Some(index),
+                        Err(index) => {
+                            let metadata: Option<(Vec<u8>, u64)> = snapshot.query_row(
+                                "SELECT stream_key, commit_revision FROM analysis_results
+                                 WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?
+                                    AND stream_key IS NOT NULL",
+                                params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR,
+                                    crate::GRAPH_SCHEMA_VERSION, reference.result_id], |row| Ok((row.get(0)?, row.get(1)?)),
+                            ).optional().context(AnalysisDatabaseSnafu {
+                                operation: "read notification graph source",
+                            })?;
+                            if let Some((source_key, graph_revision)) = metadata {
+                                let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
+                                let header = self.graph_input(snapshot, selection.tenant_id,
+                                    &reference.result_id, &mut output, control, false)?;
+                                let graph = header.snapshot;
+                                if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
+                                if !selection.permits_graph(&graph) { continue; }
+                                let mut budget = output.sink(control);
+                                budget.charge(reference.result_id.len())?;
+                                budget.grow(&mut graphs)?;
+                                graphs.insert(index, (reference.result_id.clone(), graph_revision, graph));
+                                Some(index)
+                            } else if unscoped_notifications { None } else { continue; }
+                        }
+                    };
+                    if let Some(index) = index {
+                        let (_, graph_revision, graph) = &graphs[index];
+                        output.reference_result(&reference.result_id, *graph_revision, AnalysisReferenceOriginV1::Notification)?;
+                        graph.findings.iter().find(|finding| finding.finding_id == reference.finding_id)
+                    } else { None }
                 } else if unscoped_notifications { None } else { continue; };
-                if !selection.binding_ids.is_empty() && finding.as_ref().is_none_or(|finding| {
+                if !selection.binding_ids.is_empty() && finding.is_none_or(|finding| {
                     finding.effects.is_empty() || finding.effects.iter().any(|effect| {
                         effect.binding_id.is_none_or(|binding| !selection.binding_ids.contains(&binding))
                     })
@@ -2011,7 +2024,7 @@ impl AnalysisStore {
                         retry_utc_ns = Some(retry_utc_ns.map_or(deadline, |old: u64| old.min(deadline)));
                     }
                 }
-                capture.notification(&obligation, finding.as_ref(), revision, retry_utc_ns,
+                capture.notification(&obligation, finding, revision, retry_utc_ns,
                     &mut output.sink(control))?;
             }
             for id in &selection.results {

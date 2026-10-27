@@ -796,6 +796,187 @@ fn context_notification_fields() -> TestResult {
         .values()
         .flatten()
         .all(|batch| batch.num_rows() == 0));
+    let single = read(&fixture.store, &selection, &["notifications"], 150)?;
+    let mut added_bytes = 0;
+    let mut expected_contexts = single
+        .extraction
+        .references
+        .iter()
+        .filter_map(|reference| {
+            reference.context().map(|context| {
+                (
+                    context.key.clone(),
+                    (context.commit_revision, reference.origins().to_vec()),
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut added = Vec::new();
+    for id in [[11; 16], [12; 16]] {
+        let mut repeated = obligation.clone();
+        repeated.key.notification_id = id;
+        let body = serde_json::to_vec(&repeated)?;
+        added_bytes += body.len();
+        let context = AnalysisContextVersionV1 {
+            key: AnalysisContextKeyV1 {
+                tenant_id: tenant,
+                owner_id: NOTIFICATION_STATE_OWNER.into(),
+                entity_key: id.to_vec(),
+                lifetime_key: b"obligation".to_vec(),
+                owner_revision: repeated.revision,
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: repeated.sensitivity,
+            body,
+        };
+        let revision = fixture.store.commit_context(&context)?;
+        expected_contexts.insert(
+            context.key,
+            (revision, vec![AnalysisReferenceOriginV1::Notification]),
+        );
+        added.push((id, revision));
+    }
+    let multiple = read(&fixture.store, &selection, &["notifications"], 150)?;
+    assert_eq!(
+        multiple.tables["notifications"]
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>(),
+        4
+    );
+    let original = row(&single, "notifications", 0)?;
+    assert_eq!(row(&multiple, "notifications", 0)?, original);
+    assert_eq!(
+        row(&multiple, "notifications", 1)?,
+        row(&single, "notifications", 1)?
+    );
+    for (index, (id, revision)) in added.iter().enumerate() {
+        let repeated = row(&multiple, "notifications", index + 2)?;
+        assert_eq!(
+            column::<BinaryArray>(&repeated, "notification_id")?.value(0),
+            id
+        );
+        assert_eq!(
+            column::<UInt64Array>(&repeated, "commit_revision")?.value(0),
+            *revision
+        );
+        for (field, array) in original
+            .schema_ref()
+            .fields()
+            .iter()
+            .zip(original.columns())
+        {
+            if !matches!(field.name().as_str(), "notification_id" | "commit_revision") {
+                assert_eq!(repeated.column_by_name(field.name()), Some(array));
+            }
+        }
+    }
+    let contexts = multiple
+        .extraction
+        .references
+        .iter()
+        .filter_map(|reference| {
+            reference.context().map(|context| {
+                (
+                    context.key.clone(),
+                    (context.commit_revision, reference.origins().to_vec()),
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(contexts, expected_contexts);
+    let results = |page: &AnalysisPositionPageV1| {
+        page.extraction
+            .references
+            .iter()
+            .filter_map(|reference| {
+                reference
+                    .result()
+                    .map(|result| (result.clone(), reference.origins().to_vec()))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(results(&multiple), results(&single));
+    assert_eq!(
+        multiple.extraction.scanned_bytes,
+        single.extraction.scanned_bytes + added_bytes
+    );
+    let notification_ids = |page: &AnalysisPositionPageV1| -> std::result::Result<
+        Vec<Vec<u8>>,
+        Box<dyn std::error::Error>,
+    > {
+        let mut ids = Vec::new();
+        for batch in page.tables.get("notifications").into_iter().flatten() {
+            let values = column::<BinaryArray>(batch, "notification_id")?;
+            ids.extend((0..values.len()).map(|index| values.value(index).to_vec()));
+        }
+        Ok(ids)
+    };
+    let mut scoped = selection.clone();
+    scoped.binding_ids = vec![fixture.snapshot.findings[0]
+        .effects
+        .iter()
+        .find_map(|effect| effect.binding_id)
+        .ok_or("notification fixture binding")?];
+    let expected_ids = vec![vec![7; 16], vec![11; 16], vec![12; 16]];
+    assert_eq!(
+        notification_ids(&read(&fixture.store, &scoped, &["notifications"], 150)?)?,
+        expected_ids
+    );
+    let mut denied = scoped.clone();
+    denied.binding_ids = vec![[99; 16]];
+    assert!(notification_ids(&read(&fixture.store, &denied, &["notifications"], 150)?)?.is_empty());
+    denied = selection.clone();
+    denied.sources = Selection::Exact(Vec::new());
+    assert!(notification_ids(&read(&fixture.store, &denied, &["notifications"], 150)?)?.is_empty());
+    let mut missing = obligation.clone();
+    missing.key.notification_id = [13; 16];
+    missing
+        .finding
+        .as_mut()
+        .ok_or("fixture finding reference")?
+        .result_id = "graph:missing".into();
+    let missing_revision = fixture.store.commit_context(&AnalysisContextVersionV1 {
+        key: AnalysisContextKeyV1 {
+            tenant_id: tenant,
+            owner_id: NOTIFICATION_STATE_OWNER.into(),
+            entity_key: missing.key.notification_id.to_vec(),
+            lifetime_key: b"obligation".to_vec(),
+            owner_revision: missing.revision,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: missing.sensitivity,
+        body: serde_json::to_vec(&missing)?,
+    })?;
+    let unscoped = read(&fixture.store, &selection, &["notifications"], 150)?;
+    assert_eq!(
+        notification_ids(&unscoped)?,
+        vec![
+            vec![7; 16],
+            vec![8; 16],
+            vec![11; 16],
+            vec![12; 16],
+            vec![13; 16]
+        ]
+    );
+    let missing_row = row(&unscoped, "notifications", 4)?;
+    assert!(!column::<BooleanArray>(&missing_row, "finding_available")?.value(0));
+    assert!(column::<BinaryArray>(&missing_row, "finding_revision")?.is_null(0));
+    assert_eq!(
+        column::<StringArray>(&missing_row, "finding_result_id")?.value(0),
+        "graph:missing"
+    );
+    assert_eq!(
+        column::<UInt64Array>(&missing_row, "commit_revision")?.value(0),
+        missing_revision
+    );
+    assert_eq!(results(&unscoped), results(&single));
+    assert_eq!(
+        notification_ids(&read(&fixture.store, &scoped, &["notifications"], 150)?)?,
+        expected_ids
+    );
     Ok(())
 }
 

@@ -4683,3 +4683,28 @@ The [focused checks](</home/navid/mithril-test-hosts/araphor-package-qualificati
 Source: projection-requests-source.json, SHA-256 7c0d2f9f65e4056e43f2ef9af5a4af3aee5d3fcc93e6580f24eb93401bb9fdd9.
 The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#physical-projections-for-subscription-dependencies) retains the separate RED source and executable identities.
 The failed WAL case does not establish current producer cursors or the complete timeout cause. Current physical qualification and complete incident proof remain Not done.
+
+
+## Shared notification Graph reads
+
+**Local Graph reuse and focused Data checks: Done. Busy-input and physical qualification: Not done.**
+[AnalysisStore::read_tables_inner](../../crates/araphor-data/src/analysis/extraction.rs) owns notification capture inside one existing database snapshot.
+Several obligations can reference the same saved Graph. The local sorted vector retains one checked Graph and revision for each permitted result ID.
+
+The first reference reads the existing result index and checks its selected source.
+  -> [graph_input](../../crates/araphor-data/src/analysis/extraction/graph.rs) reads the header and all findings, checks the finding count, and validates the combined snapshot.
+  -> [AnalysisSelectionV1::permits_graph](../../crates/araphor-data/src/analysis/extraction.rs) checks binding access across the Graph evidence and findings.
+  -> Existing ReadBudget::charge and ReadBudget::grow admit the owned key and actual vector capacity before insertion.
+  -> Later obligations borrow the requested finding from this checked Graph.
+  -> Each obligation retains its result and context references, per-finding binding filter, and route checks.
+  -> [Capture::notification](../../crates/araphor-data/src/analysis/extraction/tables/notification.rs) writes the existing Arrow row.
+
+The capture closure owns and releases the vector. The existing Graph charge remains for each actual load.
+This path keeps whole-Graph validation. A single-finding point read would omit finding count, order, package, manifest, and binding checks used by this capture.
+Query consumes the resulting Arrow batches through its existing DataFusion source scan.
+
+[context_notification_fields](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs) uses three obligations that reference one real Graph. A fourth obligation contains an unconfirmed concern.
+It checks every output column and exact references before it checks that new obligations add only their context-body scan bytes.
+The [RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-red-facts.json>) shows 24,938 excess scanned bytes.
+The [GREEN record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-graph-reuse-green-test.json>) also covers exact scoped IDs, an excluded source, and missing-Graph behavior.
+The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#shared-notification-graph-reads) records six focused Data passes, scoped static checks, source identity, and the separate unresolved WAL failure.
