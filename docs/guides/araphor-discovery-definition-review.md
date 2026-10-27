@@ -4782,3 +4782,66 @@ Query continues to read this revision through its existing native DataFusion sub
 It verifies unrelated registration, a new head at the same consumed cursor, fallbacks, global gaps, retirement, idempotence, and reopen.
 Its optional-source case has no head. A published optional head and stored-row corruption are not independently exercised.
 The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#source-specific-graph-progress-dependencies) records RED, five passing focused cases, static checks, source identity, and the unresolved busy-input failure.
+
+
+## Native physical planning ownership
+
+### Intended end state
+
+Native DataFusion planning preserves subscription control and worker ownership.
+A pending scan can cancel. Synchronous native work keeps its lease until that work returns.
+
+[Session::physical](../../crates/araphor-query/src/execution.rs) installs the existing control and package extensions.
+  -> [Engine::blocking](../../crates/araphor-query/src/execution.rs) runs the native analyzer and logical optimizer through the existing blocking path.
+  -> [Engine::plan_physical](../../crates/araphor-query/src/execution.rs) starts the native physical-planning future on the existing Engine runtime.
+  -> [PackageExec::new](../../crates/araphor-query/src/definition/physical.rs) can await package preparation through the existing blocking path.
+  -> [Engine::join_worker](../../crates/araphor-query/src/execution.rs) joins the worker and receives its checked result.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant E as Engine runtime
+    participant B as Blocking worker
+    C->>E: Start native physical planning
+    opt Package preparation required
+        E->>B: Prepare package
+        B-->>E: Return preparation result
+    end
+    alt Planning completes
+        E-->>C: Return checked plan
+    else Caller cancels
+        C->>E: Cancel control and join
+        E-->>C: Finish worker and release lease
+    end
+```
+
+Engine owns the existing two-thread runtime and shuts it down when Engine drops.
+The planning task holds an Arc to Engine and the existing Session task-token lease.
+The inner async move owns LogicalPlan, SessionState, and their extensions.
+Completion or cancellation drops these inputs before the task sends its result.
+If the receiver has closed, the send drops the result while Engine and the lease remain held.
+[blocking_drop_orders_cleanup](../../crates/araphor-query/src/execution/tests.rs) and [planning_drop_orders_cleanup](../../crates/araphor-query/src/execution/tests.rs) check the resource-before-lease order.
+The native case observes the actual DataFusion plan through a weak reference.
+
+Both dispatch paths use one private join_worker method and the existing [AnalysisReadControl::query_async](../../crates/araphor-data/src/analysis/read.rs).
+PendingRead requests cancellation if the caller drops its future.
+[Subscription::cancel_and_join](../../crates/araphor-query/src/follow/mod.rs) waits for its existing task tracker.
+A pending async scan can stop without a scan-release event; [notify_planning_cancel_joins](../../crates/araphor-query/src/follow/tests/runtime.rs) checks this condition.
+Synchronous work inside a native scan cannot stop before that work returns.
+[native_planning_joins_worker](../../crates/araphor-query/src/follow/tests/runtime.rs) requires cancellation to retain the permit until the held scan returns.
+Engine::wait keeps its existing synchronous entry and rejects synchronous reentry on its own runtime.
+Native planning uses an async task, so package preparation does not wait under a parent blocking-worker slot.
+Runtime creation, thread count, limits, native plan state, and the SQL execution contract stay unchanged.
+
+The [corrected RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-red-fixed-facts.json>) fails in 6.014 seconds on the old dispatch path after valid cleanup.
+The first attempt polls a completed cleanup future twice. That [invalid attempt](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-red-invalid-facts.json>) is not production failure proof.
+The [twelve focused Query cases](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-green-checks.json>) pass on the applied source.
+These cases include pending-scan cancellation, synchronous-scan cancellation, both cleanup orders, deadlines, clocks, package preparation, and complete SQL/Wasm results.
+The [SQL/Wasm case](../../crates/araphor-query/src/definition/tests/execution.rs) uses one caller blocking thread.
+[Strict Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-clippy.json>) passes in 69.105 seconds. [Scoped formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-fmt.json>) passes in 0.072 seconds.
+
+Source: native-planning-green-source.json, SHA-256 ff4beae2a829c76b6aaa8baee47bb3aba48d56478d677c53a5ec426068a971bb.
+The fresh E2E build passes in 140.493 seconds. The [normal busy-input case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-incident-facts.json>) still fails in 119.482 seconds.
+Its cache contains actor Graph cursor 950 and background Graph cursor 642, but no selected notification. The strict assertions after the completion wait do not run.
+This recorded cache differs from earlier runs. It does not establish a general speed improvement or the cause of the remaining notification delay.
+Current physical qualification, complete incident proof, and an end-to-end speed result remain **Not done**.

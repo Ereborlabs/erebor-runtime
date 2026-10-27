@@ -408,15 +408,65 @@ impl Engine {
         lease: impl Send + 'static,
         operation: impl FnOnce() -> Result<T> + Send + 'static,
     ) -> Result<T> {
-        let mut pending = PendingRead {
+        let pending = PendingRead {
             control: Arc::clone(&control),
             active: true,
         };
         let (send, receive) = tokio::sync::oneshot::channel();
-        let mut worker = tokio::task::spawn_blocking(move || {
+        let worker = tokio::task::spawn_blocking(move || {
             let _lease = lease;
             drop(send.send(operation()));
         });
+        Self::join_worker(control, pending, worker, receive).await
+    }
+
+    async fn plan_physical(
+        self: &Arc<Self>,
+        state: SessionState,
+        plan: LogicalPlan,
+        control: Arc<AnalysisReadControl>,
+        lease: impl Send + 'static,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let pending = PendingRead {
+            control: Arc::clone(&control),
+            active: true,
+        };
+        let handle = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| {
+                BusySnafu {
+                    resource: "execution runtime",
+                }
+                .build()
+            })?
+            .handle();
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let engine = Arc::clone(self);
+        let stage = Arc::clone(&control);
+        let worker = handle.spawn(async move {
+            let _engine = engine;
+            let _lease = lease;
+            let result = stage
+                .query_async(async move {
+                    state
+                        .query_planner()
+                        .create_physical_plan(&plan, &state)
+                        .await
+                        .context(SqlSnafu)
+                })
+                .await;
+            drop(send.send(result));
+        });
+        Self::join_worker(control, pending, worker, receive).await
+    }
+
+    async fn join_worker<T: Send + 'static>(
+        control: Arc<AnalysisReadControl>,
+        mut pending: PendingRead,
+        mut worker: tokio::task::JoinHandle<()>,
+        receive: tokio::sync::oneshot::Receiver<Result<T>>,
+    ) -> Result<T> {
         let result = control
             .query_async(async {
                 let result = (&mut worker).await;
@@ -1240,14 +1290,8 @@ impl Session {
             .context(SqlSnafu)
         })
         .await?;
-        control
-            .query_async(async {
-                state
-                    .query_planner()
-                    .create_physical_plan(&plan, &state)
-                    .await
-                    .context(SqlSnafu)
-            })
+        self.engine
+            .plan_physical(state, plan, control, self.token()?)
             .await
     }
 

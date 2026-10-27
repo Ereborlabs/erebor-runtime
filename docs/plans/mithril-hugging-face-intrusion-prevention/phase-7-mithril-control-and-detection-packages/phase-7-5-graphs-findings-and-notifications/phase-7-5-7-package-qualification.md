@@ -1019,3 +1019,41 @@ That read does not prove publication or full Graph delivery before the wait expi
 [Integrity checks](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/scoped-graph-progress-check-integrity.json>) confirm unchanged source, executables, and excluded files.
 No full CI, benchmark, image build, or physical case runs.
 PENDING: busy-input completion, current images, paired physical result, final evidence records, resource absence, and owned VM removal.
+
+
+## Native physical planning execution
+
+**Native planning and focused owner checks: Done. Busy-input completion, current physical result, and complete qualification: Not done.**
+The [temporary diagnostic](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/publication-phase-probe-facts.json>) records a native physical-planning interval of up to 13.01 seconds.
+The [interval record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/publication-phase-probe-intervals.json>) uses parent line-reader arrival times. These intervals include scheduling and nested preparation; they are not CPU measurements or a benchmark.
+The diagnostic keeps its original source and executable limits. It does not establish the complete busy-WAL cause.
+
+Native planning now runs as an async task on the Query engine's existing runtime.
+[Engine::plan_physical and join_worker](../../../../../crates/araphor-query/src/execution.rs) retain the engine, operation control, result, and task lease through completion or cancellation.
+Blocking work uses the same result-join owner. Logical optimization and package preparation keep their existing blocking workers.
+No new executor, runtime, store, scheduler, or timeout is added.
+The blocking-parent proposal was rejected: nested package preparation can need the same blocking pool, so a parent that holds its sole worker can prevent progress.
+
+The [corrected native-scan RED](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-red-fixed-facts.json>) fails in 6.014 seconds with AnalysisReadDeadline before the current-thread test can release its synchronous scan gate.
+Gate release and bounded cleanup run before the failure is returned. This proves the native-planning liveness condition; it does not prove the sole busy-WAL cause.
+The [earlier cleanup attempt](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-red-invalid-facts.json>) polls a completed future again and panics. That result remains invalid RED evidence.
+
+The [Query build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-green-check-build.json>) passes in 51.942 seconds.
+The [focused Query record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-green-checks.json>) contains twelve passing executions, each with one pass, zero failures, and zero ignored cases.
+These checks cover native-scan cancellation and joined cleanup, Notify-only cancellation without release, package preparation, abandoned result and lease order, clock changes, and SQL/Wasm execution with one caller blocking worker.
+The existing clock assertions and SQL/Wasm accumulation assertions remain.
+[Query Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-clippy.json>) passes with warnings denied in 69.105 seconds.
+[Four-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-fmt.json>) passes in 0.072 seconds.
+The source is [native-planning-green-source.json](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-green-source.json>), SHA-256 ff4beae2a829c76b6aaa8baee47bb3aba48d56478d677c53a5ec426068a971bb, with 2,042 pins.
+
+The fresh [E2E build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-incident-check-build.json>) passes in 140.493 seconds.
+The unchanged [busy-WAL case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-incident-facts.json>) fails in 119.482 seconds: zero passes, one failure, zero ignored cases.
+The client cache contains actor Graph cursor 950 at commit revision 91 and background Graph cursor 642 at commit revision 93. Records 941 and 950 are present.
+The actor finding is Confirmed with Exact policy. Background CPU 0 has matching healthy coverage and the selected cut member.
+The selected notification is absent. The completion predicate still waits for that notification; the strict assertions after the wait do not run.
+A later finite state query reports consumed cursors 950 and 642 at read revision 104. That later query does not establish when those results were published.
+The selected notice field does not establish whether a stored obligation exists or whether routing failed.
+The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/native-planning-incident-check-integrity.json>) confirms unchanged source, executable, and excluded files.
+PENDING: current deployment images, the paired physical result, final evidence records, owned-resource absence, and owned VM removal.
+The whole qualification matrix and current physical result remain Not done. Existing matrix records retain their original source, artifact, and assertion limits.
+No overall speed improvement, full CI, benchmark, full incident reproduction, Python execution, upstream algorithm port, or external notification delivery is qualified by this result.

@@ -191,6 +191,105 @@ async fn blocking_drop_orders_cleanup(
 }
 
 #[tokio::test]
+async fn planning_drop_orders_cleanup(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[derive(Debug)]
+    struct ResultGate {
+        plan: Arc<std::sync::Mutex<Option<std::sync::Weak<dyn ExecutionPlan>>>>,
+        entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    }
+    impl datafusion::physical_optimizer::PhysicalOptimizerRule for ResultGate {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _: &datafusion::common::config::ConfigOptions,
+        ) -> NativeResult<Arc<dyn ExecutionPlan>> {
+            if let Some(release) = self.release.lock().unwrap().take() {
+                *self.plan.lock().unwrap() = Some(Arc::downgrade(&plan));
+                if let Some(entered) = self.entered.lock().unwrap().take() {
+                    let _entered = entered.send(());
+                }
+                release
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|source| {
+                        datafusion::common::DataFusionError::External(Box::new(source))
+                    })?;
+            }
+            Ok(plan)
+        }
+        fn name(&self) -> &str {
+            "result_cleanup_gate"
+        }
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+    struct Lease {
+        plan: Arc<std::sync::Mutex<Option<std::sync::Weak<dyn ExecutionPlan>>>>,
+        report: Option<tokio::sync::oneshot::Sender<bool>>,
+        _token: araphor_package_runtime::TaskTrackerToken,
+    }
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            let dropped = self
+                .plan
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|plan| plan.upgrade().is_none());
+            if let Some(report) = self.report.take() {
+                let _reported = report.send(dropped);
+            }
+            assert!(dropped, "native plan outlived the worker lease");
+        }
+    }
+
+    let fixture = Fixture::new(Limits::default());
+    let native = Arc::new(std::sync::Mutex::new(None));
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let mut rules = fixture.engine.state.physical_optimizers().to_vec();
+    rules.push(Arc::new(ResultGate {
+        plan: Arc::clone(&native),
+        entered: std::sync::Mutex::new(Some(entered)),
+        release: std::sync::Mutex::new(Some(held)),
+    }));
+    let state = super::SessionStateBuilder::new_from_existing(fixture.engine.state.clone())
+        .with_physical_optimizer_rules(rules)
+        .build();
+    let plan = datafusion::logical_expr::LogicalPlanBuilder::empty(false).build()?;
+    let tracker = araphor_package_runtime::TaskTracker::new();
+    let (report, observed) = tokio::sync::oneshot::channel();
+    let lease = Lease {
+        plan: Arc::clone(&native),
+        report: Some(report),
+        _token: tracker.token(),
+    };
+    let mut work = Box::pin(fixture.engine.plan_physical(
+        state,
+        plan,
+        Arc::new(AnalysisReadControl::default()),
+        lease,
+    ));
+    tokio::select! {
+        result = &mut work => {
+            let _result = result?;
+            return Err("native planning completed before release".into());
+        }
+        ready = ready => ready?,
+    }
+    assert!(native.lock().unwrap().as_ref().unwrap().upgrade().is_some());
+    drop(work);
+    tracker.close();
+    assert_eq!(tracker.len(), 1);
+    release.send(())?;
+    tokio::time::timeout(Duration::from_secs(5), tracker.wait()).await?;
+    assert!(observed.await?);
+    Ok(())
+}
+
+#[tokio::test]
 async fn blocking_deadline_keeps_parent(
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let parent = control();

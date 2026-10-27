@@ -463,6 +463,8 @@ struct PlanningGate {
     inner: Arc<dyn TableProvider>,
     entered: Arc<tokio::sync::Notify>,
     released: Arc<tokio::sync::Notify>,
+
+    held: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
 }
 
 #[async_trait::async_trait]
@@ -494,9 +496,17 @@ impl TableProvider for PlanningGate {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::common::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
-        let released = self.released.notified();
-        self.entered.notify_one();
-        released.await;
+        let held = self.held.lock().unwrap().take();
+        if let Some(held) = held {
+            self.entered.notify_one();
+            held.recv_timeout(Duration::from_secs(5))
+                .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
+        } else {
+            let released = self.released.notified();
+            self.entered.notify_one();
+            released.await;
+        }
+
         self.inner.scan(state, projection, filters, limit).await
     }
 }
@@ -511,6 +521,8 @@ async fn planning_keeps_clock_change() {
         inner: SourceSnapshot::providers()["events"].clone(),
         entered: Arc::clone(&entered),
         released: Arc::clone(&released),
+
+        held: std::sync::Mutex::new(None),
     });
     let state = fixture
         .engine
@@ -923,4 +935,137 @@ async fn clock_keeps_pending_source() {
     assert_eq!(values(&changed, 0), [ScalarValue::Int64(Some(2))]);
     assert!(changed.cursor.read_revision() > first.cursor.read_revision());
     assert!(!changed.clock_changed);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_planning_joins_worker(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let fixture = Fixture::new(Limits {
+        tenant_evaluations: Some(1),
+        input_capacity: Some(128 * 1024 * 1024),
+        output_capacity: Some(16 * 1024 * 1024),
+        ..Limits::default()
+    });
+    fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let (release, held) = std::sync::mpsc::channel();
+    let provider: Arc<dyn TableProvider> = Arc::new(PlanningGate {
+        inner: SourceSnapshot::providers()["events"].clone(),
+        entered: Arc::clone(&entered),
+        released: Arc::new(tokio::sync::Notify::new()),
+        held: std::sync::Mutex::new(Some(held)),
+    });
+    let state = fixture
+        .engine
+        .catalog(BTreeMap::from([("events".into(), provider)]))?;
+    let plan = Arc::new(fixture.engine.plan(
+        &state,
+        Parser::default().parse("SELECT COUNT(*) AS total FROM events")?,
+        vec![],
+    )?);
+    let control = AnalysisReadControl::default();
+    let session = fixture.engine.session(fixture.selection(), &control, 0)?;
+    let mut subscription = Subscription::new(
+        session,
+        plan,
+        BTreeMap::from([("events".into(), None)]),
+        b"native planning principal",
+        None,
+        TestClock::new(2_000_000_000),
+        true,
+    )?;
+    let reached: std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> = tokio::select! {
+        () = entered.notified() => Ok(()),
+        result = subscription.next() => Err(format!("native planner completed before release: {result:?}").into()),
+    };
+    let mut joined = Box::pin(subscription.cancel_and_join());
+    let first = futures_util::poll!(joined.as_mut());
+    let pending = first.is_pending();
+    let capacity_held = fixture.engine.reserve_evaluation([1; 16]).is_err();
+    let released = release.send(());
+    let stopped = match first {
+        std::task::Poll::Ready(result) => result,
+        std::task::Poll::Pending => tokio::time::timeout(Duration::from_secs(5), joined).await?,
+    };
+    stopped?;
+    reached?;
+    assert!(
+        pending,
+        "native planning cancellation completed before release"
+    );
+    assert!(
+        capacity_held,
+        "native planning released its permit before the worker"
+    );
+    released.map_err(|_| "native planning gate receiver closed")?;
+    drop(fixture.engine.reserve_evaluation([1; 16])?);
+    drop(fixture.engine.memory().reserve_input(128 * 1024 * 1024)?);
+    drop(fixture.engine.memory().reserve_output(16 * 1024 * 1024)?);
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn notify_planning_cancel_joins(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let fixture = Fixture::new(Limits {
+        tenant_evaluations: Some(1),
+        input_capacity: Some(128 * 1024 * 1024),
+        output_capacity: Some(16 * 1024 * 1024),
+        ..Limits::default()
+    });
+    fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let released = Arc::new(tokio::sync::Notify::new());
+    let provider: Arc<dyn TableProvider> = Arc::new(PlanningGate {
+        inner: SourceSnapshot::providers()["events"].clone(),
+        entered: Arc::clone(&entered),
+        released: Arc::clone(&released),
+        held: std::sync::Mutex::new(None),
+    });
+    let state = fixture
+        .engine
+        .catalog(BTreeMap::from([("events".into(), provider)]))?;
+    let plan = Arc::new(fixture.engine.plan(
+        &state,
+        Parser::default().parse("SELECT COUNT(*) AS total FROM events")?,
+        vec![],
+    )?);
+    let control = AnalysisReadControl::default();
+    let session = fixture.engine.session(fixture.selection(), &control, 0)?;
+    let mut subscription = Subscription::new(
+        session,
+        plan,
+        BTreeMap::from([("events".into(), None)]),
+        b"notify planning principal",
+        None,
+        TestClock::new(2_000_000_000),
+        true,
+    )?;
+    let reached: std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> = tokio::select! {
+        () = entered.notified() => Ok(()),
+        result = subscription.next() => Err(format!("native notify planner completed before cancellation: {result:?}").into()),
+    };
+    let capacity_held = fixture.engine.reserve_evaluation([1; 16]).is_err();
+    let mut joined = Box::pin(subscription.cancel_and_join());
+    let observed = tokio::time::timeout(Duration::from_secs(5), joined.as_mut()).await;
+    let joined_without_release = observed.is_ok();
+    released.notify_one();
+    let stopped = match observed {
+        Ok(result) => result,
+        Err(_) => tokio::time::timeout(Duration::from_secs(5), joined.as_mut()).await?,
+    };
+    stopped?;
+    reached?;
+    assert!(
+        joined_without_release,
+        "native notify planning required release to cancel"
+    );
+    assert!(
+        capacity_held,
+        "native notify planning did not retain its permit"
+    );
+    drop(fixture.engine.reserve_evaluation([1; 16])?);
+    drop(fixture.engine.memory().reserve_input(128 * 1024 * 1024)?);
+    drop(fixture.engine.memory().reserve_output(16 * 1024 * 1024)?);
+    Ok(())
 }

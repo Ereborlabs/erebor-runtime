@@ -464,12 +464,18 @@ async fn accumulation(target: &str) -> TestResult {
     Ok(())
 }
 
-#[tokio::test]
-async fn physical_sql_wasm_complete_relation() -> TestResult {
-    for target in ["sql", "wasm"] {
-        accumulation(target).await?;
-    }
-    Ok(())
+#[test]
+fn physical_sql_wasm_complete_relation() -> TestResult {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        for target in ["sql", "wasm"] {
+            accumulation(target).await?;
+        }
+        Ok(())
+    })
 }
 
 #[tokio::test]
