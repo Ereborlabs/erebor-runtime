@@ -1003,31 +1003,29 @@ impl AnalysisStore {
             path: Path::new("<relation-revisions>"),
         })?;
         let changed = transaction
-            .execute(
+            .prepare_cached(
                 "UPDATE relation_revisions SET last_changed_revision = ?
                  WHERE relation_name IN (SELECT unnest(CAST(? AS VARCHAR[])))",
-                params![revision, names],
             )
+            .and_then(|mut statement| statement.execute(params![revision, names]))
             .context(AnalysisDatabaseSnafu {
                 operation: "advance relation revisions",
             })?;
         if changed < relations.len() {
             for relation in relations {
                 transaction
-                    .execute(
+                    .prepare_cached(
                         "INSERT INTO relation_revisions VALUES (?, ?) ON CONFLICT DO NOTHING",
-                        params![relation, revision],
                     )
+                    .and_then(|mut statement| statement.execute(params![relation, revision]))
                     .context(AnalysisDatabaseSnafu {
                         operation: "insert relation revision",
                     })?;
             }
         }
         transaction
-            .execute(
-                "UPDATE store_meta SET commit_revision = ? WHERE singleton = true",
-                params![revision],
-            )
+            .prepare_cached("UPDATE store_meta SET commit_revision = ? WHERE singleton = true")
+            .and_then(|mut statement| statement.execute(params![revision]))
             .context(AnalysisDatabaseSnafu {
                 operation: "advance store revision",
             })?;
@@ -1037,12 +1035,15 @@ impl AnalysisStore {
     fn read_meta_from(connection: &Connection, path: &Path) -> Result<AnalysisStoreMetaV1> {
         let (uuid, schema_version, recovery_epoch, commit_revision): (String, i64, u64, u64) =
             connection
-                .query_row(
+                .prepare_cached(
                     "SELECT store_uuid, schema_version, recovery_epoch, commit_revision
                      FROM store_meta WHERE singleton = true",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
+                .and_then(|mut statement| {
+                    statement.query_row([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })
+                })
                 .context(AnalysisDatabaseSnafu {
                     operation: "read store identity",
                 })?;

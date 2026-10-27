@@ -84,7 +84,7 @@ impl AnalysisStore {
     ) -> Result<Vec<FindingKey>> {
         let mut statement =
             snapshot
-                .prepare(Self::finding_selection())
+                .prepare_cached(Self::finding_selection())
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare selected native finding keys",
                 })?;
@@ -138,7 +138,7 @@ impl AnalysisStore {
             &stream_bytes as &dyn duckdb::ToSql,
         ]);
         let mut statement = snapshot
-            .prepare(&Self::finding_preflight(ids.len()))
+            .prepare_cached(&Self::finding_preflight(ids.len()))
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare selected native graph bounds",
             })?;

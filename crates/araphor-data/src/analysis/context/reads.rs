@@ -88,27 +88,31 @@ impl AnalysisStore {
         key: &AnalysisContextKeyV1,
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
         let stored: Option<ContextRow> = connection
-            .query_row(
+            .prepare_cached(
                 "SELECT valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision
                  FROM context_versions WHERE tenant_id = ? AND owner_id = ? AND entity_key = ?
                  AND lifetime_key = ? AND owner_revision = ?",
-                params![
-                    key.tenant_id.as_slice(),
-                    key.owner_id,
-                    key.entity_key.as_slice(),
-                    key.lifetime_key.as_slice(),
-                    key.owner_revision,
-                ],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
             )
+            .and_then(|mut statement| {
+                statement.query_row(
+                    params![
+                        key.tenant_id.as_slice(),
+                        key.owner_id,
+                        key.entity_key.as_slice(),
+                        key.lifetime_key.as_slice(),
+                        key.owner_revision,
+                    ],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+            })
             .optional()
             .context(AnalysisDatabaseSnafu {
                 operation: "read context version",

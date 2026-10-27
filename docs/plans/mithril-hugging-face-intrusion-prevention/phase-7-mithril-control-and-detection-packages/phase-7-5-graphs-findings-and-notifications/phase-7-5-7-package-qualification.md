@@ -1150,3 +1150,34 @@ The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualifica
 The remaining notification cause and any execution-time gain remain unproven. No new physical case or benchmark runs.
 PENDING: current deployment images, paired physical result, final evidence records, owned-resource absence, and owned VM removal.
 The whole qualification matrix remains Not done. Earlier matrix records retain their original source, artifact, feature, and assertion limits.
+
+
+## Native prepared storage statements
+
+**Statement reuse and result lifetime checks: Done. Busy-input completion and complete qualification: Not done.**
+Twelve existing Data SQL call sites use DuckDB prepare_cached.
+The sites read current finding keys and bounds, exact context versions and heads, related notification state, store metadata, and current managed instances. They also insert context versions and advance relation and store revisions.
+Every statement still executes with its original parameters and transaction. Full spec and grant decode, stored-row validation, retry-before-CAS order, controls, and error fields remain.
+The existing connection cache keeps at most 16 prepared handles. It now calls the existing reset_result method before it retains a handle and clears bindings. Owned Arrow batches can keep their required buffers.
+
+The new ordinary Rust case, cached_statement_releases_results, uses the public dependency API.
+The [RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-red-facts.json>) fails at the intended Weak-schema assertion in 0.247 seconds after a 56.361-second build.
+This proves a latent result-retention issue in the dependency. The previous production code did not use prepare_cached; this RED case does not reproduce the incident timeout.
+The [GREEN record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-green-facts.json>) has 16 passes, zero failures, and zero ignored cases after a 102.579-second build.
+The new case passes in 0.061 seconds and reaches result release, new bindings, current rows after rollback, current schema after a type change, and escaped Arrow-batch checks.
+The commands enable Data test-fixtures. The records retain the actual artifacts from each Cargo feature union.
+
+Source: [prepared-storage-green-source.json](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-green-source.json>), SHA-256 b67deb24ce90bdeb2162b56c824b92633a37eb7423889a517de0a25cfb2e27ef.
+[Eight Data files pass formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-fmt.json>).
+The [changed vendor function and delta pass the native formatter check](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-vendor-style-facts.json>).
+The whole vendor file still fails the default formatter at five unchanged locations. The saved original has the same differences. No whole-file formatting pass or repository style configuration is claimed.
+[Data/Analysis Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-clippy.json>) passes with warnings denied in 42.322 seconds.
+
+The [normal E2E build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-incident-check-build.json>) passes in 144.554 seconds.
+The unchanged [busy-input case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-incident-facts.json>) still fails in 120.038 seconds: zero passes, one failure, zero ignored cases.
+Its cache contains actor cursor 950 at publication 94 and background cursor 642 at publication 90. Both selected records are present.
+The selected finding is Confirmed with Exact policy evidence. Its notice is absent. Background CPU 0 has matching healthy coverage and one selected cut member.
+Strict assertions after the wait do not run. Later producer reads finish, but do not prove publication before the deadline. An absent client notice does not prove absent saved state.
+The source, artifacts, and excluded files remain unchanged. No execution-time gain, complete incident proof, current physical proof, or external-delivery proof is established.
+PENDING: current deployment images, paired physical result, final evidence records, owned-resource absence, and owned VM removal.
+The whole qualification matrix remains Not done. Earlier records retain their original source, artifact, feature, and assertion limits.

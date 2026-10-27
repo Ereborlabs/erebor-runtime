@@ -113,8 +113,8 @@ impl AnalysisStore {
         tenant: [u8; 16],
         id: &str,
     ) -> Result<Option<ManagedInstance>> {
-        let row = reader.query_row("SELECT v.spec, i.authority, i.generation, i.progress, i.running, i.removed, i.lifecycle FROM managed_instances i JOIN managed_versions v USING (tenant_id, instance_id, generation) WHERE i.tenant_id = ? AND i.instance_id = ?", params![tenant.as_slice(), id], |row|
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, u64>(2)?, row.get::<_, u64>(3)?, row.get::<_, bool>(4)?, row.get::<_, bool>(5)?, row.get::<_, u64>(6)?)))
+        let row = reader.prepare_cached("SELECT v.spec, i.authority, i.generation, i.progress, i.running, i.removed, i.lifecycle FROM managed_instances i JOIN managed_versions v USING (tenant_id, instance_id, generation) WHERE i.tenant_id = ? AND i.instance_id = ?").and_then(|mut statement| statement.query_row(params![tenant.as_slice(), id], |row|
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, u64>(2)?, row.get::<_, u64>(3)?, row.get::<_, bool>(4)?, row.get::<_, bool>(5)?, row.get::<_, u64>(6)?))))
             .optional().context(AnalysisDatabaseSnafu { operation: "read managed instance" })?;
         row.map(|row| Self::managed_row(tenant, id, row))
             .transpose()

@@ -83,7 +83,7 @@ impl AnalysisStore {
             .and_then(|value| i64::try_from(value).ok());
         self.read_snapshot(|reader| {
             let mut statement = reader
-                .prepare(
+                .prepare_cached(
                     "SELECT entity_key, lifetime_key, MAX(owner_revision) FROM context_versions
                  WHERE tenant_id = ? AND owner_id = ?
                  GROUP BY entity_key, lifetime_key ORDER BY entity_key, lifetime_key LIMIT ?",

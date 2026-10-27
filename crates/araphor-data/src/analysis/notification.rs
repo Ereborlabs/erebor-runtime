@@ -45,7 +45,7 @@ impl AnalysisStore {
         self.read_snapshot(|reader| {
             let owner = crate::NOTIFICATION_STATE_OWNER;
             let mut statement = reader
-                .prepare(
+                .prepare_cached(
                     "WITH heads AS (
                     SELECT * FROM context_versions WHERE tenant_id = ? AND owner_id = ?
                     QUALIFY ROW_NUMBER() OVER (PARTITION BY entity_key, lifetime_key

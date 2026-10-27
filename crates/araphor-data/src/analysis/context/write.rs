@@ -157,9 +157,11 @@ impl AnalysisStore {
             };
             let sensitivity: &'static str = input.sensitivity.into();
             writer
-                .execute(
+                .prepare_cached(
                     "INSERT INTO context_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
+                )
+                .and_then(|mut statement| {
+                    statement.execute(params![
                         key.tenant_id.as_slice(),
                         key.owner_id,
                         key.entity_key.as_slice(),
@@ -170,8 +172,8 @@ impl AnalysisStore {
                         sensitivity,
                         input.body.as_slice(),
                         current,
-                    ],
-                )
+                    ])
+                })
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert context version",
                 })?;
@@ -244,17 +246,21 @@ impl AnalysisStore {
     ) -> Result<()> {
         if let Some(expected) = expected {
             let latest: Option<u64> = reader
-                .query_row(
+                .prepare_cached(
                     "SELECT MAX(owner_revision) FROM context_versions
                  WHERE tenant_id = ? AND owner_id = ? AND entity_key = ? AND lifetime_key = ?",
-                    params![
-                        key.tenant_id.as_slice(),
-                        key.owner_id,
-                        key.entity_key.as_slice(),
-                        key.lifetime_key.as_slice()
-                    ],
-                    |row| row.get(0),
                 )
+                .and_then(|mut statement| {
+                    statement.query_row(
+                        params![
+                            key.tenant_id.as_slice(),
+                            key.owner_id,
+                            key.entity_key.as_slice(),
+                            key.lifetime_key.as_slice()
+                        ],
+                        |row| row.get(0),
+                    )
+                })
                 .context(AnalysisDatabaseSnafu {
                     operation: "read expected context head",
                 })?;

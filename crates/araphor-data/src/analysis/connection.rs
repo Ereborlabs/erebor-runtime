@@ -1158,4 +1158,97 @@ mod tests {
         ));
         Ok(())
     }
+
+    #[test]
+    fn cached_statement_releases_results() -> TestResult {
+        use duckdb::arrow::{
+            array::{Int32Array, StringArray},
+            datatypes::DataType,
+        };
+        use std::sync::Arc;
+
+        let mut connection = duckdb::Connection::open_in_memory()?;
+        let bound = "SELECT ?::BIGINT AS value";
+        let schema = {
+            let mut statement = connection.prepare_cached(bound)?;
+            assert_eq!(statement.query_row([7_i64], |row| row.get::<_, i64>(0))?, 7);
+            let schema = statement.schema();
+            let weak = Arc::downgrade(&schema);
+            drop(schema);
+            weak
+        };
+        assert!(
+            schema.upgrade().is_none(),
+            "cached execution result retains its schema"
+        );
+        {
+            let mut statement = connection.prepare_cached(bound)?;
+            assert_eq!(statement.query_row([9_i64], |row| row.get::<_, i64>(0))?, 9);
+        }
+
+        connection.execute_batch(
+            "CREATE TABLE prepared_rows (value INTEGER); INSERT INTO prepared_rows VALUES (1)",
+        )?;
+        let read = "SELECT value FROM prepared_rows ORDER BY value";
+        let escaped = {
+            let mut statement = connection.prepare_cached(read)?;
+            let mut batches = statement.query_arrow([])?;
+            let batch = batches.next().ok_or("first Arrow batch absent")?;
+            assert!(batches.next().is_none());
+            batch
+        };
+        assert_eq!(escaped.schema().field(0).data_type(), &DataType::Int32);
+        {
+            let transaction = connection.transaction()?;
+            transaction.execute("INSERT INTO prepared_rows VALUES (?)", [2_i32])?;
+            {
+                let mut statement = transaction.prepare_cached(read)?;
+                let rows = statement
+                    .query_map([], |row| row.get::<_, i32>(0))?
+                    .collect::<duckdb::Result<Vec<_>>>()?;
+                assert_eq!(rows, vec![1, 2]);
+            }
+            transaction.rollback()?;
+        }
+        {
+            let mut statement = connection.prepare_cached(read)?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, i32>(0))?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+            assert_eq!(rows, vec![1]);
+        }
+
+        connection.execute_batch(
+            "DROP TABLE prepared_rows;
+         CREATE TABLE prepared_rows (value VARCHAR);
+         INSERT INTO prepared_rows VALUES ('changed')",
+        )?;
+        {
+            let mut statement = connection.prepare_cached(read)?;
+            let mut batches = statement.query_arrow([])?;
+            let batch = batches.next().ok_or("new Arrow batch absent")?;
+            assert!(batches.next().is_none());
+            assert_eq!(batch.schema().field(0).data_type(), &DataType::Utf8);
+            assert_eq!(
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or("new Arrow column type")?
+                    .value(0),
+                "changed",
+            );
+        }
+        assert_eq!(escaped.schema().field(0).data_type(), &DataType::Int32);
+        assert_eq!(
+            escaped
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .ok_or("escaped Arrow column type")?
+                .value(0),
+            1,
+        );
+        Ok(())
+    }
 }

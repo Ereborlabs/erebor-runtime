@@ -4950,3 +4950,42 @@ Strict assertions after the wait do not run. These results do not isolate the re
 The full goal and current physical qualification remain Not done.
 Current images, paired physical proof, final evidence, owned-resource absence, and owned VM removal remain open.
 Earlier proof records keep their original source and artifact limits.
+
+
+## Prepared statements in Data storage
+
+Read the existing owners in this order:
+
+| Owner | Existing work that uses prepare_cached | Sites |
+| --- | --- | --- |
+| [Finding preflight](../../crates/araphor-data/src/analysis/graph/findings/preflight.rs) | Current key selection and retained-header bounds | 2 |
+| [Context reads](../../crates/araphor-data/src/analysis/context/reads.rs) | Exact stored version | 1 |
+| [Context heads](../../crates/araphor-data/src/analysis/context/pages.rs) | Current heads for an owner | 1 |
+| [Context writes](../../crates/araphor-data/src/analysis/context/write.rs) | Expected owner head and version insert | 2 |
+| [Store metadata](../../crates/araphor-data/src/analysis/mod.rs) | Singleton read and three revision statements | 4 |
+| [Managed reads](../../crates/araphor-data/src/analysis/managed/read.rs) | Exact current-instance join | 1 |
+| [Notification reads](../../crates/araphor-data/src/analysis/notification.rs) | Related saved-state lookup | 1 |
+
+These are storage statements under the existing Data owners. Query subscriptions still use the native DataFusion planning and execution path.
+Each call gets a prepared handle, binds its original parameters, executes against its current transaction, and runs its original decoder and checks.
+The convenience-call closures end at their previous operation boundaries. Explicit row iterators keep their previous scopes.
+Lifecycle reads still decode the complete stored spec and grant. Context writes still check exact retry before expected head and commit each changed version through the existing owner.
+
+[The dependency cache](../../vendor/duckdb/src/cache.rs) calls RawStatement::reset_result after the null guard and before it borrows the cache and clears bindings.
+That existing method releases the last ExecutedResult. The native prepared handle and cache key remain.
+The existing LRU holds at most 16 prepared handles on each connection. This is not zero retained memory.
+Metadata inspection follows execution. Owned Arrow batches can retain their own result buffers after the statement ends.
+A read failure keeps its original error context. A write failure keeps its original rollback and revision behavior.
+
+The ordinary Rust case [cached_statement_releases_results](../../crates/araphor-data/src/analysis/connection.rs) checks output release through a public Weak schema handle.
+It then checks fresh values, rollback and reuse, an actual INTEGER-to-VARCHAR table change, and an owned batch after statement release and reuse.
+The [old-cache RED](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-red-facts.json>) fails only at the first resource assertion. Its later assertions are not reached.
+The [16-case GREEN record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-green-facts.json>) reaches all assertions and covers current context, CAS, stored-row corruption, lifecycle, cancellation, Graph history, and native notification eligibility.
+This is a dependency resource check, not a reproduction of the production incident failure.
+Source: prepared-storage-green-source.json, SHA-256 b67deb24ce90bdeb2162b56c824b92633a37eb7423889a517de0a25cfb2e27ef. The records retain Cargo features and actual executable hashes.
+
+[Data formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-fmt.json>) and [Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-clippy.json>) pass.
+[Vendor delta formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-vendor-style-facts.json>) passes for the changed function. The whole file retains five pre-existing default-format differences; that failure remains recorded.
+The [unchanged normal incident](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-incident-facts.json>) still fails in 120.038 seconds. Final Graph cursors are 950 and 642. The selected finding is Confirmed/Exact; its notice is absent.
+The strict assertions after the wait do not run. These records establish no overall speed gain or absence of saved obligations.
+Complete qualification, current images, paired physical proof, final evidence, owned-resource absence, and VM removal remain Not done. Earlier proof keeps its original limits.
