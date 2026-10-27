@@ -67,9 +67,8 @@ fn native_finding_batches() -> std::result::Result<(), Box<dyn std::error::Error
         .commit_graph(&fixture.request, true, || Ok(()))?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     fixture.store.read_snapshot(|snapshot| {
-        let selection = fixture.store.preflight_findings(
+        let keys = fixture.store.selected_finding_keys(
             snapshot,
-            tenant,
             params![
                 tenant.as_slice(),
                 GRAPH_PROCESSOR,
@@ -81,6 +80,7 @@ fn native_finding_batches() -> std::result::Result<(), Box<dyn std::error::Error
                 i64::MAX
             ],
         )?;
+        let selection = fixture.store.preflight_findings(snapshot, tenant, keys)?;
         assert_eq!(FindingKey::batch_end(&selection.keys, 0), 256);
         let stored: u64 = snapshot
             .query_row(
@@ -163,9 +163,8 @@ fn native_finding_fallback() -> std::result::Result<(), Box<dyn std::error::Erro
         ),
     ] {
         let actual = fixture.store.read_snapshot(|snapshot| {
-            let mut selection = fixture.store.preflight_findings(
+            let keys = fixture.store.selected_finding_keys(
                 snapshot,
-                tenant,
                 params![
                     tenant.as_slice(),
                     GRAPH_PROCESSOR,
@@ -177,6 +176,7 @@ fn native_finding_fallback() -> std::result::Result<(), Box<dyn std::error::Erro
                     i64::MAX
                 ],
             )?;
+            let mut selection = fixture.store.preflight_findings(snapshot, tenant, keys)?;
             for key in selection.keys.iter_mut().take(points) {
                 key.bytes = MAX_READ_BYTES as u64;
             }
@@ -601,5 +601,196 @@ fn graph_pages_keep_budget() -> std::result::Result<(), Box<dyn std::error::Erro
             .graph_findings(tenant, None, None, 2, first_bytes - 1),
         Err(crate::Error::GraphEncoding { .. })
     ));
+    Ok(())
+}
+
+#[test]
+fn notification_finding_checks_current() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let fixture = CommitFixture::new()?;
+    let first = fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
+    let tenant = fixture.snapshot.scope.identity.tenant_id;
+    let finding = fixture
+        .snapshot
+        .findings
+        .first()
+        .ok_or("fixture finding")?
+        .clone();
+    let original = crate::NotificationFindingRefV1 {
+        result_id: fixture.request.result_id.clone(),
+        finding_id: finding.finding_id.clone(),
+    };
+    assert_eq!(
+        fixture.store.notification_finding(tenant, &original)?,
+        finding
+    );
+    assert!(matches!(
+        fixture.store.notification_finding([0; 16], &original),
+        Err(crate::Error::Notification {
+            code: crate::NotificationErrorCodeV1::Invalid,
+            field: "finding reference",
+            ..
+        })
+    ));
+    for invalid in ["", "finding\ninvalid", "finding\rinvalid", "\0", "\u{7f}"] {
+        for reference in [
+            crate::NotificationFindingRefV1 {
+                finding_id: invalid.into(),
+                ..original.clone()
+            },
+            crate::NotificationFindingRefV1 {
+                result_id: invalid.into(),
+                ..original.clone()
+            },
+        ] {
+            assert!(matches!(
+                fixture.store.notification_finding(tenant, &reference),
+                Err(crate::Error::Notification {
+                    code: crate::NotificationErrorCodeV1::Invalid,
+                    field: "finding reference",
+                    ..
+                })
+            ));
+        }
+    }
+    assert!(matches!(
+        fixture.store.notification_finding([9; 16], &original),
+        Err(crate::Error::Notification {
+            code: crate::NotificationErrorCodeV1::Denied,
+            field: "current finding scope",
+            ..
+        })
+    ));
+    let missing = crate::NotificationFindingRefV1 {
+        finding_id: "absent-finding".into(),
+        ..original.clone()
+    };
+    assert!(matches!(
+        fixture.store.notification_finding(tenant, &missing),
+        Err(crate::Error::Notification {
+            code: crate::NotificationErrorCodeV1::Denied,
+            field: "current finding scope",
+            ..
+        })
+    ));
+    let unknown_result = crate::NotificationFindingRefV1 {
+        result_id: "graph:missing".into(),
+        ..original.clone()
+    };
+    assert!(matches!(
+        fixture.store.notification_finding(tenant, &unknown_result),
+        Err(crate::Error::Notification {
+            code: crate::NotificationErrorCodeV1::Conflict,
+            field: "current finding reference",
+            ..
+        })
+    ));
+
+    let mut next = fixture.request.clone();
+    next.expected_cursor = next.consumed_cursor;
+    next.result_id = "graph:notification-current".into();
+    next.created_utc_ns += 1;
+    let mut snapshot = fixture.snapshot.clone();
+    snapshot.previous_result_id = Some(original.result_id.clone());
+    let updated = snapshot.findings.first_mut().ok_or("fixture finding")?;
+    updated.required_action = Some("inspect-current-effect".into());
+    let updated = updated.clone();
+    snapshot.validate()?;
+    next.body = serde_json::to_vec(&snapshot)?;
+    let second = fixture.store.commit_graph(&next, false, || Ok(()))?;
+    assert!(second.commit_revision > first.commit_revision);
+    let current = crate::NotificationFindingRefV1 {
+        result_id: next.result_id.clone(),
+        finding_id: finding.finding_id.clone(),
+    };
+    assert_eq!(
+        fixture.store.notification_finding(tenant, &current)?,
+        updated
+    );
+    assert!(matches!(
+        fixture.store.notification_finding(tenant, &original),
+        Err(crate::Error::Notification {
+            code: crate::NotificationErrorCodeV1::Conflict,
+            field: "current finding reference",
+            ..
+        })
+    ));
+    assert_eq!(
+        fixture
+            .store
+            .graph_finding(tenant, &original.result_id, &original.finding_id)?,
+        Some(finding.clone())
+    );
+
+    let header: Vec<u8> = {
+        let mut writer = fixture.store.writer_access()?;
+        writer.get_mut()?.query_row(
+            "SELECT body FROM analysis_results WHERE result_id = ?",
+            params![&current.result_id],
+            |row| row.get(0),
+        )?
+    };
+    fixture.store.fault_write(
+        "UPDATE analysis_results SET body = 'invalid'::BLOB WHERE result_id = ?",
+        params![&current.result_id],
+    )?;
+    let corrupt_current = fixture.store.notification_finding(tenant, &current);
+    let corrupt_stale = fixture.store.notification_finding(tenant, &original);
+    fixture.store.fault_write(
+        "UPDATE analysis_results SET body = ? WHERE result_id = ?",
+        params![&header, &current.result_id],
+    )?;
+    assert!(
+        matches!(
+            &corrupt_current,
+            Err(crate::Error::GraphInvalid {
+                field: "graph header format",
+                ..
+            })
+        ),
+        "matching corrupt reference returned {corrupt_current:?}"
+    );
+    assert!(
+        matches!(
+            &corrupt_stale,
+            Err(crate::Error::Notification {
+                code: crate::NotificationErrorCodeV1::Conflict,
+                field: "current finding reference",
+                ..
+            })
+        ),
+        "stale reference returned {corrupt_stale:?}"
+    );
+
+    let mut empty = next.clone();
+    empty.result_id = "graph:notification-empty".into();
+    empty.created_utc_ns += 1;
+    snapshot.previous_result_id = Some(current.result_id.clone());
+    snapshot.findings.clear();
+    snapshot.validate()?;
+    empty.body = serde_json::to_vec(&snapshot)?;
+    let third = fixture.store.commit_graph(&empty, false, || Ok(()))?;
+    assert!(third.commit_revision > second.commit_revision);
+    assert_eq!(
+        fixture.store.graph_result(tenant, &empty.result_id)?,
+        Some(snapshot)
+    );
+    for reference in [&original, &current] {
+        assert!(matches!(
+            fixture.store.notification_finding(tenant, reference),
+            Err(crate::Error::Notification {
+                code: crate::NotificationErrorCodeV1::Denied,
+                field: "current finding scope",
+                ..
+            })
+        ));
+    }
+    assert_eq!(
+        fixture
+            .store
+            .graph_finding(tenant, &original.result_id, &original.finding_id)?,
+        Some(finding)
+    );
     Ok(())
 }

@@ -4845,3 +4845,64 @@ The fresh E2E build passes in 140.493 seconds. The [normal busy-input case](</ho
 Its cache contains actor Graph cursor 950 and background Graph cursor 642, but no selected notification. The strict assertions after the completion wait do not run.
 This recorded cache differs from earlier runs. It does not establish a general speed improvement or the cause of the remaining notification delay.
 Current physical qualification, complete incident proof, and an end-to-end speed result remain **Not done**.
+
+
+## Reject stale notification references before materialization
+
+Data rejects a stale notification reference before header or finding materialization.
+A matching reference still requires the existing stored-result and finding validation.
+The native DataFusion subscription and its notification query keep their existing execution path.
+
+[consume_rows](../../crates/araphor-analysis/src/notification/reactive.rs) checks each candidate before routing.
+  -> [NotificationRouter::route_finding](../../crates/araphor-analysis/src/notification/routing.rs) keeps its router mutex and positive evaluation-time check.
+  -> [AnalysisStore::notification_finding](../../crates/araphor-data/src/analysis/graph/findings.rs) checks the tenant and both identifiers, then opens one read snapshot.
+  -> [selected_finding_keys](../../crates/araphor-data/src/analysis/graph/findings/preflight.rs) uses the unchanged current-key selection query.
+  -> [notification_finding](../../crates/araphor-data/src/analysis/graph/findings.rs) compares the selected result ID before header preflight or finding reconstruction.
+  -> [preflight_findings](../../crates/araphor-data/src/analysis/graph/findings/preflight.rs) checks the matching header and stored-byte bounds in that snapshot.
+  -> [collect_findings](../../crates/araphor-data/src/analysis/graph/findings/batches.rs) decodes and validates the matching finding in that snapshot.
+  -> [route_finding](../../crates/araphor-analysis/src/notification/routing.rs) reads fresh route heads and calls the existing scheduler.
+
+```mermaid
+sequenceDiagram
+    participant A as Analysis router
+    participant D as Data read owner
+    participant S as SQL snapshot
+    A->>D: Read expected finding
+    D->>S: Select current finding key
+    S-->>D: Current result ID or absent
+    alt Absent or stale reference
+        D-->>A: Denied or Conflict
+    else Matching reference
+        D->>S: Existing preflight and finding read
+        D-->>A: Validated FindingV1
+    end
+```
+
+The [selection SQL](../../crates/araphor-data/src/analysis/graph/findings/selection.rs) first ranks result heads by stream and first cursor, then ranks by finding ID.
+Both ranking stages stay unchanged. The expected result ID does not restrict either ranking stage.
+An absent key returns Notification Denied for current finding scope.
+A different result ID returns Notification Conflict for current finding reference.
+A zero tenant or invalid identifier returns Notification Invalid for finding reference.
+Historical result retention does not make an old reference current.
+
+The key comparison and materialization share one existing read transaction.
+A stale reference does not decode the newer header or finding.
+A matching reference retains header/index checks, stored-byte bounds, manifest checks, finding validation, and retained-result visibility.
+The invalid CBOR header in the regression returns Conflict for a stale reference and GraphInvalid for a matching reference.
+This precedence is intentional. A stale reference cannot authorize routing or delivery.
+Analysis keeps its per-item checks, mutex, fresh route reads, scheduling, delivery order, and item-local errors.
+The change adds no cache, schema, timer, polling, or execution owner.
+
+[notification_finding_checks_current](../../crates/araphor-data/src/analysis/graph/findings/tests.rs) contains exact matching output, input guards, foreign and absent findings, real replacement, and retained-history checks.
+The corruption setup saves the actual stored CBOR header and restores that header before either corruption assertion.
+The [completed RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-red-facts.json>) reports GraphInvalid where stale-reference Conflict is required.
+The matching-corruption assertion passes first. The old-order shim then fails at the intended stale-reference assertion.
+The same test also contains an empty replacement that must hide historical findings from current notification reads.
+Those empty-replacement assertions are not reached in RED. The unchanged regression reaches and passes them in GREEN in 1.377 seconds.
+
+Source: notification-current-read-green-source.json, SHA-256 41cd011d8b9ca639c8feabf0ca2a633afbcddc81c1e1373dc69398b635a4acd0.
+The [focused GREEN record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-green-facts.json>) has twelve passing owner cases. Its build passes in 175.084 seconds.
+RED Data has no Cargo features; GREEN Data enables test-fixtures. The read and regression have no feature conditional. The runs are not feature-identical.
+[Four-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-fmt.json>) and [Data/Analysis Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-clippy.json>) pass.
+The [normal busy-input incident case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-incident-facts.json>) still fails in 120.380 seconds. Both final Graphs and the Confirmed finding are present; the selected notice is absent. Strict assertions after the wait do not run.
+Current physical qualification, complete incident proof, and an end-to-end speed result remain **Not done**.

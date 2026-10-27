@@ -69,29 +69,9 @@ impl NotificationRouter {
         now: u64,
     ) -> Result<usize> {
         let _guard = self.lock()?;
-        NotificationErrorCodeV1::Invalid.require(
-            now > 0
-                && tenant != [0; 16]
-                && NotificationGrantV1::identifier(&reference.finding_id, usize::MAX)
-                && NotificationGrantV1::identifier(&reference.result_id, usize::MAX),
-            "finding reference",
-        )?;
-        let (result_id, finding) = self
-            .store
-            .graph_findings(tenant, None, Some(&reference.finding_id), 1, usize::MAX)?
-            .pop()
-            .ok_or_else(|| {
-                NotificationSnafu {
-                    code: NotificationErrorCodeV1::Denied,
-                    field: "current finding scope",
-                }
-                .build()
-            })?;
-        NotificationErrorCodeV1::Conflict.require(
-            result_id == reference.result_id,
-            "current finding reference",
-        )?;
+        NotificationErrorCodeV1::Invalid.require(now > 0, "finding reference")?;
+        let finding = self.store.notification_finding(tenant, reference)?;
         let routes = self.routes(tenant)?;
-        self.schedule(&finding, &result_id, &routes, now)
+        self.schedule(&finding, &reference.result_id, &routes, now)
     }
 }

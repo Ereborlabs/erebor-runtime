@@ -3,7 +3,10 @@ use snafu::ResultExt as _;
 
 use super::super::graph_rows::GraphHeader;
 use super::*;
-use crate::{FindingV1, GraphInvalidSnafu, GraphRevisionV1};
+use crate::{
+    FindingV1, GraphInvalidSnafu, GraphRevisionV1, NotificationErrorCodeV1,
+    NotificationFindingRefV1, NotificationGrantV1, NotificationSnafu,
+};
 
 mod batches;
 mod preflight;
@@ -30,9 +33,8 @@ impl AnalysisStore {
         }
         self.check_graph_read(tenant, &[after, exact], "finding page scope")?;
         self.read_snapshot(|snapshot| {
-            let selection = self.preflight_findings(
+            let keys = self.selected_finding_keys(
                 snapshot,
-                tenant,
                 params![
                     tenant.as_slice(),
                     GRAPH_PROCESSOR,
@@ -44,7 +46,58 @@ impl AnalysisStore {
                     limit.min(i64::MAX as usize) as i64
                 ],
             )?;
+            let selection = self.preflight_findings(snapshot, tenant, keys)?;
             self.collect_findings(snapshot, selection, tenant, bytes)
+        })
+    }
+
+    pub fn notification_finding(
+        &self,
+        tenant: [u8; 16],
+        reference: &NotificationFindingRefV1,
+    ) -> Result<FindingV1> {
+        NotificationErrorCodeV1::Invalid.require(
+            tenant != [0; 16]
+                && NotificationGrantV1::identifier(&reference.finding_id, usize::MAX)
+                && NotificationGrantV1::identifier(&reference.result_id, usize::MAX),
+            "finding reference",
+        )?;
+        self.read_snapshot(|snapshot| {
+            let keys = self.selected_finding_keys(
+                snapshot,
+                params![
+                    tenant.as_slice(),
+                    GRAPH_PROCESSOR,
+                    GRAPH_SCHEMA_VERSION,
+                    None::<&str>,
+                    None::<&str>,
+                    Some(reference.finding_id.as_str()),
+                    Some(reference.finding_id.as_str()),
+                    1_i64
+                ],
+            )?;
+            let key = keys.first().ok_or_else(|| {
+                NotificationSnafu {
+                    code: NotificationErrorCodeV1::Denied,
+                    field: "current finding scope",
+                }
+                .build()
+            })?;
+            NotificationErrorCodeV1::Conflict.require(
+                key.result == reference.result_id,
+                "current finding reference",
+            )?;
+            let selection = self.preflight_findings(snapshot, tenant, keys)?;
+            self.collect_findings(snapshot, selection, tenant, usize::MAX)?
+                .pop()
+                .map(|(_, finding)| finding)
+                .ok_or_else(|| {
+                    NotificationSnafu {
+                        code: NotificationErrorCodeV1::Denied,
+                        field: "current finding scope",
+                    }
+                    .build()
+                })
         })
     }
 

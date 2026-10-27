@@ -43,11 +43,11 @@ impl AnalysisStore {
         &self,
         snapshot: &Connection,
         tenant: [u8; 16],
-        values: &[&dyn duckdb::ToSql],
+        keys: Vec<FindingKey>,
     ) -> Result<FindingSelection> {
         let mut selection = FindingSelection {
             headers: FindingHeaders::default(),
-            keys: self.selected_finding_keys(snapshot, values)?,
+            keys,
         };
         let results = selection
             .keys
@@ -77,7 +77,7 @@ impl AnalysisStore {
         Ok(selection)
     }
 
-    fn selected_finding_keys(
+    pub(super) fn selected_finding_keys(
         &self,
         snapshot: &Connection,
         values: &[&dyn duckdb::ToSql],

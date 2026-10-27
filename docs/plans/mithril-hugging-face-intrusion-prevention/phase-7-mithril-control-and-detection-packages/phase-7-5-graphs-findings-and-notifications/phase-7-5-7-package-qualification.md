@@ -1057,3 +1057,51 @@ The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualifica
 PENDING: current deployment images, the paired physical result, final evidence records, owned-resource absence, and owned VM removal.
 The whole qualification matrix and current physical result remain Not done. Existing matrix records retain their original source, artifact, and assertion limits.
 No overall speed improvement, full CI, benchmark, full incident reproduction, Python execution, upstream algorithm port, or external notification delivery is qualified by this result.
+
+
+## Current finding checks for notification routing
+
+**Current-reference correction and focused owner checks: Done. Busy-input completion, complete qualification, and current physical result: Not done.**
+The [temporary routing trace](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-owner-probe-facts-v2.json>) has 1,571 markers and no truncation.
+At captured revision C56, the batch has 138 finding references and zero delivery keys.
+Its routing loop takes 42.859 seconds. Eleven routes succeed; 127 references then fail the current-result check.
+Those 127 current-finding reads take 22.224 seconds in total before the stale references are rejected.
+The later batch has 139 references and eleven delivery keys. It stops before an individual delivery starts.
+Eighteen saves comprise eleven new obligations and seven updates. They do not represent eighteen obligations.
+The [intervals](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-owner-probe-intervals.json>) use parent line-reader arrival times.
+They do not measure CPU cost, prove the sole incident timeout cause, or establish an execution-time gain.
+
+[AnalysisStore::notification_finding](../../../../../crates/araphor-data/src/analysis/graph/findings.rs) validates the tenant and both reference identifiers before a read.
+It returns the existing Notification Invalid error with the finding reference field for invalid input.
+Within one read snapshot, it selects the current key through the existing selection query.
+An absent key returns Notification Denied for current finding scope.
+A different result returns Notification Conflict for current finding reference before materialization.
+A matching result uses the existing header, index, stored-byte, and finding checks through preflight and collection.
+Both [SQL ranking stages](../../../../../crates/araphor-data/src/analysis/graph/findings/selection.rs) remain unchanged. The expected result is not a ranking filter.
+[NotificationRouter::route_finding](../../../../../crates/araphor-analysis/src/notification/routing.rs) keeps the router mutex and the now greater than zero check.
+Data now owns the existing tenant and reference guards. Analysis still reads fresh routes and calls NotificationRouter::schedule.
+Per-item checks, scheduling, delivery order, and checked persistence remain. No cache, batch owner, or new execution owner is added.
+
+The [old-order RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-red-facts.json>) has a passing build in 59.555 seconds and the intended failing case in 2.144 seconds.
+The test restores the saved CBOR header before both corruption assertions.
+The old read rejects the corrupt current header before it can return the expected stale-reference Conflict.
+The matching-corrupt assertion passes before that intended failure. Later empty-replacement assertions are not reached in RED.
+The exact regression is analysis::graph::findings::tests::notification_finding_checks_current in RED and GREEN.
+The current [GREEN source manifest](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-green-source.json>) is SHA-256 41cd011d8b9ca639c8feabf0ca2a633afbcddc81c1e1373dc69398b635a4acd0.
+The [Data/Analysis build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-green-check-build.json>) passes in 175.084 seconds.
+The [focused record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-green-facts.json>) has twelve passes, zero failures, and zero ignored cases.
+The unchanged new regression passes in 1.377 seconds and reaches the empty-replacement assertions.
+RED Data has no Cargo features; the combined GREEN build enables test-fixtures. The read and regression have no feature conditional. The runs are not feature-identical.
+[Four-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-fmt.json>) passes in 0.034 seconds.
+[Data/Analysis Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-clippy.json>) passes with warnings denied in 70.646 seconds.
+
+The fresh [normal E2E build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-incident-check-build.json>) passes in 148.569 seconds.
+The unchanged [busy-input case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-incident-facts.json>) still fails in 120.380 seconds: zero passes, one failure, zero ignored cases.
+Its cache contains actor Graph cursor 950 at publication 88 and background Graph cursor 642 at publication 85.
+Records 941 and 950 are present. The selected finding is Confirmed with Exact policy evidence. Its notice is absent.
+The background Graph has healthy matching CPU 0 coverage and one selected cut member.
+Strict assertions after the wait do not run. Later finite state reads retain their later-snapshot limits.
+The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-incident-check-integrity.json>) confirms unchanged source, executable, and excluded files.
+The remaining notification cause and an overall execution-time gain are not established. No new physical case or benchmark runs.
+PENDING: current deployment images, paired physical result, final evidence records, owned-resource absence, and owned VM removal.
+The whole qualification matrix remains Not done. Earlier matrix records retain their original source, artifact, and assertion limits.
