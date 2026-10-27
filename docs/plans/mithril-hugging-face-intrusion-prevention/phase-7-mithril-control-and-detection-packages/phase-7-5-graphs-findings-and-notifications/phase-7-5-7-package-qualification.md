@@ -806,3 +806,18 @@ PENDING: normal-source busy-WAL proof, current deployment images, paired physica
 PENDING: final evidence retention, document status, and owned VM removal. No current physical PASS is claimed.
 The Analysis idle observation covers 50 milliseconds; Query uses its existing clock notification for deterministic idle checks.
 Performance, full incident reproduction, Python execution, upstream algorithm ports, and external delivery remain outside this result.
+
+
+## Ordinary Follow replacement delivery
+
+**Native Query replacement proof: Done. Busy WAL, gRPC replacement, load, and current physical proof: Not done.**
+The existing [manifest_replacement_rebinds case](../../../../../crates/araphor-analysis/src/graph/native/tests/managed/notices/snapshot.rs) uses the same graph_manifest SQL as the incident observer.
+One production Instance publishes Graph 1–3. Ordinary tenant-wide Follow reads its full snapshot.
+The fixture then accepts record 4, and the same Instance publishes Graph 1–4. No record 5 or other write follows.
+Follow must return one Replace row with the new result ID, exact receipt revision, full evidence IDs, and previous-result link. The old Graph must remain unchanged.
+Metadata-only updates can arrive inside the existing 30-second stream bound. The observer joins cleanup on error or panic.
+The [exact case record](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/public-manifest-test-test.json) reports one pass, zero failures, zero ignored cases, and 13.219 seconds.
+The test executable SHA-256 is d6648b312f752724bf0ab6c7e602a26719fbf085890d42cc810ed0ac7618ea26.
+The 2,042-file source manifest is public-manifest-test-source.json, SHA-256 d472139186991809b92b6934caef6f2bf2d808ce2ff96c4f9e1546316fab1116.
+The [Analysis build](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/public-manifest-test-build.json), [strict Clippy](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/public-manifest-clippy.json), and [one-file formatting](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/public-manifest-fmt.json) pass. No unchanged behavioral case is repeated.
+This test adds no production owner or behavior. It does not establish the busy-WAL timeout cause, gRPC delivery, concurrent load behavior, or physical qualification.

@@ -4611,3 +4611,14 @@ A borrowed-slice test comparison removes the Clippy warning. It preserves the co
 PENDING: normal-source WAL proof, deployed image identity, paired physical result, resource absence, and final VM removal. No full CI ran.
 Final core source SHA-256: 427f4bf37e8ebb54b3bf4a2e65f83c0537f4bd10825de750bde0dab5646be347 in graph-core-final-source.json.
 Retain prior failures. Claim no benchmark, full incident reproduction, Python or upstream algorithm qualification, or external delivery.
+
+
+## Ordinary Follow replacement snapshot
+
+[manifest_replacement_rebinds](../../crates/araphor-analysis/src/graph/native/tests/managed/notices/snapshot.rs) checks full Graph replacement through ordinary native Query Follow.
+Read it with [SourceData::open](../../crates/araphor-query/src/sources/mod.rs) and [Session::capture_physical](../../crates/araphor-query/src/execution.rs): each physical execution reads the SourceSnapshot in its TaskContext.
+The test reads Graph 1–3, accepts record 4, and runs the same production Instance again. It requires a new Replace payload for Graph 1–4 without record 5.
+It checks exact evidence, receipt revision, previous-result linkage, captured result reference, and unchanged old Graph. The initial update is dropped before the second run.
+The [case record](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/public-manifest-test-test.json) reports one pass. Analysis-only strict Clippy and one-file formatting also pass.
+Source: public-manifest-test-source.json, SHA-256 d472139186991809b92b6934caef6f2bf2d808ce2ff96c4f9e1546316fab1116.
+This is ordinary native Follow proof. The busy-WAL, gRPC replacement, concurrent-load, and current physical results remain Not done.
