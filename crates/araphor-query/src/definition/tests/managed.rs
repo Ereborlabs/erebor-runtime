@@ -68,6 +68,7 @@ async fn constant_capture_keeps_state() -> TestResult {
             &definition,
             Invocation::default(),
             ManagedRead {
+                follow: false,
                 expected: None,
                 instance: instance.clone(),
                 rebuild: true,
@@ -119,6 +120,7 @@ async fn constant_capture_keeps_state() -> TestResult {
             &definition,
             Invocation::default(),
             ManagedRead {
+                follow: false,
                 expected: None,
                 instance,
                 rebuild: false,
@@ -165,6 +167,7 @@ async fn managed_capture_rejects_state() -> TestResult {
                 &definition,
                 invocation,
                 ManagedRead {
+                    follow: false,
                     expected: None,
                     instance: instance.clone(),
                     rebuild: false,
@@ -207,6 +210,7 @@ async fn managed_capture_keeps_binding() -> TestResult {
                 &definition,
                 Invocation::default(),
                 ManagedRead {
+                    follow: false,
                     expected: None,
                     instance: changed,
                     rebuild: false,

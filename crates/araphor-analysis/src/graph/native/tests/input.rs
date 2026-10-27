@@ -224,6 +224,8 @@ async fn immutable_facts_precede_guests() -> TestResult {
             head
         );
         let expected_health = before_health.map(|mut health| {
+            health.state = araphor_data::ProcessorStateV1::ProcessingFailed;
+            health.incomplete = true;
             health.read_revision = revision;
             health
         });

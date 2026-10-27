@@ -92,6 +92,7 @@ async fn empty_gate_keeps_history() -> TestResult {
                 expected: None,
                 completed: None,
                 rebuild: false,
+                follow: false,
             },
             araphor_data::AnalysisTableRead {
                 requests: &requests,

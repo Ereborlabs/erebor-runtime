@@ -134,6 +134,12 @@ impl Run {
                         publication.begin(&worker)
                     })
                     .await?;
+                if managed.follow != self.follow {
+                    return crate::InvalidSnafu {
+                        field: "managed execution mode",
+                    }
+                    .fail();
+                }
                 definition.check_invocation(
                     self.session.selection(),
                     &invocation,

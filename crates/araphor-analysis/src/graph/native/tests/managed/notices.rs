@@ -1,6 +1,24 @@
 use super::*;
 use futures_util::StreamExt as _;
 
+mod snapshot;
+
+const NOTICE_WORK_SQL: &str = "WITH changes AS (
+                SELECT COALESCE(MAX(commit_revision), 0) AS revision
+                FROM context_versions WHERE owner_id = 'Graph notice signal'
+             ), heads AS (
+                SELECT first_cursor, last_cursor, notice_context_revision
+                FROM graph_manifest
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY tenant_id, source_key, first_cursor
+                    ORDER BY commit_revision DESC) = 1
+             ), work AS (
+                SELECT first_cursor, last_cursor FROM heads CROSS JOIN changes
+                WHERE notice_context_revision < revision
+                ORDER BY first_cursor LIMIT 1
+             ) SELECT events.* FROM events JOIN work
+               ON source_cursor BETWEEN first_cursor AND last_cursor";
+
 impl Fixture {
     pub(super) async fn graph_definition(
         &self,
@@ -106,6 +124,13 @@ pub(super) async fn next_receipt(
             .await?
             .ok_or("managed Graph subscription ended")??,
     )
+}
+
+fn captured_revision(receipt: &araphor_data::ManagedReceipt) -> TestResult<u64> {
+    Ok(araphor_query::follow::Cursor::decode(
+        &receipt.frontier.as_ref().ok_or("Graph frontier")?.cursor,
+    )?
+    .read_revision())
 }
 
 #[tokio::test]
@@ -225,7 +250,7 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
             &head.result_id,
             head.commit_revision
         )?,
-        Some((reused.commit_revision, coverage))
+        Some((captured_revision(&reused)?, coverage))
     );
     let saved = fixture
         .query
@@ -554,7 +579,7 @@ async fn managed_drains_prefixes() -> TestResult {
                 &result.result_id,
                 result.commit_revision,
             )?,
-            Some((receipt.commit_revision, coverage))
+            Some((captured_revision(&receipt)?, coverage))
         );
         let health = fixture
             .query
@@ -629,26 +654,7 @@ async fn retained_notices(cuts: &[(u64, u64)]) -> TestResult {
     }
     let current = fixture.query.store().processor_result(&scope)?;
     let job = fixture
-        .managed_graph(
-            &grant,
-            &definition,
-            "retained-notices",
-            "WITH changes AS (
-                SELECT COALESCE(MAX(commit_revision), 0) AS revision
-                FROM context_versions WHERE owner_id = 'Graph notice signal'
-             ), heads AS (
-                SELECT first_cursor, last_cursor, notice_context_revision
-                FROM graph_manifest
-                QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY tenant_id, source_key, first_cursor
-                    ORDER BY commit_revision DESC) = 1
-             ), work AS (
-                SELECT first_cursor, last_cursor FROM heads CROSS JOIN changes
-                WHERE notice_context_revision < revision
-                ORDER BY first_cursor LIMIT 1
-             ) SELECT events.* FROM events JOIN work
-               ON source_cursor BETWEEN first_cursor AND last_cursor",
-        )
+        .managed_graph(&grant, &definition, "retained-notices", NOTICE_WORK_SQL)
         .await?;
     let job = fixture.running_graph(job).await?;
     let mut stream = job.subscribe(
@@ -665,13 +671,13 @@ async fn retained_notices(cuts: &[(u64, u64)]) -> TestResult {
         let receipt = next_receipt(&mut stream).await?;
         assert_eq!(receipt.results.len(), 3);
         assert!(receipt.commit_revision > signal);
-        stamped.push(receipt.commit_revision);
+        stamped.push((captured_revision(&receipt)?, receipt.commit_revision));
         for (position, (id, retained, revision)) in heads.iter().enumerate() {
             assert_eq!(
                 fixture.query.store().graph_notice(&scope, id, *revision,)?,
                 Some((
                     if position <= index {
-                        stamped[position]
+                        stamped[position].0
                     } else {
                         *revision
                     },
@@ -691,7 +697,7 @@ async fn retained_notices(cuts: &[(u64, u64)]) -> TestResult {
     assert_eq!(fixture.query.store().processor_result(&scope)?, current);
     let drained = next_receipt(&mut stream).await?;
     assert!(drained.results.is_empty());
-    assert!(drained.commit_revision > *stamped.last().ok_or("last Graph notice")?);
+    assert!(drained.commit_revision > stamped.last().ok_or("last Graph notice")?.1);
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), cuts.len() * 2);
     let before = fixture.query.store().meta()?;
     assert!(
@@ -719,7 +725,7 @@ async fn retained_notices(cuts: &[(u64, u64)]) -> TestResult {
     for (index, (id, graph, revision)) in heads.iter().enumerate() {
         assert_eq!(
             fixture.query.store().graph_notice(&scope, id, *revision,)?,
-            Some((stamped[index], coverage))
+            Some((stamped[index].0, coverage))
         );
         assert_eq!(
             fixture

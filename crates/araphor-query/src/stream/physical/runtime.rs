@@ -27,6 +27,7 @@ pub(super) struct Runtime {
     cut: Option<WindowCut>,
     advance_window: bool,
     revision: u64,
+    captured: u64,
     position: Option<StorePositionV1>,
     content: Option<[u8; 32]>,
     evaluated: u64,
@@ -85,11 +86,13 @@ impl Runtime {
             }
             _ => None,
         };
+        let revision = run
+            .resume
+            .as_ref()
+            .map_or(0, |cursor| cursor.read_revision());
         Ok(Self {
-            revision: run
-                .resume
-                .as_ref()
-                .map_or(0, |cursor| cursor.read_revision()),
+            revision,
+            captured: revision,
             position: run.resume.as_ref().map(|cursor| cursor.position()),
             run,
             input: Arc::clone(&physical.input),
@@ -180,7 +183,7 @@ impl Runtime {
             .await?;
         self.check_store(&meta)?;
         self.progress.checked(meta.commit_revision);
-        Ok(revision > self.revision)
+        Ok(revision > self.captured)
     }
 
     async fn evaluate(
@@ -355,6 +358,7 @@ impl Runtime {
                                 });
                             }
                             self.revision = cursor.read_revision();
+                            self.captured = cursor.read_revision();
                             self.position = Some(cursor.position());
                             self.evaluated = cursor.evaluated();
                             self.exhausted = true;
@@ -453,16 +457,21 @@ impl Runtime {
             return Ok(None);
         };
         self.check_store(&output.snapshot.page.extraction.meta)?;
-        self.revision = output
-            .snapshot
-            .page
-            .extraction
-            .meta
-            .commit_revision
-            .max(calls.published_revision());
+        let captured = output.snapshot.page.extraction.meta.commit_revision;
+        self.revision = captured.max(calls.published_revision());
+        self.captured = if self.run.follow
+            && output
+                .snapshot
+                .managed()
+                .is_some_and(|managed| managed.follows_graph())
+        {
+            captured
+        } else {
+            self.revision
+        };
         self.position = Some(output.position);
         self.progress
-            .captured(self.revision, output.snapshot.next_change);
+            .captured(self.captured, output.snapshot.next_change);
         self.snapshot = Some(Arc::clone(&output.snapshot));
         self.evaluated = now;
         let completed = self.run.managed.is_none() || calls.published_revision() != 0;

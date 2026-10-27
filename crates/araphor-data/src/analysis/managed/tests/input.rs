@@ -57,6 +57,7 @@ impl Saved {
             .read_managed_tables(
                 &fixture.instance.grant.selection,
                 &ManagedRead {
+                    follow: false,
                     instance: fixture.instance.clone(),
                     expected: None,
                     rebuild: false,
@@ -128,6 +129,7 @@ impl Saved {
             .read_managed_tables(
                 &instance.grant.selection,
                 &ManagedRead {
+                    follow: false,
                     instance: instance.clone(),
                     expected: None,
                     rebuild: false,

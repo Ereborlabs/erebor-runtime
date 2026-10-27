@@ -226,6 +226,7 @@ fn profile_rejects_gap_proof() -> TestResult {
             &[],
             &[],
             false,
+            false,
         ),
         Err(crate::Error::AnalysisConflict { .. })
     ));

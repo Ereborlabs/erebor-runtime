@@ -44,6 +44,7 @@ async fn retained_elision_keeps_proof() -> TestResult {
                 instance: source.admitted().clone(),
                 rebuild: false,
                 completed: None,
+                follow: false,
             },
         )
         .await

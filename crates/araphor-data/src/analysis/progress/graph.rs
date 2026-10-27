@@ -95,16 +95,22 @@ impl AnalysisStore {
         let receipt = self.commit_managed_projection(
             managed,
             |transaction, revision, _| {
+                let notice = if managed.attempt.follows_graph() {
+                    managed.attempt.captured_revision()
+                } else {
+                    revision
+                };
                 let write = self.progress_rows(
                     transaction,
                     &input,
                     ResultHead::Unchecked,
                     packet.advance,
                     None,
-                    Some((&graph, revision)),
+                    Some((&graph, notice)),
                     &packet.contexts,
                     &packet.proofs,
                     &packet.sources,
+                    managed.attempt.follows_graph(),
                     true,
                 )?;
                 graph_receipt = Some(write.receipt);

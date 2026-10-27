@@ -168,6 +168,7 @@ impl Fixture {
         let page = store.read_managed_tables(
             &instance.grant.selection,
             &ManagedRead {
+                follow: false,
                 expected: None,
                 instance: instance.clone(),
                 rebuild,
@@ -1025,6 +1026,7 @@ fn managed_sql_checks_authority() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                follow: false,
                 expected: None,
                 instance,
                 rebuild: false,
@@ -1630,6 +1632,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
             .read_managed_tables(
                 &grant.selection,
                 &ManagedRead {
+                    follow: false,
                     expected: None,
                     instance,
                     rebuild: false,
@@ -1859,6 +1862,7 @@ fn managed_registration_keeps_cut() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                follow: false,
                 expected: None,
                 instance,
                 rebuild: false,
@@ -1891,6 +1895,7 @@ fn managed_registration_keeps_cut() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                follow: false,
                 expected: None,
                 instance,
                 rebuild: false,
@@ -1953,6 +1958,7 @@ fn managed_witness_lifetime_check() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                follow: false,
                 expected: None,
                 instance: fixture.instance.clone(),
                 rebuild: false,

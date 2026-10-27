@@ -303,11 +303,16 @@ impl AnalysisStore {
             &capture.instance,
             capture.generation,
         )?;
+        capture.check_follow_mode(&spec)?;
         let meta = Self::read_meta_from(reader, &self.root.join("analysis.duckdb"))?;
         if meta.store_uuid != capture.store
             || meta.schema_version != capture.schema
             || meta.recovery_epoch != capture.recovery
             || meta.commit_revision < capture.revision
+            || capture
+                .sources
+                .iter()
+                .any(|(_, revision)| *revision > capture.revision)
             || instance.generation != capture.expected_generation
             || instance.grant != capture.grant
             || instance.lifecycle != capture.lifecycle
@@ -344,7 +349,9 @@ impl AnalysisStore {
             }
         }
         let control = AnalysisReadControl::default();
-        if !Self::package_sources_current(reader, &capture.sources, &control)? {
+        if !capture.follows_graph(&spec)
+            && !Self::package_sources_current(reader, &capture.sources, &control)?
+        {
             return if Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, &control)
                 .is_ok()
             {

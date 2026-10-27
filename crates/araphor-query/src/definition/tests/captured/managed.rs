@@ -4,6 +4,8 @@ use super::*;
 use crate::follow::{ManagedPublication, Operation, Subscription, SystemClock};
 use araphor_data::{ManagedFrontier, ManagedRead};
 
+mod snapshot;
+
 impl ManagedPublication for Sink {
     fn begin(&self, control: &AnalysisReadControl) -> crate::Result<(Invocation, ManagedRead)> {
         self.state.begins.fetch_add(1, Ordering::SeqCst);
@@ -19,13 +21,19 @@ impl ManagedPublication for Sink {
             .managed
             .clone()
             .ok_or_else(|| PackageErrorCodeV1::Incomplete.error("test managed instance"))?;
+        let completed = matches!(
+            instance.spec.destination,
+            araphor_data::ManagedDestination::Graph { .. }
+        )
+        .then_some(instance.progress);
         Ok((
             Invocation::default(),
             ManagedRead {
+                follow: !self.state.finite.load(Ordering::SeqCst),
                 expected: None,
                 instance,
                 rebuild: self.state.rebuild.load(Ordering::SeqCst),
-                completed: None,
+                completed,
             },
         ))
     }

@@ -353,6 +353,7 @@ impl AnalysisStore {
             &[],
             &[],
             false,
+            false,
         )
         .map(|write| Some((write, origin)))
     }

@@ -364,6 +364,7 @@ async fn host_recovers_failed_frontier() -> TestResult {
                             expected: None,
                             rebuild: false,
                             completed: Some(failed.completed),
+                            follow: true,
                         },
                         araphor_data::AnalysisExtractLimits::default(),
                         &AnalysisReadControl::default(),

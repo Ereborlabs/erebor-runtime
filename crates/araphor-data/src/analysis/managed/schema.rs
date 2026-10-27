@@ -264,6 +264,7 @@ impl AnalysisStore {
             let previous =
                 Self::managed_version_from(reader, tenant, &instance, capture.expected_generation)?;
             capture.grant.validate()?;
+            capture.check_follow_mode(&program)?;
             if capture.store != meta.store_uuid
                 || capture.schema != meta.schema_version
                 || capture.recovery == 0

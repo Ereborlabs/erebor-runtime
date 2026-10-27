@@ -17,6 +17,18 @@ impl AnalysisStore {
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
     ) -> Result<ManagedCapture> {
+        if request.follow
+            && matches!(
+                &request.instance.spec.destination,
+                ManagedDestination::Graph { .. }
+            )
+            && (request.expected.is_some()
+                || request.rebuild
+                || request.completed.is_none()
+                || !request.instance.running)
+        {
+            return Err(Code::Invalid.error("managed Graph follow mode"));
+        }
         let before = output.input_bytes;
         let expected = request.expected();
         let bytes: u64 = reader.query_row("SELECT octet_length(v.spec) + octet_length(i.authority) FROM managed_instances i JOIN managed_versions v USING (tenant_id, instance_id) WHERE i.tenant_id = ? AND i.instance_id = ? AND v.generation = ?",
@@ -173,6 +185,7 @@ impl AnalysisStore {
                 running: instance.running,
                 lifecycle: instance.lifecycle,
                 rebuild: request.rebuild,
+                follow: request.follow,
                 prior: states,
                 store: output.meta.store_uuid,
                 schema: output.meta.schema_version,

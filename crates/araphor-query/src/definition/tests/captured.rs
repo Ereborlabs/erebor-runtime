@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
@@ -41,7 +41,9 @@ struct WriterGate {
 #[derive(Debug, Default)]
 struct SinkState {
     admitted: AtomicBool,
+    finite: AtomicBool,
     rebuild: AtomicBool,
+    publication: AtomicU64,
     begins: AtomicUsize,
     admissions: AtomicUsize,
     begin_gate: Option<WriterGate>,
@@ -190,7 +192,10 @@ impl DataSink for Sink {
             frontier.pending = !completed;
         }
         if self.managed.is_some() && completed {
-            acknowledgement.acknowledge(context, revision)?;
+            acknowledgement.acknowledge(
+                context,
+                revision.max(self.state.publication.load(Ordering::SeqCst)),
+            )?;
         }
         Ok(rows)
     }

@@ -331,6 +331,7 @@ pub struct ManagedRead {
     pub instance: ManagedInstance,
     pub expected: Option<ManagedInstance>,
     pub rebuild: bool,
+    pub follow: bool,
     /// Require this completion when a native frontier was selected.
     pub completed: Option<u64>,
 }
@@ -468,6 +469,8 @@ pub(super) struct Capture {
     pub running: bool,
     pub lifecycle: u64,
     pub rebuild: bool,
+    #[serde(default)]
+    pub follow: bool,
     pub prior: BTreeMap<u64, Option<PackageResultRefV1>>,
     pub store: uuid::Uuid,
     pub schema: u32,
@@ -481,6 +484,21 @@ pub(super) struct Capture {
     pub traces: Vec<[u8; 16]>,
 }
 
+impl Capture {
+    pub(super) fn follows_graph(&self, spec: &ManagedSpec) -> bool {
+        self.follow && matches!(&spec.destination, ManagedDestination::Graph { .. })
+    }
+
+    pub(super) fn check_follow_mode(&self, spec: &ManagedSpec) -> Result<()> {
+        if self.follows_graph(spec)
+            && (!self.running || self.rebuild || self.generation != self.expected_generation)
+        {
+            return Err(Code::Invalid.error("managed Graph follow mode"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ManagedCapture {
     pub(super) instance: ManagedInstance,
@@ -490,6 +508,10 @@ pub struct ManagedCapture {
 }
 
 impl ManagedCapture {
+    pub fn follows_graph(&self) -> bool {
+        self.contract.follows_graph(&self.instance.spec)
+    }
+
     pub fn instance(&self) -> &ManagedInstance {
         &self.instance
     }
@@ -643,6 +665,14 @@ pub struct ManagedAttempt(
 );
 
 impl ManagedAttempt {
+    pub(in crate::analysis) fn follows_graph(&self) -> bool {
+        self.0.capture.follows_graph(&self.1.spec)
+    }
+
+    pub(in crate::analysis) fn captured_revision(&self) -> u64 {
+        self.0.capture.revision
+    }
+
     pub(in crate::analysis) fn switches_version(&self) -> bool {
         self.0.capture.generation != self.0.capture.expected_generation
     }

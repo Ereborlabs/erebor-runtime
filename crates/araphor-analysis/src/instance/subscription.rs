@@ -430,6 +430,7 @@ impl ManagedPublication for sink::Publication {
                                 instance: current.clone(),
                                 rebuild: request.rebuild,
                                 completed: None,
+                                follow: false,
                             },
                         ));
                     }
@@ -451,6 +452,7 @@ impl ManagedPublication for sink::Publication {
                                 expected: Some(expected.clone()),
                                 rebuild: *rebuild,
                                 completed: None,
+                                follow: false,
                             },
                         ));
                     }
@@ -492,6 +494,7 @@ impl ManagedPublication for sink::Publication {
                         instance: current,
                         rebuild: false,
                         completed: Some(resume.completed),
+                        follow: true,
                     },
                 ))
             },

@@ -1,4 +1,6 @@
 use super::*;
+
+mod follow;
 use crate::PackageErrorCodeV1 as Code;
 
 #[test]
@@ -638,6 +640,7 @@ fn empty_graph_keeps_capture() -> TestResult {
             Ok(store.read_managed_tables(
                 &selection,
                 &ManagedRead {
+                    follow: false,
                     instance,
                     expected: None,
                     rebuild: false,

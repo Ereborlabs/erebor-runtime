@@ -762,3 +762,47 @@ These checks cover 2,039 pins, SHA-256 03fb10a05da4987b3546cb3e38a10e04cb03f44ea
 The executable SHA-256 is cad458aa8f2bd16568aac18aee169cb483b51dbb1dfc7058a6fa02b2a48c0329.
 This test proves public-RPC wiring, source deduplication, and independent result retention. It does not hold one request pending or prove a physical cause.
 The current production source remains unchanged. The physical incident, additional input qualification, and final VM removal remain Not done.
+
+
+## Captured input and notice publication
+
+**Core implementation and focused tests: Done. Busy WAL, current physical incident, and full qualification: Not done.**
+The user approved publication of each valid captured Graph input snapshot while later input waits.
+Analysis selects Follow explicitly. Finite runs and version operations keep strict source freshness.
+Query keeps input cut C separate from publication revision P and preserves intervening input for the next run.
+Data retains authority, lifecycle, generation, saved-state, Graph-head, consumed-cursor, evidence, revocation, and expiry checks.
+The existing Data transaction saves findings, state, progress, and the receipt together.
+The [reading route](../../../../guides/araphor-discovery-definition-review.md#captured-graph-input-publication-reading-route) identifies the capture, getter, commit, and Query owners.
+
+The [red notice regression](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-notice-red-test.json) records notice revision 19 for captured C=16 after an intervening context arrival.
+It fails in 25.966 seconds: zero passes, one failure, zero ignored cases.
+The correction stamps C for explicit Graph Follow and keeps P for finite publication.
+The [qualified ledger](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-notice-qualified.json) records eight passing affected cases.
+The first seven pass in graph-notice-green-tests.json on source 249a53f7745dfaeaecd02b1a1571da6c018664f003a5996a3e7ec21629367ed6.
+The finite immutable_facts_precede_guests case passes in graph-notice-final-test.json in 134.675 seconds.
+Its two expected health fields now match the existing finite-failure contract: ProcessingFailed and incomplete=true.
+That test correction changes no production byte. The original eighth-case failure remains retained.
+The behavioral source is graph-notice-final-source.json, SHA-256 de601481c2616dd4293199feea7923b5fe3fbe7bfbd8539992fd81719bb08afc.
+The earlier 21 focused owner passes retain their separate recorded sources and assertion limits.
+
+The [temporary WAL probe](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-wal-trace-facts.json) fails in 121.011 seconds: zero passes, one failure, zero ignored cases.
+Actor publication at C=78/P=83 precedes the failure cache print; the later public producer read reports accepted=consumed=950.
+The client cache still has actor Graph P44/cursor940 and background Graph P47/cursor639.
+The background producer read reports accepted642 and consumed640. Notifications are empty.
+These observations do not establish the timeout cause. The three temporary source files are restored to the normal source pins.
+Four pending E2E files remain outside this bounded core deliverable.
+
+[Matrix reconciliation](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/matrix-reconciled-v2.json) retains the accepted assignments and 31 component executions on source dd348647.
+Public admission, lifecycle, mandatory detection, native, Wasm, traversal, recovery, and version proof keeps each original source, artifact, target, failure, and retry limit.
+CLI equality remains compositional. The native loader check does not prove a valid dependent Arrow model.
+No new matrix work, runtime owner, store, scheduler, polling loop, or quota is added.
+
+[Strict Clippy](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-core-final-clippy.json) passes for the Data, Query, and Analysis library and test targets in 22.357 seconds.
+[Formatting](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-core-final-fmt.json) passes for the 32 changed core Rust files.
+The final core source is graph-core-final-source.json, SHA-256 427f4bf37e8ebb54b3bf4a2e65f83c0537f4bd10825de750bde0dab5646be347.
+It changes only one test comparison to borrowed slices after the behavioral proof; production bytes and comparison values are unchanged. The earlier Clippy failure remains retained.
+This bounded core result does not complete qualification. No full CI or benchmark ran.
+PENDING: normal-source busy-WAL proof, current deployment images, paired physical result, and owned-resource absence.
+PENDING: final evidence retention, document status, and owned VM removal. No current physical PASS is claimed.
+The Analysis idle observation covers 50 milliseconds; Query uses its existing clock notification for deterministic idle checks.
+Performance, full incident reproduction, Python execution, upstream algorithm ports, and external delivery remain outside this result.

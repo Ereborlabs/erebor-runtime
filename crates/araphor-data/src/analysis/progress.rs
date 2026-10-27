@@ -764,6 +764,7 @@ impl AnalysisStore {
             contexts,
             proofs,
             sources,
+            false,
             canonical,
         )?;
         if !write.commit {
@@ -816,6 +817,7 @@ impl AnalysisStore {
         contexts: &[super::AnalysisContextVersionV1],
         proofs: &[AnalysisContextRefV1],
         sources: &[(String, u64)],
+        captured_prefix: bool,
         canonical: bool,
     ) -> Result<ProgressWrite> {
         let (graph, notice) = graph.map_or((None, 0), |(graph, notice)| (Some(graph), notice));
@@ -934,11 +936,12 @@ impl AnalysisStore {
         if existing.is_none() {
             let revision = Self::read_meta_from(transaction, &self.root)?.commit_revision;
             if sources.iter().any(|(_, captured)| *captured > revision)
-                || !Self::package_sources_current(
-                    transaction,
-                    sources,
-                    &AnalysisReadControl::default(),
-                )?
+                || (!captured_prefix
+                    && !Self::package_sources_current(
+                        transaction,
+                        sources,
+                        &AnalysisReadControl::default(),
+                    )?)
             {
                 return AnalysisConflictSnafu.fail();
             }

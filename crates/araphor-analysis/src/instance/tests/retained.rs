@@ -406,6 +406,7 @@ async fn retained_alias_rejects_managed() -> TestResult {
                 instance: source.admitted().clone(),
                 rebuild: false,
                 completed: None,
+                follow: false,
             },
         )
         .await

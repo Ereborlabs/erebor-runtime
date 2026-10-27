@@ -346,6 +346,7 @@ fn transition_fences_registration() -> TestResult {
         .read_managed_tables(
             &fixture.instance.grant.selection,
             &ManagedRead {
+                follow: false,
                 expected: None,
                 instance: fixture.instance.clone(),
                 rebuild: false,

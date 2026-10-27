@@ -4546,3 +4546,68 @@ It proves diagnostic wiring and result retention; it does not hold a query pendi
 The [physical failure facts](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/runtime-link-failure-facts.json) retain both successful read assertions and the missing selected-source Graph result.
 The cached Graph belongs to another source. The old sequential diagnostic receives no query frame and never reaches status/history.
 The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#runtime-image-result-and-independent-failure-reads) records source hashes, passing diagnostic checks, cleanup absence, and the remaining physical proof.
+
+
+## Captured Graph input publication reading route
+
+**Core implementation and focused tests: Done. Full qualification: Not done.**
+The user approved continuous Graph publication for a fixed input snapshot while later input waits.
+Input cut C identifies work that was read. Publication revision P identifies the atomic output commit.
+Finite execution and public current-result reads keep strict source freshness.
+
+Read these owners in order:
+
+1. [Instance::subscribe and Publication::begin](../../crates/araphor-analysis/src/instance/subscription.rs) select explicit Follow.
+   Once and Version set follow=false, even when the instance is running.
+2. [ManagedRead and Capture](../../crates/araphor-data/src/analysis/managed/model.rs) carry and retain that mode.
+   [capture_managed](../../crates/araphor-data/src/analysis/managed/capture.rs) binds it to the captured instance and input.
+3. [Run::session](../../crates/araphor-query/src/stream/mod.rs) rejects disagreement with Run.follow.
+   [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) runs the native DataFusion plan on captured Arrow input.
+4. [check_managed_capture](../../crates/araphor-data/src/analysis/managed/commit.rs) permits later source changes only for sealed Follow plus Graph.
+   [commit_managed_graph](../../crates/araphor-data/src/analysis/progress/graph.rs) derives the same rule from the retained attempt.
+5. [ManagedAttempt::captured_revision](../../crates/araphor-data/src/analysis/managed/model.rs) returns C from that retained capture.
+   [commit_managed_graph](../../crates/araphor-data/src/analysis/progress/graph.rs) stamps C for Follow notices and P for finite notices.
+6. [commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) saves output, state, Graph rows, and receipt in one transaction.
+   [Runtime::changed](../../crates/araphor-query/src/stream/physical/runtime.rs) compares relevant input progress with C.
+   [managed_resume](../../crates/araphor-data/src/analysis/managed/read.rs) returns the saved input frontier after restart.
+
+```mermaid
+sequenceDiagram
+    participant A as Analysis subscription
+    participant Q as Query
+    participant D as Data
+    A->>Q: Explicit Graph Follow
+    Q->>D: Capture input at C
+    Note over D: Context A arrives after C
+    Q->>D: Publish validated captured input
+    D-->>A: Receipt P; notice C
+    Q->>D: Check relevant input after C
+    D-->>Q: Context A remains pending
+```
+
+The publication gates keep future-revision bounds, store identity, authority, generation, lifecycle, progress, and completion fences.
+Call-state comparison, dependency freshness, exact contexts, trace revocation, witnesses, expiry, previous heads, and consumed cursors remain checked.
+Rejection saves no partial output or progress. [managed_current](../../crates/araphor-data/src/analysis/managed/read.rs) retains strict current-result and retained-call freshness.
+Readable historical output can have current=false. Captured-prefix publication does not make it current.
+
+[Control graph-events.sql](../../crates/mithril-control/src/service/packages/graph-events.sql) compares notice_context_revision with input policy and ACK context revisions.
+[notice_keeps_pending_signal](../../crates/araphor-analysis/src/graph/native/tests/managed/notices/snapshot.rs) holds captured Facts, sends another context, and requires C<A<P.
+The [red record](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-notice-red-test.json) observes notice revision 19 instead of C=16.
+The [eight-case ledger](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-notice-qualified.json) records the correction and affected Follow checks passing.
+Its first seven cases use source 249a53f7; the corrected finite case uses source de601481. Production bytes are identical between these two source states.
+[immutable_facts_precede_guests](../../crates/araphor-analysis/src/graph/native/tests/input.rs) retains rejection and unchanged output assertions.
+Its expected ProcessingFailed and incomplete=true health fields match the existing finite-failure contract; the earlier assertion failure remains retained.
+The notice test requires a second three-call receipt without another signal, unchanged Graph/evidence/head/consumed cursor, and joined cleanup.
+[Query snapshot tests](../../crates/araphor-query/src/definition/tests/captured/managed/snapshot.rs) prove protocol catch-up, restart, mode agreement, and clock-based idle bookkeeping.
+That fixture does not execute the complete Analysis Graph owner. The Analysis 50-millisecond idle observation is supplementary.
+
+The [temporary WAL facts](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-wal-trace-facts.json) retain failure in 121.011 seconds and separate producer/cache observations.
+The actor producer reaches cursor 950 while its cached Graph remains at 940; the background producer has accepted cursor 642 and consumed cursor 640 while its cached Graph remains at 639.
+The cause is unproved. Late teardown errors do not establish it. The three temporary source files are restored.
+Four pending E2E files remain outside the bounded core deliverable.
+[Matrix reconciliation](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/matrix-reconciled-v2.json) keeps prior source limits, compositional CLI proof, and the native dependent-Arrow limit.
+[Strict Clippy](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-core-final-clippy.json) and [scoped formatting](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-core-final-fmt.json) pass. They cover the three core crates and 32 changed core Rust files.
+A borrowed-slice test comparison removes the Clippy warning. It preserves the comparison values; no production byte changes after the eight-case proof. The original Clippy failure remains retained.
+PENDING: normal-source WAL proof, deployed image identity, paired physical result, resource absence, and final VM removal. No full CI ran.
+Final core source SHA-256: 427f4bf37e8ebb54b3bf4a2e65f83c0537f4bd10825de750bde0dab5646be347 in graph-core-final-source.json.
+Retain prior failures. Claim no benchmark, full incident reproduction, Python or upstream algorithm qualification, or external delivery.

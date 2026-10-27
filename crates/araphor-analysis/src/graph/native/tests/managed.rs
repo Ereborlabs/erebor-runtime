@@ -1039,6 +1039,7 @@ async fn managed_expiry_reads_history() -> TestResult {
         expected: None,
         completed: None,
         rebuild: false,
+        follow: false,
     };
     let schemas = AnalysisStore::table_schemas();
     let columns = BTreeMap::from([
@@ -1185,6 +1186,7 @@ async fn managed_expiry_reads_history() -> TestResult {
             expected: None,
             completed: None,
             rebuild: false,
+            follow: false,
         },
         read(),
         araphor_data::AnalysisExtractLimits::default(),
