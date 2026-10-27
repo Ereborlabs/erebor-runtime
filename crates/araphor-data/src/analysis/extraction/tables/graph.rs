@@ -9,7 +9,7 @@ macro_rules! graph_row {
     (
         $append:ident, $schema:ident, $relation:literal;
         $capture:ident, $budget:ident, $graph:ident, $result:ident,
-        $revision:ident, $sensitivity:ident, $source:ident;
+        $revision:ident, $sensitivity:ident, $source:ident, $encoded:ident;
         $( $arg:ident: $arg_type:ty ),* $(,)?;
         $( $name:ident => $kind:ident($nullable:literal): $value:expr ),* $(,)?
     ) => {
@@ -22,6 +22,7 @@ macro_rules! graph_row {
                 $revision: u64,
                 $sensitivity: ContextSensitivityV1,
                 $source: &[u8],
+                $encoded: &std::cell::OnceCell<Vec<u8>>,
                 $( $arg: $arg_type, )*
                 $budget: &mut ReadBudget<'_>,
             );
@@ -33,7 +34,7 @@ macro_rules! graph_row {
                 source_key => Binary(false): Some($source),
                 graph_result_id => Utf8(false): Some($result),
                 commit_revision => UInt64(false): Some($revision),
-                graph_revision => Json(false): Some(&$graph.input_manifest),
+                graph_revision => Binary(false): Some($budget.revision_json(&$graph.input_manifest, $encoded)?),
                 graph_sensitivity => Utf8(false): Some(<&str>::from($sensitivity)),
                 $( $name => $kind($nullable): $value, )*
             }
@@ -75,6 +76,7 @@ impl Capture<'_> {
         if !self.scope.permits_graph(graph) {
             return Ok(true);
         }
+        let encoded = std::cell::OnceCell::new();
         if let Some(canonical) = canonical {
             if self.read.projects_field("graph_manifest", "snapshot") {
                 budget.charge(canonical.capacity())?;
@@ -123,6 +125,7 @@ impl Capture<'_> {
                 commit_revision,
                 sensitivity,
                 &source_key,
+                &encoded,
                 finding,
                 budget,
             )? {
@@ -148,6 +151,7 @@ impl Capture<'_> {
                     commit_revision,
                     sensitivity,
                     &source_key,
+                    &encoded,
                     finding,
                     observation,
                     budget,
@@ -163,6 +167,7 @@ impl Capture<'_> {
                 commit_revision,
                 sensitivity,
                 &source_key,
+                &encoded,
                 edge,
                 budget,
             )? {
@@ -182,6 +187,7 @@ impl Capture<'_> {
                 commit_revision,
                 sensitivity,
                 &source_key,
+                &encoded,
                 subject,
                 depth,
                 budget,
@@ -196,6 +202,7 @@ impl Capture<'_> {
                 commit_revision,
                 sensitivity,
                 &source_key,
+                &encoded,
                 branch,
                 budget,
             )? {
@@ -209,6 +216,7 @@ impl Capture<'_> {
                 commit_revision,
                 sensitivity,
                 &source_key,
+                &encoded,
                 package,
                 budget,
             )? {
@@ -227,6 +235,7 @@ impl Capture<'_> {
             commit_revision,
             sensitivity,
             &source_key,
+            &encoded,
             subject_count,
             relationship_count,
             contexts,
@@ -238,10 +247,10 @@ impl Capture<'_> {
 
     graph_row! {
         finding_row, finding_fields, "findings";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
         finding: &crate::FindingV1;
         finding_id => Utf8(false): Some(finding.finding_id.as_str()),
-        finding_revision => Json(false): Some(&finding.revision),
+        finding_revision => Binary(false): Some(budget.revision_json(&finding.revision, encoded)?),
         package_id => Utf8(false): Some(finding.package_id.as_str()),
         package_version => UInt64(false): Some(finding.package_version),
         subject_id => Json(false): Some(&finding.subject_id),
@@ -272,7 +281,7 @@ impl Capture<'_> {
 
     graph_row! {
         observation_row, observation_fields, "policy_observations";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
         finding: &crate::FindingV1, observation: &crate::PolicyObservationProvenanceV1;
         finding_id => Utf8(false): Some(finding.finding_id.as_str()),
         profile_generation_ref_id => UInt64(false): Some(observation.profile_generation_ref_id),
@@ -292,7 +301,7 @@ impl Capture<'_> {
 
     graph_row! {
         relationship_row, relationship_fields, "relationships";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
         edge: &crate::GraphEdgeV1;
         relationship_key => Json(false): Some(&edge.key),
         from_subject_id => Json(false): Some(&edge.key.from),
@@ -321,7 +330,7 @@ impl Capture<'_> {
 
     graph_row! {
         subject_row, subject_fields, "graph_subjects";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
         subject: &GraphSubjectKeyV1, depth: Option<u32>;
         subject_id => Json(false): Some(subject),
         subject_kind => Utf8(false): Some(match subject.kind {
@@ -343,7 +352,7 @@ impl Capture<'_> {
 
     graph_row! {
         branch_row, branch_fields, "graph_branches";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
         branch: &crate::GraphBranchV1;
         package_id => Utf8(false): Some(branch.package_id.as_str()),
         seed_subject_id => Json(false): Some(&branch.seed),
@@ -360,7 +369,7 @@ impl Capture<'_> {
 
     graph_row! {
         package_row, package_fields, "correlation_packages";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
         package: &crate::GraphPackageCheckpointV1;
         package_id => Utf8(false): Some(package.package_id.as_str()),
         package_version => UInt64(false): Some(package.package_version),
@@ -396,7 +405,7 @@ impl Capture<'_> {
 
     graph_row! {
         graph_row, graph_fields, "graph_manifest";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
         subject_count: usize, relationship_count: usize, contexts: &[crate::AnalysisContextRefV1], notice: (u64, u64), canonical: Option<&[u8]>;
         first_cursor => UInt64(false): Some(graph.first_cursor),
         last_cursor => UInt64(false): Some(graph.last_cursor),

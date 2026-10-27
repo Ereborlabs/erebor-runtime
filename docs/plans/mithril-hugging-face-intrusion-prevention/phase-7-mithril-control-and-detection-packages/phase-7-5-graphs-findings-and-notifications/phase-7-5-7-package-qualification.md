@@ -1181,3 +1181,36 @@ Strict assertions after the wait do not run. Later producer reads finish, but do
 The source, artifacts, and excluded files remain unchanged. No execution-time gain, complete incident proof, current physical proof, or external-delivery proof is established.
 PENDING: current deployment images, paired physical result, final evidence records, owned-resource absence, and owned VM removal.
 The whole qualification matrix remains Not done. Earlier records retain their original source, artifact, feature, and assertion limits.
+
+
+## Reuse Graph revision bytes during capture
+
+**Local revision reuse and focused checks: Done. Busy-input completion and complete qualification: Not done.**
+Capture::graph shares one standard OnceCell byte buffer during each Graph emission.
+Notification extraction shares one buffer in each existing loaded Graph slot within the capture.
+The first requested revision cell uses the existing bounded JSON encoder. Later requested cells reuse its bytes.
+Each requested cell keeps its temporary-byte charge. A reused buffer that exceeds the remaining budget returns the same overflow error.
+The existing Binary schema, builder copies, row admission, page bounds, validation, and reference checks remain.
+Each capture creates its own buffers. The buffers do not retain results between captures.
+Header encoding and owned finding-revision clones still run. The [review route](../../../../guides/araphor-discovery-definition-review.md) gives the source flow and lifetime.
+
+Source: [revision-encoding-source.json](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-source.json>), SHA-256 a4790d939482a2d8ae168481d76d123c2a214820336e056821797f2aa7f39f98.
+The five-file candidate is 7db4fef66af6065f4df35ecb57666fc5054aff6fbc5781d6c2dea4490499d2a2.
+The [Data/Analysis build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-check-build.json>) passes in 98.759 seconds with Data test-fixtures enabled.
+The [focused record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-facts.json>) has eleven passes, zero failures, and zero ignored cases.
+The extended context_notification_fields case passes in 2.073 seconds.
+The case checks complete revision bytes with context and coverage, fresh replacement findings, retained old notification references, and null missing findings.
+Owned Arrow rows remain valid after capture and Graph buffers drop.
+A projection with only notifications.finding_revision keeps the allocation error and row count when the warmed append has no remaining input budget.
+[Five-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-fmt.json>) passes in 0.135 seconds. [Data/Analysis Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-clippy.json>) passes with warnings denied in 40.990 seconds.
+
+The [normal E2E build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-incident-check-build.json>) passes in 141.425 seconds.
+The unchanged [busy-input case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-incident-facts.json>) fails in 121.521 seconds: zero passes, one failure, zero ignored cases.
+Its cache contains actor cursor 950 at publication 98 and background cursor 642 at publication 95.
+The actor finding is Confirmed with Exact policy evidence. Its selected notice is absent.
+Records 941 and 950 are present. The streams report complete and exhausted input. Background CPU 0 has matching healthy coverage and one cut member.
+Strict assertions after the wait do not run. An absent client notice does not prove absence of saved state.
+The records establish no execution-time gain, sole timeout cause, zero-copy result, or complete qualification result.
+No global cache, owner, public API, schema, dependency, timer, quota, or version is added.
+PENDING: busy-input completion, current images, paired physical proof, final evidence, owned-resource absence, and owned VM removal.
+The whole qualification matrix remains Not done. Earlier proof keeps its original source, artifact, feature, and assertion limits.

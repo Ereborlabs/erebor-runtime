@@ -317,6 +317,25 @@ fn batch_metadata(batches: &Vec<RecordBatch>) -> usize {
             .sum::<usize>()
 }
 
+impl ReadBudget<'_> {
+    fn revision_json<'b>(
+        &mut self,
+        revision: &crate::GraphRevisionV1,
+        encoded: &'b std::cell::OnceCell<Vec<u8>>,
+    ) -> Result<&'b [u8]> {
+        if let Some(bytes) = encoded.get() {
+            if bytes.len() > self.remaining_bytes() {
+                return Err(overflow());
+            }
+            self.charge(bytes.len())?;
+            return Ok(bytes.as_slice());
+        }
+        let bytes = json(Some(revision), self)?
+            .ok_or_else(|| invalid("the Graph revision encoding is absent"))?;
+        Ok(encoded.get_or_init(|| bytes).as_slice())
+    }
+}
+
 fn json<T: serde::Serialize + ?Sized>(
     value: Option<&T>,
     budget: &mut ReadBudget<'_>,

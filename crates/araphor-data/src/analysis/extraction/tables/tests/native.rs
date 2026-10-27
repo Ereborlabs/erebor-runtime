@@ -977,6 +977,126 @@ fn context_notification_fields() -> TestResult {
         notification_ids(&read(&fixture.store, &scoped, &["notifications"], 150)?)?,
         expected_ids
     );
+
+    let old_revision = serde_json::to_vec(&fixture.snapshot.input_manifest)?;
+    let mut revision_selection = selection.clone();
+    revision_selection.select_graphs(
+        Selection::Exact(vec![fixture.request.result_id.clone()]),
+        None,
+    )?;
+    let before = read(
+        &fixture.store,
+        &revision_selection,
+        &["findings", "notifications"],
+        150,
+    )?;
+    let retained_finding = row(&before, "findings", 0)?;
+    let retained_notification = row(&before, "notifications", 0)?;
+    assert_eq!(
+        column::<BinaryArray>(&retained_finding, "finding_revision")?.value(0),
+        old_revision,
+    );
+    let mut replacement = fixture.snapshot.clone();
+    replacement.previous_result_id = Some(fixture.request.result_id.clone());
+    replacement.input_manifest.context.push(context.key.clone());
+    replacement.graph.revision = replacement.input_manifest.clone();
+    for finding in &mut replacement.findings {
+        finding.revision = replacement.input_manifest.clone();
+    }
+    replacement.validate()?;
+    assert!(!replacement.input_manifest.context.is_empty());
+    assert!(!replacement.input_manifest.coverage.is_empty());
+    let new_revision = serde_json::to_vec(&replacement.input_manifest)?;
+    assert_ne!(new_revision, old_revision);
+    let mut commit = fixture.request.clone();
+    commit.expected_cursor = commit.consumed_cursor;
+    commit.context_revision = context_revision;
+    commit.context_refs = vec![AnalysisContextRefV1 {
+        key: context.key.clone(),
+        commit_revision: context_revision,
+    }];
+    commit.result_id = "graph:revision-context".into();
+    commit.created_utc_ns = 150;
+    commit.body = serde_json::to_vec(&replacement)?;
+    fixture.store.commit_graph(&commit, false, || Ok(()))?;
+    revision_selection.select_graphs(Selection::Exact(vec![commit.result_id.clone()]), None)?;
+    let after = read(
+        &fixture.store,
+        &revision_selection,
+        &["findings", "notifications"],
+        150,
+    )?;
+    let retained_replacement = row(&after, "findings", 0)?;
+    assert_eq!(
+        column::<BinaryArray>(&retained_replacement, "finding_revision")?.value(0),
+        new_revision,
+    );
+    for index in 0..5 {
+        assert_eq!(
+            row(&after, "notifications", index)?,
+            row(&unscoped, "notifications", index)?
+        );
+    }
+    assert!(
+        column::<BinaryArray>(&row(&after, "notifications", 4)?, "finding_revision")?.is_null(0)
+    );
+
+    {
+        let (mut output, control) = extraction()?;
+        let schema = &AnalysisStore::table_schemas()["notifications"];
+        let requests = BTreeMap::from([(
+            "notifications".into(),
+            Some([schema.index_of("finding_revision")?].into_iter().collect()),
+        )]);
+        let read = AnalysisTableRead {
+            requests: &requests,
+            event_ranges: None,
+            inputs: None,
+            mode: AnalysisReadModeV1::Complete,
+            now: 150,
+        };
+        let mut capture = Capture::new(&read, &selection);
+        let revision = std::cell::OnceCell::new();
+        let finding = &fixture.snapshot.findings[0];
+        let mut budget = output.sink(&control);
+        assert!(capture.notification(
+            &obligation,
+            Some((finding, &revision)),
+            context_revision,
+            None,
+            &mut budget,
+        )?);
+        let rows = capture.tables["notifications"].total_rows;
+        budget.output.limits.input_bytes = budget.output.input_bytes;
+        assert!(matches!(
+            capture.notification(
+                &obligation,
+                Some((finding, &revision)),
+                context_revision,
+                None,
+                &mut budget,
+            ),
+            Err(crate::Error::AnalysisInputTooLarge {
+                resource: "native source Arrow allocation",
+                ..
+            })
+        ));
+        assert_eq!(capture.tables["notifications"].total_rows, rows);
+    }
+
+    drop((before, after, replacement, commit, fixture));
+    assert_eq!(
+        column::<BinaryArray>(&retained_finding, "finding_revision")?.value(0),
+        old_revision,
+    );
+    assert_eq!(
+        column::<BinaryArray>(&retained_notification, "finding_revision")?.value(0),
+        old_revision,
+    );
+    assert_eq!(
+        column::<BinaryArray>(&retained_replacement, "finding_revision")?.value(0),
+        new_revision,
+    );
     Ok(())
 }
 

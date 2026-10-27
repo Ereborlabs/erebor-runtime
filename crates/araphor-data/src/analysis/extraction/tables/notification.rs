@@ -97,7 +97,7 @@ impl Capture<'_> {
         pub(in crate::analysis::extraction) fn notification(
             &mut self,
             obligation: &NotificationObligationV1,
-            finding: Option<&FindingV1>,
+            finding: Option<(&FindingV1, &std::cell::OnceCell<Vec<u8>>)>,
             commit_revision: u64,
             retry_utc_ns: Option<u64>,
             budget: &mut ReadBudget<'_>,
@@ -132,7 +132,7 @@ impl Capture<'_> {
             kind => Utf8(false):Some(if obligation.finding.is_some(){"finding"}else{"unconfirmed_concern"}),
             finding_id => Utf8(true):obligation.finding.as_ref().map(|value|value.finding_id.as_str()),
             finding_result_id => Utf8(true):obligation.finding.as_ref().map(|value|value.result_id.as_str()),
-            finding_revision => Json(true):finding.map(|value|&value.revision),
+            finding_revision => Binary(true):finding.map(|(value, encoded)| budget.revision_json(&value.revision, encoded)).transpose()?,
             finding_available => Boolean(false):Some(finding.is_some()),
             package_id => Utf8(false):Some(&obligation.package_id),
             required_action => Utf8(true):obligation.required_action.as_deref(),

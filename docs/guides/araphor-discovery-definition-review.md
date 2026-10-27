@@ -4989,3 +4989,39 @@ Source: prepared-storage-green-source.json, SHA-256 b67deb24ce90bdeb2162b56c824b
 The [unchanged normal incident](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/prepared-storage-incident-facts.json>) still fails in 120.038 seconds. Final Graph cursors are 950 and 642. The selected finding is Confirmed/Exact; its notice is absent.
 The strict assertions after the wait do not run. These records establish no overall speed gain or absence of saved obligations.
 Complete qualification, current images, paired physical proof, final evidence, owned-resource absence, and VM removal remain Not done. Earlier proof keeps its original limits.
+
+
+## Graph revision encoding within one capture
+
+The native tables keep the same complete GraphRevisionV1 JSON bytes in Binary cells.
+Local reuse removes repeated cell encoding while one Graph is emitted. The full revision still includes evidence, coverage, context, and missing ranges.
+
+[AnalysisStore::read_tables](../../crates/araphor-data/src/analysis/extraction.rs) captures the selected stored Graph under the existing source and context checks.
+  -> [Capture::graph](../../crates/araphor-data/src/analysis/extraction/tables/graph.rs) creates one standard OnceCell<Vec<u8>> for that Graph emission.
+  -> [ReadBudget::revision_json](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) encodes the first requested revision cell through the existing bounded JSON function.
+  -> [table_row!](../../crates/araphor-data/src/analysis/extraction/tables/builder.rs) appends the borrowed bytes through the existing Binary builder.
+[Notification extraction](../../crates/araphor-data/src/analysis/extraction.rs) keeps one cell beside each Graph in its existing capture-local loaded-Graph vector.
+  -> [Capture::notification](../../crates/araphor-data/src/analysis/extraction/tables/notification.rs) borrows the finding and that Graph's cell. An unavailable finding keeps a null revision.
+
+The row projection gates the revision_json call. An omitted Arrow revision field adds no cell encoding.
+A buffer hit checks the remaining byte budget before it charges the original temporary-byte amount for that cell.
+The same overflow error, page admission, schema, null rules, and builder-copy behavior remain.
+Graph emission drops its cell on return. Notification extraction drops its cells with the local Graph vector.
+Arrow batches own their copied buffers and remain valid after those cells drop. A later capture starts with new cells.
+[Full revision validation](../../crates/araphor-data/src/graph/model.rs) and source, witness, context, retention, and authority checks remain.
+[Header decoding](../../crates/araphor-data/src/analysis/graph_rows/header.rs) still encodes a manifest for its byte bound. [Finding hydration](../../crates/araphor-data/src/analysis/graph_rows/findings.rs) still clones each owned finding revision.
+This change adds no global cache, public API, schema, dependency, owner, timer, quota, or version.
+
+The extended ordinary Rust case is [context_notification_fields](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs).
+It compares exact JSON Binary bytes before and after a context-bound Graph replacement and retains coverage in the complete revision.
+Old notification references keep their old revision. Missing retained findings keep null revisions. Owned Arrow rows survive capture and Graph-buffer release.
+Its isolated budget block projects only notifications.finding_revision. A repeated warmed append with zero remaining input budget returns the existing allocation error before the row count changes.
+The [eleven focused cases](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-facts.json>) pass; the extension passes in 2.073 seconds after the 98.759-second Data/Analysis build.
+[Five-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-fmt.json>) passes in 0.135 seconds. [Data/Analysis Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-clippy.json>) passes with warnings denied in 40.990 seconds, with Data test-fixtures enabled.
+Source: [revision-encoding-source.json](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-source.json>), SHA-256 a4790d939482a2d8ae168481d76d123c2a214820336e056821797f2aa7f39f98.
+
+The [normal incident record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/revision-encoding-incident-facts.json>) has a passing 141.425-second build and a failed 121.521-second case. Strict assertions after the wait do not run.
+Actor Graph cursor 950/publication 98 contains a Confirmed finding with Exact policy evidence; its selected notice is absent. Background cursor 642/publication 95 has matching healthy CPU 0 coverage and one cut member.
+These records prove no overall speed gain, sole timeout cause, zero-copy behavior, or absence of saved obligations.
+Local reuse is Done. Busy-input completion, full qualification, current images, paired physical proof, owned-resource absence, and owned VM removal remain Not done.
+Earlier proof retains its original source, artifact, feature, and assertion limits.

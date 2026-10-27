@@ -1943,7 +1943,12 @@ impl AnalysisStore {
             }
             self.extract_graph_coverage(snapshot, &read, &mut output, &mut capture, control)?;
             let mut routes = BTreeMap::new();
-            let mut graphs = Vec::<(String, u64, crate::GraphSnapshotV1)>::new();
+            let mut graphs = Vec::<(
+                String,
+                u64,
+                crate::GraphSnapshotV1,
+                std::cell::OnceCell<Vec<u8>>,
+            )>::new();
             for key in selection.obligations.as_slice() {
                 control.check()?;
                 let (context, revision) = Self::read_context_from(snapshot, &self.root, key)?
@@ -1952,7 +1957,7 @@ impl AnalysisStore {
                 output.charge(context.body.capacity().saturating_mul(2))?;
                 let obligation = crate::NotificationObligationV1::try_from(&context)?;
                 let finding = if let Some(reference) = &obligation.finding {
-                    let index = match graphs.binary_search_by(|(id, _, _)| id.cmp(&reference.result_id)) {
+                    let index = match graphs.binary_search_by(|(id, _, _, _)| id.cmp(&reference.result_id)) {
                         Ok(index) => Some(index),
                         Err(index) => {
                             let metadata: Option<(Vec<u8>, u64)> = snapshot.query_row(
@@ -1974,18 +1979,20 @@ impl AnalysisStore {
                                 let mut budget = output.sink(control);
                                 budget.charge(reference.result_id.len())?;
                                 budget.grow(&mut graphs)?;
-                                graphs.insert(index, (reference.result_id.clone(), graph_revision, graph));
+                                graphs.insert(index, (reference.result_id.clone(), graph_revision, graph,
+                                    std::cell::OnceCell::new()));
                                 Some(index)
                             } else if unscoped_notifications { None } else { continue; }
                         }
                     };
                     if let Some(index) = index {
-                        let (_, graph_revision, graph) = &graphs[index];
+                        let (_, graph_revision, graph, encoded) = &graphs[index];
                         output.reference_result(&reference.result_id, *graph_revision, AnalysisReferenceOriginV1::Notification)?;
                         graph.findings.iter().find(|finding| finding.finding_id == reference.finding_id)
+                            .map(|finding| (finding, encoded))
                     } else { None }
                 } else if unscoped_notifications { None } else { continue; };
-                if !selection.binding_ids.is_empty() && finding.is_none_or(|finding| {
+                if !selection.binding_ids.is_empty() && finding.is_none_or(|(finding, _)| {
                     finding.effects.is_empty() || finding.effects.iter().any(|effect| {
                         effect.binding_id.is_none_or(|binding| !selection.binding_ids.contains(&binding))
                     })
