@@ -428,3 +428,117 @@ fn native_retry_rejects_corruption() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn native_membership_validation() -> TestResult {
+    use crate::GraphValidate as _;
+
+    let fixture = CommitFixture::new()?;
+    let mut sorted = fixture.snapshot.clone();
+    let record = sorted.input_manifest.evidence[0].clone();
+    let mut records = [0, 1, 2]
+        .map(|cpu_id| {
+            let mut record = record.clone();
+            record.cpu_id = cpu_id;
+            record
+        })
+        .to_vec();
+    records.sort();
+    sorted.input_manifest.evidence = records.clone();
+    sorted.graph.revision = sorted.input_manifest.clone();
+    sorted.input_positions = vec![(
+        records[1].clone(),
+        crate::StorePositionV1 {
+            commit_revision: 1,
+            ordinal: 0,
+        },
+    )];
+    for finding in &mut sorted.findings {
+        finding.revision = sorted.input_manifest.clone();
+        finding.evidence = records.clone();
+        let effect = finding.effects.first().ok_or("fixture effect")?.clone();
+        finding.effects = records
+            .iter()
+            .map(|record| {
+                let mut effect = effect.clone();
+                effect.evidence = record.clone();
+                effect
+            })
+            .collect();
+    }
+    for edge in &mut sorted.graph.edges {
+        edge.key.evidence = records.clone();
+    }
+    sorted.validate()?;
+
+    let rejected = |result: crate::Result<()>, expected: &'static str| {
+        assert!(
+            matches!(&result, Err(crate::Error::GraphInvalid { field, .. }) if *field == expected),
+            "expected GraphInvalid/{expected}, got {result:?}"
+        );
+    };
+    let mut absent = records[0].clone();
+    absent.cpu_id = 3;
+
+    let mut missing_position = sorted.clone();
+    missing_position.input_positions[0].0 = absent.clone();
+    rejected(missing_position.validate(), "graph snapshot");
+
+    let mut missing_finding = sorted.findings[0].clone();
+    missing_finding.evidence = vec![absent.clone()];
+    for effect in &mut missing_finding.effects {
+        effect.evidence = absent.clone();
+    }
+    rejected(missing_finding.validate(), "finding revision");
+
+    let mut missing_effect = sorted.findings[0].clone();
+    missing_effect.effects[0].evidence = absent.clone();
+    rejected(missing_effect.validate(), "finding revision");
+
+    for from in [true, false] {
+        let mut missing_endpoint = sorted.clone();
+        let mut edge = missing_endpoint.graph.edges[0].clone();
+        let endpoint = if from {
+            &mut edge.key.from
+        } else {
+            &mut edge.key.to
+        };
+        endpoint.identity[0] ^= 128;
+        endpoint.validate()?;
+        missing_endpoint.graph.edges = vec![edge];
+        rejected(missing_endpoint.validate(), "graph edge proof");
+    }
+
+    let mut missing_edge_evidence = sorted.clone();
+    let mut edge = missing_edge_evidence.graph.edges[0].clone();
+    edge.key.evidence = vec![absent];
+    missing_edge_evidence.graph.edges = vec![edge];
+    rejected(missing_edge_evidence.validate(), "graph edge proof");
+
+    let mut unsorted_manifest = sorted.clone();
+    unsorted_manifest.input_manifest.evidence.reverse();
+    unsorted_manifest.graph.revision = unsorted_manifest.input_manifest.clone();
+    for finding in &mut unsorted_manifest.findings {
+        finding.revision = unsorted_manifest.input_manifest.clone();
+    }
+    unsorted_manifest.input_positions[0].1.commit_revision = 0;
+    rejected(unsorted_manifest.validate(), "revision manifest");
+
+    let mut unsorted_finding = sorted.findings[0].clone();
+    unsorted_finding.evidence.reverse();
+    unsorted_finding.effects.clear();
+    rejected(unsorted_finding.validate(), "finding revision");
+
+    let mut invalid_revision = unsorted_finding;
+    invalid_revision.revision.evidence.reverse();
+    rejected(invalid_revision.validate(), "revision manifest");
+
+    let mut unsorted_subjects = sorted;
+    unsorted_subjects.graph.subjects.reverse();
+    unsorted_subjects.graph.edges.truncate(1);
+    let endpoint = &mut unsorted_subjects.graph.edges[0].key.from;
+    endpoint.identity[0] ^= 128;
+    endpoint.validate()?;
+    rejected(unsorted_subjects.validate(), "graph snapshot");
+    Ok(())
+}

@@ -303,7 +303,7 @@ impl FindingV1 {
             || self
                 .evidence
                 .iter()
-                .any(|id| !self.revision.evidence.contains(id))
+                .any(|id| self.revision.evidence.binary_search(id).is_err())
             || self
                 .required_coverage_interval_ids
                 .windows(2)
@@ -312,7 +312,7 @@ impl FindingV1 {
             || self
                 .effects
                 .iter()
-                .any(|effect| !self.evidence.contains(&effect.evidence))
+                .any(|effect| self.evidence.binary_search(&effect.evidence).is_err())
             || self
                 .required_action
                 .as_ref()
@@ -419,7 +419,8 @@ impl GraphSnapshotV1 {
             || self.graph.revision != self.input_manifest
             || self.missing_ranges != self.input_manifest.missing_ranges
             || self.input_positions.iter().any(|(record, position)| {
-                !self.input_manifest.evidence.contains(record) || position.commit_revision == 0
+                self.input_manifest.evidence.binary_search(record).is_err()
+                    || position.commit_revision == 0
             })
             || self
                 .previous_result_id
@@ -471,14 +472,14 @@ impl GraphSnapshotV1 {
             }
         }
         for edge in &self.graph.edges {
-            if !self.graph.subjects.contains(&edge.key.from)
-                || !self.graph.subjects.contains(&edge.key.to)
+            if self.graph.subjects.binary_search(&edge.key.from).is_err()
+                || self.graph.subjects.binary_search(&edge.key.to).is_err()
                 || edge.first_boottime_ns > edge.last_boottime_ns
                 || edge
                     .key
                     .evidence
                     .iter()
-                    .any(|id| !self.input_manifest.evidence.contains(id))
+                    .any(|id| self.input_manifest.evidence.binary_search(id).is_err())
                 || (edge.key.edge_type == GraphEdgeTypeV1::NativeParent
                     && (edge.key.from.authority != edge.key.to.authority
                         || !matches!(

@@ -1105,3 +1105,48 @@ The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualifica
 The remaining notification cause and an overall execution-time gain are not established. No new physical case or benchmark runs.
 PENDING: current deployment images, paired physical result, final evidence records, owned-resource absence, and owned VM removal.
 The whole qualification matrix remains Not done. Earlier matrix records retain their original source, artifact, and assertion limits.
+
+
+## Sorted Graph membership validation
+
+**Sorted membership and focused Data checks: Done. Busy-input completion and complete qualification: Not done.**
+[Graph model validation](../../../../../crates/araphor-data/src/graph/model.rs) uses six standard slice binary searches in five membership groups.
+The groups cover input positions, finding evidence, finding effects, edge endpoints, and edge evidence.
+Edge endpoints require separate from and to searches.
+The searches use the existing Rust Eq and Ord implementations and the already required strict order.
+Manifest validation runs before manifest membership. Finding evidence order is checked before effect membership.
+Subject order and subject validation remain before edge membership.
+Each search stays at the same boolean position. Validation order, scope checks, and error fields stay unchanged.
+No allocation, cache, query operator, schema, timer, or execution owner is added.
+
+The code removes nested linear membership searches at these six expressions.
+Header decoding, manifest validation, SQL work, and read admission still run through their existing owners.
+The earlier [Notification owner trace](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-owner-probe-facts-v2.json>) measures owner-call intervals on older source.
+That trace cannot attribute time to these internal validation searches.
+No benchmark, RED result, measured gain, or sole timeout-cause claim is made.
+
+The new ordinary Rust case is [native_membership_validation](../../../../../crates/araphor-data/src/analysis/graph_rows/tests.rs).
+The added case preserves every existing test and assertion.
+The existing CommitFixture supplies the snapshot. Three valid sorted records exercise member positions.
+A nonempty input position uses StorePositionV1 with commit revision 1 and ordinal 0.
+Absent record IDs keep the same source and cursor and change only CPU identity.
+The case isolates all five missing-member groups and checks from and to endpoints separately.
+Endpoint changes preserve byte length and pass endpoint validation before the snapshot check.
+Malformed manifest, finding evidence, and subject order retain their expected GraphInvalid fields and precedence.
+The case is expected to pass both algorithms. It has no timing threshold, comparison counter, or shared test helper.
+
+Source: [graph-membership-source.json](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-source.json>), SHA-256 7ca5a85d8405d0d67cda4957cc55a30e8b4049d2b1c6ba8e6447c325e612d89b.
+The [Data build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-check-build.json>) passes in 55.730 seconds with test-fixtures enabled.
+The [focused record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-facts.json>) has nine passes, zero failures, and zero ignored cases. The new case passes in 0.903 seconds.
+[Two-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-fmt.json>) passes in 0.035 seconds.
+[Data Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-clippy.json>) passes with warnings denied in 16.984 seconds.
+The [normal E2E build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-incident-check-build.json>) passes in 139.738 seconds.
+The unchanged [busy-input case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-incident-facts.json>) still fails in 124.283 seconds: zero passes, one failure, zero ignored cases.
+Its cache contains actor Graph cursor 950 at publication 83 and background Graph cursor 642 at publication 77.
+The selected finding is Confirmed with Exact policy evidence. Both selected records are present; the notice is absent.
+Background CPU 0 has matching healthy coverage and one selected cut member. Strict assertions after the wait do not run.
+Later diagnostics retain their partial-read and later-snapshot limits.
+The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-incident-check-integrity.json>) confirms unchanged source, executable, and excluded files.
+The remaining notification cause and any execution-time gain remain unproven. No new physical case or benchmark runs.
+PENDING: current deployment images, paired physical result, final evidence records, owned-resource absence, and owned VM removal.
+The whole qualification matrix remains Not done. Earlier matrix records retain their original source, artifact, feature, and assertion limits.

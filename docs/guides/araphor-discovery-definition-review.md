@@ -4906,3 +4906,47 @@ RED Data has no Cargo features; GREEN Data enables test-fixtures. The read and r
 [Four-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-fmt.json>) and [Data/Analysis Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-clippy.json>) pass.
 The [normal busy-input incident case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-current-read-incident-facts.json>) still fails in 120.380 seconds. Both final Graphs and the Confirmed finding are present; the selected notice is absent. Strict assertions after the wait do not run.
 Current physical qualification, complete incident proof, and an end-to-end speed result remain **Not done**.
+
+
+## Sorted membership in Graph validation
+
+Graph validation keeps its existing validity rules and error order.
+Six negative membership expressions now use the standard slice binary_search method and its is_err result.
+The change has five groups. Each searched slice has a strict-order check before the search runs.
+
+[GraphHeader::decode](../../crates/araphor-data/src/analysis/graph_rows/header.rs) decodes the retained header and reconstructs Graph metadata with empty row collections.
+  -> [GraphSnapshotV1::validate](../../crates/araphor-data/src/graph/model.rs) validates the manifest and retained metadata.
+[GraphRows::read_control](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) loads subjects, edges, and findings and checks row counts and encoded-byte bounds.
+  -> [GraphSnapshotV1::validate](../../crates/araphor-data/src/graph/model.rs) validates the complete materialized Graph.
+[GraphRows::finding](../../crates/araphor-data/src/analysis/graph_rows/findings.rs) reconstructs a finding from its row and the header manifest and checks its tenant.
+  -> [FindingV1::validate](../../crates/araphor-data/src/graph/model.rs) validates the revision before finding evidence and effect evidence.
+
+| Membership group | Searched slice | Existing strict-order gate | Search sites |
+| --- | --- | --- | --- |
+| Finding evidence belongs to its revision | revision.evidence | GraphRevisionV1::validate runs first | 1 |
+| Effect evidence belongs to its finding | finding.evidence | FindingV1 checks evidence order earlier in the same condition | 1 |
+| Input-position records belong to the manifest | input_manifest.evidence | GraphSnapshotV1 validates the manifest first | 1 |
+| Edge endpoints belong to Graph subjects | graph.subjects | GraphSnapshotV1 checks subject order before the edge loop | 2 |
+| Edge evidence belongs to the manifest | input_manifest.evidence | GraphSnapshotV1 validates the manifest first | 1 |
+
+[DiscoveryRecordIdV1](../../crates/araphor-analysis-builtins/src/discovery/model.rs) and [GraphSubjectKeyV1](../../crates/araphor-analysis-builtins/src/graph/model/domain.rs) derive Eq, Ord, PartialEq, and PartialOrd.
+The searches compare the same complete keys as the previous equality membership checks.
+Each replacement stays at the same Boolean position. Every surrounding guard, validation call, and error field remains.
+The required-coverage-interval zero check still uses contains. Other membership checks remain unchanged.
+No sort, set, cache, helper, owner, API, or DataFusion operator is added.
+
+The applied candidate adds one ordinary Rust test, [native_membership_validation](../../crates/araphor-data/src/analysis/graph_rows/tests.rs).
+Its valid Graph has three ordered evidence records, all three finding/effect/edge members, and a nonempty middle-record input position.
+Six isolated missing-member paths check the exact GraphInvalid field: position, finding evidence, effect evidence, both edge endpoints, and edge evidence.
+Descending manifest evidence, finding evidence, and subjects keep their existing rejection fields.
+Combined-invalid inputs check that revision validation and subject ordering keep their earlier error priority.
+These assertions preserve functional behavior. No RED result, benchmark, or execution-time gain is claimed for this change.
+
+Source: [graph-membership-source.json](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-source.json>), SHA-256 7ca5a85d8405d0d67cda4957cc55a30e8b4049d2b1c6ba8e6447c325e612d89b.
+The [focused Data record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-facts.json>) has nine passes on this source. The new case passes in 0.903 seconds; the build passes in 55.730 seconds with test-fixtures enabled.
+[Two-file formatting](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-fmt.json>) and [Data Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-clippy.json>) pass.
+The [normal incident case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/graph-membership-incident-facts.json>) still fails in 124.283 seconds. Final Graph cursors are 950 and 642. The selected finding is Confirmed with Exact policy evidence; its notice is absent.
+Strict assertions after the wait do not run. These results do not isolate the remaining cause or establish an overall execution-time gain.
+The full goal and current physical qualification remain Not done.
+Current images, paired physical proof, final evidence, owned-resource absence, and owned VM removal remain open.
+Earlier proof records keep their original source and artifact limits.
