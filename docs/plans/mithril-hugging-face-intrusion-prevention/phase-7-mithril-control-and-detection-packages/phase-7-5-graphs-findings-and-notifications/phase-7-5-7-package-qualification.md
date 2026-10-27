@@ -951,3 +951,38 @@ The final source is coordinated-reader-state-source.json, with 2,042 pins and SH
 The [normal build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-check-build.json>) binds Query and E2E executables; the [state build](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-state-build.json>) binds the Data executable.
 The [integrity record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/coordinated-reader-check-integrity.json>) confirms unchanged source, executables, and excluded files. No full CI, benchmark, or physical case runs.
 PENDING: busy-input completion, current images, paired physical result, final records, resource absence, and owned VM removal.
+
+
+## Reuse canonical Graph snapshots
+
+**Canonical byte reuse and focused checks: Done. Busy WAL and complete qualification: Not done.**
+The full Graph read already creates canonical JSON to check the stored byte length.
+Native snapshot projection previously serialized the same Graph twice more: one count pass and one output pass.
+Data now retains the first buffer in its existing CanonicalGraph value.
+The native Binary builder copies the validated bytes into its existing Arrow buffer.
+The public schema and canonical bytes remain the same.
+
+The existing two-times-snapshot input charge remains.
+Capture also charges the retained Vec capacity before Arrow output allocation.
+Header-only reads do not serialize a snapshot.
+Traversal supplies no retained buffer and encodes its selected Graph only when the snapshot column is requested.
+Partial and modified traversal values still validate.
+The [reading route](../../../../guides/araphor-discovery-definition-review.md#reuse-canonical-graph-snapshots) identifies the buffer, projection, and guard owners.
+
+The [focused record](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/canonical-snapshot-reuse-checks.json) contains ten passes and one failing busy-WAL case.
+Nine Data checks and ordinary Follow replacement pass.
+The extended graph_snapshot_deadline case checks exact full bytes, fresh zero-hop traversal bytes, native schema, witnesses, and the result reference.
+All earlier assertions remain.
+The build passes in 165.734 seconds.
+The source manifest is canonical-snapshot-reuse-source.json, SHA-256 593704df1deeaee2d92d2cd5f3542667a693a22c1c99f22d6c31afb3f0ffdd2a, with 2,042 pins.
+[Data Clippy](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/canonical-snapshot-reuse-clippy.json) passes with warnings denied in 17.230 seconds.
+[Six-file formatting](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/canonical-snapshot-reuse-fmt.json) passes in 0.135 seconds.
+
+The [normal busy-WAL case](/home/navid/mithril-test-hosts/araphor-package-qualification-verification/canonical-snapshot-reuse-wal-facts.json) fails in 122.868 seconds.
+Its cache contains records 941 and 950, actor Graph cursor 940, background Graph cursor 639 with 138 findings, and zero selected notifications.
+A later actor graph_state read reports consumed cursor 950 and a new head at read revision 156.
+That later read does not establish publication before the wait expired or delivery of the final Graph.
+The background state query returns no frame within the existing failure collector.
+Source and executable hashes remain unchanged through the checks.
+The removed serialization passes are source-proven; an overall execution-time improvement is not established.
+PENDING: busy-input completion, current images, paired physical result, final evidence records, resource absence, and owned VM removal.

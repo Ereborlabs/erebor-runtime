@@ -1915,7 +1915,7 @@ impl AnalysisStore {
                     .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
                 let subjects = read.projected("graph_subjects").is_some();
                 let edges = read.projected("relationships").is_some();
-                let header = self.graph_input(snapshot, selection.tenant_id, id, &mut output, control, complete_graph)?;
+                let (header, canonical) = self.graph_input(snapshot, selection.tenant_id, id, &mut output, control, complete_graph)?;
                 let mut graph = header.snapshot;
                 if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
                 if !selection.permits_graph(&graph) { continue; }
@@ -1932,13 +1932,13 @@ impl AnalysisStore {
                         return self.reject("the selected graph relationship count differs");
                     }
                 }
-                graph.validate()?;
+                if !complete_graph && (subjects || edges) { graph.validate()?; }
                 output.capture_graph(id, &graph, control)?;
                 let contexts = if graph_contexts {
                     self.graph_contexts(snapshot, selection.tenant_id, id, &mut output, control)?
                 } else { Vec::new() };
                 output.reference_result(id, revision, AnalysisReferenceOriginV1::Graph)?;
-                capture.graph(id, &graph, header.subject_count, header.edge_count,
+                capture.graph(id, &graph, canonical.as_ref(), header.subject_count, header.edge_count,
                     revision, sensitivity, None, &contexts, header.notice, &mut output.sink(control))?;
             }
             self.extract_graph_coverage(snapshot, &read, &mut output, &mut capture, control)?;
@@ -1966,7 +1966,7 @@ impl AnalysisStore {
                             })?;
                             if let Some((source_key, graph_revision)) = metadata {
                                 let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
-                                let header = self.graph_input(snapshot, selection.tenant_id,
+                                let (header, _) = self.graph_input(snapshot, selection.tenant_id,
                                     &reference.result_id, &mut output, control, false)?;
                                 let graph = header.snapshot;
                                 if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }

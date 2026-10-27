@@ -97,6 +97,7 @@ impl AnalysisStore {
             capture.graph(
                 id,
                 &graph,
+                None,
                 graph.graph.subjects.len(),
                 graph.graph.edges.len(),
                 version.revision,

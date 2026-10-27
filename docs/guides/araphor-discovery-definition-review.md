@@ -4735,3 +4735,28 @@ It releases and joins before asserting the saved writer availability. The [RED r
 [capture_retry_state](../../crates/araphor-data/src/analysis/connection.rs) verifies a newly accepted cut and cancellation while queued, including configured-permit cleanup.
 The [qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#reactive-read-admission) records the eleven further owner passes, separate source states, static checks, and unresolved incident result.
 The later actor state at cursor 950 is collected after the incident wait error. It does not prove when the producer published that head or when the subscriber could receive it.
+
+
+## Reuse canonical Graph snapshots
+
+Read these owners in order:
+
+| Owner | Behavior |
+| --- | --- |
+| [GraphRows::read_control](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) | Reconstruct rows. Check row counts, canonical length, and the full Graph. Return the existing CanonicalGraph with its bytes. |
+| [AnalysisStore::graph_input](../../crates/araphor-data/src/analysis/extraction/graph.rs) | Admit the header and snapshot input bytes. Move the full snapshot and optional byte buffer to extraction. Partial reads return no buffer. |
+| [Native extraction](../../crates/araphor-data/src/analysis/extraction.rs) | Check source, binding, sensitivity, witnesses, and references. Pass the unchanged full buffer to Capture. Validate selected subjects or relationships after mutation. |
+| [Capture::graph](../../crates/araphor-data/src/analysis/extraction/tables/graph.rs) | Charge the retained buffer capacity. Copy the validated bytes into the existing Arrow buffer. Generate fallback JSON only when that column is selected and no buffer is supplied. |
+| [Traversal](../../crates/araphor-data/src/analysis/extraction/graph/traversal.rs) | Validate its selected Graph and supply no full-result buffer. Its snapshot needs fresh encoding. |
+
+GraphRows::read keeps its GraphSnapshot return type for existing public reads and stored-result checks.
+The storage header, SQL schema, and snapshot bytes do not change.
+The full read retains one existing canonical buffer instead of serializing the same snapshot twice again.
+The existing two-times-snapshot precharge, actual retained capacity, Arrow allocation, page, scan, and cancellation checks remain.
+No cache or second result owner is added.
+
+The [native snapshot case](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs) checks exact full bytes and selected traversal bytes.
+It also keeps its deadline, header-only, corruption, witness, and reference assertions.
+The focused record covers nine Data cases and ordinary Follow replacement on source 593704df.
+The separate busy-WAL case still fails. Its later producer read is not proof of timely final delivery.
+See [the qualification result](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md#reuse-canonical-graph-snapshots) for source and artifact limits.

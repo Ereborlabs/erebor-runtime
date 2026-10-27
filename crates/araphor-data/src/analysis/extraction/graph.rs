@@ -246,7 +246,7 @@ impl AnalysisStore {
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
         complete: bool,
-    ) -> Result<GraphHeader> {
+    ) -> Result<(GraphHeader, Option<Vec<u8>>)> {
         control.check()?;
         let length: u64 = snapshot
             .query_row(
@@ -273,16 +273,22 @@ impl AnalysisStore {
         let remaining = header.snapshot_bytes.saturating_sub(length);
         output.scan(remaining)?;
         output.charge(remaining.saturating_mul(2))?;
-        if complete {
-            header.snapshot = GraphRows::read_control(snapshot, result_id, &header, Some(control))?;
+        let canonical = if complete {
+            let (graph, body) =
+                GraphRows::read_control(snapshot, result_id, &header, Some(control))?.into_parts();
+            header.snapshot = graph;
+            Some(body)
         } else {
             header.snapshot.findings =
                 GraphRows::read_findings(snapshot, result_id, &header, Some(control))?;
-        }
+            None
+        };
         if header.snapshot.findings.len() != header.finding_count {
             return self.reject("the selected graph finding count differs");
         }
-        header.snapshot.validate()?;
-        Ok(header)
+        if !complete {
+            header.snapshot.validate()?;
+        }
+        Ok((header, canonical))
     }
 }

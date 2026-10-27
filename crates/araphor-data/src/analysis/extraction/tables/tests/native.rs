@@ -1311,6 +1311,10 @@ fn graph_snapshot_deadline() -> TestResult {
             notice.1
         );
         assert_eq!(
+            column::<BinaryArray>(batch, "snapshot")?.value(0),
+            fixture.request.body.as_slice()
+        );
+        assert_eq!(
             serde_json::from_slice::<GraphSnapshotV1>(
                 column::<BinaryArray>(batch, "snapshot")?.value(0)
             )?,
@@ -1323,6 +1327,47 @@ fn graph_snapshot_deadline() -> TestResult {
             .result()
             .is_some_and(|result| result.result_id == fixture.request.result_id)));
     }
+    let seed = graph
+        .graph
+        .subjects
+        .first()
+        .ok_or("the graph has no traversal seed")?
+        .clone();
+    let mut traversal = selection.clone();
+    traversal.select_graphs(
+        Selection::Exact(vec![fixture.request.result_id.clone()]),
+        Some(GraphTraversalV1 {
+            seeds: vec![seed.clone()],
+            result_ids: vec![fixture.request.result_id.clone()],
+            max_hops: 0,
+            ..Default::default()
+        }),
+    )?;
+    let page = read(
+        &fixture.store,
+        &traversal,
+        &["graph_manifest"],
+        deadline - 1,
+    )?;
+    let batch = &page.tables["graph_manifest"][0];
+    assert_eq!(
+        batch.schema(),
+        AnalysisStore::table_schemas()["graph_manifest"]
+    );
+    let body = column::<BinaryArray>(batch, "snapshot")?.value(0);
+    let mut expected = fixture.snapshot.clone();
+    expected.graph.subjects = vec![seed];
+    expected.graph.edges.clear();
+    expected.findings.clear();
+    let expected_body = serde_json::to_vec(&expected)?;
+    assert_eq!(body, expected_body.as_slice());
+    assert_ne!(body, fixture.request.body.as_slice());
+    assert_eq!(serde_json::from_slice::<GraphSnapshotV1>(body)?, expected);
+    assert_eq!(page.extraction.witnesses, fixture.request.witnesses);
+    assert!(page.extraction.references.iter().any(|reference| reference
+        .result()
+        .is_some_and(|result| result.result_id == fixture.request.result_id
+            && result.commit_revision == receipt.commit_revision)));
     let schema = &AnalysisStore::table_schemas()["graph_manifest"];
     let columns = BTreeMap::from([(
         "graph_manifest".into(),

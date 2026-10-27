@@ -149,7 +149,7 @@ impl GraphRows {
         result_id: &str,
         header: &GraphHeader,
     ) -> Result<GraphSnapshotV1> {
-        Self::read_control(writer, result_id, header, None)
+        Self::read_control(writer, result_id, header, None).map(|graph| graph.into_parts().0)
     }
 
     pub(super) fn read_control(
@@ -157,7 +157,7 @@ impl GraphRows {
         result_id: &str,
         header: &GraphHeader,
         control: Option<&AnalysisReadControl>,
-    ) -> Result<GraphSnapshotV1> {
+    ) -> Result<CanonicalGraph> {
         Self::check_bytes(writer, result_id, header)?;
         let mut snapshot = header.snapshot.clone();
         snapshot.graph.subjects = Self::read_subjects(writer, result_id, control)?;
@@ -166,15 +166,21 @@ impl GraphRows {
         if snapshot.graph.subjects.len() != header.subject_count
             || snapshot.graph.edges.len() != header.edge_count
             || snapshot.findings.len() != header.finding_count
-            || Self::json(&snapshot)?.len() != header.snapshot_bytes
         {
             return GraphInvalidSnafu {
                 field: "graph row counts or bytes",
             }
             .fail();
         }
+        let body = Self::json(&snapshot)?;
+        if body.len() != header.snapshot_bytes {
+            return GraphInvalidSnafu {
+                field: "graph row counts or bytes",
+            }
+            .fail();
+        }
         snapshot.validate()?;
-        Ok(snapshot)
+        Ok(CanonicalGraph { snapshot, body })
     }
 
     fn load<T>(

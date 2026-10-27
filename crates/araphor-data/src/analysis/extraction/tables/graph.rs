@@ -62,6 +62,7 @@ impl Capture<'_> {
         &mut self,
         result_id: &str,
         graph: &GraphSnapshotV1,
+        canonical: Option<&Vec<u8>>,
         subject_count: usize,
         relationship_count: usize,
         commit_revision: u64,
@@ -73,6 +74,11 @@ impl Capture<'_> {
     ) -> Result<bool> {
         if !self.scope.permits_graph(graph) {
             return Ok(true);
+        }
+        if let Some(canonical) = canonical {
+            if self.read.projects_field("graph_manifest", "snapshot") {
+                budget.charge(canonical.capacity())?;
+            }
         }
         let deadline = graph.witness_deadline_utc_ns;
         if deadline > self.read.now {
@@ -209,6 +215,12 @@ impl Capture<'_> {
                 return Ok(false);
             }
         }
+        let fallback =
+            if canonical.is_none() && self.read.projects_field("graph_manifest", "snapshot") {
+                json(Some(graph), budget)?
+            } else {
+                None
+            };
         self.graph_row(
             graph,
             result_id,
@@ -219,6 +231,7 @@ impl Capture<'_> {
             relationship_count,
             contexts,
             notice,
+            canonical.map(Vec::as_slice).or(fallback.as_deref()),
             budget,
         )
     }
@@ -384,7 +397,7 @@ impl Capture<'_> {
     graph_row! {
         graph_row, graph_fields, "graph_manifest";
         self, budget, graph, result_id, commit_revision, sensitivity, source_key;
-        subject_count: usize, relationship_count: usize, contexts: &[crate::AnalysisContextRefV1], notice: (u64, u64);
+        subject_count: usize, relationship_count: usize, contexts: &[crate::AnalysisContextRefV1], notice: (u64, u64), canonical: Option<&[u8]>;
         first_cursor => UInt64(false): Some(graph.first_cursor),
         last_cursor => UInt64(false): Some(graph.last_cursor),
         previous_result_id => Utf8(true): graph.previous_result_id.as_deref(),
@@ -397,7 +410,7 @@ impl Capture<'_> {
         relationship_count => UInt64(false): Some(u64::try_from(relationship_count).map_err(|_| overflow())?),
         max_hops => UInt32(false): Some(0),
         hop_boundary => Boolean(false): Some(false),
-        snapshot => Json(false): Some(graph),
+        snapshot => Binary(false): canonical,
         context_refs => Json(false): Some(contexts),
     }
 }
